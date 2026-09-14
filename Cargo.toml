@@ -34,4 +34,4 @@ lsp-server = "0.10"
 lsp-types = "0.97"
 url = "2"
 ureq = { version = "3", features = ["json"] }
-base64 = "0.22"
+base64 = "0.23"
