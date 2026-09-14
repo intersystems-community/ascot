@@ -1,0 +1,266 @@
+package iris:ascot;
+
+interface common {
+
+    record position {
+        line: u32,
+        character: u32,
+    }
+
+    record range {
+        start: position,
+        end: position,
+    }
+
+    record location {
+        uri: string,
+        range: range,
+    }
+
+    record diagnostic-related-information {
+        location: location,
+        message: string,
+    }
+
+    record name-info {
+        before: position,
+        content: string,
+        after: position,
+    }
+
+    enum arg-mode {
+        default,
+        output,
+        by-ref,
+    }
+
+    record normal-arg {
+        mode: arg-mode,
+        name: string,
+        t: option<string>,
+        default: option<string>,
+        // Where this parameter is declared, within its enclosing `member-info`'s `uri`.
+        declared-at: option<range>,
+    }
+
+    record variadic-arg {
+        mode: arg-mode,
+        name: string,
+        t: option<string>,
+        declared-at: option<range>,
+    }
+
+    record method-info {
+        normal: list<normal-arg>,
+        variadic: option<variadic-arg>,
+        t: option<string>,
+        procedure-block: option<list<string>>,
+        body: range,
+    }
+
+    record parameter-info {
+        t: option<string>,
+        v: option<string>
+    }
+
+    enum collection-kind { %list, array }
+
+    // `t` is the element type for a `list Of`/`array Of` property.
+    record property-info {
+        t: option<string>,
+        collection: option<collection-kind>,
+        multidimensional: bool,
+    }
+
+    variant member-kind {
+        parameter(parameter-info),
+        property(property-info),
+        relationship(option<string>),
+        foreign-key,
+        index,
+        projection,
+        trigger,
+        x-data,
+        storage,
+        query,
+        method(method-info),
+        class-method(method-info),
+        client-method(method-info),
+    }
+
+    record member-info {
+        doc: string,
+        before: position,
+        name: name-info,
+        // Alternate names it can also be referenced by (a property's `[ Aliases = (...) ]`);
+        // empty for every other member kind.
+        aliases: list<string>,
+        deprecated: bool,
+        kind: member-kind,
+        after: position,
+        // The class this member is declared in, when known (e.g. resolved against a workspace
+        // file). `None` for members synthesized without a backing location (`%New`, IRIS system
+        // classes the host can't map to a uri, ...).
+        uri: option<string>,
+        // The class that actually declares this compiled/inherited member -- distinguishes a
+        // real override of a default IRIS hook (`%DispatchMethod`, ...) from every class's own
+        // meaningless inherited stub. `None` on the workspace side, where this isn't tracked.
+        origin: option<string>,
+    }
+
+    record class-info {
+        doc: string,
+        name: name-info,
+        extends: list<string>,
+        deprecated: bool,
+        // Never includes a method's own body/implementation -- only the same lightweight
+        // metadata a single-member lookup would return.
+        members: list<member-info>,
+        // This class's own (not inherited) `[PropertyClass = ...]` value, split into class
+        // names -- see `check::env::WorkspaceEnv::property_class_names`.
+        property-class-names: list<string>,
+        // This class's own (not inherited) `Include` files -- an `Include` is inherited, so
+        // ascot unions these up the `extends` chain itself (`inherited_include_names`).
+        includes: list<string>,
+        // `None` when unknown. IRIS's compiled `ClassType` already resolves both the
+        // `[ClassType = datatype]` keyword and inheritance from %Library.DataType.
+        is-datatype: option<bool>,
+        // A uri the host itself understands for this class (e.g. an `isfs://` one some editor
+        // extensions mount) -- ascot never interprets it, just hands it back for "go to
+        // definition"/hover. `None` if the host has nothing to offer, or doesn't try.
+        uri: option<string>,
+    }
+
+    record routine-source {
+        text: string,
+        // Same meaning as `class-info.uri`.
+        uri: option<string>,
+    }
+
+    enum diagnostic-severity {
+        error,
+        warning,
+        information,
+        hint,
+    }
+
+    record diagnostic {
+        message: string,
+        range: range,
+        related-information: list<diagnostic-related-information>,
+        severity: diagnostic-severity,
+    }
+
+    record inlay-hint {
+        position: position,
+        label: string,
+        padding-left: bool,
+        padding-right: bool,
+    }
+
+    // A subset of LSP's `SymbolKind` -- only the kinds ascot actually emits.
+    enum symbol-kind {
+        class,
+        // A routine, in a `.mac`/`.int` document-symbol outline (there's no enclosing class).
+        module,
+        method,
+        property,
+        %interface,
+        function,
+        constant,
+        array,
+        object,
+        key,
+        %struct,
+        event,
+    }
+
+    record symbol-info {
+        name: string,
+        kind: symbol-kind,
+        deprecated: bool,
+        range: range,
+        selection-range: range,
+    }
+
+    // A `textDocument/documentSymbol` outline: `root` is the class or routine declared in the
+    // document, `members` are its members or labels. Flat rather than nested (WIT records can't
+    // be self-referential) -- members never nest further in this domain, so the consumer's own
+    // one-level `DocumentSymbol { children: [...] }` wrapping is all the nesting either ever
+    // needs.
+    record document-symbol {
+        root: symbol-info,
+        members: list<symbol-info>,
+    }
+
+    record workspace-symbol {
+        name: string,
+        kind: symbol-kind,
+        deprecated: bool,
+        location: location,
+    }
+}
+
+interface imported {
+    use common.{class-info, routine-source};
+
+    resource iris-connection {
+        // `cls`'s own (not inherited) members, superclasses, and other class-level metadata --
+        // everything ascot needs to resolve a member, "did you mean" a name, or check a type
+        // parameter, in one round trip.
+        get-cls: func(cls: string) -> option<class-info>;
+        // The raw source of the include file `name.inc`, for an `#include`/`Include` that isn't
+        // already open in the workspace -- e.g. a system or shared include.
+        get-inc: func(name: string) -> option<routine-source>;
+        // The raw source of the routine `name` -- its `.int` if it has one (the instance's own
+        // macro expansion, so nothing to expand here), else its `.mac` -- for a `Label^name`
+        // call into a routine that isn't open in the workspace. Kept apart from `get-inc`
+        // because a `.inc` and a `.mac` may share a name (`%occMessages`).
+        get-int-or-mac: func(name: string) -> option<routine-source>;
+    }
+}
+
+interface exported {
+    use common.{
+        member-info, class-info, position,
+        diagnostic, inlay-hint, range, location,
+        document-symbol, workspace-symbol,
+    };
+    use imported.{iris-connection};
+
+    resource workspace {
+        constructor(env: option<iris-connection>);
+        // Stores the raw source; no parsing happens here (kind is inferred from `uri`'s
+        // extension). Doubles as both open and edit. Returns the uris (including this one)
+        // whose cached analysis is now stale and should be rechecked.
+        open: func(uri: string, text: string) -> list<string>;
+        // Returns the uris (including this one) whose cached analysis is now stale.
+        close: func(uri: string) -> list<string>;
+        diagnostics: func(uri: string) -> list<diagnostic>;
+        inlay-hint: func(uri: string, range: range) -> list<inlay-hint>;
+        definition: func(uri: string, position: position) -> option<location>;
+        // Every location across the workspace that refers to whatever's declared or referenced
+        // at `position` — the reverse of `definition`. `include-declaration` controls whether
+        // the declaration site itself is included in the result.
+        references: func(uri: string, position: position, include-declaration: bool) -> list<location>;
+        // The class member declared at `position`, if any. Otherwise, the inferred type of the
+        // local variable read there and/or what the macro invocation there expanded to — both
+        // together when both apply. Rendered as markdown and ready for `textDocument/hover`.
+        hover: func(uri: string, position: position) -> option<string>;
+        // Classes in the workspace whose name starts with `query`.
+        query-cls: func(query: string) -> list<tuple<string, class-info>>;
+        // Members of `cls` (as named in `query-cls`'s result) whose name starts with `query`.
+        query-mem: func(cls: string, query: string) -> list<tuple<string, member-info>>;
+        // The class declared in `uri` and its members, or (in a `.mac`/`.int` routine) its
+        // labels, as a `textDocument/documentSymbol` outline.
+        document-symbol: func(uri: string) -> option<document-symbol>;
+        // Classes and members across the workspace whose name starts with `query`, as a
+        // `workspace/symbol` result.
+        workspace-symbol: func(query: string) -> list<workspace-symbol>;
+    }
+}
+
+world analyzer {
+    import imported;
+    export exported;
+}

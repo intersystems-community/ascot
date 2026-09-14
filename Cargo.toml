@@ -1,0 +1,37 @@
+[workspace]
+members = ["tygr-objectscript"]
+
+[package]
+name = "ascot"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "A type checker and code intelligence engine for InterSystems ObjectScript, usable as a CLI, an LSP or MCP server, or a library."
+repository = "https://github.com/intersystems-community/ascot"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.dev-wasm]
+inherits = "release"
+opt-level = 0
+debug = false
+
+[dependencies]
+either = "1.15.0"
+tygr = "0.6.0"
+tygr-objectscript = { version = "0.1.0", path = "tygr-objectscript" }
+wasm-bindgen = "0.2.117"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.149"
+wit-bindgen = "0.61.1"
+schemars = "1.2.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rmcp = { version = "3.1.2", features = ["server", "macros", "transport-io"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-std"] }
+lsp-server = "0.10"
+lsp-types = "0.97"
+url = "2"
+ureq = { version = "3", features = ["json"] }
+base64 = "0.22"

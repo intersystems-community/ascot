@@ -1,0 +1,17 @@
+[package]
+name = "tygr-objectscript"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "tygr grammar definitions for InterSystems ObjectScript and IRIS SQL"
+repository = "https://github.com/intersystems-community/ascot"
+
+[dependencies]
+either = "1.15.0"
+tygr = "0.6.0"
+
+[lints.clippy]
+# Grammars are written as nested generic types by design; complexity here
+# isn't a code smell.
+type_complexity = "allow"
+large_enum_variant = "allow"

@@ -1,0 +1,13 @@
+{
+    "name": "ascot-plugins",
+    "owner": {
+        "name": "InterSystems Community"
+    },
+    "plugins": [
+        {
+            "name": "ascot-lsp",
+            "source": "./bindings/claude-lsp-plugin",
+            "description": "ascot as an LSP server for InterSystems ObjectScript (expects `ascot` on PATH)"
+        }
+    ]
+}

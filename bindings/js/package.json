@@ -1,0 +1,29 @@
+{
+  "name": "@intersystems-community/ascot",
+  "version": "0.1.0",
+  "description": "ascot, a type checker and code intelligence engine for InterSystems ObjectScript, for Node and other JS consumers.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/intersystems-community/ascot.git",
+    "directory": "bindings/js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "generated",
+    "lib/*.core*.wasm"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "bash scripts/build.sh"
+  },
+  "devDependencies": {
+    "@bytecodealliance/jco": "^1.25.2",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --all-targets
+
+      # `--all-targets` above skips doctests (a cargo quirk, not an oversight) — run them too.
+      - name: Doc tests
+        run: cargo test --doc
+
+      - name: WASM build
+        run: cargo build --target=wasm32-unknown-unknown --release --lib
+
+  npm-bindings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Install devDependencies
+        working-directory: bindings/js
+        run: npm ci
+
+      - name: Build (wasm -> jco -> tsc)
+        working-directory: bindings/js
+        run: bash scripts/build.sh
+
+      - name: Pack
+        working-directory: bindings/js
+        run: npm pack --dry-run
