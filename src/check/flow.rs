@@ -32,7 +32,7 @@ struct Shared<'a> {
     // `None` is for subroutines and procedures only. It means that the output expectation
     // is unclear until the first return/quit command.
     output: RefCell<Option<WithRange<Option<Ty>>>>,
-    ty_var: RefCell<u8>,
+    ty_var: RefCell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
     // Kept in declaration order for a deterministic diagnostic when more than one is never
     // assigned.
@@ -89,7 +89,7 @@ impl Local {
 }
 
 impl<'a> Flow<'a> {
-    pub(crate) fn fresh(&mut self) -> u8 {
+    pub(crate) fn fresh(&mut self) -> u32 {
         let ty_var = *self.shared.ty_var.borrow();
         self.shared.ty_var.replace(ty_var + 1);
         ty_var
@@ -1082,7 +1082,7 @@ impl Bindings {
         Ok(())
     }
 
-    fn refine_on_prop(&mut self, target: u8, term: &Term) {
+    fn refine_on_prop(&mut self, target: u32, term: &Term) {
         for binding in self.bindings.values_mut() {
             binding.assigned = binding.assigned.clone().refine_on_prop(target, term);
         }

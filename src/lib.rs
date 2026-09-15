@@ -4519,4 +4519,91 @@ mod tests {
             "{diagnostics:?}"
         );
     }
+
+    #[test]
+    fn constant_folding_that_overflows_or_divides_by_zero_is_not_folded() {
+        let diagnostics = class_diagnostics(
+            "ClassMethod M(x) {\n Set a = 5 - 10\n Set b = 10 \\ 0\n Set c = 10 # 0\n Set d = 2 ** 40\n If ($D(x) - 5) { Write 1 }\n If (5 - 10) > 0 { Write 2 }\n Write a, b, c, d\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn cyclic_extends_does_not_recurse_forever() {
+        let diagnostics = without_hints(diagnostics_for(&[
+            (
+                "A.cls",
+                "Class Test.A Extends Test.B {\nProperty P As %String;\nClassMethod M() {\n Set o = ..%New()\n Write o.P, ..Nope()\n}\n}\n",
+            ),
+            ("B.cls", "Class Test.B Extends Test.A {\n}\n"),
+        ]));
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("Cannot find member 'Nope'"),
+            "{diagnostics:?}"
+        );
+
+        // `Selfx` resolves relative to the class's own package: to itself.
+        let diagnostics = without_hints(diagnostics_for(&[(
+            "Selfx.cls",
+            "Class Test.Selfx Extends Selfx {\nClassMethod M() {\n Do ..Nope()\n}\n}\n",
+        )]));
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn many_refinements_in_one_method_do_not_overflow_the_type_variable_counter() {
+        let body: String = (0..300)
+            .map(|i| format!("\tIf $D(x{i}) {{ Write {i} }}\n"))
+            .collect();
+        let diagnostics =
+            diagnostics_for(&[("Many.mac", &format!("ROUTINE Many\n{body}\tQuit\n"))]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn recursive_macro_is_reported_instead_of_expanding_forever() {
+        for src in [
+            "ROUTINE Rec\n#define A $$$A\n\twrite $$$A\n\tquit\n",
+            "ROUTINE Rec\n#define B(x) $$$B(x)\n\twrite $$$B(1)\n\tquit\n",
+            "ROUTINE Rec\n#define C $$$D\n#define D $$$C\n\twrite $$$C\n\tquit\n",
+        ] {
+            let diagnostics = diagnostics_for(&[("Rec.mac", src)]);
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert!(
+                diagnostics[0].message.contains("expands recursively"),
+                "{diagnostics:?}"
+            );
+            assert_eq!(
+                diagnostics[0].range.start.line as usize,
+                src.matches('\n').count() - 2
+            );
+        }
+    }
+
+    #[test]
+    fn include_cycles_are_included_once() {
+        let diagnostics = diagnostics_for(&[
+            ("R.mac", "ROUTINE R\n#include A\n\twrite $$$X\n\tquit\n"),
+            ("A.inc", "ROUTINE A [Type=INC]\n#include B\n#define X 1\n"),
+            ("B.inc", "ROUTINE B [Type=INC]\n#include A\n#include B\n"),
+        ]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn hover_past_the_end_of_a_routine_is_none() {
+        let workspace = Workspace::new(None);
+        let uri = "Short.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE Short\n#define X 1\n\twrite $$$X\n\tquit\n".to_string(),
+        );
+        let position = bindings::Position {
+            line: 100,
+            character: 0,
+        };
+        assert!(workspace.hover(uri.clone(), position).is_none());
+        assert!(workspace.macro_expansion(uri, position).is_none());
+    }
 }

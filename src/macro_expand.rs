@@ -54,7 +54,12 @@ struct Origin {
     uri: Option<String>,
     range: std::ops::Range<usize>,
     parent: Option<Arc<Origin>>,
+    // How many macro substitutions deep this text is; bounded by `MAX_MACRO_DEPTH`.
+    depth: usize,
 }
+
+// Deeper than any real `#define` chain; a self-referential macro would otherwise expand forever.
+const MAX_MACRO_DEPTH: usize = 200;
 
 impl Origin {
     fn top_level(range: std::ops::Range<usize>) -> Self {
@@ -62,6 +67,7 @@ impl Origin {
             uri: None,
             range,
             parent: None,
+            depth: 0,
         }
     }
 
@@ -70,6 +76,7 @@ impl Origin {
             uri: self.uri.clone(),
             range,
             parent: self.parent.clone(),
+            depth: self.depth,
         }
     }
 
@@ -78,6 +85,14 @@ impl Origin {
             uri: Some(uri),
             range,
             parent: Some(Arc::new(self.clone())),
+            depth: self.depth,
+        }
+    }
+
+    fn deeper(&self) -> Self {
+        Origin {
+            depth: self.depth + 1,
+            ..self.clone()
         }
     }
 }
@@ -90,6 +105,7 @@ type SourceMapVec = Vec<(std::ops::Range<usize>, Origin, bool)>;
 pub struct SourceMap {
     vec: SourceMapVec,
     source_olc: OLC,
+    source_lines: usize,
     pub(crate) expanded_olc: OLC,
     expanded_text: String,
     // OLC for each uri that ever appears as an `Origin::uri`.
@@ -167,6 +183,9 @@ impl SourceMap {
     // its full expansion, not just its own body's literal text. `None` if `position` isn't
     // inside any macro invocation.
     pub(crate) fn macro_expansion_at_position(&self, position: Position) -> Option<String> {
+        if position.line as usize >= self.source_lines {
+            return None;
+        }
         let offset = self
             .source_olc
             .line_character_to_offset((position.line as usize, position.character as usize));
@@ -513,6 +532,9 @@ impl WorkspaceStruct {
                         HMacroCommand::Include(included_name) => {
                             let included_name = included_name.deref();
                             match self.resolve_include(&included_name.print()) {
+                                // IRIS processes a repeated `#include` once; this also ends
+                                // include cycles.
+                                Some((inc_uri, ..)) if dones.included.contains_key(&inc_uri) => {}
                                 Some((inc_uri, inc_text, inc_units)) => {
                                     dones.note_included_file(inc_uri.clone(), &inc_text);
                                     let items = inc_units
@@ -553,6 +575,14 @@ impl WorkspaceStruct {
                         dones.note_invocation(&origin);
                         let MacroCallStruct { name, args } = ddd.deref();
                         let substituted = match definitions.get(&name.print()) {
+                            Some(_) if origin.depth >= MAX_MACRO_DEPTH => {
+                                dones.note_unresolved(
+                                    crate::check::TypeError::macro_expansion_too_deep,
+                                    name.print(),
+                                    &origin,
+                                );
+                                false
+                            }
                             Some(def) if def.is_compile_time() => false,
                             // `$$$M(args)` on a parameterless `M` keeps the argument list: the
                             // body is typically a method name the arguments then call.
@@ -563,7 +593,7 @@ impl WorkspaceStruct {
                                 if let Some(args) = args.as_ref() {
                                     units.extend(<Vec<MacroedUnit>>::parse(&args.print())?);
                                 }
-                                todos.push(units, origin.clone());
+                                todos.push(units, origin.deeper());
                                 true
                             }
                             Some(MacroDefinition {
@@ -590,7 +620,8 @@ impl WorkspaceStruct {
                                     .chain(std::iter::once(&literal))
                                     .map(|par| (par, text.clone(), arg_origin.clone(), precise))
                                     .collect();
-                                let items = substitute_macro_body(body, &param_map, &origin)?;
+                                let items =
+                                    substitute_macro_body(body, &param_map, &origin.deeper())?;
                                 todos.push_items(items);
                                 true
                             }
@@ -616,7 +647,8 @@ impl WorkspaceStruct {
                                     })
                                     .collect();
                                 param_map.sort_by(|(k1, ..), (k2, ..)| k2.cmp(k1));
-                                let items = substitute_macro_body(body, &param_map, &origin)?;
+                                let items =
+                                    substitute_macro_body(body, &param_map, &origin.deeper())?;
                                 todos.push_items(items);
                                 true
                             }
@@ -731,10 +763,9 @@ impl WorkspaceStruct {
         uri: &str,
         src: &str,
     ) -> Result<(Routine, SourceMap, MacroDefinitions), Diagnostic> {
-        let source_olc = OLC::new(src);
         let mut dones = DoneList::new();
         let result = self.expand_rtn_helper(src, &mut dones);
-        let map = dones.into_source_map(source_olc);
+        let map = dones.into_source_map(src);
         match result {
             Ok((routine, definitions)) => Ok((routine, map, definitions)),
             // A macro left unexpanded by an unresolved `#include` often doesn't re-parse (same
@@ -799,7 +830,6 @@ impl WorkspaceStruct {
         body: &str,
         base_definitions: &MacroDefinitions,
     ) -> Result<(String, SourceMap, MacroDefinitions), Diagnostic> {
-        let source_olc = OLC::new(&format!("{header}{body}"));
         let mut dones = DoneList::new();
         // The body's own `#define`s land here too, for `check::mod` to recognize.
         let mut definitions = base_definitions.clone();
@@ -828,7 +858,7 @@ impl WorkspaceStruct {
             );
             self.expand_units(&mut definitions, &mut todos, &mut dones)
         })();
-        let map = dones.into_source_map(source_olc);
+        let map = dones.into_source_map(&text);
         match result {
             Ok(()) => {
                 let expanded_text = map.expanded_text.clone();
@@ -937,6 +967,9 @@ fn substitute_macro_body<'a>(
     Ok(items)
 }
 
+// Builds the diagnostic for something left unresolved, once its source range is known.
+type UnresolvedError = fn(String, bindings::Range) -> crate::check::TypeError;
+
 struct DoneList {
     text: String,
     map: SourceMapVec,
@@ -945,7 +978,7 @@ struct DoneList {
     // `#include`s naming a file not open in the workspace — dropped rather than spliced back in
     // literally, since the raw `#include Name` text rarely re-parses and would otherwise mask
     // this diagnostic behind a generic syntax error.
-    unresolved: Vec<(String, Origin)>,
+    unresolved: Vec<(UnresolvedError, String, Origin)>,
 }
 
 impl DoneList {
@@ -960,7 +993,11 @@ impl DoneList {
     }
 
     fn note_unresolved_include(&mut self, name: String, origin: &Origin) {
-        self.unresolved.push((name, origin.clone()));
+        self.note_unresolved(crate::check::TypeError::cannot_find_include, name, origin);
+    }
+
+    fn note_unresolved(&mut self, make: UnresolvedError, name: String, origin: &Origin) {
+        self.unresolved.push((make, name, origin.clone()));
     }
 
     // Records a top-level macro call's own source span, for `macro_expansion_at_position`.
@@ -985,13 +1022,14 @@ impl DoneList {
         self.included.entry(uri).or_insert_with(|| OLC::new(text));
     }
 
-    fn into_source_map(self, source_olc: OLC) -> SourceMap {
+    fn into_source_map(self, src: &str) -> SourceMap {
+        let source_olc = OLC::new(src);
         let mut invocations = self.invocations;
         invocations.sort_by_key(|span| span.start);
         let unresolved = self
             .unresolved
             .into_iter()
-            .filter_map(|(name, origin)| {
+            .filter_map(|(make, name, origin)| {
                 let olc = match &origin.uri {
                     None => &source_olc,
                     Some(uri) => self.included.get(uri)?,
@@ -1000,12 +1038,13 @@ impl DoneList {
                     start: Position::from(olc.offset_to_line_character(origin.range.start)),
                     end: Position::from(olc.offset_to_line_character(origin.range.end)),
                 };
-                Some(crate::check::TypeError::cannot_find_include(name, range).into())
+                Some(make(name, range).into())
             })
             .collect();
         SourceMap {
             vec: self.map,
             source_olc,
+            source_lines: src.matches('\n').count() + 1,
             expanded_olc: OLC::new(&self.text),
             expanded_text: self.text,
             included: self.included,
