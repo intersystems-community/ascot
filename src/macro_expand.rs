@@ -560,6 +560,23 @@ impl WorkspaceStruct {
                                 precise,
                             )?;
                         }
+                        HMacroCommand::IfDef(..) | HMacroCommand::IfNDef(..) => {
+                            let defined = definitions.contains_key(&macro_name_in(input));
+                            let keep =
+                                defined == matches!(command.deref(), HMacroCommand::IfDef(..));
+                            self.resolve_branch(
+                                definitions,
+                                todos,
+                                dones,
+                                Some(keep),
+                                unit.print(),
+                                origin,
+                                precise,
+                            )?;
+                        }
+                        HMacroCommand::Undef(..) => {
+                            definitions.remove(&macro_name_in(input));
+                        }
                         _ => dones.push(&unit.print(), &origin, precise),
                     },
                     MacroRedex::DDD(ddd) => {
@@ -700,51 +717,78 @@ impl WorkspaceStruct {
         Ok(dones.text)
     }
 
-    // Resolves one `#if`/`#elseif` branch: "1" keeps it (discarding the rest of the chain via
-    // take_branch+skip_branch), "0" drops it and loops to try the closing `#elseif` in turn, and
-    // anything else is unresolved — the directive prints unexpanded and `todos` is left
-    // untouched, so the rest of the chain is also left unresolved rather than discarded.
+    // Resolves one `#if`/`#elseif` branch by its condition: "1" keeps it, "0" drops it, and
+    // anything else is unresolved (see `resolve_branch`).
     #[allow(clippy::too_many_arguments)]
     fn resolve_if(
         &self,
         definitions: &mut MacroDefinitions,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
-        mut condition: cos::MacroInput,
-        mut printed: String,
-        mut origin: Origin,
-        mut precise: bool,
+        condition: cos::MacroInput,
+        printed: String,
+        origin: Origin,
+        precise: bool,
     ) -> Result<(), tygr::Error> {
-        loop {
-            let expanded = self.expand_condition(definitions, &condition)?;
-            // `#if 0 /* Maintenance */` -- a trailing comment is common and not part of the test.
-            let end = ["/*", "//", ";"]
-                .iter()
-                .filter_map(|marker| expanded.find(marker))
-                .min()
-                .unwrap_or(expanded.len());
-            match expanded[..end].trim() {
-                "1" => {
-                    let (branch, mut end) = take_branch(todos);
-                    while !matches!(end, BranchEnd::EndIf) {
-                        end = skip_branch(todos);
-                    }
-                    todos.restore(branch);
-                    return Ok(());
+        let expanded = self.expand_condition(definitions, &condition)?;
+        // `#if 0 /* Maintenance */` -- a trailing comment is common and not part of the test.
+        let end = ["/*", "//", ";"]
+            .iter()
+            .filter_map(|marker| expanded.find(marker))
+            .min()
+            .unwrap_or(expanded.len());
+        let decided = match expanded[..end].trim() {
+            "1" => Some(true),
+            "0" => Some(false),
+            _ => None,
+        };
+        self.resolve_branch(definitions, todos, dones, decided, printed, origin, precise)
+    }
+
+    // Keeps a decided-true branch (discarding the rest of the chain via take_branch+skip_branch),
+    // drops a decided-false one and tries the closing `#elseif` in turn, and leaves an undecided
+    // one alone -- the directive prints unexpanded and `todos` is left untouched, so the rest of
+    // the chain is also left unresolved rather than discarded.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_branch(
+        &self,
+        definitions: &mut MacroDefinitions,
+        todos: &mut TodoList<'_>,
+        dones: &mut DoneList,
+        decided: Option<bool>,
+        printed: String,
+        origin: Origin,
+        precise: bool,
+    ) -> Result<(), tygr::Error> {
+        match decided {
+            Some(true) => {
+                let (branch, mut end) = take_branch(todos);
+                while !matches!(end, BranchEnd::EndIf) {
+                    end = skip_branch(todos);
                 }
-                "0" => match skip_branch(todos) {
-                    BranchEnd::EndIf | BranchEnd::Else => return Ok(()),
-                    BranchEnd::Elseif {
-                        condition: c,
-                        printed: p,
-                        origin: o,
-                        precise: pr,
-                    } => (condition, printed, origin, precise) = (c, p, o, pr),
-                },
-                _ => {
-                    dones.push(&printed, &origin, precise);
-                    return Ok(());
-                }
+                todos.restore(branch);
+                Ok(())
+            }
+            Some(false) => match skip_branch(todos) {
+                BranchEnd::EndIf | BranchEnd::Else => Ok(()),
+                BranchEnd::Elseif {
+                    condition,
+                    printed,
+                    origin,
+                    precise,
+                } => self.resolve_if(
+                    definitions,
+                    todos,
+                    dones,
+                    condition,
+                    printed,
+                    origin,
+                    precise,
+                ),
+            },
+            None => {
+                dones.push(&printed, &origin, precise);
+                Ok(())
             }
         }
     }
@@ -1161,7 +1205,9 @@ fn scan_branch<'a>(todos: &mut TodoList<'a>, mut keep: impl FnMut(TodoItem<'a>))
             }
             // Only `#endif` closes a nested `#if` — an `#elseif`/`#else` at level > 0 is just
             // one of *its* own branches, not a terminator, so it doesn't reduce the level.
-            HMacroCommand::If(..) => level += 1,
+            HMacroCommand::If(..) | HMacroCommand::IfDef(..) | HMacroCommand::IfNDef(..) => {
+                level += 1
+            }
             HMacroCommand::EndIf(..) => level -= 1,
             _ => {}
         }
@@ -1178,6 +1224,15 @@ fn take_branch<'a>(todos: &mut TodoList<'a>) -> (Vec<TodoItem<'a>>, BranchEnd) {
     let mut taken = Vec::new();
     let end = scan_branch(todos, |item| taken.push(item));
     (taken, end)
+}
+
+// The macro name an `#ifdef`/`#ifndef`/`#undef` names: its first word.
+fn macro_name_in(input: &cos::MacroInput) -> String {
+    import_macro_input(input)
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string()
 }
 
 // Joins a macro's (possibly multi-line, `##CONTINUE`-terminated) body into a single string
