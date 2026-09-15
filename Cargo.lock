@@ -41,7 +41,6 @@ dependencies = [
  "tygr-objectscript",
  "ureq",
  "url",
- "wasm-bindgen",
  "wit-bindgen",
 ]
 

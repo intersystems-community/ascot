@@ -1,14 +1,11 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use either::Either::{Left, Right};
-use tygr::{Grammar, StringEq, VecSep, Wrap};
+use tygr::Grammar;
 
 use crate::bindings::{self, ArgMode};
 use crate::check::{WorkspaceEnv, errors::*};
-use crate::cos::{
-    CallType, CollectionKind, Formal, LocalVariableName, Method, PropertyType, SGap, Type,
-};
+use crate::cos::{CallType, CollectionKind, Formal, PropertyType, Type};
 use crate::details::WithRange;
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -533,7 +530,6 @@ impl std::fmt::Display for HOTy {
 #[derive(Clone, Debug)]
 pub struct ClassTy {
     pub name: String,
-    pub parameters: Vec<(String, String)>,
     // Where `name` is declared in the workspace, if it's been resolved — not part of the
     // type's identity (a `##class(X)` literal and one merged from elsewhere both denote the
     // same class regardless of which happened to resolve this), so excluded from equality.
@@ -542,19 +538,11 @@ pub struct ClassTy {
 
 impl PartialEq for ClassTy {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.parameters == other.parameters
+        self.name == other.name
     }
 }
 
 impl Eq for ClassTy {}
-
-impl ClassTy {
-    pub fn new(name: String, parameters: Vec<(String, String)>) -> Self {
-        let mut cty = Self::from(name);
-        cty.parameters = parameters;
-        cty
-    }
-}
 
 pub fn normalize_class_name(name: &mut String) {
     if !name.contains(".") && name.starts_with("%") {
@@ -567,7 +555,6 @@ impl From<String> for ClassTy {
         normalize_class_name(&mut name);
         ClassTy {
             name,
-            parameters: vec![],
             location: None,
         }
     }
@@ -576,22 +563,9 @@ impl From<String> for ClassTy {
 impl std::fmt::Display for ClassTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.name.strip_prefix("%Library.") {
-            Some(this) => write!(f, "%{}", this)?,
-            None => write!(f, "{}", self.name)?,
-        };
-        if !self.parameters.is_empty() {
-            write!(
-                f,
-                "({})",
-                self.parameters
-                    .iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )?;
-            write!(f, ")")?;
+            Some(this) => write!(f, "%{}", this),
+            None => write!(f, "{}", self.name),
         }
-        Ok(())
     }
 }
 
@@ -969,65 +943,6 @@ impl TyProcedure {
             Some(arg.clone())
         } else {
             self.variadic_arg.as_ref().map(NormalArg::from)
-        }
-    }
-}
-
-impl From<&Method> for TyProcedure {
-    fn from(method: &Method) -> Self {
-        let mut args = method
-            .formal_spec
-            .iter()
-            .flat_map(|spec| spec.formals().into_iter())
-            .map(|formal| {
-                if formal.variadic.is_none() {
-                    Left(NormalArg::from(formal.deref()))
-                } else {
-                    Right(VariadicArg::from(formal.deref()))
-                }
-            })
-            .collect::<Vec<_>>();
-        let variadic = if args.last().is_some_and(|arg| arg.is_right()) {
-            args.pop().and_then(|arg| arg.right())
-        } else {
-            None
-        };
-        let procedure_block = method.keywords.as_ref().and_then(|keywords| {
-            let procedure_block = keywords.get("ProcedureBlock")?;
-            let procedure_block = match procedure_block {
-                crate::cos::KeywordEntry::Assign { .. } => None,
-                crate::cos::KeywordEntry::Not { .. } => Some(false),
-                crate::cos::KeywordEntry::Flag(..) => Some(true),
-            }?;
-            if !procedure_block {
-                None
-            } else {
-                let public_list = keywords.get("PublicList").and_then(|public_list| {
-                    let public_list = public_list.value()?;
-                    Some(
-                        <Wrap<
-                            (StringEq!("("), SGap),
-                            VecSep<LocalVariableName, Wrap<SGap, StringEq!(","), SGap>>,
-                            (SGap, StringEq!(")")),
-                        >>::parse(&public_list.print())
-                        .ok()?
-                        .deref()
-                        .items
-                        .iter()
-                        .map(|x| x.print())
-                        .collect(),
-                    )
-                });
-                Some(public_list.unwrap_or(vec![]))
-            }
-        });
-        Self {
-            normal_args: args.into_iter().filter_map(|arg| arg.left()).collect(),
-            variadic_arg: variadic,
-            procedure_block,
-            out: method.return_type.deref().as_deref().map(Ty::from),
-            uri: None,
-            declared_at: None,
         }
     }
 }

@@ -90,10 +90,6 @@ pub struct MGap(Raw<Vec<MGapUnit>>);
 
 #[derive(Grammar)]
 #[grammar(inline)]
-pub struct MGap1(Raw<Vec1<MGapUnit>>);
-
-#[derive(Grammar)]
-#[grammar(inline)]
 pub enum MGapUnit {
     SGap(SGapUnit),
     NL(NL),
@@ -124,70 +120,12 @@ pub struct LGap1(Raw<LGap1Enum>);
 #[grammar(inline)]
 pub struct LGap(Option<LGap1>);
 
-#[derive(Grammar)]
-pub struct LabelInClass {
-    label: Label,
-    // Undocumented, but common in practice.
-    params: Option<ParameterList>,
-}
-
 #[derive(Grammar, Clone)]
 #[grammar(inline)]
 pub struct HMacro {
     // some old routines have a bare "#"
     pub command: Prefix<StringEq!("#"), HMacroCommand>,
     pub input: MacroInput,
-}
-
-#[derive(Clone)]
-pub struct ToEndIf(String);
-
-impl Grammar for ToEndIf {
-    type First = <tygr::first::AnyChar as tygr::first::First>::Nullable;
-
-    fn parse_at(input: &str, pos: usize, state: State) -> Option<(Self, usize)> {
-        let new_pos = Self::scan_at(input, pos, state)?;
-        Some((Self(input[pos..new_pos].to_string()), new_pos))
-    }
-
-    fn scan_at(input: &str, mut pos: usize, mut state: State) -> Option<usize> {
-        let mut level: usize = 0;
-        loop {
-            pos = <StringEndsWith<
-                Prefix<StringEq!("#"), Either<StringEqCI!("If"), StringEqCI!("EndIf")>>,
-            >>::scan_at(input, pos, state.reborrow())?;
-            if input.get(pos - 3..pos)?.to_lowercase().ends_with("#if") {
-                level += 1;
-            } else {
-                if level == 0 {
-                    break Some(pos);
-                } else {
-                    level -= 1;
-                }
-            }
-        }
-    }
-
-    fn print_to(&self, buf: &mut String) {
-        buf.push_str(&self.0)
-    }
-
-    fn to_bnf() -> bnf::Expr {
-        bnf::Expr::RuleRef("...to the matching #EndIf...".to_string())
-    }
-
-    fn fail_at(pos: usize, state: State) -> bool {
-        <StringEndsWith<Prefix<StringEq!("#"), Either<StringEqCI!("If"), StringEqCI!("EndIf")>>>>::fail_at(
-            pos, state,
-        )
-    }
-}
-
-#[derive(Grammar)]
-pub enum IfRelatedMacro {
-    ElseIf(StringEqCI!("ElseIf")),
-    Else(StringEqCI!("Else")),
-    EndIf(StringEqCI!("EndIf")),
 }
 
 #[derive(Grammar, Clone)]
@@ -234,20 +172,6 @@ type LGapX<T> = Prefix<LGap, T>;
 
 #[derive(Grammar)]
 #[grammar(inline)]
-pub struct SGapX<T> {
-    pub before: SGap,
-    pub it: T,
-}
-
-impl<T> Deref for SGapX<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.it
-    }
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
 pub struct SGap1X<T> {
     before: SGap1,
     it: T,
@@ -255,21 +179,6 @@ pub struct SGap1X<T> {
 
 impl<T> Deref for SGap1X<T> {
     type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.it
-    }
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub struct XEGap<T> {
-    pub it: T,
-    after: SGap,
-}
-
-impl<T> Deref for XEGap<T> {
-    type Target = T;
-
     fn deref(&self) -> &Self::Target {
         &self.it
     }
@@ -1519,12 +1428,6 @@ pub struct OpenArg {
 pub type IOParameters = VecSep<IOParameter, StringEq!(":")>;
 
 #[derive(Grammar)]
-pub enum Device {
-    Number(Digits),
-    String(OSString),
-}
-
-#[derive(Grammar)]
 pub struct IOParameter {
     pub key: Option<(StringEq!("/"), Identifier)>,
     pub eq: Option<StringEq!("=")>,
@@ -2230,55 +2133,6 @@ char_class!(pub IsOSTextSafe, "objectscript_text", |ch| ch.is_alphanumeric()
         | ','
 ));
 
-char_class!(pub IsWSOrTB, "ws_or_tb", |ch| ch == ' ' || ch == '\t');
-
-#[derive(Grammar, Clone)]
-pub struct JavaScript(Raw<Vec<JavaScriptUnit>>);
-
-#[derive(Grammar)]
-#[grammar(hidden)]
-pub enum JavaScriptUnit {
-    Safe(StringOf1<IsJSSafe>),
-    String(JSString<Impossible>),
-    LC(GenericLineComment<StringEq!("//")>),
-    RC(RangeComment),
-    Slash(StringEq!("/")),
-    Escaped(StringEq!("\\"), CharOf<IsNotNL>),
-    Block(StringEq!("{"), Vec<JavaScriptUnit>, StringEq!("}")),
-}
-
-char_class!(pub IsJSSafe, "js_safe", |ch| {
-    ch.is_alphanumeric()
-        || ch.is_whitespace()
-        || matches!(
-            ch,
-            '(' | ')'
-                | '['
-                | ']'
-                | '!'
-                | '.'
-                | '='
-                | '+'
-                | '-'
-                | '*'
-                | '|'
-                | ':'
-                | ','
-                | ';'
-                | '?'
-                | '$'
-                | '&'
-                | '<'
-                | '>'
-                | '_'
-                | '%'
-                | '^'
-                // This is not safe in EmbededJS but safe for JavaScript
-                | '#'
-                | '@'
-        )
-});
-
 #[derive(Grammar)]
 pub struct HashEmbededOS(StringEq!("#("), StringEndsWith<StringEq!(")#")>);
 
@@ -2315,9 +2169,6 @@ pub enum HTMLTagContentUnit {
     Str(JSString<HashEmbededOS>),
     Sym(CharOf<IsHTMLContentSafe>),
 }
-
-char_class!(pub IsHTMLTagSafe, "is_html_tag_safe", |ch| ch.is_alphanumeric()
-    || ch == '/');
 
 type HTMLTagContent = Vec<HTMLTagContentUnit>;
 
@@ -6049,10 +5900,6 @@ pub struct SpaceOrTab(StringOf<IsSpaceOrTab>);
 #[grammar(hidden)]
 pub struct SpaceOrTab1(StringOf1<IsSpaceOrTab>);
 
-char_class!(pub IsRoutineNameStart, "routine_name_start", |ch| {
-    ch.is_ascii_alphabetic() || ch == '%'
-});
-
 char_class!(pub IsRoutineNamePart, "routine_name_part", |ch| {
     ch.is_alphanumeric() || ch == '.'
 });
@@ -6087,8 +5934,6 @@ pub struct MacroName(pub Range<MacroNameText>);
 #[derive(Grammar, Clone)]
 pub struct MacroNameText(StringOf1<IsMacroNameChar>);
 
-char_class!(pub IsValueChar, "value_char", |ch| ch.is_alphanumeric());
-
 #[derive(Grammar)]
 pub struct Value(Expr);
 
@@ -6096,12 +5941,6 @@ pub struct Value(Expr);
 pub enum ScopeKeyword {
     Private(StringEqCI!("Private")),
     Public(StringEqCI!("Public")),
-}
-
-#[derive(Grammar)]
-pub struct TrailingSpace {
-    space: SpaceOrTab,
-    comment: Option<LineComment>,
 }
 
 #[derive(Grammar, Clone, PartialEq, Eq)]
