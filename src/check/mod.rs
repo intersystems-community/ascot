@@ -1164,17 +1164,11 @@ impl CheckCommandInner for cos::Command {
             cos::Command::Lock { .. } => Ok(()),
             cos::Command::Hang { .. } => Ok(()),
             cos::Command::Job { .. } => Ok(()),
-            cos::Command::TStart { pc, .. } => check_pc(pc, env, flow, |flow| flow.handle_tstart()),
-            cos::Command::TCommit { pc, .. } => {
-                check_pc(pc, env, flow, |flow| flow.handle_tcommit())
-            }
-            cos::Command::TRollback { pc, one, .. } => check_pc(pc, env, flow, |flow| {
-                if one.is_some() {
-                    flow.handle_trollback1()
-                } else {
-                    flow.handle_trollback()
-                }
-            }),
+            // The transaction level isn't tracked: it depends on the run-time conditions around
+            // each `TSTART`/`TCOMMIT`, and a flow-insensitive count only produced false alarms.
+            cos::Command::TStart { pc, .. }
+            | cos::Command::TCommit { pc, .. }
+            | cos::Command::TRollback { pc, .. } => check_pc(pc, env, flow, |_| Ok(())),
             cos::Command::ZWrite { pc, exp, .. } => check_pc(pc, env, flow, |flow| {
                 if let Some(exp) = exp {
                     let _ = exp.to_ty(env, flow)?;
@@ -1384,8 +1378,12 @@ fn check_try<'a>(
     catch_target: Option<&cos::CatchTarget>,
     catch_block: &Range<cos::Block>,
 ) -> Result<(), QuasiTypeError> {
-    let mut catch_flow = flow.split();
+    let before = flow.split();
     flow.with_block(env.range(try_block), |flow| try_block.check(env, flow))?;
+    // The exception may be thrown anywhere in the try block, so the catch block starts from
+    // anything between its start and its end.
+    let mut catch_flow = flow.split();
+    catch_flow.merge(before)?;
     if let Some(target) = catch_target
         && let Left(local) = target.deref().as_local(env, flow)?
     {
@@ -1403,30 +1401,26 @@ fn check_while<'a>(
     range: bindings::Range,
     block: &ProcedureBody,
 ) -> Result<(), QuasiTypeError> {
-    // The condition is re-evaluated every iteration; whatever it writes (e.g. a `$LISTNEXT`
-    // by-ref pointer) is consumed by that next re-evaluation, which a single pass can't see.
-    // Evaluate it once, throwaway, to prime that state, before the real evaluation below.
-    let was_suppressed = flow.suppress_diagnostics();
-    let result = env.with_hints_suppressed(|| {
-        check_and(
+    // The condition is re-evaluated every iteration, so it's part of each loop pass: the first
+    // (throwaway) pass primes whatever it writes (e.g. a `$LISTNEXT` by-ref pointer), and the
+    // second re-applies its refinement to the state the body left behind. The loop is left where
+    // the last pass found it false.
+    let if_false = std::cell::RefCell::new(None);
+    flow.with_loop(range, false, false, env, |flow| {
+        let exit = check_and(
             cnds.first.as_ref().map(|x| x.deref()),
             &cnds.remaining,
             env,
             flow,
             false,
-        )
-    });
-    flow.restore_diagnostics(was_suppressed);
-    result?;
-    let if_false = check_and(
-        cnds.first.as_ref().map(|x| x.deref()),
-        &cnds.remaining,
-        env,
-        flow,
-        false,
-    )?;
-    flow.with_loop(range, true, false, env, |flow| block.check(env, flow))?;
-    flow.merge(if_false)
+        )?;
+        if_false.replace(Some(exit));
+        block.check(env, flow)
+    })?;
+    match if_false.into_inner() {
+        Some(if_false) => flow.merge_loop_exit(if_false),
+        None => Ok(()),
+    }
 }
 
 fn check_do_while<'a>(

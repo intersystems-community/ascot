@@ -339,7 +339,10 @@ impl WorkspaceStruct {
     ) -> Option<Diagnostic> {
         let other_uri = self.doc_cache.iter().find_map(|(other_uri, entry)| {
             let cell = entry.as_ref().ok()?;
-            (other_uri != uri && cell.borrow().name(other_uri) == name).then(|| other_uri.clone())
+            (other_uri != uri
+                && DocKind::from_uri(other_uri) == Some(DocKind::Cls)
+                && cell.borrow().name(other_uri) == name)
+                .then(|| other_uri.clone())
         })?;
         let other_range = self.cls_details(&other_uri).ok()?.name.range;
         Some(Diagnostic {
@@ -3863,8 +3866,9 @@ mod tests {
         );
     }
 
+    // Whether the levels agree depends on the run-time conditions, so they aren't tracked.
     #[test]
-    fn disagreeing_transaction_levels_are_a_soft_warning() {
+    fn transaction_levels_are_not_checked() {
         let workspace = Workspace::new(None);
         let uri = "T.cls".to_string();
         workspace.open(
@@ -3872,22 +3876,8 @@ mod tests {
             "Class Test.T Extends %RegisteredObject {\nClassMethod M(x) {\n if x {\n  tstart\n }\n if x {\n  tcommit\n }\n write undefinedVar\n quit\n}\n}\n".to_string(),
         );
         let diagnostics = workspace.diagnostics(uri);
-        let tlevel: Vec<_> = diagnostics
-            .iter()
-            .filter(|d| d.message.contains("TLevels"))
-            .collect();
-        assert!(!tlevel.is_empty(), "{diagnostics:?}");
-        assert!(
-            tlevel
-                .iter()
-                .all(|d| d.severity == bindings::DiagnosticSeverity::Warning)
-        );
-        // Soft: the method's checking carried on past the disagreement.
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.message.contains("undefinedVar"))
-        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(diagnostics[0].message.contains("undefinedVar"));
     }
 
     #[test]
@@ -4629,5 +4619,122 @@ mod tests {
             assert!(hover.is_some(), "no hover at {line}:{character}");
             assert_eq!(workspace.hover_type(col0.clone(), position), hover);
         }
+    }
+
+    #[test]
+    fn subscripted_data_is_not_decided_by_the_scalar() {
+        let diagnostics = class_diagnostics(
+            "ClassMethod M() {\n Set x = 1\n If $D(x(\"a\")) { Write \"sub\" } Else { Write \"none\" }\n Write x\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn catch_block_sees_writes_from_the_try_block_as_maybe() {
+        let diagnostics = class_diagnostics(
+            "ClassMethod M() {\n Try { Set x = 1  Set y = $ZF(-100,\"\",\"ls\") } Catch ex { Write x, y }\n}\n",
+        );
+        assert!(!diagnostics.is_empty());
+        for d in &diagnostics {
+            assert_eq!(d.severity, bindings::DiagnosticSeverity::Warning, "{d:?}");
+            assert!(d.message.contains("may be undefined"), "{d:?}");
+        }
+    }
+
+    #[test]
+    fn while_condition_is_reapplied_on_every_pass() {
+        let diagnostics = class_diagnostics(
+            "ClassMethod M() {\n Set x = 1\n While $D(x) { Write x  Kill x }\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn continue_in_a_loop_reaches_the_code_after_it() {
+        let diagnostics = class_diagnostics(
+            "ClassMethod M() {\n Do { If $R(2) { Continue }  Set x = 1 } While $R(2)\n Write x\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("may be undefined: x"),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn new_outside_a_procedure_block_undefines_the_variable() {
+        let diagnostics = diagnostics_for(&[(
+            "NewX.mac",
+            "ROUTINE NewX\n\tSet x = 1\n\tNew x\n\tWrite x\n\tQuit\n",
+        )]);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.severity == bindings::DiagnosticSeverity::Error
+                    && d.message.contains("undefined: x")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn integer_literal_too_big_for_a_constant_is_not_zero() {
+        let diagnostics = class_diagnostics("ClassMethod M() {\n If 4294967296 { Write 1 }\n}\n");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn new_returns_an_instance_even_when_onnew_is_unresolvable() {
+        // No `Extends` at all: every member is known, so a missing one is an error.
+        let diagnostics = without_hints(diagnostics_for(&[(
+            "Nw.cls",
+            "Class Test.Nw {\nProperty P As %String;\nClassMethod M() {\n Set obj = ##class(Test.Nw).%New()\n Do obj.Nope()\n Write obj.P\n}\n}\n",
+        )]));
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("Cannot find member 'Nope'"),
+            "{diagnostics:?}"
+        );
+        // A system superclass outside the workspace: `Nope` can't be confirmed, but `%New` can.
+        let diagnostics = class_diagnostics(
+            "Property P As %String;\nClassMethod M() {\n Set obj = ..%New()\n Do obj.Nope()\n Write obj.P\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
+        assert!(diagnostics[0].message.contains("'Nope'"), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn get_of_a_maybe_undefined_variable_merges_with_the_default() {
+        let workspace = Workspace::new(None);
+        let uri = "G.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.G {\nClassMethod G(a As Test.G) {\n If $R(2) { Kill a }\n Set b = $G(a)\n Write b\n}\n}\n".to_string(),
+        );
+        let hover = workspace
+            .hover_type(
+                uri,
+                bindings::Position {
+                    line: 4,
+                    character: 7,
+                },
+            )
+            .expect("hover on `b`");
+        assert!(!hover.contains("String"), "{hover}");
+    }
+
+    // A routine sharing a class's name is unrelated to it: not a duplicate, and not a class to
+    // read the duplicate's range from.
+    #[test]
+    fn a_routine_named_like_a_class_is_not_a_duplicate_class() {
+        let diagnostics = diagnostics_for(&[
+            (
+                "Same.cls",
+                "Class Test.Same {\nClassMethod M() {\n Quit\n}\n}\n",
+            ),
+            ("Same.mac", "ROUTINE Test.Same\n\tQuit\n"),
+            ("Same.inc", "ROUTINE Test.Same [Type=INC]\n#define X 1\n"),
+        ]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 }
