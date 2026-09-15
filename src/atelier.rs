@@ -284,6 +284,10 @@ struct MemberRow {
     #[serde(default, deserialize_with = "empty_string_as_none")]
     collection: Option<String>,
     #[serde(default)]
+    relationship: Value,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    cardinality: Option<String>,
+    #[serde(default)]
     multi_dimensional: Value,
     #[serde(deserialize_with = "empty_string_as_none")]
     stub: Option<String>,
@@ -311,15 +315,16 @@ fn all_mem_uncached(conn: &AtelierConnection, cls: &str) -> Vec<MemberRow> {
     let sql = |description: &str| {
         format!(
             "SELECT Name, NULL AS Aliases, 'method' AS MemberType, {description}, FormalSpec, \
-             ReturnType, NULL AS Collection, 0 AS MultiDimensional, Stub, ClassMethod, \
-             Deprecated, Origin FROM %Dictionary.CompiledMethod WHERE Parent = ? UNION ALL \
-             SELECT Name, Aliases, 'property' AS MemberType, {description}, NULL AS FormalSpec, \
-             Type AS ReturnType, Collection, MultiDimensional, NULL AS Stub, 0 AS ClassMethod, \
-             Deprecated, Origin FROM %Dictionary.CompiledProperty WHERE Parent = ? UNION ALL \
-             SELECT Name, NULL AS Aliases, 'parameter' AS MemberType, {description}, NULL AS \
-             FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS MultiDimensional, NULL AS \
-             Stub, 0 AS ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledParameter WHERE \
-             Parent = ?"
+             ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS Relationship, NULL AS \
+             Cardinality, Stub, ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledMethod \
+             WHERE Parent = ? UNION ALL SELECT Name, Aliases, 'property' AS MemberType, \
+             {description}, NULL AS FormalSpec, Type AS ReturnType, Collection, MultiDimensional, \
+             Relationship, Cardinality, NULL AS Stub, 0 AS ClassMethod, Deprecated, Origin FROM \
+             %Dictionary.CompiledProperty WHERE Parent = ? UNION ALL SELECT Name, NULL AS \
+             Aliases, 'parameter' AS MemberType, {description}, NULL AS FormalSpec, Type AS \
+             ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS Relationship, NULL AS \
+             Cardinality, NULL AS Stub, 0 AS ClassMethod, Deprecated, Origin FROM \
+             %Dictionary.CompiledParameter WHERE Parent = ?"
         )
     };
     // The Atelier query API fails the whole query over a text value that merely starts with `{`
@@ -424,6 +429,18 @@ fn property_type(
 
 fn row_to_member_kind(row: &MemberRow) -> MemberKind {
     match row.member_type.as_str() {
+        // A `many`/`children` relationship is the collection of the related objects.
+        "property" if is_truthy(&row.relationship) => MemberKind::Relationship(
+            match row
+                .cardinality
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("many" | "children") => Some("%Library.RelationshipObject".to_string()),
+                _ => row.return_type.clone(),
+            },
+        ),
         "property" => MemberKind::Property(property_type(
             row.collection.as_deref(),
             row.return_type.clone(),

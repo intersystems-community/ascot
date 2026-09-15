@@ -673,7 +673,7 @@ fn process_member(
                 keywords,
                 ..
             } => (
-                with_range_name(&name.0, olc),
+                with_range(name.0.as_ref().map(|_| name.name()), olc),
                 deprecated || is_deprecated(&keywords),
                 MemberKindSpecificDetails::Property {
                     ty: as_type.as_deref().map(Ty::from),
@@ -688,7 +688,7 @@ fn process_member(
                 keywords,
                 ..
             } => (
-                with_range_name(&name.0, olc),
+                with_range(name.0.as_ref().map(|_| name.name()), olc),
                 deprecated || is_deprecated(&keywords),
                 MemberKindSpecificDetails::Property {
                     // A `many`/`children` relationship is the collection of the related objects.

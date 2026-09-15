@@ -554,10 +554,16 @@ impl WorkspaceStruct {
                         let MacroCallStruct { name, args } = ddd.deref();
                         let substituted = match definitions.get(&name.print()) {
                             Some(def) if def.is_compile_time() => false,
+                            // `$$$M(args)` on a parameterless `M` keeps the argument list: the
+                            // body is typically a method name the arguments then call.
                             Some(MacroDefinition {
                                 params: None, body, ..
                             }) => {
-                                todos.push(<Vec<MacroedUnit>>::parse(body)?, origin.clone());
+                                let mut units = <Vec<MacroedUnit>>::parse(body)?;
+                                if let Some(args) = args.as_ref() {
+                                    units.extend(<Vec<MacroedUnit>>::parse(&args.print())?);
+                                }
+                                todos.push(units, origin.clone());
                                 true
                             }
                             Some(MacroDefinition {
@@ -798,13 +804,19 @@ impl WorkspaceStruct {
         // The body's own `#define`s land here too, for `check::mod` to recognize.
         let mut definitions = base_definitions.clone();
         // Tokenized together so every offset, including a macro argument's, is relative to the
-        // same text.
+        // same text; the header itself is copied verbatim (a `{$$$X}` parameter default must not
+        // change its length, or the body would be cut at the wrong offset).
         let text = format!("{header}{body}");
         let result = (|| -> Result<(), tygr::Error> {
             let units = <Vec<Range<MacroedUnit>>>::parse(&text)?;
+            let (in_header, in_body): (Vec<_>, Vec<_>) =
+                units.iter().partition(|x| x.end <= header.len());
+            for x in in_header {
+                dones.push(&x.print(), &Origin::top_level(x.start..x.end), true);
+            }
             let mut todos = TodoList::new(
-                units
-                    .iter()
+                in_body
+                    .into_iter()
                     .map(|x| {
                         (
                             Cow::Borrowed(x.deref()),
