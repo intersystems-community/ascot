@@ -4606,4 +4606,28 @@ mod tests {
         assert!(workspace.hover(uri.clone(), position).is_none());
         assert!(workspace.macro_expansion(uri, position).is_none());
     }
+
+    // A `#dim` at column 0 (legal in a routine) is analyzed exactly like an indented one.
+    #[test]
+    fn dim_at_column_zero_in_a_routine_is_checked_in_place() {
+        let body =
+            "#dim x As %String\n\tWrite x\n\tQuit\nlbl\n#dim y As %Integer\n\tWrite y\n\tQuit\n";
+        let workspace = Workspace::new(None);
+        let col0 = "Col0.mac".to_string();
+        let indented = "Indented.mac".to_string();
+        workspace.open(col0.clone(), format!("ROUTINE Col0\n{body}"));
+        workspace.open(
+            indented.clone(),
+            format!("ROUTINE Indented\n{}", body.replace("#dim", " #dim")),
+        );
+        let diagnostics = workspace.diagnostics(indented.clone());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(workspace.diagnostics(col0.clone()), diagnostics);
+        for (line, character) in [(2, 7), (6, 7)] {
+            let position = bindings::Position { line, character };
+            let hover = workspace.hover_type(indented.clone(), position);
+            assert!(hover.is_some(), "no hover at {line}:{character}");
+            assert_eq!(workspace.hover_type(col0.clone(), position), hover);
+        }
+    }
 }

@@ -6275,8 +6275,8 @@ pub type LineStart = Either<SGap1, NotFollowedBy<CharOf<IsNotHash>>>;
 
 #[derive(Grammar)]
 pub struct RoutineMain {
-    pub line_1: Option<CommandLine<LineStart>>,
-    pub line_n: Option<Prefix<Raw<Vec1<NL>>, VecSep<CommandLine<LineStart>, Raw<Vec1<NL>>>>>,
+    pub line_1: Option<CommandLine<SGap1>>,
+    pub line_n: Option<Prefix<Raw<Vec1<NL>>, VecSep<CommandLine<SGap1>, Raw<Vec1<NL>>>>>,
 }
 
 #[derive(Grammar, Clone)]
@@ -6346,11 +6346,6 @@ mod regression_tests {
         let keywords = methods(&cls)[0].header.keywords.as_ref().expect("keywords");
         assert!(keywords.get("CodeMode").is_some());
         assert!(keywords.get("Language").is_none());
-    }
-
-    #[test]
-    fn dim_at_column_zero_in_routine() {
-        routine("#dim x as %String\n s x=1\nlbl\n#dim y as %String\n q\n").expect("Ok");
     }
 
     #[test]

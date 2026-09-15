@@ -3195,8 +3195,8 @@ trait AsCommandLines<Start: 'static> {
     fn as_command_lines(&self) -> impl Iterator<Item = &CommandLine<Start>>;
 }
 
-impl AsCommandLines<LineStart> for RoutineMain {
-    fn as_command_lines(&self) -> impl Iterator<Item = &CommandLine<LineStart>> {
+impl AsCommandLines<SGap1> for RoutineMain {
+    fn as_command_lines(&self) -> impl Iterator<Item = &CommandLine<SGap1>> {
         self.line_1
             .iter()
             .chain(self.line_n.iter().flat_map(|line_n| line_n.items.iter()))

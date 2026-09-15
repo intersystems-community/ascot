@@ -504,7 +504,7 @@ impl WorkspaceStruct {
     ) -> Result<(), tygr::Error> {
         while let Some((unit, origin, precise)) = todos.pop() {
             match unit.as_ref() {
-                MacroedUnit::Plain(unit) => dones.push(&unit.print(), &origin, precise),
+                MacroedUnit::Plain(unit) => dones.push_plain(&unit.print(), &origin, precise),
                 MacroedUnit::Redex(unit) => match unit {
                     MacroRedex::H(HMacro { command, input }) => match command.deref() {
                         HMacroCommand::Define { name, args, .. } => {
@@ -1014,6 +1014,36 @@ impl DoneList {
         self.text.push_str(text);
         self.map
             .push((start..self.text.len(), origin.clone(), precise));
+    }
+
+    // Like `push`, but a `#dim` at column 0 (legal in a routine, where the plain grammar keeps
+    // column 0 for labels) is indented by one space, mapped imprecisely so positions stay exact.
+    fn push_plain(&mut self, text: &str, origin: &Origin, precise: bool) {
+        let mut done = 0;
+        let mut at_line_start = self.text.is_empty() || self.text.ends_with('\n');
+        for (i, ch) in text.char_indices() {
+            if at_line_start
+                && text[i..]
+                    .get(..4)
+                    .is_some_and(|w| w.eq_ignore_ascii_case("#dim"))
+            {
+                let piece = if precise {
+                    origin.with_range(origin.range.start + done..origin.range.start + i)
+                } else {
+                    origin.clone()
+                };
+                self.push(&text[done..i], &piece, precise);
+                self.push(" ", origin, false);
+                done = i;
+            }
+            at_line_start = ch == '\n';
+        }
+        let piece = if precise {
+            origin.with_range(origin.range.start + done..origin.range.end)
+        } else {
+            origin.clone()
+        };
+        self.push(&text[done..], &piece, precise);
     }
 
     // Remembers `uri`'s own text so a precise origin into it can later be converted to a
