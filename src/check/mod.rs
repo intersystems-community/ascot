@@ -1164,17 +1164,11 @@ impl CheckCommandInner for cos::Command {
             cos::Command::Lock { .. } => Ok(()),
             cos::Command::Hang { .. } => Ok(()),
             cos::Command::Job { .. } => Ok(()),
-            cos::Command::TStart { pc, .. } => check_pc(pc, env, flow, |flow| flow.handle_tstart()),
-            cos::Command::TCommit { pc, .. } => {
-                check_pc(pc, env, flow, |flow| flow.handle_tcommit())
-            }
-            cos::Command::TRollback { pc, one, .. } => check_pc(pc, env, flow, |flow| {
-                if one.is_some() {
-                    flow.handle_trollback1()
-                } else {
-                    flow.handle_trollback()
-                }
-            }),
+            // The transaction level isn't tracked: it depends on the run-time conditions around
+            // each `TSTART`/`TCOMMIT`, and a flow-insensitive count only produced false alarms.
+            cos::Command::TStart { pc, .. }
+            | cos::Command::TCommit { pc, .. }
+            | cos::Command::TRollback { pc, .. } => check_pc(pc, env, flow, |_| Ok(())),
             cos::Command::ZWrite { pc, exp, .. } => check_pc(pc, env, flow, |flow| {
                 if let Some(exp) = exp {
                     let _ = exp.to_ty(env, flow)?;
@@ -1389,7 +1383,7 @@ fn check_try<'a>(
     // The exception may be thrown anywhere in the try block, so the catch block starts from
     // anything between its start and its end.
     let mut catch_flow = flow.split();
-    catch_flow.merge_for_catch(before)?;
+    catch_flow.merge(before)?;
     if let Some(target) = catch_target
         && let Left(local) = target.deref().as_local(env, flow)?
     {

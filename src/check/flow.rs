@@ -254,10 +254,7 @@ impl<'a> Flow<'a> {
                 creates: RefCell::new(HashSet::new()),
                 incomplete: std::cell::Cell::new(false),
             }),
-            bindings: Some(Bindings {
-                bindings,
-                tlevel: 0,
-            }),
+            bindings: Some(Bindings { bindings }),
             loop_context: None,
             current_range: range,
         };
@@ -429,22 +426,6 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
-    // Merges the state a `Try` block was entered in into the state it left behind, for the
-    // `Catch` block, which may be entered from anywhere in between. The transaction level is kept
-    // as it was at entry: whether the exception came before or after a `TSTART` isn't knowable,
-    // and the idiomatic `If tranOpen { TROLLBACK }` would otherwise be flagged as inconsistent.
-    pub(crate) fn merge_for_catch(&mut self, before: Self) -> Result<(), QuasiTypeError> {
-        let tlevel = before.bindings.as_ref().map(|b| b.tlevel);
-        let was_suppressed = self.suppress_diagnostics();
-        let result = self.merge(before);
-        self.restore_diagnostics(was_suppressed);
-        result?;
-        if let (Some(mine), Some(tlevel)) = (self.bindings.as_mut(), tlevel) {
-            mine.tlevel = tlevel;
-        }
-        Ok(())
-    }
-
     // Merges a state split off inside the loop just left, as another way out of it: its loop
     // context is the loop's own (and empty, being split at the condition), not this flow's.
     pub(crate) fn merge_loop_exit(&mut self, mut them: Self) -> Result<(), QuasiTypeError> {
@@ -526,16 +507,6 @@ impl<'a> Flow<'a> {
     }
 
     pub(crate) fn merge(&mut self, them: Self) -> Result<(), QuasiTypeError> {
-        // Soft: the idiomatic `if x { tstart } ... if x { tcommit }` disagrees here too, and
-        // telling it apart from a transaction really left open needs the conditions correlated.
-        if let (Some(mine), Some(theirs)) = (&self.bindings, &them.bindings)
-            && mine.tlevel != theirs.tlevel
-        {
-            self.add_soft_diagnostic(QuasiTypeError::inconsistent_tlevel(
-                mine.tlevel,
-                theirs.tlevel,
-            ));
-        }
         merge_all_bindings(
             &mut self.bindings,
             them.bindings,
@@ -948,22 +919,6 @@ impl<'a> Flow<'a> {
         Ok(self.lookup(name.to_string())?.subscript_assigned.is_some())
     }
 
-    pub(crate) fn handle_tstart(&mut self) -> Result<(), QuasiTypeError> {
-        self.bindings()?.handle_tstart()
-    }
-
-    pub(crate) fn handle_tcommit(&mut self) -> Result<(), QuasiTypeError> {
-        self.bindings()?.handle_tcommit()
-    }
-
-    pub(crate) fn handle_trollback1(&mut self) -> Result<(), QuasiTypeError> {
-        self.bindings()?.handle_trollback1()
-    }
-
-    pub(crate) fn handle_trollback(&mut self) -> Result<(), QuasiTypeError> {
-        self.bindings()?.handle_trollback()
-    }
-
     pub(crate) fn is_public(&mut self, name: &str) -> Result<bool, QuasiTypeError> {
         Ok(!self.lookup(name.to_string())?.private)
     }
@@ -1068,7 +1023,6 @@ impl Binding {
 #[derive(Clone, Default)]
 pub struct Bindings {
     bindings: HashMap<String, Binding>,
-    tlevel: i8,
 }
 
 impl Bindings {
@@ -1100,26 +1054,6 @@ impl Bindings {
     // Default is a closure, not a stored `procedure_block`, since only `Flow::lookup` knows it.
     fn entry(&mut self, name: String, default: impl FnOnce() -> Binding) -> &mut Binding {
         self.bindings.entry(name).or_insert_with(default)
-    }
-
-    pub(crate) fn handle_tstart(&mut self) -> Result<(), QuasiTypeError> {
-        self.tlevel += 1;
-        Ok(())
-    }
-
-    pub(crate) fn handle_tcommit(&mut self) -> Result<(), QuasiTypeError> {
-        self.tlevel -= 1;
-        Ok(())
-    }
-
-    pub(crate) fn handle_trollback1(&mut self) -> Result<(), QuasiTypeError> {
-        self.tlevel -= 1;
-        Ok(())
-    }
-
-    pub(crate) fn handle_trollback(&mut self) -> Result<(), QuasiTypeError> {
-        self.tlevel = 0;
-        Ok(())
     }
 
     fn refine_on_prop(&mut self, target: u32, term: &Term) {
@@ -1161,8 +1095,6 @@ pub fn merge_all_bindings(
                 let merged = this_binding.merge(that_binding, env, &name)?;
                 this.bindings.insert(name, merged);
             }
-            // A disagreement was already reported by `Flow::merge`; keep the deeper level.
-            this.tlevel = this.tlevel.max(that.tlevel);
             Ok(())
         }
     }

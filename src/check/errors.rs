@@ -27,10 +27,6 @@ impl QuasiTypeError {
         Self::WithoutRange(TypeErrorKind::UndefinedMacro { name, suggestions }, vec![])
     }
 
-    pub fn inconsistent_tlevel(this: i8, that: i8) -> Self {
-        Self::WithoutRange(TypeErrorKind::InconsistentTLevel { this, that }, vec![])
-    }
-
     pub fn unreachable() -> Self {
         Self::WithoutRange(TypeErrorKind::Unreachable, vec![])
     }
@@ -381,10 +377,6 @@ pub enum TypeErrorKind {
         name: String,
         suggestions: Vec<String>,
     },
-    InconsistentTLevel {
-        this: i8,
-        that: i8,
-    },
     ContinueNotInLoop,
     DuplicatedMemberName {
         name: String,
@@ -443,7 +435,6 @@ impl TypeErrorKind {
             TypeErrorKind::NotInClass => DiagnosticSeverity::Error,
             TypeErrorKind::ProcedureCallReturnsNothing => DiagnosticSeverity::Error,
             TypeErrorKind::RequirePrivateVariable(_) => DiagnosticSeverity::Error,
-            TypeErrorKind::InconsistentTLevel { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::ContinueNotInLoop => DiagnosticSeverity::Error,
             TypeErrorKind::DuplicatedMemberName { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::MixedPrecedence => DiagnosticSeverity::Warning,
@@ -694,9 +685,6 @@ impl std::fmt::Display for TypeErrorKind {
             TypeErrorKind::UndefinedMacro { name, suggestions } => {
                 write!(f, "The macro '{name}' is undefined")?;
                 write_suggestions(f, suggestions)
-            }
-            TypeErrorKind::InconsistentTLevel { this, that } => {
-                write!(f, "The TLevels are inconsistent ({} vs {})", this, that)
             }
             TypeErrorKind::ContinueNotInLoop => {
                 write!(f, "CONTINUE is not within a loop")

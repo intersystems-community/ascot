@@ -339,7 +339,10 @@ impl WorkspaceStruct {
     ) -> Option<Diagnostic> {
         let other_uri = self.doc_cache.iter().find_map(|(other_uri, entry)| {
             let cell = entry.as_ref().ok()?;
-            (other_uri != uri && cell.borrow().name(other_uri) == name).then(|| other_uri.clone())
+            (other_uri != uri
+                && DocKind::from_uri(other_uri) == Some(DocKind::Cls)
+                && cell.borrow().name(other_uri) == name)
+                .then(|| other_uri.clone())
         })?;
         let other_range = self.cls_details(&other_uri).ok()?.name.range;
         Some(Diagnostic {
@@ -3863,8 +3866,9 @@ mod tests {
         );
     }
 
+    // Whether the levels agree depends on the run-time conditions, so they aren't tracked.
     #[test]
-    fn disagreeing_transaction_levels_are_a_soft_warning() {
+    fn transaction_levels_are_not_checked() {
         let workspace = Workspace::new(None);
         let uri = "T.cls".to_string();
         workspace.open(
@@ -3872,22 +3876,8 @@ mod tests {
             "Class Test.T Extends %RegisteredObject {\nClassMethod M(x) {\n if x {\n  tstart\n }\n if x {\n  tcommit\n }\n write undefinedVar\n quit\n}\n}\n".to_string(),
         );
         let diagnostics = workspace.diagnostics(uri);
-        let tlevel: Vec<_> = diagnostics
-            .iter()
-            .filter(|d| d.message.contains("TLevels"))
-            .collect();
-        assert!(!tlevel.is_empty(), "{diagnostics:?}");
-        assert!(
-            tlevel
-                .iter()
-                .all(|d| d.severity == bindings::DiagnosticSeverity::Warning)
-        );
-        // Soft: the method's checking carried on past the disagreement.
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.message.contains("undefinedVar"))
-        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(diagnostics[0].message.contains("undefinedVar"));
     }
 
     #[test]
@@ -4731,5 +4721,20 @@ mod tests {
             )
             .expect("hover on `b`");
         assert!(!hover.contains("String"), "{hover}");
+    }
+
+    // A routine sharing a class's name is unrelated to it: not a duplicate, and not a class to
+    // read the duplicate's range from.
+    #[test]
+    fn a_routine_named_like_a_class_is_not_a_duplicate_class() {
+        let diagnostics = diagnostics_for(&[
+            (
+                "Same.cls",
+                "Class Test.Same {\nClassMethod M() {\n Quit\n}\n}\n",
+            ),
+            ("Same.mac", "ROUTINE Test.Same\n\tQuit\n"),
+            ("Same.inc", "ROUTINE Test.Same [Type=INC]\n#define X 1\n"),
+        ]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 }
