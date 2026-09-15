@@ -11,7 +11,6 @@ use std::process;
 use std::process::exit;
 use tygr::Grammar;
 
-#[cfg(not(target_arch = "wasm32"))]
 use ascot::atelier::IrisClient;
 
 fn main() {
@@ -40,15 +39,16 @@ fn main() {
             analyze_workspace(&root, paths.iter().map(PathBuf::as_path), iris);
         }
         Some("parse") => {
-            let file_path = args.get(2).expect("usage: parse <file>");
+            let Some(file_path) = args.get(2) else {
+                eprintln!("usage: parse <file>");
+                exit(1);
+            };
             scan_file(file_path);
         }
-        #[cfg(not(target_arch = "wasm32"))]
         Some("mcp") => {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
             rt.block_on(run_mcp_server());
         }
-        #[cfg(not(target_arch = "wasm32"))]
         Some("lsp") => {
             let mut rest: Vec<String> = args[2..].to_vec();
             let iris = connect_iris(&mut rest);
@@ -59,7 +59,7 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: parse <file> | analyze [--iris <url>] [--iris-namespace <ns>] <path> | analyze-workspace [--iris <url>] [--iris-namespace <ns>] <root> <path> ... | mcp | lsp [--iris <url>] [--iris-namespace <ns>]"
+                "usage: parse <file> | analyze [--iris <url>] [--iris-namespace <ns>] <path>... | analyze-workspace [--iris <url>] [--iris-namespace <ns>] <root> <path>... | mcp | lsp [--iris <url>] [--iris-namespace <ns>]"
             );
             exit(1);
         }
@@ -69,7 +69,6 @@ fn main() {
 const DEFAULT_IRIS_NAMESPACE: &str = "%SYS";
 
 /// Pulls `--flag <value>` out of `args` (in place), wherever it appears, leaving the rest.
-#[cfg(not(target_arch = "wasm32"))]
 fn extract_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
     let idx = args.iter().position(|a| a == flag)?;
     args.remove(idx);
@@ -82,7 +81,6 @@ fn extract_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
 
 /// Pulls `--iris`/`--iris-namespace` out of `args` and connects, if `--iris` was given.
 /// `--iris-namespace` defaults to `%SYS` and is ignored (with a warning) if `--iris` is absent.
-#[cfg(not(target_arch = "wasm32"))]
 fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
     let url = extract_flag(args, "--iris");
     let namespace = extract_flag(args, "--iris-namespace");
@@ -102,7 +100,6 @@ fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 async fn run_mcp_server() {
     use ascot::mcp::AnalyzerMcpServer;
     use rmcp::ServiceExt;
@@ -142,10 +139,16 @@ fn scan_file(file_path: &str) {
     }
 }
 
-/// Add every `.cls`/`.mac`/`.int` file under `root` to a workspace and report all diagnostics.
+/// Add every `.cls`/`.mac`/`.int`/`.inc` file under each of `roots` to a workspace and report
+/// all diagnostics. A root that doesn't exist is an error, not an empty result: a typo'd path in
+/// a CI step must not pass forever.
 fn analyze<'a>(roots: impl Iterator<Item = &'a Path>, iris: Option<Box<dyn IrisClient>>) {
     let mut files = Vec::new();
     for root in roots {
+        if !root.exists() {
+            eprintln!("Error: {} does not exist", root.display());
+            exit(1);
+        }
         collect_doc(root, &mut files);
     }
     files.sort();
@@ -160,8 +163,8 @@ fn analyze<'a>(roots: impl Iterator<Item = &'a Path>, iris: Option<Box<dyn IrisC
     }
 }
 
-/// Add every `.cls`/`.mac`/`.int` file under `root` to a workspace (so cross-file references
-/// resolve), but only report diagnostics for files under the given `paths`.
+/// Add every `.cls`/`.mac`/`.int`/`.inc` file under `root` to a workspace (so cross-file
+/// references resolve), but only report diagnostics for files under the given `paths`.
 fn analyze_workspace<'a>(
     root: &Path,
     paths: impl Iterator<Item = &'a Path>,

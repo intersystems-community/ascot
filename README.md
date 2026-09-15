@@ -41,7 +41,8 @@ claude mcp add ascot -- /path/to/ascot mcp
 ascot lsp
 ```
 
-Runs the LSP server described above.
+Starts the LSP server (stdio), providing the features listed above to any
+LSP client.
 
 ### Use as a CLI tool
 
@@ -49,8 +50,9 @@ Runs the LSP server described above.
 ascot analyze [PATH] ...
 ```
 
-Parses every `.cls`/`.mac`/`.int` file under `PATH` and prints diagnostics.
-Exits non-zero if any were found.
+Loads every `.cls`/`.mac`/`.int`/`.inc` file under each `PATH` into one
+workspace and prints diagnostics for all of them. Exits non-zero if any error
+or warning was found, or if a `PATH` doesn't exist.
 
 ```sh
 ascot analyze-workspace [WORKSPACE-ROOT] [PATH] ...
@@ -61,6 +63,13 @@ workspace, so cross-file references resolve, but only prints diagnostics for
 files under the given `PATH`(s). Useful for checking a subset of a large
 workspace without losing cross-file context. Each `PATH` must be inside
 `WORKSPACE-ROOT`; paths that aren't are skipped with a warning.
+
+```sh
+ascot parse FILE
+```
+
+Only parses `FILE` (no type checking) and prints the syntax error, if any.
+Exits non-zero on a syntax error.
 
 ### Connecting to IRIS
 

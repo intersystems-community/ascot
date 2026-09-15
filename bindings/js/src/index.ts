@@ -13,7 +13,15 @@ import type { ClassInfo, RoutineSource } from "../generated/interfaces/iris-asco
 
 export type * from "../generated/interfaces/iris-ascot-common.js";
 
-export type Workspace = InstanceType<Root["exported"]["Workspace"]>;
+type RawWorkspace = InstanceType<Root["exported"]["Workspace"]>;
+
+/** Every method of the wasm `Workspace`, as `createWorkspace` hands it out: all async, since
+ * `serialize` below queues each call behind the previous one. */
+export type Workspace = {
+	[K in keyof RawWorkspace]: RawWorkspace[K] extends (...args: infer A) => infer R
+		? (...args: A) => Promise<Awaited<R>>
+		: RawWorkspace[K];
+};
 
 /** The shape your `imported.iris-connection` implementation must satisfy. */
 export interface Imported {
@@ -47,7 +55,7 @@ async function loadWasm(IrisConnection: abstract new (...args: never[]) => Impor
 // wasm instance, so this queue is module-wide, not per-Workspace.
 let tail: Promise<void> = Promise.resolve();
 
-function serialize(instance: Workspace): Workspace {
+function serialize(instance: RawWorkspace): Workspace {
 	return new Proxy(instance, {
 		get(target, prop, receiver) {
 			const value = Reflect.get(target, prop, receiver);
@@ -64,7 +72,7 @@ function serialize(instance: Workspace): Workspace {
 				}
 			};
 		},
-	}) as Workspace;
+	}) as unknown as Workspace;
 }
 
 /**

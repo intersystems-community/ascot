@@ -832,12 +832,6 @@ pub struct SQLCastExpression {
     close: (Space, StringEq!(")")),
 }
 
-pub type SQLFunctionArgs = Wrap<
-    (Space, StringEq!("("), Space),
-    Option<VecSep<Scalx, (Space, StringEq!(","), Space)>>,
-    (Space, StringEq!(")")),
->;
-
 type ArgSep = (Space, StringEq!(","), Space);
 
 #[derive(Grammar)]
@@ -1102,13 +1096,6 @@ pub struct DatePartNameRaw(DatePartCommon);
 pub struct DatePartPart(OptionallyWrapped<DatePartPartRaw>);
 
 #[derive(Grammar)]
-#[grammar(inline)]
-pub enum DatePartPartCommon {
-    SqlTimestamp(Either<StringEqCI!("SQLTIMESTAMP"), StringEqCI!("STS")>),
-    Common(DatePartCommon),
-}
-
-#[derive(Grammar)]
 #[grammar(name = "datepart_trunc")]
 pub struct DatePartTrunc(OptionallyWrapped<DatePartTruncRaw>);
 
@@ -1256,16 +1243,6 @@ pub struct SQLProbabilityArgs {
     pub use_clause: Option<PredictProbabilityUse>,
     pub for_clause: Option<ProbabilityFor>,
     pub with_clause: Option<PredictWith>,
-    pub close: (Space, StringEq!(")")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub struct SQLToVectorArgs {
-    pub open: (Space, StringEq!("("), Space),
-    pub expr: Scalx,
-    pub datatype: Option<((Space, StringEq!(","), Space), VectorDatyp)>,
-    pub dimension: Option<((Space, StringEq!(","), Space), Number)>,
     pub close: (Space, StringEq!(")")),
 }
 
@@ -1729,12 +1706,6 @@ pub type WindowOrder = Prefix<
     (Space, StringEqCI!("ORDER"), Space, StringEqCI!("BY"), Space),
     VecSep<Scalx, (Space, StringEq!(","), Space)>,
 >;
-
-#[derive(Grammar)]
-pub struct SQLWindowOrderItem {
-    pub expr: Scalx,
-    pub direction: Option<(Space, SQLOrderDirection)>,
-}
 
 #[derive(Grammar)]
 #[grammar(inline)]
@@ -2462,10 +2433,6 @@ pub struct Fetch {
 }
 
 #[derive(Grammar)]
-#[grammar(name = "ROW/ROWS")]
-pub struct RowRows(RowRowsInline);
-
-#[derive(Grammar)]
 #[grammar(inline)]
 pub enum RowRowsInline {
     Rows(StringEqCI!("ROWS")),
@@ -2653,16 +2620,6 @@ pub enum UpdateOption {
     ProfileAll((Space, StringEqCI!("%PROFILE_ALL"))),
     NoRuntime((Space, StringEqCI!("%NORUNTIME"))),
     DoRuntime((Space, StringEqCI!("%DORUNTIME"))),
-}
-
-#[derive(Grammar)]
-pub enum SQLWhereOperand {
-    CurrentOf {
-        current_kw: (StringEqCI!("CURRENT"), Space, StringEqCI!("OF"), Space),
-        cursor: Ident,
-        and_pred: Option<Spaced<AndClause<Prdct>>>,
-    },
-    Predicate(Prdct),
 }
 
 #[derive(Grammar)]
@@ -2912,10 +2869,6 @@ pub enum SQLArgument {
     Expr(Scalx),
     HostVar(StringEq!(":"), HostIdentifier),
 }
-
-#[derive(Grammar)]
-#[grammar(name = "explain statement")]
-pub struct ExplainStatement(Explain);
 
 #[derive(Grammar)]
 #[grammar(name = "explain")]
@@ -3459,120 +3412,6 @@ pub enum PrivSpec {
     Threshold(StringEqCI!("%THRESHOLD")),
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum DatypInternal {
-    Binary {
-        keyword: StringEqCI!("BINARY"),
-        varying: Option<(Space, StringEqCI!("VARYING"))>,
-        size: Option<SQLSizeSpec>,
-    },
-    Bit {
-        keyword: StringEqCI!("BIT"),
-        size: Option<SQLSizeSpec>,
-    },
-    Char {
-        keyword: StringEqCI!("CHAR"),
-        varying: Option<(Space, StringEqCI!("VARYING"))>,
-        size: Option<SQLSizeSpec>,
-    },
-    Character {
-        keyword: StringEqCI!("CHARACTER"),
-        varying: Option<(Space, StringEqCI!("VARYING"))>,
-        size: Option<SQLSizeSpec>,
-    },
-    Date(StringEqCI!("DATE")),
-    Dec {
-        keyword: StringEqCI!("DEC"),
-        precision: Option<SQLPrecisionSpec>,
-    },
-    Decimal {
-        keyword: StringEqCI!("DECIMAL"),
-        precision: Option<SQLPrecisionSpec>,
-    },
-    Double {
-        keyword: StringEqCI!("DOUBLE"),
-        precision: Option<(Space, StringEqCI!("PRECISION"))>,
-    },
-    Float {
-        keyword: StringEqCI!("FLOAT"),
-        size: Option<SQLSizeSpec>,
-    },
-    Guid(StringEqCI!("GUID")),
-    Image(StringEqCI!("IMAGE")),
-    Integer(StringEqCI!("INTEGER")), // Try INTEGER before INT
-    Int(StringEqCI!("INT")),
-    Long(StringEqCI!("LONG")),
-    LongVarChar(StringEqCI!("LONG"), Space, StringEqCI!("VARCHAR")),
-    LongVarBinary(StringEqCI!("LONGVARBINARY")),
-    LongVarChar2(StringEqCI!("LONGVARCHAR")),
-    Money(StringEqCI!("MONEY")),
-    National {
-        keyword: StringEqCI!("NATIONAL"),
-        char_type: Option<(
-            Space,
-            Either<
-                StringEqCI!("CHAR"),
-                Either<
-                    (
-                        StringEqCI!("CHARACTER"),
-                        Option<(Space, StringEqCI!("VARYING"))>,
-                    ),
-                    StringEqCI!("VARCHAR"),
-                >,
-            >,
-        )>,
-        size: Option<SQLSizeSpec>,
-    },
-    NChar {
-        keyword: StringEqCI!("NCHAR"),
-        size: Option<SQLSizeSpec>,
-    },
-    NText(StringEqCI!("NTEXT")),
-    Number {
-        keyword: StringEqCI!("NUMBER"),
-        precision: Option<SQLPrecisionSpec>,
-    },
-    Numeric {
-        keyword: StringEqCI!("NUMERIC"),
-        precision: Option<SQLPrecisionSpec>,
-    },
-    Raw {
-        keyword: StringEqCI!("RAW"),
-        size: Option<SQLSizeSpec>,
-    },
-    Real(StringEqCI!("REAL")),
-    SmallInt(StringEqCI!("SMALLINT")),
-    SmallMoney(StringEqCI!("SMALLMONEY")),
-    SmallDateTime(StringEqCI!("SMALLDATETIME")),
-    Text(StringEqCI!("TEXT")),
-    Time(StringEqCI!("TIME")),
-    Timestamp(StringEqCI!("TIMESTAMP")),
-    DateTime(StringEqCI!("DATETIME")),
-    TinyInt(StringEqCI!("TINYINT")),
-    VarBinary {
-        keyword: StringEqCI!("VARBINARY"),
-        size: Option<SQLSizeSpec>,
-    },
-    VarChar {
-        keyword: StringEqCI!("VARCHAR"),
-        size: Option<SQLSizeSpec>,
-    },
-    VarChar2 {
-        keyword: StringEqCI!("VARCHAR2"),
-        size: Option<SQLSizeSpec>,
-    },
-    Vector {
-        keyword: StringEqCI!("VECTOR"),
-        spec: Option<SQLVectorSpec>,
-    },
-    Custom {
-        paren_hash: SQLParenHash,
-        size: Option<SQLSizeSpec>,
-    },
-    Token(Ident, Option<SQLSizeSpec>),
-}
-
 type OptParenScalx = Option<Parenthesized<Scalx>>;
 type OptParenScalx2 = Option<Parenthesized<(Scalx, Option<(Space, StringEq!(","), Space, Scalx)>)>>;
 
@@ -3626,42 +3465,6 @@ pub enum CastType {
     Varbinary(StringEqCI!("VARBINARY"), OptParenScalx),
     Varchar(StringEqCI!("VARCHAR"), OptParenScalx),
 }
-
-pub type SQLParenHash = Wrap<(StringEq!("("), Space), StringOf1<IsHash>, (Space, StringEq!(")"))>;
-
-char_class!(pub IsHash, "hash", |ch| ch == '#');
-
-pub type SQLSizeSpec =
-    Wrap<(StringEq!("("), Space), Vec<SQLDataTypeToken>, (Space, StringEq!(")"))>;
-
-#[derive(Grammar)]
-pub enum SQLDataTypeToken {
-    Ident(Ident),
-    Number(Number),
-    Comma(StringEq!(",")),
-    Space(Space),
-}
-
-#[derive(Grammar)]
-pub struct SQLPrecisionSpec {
-    pub open: (StringEq!("("), Space),
-    pub precision: Number,
-    pub scale: Option<((Space, StringEq!(","), Space), Number)>,
-    pub close: (Space, StringEq!(")")),
-}
-
-pub type SQLVectorSpec =
-    Wrap<(StringEq!("("), Space), Vec<SQLDataTypeToken>, (Space, StringEq!(")"))>;
-
-pub type OnTable = Prefix<
-    (
-        Space,
-        StringEqCI!("ON"),
-        Space,
-        Option<(StringEqCI!("TABLE"), Space)>,
-    ),
-    TName,
->;
 
 #[derive(Grammar)]
 #[grammar(name = "ddl")]
@@ -4411,10 +4214,6 @@ pub enum ImmediateDefer {
 pub struct AlterFTAction(Ident);
 
 #[derive(Grammar)]
-#[grammar(name = "mlconfig-desc")]
-pub struct MLConfigDesc(StringLiteral);
-
-#[derive(Grammar)]
 #[grammar(name = "model-name")]
 pub struct ModelName(Ident);
 
@@ -4655,22 +4454,6 @@ char_class!(pub IsDbIdentifierPart, "db_identifier_part", |ch| {
 });
 
 #[derive(Grammar)]
-#[grammar(name = "db_identifier start")]
-pub enum DbIdentifierStart {
-    Lattin(CharOf<IsSimpleLatinLetter>),
-    U(StringEq!("_")),
-}
-
-#[derive(Grammar)]
-#[grammar(name = "db_identifier part")]
-pub enum DbIdentifierPart {
-    Lattin(CharOf<IsSimpleLatinLetter>),
-    Digit(CharOf<IsDigit>),
-    U(StringEq!("_")),
-    D(StringEq!("-")),
-}
-
-#[derive(Grammar)]
 #[grammar(name = "DR option")]
 pub enum DROption {
     ApiToken(
@@ -4713,14 +4496,6 @@ pub enum CollectTarget {
 pub struct DBOption(Ident);
 
 #[derive(Grammar)]
-#[grammar(inline)]
-pub struct FTColumnDef {
-    pub name: Ident,
-    sp: Space,
-    pub datatype: Datyp,
-}
-
-#[derive(Grammar)]
 #[grammar(name = "ft-options")]
 pub struct FTOptions(Ident);
 
@@ -4738,21 +4513,6 @@ pub enum ServerType {
 #[derive(Grammar)]
 #[grammar(name = "fdw-name")]
 pub struct FDWName(Ident);
-
-#[derive(Grammar)]
-pub enum ConnectionOrHost {
-    Connection {
-        connection_kw: StringEqCI!("CONNECTION"),
-        value: (Space, Literal),
-    },
-    Host {
-        host_kw: StringEqCI!("HOST"),
-        value: (Space, Literal, Space),
-        open: (StringEq!("("), Space),
-        options: DBServerOptions,
-        close: (Space, StringEq!(")")),
-    },
-}
 
 #[derive(Grammar)]
 #[grammar(name = "db-server-options")]
@@ -4774,18 +4534,8 @@ pub enum FTPushdownType {
 pub struct IndexClassName(Ident);
 
 #[derive(Grammar)]
-pub struct IndexParameterList(Ident);
-
-#[derive(Grammar)]
-pub struct IndexWithOptions(Ident);
-
-#[derive(Grammar)]
 #[grammar(name = "qualified SPname")]
 pub struct QualifiedSPName(DottedIdent);
-
-#[derive(Grammar)]
-#[grammar(name = "table name")]
-pub struct TableName(TName);
 
 #[derive(Grammar)]
 #[grammar(name = "classname")]
@@ -4842,540 +4592,10 @@ pub enum TriggerBody {
 }
 
 #[derive(Grammar)]
-pub struct SQLCreateTableAsSelect {
-    pub create_kw: StringEqCI!("CREATE"),
-    pub table_kw: (Space, StringEqCI!("TABLE"), Space),
-    pub if_not_exists: Option<(
-        Space,
-        StringEqCI!("IF"),
-        Space,
-        StringEqCI!("NOT"),
-        Space,
-        StringEqCI!("EXISTS"),
-        Space,
-    )>,
-    pub nojourn: Option<(Space, StringEqCI!("%NOJOURN"), Space)>,
-    pub table: TName,
-    pub as_kw: (Space, StringEqCI!("AS"), Space),
-    pub with_clause: Option<WithClause>,
-    pub query: Box<Query>,
-    pub table_options: Option<(Space, TableOptionList)>,
-}
-
-#[derive(Grammar)]
-#[grammar(name = "telem option")]
-pub enum TElemOption {
-    Column(SQLColumnDef),
-    Constraint(SQLTableConstraint),
-    Description(StringEqCI!("%DESCRIPTION"), Space, StringLiteral),
-    File(StringEqCI!("%FILE"), Space, StringLiteral),
-    ExtentSize(ExtentSizeClause),
-    Routine(StringEqCI!("%ROUTINE"), Space, StringLiteral),
-    PublicRowId(StringEqCI!("%PUBLICROWID")),
-    ClassParameter(ClassParameter),
-    Shard(Shard),
-}
-
-#[derive(Grammar)]
-pub struct SQLColumnDef {
-    pub name: Ident,
-    pub datatype_and_identity: (Space, SQLColumnTypeSpec),
-    pub qualifiers: Vec<(Space, SQLFieldQualifier)>,
-}
-
-#[derive(Grammar)]
-pub enum SQLColumnTypeSpec {
-    TypeOnly(Datyp),
-    TypeAndIdentity(Option<Datyp>, Space, SQLIdentity),
-}
-
-pub type SQLIdentity = Prefix<StringEqCI!("IDENTITY"), Option<SQLIdentitySpec>>;
-
-#[derive(Grammar)]
-pub struct SQLIdentitySpec {
-    pub space1: Space,
-    pub open: (StringEq!("("), Space),
-    pub space2: Space,
-    pub seed: Literal,
-    pub space3: Space,
-    pub comma: StringEq!(","),
-    pub space4: Space,
-    pub increment: Literal,
-    pub space5: Space,
-    pub close: (Space, StringEq!(")")),
-}
-
-#[derive(Grammar)]
-pub enum SQLFieldQualifier {
-    Constraint(SQLFieldConstraint),
-    Collation(SQLCollation),
-    Description(StringEqCI!("%DESCRIPTION"), Space, StringLiteral),
-    Default {
-        default_kw: StringEqCI!("DEFAULT"),
-        value: (Space, SQLDefaultValue),
-    },
-    CharSet {
-        charset_kw: StringEqCI!("CHARACTER"),
-        set_kw: (Space, StringEqCI!("SET"), Space),
-        charset: Ident,
-    },
-    Collate {
-        collate_kw: StringEqCI!("COLLATE"),
-        collation: (Space, Either<Ident, SQLCollation>),
-    },
-    Private(StringEqCI!("PRIVATE")),
-    Transient(StringEqCI!("TRANSIENT")),
-    Calculated(StringEqCI!("CALCULATED")),
-    ComputeCode {
-        keyword: StringEqCI!("COMPUTECODE"),
-        open: (Space, StringEq!("{"), Space),
-        code: StringOf<IsNotCloseBrace>,
-        close: (Space, StringEq!("}")),
-    },
-    ComputeOnChange {
-        keyword: StringEqCI!("COMPUTEONCHANGE"),
-        open: (Space, StringEq!("("), Space),
-        columns: VecSep<Ident, (Space, StringEq!(","), Space)>,
-        close: (Space, StringEq!(")")),
-    },
-    StorageType {
-        keyword: StringEqCI!("STORAGETYPE"),
-        eq: (Space, StringEq!("="), Space),
-        storage_type: SQLStorageType,
-    },
-    OnUpdate {
-        keyword: StringEqCI!("ON"),
-        update_kw: (Space, StringEqCI!("UPDATE"), Space),
-        value: SQLUpdateValue,
-    },
-}
-
-char_class!(pub IsNotCloseBrace, "not_close_brace", |ch| ch != '}');
-
-#[derive(Grammar)]
-pub enum SQLStorageType {
-    Columnar(StringEqCI!("COLUMNAR")),
-    Row(StringEqCI!("ROW")),
-}
-
-#[derive(Grammar)]
-pub enum SQLDefaultValue {
-    Null(StringEqCI!("NULL")),
-    CurrentDate(StringEqCI!("CURRENT_DATE")),
-    CurrentTimestamp(
-        StringEqCI!("CURRENT_TIMESTAMP"),
-        Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    ),
-    CurrentTime(
-        StringEqCI!("CURRENT_TIME"),
-        Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    ),
-    SysDate(StringEqCI!("SYSDATE")),
-    User(StringEqCI!("USER")),
-    CurrentUser(StringEqCI!("CURRENT_USER")),
-    SessionUser(StringEqCI!("SESSION_USER")),
-    SystemUser(StringEqCI!("SYSTEM_USER")),
-    Literal(Literal),
-    NegativeLiteral(StringEq!("-"), Number),
-    ObjectScript(StringEqCI!("OBJECTSCRIPT"), Space, StringLiteral),
-    COS(StringEqCI!("%COS"), Space, StringLiteral),
-    MCode(StringEqCI!("%MCODE"), Space, StringLiteral),
-    GetDate(
-        StringEqCI!("GETDATE"),
-        StringEq!("("),
-        Option<Literal>,
-        StringEq!(")"),
-    ),
-    GetUtcDate(
-        StringEqCI!("GETUTCDATE"),
-        StringEq!("("),
-        Option<Literal>,
-        StringEq!(")"),
-    ),
-    ToDate(
-        StringEqCI!("TO_DATE("),
-        Space,
-        Literal,
-        Option<(Space, StringEq!(","), Space, Literal)>,
-        Space,
-        StringEq!(")"),
-    ),
-    ToTimestamp(
-        StringEqCI!("TO_TIMESTAMP("),
-        Space,
-        Literal,
-        Option<(Space, StringEq!(","), Space, Literal)>,
-        Space,
-        StringEq!(")"),
-    ),
-    Paren(StringEq!("("), Box<SQLDefaultValue>, StringEq!(")")),
-}
-
-#[derive(Grammar)]
-pub enum SQLUpdateValue {
-    CurrentDate(StringEqCI!("CURRENT_DATE")),
-    CurrentTimestamp(
-        StringEqCI!("CURRENT_TIMESTAMP"),
-        Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    ),
-    CurrentTime(
-        StringEqCI!("CURRENT_TIME"),
-        Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    ),
-    GetDate(
-        StringEqCI!("GETDATE"),
-        StringEq!("("),
-        Option<Literal>,
-        StringEq!(")"),
-    ),
-    GetUtcDate(
-        StringEqCI!("GETUTCDATE"),
-        StringEq!("("),
-        Option<Literal>,
-        StringEq!(")"),
-    ),
-    SysDate(StringEqCI!("SYSDATE")),
-    User(StringEqCI!("USER")),
-    CurrentUser(StringEqCI!("CURRENT_USER")),
-    SessionUser(StringEqCI!("SESSION_USER")),
-    SystemUser(StringEqCI!("SYSTEM_USER")),
-    Null(StringEqCI!("NULL")),
-    Literal(Literal),
-    NegativeLiteral(StringEq!("-"), Number),
-}
-
-#[derive(Grammar)]
-pub enum SQLCollation {
-    AlphaUp(StringEqCI!("ALPHAUP")),
-    Exact(StringEqCI!("EXACT")),
-    Minus(StringEqCI!("MINUS")),
-    Plus(StringEqCI!("PLUS")),
-    Space(StringEqCI!("SPACE")),
-    SqlString {
-        keyword: StringEqCI!("SQLSTRING"),
-        param: Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    },
-    SqlUpper {
-        keyword: StringEqCI!("SQLUPPER"),
-        param: Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    },
-    Upper(StringEqCI!("UPPER")),
-    String {
-        keyword: StringEqCI!("STRING"),
-        param: Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    },
-    Mvr(StringEqCI!("MVR")),
-    Truncate {
-        keyword: StringEqCI!("TRUNCATE"),
-        param: Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    },
-    PAlphaUp(StringEqCI!("%ALPHAUP")),
-    PExact(StringEqCI!("%EXACT")),
-    PMinus(StringEqCI!("%MINUS")),
-    PPlus(StringEqCI!("%PLUS")),
-    PSpace(StringEqCI!("%SPACE")),
-    PSqlString {
-        keyword: StringEqCI!("%SQLSTRING"),
-        param: Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    },
-    PSqlUpper {
-        keyword: StringEqCI!("%SQLUPPER"),
-        param: Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    },
-    PUpper(StringEqCI!("%UPPER")),
-    PString {
-        keyword: StringEqCI!("%STRING"),
-        param: Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    },
-    PMvr(StringEqCI!("%MVR")),
-    PTruncate {
-        keyword: StringEqCI!("%TRUNCATE"),
-        param: Option<(StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-    },
-}
-
-#[derive(Grammar)]
-pub enum SQLFieldConstraint {
-    Simple(FCon),
-    Named {
-        constraint_kw: StringEqCI!("CONSTRAINT"),
-        name: (Space, TName),
-        def: (Space, FCon),
-    },
-}
-
-#[derive(Grammar)]
-pub enum FCon {
-    NotNull {
-        not_kw: StringEqCI!("NOT"),
-        null_kw: (Space, StringEqCI!("NULL")),
-        informix: Option<(Space, Informix)>,
-    },
-    Null(StringEqCI!("NULL")),
-    Identity(SQLIdentity),
-    Unique {
-        unique_kw: StringEqCI!("UNIQUE"),
-        cluster: Option<(Space, Cluster)>,
-        informix: Option<(Space, Informix)>,
-    },
-    Primary {
-        primary_kw: StringEqCI!("PRIMARY"),
-        key_kw: Option<(Space, StringEqCI!("KEY"))>,
-        cluster: Option<(Space, Cluster)>,
-        informix: Option<(Space, Informix)>,
-    },
-    References {
-        references_kw: StringEqCI!("REFERENCES"),
-        ref_spec: (Space, SQLReferenceSpec),
-        informix: Option<(Space, Informix)>,
-    },
-    Check(CheckCnstr),
-    Default {
-        default_kw: StringEqCI!("DEFAULT"),
-        value: (Space, SQLDefaultValue),
-    },
-}
-
-#[derive(Grammar)]
-pub struct SQLReferenceSpec {
-    pub table: TName,
-    pub columns: Option<(
-        Space,
-        StringEq!("("),
-        Space,
-        VecSep<Ident, (Space, StringEq!(","), Space)>,
-        Space,
-        StringEq!(")"),
-    )>,
-    pub match_spec: Option<(Space, StringEqCI!("MATCH"), Space, SQLMatchType)>,
-    pub actions: Option<SQLReferentialActions>,
-    pub nocheck: Option<(Space, StringEqCI!("NOCHECK"))>,
-}
-
-#[derive(Grammar)]
-pub enum SQLMatchType {
-    Full(StringEqCI!("FULL")),
-    Partial(StringEqCI!("PARTIAL")),
-}
-
-#[derive(Grammar)]
-pub enum SQLReferentialActions {
-    UpdateDelete {
-        update: SQLUpdateRule,
-        delete: Option<(Space, SQLDeleteRule)>,
-    },
-    DeleteUpdate {
-        delete: SQLDeleteRule,
-        update: Option<(Space, SQLUpdateRule)>,
-    },
-}
-
-#[derive(Grammar)]
-pub struct SQLUpdateRule {
-    pub on_kw: StringEqCI!("ON"),
-    pub update_kw: (Space, StringEqCI!("UPDATE"), Space),
-    pub action: SQLRefAction,
-}
-
-#[derive(Grammar)]
-pub struct SQLDeleteRule {
-    pub on_kw: StringEqCI!("ON"),
-    pub delete_kw: (Space, StringEqCI!("DELETE"), Space),
-    pub action: SQLRefAction,
-}
-
-#[derive(Grammar)]
-pub enum SQLRefAction {
-    NoAction(StringEqCI!("NO"), Space, StringEqCI!("ACTION")),
-    Cascade(StringEqCI!("CASCADE")),
-    SetNull(StringEqCI!("SET"), Space, StringEqCI!("NULL")),
-    SetDefault(StringEqCI!("SET"), Space, StringEqCI!("DEFAULT")),
-}
-
-pub type SQLCheckExpression =
-    Wrap<(StringEq!("("), Space), Vec<SQLCheckToken>, (Space, StringEq!(")"))>;
-
-#[derive(Grammar)]
-pub enum SQLCheckToken {
-    Paren(StringEq!("("), Vec<SQLCheckToken>, StringEq!(")")),
-    NotParen(CharOf<IsNotParenChar>),
-}
-
-char_class!(pub IsNotParenChar, "not_paren", |ch| ch != '(' && ch != ')');
-
-#[derive(Grammar)]
-pub enum SQLTableConstraint {
-    Unique(SQLTableUniqueConstraint),
-    PrimaryKey(SQLTablePrimaryKeyConstraint),
-    ForeignKey(SQLTableForeignKeyConstraint),
-    Check(SQLTableCheckConstraint),
-}
-
-#[derive(Grammar)]
-pub struct SQLTableUniqueConstraint {
-    pub constraint_name: Option<(StringEqCI!("CONSTRAINT"), Space, Ident, Space)>,
-    pub unique_kw: StringEqCI!("UNIQUE"),
-    pub cluster: Option<(Space, Cluster)>,
-    pub columns: (
-        Space,
-        StringEq!("("),
-        Space,
-        VecSep<Ident, (Space, StringEq!(","), Space)>,
-        Space,
-        StringEq!(")"),
-    ),
-    pub informix: Option<(Space, Informix)>,
-    pub fillfactor: Option<(
-        Space,
-        StringEqCI!("WITH"),
-        Space,
-        StringEqCI!("FILLFACTOR"),
-        Space,
-        StringEq!("="),
-        Space,
-        Literal,
-    )>,
-}
-
-#[derive(Grammar)]
-pub struct SQLTablePrimaryKeyConstraint {
-    pub constraint_name: Option<(StringEqCI!("CONSTRAINT"), Space, Ident, Space)>,
-    pub primary_kw: StringEqCI!("PRIMARY"),
-    pub key_kw: (Space, StringEqCI!("KEY")),
-    pub cluster: Option<(Space, Cluster)>,
-    pub columns: (
-        Space,
-        StringEq!("("),
-        Space,
-        VecSep<Ident, (Space, StringEq!(","), Space)>,
-        Space,
-        StringEq!(")"),
-    ),
-    pub informix: Option<(Space, Informix)>,
-    pub on_clause: Option<(
-        Space,
-        Either<StringEqCI!("ON"), StringEqCI!("IN")>,
-        Space,
-        Ident,
-    )>,
-}
-
-#[derive(Grammar)]
-pub struct SQLTableForeignKeyConstraint {
-    pub constraint_name: Option<(StringEqCI!("CONSTRAINT"), Space, Ident, Space)>,
-    pub foreign_kw: StringEqCI!("FOREIGN"),
-    pub key_kw: (Space, StringEqCI!("KEY")),
-    pub columns: (
-        Space,
-        StringEq!("("),
-        Space,
-        VecSep<Ident, (Space, StringEq!(","), Space)>,
-        Space,
-        StringEq!(")"),
-    ),
-    pub references_kw: (Space, StringEqCI!("REFERENCES"), Space),
-    pub ref_spec: SQLReferenceSpec,
-    pub informix: Option<(Space, Informix)>,
-}
-
-#[derive(Grammar)]
-pub struct SQLTableCheckConstraint {
-    pub constraint_name: Option<(StringEqCI!("CONSTRAINT"), Space, Ident, Space)>,
-    pub check_kw: StringEqCI!("CHECK"),
-    pub check_expr: (Space, SQLCheckExpression),
-    pub informix: Option<(Space, Informix)>,
-}
-
-#[derive(Grammar)]
-pub struct ExtentSizeClause {
-    pub keyword: Either<StringEqCI!("%NUMROWS"), StringEqCI!("%EXTENTSIZE")>,
-    pub value: (Space, Literal),
-}
-
-#[derive(Grammar)]
-pub struct SQLInformixTableOptions {
-    pub on_in: Option<(
-        Either<StringEqCI!("ON"), StringEqCI!("IN")>,
-        Space,
-        Ident,
-        Space,
-    )>,
-    pub extent_size: Option<(
-        StringEqCI!("EXTENT"),
-        Space,
-        StringEqCI!("SIZE"),
-        Space,
-        Literal,
-        Space,
-    )>,
-    pub next_size: Option<(
-        StringEqCI!("NEXT"),
-        Space,
-        StringEqCI!("SIZE"),
-        Space,
-        Literal,
-        Space,
-    )>,
-    pub lock_mode: Option<(
-        StringEqCI!("LOCK"),
-        Space,
-        StringEqCI!("MODE"),
-        Space,
-        LockSpec,
-    )>,
-}
-
-#[derive(Grammar)]
 #[grammar(name = "lock spec")]
 pub enum LockSpec {
     Row(StringEqCI!("ROW")),
     Page(StringEqCI!("PAGE")),
-}
-
-#[derive(Grammar)]
-pub enum SQLTableOption {
-    StorageType {
-        keyword: StringEqCI!("STORAGETYPE"),
-        eq: Option<(Space, StringEq!("="), Space)>,
-        storage_type: SQLStorageType,
-    },
-    ClassParameter(ClassParameter),
-}
-
-#[derive(Grammar)]
-pub enum SQLPartitionOption {
-    Off(StringEqCI!("PARTITION"), Space, StringEqCI!("OFF")),
-    By {
-        partition_kw: StringEqCI!("PARTITION"),
-        by_kw: (Space, StringEqCI!("BY"), Space),
-        specs: VecSep<PartitionSpecification, (Space, StringEq!(","), Space)>,
-    },
-}
-
-#[derive(Grammar)]
-pub enum SQLPartitionDateTimeInterval {
-    Years(Either<StringEqCI!("YEAR"), StringEqCI!("YEARS")>),
-    Months(Either<StringEqCI!("MONTH"), StringEqCI!("MONTHS")>),
-    Days(Either<StringEqCI!("DAY"), StringEqCI!("DAYS")>),
-    Hours(Either<StringEqCI!("HOUR"), StringEqCI!("HOURS")>),
-    Minutes(Either<StringEqCI!("MINUTE"), StringEqCI!("MINUTES")>),
-}
-
-#[derive(Grammar)]
-pub struct SQLDropTableStatement {
-    pub drop_kw: StringEqCI!("DROP"),
-    pub table_kw: (Space, StringEqCI!("TABLE"), Space),
-    pub if_exists: Option<(
-        Space,
-        StringEqCI!("IF"),
-        Space,
-        StringEqCI!("EXISTS"),
-        Space,
-    )>,
-    pub nojourn: Option<(Space, StringEqCI!("%NOJOURN"), Space)>,
-    pub table: TName,
-    pub cascade: Option<(Space, CascadeOpt)>,
-    pub data_option: Option<(Space, DataOption)>,
 }
 
 #[derive(Grammar)]
@@ -5393,218 +4613,6 @@ pub enum DataOption {
 }
 
 #[derive(Grammar)]
-pub struct SQLAlterTableStatement {
-    pub alter_kw: StringEqCI!("ALTER"),
-    pub table_kw: (Space, StringEqCI!("TABLE"), Space),
-    pub table: TName,
-    pub with_check: Option<(Space, CheckSpec)>,
-    pub action: Option<(Space, SQLAlterTableAction)>,
-}
-
-#[derive(Grammar)]
-pub enum SQLAlterTableAction {
-    Add {
-        add_kw: StringEqCI!("ADD"),
-        paren_open: Option<StringEq!("(")>,
-        actions: (Space, VecSep<AddAction, (Space, StringEq!(","), Space)>),
-        paren_close: Option<(Space, StringEq!(")"))>,
-    },
-    Drop {
-        drop_kw: Either<StringEqCI!("DROP"), StringEqCI!("DELETE")>,
-        action: (Space, SQLDropAction),
-    },
-    LockMode {
-        lock_kw: StringEqCI!("LOCK"),
-        mode_kw: (Space, StringEqCI!("MODE"), Space),
-        open: (StringEq!("("), Space),
-        mode: (
-            Space,
-            Either<StringEqCI!("ROW"), StringEqCI!("PAGE")>,
-            Space,
-        ),
-        close: (Space, StringEq!(")")),
-    },
-    CheckConstraintAll {
-        check_spec: CheckSpec,
-        constraint_kw: (Space, StringEqCI!("CONSTRAINT"), Space),
-        all_kw: StringEqCI!("ALL"),
-    },
-    AlterColumn {
-        alter_kw: StringEqCI!("ALTER"),
-        column_kw: Option<(Space, StringEqCI!("COLUMN"))>,
-        column: (Space, Ident),
-        alter_spec: (Space, SQLAlterColumnSpec),
-    },
-    Modify {
-        modify_kw: StringEqCI!("MODIFY"),
-        paren_open: Option<(Space, StringEq!("("))>,
-        specs: (
-            Space,
-            VecSep<SQLModifyColumnSpec, (Space, StringEq!(","), Space)>,
-        ),
-        paren_close: Option<(Space, StringEq!(")"))>,
-    },
-    Rename {
-        rename_kw: StringEqCI!("RENAME"),
-        new_name: (Space, Ident),
-    },
-    Convert {
-        convert_kw: StringEqCI!("CONVERT"),
-        clause: (Space, ConvertClause),
-    },
-    Cleanup(StringEqCI!("CLEANUP")),
-    Move {
-        move_kw: StringEqCI!("MOVE"),
-        spec: (Space, MoveSpec),
-    },
-    TruncatePartition {
-        truncate_kw: StringEqCI!("TRUNCATE"),
-        spec: (Space, SQLPartitionRefSpec),
-    },
-    DropPartition {
-        drop_kw: Either<StringEqCI!("DROP"), StringEqCI!("DELETE")>,
-        spec: (Space, SQLPartitionRefSpec),
-    },
-    DropAllPartitions {
-        drop_kw: Either<StringEqCI!("DROP"), StringEqCI!("DELETE")>,
-        all_kw: (Space, StringEqCI!("ALL"), Space),
-        partitions_kw: StringEqCI!("PARTITIONS"),
-    },
-}
-
-#[derive(Grammar)]
-pub enum SQLAddConstraintBody {
-    ForeignKey {
-        fk_spec: SQLTableForeignKeyConstraint,
-        on_clause: Option<(Space, StringEqCI!("ON"), Space, Ident)>,
-    },
-    Unique {
-        unique_spec: SQLTableUniqueConstraint,
-        fillfactor: Option<(
-            Space,
-            StringEqCI!("WITH"),
-            Space,
-            StringEqCI!("FILLFACTOR"),
-            Space,
-            StringEq!("="),
-            Space,
-            Literal,
-        )>,
-        on_clause: Option<(Space, StringEqCI!("ON"), Space, Ident)>,
-    },
-    PrimaryKey {
-        pk_spec: SQLTablePrimaryKeyConstraint,
-        on_clause: Option<(Space, StringEqCI!("ON"), Space, Ident)>,
-    },
-    Check(SQLTableCheckConstraint),
-}
-
-#[derive(Grammar)]
-pub enum SQLDropAction {
-    ForeignKey {
-        foreign_kw: StringEqCI!("FOREIGN"),
-        key_kw: (Space, StringEqCI!("KEY"), Space),
-        name: Ident,
-    },
-    PrimaryKey(StringEqCI!("PRIMARY"), Space, StringEqCI!("KEY")),
-    Constraint {
-        constraint_kw: StringEqCI!("CONSTRAINT"),
-        name: (Space, Ident),
-    },
-    Column {
-        column_kw: Option<(StringEqCI!("COLUMN"), Space)>,
-        columns: VecSep<SQLDropColumnSpec, (Space, StringEq!(","), Space)>,
-    },
-}
-
-#[derive(Grammar)]
-pub struct SQLDropColumnSpec {
-    pub column: Ident,
-    pub cascade: Option<(Space, CascadeOpt)>,
-    pub data_option: Option<(Space, DataOption)>,
-}
-
-#[derive(Grammar)]
-pub enum SQLAlterColumnSpec {
-    SetDefault {
-        set_kw: StringEqCI!("SET"),
-        default_kw: (Space, StringEqCI!("DEFAULT"), Space),
-        value: SQLDefaultValue,
-    },
-    Default {
-        default_kw: StringEqCI!("DEFAULT"),
-        value: (Space, SQLDefaultValue),
-    },
-    DropDefault(StringEqCI!("DROP"), Space, StringEqCI!("DEFAULT")),
-    Null(StringEqCI!("NULL")),
-    NotNull(StringEqCI!("NOT"), Space, StringEqCI!("NULL")),
-    Collate {
-        collate_kw: StringEqCI!("COLLATE"),
-        collation: (Space, Either<Ident, SQLCollation>),
-    },
-    DataType {
-        datatype: Datyp,
-        collate: Option<(Space, StringEqCI!("COLLATE"), Space, SQLCollation)>,
-    },
-    Rename {
-        rename_kw: StringEqCI!("RENAME"),
-        new_name: (Space, Ident),
-    },
-}
-
-#[derive(Grammar)]
-pub struct SQLModifyColumnSpec {
-    pub column: Ident,
-    pub datatype: Option<(Space, Datyp)>,
-    pub modifications: (Space, SQLColumnModifications),
-}
-
-#[derive(Grammar)]
-pub enum SQLColumnModifications {
-    Rename {
-        rename_kw: StringEqCI!("RENAME"),
-        new_name: (Space, Ident),
-    },
-    Qualifiers {
-        default: Option<(StringEqCI!("DEFAULT"), Space, SQLDefaultValue, Space)>,
-        constraint_name: Option<(StringEqCI!("CONSTRAINT"), Space, Ident, Space)>,
-        nullable: Option<(Option<(StringEqCI!("NOT"), Space)>, StringEqCI!("NULL"))>,
-    },
-}
-
-#[derive(Grammar)]
-pub enum SQLStorageDefaultConversion {
-    Type {
-        to_kw: Option<(StringEqCI!("TO"), Space)>,
-        storagetype_kw: StringEqCI!("STORAGETYPE"),
-        eq: (Space, StringEq!("="), Space),
-        storage_type: SQLStorageType,
-    },
-    Columns {
-        column_kw: StringEqCI!("COLUMN"),
-        s_suffix: Option<StringEq!("S")>,
-        columns: (Space, VecSep<Ident, (Space, StringEq!(","), Space)>),
-        to_kw: (Space, StringEqCI!("TO"), Space),
-        storagetype_kw: StringEqCI!("STORAGETYPE"),
-        eq: (Space, StringEq!("="), Space),
-        storage_type: SQLStorageType,
-    },
-}
-
-#[derive(Grammar)]
-pub enum SQLPartitionConversion {
-    OnOff {
-        partition_kw: StringEqCI!("PARTITION"),
-        switch: (Space, Either<StringEqCI!("ON"), StringEqCI!("OFF")>),
-    },
-    By {
-        partition_kw: StringEqCI!("PARTITION"),
-        by_kw: (Space, StringEqCI!("BY"), Space),
-        specs: VecSep<PartitionSpecification, (Space, StringEq!(","), Space)>,
-    },
-}
-
-#[derive(Grammar)]
 #[grammar(name = "move spec")]
 pub struct MoveSpec {
     pub partition_range: Option<(PartitionRangeSpec, Space)>,
@@ -5613,12 +4621,6 @@ pub struct MoveSpec {
     pub activate: Option<(Space, SQLActivateSpec)>,
 }
 
-pub type SQLPartitionPrefix = Wrap<
-    (StringEq!("("), Space),
-    VecSep<Literal, (Space, StringEq!(","), Space)>,
-    (Space, StringEq!(")")),
->;
-
 #[derive(Grammar)]
 #[grammar(name = "activate spec")]
 pub struct SQLActivateSpec {
@@ -5626,9 +4628,6 @@ pub struct SQLActivateSpec {
     pub activate_kw: StringEqCI!("ACTIVATE"),
     pub mappings_kw: Option<(Space, StringEqCI!("MAPPINGS"))>,
 }
-
-pub type SQLPartitionRefSpec =
-    Prefix<StringEqCI!("PARTITION"), (Space, Either<PartitionRangeSpec, SQLPartitionPrefix>)>;
 
 #[derive(Grammar)]
 #[grammar(name = "cre or alt")]
@@ -5664,21 +4663,6 @@ pub enum LevelsClause {
     Cascade(StringEqCI!("CASCADE")),
     Cascaded(StringEqCI!("CASCADED")),
     Local(StringEqCI!("LOCAL")),
-}
-
-#[derive(Grammar)]
-pub struct SQLDropViewStatement {
-    pub drop_kw: StringEqCI!("DROP"),
-    pub view_kw: (Space, StringEqCI!("VIEW"), Space),
-    pub if_exists: Option<(
-        Space,
-        StringEqCI!("IF"),
-        Space,
-        StringEqCI!("EXISTS"),
-        Space,
-    )>,
-    pub view: TName,
-    pub cascade: Option<(Space, CascadeOpt)>,
 }
 
 #[derive(Grammar)]
@@ -5775,24 +4759,6 @@ pub enum DatabaseName {
         first: CharOf<IsDbIdentStart>,
         rest: Vec<CharOf<IsDbIdentPart>>,
     },
-}
-
-#[derive(Grammar)]
-#[grammar(name = "db_option")]
-pub enum DbOption {
-    EncryptedDb(StringEqCI!("ENCRYPTED_DB")),
-    GlobalJournalState {
-        kw: StringEqCI!("GLOBAL_JOURNAL_STATE"),
-        eq: Option<(Space, StringEq!("="))>,
-        value: (Space, YesNo),
-    },
-}
-
-#[derive(Grammar)]
-#[grammar(name = "YES/NO")]
-pub enum YesNo {
-    No(StringEqCI!("NO")),
-    Yes(StringEqCI!("YES")),
 }
 
 #[derive(Grammar)]
@@ -6010,94 +4976,12 @@ pub type COSMethodBody = crate::cos::Brace<crate::cos::OSText>;
 pub type PythonMethodBody = Prefix<StringEq!("{"), StringEndsWith<StringEq!("}")>>;
 
 #[derive(Grammar)]
-#[grammar(name = "external-language")]
-pub enum ExternalLanguage {
-    DotNet(StringEqCI!("DOTNET")),
-    Java(StringEqCI!("JAVA")),
-    Python(StringEqCI!("PYTHON")),
-}
-
-#[derive(Grammar)]
-#[grammar(name = "external routine name")]
-pub struct ExternalRoutineName(StringLiteral);
-
-#[derive(Grammar)]
-#[grammar(name = "trigger event name")]
-pub enum TriggerEventName {
-    Delete(StringEqCI!("DELETE")),
-    Insert(StringEqCI!("INSERT")),
-    Update(StringEqCI!("UPDATE")),
-}
-
-#[derive(Grammar)]
-#[grammar(name = "trigger column list")]
-pub struct TriggerColumnList {
-    first: ColumnName,
-    rest: Vec<(Space, StringEq!(","), Space, ColumnName)>,
-}
-
-pub type OrderClause = Prefix<(StringEqCI!("ORDER"), Space), Integer>;
-
-#[derive(Grammar)]
-#[grammar(name = "old or new values alias list")]
-pub struct OldOrNewValuesAliasList {
-    first: OldOrNewValuesAlias,
-    second: Option<(Space, OldOrNewValuesAlias)>,
-}
-
-#[derive(Grammar)]
-#[grammar(name = "old or new values alias")]
-pub enum OldOrNewValuesAlias {
-    New {
-        kw: StringEqCI!("NEW"),
-        row: Option<(Space, StringEqCI!("ROW"))>,
-        as_kw: Option<(Space, StringEqCI!("AS"))>,
-        name: (Space, ColumnName),
-    },
-    Old {
-        kw: StringEqCI!("OLD"),
-        row: Option<(Space, StringEqCI!("ROW"))>,
-        as_kw: Option<(Space, StringEqCI!("AS"))>,
-        name: (Space, ColumnName),
-    },
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum ForEachTarget {
-    Row(StringEqCI!("ROW")),
-    RowAndObject(StringEqCI!("ROW_AND_OBJECT")),
-    Statement(StringEqCI!("STATEMENT")),
-}
-
-pub type LanguageClause = Prefix<(StringEqCI!("LANGUAGE"), Space), Language>;
-
-#[derive(Grammar)]
 pub enum Language {
     Cos(StringEqCI!("COS")),
     ObjectScript(StringEqCI!("OBJECTSCRIPT")),
     Python(StringEqCI!("PYTHON")),
     Sql(StringEqCI!("SQL")),
 }
-
-#[derive(Grammar)]
-#[grammar(name = "triggered statement")]
-pub enum TriggeredStatement {
-    Single {
-        statement: SqlProcedureStatement,
-        semi: StringEq!(";"),
-    },
-    Block {
-        begin: StringEq!("BEGIN"),
-        atomic: Option<StringEq!("ATOMIC")>,
-        statements: Vec<(SqlProcedureStatement, StringEq!(";"))>,
-        end: StringEq!("END"),
-    },
-}
-
-#[derive(Grammar)]
-#[grammar(name = "SQL procedure statement")]
-pub struct SqlProcedureStatement(Stat);
 
 #[derive(Grammar)]
 #[grammar(name = "indexname")]
@@ -6150,10 +5034,6 @@ pub enum CollectionSpec {
         StringEq!(")"),
     ),
 }
-
-#[derive(Grammar)]
-#[grammar(name = "index classname")]
-pub struct IndexClassname(Ident);
 
 #[derive(Grammar)]
 #[grammar(name = "classname")]
@@ -6939,21 +5819,6 @@ pub struct PartitionId(Literal);
 pub struct PartitionFieldValue(Literal);
 
 #[derive(Grammar)]
-#[grammar(name = "activate spec")]
-pub struct ActivateSpec {
-    mode: Option<(ActivateMode, Space)>,
-    kw: StringEqCI!("ACTIVATE"),
-    mappings: Option<(Space, StringEqCI!("MAPPINGS"))>,
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum ActivateMode {
-    Defer(StringEqCI!("DEFER")),
-    Force(StringEqCI!("FORCE")),
-}
-
-#[derive(Grammar)]
 #[grammar(name = "fld qualifier")]
 pub enum FldQualifier {
     Description {
@@ -7320,14 +6185,6 @@ pub enum TriggeredAction {
 }
 
 #[derive(Grammar)]
-#[grammar(name = "triggered action for each target")]
-pub enum TriggeredActionForEachTarget {
-    Row(StringEq!("ROW")),
-    RowAndObject(StringEq!("ROW_AND_OBJECT")),
-    Statement(StringEq!("STATEMENT")),
-}
-
-#[derive(Grammar)]
 #[grammar(name = "positive integer", validated)]
 pub struct PositiveInteger(Number);
 
@@ -7594,108 +6451,6 @@ pub type LoadSqlLogToFile = Prefix<
 >;
 
 #[derive(Grammar)]
-#[grammar(name = "ft-options")]
-pub enum FtOptions {
-    Db(DbFtOptions),
-    File(FileFtOptions),
-}
-
-#[derive(Grammar)]
-#[grammar(name = "file-ft-options")]
-pub enum FileFtOptions {
-    File {
-        kw: (StringEqCI!("FILE"), Space),
-        path: Literal,
-    },
-    Columns {
-        spec: Option<(
-            StringEqCI!("COLUMNS"),
-            Space,
-            StringEq!("("),
-            Space,
-            ColumnDefList,
-            Space,
-            StringEq!(")"),
-        )>,
-    },
-}
-
-#[derive(Grammar)]
-#[grammar(name = "db-ft-options")]
-pub enum DbFtOptions {
-    Query {
-        kw: (StringEqCI!("QUERY"), Space),
-        value: Literal,
-    },
-    Table {
-        kw: (StringEqCI!("TABLE"), Space),
-        value: Literal,
-    },
-}
-
-#[derive(Grammar)]
-#[grammar(name = "alter-ft-action")]
-pub enum AlterFtAction {
-    Alter {
-        kw: (StringEqCI!("ALTER"), Space),
-        action: SubAlterFtAction,
-    },
-    Modify {
-        kw: (StringEqCI!("MODIFY"), Space),
-        spec: FtModificationSpec,
-    },
-}
-
-#[derive(Grammar)]
-#[grammar(name = "sub-alter-ft-action")]
-pub struct SubAlterFtAction(AlterFtColumnAction);
-
-#[derive(Grammar)]
-#[grammar(name = "alter-ft-column-action")]
-pub enum AlterFtColumnAction {
-    AddColumn {
-        name: Ident,
-        datyp: (Space, Datyp),
-    },
-    Rename {
-        column_kw: Option<(StringEqCI!("COLUMN"), Space)>,
-        action: RenameFtAction,
-    },
-}
-
-#[derive(Grammar)]
-#[grammar(name = "ft-modification-spec")]
-pub enum FtModificationSpec {
-    ColumnDefs {
-        first_name: Ident,
-        first_datyp: (Space, Datyp),
-        rest: Vec<(Space, StringEq!(","), Space, Ident, Space, Datyp)>,
-    },
-    Renames {
-        first: RenameFtAction,
-        rest: Vec<(Space, StringEq!(","), Space, RenameFtAction)>,
-    },
-}
-
-#[derive(Grammar)]
-#[grammar(name = "rename-ft-action")]
-pub struct RenameFtAction {
-    old_name: Ident,
-    rename_kw: (Space, StringEqCI!("RENAME"), Space),
-    new_name: Ident,
-    values: Option<(
-        Space,
-        StringEqCI!("VALUES"),
-        Space,
-        StringEq!("("),
-        Space,
-        Ident,
-        Space,
-        StringEq!(")"),
-    )>,
-}
-
-#[derive(Grammar)]
 #[grammar(name = "alter-server-action")]
 pub enum AlterServerAction {
     Alter {
@@ -7735,13 +6490,6 @@ pub enum SubAlterServerAction {
         kw: (StringEqCI!("USERNAME"), Space),
         value: Literal,
     },
-}
-
-#[derive(Grammar)]
-#[grammar(name = "fdw-name")]
-pub enum FdwName {
-    Csv(StringEqCI!("csv")),
-    Jdbc(StringEqCI!("jdbc")),
 }
 
 #[derive(Grammar)]

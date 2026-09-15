@@ -12,16 +12,10 @@ repository = "https://github.com/intersystems-community/ascot"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[profile.dev-wasm]
-inherits = "release"
-opt-level = 0
-debug = false
-
 [dependencies]
 either = "1.15.0"
 tygr = "0.6.0"
 tygr-objectscript = { version = "0.1.0", path = "tygr-objectscript" }
-wasm-bindgen = "0.2.117"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.149"
 wit-bindgen = "0.62.0"
