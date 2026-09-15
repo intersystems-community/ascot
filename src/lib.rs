@@ -202,34 +202,32 @@ impl WorkspaceStruct {
             },
         };
         let new_name = entry.as_ref().ok().map(|doc| doc.name(&uri));
-        // `insert` hands back whatever was there before, so `index_class_name`/etc. below can
-        // fix up a stale forward-index entry on a rename without a separate lookup.
+        // `insert` hands back whatever was there before, so `index_name` below can fix up a
+        // stale forward-index entry on a rename without a separate lookup.
         let old_name = self
             .doc_cache
             .insert(uri.clone(), entry.map(RefCell::new))
             .and_then(Result::ok)
             .map(|cell| cell.into_inner().name(&uri));
-        if let Some(new_name) = new_name {
-            match kind {
-                DocKind::Cls => self.index_class_name(&uri, old_name, new_name),
-                DocKind::Routine => self.index_rtn_name(&uri, old_name, new_name),
-                DocKind::Inc => self.index_inc_name(&uri, old_name, new_name),
-            }
-        }
-        self.invalidate(&uri)
+        let mut affected = match (new_name, old_name) {
+            (Some(new_name), old_name) => self.index_name(kind, &uri, old_name, new_name),
+            // No longer parses: whatever it declared before, it doesn't now.
+            (None, Some(old_name)) => self.unindex(kind, &uri, &old_name),
+            (None, None) => vec![],
+        };
+        affected.extend(self.invalidate(&uri));
+        affected.sort();
+        affected.dedup();
+        affected
     }
 
     fn remove_uri(&mut self, uri: &str) -> Vec<String> {
-        let affected = self.invalidate(uri);
+        let mut affected = self.invalidate(uri);
         if let Some(Ok(cell)) = self.doc_cache.remove(uri) {
             let name = cell.into_inner().name(uri);
-            let index = match DocKind::from_uri(uri) {
-                Some(DocKind::Cls) => &self.class_index,
-                Some(DocKind::Routine) => &self.rtn_index,
-                Some(DocKind::Inc) => &self.inc_index,
-                None => unreachable!("a uri in doc_cache always has a recognized extension"),
-            };
-            index.borrow_mut().remove(&name);
+            let kind = DocKind::from_uri(uri)
+                .expect("a uri in doc_cache always has a recognized extension");
+            affected.extend(self.unindex(kind, uri, &name));
         }
         if let Some(deps) = self.depends_on.borrow_mut().remove(uri) {
             let mut dependents = self.dependents.borrow_mut();
@@ -308,14 +306,31 @@ impl WorkspaceStruct {
         }
     }
 
-    fn index_class_name(&self, uri: &str, old_name: Option<String>, name: String) {
+    fn index_for(&self, kind: DocKind) -> &RefCell<HashMap<String, String>> {
+        match kind {
+            DocKind::Cls => &self.class_index,
+            DocKind::Routine => &self.rtn_index,
+            DocKind::Inc => &self.inc_index,
+        }
+    }
+
+    // Makes `uri` the owner of `name` (dropping its claim on `old_name`, if renamed). Returns
+    // the other uris whose cached analysis this makes stale.
+    fn index_name(
+        &self,
+        kind: DocKind,
+        uri: &str,
+        old_name: Option<String>,
+        name: String,
+    ) -> Vec<String> {
+        let mut affected = vec![];
         if old_name.as_deref() != Some(name.as_str())
             && let Some(old_name) = old_name
         {
-            self.class_index.borrow_mut().remove(&old_name);
+            affected.extend(self.unindex(kind, uri, &old_name));
         }
-        let previous_owner = self.class_index.borrow().get(&name).cloned();
-        self.class_index
+        let previous_owner = self.index_for(kind).borrow().get(&name).cloned();
+        self.index_for(kind)
             .borrow_mut()
             .insert(name.clone(), uri.to_string());
         // A newly-discovered conflict: the other file was checked (and cached) before this one
@@ -324,8 +339,39 @@ impl WorkspaceStruct {
         if let Some(previous_owner) = previous_owner
             && previous_owner != uri
         {
-            self.invalidate(&previous_owner);
+            affected.extend(self.invalidate(&previous_owner));
         }
+        affected
+    }
+
+    // Drops `uri`'s claim on `name`, handing it to another document of that kind still declaring
+    // it, if any. Every such document's cached analysis (a duplicate-class error naming `uri`,
+    // say) is stale, so they're all returned for rechecking.
+    fn unindex(&self, kind: DocKind, uri: &str, name: &str) -> Vec<String> {
+        let others: Vec<String> = self
+            .doc_cache
+            .iter()
+            .filter_map(|(other, entry)| {
+                let cell = entry.as_ref().ok()?;
+                (other != uri
+                    && DocKind::from_uri(other) == Some(kind)
+                    && cell.borrow().name(other) == name)
+                    .then(|| other.clone())
+            })
+            .collect();
+        let index = self.index_for(kind);
+        if index.borrow().get(name).is_some_and(|owner| owner == uri) {
+            index.borrow_mut().remove(name);
+            if let Some(successor) = others.iter().min() {
+                index
+                    .borrow_mut()
+                    .insert(name.to_string(), successor.clone());
+            }
+        }
+        others
+            .iter()
+            .flat_map(|other| self.invalidate(other))
+            .collect()
     }
 
     // `class_index` only ever remembers one owner per name (whichever claimed it last), so it
@@ -387,7 +433,9 @@ impl WorkspaceStruct {
         let mut entry = cell.borrow_mut();
         let doc = &mut *entry;
         let text = doc.text.as_str();
-        doc.details
+        let fresh = doc.details.is_none();
+        let details = doc
+            .details
             .get_or_insert_with(|| match DocKind::from_uri(uri) {
                 Some(DocKind::Cls) => ClassDetails::try_from(text)
                     .map(|details| DocDetails::Cls(Arc::new(details), None))
@@ -410,16 +458,14 @@ impl WorkspaceStruct {
                     .map_err(|err| tygr_error_to_diagnostics(err, text)),
                 None => unreachable!("a uri in doc_cache always has a recognized extension"),
             })
-            .clone()
-    }
-
-    fn index_rtn_name(&self, uri: &str, old_name: Option<String>, name: String) {
-        if old_name.as_deref() != Some(name.as_str())
-            && let Some(old_name) = old_name
-        {
-            self.rtn_index.borrow_mut().remove(&old_name);
+            .clone();
+        // `rtn_details` (symbols, another routine's label lookup) may get here before
+        // `ensure_checked` records the full dependency set; the `#include`s just resolved must
+        // invalidate this expansion either way.
+        if fresh && let Ok(DocDetails::Rtn(rtn, _)) = &details {
+            self.record_deps(uri, rtn.map.included_uris().cloned().collect());
         }
-        self.rtn_index.borrow_mut().insert(name, uri.to_string());
+        details
     }
 
     // `rtn_index` is populated for every open routine immediately (see `insert`), so this is
@@ -4736,5 +4782,133 @@ mod tests {
             ("Same.inc", "ROUTINE Test.Same [Type=INC]\n#define X 1\n"),
         ]);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    // A mode mismatch compiles, so it's a warning and the rest of the method is still checked.
+    #[test]
+    fn argument_mode_mismatch_does_not_stop_checking_the_method() {
+        for call in ["Do ..ByVal(.x)", "Do ..Out(1)"] {
+            let diagnostics = class_diagnostics(&format!(
+                "ClassMethod ByVal(x) {{\n Quit\n}}\nClassMethod Out(Output o) {{\n Set o = 1\n}}\nClassMethod M() {{\n {call}\n Set y = 1\n}}\n"
+            ));
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|d| d.severity == bindings::DiagnosticSeverity::Warning),
+                "{call}: {diagnostics:?}"
+            );
+            assert!(
+                diagnostics.iter().any(|d| d.message.contains("'y'")),
+                "{call}: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn similar_name_suggestions_do_not_depend_on_candidate_order() {
+        let candidates = ["tORPHANPROCEDURE", "tORPHANprocedure", "TRUNCATE"];
+        let forward = check::top_similar("tORPHANPROC", candidates.iter().copied(), 20);
+        let backward = check::top_similar("tORPHANPROC", candidates.iter().rev().copied(), 20);
+        assert_eq!(forward, backward);
+        assert_eq!(forward.len(), 2, "{forward:?}");
+    }
+
+    #[test]
+    fn routine_expansion_computed_for_symbols_still_tracks_its_includes() {
+        let workspace = Workspace::new(None);
+        workspace.open(
+            "A.inc".to_string(),
+            "ROUTINE A [Type=INC]\n#define X 1\n".to_string(),
+        );
+        workspace.open(
+            "R.mac".to_string(),
+            "ROUTINE R\n#include A\n\twrite $$$X\n\tquit\n".to_string(),
+        );
+        assert!(workspace.document_symbol("R.mac".to_string()).is_some());
+        let affected = workspace.open(
+            "A.inc".to_string(),
+            "ROUTINE A [Type=INC]\n#define Y 1\n".to_string(),
+        );
+        assert!(affected.contains(&"R.mac".to_string()), "{affected:?}");
+        let diagnostics = workspace.diagnostics("R.mac".to_string());
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("'X' is undefined"),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn class_depends_on_transitively_included_files() {
+        let workspace = Workspace::new(None);
+        workspace.open(
+            "B.inc".to_string(),
+            "ROUTINE B [Type=INC]\n#define X 1\n".to_string(),
+        );
+        workspace.open(
+            "A.inc".to_string(),
+            "ROUTINE A [Type=INC]\n#include B\n".to_string(),
+        );
+        workspace.open(
+            "C.cls".to_string(),
+            "Include A\n\nClass Test.C {\nClassMethod M() {\n Write $$$X\n}\n}\n".to_string(),
+        );
+        assert!(workspace.diagnostics("C.cls".to_string()).is_empty());
+        let affected = workspace.open(
+            "B.inc".to_string(),
+            "ROUTINE B [Type=INC]\n#define Y 1\n".to_string(),
+        );
+        assert!(affected.contains(&"C.cls".to_string()), "{affected:?}");
+        let diagnostics = workspace.diagnostics("C.cls".to_string());
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("'X' is undefined"),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn class_index_forgets_a_name_its_file_no_longer_declares() {
+        let workspace = Workspace::new(None);
+        workspace.open(
+            "C.cls".to_string(),
+            "Class Test.C {\nClassMethod M() {\n Do ##class(Test.Foo).Baz()\n}\n}\n".to_string(),
+        );
+        let foo = bindings::Position {
+            line: 2,
+            character: 15,
+        };
+        let definition = |ws: &Workspace| ws.definition("C.cls".to_string(), foo).map(|l| l.uri);
+        workspace.open("A.cls".to_string(), "Class Test.Foo {\n}\n".to_string());
+        assert_eq!(definition(&workspace), Some("A.cls".to_string()));
+        // Unparseable for a while (mid-edit), then renamed: `Test.Foo` is nobody's.
+        workspace.open("A.cls".to_string(), "Clas Test.Foo {\n".to_string());
+        workspace.open("A.cls".to_string(), "Class Test.Bar {\n}\n".to_string());
+        assert_eq!(definition(&workspace), None);
+    }
+
+    #[test]
+    fn closing_one_of_two_same_named_classes_leaves_the_other_indexed() {
+        let workspace = Workspace::new(None);
+        workspace.open(
+            "C.cls".to_string(),
+            "Class Test.C {\nClassMethod M() {\n Do ##class(Test.Foo).Baz()\n}\n}\n".to_string(),
+        );
+        workspace.open("A.cls".to_string(), "Class Test.Foo {\n}\n".to_string());
+        workspace.open("B.cls".to_string(), "Class Test.Foo {\n}\n".to_string());
+        assert!(!workspace.diagnostics("B.cls".to_string()).is_empty());
+        let affected = workspace.close("A.cls".to_string());
+        assert!(affected.contains(&"B.cls".to_string()), "{affected:?}");
+        assert!(workspace.diagnostics("B.cls".to_string()).is_empty());
+        let foo = bindings::Position {
+            line: 2,
+            character: 15,
+        };
+        assert_eq!(
+            workspace
+                .definition("C.cls".to_string(), foo)
+                .map(|l| l.uri),
+            Some("B.cls".to_string())
+        );
     }
 }

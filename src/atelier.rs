@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
+use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -80,8 +81,9 @@ impl AtelierConnection {
             "" | "/" => "",
             path => path.trim_end_matches('/'),
         };
-        let username = parsed.username();
-        let password = parsed.password().unwrap_or("");
+        // `Url` hands these back still percent-encoded; IRIS wants the real characters.
+        let username = percent_decode_str(parsed.username()).decode_utf8_lossy();
+        let password = percent_decode_str(parsed.password().unwrap_or("")).decode_utf8_lossy();
         let auth_header = format!(
             "Basic {}",
             base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
@@ -605,6 +607,15 @@ mod tests {
             property_type(None, Some("%String".into()), false).collection,
             None
         );
+    }
+
+    #[test]
+    fn connect_decodes_percent_encoded_credentials() {
+        let conn =
+            AtelierConnection::connect("http://us%40er:p%40ss%25word@localhost:8080", "USER")
+                .unwrap();
+        let expected = base64::engine::general_purpose::STANDARD.encode("us@er:p@ss%word");
+        assert_eq!(conn.auth_header, format!("Basic {expected}"));
     }
 
     #[test]

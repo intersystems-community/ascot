@@ -417,15 +417,6 @@ impl SourceMap {
 impl WorkspaceStruct {
     // Keeps `inc_index` in sync with `uri`'s latest tier-A header name — dropping the old
     // name's entry first, in case it changed.
-    pub(crate) fn index_inc_name(&self, uri: &str, old_name: Option<String>, name: String) {
-        if old_name.as_deref() != Some(name.as_str())
-            && let Some(old_name) = old_name
-        {
-            self.inc_index.borrow_mut().remove(&old_name);
-        }
-        self.inc_index.borrow_mut().insert(name, uri.to_string());
-    }
-
     // Resolves an `#include name`: an already-open `.inc` document first, then (if connected)
     // by fetching it from the server -- covers a system or shared include that isn't part of
     // the local editor workspace. Returns its uri (the host's own if it offered one, else a
@@ -815,6 +806,8 @@ impl WorkspaceStruct {
                             .collect(),
                     );
                     let _ = self.expand_units(&mut definitions, &mut todos, &mut dones);
+                    // Whatever the include itself included: an edit there changes this class too.
+                    resolved_uris.extend(dones.included.into_keys());
                 }
                 None => failed.push(name.clone()),
             }

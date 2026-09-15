@@ -31,6 +31,7 @@ dependencies = [
  "either",
  "lsp-server",
  "lsp-types",
+ "percent-encoding",
  "rmcp",
  "schemars",
  "serde",
