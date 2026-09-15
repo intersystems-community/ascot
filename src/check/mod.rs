@@ -2013,6 +2013,8 @@ fn precedence_of<X>(op: &InfixOperation<X>) -> Option<Precedence> {
     match op.deref() {
         cos::Operator::Or(_)
         | cos::Operator::And(..)
+        | cos::Operator::NAnd(_)
+        | cos::Operator::NOr(_)
         | cos::Operator::LO(_)
         | cos::Operator::LA(_) => Some(Precedence::Logical),
         cos::Operator::Eq(_)
@@ -2055,7 +2057,9 @@ impl TryFrom<&cos::Operator> for TermOp {
             cos::Operator::LO(..) => Err(()),
             cos::Operator::LA(..) => Err(()),
             cos::Operator::And(..) => Err(()),
+            cos::Operator::NAnd(..) => Err(()),
             cos::Operator::Or(..) => Err(()),
+            cos::Operator::NOr(..) => Err(()),
             cos::Operator::Add(..) => Ok(Self::Add),
             cos::Operator::Sub(..) => Ok(Self::Sub),
             cos::Operator::Pow(..) => Ok(Self::Pow),
@@ -2140,7 +2144,9 @@ fn check_infix<'a, X>(
                 cos::Operator::LO(_) => Ok(PowerTy::from("%Boolean")),
                 cos::Operator::LA(_) => Ok(PowerTy::from("%Boolean")),
                 cos::Operator::And(..) => Ok(PowerTy::from("%Boolean")),
+                cos::Operator::NAnd(_) => Ok(PowerTy::from("%Boolean")),
                 cos::Operator::Or(_) => Ok(PowerTy::from("%Boolean")),
+                cos::Operator::NOr(_) => Ok(PowerTy::from("%Boolean")),
                 cos::Operator::Add(_) | cos::Operator::Sub(_) => Ok(env.merge_ty(lhs, rhs).into()),
                 cos::Operator::Pow(_) => Ok(PowerTy::from("%DataType")),
                 cos::Operator::Mul(_) => Ok(PowerTy::from("%DataType")),
@@ -3086,7 +3092,7 @@ impl CheckCommandInner for cos::DAOElem {
             cos::DAOElem::False(_) => (),
             cos::DAOElem::Null(_) => (),
             cos::DAOElem::Str(_) => (),
-            cos::DAOElem::Num(_) => (),
+            cos::DAOElem::Num(..) => (),
             cos::DAOElem::OS { content, .. } => {
                 let _ = content.to_ty(env, flow)?;
             }
@@ -3189,8 +3195,8 @@ trait AsCommandLines<Start: 'static> {
     fn as_command_lines(&self) -> impl Iterator<Item = &CommandLine<Start>>;
 }
 
-impl AsCommandLines<SGap1> for RoutineMain {
-    fn as_command_lines(&self) -> impl Iterator<Item = &CommandLine<SGap1>> {
+impl AsCommandLines<LineStart> for RoutineMain {
+    fn as_command_lines(&self) -> impl Iterator<Item = &CommandLine<LineStart>> {
         self.line_1
             .iter()
             .chain(self.line_n.iter().flat_map(|line_n| line_n.items.iter()))
