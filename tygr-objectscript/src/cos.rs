@@ -148,20 +148,24 @@ pub enum HMacroCommand {
             Wrap<(StringEq!("("), SGap), Prefix<StringEq!("%"), MacroName>, (SGap, StringEq!(")"))>,
         >,
     },
-    IfDef(StringEqCI!("ifDef")),
-    IfNDef(StringEqCI!("ifNDef")),
-    If(StringEqCI!("if")),
-    Elseif(StringEqCI!("ElseIf")),
-    Else(StringEqCI!("Else")),
-    EndIf(StringEqCI!("EndIf")),
-    Execute(StringEqCI!("execute")),
-    Import(StringEqCI!("import")),
+    // Each bare keyword ends at a word boundary: `..#Undefined` is a parameter reference, not
+    // `#undef ined`.
+    IfDef(StringEqCI!("ifDef"), HMacroKeywordEnd),
+    IfNDef(StringEqCI!("ifNDef"), HMacroKeywordEnd),
+    If(StringEqCI!("if"), HMacroKeywordEnd),
+    Elseif(StringEqCI!("ElseIf"), HMacroKeywordEnd),
+    Else(StringEqCI!("Else"), HMacroKeywordEnd),
+    EndIf(StringEqCI!("EndIf"), HMacroKeywordEnd),
+    Execute(StringEqCI!("execute"), HMacroKeywordEnd),
+    Import(StringEqCI!("import"), HMacroKeywordEnd),
     Include(Prefix<(StringEqCI!("include"), SGap1), RoutineName>),
-    Noshow(StringEqCI!("noshow")),
-    Show(StringEqCI!("show")),
-    SqlCompile(StringEqCI!("sqlcompile")),
-    Undef(StringEqCI!("undef")),
+    Noshow(StringEqCI!("noshow"), HMacroKeywordEnd),
+    Show(StringEqCI!("show"), HMacroKeywordEnd),
+    SqlCompile(StringEqCI!("sqlcompile"), HMacroKeywordEnd),
+    Undef(StringEqCI!("undef"), HMacroKeywordEnd),
 }
+
+type HMacroKeywordEnd = NotFollowedBy<CharOf<IsLetterOrNumber>>;
 
 pub type SGapXSGap<T> = Wrap<SGap, T, SGap>;
 pub type SGapXMGap<T> = Wrap<SGap, T, MGap>;

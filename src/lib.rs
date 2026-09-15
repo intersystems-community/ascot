@@ -4932,4 +4932,57 @@ mod tests {
             .expect("expansion");
         assert_eq!(expansion.trim(), "($$Wrap^Other($g(%flag))[\"D\")");
     }
+
+    fn routine_diagnostics(body: &str) -> Vec<bindings::Diagnostic> {
+        diagnostics_for(&[("D.mac", &format!("ROUTINE D\n{body}\tQuit\n"))])
+    }
+
+    #[test]
+    fn ifdef_and_ifndef_are_evaluated() {
+        // Undefined `FOO`: `#ifdef` skips its branch, `#ifndef` keeps it.
+        assert!(routine_diagnostics("#ifdef FOO\n\tWrite $$$UNDEFA\n#endif\n").is_empty());
+        let d = routine_diagnostics("#ifndef FOO\n\tWrite $$$UNDEFB\n#endif\n");
+        assert!(
+            d.iter()
+                .any(|d| d.message.contains("'UNDEFB' is undefined")),
+            "{d:?}"
+        );
+        // Defined `FOO`: the other way round, and `#else` works for both.
+        let d = routine_diagnostics(
+            "#define FOO 1\n#ifdef FOO\n\tWrite $$$UNDEFC\n#else\n\tWrite $$$UNDEFD\n#endif\n",
+        );
+        assert!(
+            d.iter()
+                .any(|d| d.message.contains("'UNDEFC' is undefined")),
+            "{d:?}"
+        );
+        assert!(d.iter().all(|d| !d.message.contains("UNDEFD")), "{d:?}");
+        let d = routine_diagnostics(
+            "#define FOO 1\n#ifndef FOO\n\tWrite $$$UNDEFE\n#else\n\tWrite $$$UNDEFF\n#endif\n",
+        );
+        assert!(
+            d.iter()
+                .any(|d| d.message.contains("'UNDEFF' is undefined")),
+            "{d:?}"
+        );
+        assert!(d.iter().all(|d| !d.message.contains("UNDEFE")), "{d:?}");
+    }
+
+    #[test]
+    fn undef_removes_a_definition() {
+        let d = routine_diagnostics("#define X 1\n#undef X\n\tWrite $$$X\n");
+        assert!(
+            d.iter().any(|d| d.message.contains("'X' is undefined")),
+            "{d:?}"
+        );
+    }
+
+    // The `#ifdef`'s `#endif` must not end the enclosing skipped `#if 0` branch.
+    #[test]
+    fn ifdef_nested_in_a_skipped_branch_does_not_end_it() {
+        let d = routine_diagnostics(
+            "#if 0\n#ifdef FOO\n\tWrite $$$UNDEFA\n#endif\n\tWrite $$$UNDEFLEAK\n#endif\n",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
 }
