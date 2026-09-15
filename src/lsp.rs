@@ -80,6 +80,17 @@ fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
     url::Url::parse(uri.as_str()).ok()?.to_file_path().ok()
 }
 
+// The workspace key for a document the client names. Clients spell `file:` uris differently
+// from `url::Url::from_file_path` (VS Code sends `file:///c%3A/...` for `C:\...`), which is how
+// the startup scan keys the same file -- so route every client uri through the path and back,
+// and the two spellings meet. Anything that isn't a file path is used as-is.
+fn workspace_key(uri: &Uri) -> String {
+    uri_to_path(uri)
+        .and_then(|path| url::Url::from_file_path(path).ok())
+        .map(|url| url.to_string())
+        .unwrap_or_else(|| uri.as_str().to_string())
+}
+
 fn open_directory(workspace: &Workspace, path: &Path) {
     if path.is_dir() {
         let Ok(entries) = std::fs::read_dir(path) else {
@@ -123,7 +134,7 @@ fn main_loop(
 fn handle_request(workspace: &Workspace, req: Request) -> Response {
     match req.method.as_str() {
         "textDocument/inlayHint" => respond(req.id, req.params, |params: InlayHintParams| {
-            let uri = params.text_document.uri.as_str().to_string();
+            let uri = workspace_key(&params.text_document.uri);
             let hints = workspace
                 .inlay_hint(uri, params.range.into())
                 .into_iter()
@@ -133,11 +144,7 @@ fn handle_request(workspace: &Workspace, req: Request) -> Response {
         }),
         "textDocument/definition" => respond(req.id, req.params, |params: GotoDefinitionParams| {
             let text_document_position = params.text_document_position_params;
-            let uri = text_document_position
-                .text_document
-                .uri
-                .as_str()
-                .to_string();
+            let uri = workspace_key(&text_document_position.text_document.uri);
             let position = text_document_position.position.into();
             let location = workspace.definition(uri, position)?;
             let lsp_location = LspLocation {
@@ -148,11 +155,7 @@ fn handle_request(workspace: &Workspace, req: Request) -> Response {
         }),
         "textDocument/references" => respond(req.id, req.params, |params: ReferenceParams| {
             let text_document_position = params.text_document_position;
-            let uri = text_document_position
-                .text_document
-                .uri
-                .as_str()
-                .to_string();
+            let uri = workspace_key(&text_document_position.text_document.uri);
             let position = text_document_position.position.into();
             let locations = workspace
                 .references(uri, position, params.context.include_declaration)
@@ -168,11 +171,7 @@ fn handle_request(workspace: &Workspace, req: Request) -> Response {
         }),
         "textDocument/hover" => respond(req.id, req.params, |params: HoverParams| {
             let text_document_position = params.text_document_position_params;
-            let uri = text_document_position
-                .text_document
-                .uri
-                .as_str()
-                .to_string();
+            let uri = workspace_key(&text_document_position.text_document.uri);
             let position = text_document_position.position.into();
             let value = workspace.hover(uri, position)?;
             Some(Hover {
@@ -185,7 +184,7 @@ fn handle_request(workspace: &Workspace, req: Request) -> Response {
         }),
         "textDocument/documentSymbol" => {
             respond(req.id, req.params, |params: DocumentSymbolParams| {
-                let uri = params.text_document.uri.as_str().to_string();
+                let uri = workspace_key(&params.text_document.uri);
                 let document_symbol = workspace.document_symbol(uri)?;
                 let children = document_symbol
                     .members
@@ -249,13 +248,13 @@ fn handle_notification(
     match not.method.as_str() {
         "textDocument/didOpen" => {
             let params: DidOpenTextDocumentParams = serde_json::from_value(not.params)?;
-            let uri = params.text_document.uri.as_str().to_string();
+            let uri = workspace_key(&params.text_document.uri);
             let affected = workspace.open(uri, params.text_document.text);
             publish_all(connection, workspace, affected)?;
         }
         "textDocument/didChange" => {
             let params: DidChangeTextDocumentParams = serde_json::from_value(not.params)?;
-            let uri = params.text_document.uri.as_str().to_string();
+            let uri = workspace_key(&params.text_document.uri);
             // Whole-document sync: the (only) content change is the full new text.
             if let Some(change) = params.content_changes.into_iter().last() {
                 let affected = workspace.open(uri, change.text);
@@ -402,5 +401,24 @@ fn to_lsp_diagnostic(diagnostic: Diagnostic) -> LspDiagnostic {
         related_information: (!related_information.is_empty()).then_some(related_information),
         tags: None,
         data: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_and_scan_spellings_of_a_file_uri_share_one_key() {
+        let client: Uri = "file:///c%3A/dir/Foo.cls".parse().unwrap();
+        let scan = url::Url::from_file_path(uri_to_path(&client).unwrap()).unwrap();
+        assert_eq!(workspace_key(&client), scan.to_string());
+        assert!(!workspace_key(&client).contains("%3A"));
+    }
+
+    #[test]
+    fn a_non_file_uri_is_its_own_key() {
+        let uri: Uri = "untitled:Untitled-1".parse().unwrap();
+        assert_eq!(workspace_key(&uri), "untitled:Untitled-1");
     }
 }
