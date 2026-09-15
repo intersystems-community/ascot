@@ -2,24 +2,29 @@ name: Bug report
 description: Report something that isn't working as expected
 labels: [bug]
 body:
-  - type: textarea
-    id: what-happened
+  - type: input
+    id: version
     attributes:
-      label: What happened?
-      description: A clear description of the bug, including what you expected instead.
+      label: ascot version
+      description: Crate version or git commit.
     validations:
       required: true
   - type: textarea
     id: repro
     attributes:
       label: Steps to reproduce
-      description: A minimal SQL/class input that triggers the problem. Code snippets help most.
+      description: A minimal input that triggers the problem. Code snippets and screenshots help most.
     validations:
       required: true
-  - type: input
-    id: version
+  - type: textarea
+    id: observed
     attributes:
-      label: Version
-      description: Crate version or git commit.
+      label: What did you observe?
     validations:
       required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What do you expect?
+    validations:
+      required: false
