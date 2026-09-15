@@ -315,7 +315,27 @@ pub struct ExpColExp {
 
 pub type ColExp = Prefix<SGapXMGap<StringEq!(":")>, Range<Expr>>;
 
+// The expression is parsed once and the `:expr` / `...` suffix decides the `FunArg` variant;
+// trying `ExpColExp` and then `Expr` as separate alternatives re-parsed every argument, doubling
+// the work at each nesting level.
 #[derive(Grammar)]
+pub enum FunArgSource {
+    ColonDefault(ColExp),
+    Star {
+        kw: StringEq!("*"),
+        md: Option<StarMod>,
+    },
+    Expr {
+        expr: Range<Expr>,
+        tail: Option<Either<(SGapXMGap<StringEq!(":")>, Range<Expr>), StringEq!("...")>>,
+    },
+    ByRef {
+        dot: StringEq!("."),
+        target: SetTarget,
+    },
+}
+
+#[derive(GrammarFromOther)]
 pub enum FunArg {
     ColonNormal(ExpColExp),
     ColonDefault(ColExp),
@@ -332,6 +352,46 @@ pub enum FunArg {
         dot: StringEq!("."),
         target: SetTarget,
     },
+}
+
+impl GrammarFrom for FunArg {
+    type Source = FunArgSource;
+    fn print_to(&self, buf: &mut String) {
+        match self {
+            FunArg::ColonNormal(x) => x.print_to(buf),
+            FunArg::ColonDefault(x) => x.print_to(buf),
+            FunArg::Star { kw, md } => {
+                kw.print_to(buf);
+                md.print_to(buf);
+            }
+            FunArg::Normal { expr, expand } => {
+                expr.print_to(buf);
+                expand.print_to(buf);
+            }
+            FunArg::ByRef { dot, target } => {
+                dot.print_to(buf);
+                Grammar::print_to(target, buf);
+            }
+        }
+    }
+}
+
+impl From<FunArgSource> for FunArg {
+    fn from(value: FunArgSource) -> Self {
+        match value {
+            FunArgSource::ColonDefault(x) => FunArg::ColonDefault(x),
+            FunArgSource::Star { kw, md } => FunArg::Star { kw, md },
+            FunArgSource::Expr {
+                expr,
+                tail: Some(Either::Left((kw, e2))),
+            } => FunArg::ColonNormal(ExpColExp { e1: expr, kw, e2 }),
+            FunArgSource::Expr { expr, tail } => FunArg::Normal {
+                expr: expr.into_inner(),
+                expand: tail.and_then(Either::right),
+            },
+            FunArgSource::ByRef { dot, target } => FunArg::ByRef { dot, target },
+        }
+    }
 }
 
 #[derive(Grammar)]
@@ -642,7 +702,7 @@ pub enum DAOElem {
     False(StringEq!("false")),
     Null(StringEq!("null")),
     Str(OSString),
-    Num(Number),
+    Num(Option<StringEq!("-")>, Number),
     OS {
         open: StringEq!("("),
         content: MGapXMGap<Range<Expr>>,
@@ -794,9 +854,16 @@ pub enum Operator {
     // `&` not starting an embedded SQL/HTML/JS block.
     And(
         StringEq!("&"),
-        NotFollowedBy<Either<StringEqCI!("html"), Either<StringEqCI!("js"), StringEqCI!("sql")>>>,
+        NotFollowedBy<
+            Either<
+                StringEqCI!("html<"),
+                Either<StringEqCI!("js<"), Either<StringEqCI!("javascript<"), StringEqCI!("sql(")>>,
+            >,
+        >,
     ),
+    NAnd(StringEq!("'&")),
     Or(StringEq!("!")),
+    NOr(StringEq!("'!")),
     Add(StringEq!("+")),
     Sub(StringEq!("-")),
     Pow(StringEq!("**")),
@@ -1591,7 +1658,8 @@ pub enum SpecialVariable {
 
     ROLES(StringEqCI!("ROLES")),
 
-    STACK(Either<StringEqCI!("STACK"), StringEqCI!("ST")>),
+    // `ST` followed by a letter is `$STORAGE`, below.
+    STACK(Either<StringEqCI!("STACK"), (StringEqCI!("ST"), NotFollowedBy<CharOf<IsAlphabetic>>)>),
     SYSTEM(Either<StringEqCI!("SYSTEM"), StringEqCI!("SY")>),
     STORAGE(Either<StringEqCI!("STORAGE"), StringEqCI!("S")>),
 
@@ -2050,10 +2118,12 @@ pub enum OSTextUnitNoHash {
     T(StringOf1<IsOSTextSafe>),
     NL(StringEq!("\n"), Option<SubroutineHeader>),
     S(OSString),
-    // A `"` that doesn't open a string closed on the same line -- i.e. one inside a `;` comment
-    // (which this scanner can't tell from code), so it must not derail brace matching.
+    // A `"` that doesn't open a string closed on the same line (e.g. inside embedded SQL), so it
+    // must not derail brace matching.
     DQ(StringEq!("\"")),
     Brace(Brace<OSText>),
+    // A `;` comment: a brace inside it doesn't count.
+    EComment(StringEq!(";"), StringOf<IsNotNL>),
     LC(GenericLineComment<LineCommentStart>),
     RC(RangeComment),
     SL(StringEq!("/")),
@@ -2158,7 +2228,6 @@ char_class!(pub IsOSTextSafe, "objectscript_text", |ch| ch.is_alphanumeric()
         | '('
         | ')'
         | ','
-        | ';'
 ));
 
 char_class!(pub IsWSOrTB, "ws_or_tb", |ch| ch == ' ' || ch == '\t');
@@ -2368,7 +2437,7 @@ impl KeywordList {
             .iter()
             .flat_map(|entries| entries.items.iter())
             .map(|entry| entry.deref())
-            .find(|entry| entry.keyword().print() == key)
+            .find(|entry| entry.keyword().print().eq_ignore_ascii_case(key))
     }
 }
 
@@ -2646,10 +2715,99 @@ impl Default for MethodLanguage {
     }
 }
 
-#[derive(Grammar)]
 pub struct Method {
     pub header: MethodHeader,
     pub body: Prefix<Space, Brace<Range<OSText>>>,
+}
+
+type OSBody = Prefix<Space, Brace<Range<OSText>>>;
+
+// What may follow a member's closing `}`: another member, a `///` doc comment, or the class's own
+// closing `}` ending the document (a bare `}` may just as well be the enclosing method's).
+#[derive(Grammar)]
+enum AfterMember {
+    Method(MethodKeyword),
+    Property(Raw<(StringEqCI!("Property"), Space1)>),
+    Relationship(Raw<(StringEqCI!("Relationship"), Space1)>),
+    Parameter(Raw<(StringEqCI!("Parameter"), Space1)>),
+    Index(Raw<(StringEqCI!("Index"), Space1)>),
+    ForeignKey(Raw<(StringEqCI!("ForeignKey"), Space1)>),
+    Query(Raw<(StringEqCI!("Query"), Space1)>),
+    Trigger(Raw<(StringEqCI!("Trigger"), Space1)>),
+    XData(Raw<(StringEqCI!("XData"), Space1)>),
+    Projection(Raw<(StringEqCI!("Projection"), Space1)>),
+    Storage(Raw<(StringEqCI!("Storage"), Space1)>),
+    Doc(StringEq!("///")),
+    Close(
+        (
+            StringEq!("}"),
+            ImportIncludeGap,
+            NotFollowedBy<CharOf<AnyChar>>,
+        ),
+    ),
+}
+
+// A body in another language (`[ Language = python ]`) can't be brace-matched with ObjectScript
+// string/comment rules. It ends at a `}` starting a line that is followed by what may follow a
+// member -- not at the first such `}`, which is routinely a `switch`'s or block's in JavaScript.
+type ForeignBodyEnd = (StringEq!("\n}"), Vec<CharOf<IsWhitespace>>, AfterMember);
+
+type ForeignBody = Raw<(
+    Vec<(NotFollowedBy<ForeignBodyEnd>, CharOf<AnyChar>)>,
+    StringEq!("\n"),
+)>;
+
+impl MethodHeader {
+    fn is_objectscript(&self) -> bool {
+        let language = self.keywords.as_ref().and_then(|keywords| {
+            let KeywordEntry::Assign {
+                value: Some(value), ..
+            } = keywords.get("Language")?
+            else {
+                return None;
+            };
+            MethodLanguage::parse(&value.print()).ok()
+        });
+        matches!(language, None | Some(MethodLanguage::ObjectScript(..)))
+    }
+}
+
+// Hand-written so the body scanner can depend on the header's `Language` keyword.
+impl Grammar for Method {
+    type First = <MethodHeader as Grammar>::First;
+
+    fn parse_at(input: &str, pos: usize, mut state: State) -> Option<(Self, usize)> {
+        let (header, pos) = MethodHeader::parse_at(input, pos, state.reborrow())?;
+        let (body, pos) = if header.is_objectscript() {
+            OSBody::parse_at(input, pos, state)?
+        } else {
+            let (space, pos) = Space::parse_at(input, pos, state.reborrow())?;
+            let (open, start) = <StringEq!("{")>::parse_at(input, pos, state.reborrow())?;
+            let end = ForeignBody::scan_at(input, start, state.reborrow())
+                .or_else(|| OSText::scan_at(input, start, state.reborrow()))?;
+            let text = Range::new(start, OSText(input[start..end].into()), end);
+            let (close, pos) = <StringEq!("}")>::parse_at(input, end, state)?;
+            (Prefix::new(space, Wrap::new(open, text, close)), pos)
+        };
+        Some((Method { header, body }, pos))
+    }
+
+    fn scan_at(input: &str, pos: usize, state: State) -> Option<usize> {
+        Self::parse_at(input, pos, state).map(|(_, end)| end)
+    }
+
+    fn print_to(&self, buf: &mut String) {
+        self.header.print_to(buf);
+        self.body.print_to(buf);
+    }
+
+    fn to_bnf() -> bnf::Expr {
+        bnf::Expr::sequence(vec![MethodHeader::to_bnf(), OSBody::to_bnf()])
+    }
+
+    fn fail_at(pos: usize, state: State) -> bool {
+        MethodHeader::fail_at(pos, state)
+    }
 }
 
 impl Deref for Method {
@@ -3237,7 +3395,7 @@ pub enum Command {
     CallMacro(MacroCall),
 
     ESQL(
-        Either<StringEqCI!("&sql("), StringEq!("##sql")>,
+        Either<StringEqCI!("&sql("), StringEqCI!("##sql(")>,
         Box<sql::SQL>,
         StringEq!(")"),
     ),
@@ -6134,4 +6292,132 @@ pub enum LineCommentStart {
 pub struct EndOfLine {
     gap: SGap,
     comment: Option<LineComment>,
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn routine(body: &str) -> Result<(), Error> {
+        Routine::scan(&format!("ROUTINE r [Type=MAC]\n{body}"))
+    }
+
+    fn methods(cls: &ClassDefinition) -> Vec<&Method> {
+        cls.member_list
+            .members
+            .seps
+            .iter()
+            .filter_map(|member| match member.deref() {
+                Member::Method(method) => Some(method),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn storage_special_variable() {
+        routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn negative_number_in_dao() {
+        routine(" s x={\"a\":-1}\n s y=[-1.5,2]\n").expect("Ok");
+    }
+
+    #[test]
+    fn negated_and_or_operators() {
+        routine(" if a'&b w 1\n if a'!b w 2\n").expect("Ok");
+    }
+
+    #[test]
+    fn and_before_identifier_starting_like_an_embedded_marker() {
+        routine(" s z=x&sqlflag\n s y=x&htmlx\n s w=x&jsy\n").expect("Ok");
+        routine(" &sql(SELECT 1 INTO :x)\n &html<<b>x</b>>\n &js<var a = 1;>\n").expect("Ok");
+        routine(" s z=x&sql(1)\n").expect_err("&sql( is not an operator");
+    }
+
+    #[test]
+    fn keyword_lookup_is_case_insensitive() {
+        let cls = ClassDefinition::parse(
+            "Class A.B\n{\n\nClassMethod E() As %Integer [ codemode = expression ]\n{\n1 + 1\n}\n\n}\n",
+        )
+        .expect("Ok");
+        let keywords = methods(&cls)[0].header.keywords.as_ref().expect("keywords");
+        assert!(keywords.get("CodeMode").is_some());
+        assert!(keywords.get("Language").is_none());
+    }
+
+    #[test]
+    fn hash_hash_sql() {
+        routine(" ##sql(SELECT 1 INTO :x)\n").expect("Ok");
+    }
+
+    #[test]
+    fn semicolon_comment_with_brace_in_method_body() {
+        let cls = ClassDefinition::parse(
+            "Class A.C\n{\n\nMethod M()\n{\n ; TODO handle the { case\n quit\n}\n\nMethod N()\n{\n s x=\";{\" ; a comment with }\n quit x\n}\n\n}\n",
+        )
+        .expect("Ok");
+        let methods = methods(&cls);
+        assert_eq!(methods.len(), 2);
+        for method in methods {
+            ProcedureBody::scan(&method.body.prefixed.wrapped.print()).expect("Ok");
+        }
+    }
+
+    #[test]
+    fn nested_function_arguments_parse_quickly() {
+        let mut expr = String::from("x");
+        for _ in 0..16 {
+            expr = format!("$p({expr},\",\",1)");
+        }
+        let start = Instant::now();
+        // The recursive descent needs more stack than a test thread has by default.
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(move || routine(&format!(" s y={expr}\n")).expect("Ok"))
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn python_method_body_is_not_brace_matched() {
+        let cls = ClassDefinition::parse(
+            "Class A.D\n{\n\nMethod M() [ Language = python ]\n{\n    x = \"}\"\n    y = '}'\n    # comment {\n    z = '''\n    }\n    '''\n    return x\n}\n\nMethod N()\n{\n quit 1\n}\n\n}\n",
+        )
+        .expect("Ok");
+        let methods = methods(&cls);
+        assert_eq!(methods.len(), 2);
+        assert!(
+            methods[0]
+                .body
+                .prefixed
+                .wrapped
+                .print()
+                .contains("return x")
+        );
+        assert_eq!(methods[1].body.prefixed.wrapped.print(), "\n quit 1\n");
+    }
+
+    #[test]
+    fn javascript_method_body_may_close_a_block_at_column_zero() {
+        let cls = ClassDefinition::parse(
+            "Class A.E\n{\n\nClientMethod f(n) [ Language = javascript ]\n{\n\tswitch (n) {\n\tcase 1:\n\t\tfor (var i=0;i<n;i++) { x(i); }\n\t\tbreak;\n}\n// done\nreturn n;\n}\n\n/// Doc\nMethod N()\n{\n quit 1\n}\n\n}\n",
+        )
+        .expect("Ok");
+        let methods = methods(&cls);
+        assert_eq!(methods.len(), 2);
+        assert!(
+            methods[0]
+                .body
+                .prefixed
+                .wrapped
+                .print()
+                .contains("return n")
+        );
+        assert_eq!(methods[1].body.prefixed.wrapped.print(), "\n quit 1\n");
+    }
 }

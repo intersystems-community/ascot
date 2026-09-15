@@ -11,8 +11,8 @@ char_class!(pub IsSimpleLatinLetter, "simple latin letter", |ch| {
     ch.is_ascii_alphabetic()
 });
 
-char_class!(pub IsHostIdentifierPart, "sql_host_ident_part", |ch| {
-    ch.is_ascii_alphanumeric()
+char_class!(pub IsNonAsciiLetter, "non-ASCII letter", |ch| {
+    !ch.is_ascii() && ch.is_alphabetic()
 });
 
 char_class!(pub IsNotDQ, "non double-quote character", |ch| ch != '"');
@@ -65,7 +65,7 @@ impl Validate for SQLIdentNonKeyword {
     }
 }
 
-// SQL Reserved Keywords (based on sqlbnf.txt and SQL-92/IRIS extensions)
+// SQL reserved words, per https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_reservedwords
 fn is_sql_reserved_keyword(word: &str) -> bool {
     matches!(
         word,
@@ -79,9 +79,6 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "DROP"
             | "ALTER"
             | "TABLE"
-            | "VIEW"
-            | "INDEX"
-            | "DATABASE"
             | "SCHEMA"
             | "GRANT"
             | "REVOKE"
@@ -124,7 +121,6 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "CONSTRAINT"
             | "PRIMARY"
             | "FOREIGN"
-            | "KEY"
             | "REFERENCES"
             | "CHECK"
             | "DEFAULT"
@@ -139,9 +135,7 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "OF"
             | "INTEGER"
             | "INT"
-            | "BIGINT"
             | "SMALLINT"
-            | "TINYINT"
             | "NUMERIC"
             | "DECIMAL"
             | "DEC"
@@ -152,35 +146,20 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "CHARACTER"
             | "VARCHAR"
             | "NCHAR"
-            | "NVARCHAR"
             | "VARYING"
             | "DATE"
             | "TIME"
-            | "TIMESTAMP"
-            | "DATETIME"
-            | "SMALLDATETIME"
-            | "BINARY"
-            | "VARBINARY"
             | "BIT"
-            | "MONEY"
-            | "SMALLMONEY"
-            | "GUID"
             | "BEGIN"
             | "COMMIT"
             | "ROLLBACK"
             | "TRANSACTION"
             | "WORK"
-            | "START"
             | "ISOLATION"
             | "LEVEL"
             | "READ"
             | "WRITE"
             | "ONLY"
-            | "UNCOMMITTED"
-            | "COMMITTED"
-            | "REPEATABLE"
-            | "SERIALIZABLE"
-            | "TRUNCATE"
             | "CASCADE"
             | "RESTRICT"
             | "USER"
@@ -192,21 +171,12 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "CURRENT_TIMESTAMP"
             | "TRUE"
             | "FALSE"
-            | "UNKNOWN"
             | "LIMIT"
             | "OFFSET"
             | "FETCH"
             | "FIRST"
             | "NEXT"
-            | "ROW"
             | "ROWS"
-            | "PARTITION"
-            | "OVER"
-            | "WINDOW"
-            | "RANGE"
-            | "UNBOUNDED"
-            | "PRECEDING"
-            | "FOLLOWING"
             | "CURRENT"
             | "CAST"
             | "CONVERT"
@@ -215,75 +185,30 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "TRIM"
             | "UPPER"
             | "LOWER"
-            | "LENGTH"
             | "COALESCE"
             | "NULLIF"
-            | "DECODE"
-            | "IFNULL"
-            | "NVL"
             | "SUM"
             | "AVG"
             | "COUNT"
             | "MIN"
             | "MAX"
-            | "STDDEV"
-            | "VARIANCE"
-            | "RANK"
-            | "DENSE_RANK"
-            | "ROW_NUMBER"
-            | "NTILE"
-            | "LEAD"
-            | "LAG"
-            | "EXPLAIN"
             | "USING"
             | "OPTION"
-            | "CALL"
             | "PROCEDURE"
-            | "FUNCTION"
-            | "TRIGGER"
-            | "METHOD"
-            | "QUERY"
-            | "LATERAL"
-            | "MATERIALIZED"
-            | "RECURSIVE"
             | "DECLARE"
             | "CURSOR"
             | "OPEN"
             | "CLOSE"
-            | "IF"
-            | "WHILE"
-            | "LOOP"
-            | "REPEAT"
-            | "UNTIL"
             | "CONTINUE"
-            | "BREAK"
-            | "RETURN"
             | "GOTO"
-            | "LABEL"
             | "PUBLIC"
-            | "PRIVATE"
             | "TEMPORARY"
             | "GLOBAL"
             | "LOCAL"
-            | "SESSION"
             | "COLLATE"
-            | "COLLATION"
             | "NATIONAL"
-            | "NTEXT"
-            | "TEXT"
-            | "IMAGE"
-            | "LONG"
-            | "LONGVARCHAR"
-            | "LONGVARBINARY"
-            | "RAW"
-            | "VECTOR"
-            | "IDENTIFIED"
-            | "PASSWORD"
-            | "ADMIN"
             | "EXECUTE"
             | "EXEC"
-            | "PREPARED"
-            | "STATEMENT"
             | "PREPARE"
             | "DEALLOCATE"
             | "GET"
@@ -300,7 +225,6 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "IMMEDIATE"
             | "AUTHORIZATION"
             | "PRIVILEGES"
-            | "USAGE"
             | "DESCRIPTOR"
             | "ALLOCATE"
             | "MATCH"
@@ -312,12 +236,9 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "DOMAIN"
             | "MODULE"
             | "LANGUAGE"
-            | "SQL"
             | "EXTERNAL"
             | "INPUT"
             | "OUTPUT"
-            | "INOUT"
-            | "MINUS"
             | "ESCAPE"
             | "INDICATOR"
             | "ASSERTION"
@@ -333,387 +254,102 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "CHAR_LENGTH"
             | "CHARACTER_LENGTH"
             | "OCTET_LENGTH"
-            | "POSITION"
             | "SYSDATE"
-            | "SYSTIMESTAMP"
-            | "UID"
-            | "ACTION"
             | "ADD"
-            | "AFTER"
-            | "AGGREGATE"
-            | "ALIAS"
-            | "ALWAYS"
-            | "ANALYZE"
-            | "APPEND"
-            | "ARCHIVE"
-            | "ARRAY"
-            | "ASSIGNMENT"
-            | "ASYNC"
-            | "ATOMIC"
-            | "ATTRIBUTE"
-            | "AUDIT"
-            | "AUTO_INCREMENT"
-            | "BACKUP"
-            | "BEFORE"
-            | "BERNOULLI"
-            | "BLOB"
-            | "BOOLEAN"
             | "BOTH"
-            | "BREADTH"
-            | "CACHE"
-            | "CALLED"
-            | "CARDINALITY"
-            | "CATALOG"
-            | "CEIL"
-            | "CEILING"
-            | "CHAIN"
-            | "CHARACTERISTICS"
-            | "CHARACTERS"
-            | "CLOB"
-            | "CLUSTER"
-            | "COBOL"
-            | "COLLECT"
-            | "COLUMN"
-            | "COMMENT"
-            | "COMMENTS"
-            | "COMPRESS"
-            | "CONDITION"
-            | "CONSTRUCTOR"
-            | "CONTAINS"
-            | "CONTENT"
-            | "COPY"
-            | "CORR"
-            | "COSTS"
-            | "COVAR_POP"
-            | "COVAR_SAMP"
-            | "CSV"
-            | "CUBE"
-            | "CUME_DIST"
-            | "CYCLE"
-            | "DAY"
-            | "DEFAULTS"
-            | "DEFINE"
-            | "DEFINER"
-            | "DEGREE"
-            | "DENSE"
-            | "DEPTH"
-            | "DEREF"
             | "DESCRIBE"
-            | "DESTROY"
-            | "DESTRUCTOR"
-            | "DETERMINISTIC"
-            | "DICTIONARY"
-            | "DISK"
-            | "DYNAMIC"
-            | "EACH"
-            | "ELEMENT"
-            | "ENCODING"
-            | "ENCRYPTED"
-            | "ENCRYPTED_PASSWORD"
-            | "ENCRYPTION"
-            | "EQUALS"
-            | "EVERY"
             | "EXCEPTION"
-            | "EXCLUDING"
-            | "EXCLUSIVE"
-            | "EXISTING"
-            | "EXP"
-            | "EXPORT"
-            | "EXTENSION"
-            | "FILE"
-            | "FILTER"
-            | "FINAL"
-            | "FLOOR"
-            | "FORCE"
-            | "FORMAT"
-            | "FORTRAN"
-            | "FREE"
-            | "FREEZE"
-            | "FREETEXT"
-            | "FREETEXTTABLE"
-            | "FS"
-            | "GENERAL"
-            | "GENERATED"
             | "GO"
-            | "GROUPING"
-            | "GROUPS"
-            | "HANDLER"
-            | "HASH"
-            | "HEADER"
-            | "HOLD"
-            | "HOST"
             | "HOUR"
             | "IDENTITY"
-            | "IGNORE"
-            | "ILIKE"
-            | "IMMUTABLE"
-            | "IMPLEMENTATION"
-            | "IMPLICIT"
-            | "IMPORT"
-            | "INCLUDING"
-            | "INCREMENT"
-            | "INDEXES"
-            | "INHERIT"
-            | "INHERITS"
             | "INITIALLY"
-            | "INITIALIZE"
-            | "INLINE"
             | "INSENSITIVE"
-            | "INSTEAD"
             | "INTERVAL"
-            | "INVOKER"
-            | "ITERATE"
-            | "JSON"
-            | "JSON_ARRAY"
-            | "JSON_OBJECT"
-            | "JSON_TABLE"
-            | "KEEP"
-            | "LANCOMPILER"
-            | "LARGE"
             | "LAST"
-            | "LISTEN"
-            | "LOAD"
-            | "LOCALTIME"
-            | "LOCALTIMESTAMP"
-            | "LOCATION"
-            | "LOCATOR"
-            | "LOCK"
-            | "LOGIN"
-            | "MAP"
-            | "MAXVALUE"
-            | "MEMBER"
-            | "MERGE"
-            | "MESSAGE_LENGTH"
-            | "MESSAGE_OCTET_LENGTH"
-            | "MESSAGE_TEXT"
             | "MINUTE"
-            | "MINVALUE"
-            | "MODE"
-            | "MODIFY"
-            | "MODIFIES"
-            | "MONTH"
-            | "MORE"
-            | "MOVE"
-            | "MULTISET"
-            | "MUMPS"
-            | "NAME"
             | "NAMES"
-            | "NCLOB"
-            | "NESTING"
-            | "NEW"
             | "NO"
-            | "NOAUDIT"
-            | "NOCOMPRESS"
-            | "NOCREATEDB"
-            | "NOCREATEROLE"
-            | "NOCREATEUSER"
-            | "NOINHERIT"
-            | "NOLOGIN"
-            | "NONE"
-            | "NORMALIZE"
-            | "NORMALIZED"
-            | "NOSUPERUSER"
-            | "NOTHING"
-            | "NOTIFY"
-            | "NOTNULL"
-            | "NOWAIT"
-            | "NULLABLE"
-            | "NULLS"
-            | "NUMBER"
-            | "OBJECT"
-            | "OCTETS"
-            | "OFF"
-            | "OFFLINE"
-            | "OIDS"
-            | "OLD"
-            | "ONLINE"
-            | "OPERATION"
-            | "OPERATORS"
-            | "OPTIMIZE"
-            | "OPTIONS"
-            | "ORDINALITY"
-            | "OTHERS"
-            | "OUT"
-            | "OVERLAY"
-            | "OVERRIDING"
-            | "OWNED"
-            | "OWNER"
-            | "PARALLEL"
-            | "PARAMETER"
-            | "PARSER"
-            | "PASCAL"
-            | "PASSING"
-            | "PAST"
-            | "PATH"
-            | "PATTERN"
-            | "PERCENT"
-            | "PERCENT_RANK"
-            | "PERCENTILE_CONT"
-            | "PERCENTILE_DISC"
-            | "PLACING"
-            | "PLANS"
-            | "PLI"
-            | "POSTFIX"
-            | "PRAGMA"
-            | "PRECEDES"
-            | "PREFIX"
-            | "PREORDER"
-            | "PROFILE"
-            | "PURGE"
-            | "QUOTE"
-            | "RAID0"
-            | "READS"
-            | "RECHECK"
-            | "RECOVERY"
-            | "REF"
-            | "REFERENCING"
-            | "REGR_AVGX"
-            | "REGR_AVGY"
-            | "REGR_COUNT"
-            | "REGR_INTERCEPT"
-            | "REGR_R2"
-            | "REGR_SLOPE"
-            | "REGR_SXX"
-            | "REGR_SXY"
-            | "REGR_SYY"
-            | "REINDEX"
-            | "RELEASE"
-            | "RENAME"
-            | "REPLACE"
-            | "REPLICA"
-            | "REPLICATION"
-            | "RESET"
-            | "RESOURCE"
-            | "RESTART"
-            | "RESTORE"
-            | "RESULT"
-            | "RETURNS"
-            | "REWRITE"
-            | "ROLLUP"
-            | "ROUTINE"
-            | "ROUTINES"
-            | "RULE"
-            | "SAVEPOINT"
-            | "SCALE"
-            | "SCHEMAS"
-            | "SCOPE"
-            | "SEARCH"
             | "SECOND"
-            | "SECURITY"
-            | "SENSITIVE"
-            | "SEPARATOR"
-            | "SEQUENCE"
-            | "SEQUENCES"
-            | "SERVER"
-            | "SETOF"
-            | "SETS"
-            | "SHARE"
-            | "SHOW"
-            | "SHUTDOWN"
-            | "SIGNAL"
-            | "SIMILAR"
-            | "SIMPLE"
-            | "SIZE"
-            | "SOURCE"
-            | "SPECIFIC"
-            | "SPECIFICTYPE"
-            | "SPLIT"
-            | "SQLCODE"
-            | "SQLEXCEPTION"
-            | "SQLWARNING"
-            | "STABLE"
-            | "STANDALONE"
-            | "STATE"
-            | "STATIC"
             | "STATISTICS"
-            | "STATS"
-            | "STDDEV_POP"
-            | "STDDEV_SAMP"
-            | "STDIN"
-            | "STDOUT"
-            | "STORAGE"
-            | "STORE"
-            | "STRICT"
-            | "STRING"
-            | "STRUCTURE"
-            | "STYLE"
-            | "SUBMULTISET"
-            | "SUCCEEDS"
-            | "SUPERUSER"
-            | "SYMMETRIC"
-            | "SYNONYM"
-            | "SYSTEM"
-            | "TABLESAMPLE"
-            | "TABLESPACE"
-            | "TEMP"
-            | "TEMPLATE"
-            | "TERMINATE"
-            | "THAN"
-            | "THROUGH"
-            | "TIES"
-            | "TIMESTAMPTZ"
-            | "TIMETZ"
-            | "TOAST"
             | "TOP"
             | "TRAILING"
-            | "TRAIN"
-            | "TRAINED"
-            | "TRANSFORM"
-            | "TRANSFORMS"
-            | "TRANSLATE"
-            | "TRANSLATION"
-            | "TREAT"
-            | "TRUSTED"
-            | "UESCAPE"
-            | "UNDER"
-            | "UNENCRYPTED"
-            | "UNLISTEN"
-            | "UNLOCK"
-            | "UNNAMED"
-            | "UNNEST"
-            | "UNTYPED"
-            | "USE"
-            | "VACUUM"
-            | "VALID"
-            | "VALIDATE"
-            | "VALIDATOR"
-            | "VALUE"
-            | "VAR_POP"
-            | "VAR_SAMP"
-            | "VARIABLE"
-            | "VERBOSE"
-            | "VERSION"
-            | "VERSIONING"
-            | "VOLATILE"
             | "WHENEVER"
-            | "WHITESPACE"
-            | "WIDTH_BUCKET"
-            | "WITHOUT"
-            | "WRAPPER"
-            | "XMLAGG"
-            | "XMLATTRIBUTES"
-            | "XMLBINARY"
-            | "XMLCAST"
-            | "XMLCOMMENT"
-            | "XMLCONCAT"
-            | "XMLDOCUMENT"
-            | "XMLELEMENT"
-            | "XMLEXISTS"
-            | "XMLFOREST"
-            | "XMLITERATE"
-            | "XMLNAMESPACES"
-            | "XMLPARSE"
-            | "XMLPI"
-            | "XMLQUERY"
-            | "XMLROOT"
-            | "XMLSCHEMA"
-            | "XMLSERIALIZE"
-            | "XMLTABLE"
-            | "XMLTEXT"
-            | "XMLVALIDATE"
-            | "YEAR"
-            | "YES"
-            | "ZONE"
+            | "%AFTERHAVING"
+            | "%ALLINDEX"
+            | "%ALPHAUP"
+            | "%ALTER"
+            | "%BEGTRANS"
+            | "%CHECKPRIV"
+            | "%CLASSNAME"
+            | "%CLASSPARAMETER"
+            | "%DBUGFULL"
+            | "%DELDATA"
+            | "%DESCRIPTION"
+            | "%EXACT"
+            | "%EXTERNAL"
+            | "%FILE"
+            | "%FIRSTTABLE"
+            | "%FLATTEN"
+            | "%FOREACH"
+            | "%FULL"
+            | "%ID"
+            | "%IDADDED"
+            | "%IGNOREINDEX"
+            | "%IGNOREINDICES"
+            | "%INLIST"
+            | "%INORDER"
+            | "%INTERNAL"
+            | "%INTEXT"
+            | "%INTRANS"
+            | "%INTRANSACTION"
+            | "%KEY"
+            | "%MATCHES"
+            | "%MCODE"
+            | "%MERGE"
+            | "%MINUS"
+            | "%MVR"
+            | "%NOCHECK"
+            | "%NODELDATA"
+            | "%NOFLATTEN"
+            | "%NOFPLAN"
+            | "%NOINDEX"
+            | "%NOLOCK"
+            | "%NOMERGE"
+            | "%NOPARALLEL"
+            | "%NOREDUCE"
+            | "%NORUNTIME"
+            | "%NOSVSO"
+            | "%NOTOPOPT"
+            | "%NOTRIGGER"
+            | "%NOUNIONOROPT"
+            | "%NUMROWS"
+            | "%ODBCIN"
+            | "%ODBCOUT"
+            | "%PARALLEL"
+            | "%PLUS"
+            | "%PROFILE"
+            | "%PROFILE_ALL"
+            | "%PUBLICROWID"
+            | "%ROUTINE"
+            | "%ROWCOUNT"
+            | "%RUNTIMEIN"
+            | "%RUNTIMEOUT"
+            | "%SQLSTRING"
+            | "%SQLUPPER"
+            | "%STARTSWITH"
+            | "%STARTTABLE"
+            | "%STRING"
+            | "%TABLENAME"
+            | "%TRUNCATE"
+            | "%UPPER"
+            | "%VALUE"
+            | "%VID"
+            | "ARE"
+            | "AT"
+            | "CONSTRAINTS"
+            | "ENDEXEC"
+            | "LEADING"
+            | "SHARD"
     )
 }
 
@@ -883,7 +519,7 @@ pub struct HostVar {
 
 pub type SubList = Wrap<
     (StringEq!("("), Space),
-    VecSep<Sub, (Space, StringEq!(","), Space)>,
+    Option<VecSep<Sub, (Space, StringEq!(","), Space)>>,
     (Space, StringEq!(")")),
 >;
 
@@ -892,11 +528,11 @@ pub type SubList = Wrap<
 pub enum InstanceVariableHostRef {
     I {
         preifx: (Option<StringEq!(":")>, StringEq!("i%")),
-        name: Raw<(CharOf<IsSimpleLatinLetter>, Vec<HostIdentifierPart>)>,
+        name: HostIdentifier,
     },
     R {
         preifx: (Option<StringEq!(":")>, StringEq!("r%")),
-        name: Raw<(CharOf<IsSimpleLatinLetter>, Vec<HostIdentifierPart>)>,
+        name: HostIdentifier,
     },
 }
 
@@ -905,8 +541,7 @@ pub enum InstanceVariableHostRef {
 pub struct PropertyHostRef {
     colon: Option<StringEq!(":")>,
     part1: HostIdentifier,
-    dot: StringEq!("."),
-    part2: HostIdentifier,
+    parts: Vec1<(StringEq!("."), Either<HostIdentifier, DelimitedIdentifier>)>,
 }
 
 #[derive(Grammar)]
@@ -932,6 +567,7 @@ pub struct HostIdentifier(Raw<(IdentifierStart, Vec<HostIdentifierPart>)>);
 pub enum HostIdentifierPart {
     Digit(CharOf<IsDigit>),
     SimpleLatin(CharOf<IsSimpleLatinLetter>),
+    Unicode(CharOf<IsNonAsciiLetter>),
 }
 
 #[derive(Grammar)]
@@ -959,8 +595,8 @@ pub enum NotEqualsOperation {
 #[derive(Grammar)]
 #[grammar(name = "order predicate")]
 pub enum OrderPredicate {
-    Le(Either<StringEq!("<="), StringEq!("NOT>")>),
-    Ge(Either<StringEq!(">="), StringEq!("NOT<")>),
+    Le(Either<StringEq!("<="), StringEqCI!("NOT>")>),
+    Ge(Either<StringEq!(">="), StringEqCI!("NOT<")>),
     Gt(StringEq!(">")),
     Lt(StringEq!("<")),
 }
@@ -969,17 +605,7 @@ pub enum OrderPredicate {
 #[grammar(name = "contains predicate")]
 pub enum ContainsPredicate {
     LB(StringEq!("[")),
-    NotLB(StringEq!("NOT[")),
-    Contains {
-        kw: StringEq!("%CONTAINS"),
-        sp: Space,
-        list: Args1Plus,
-    },
-    ContainsTerm {
-        kw: StringEq!("%CONTAINSTERM"),
-        sp: Space,
-        list: Args1Plus,
-    },
+    NotLB(StringEqCI!("NOT[")),
 }
 
 #[derive(Grammar)]
@@ -1023,11 +649,15 @@ pub enum UnaryOp {
 #[derive(Grammar)]
 #[grammar(name = "term")]
 pub enum Term {
-    Macro(StringEq!("$$$"), Identifier),
+    Macro(
+        StringEq!("$$$"),
+        Identifier,
+        Option<crate::cos::MacroArgList>,
+    ),
     Literal(Literal),
     ScalarFunction(Box<ScalarFunction>),
-    Agg(Box<Agg>),
     Window(Box<Window>),
+    Agg(Box<Agg>),
     Unary(Unary),
     XTFun(Box<XTFun>),
     ParameterMarker(ParameterMarker),
@@ -1126,24 +756,6 @@ pub struct UserDefinedFunction {
 }
 
 #[derive(Grammar)]
-#[grammar(name = "scal_first_op")]
-pub enum ScalFirstOp {
-    Mod(StringEq!("#")),
-    Mul(StringEq!("*")),
-    Div(StringEq!("/")),
-    IntDiv(StringEq!("\\")),
-}
-
-#[derive(Grammar)]
-#[grammar(name = "scal_second_op")]
-pub enum ScalSecondOp {
-    Concat(StringEq!("||")),
-    Add(StringEq!("+")),
-    Sub(StringEq!("-")),
-    Underscore(StringEq!("_")),
-}
-
-#[derive(Grammar)]
 pub enum Scalop {
     Concat(StringEq!("||")),
     Mod(StringEq!("#")),
@@ -1156,15 +768,8 @@ pub enum Scalop {
 }
 
 #[derive(Grammar)]
-pub struct Product(Term, Vec<(Wrap<Space, ScalFirstOp, Space>, Term)>);
-
-#[derive(Grammar)]
-pub struct Scalxansi(Product, Vec<(Wrap<Space, ScalSecondOp, Space>, Product)>);
-
-#[derive(Grammar)]
 pub enum Scalx {
     Legacy(VecSep<Term, Wrap<Space, Scalop, Space>>),
-    Ansi(Scalxansi),
 }
 #[derive(Grammar)]
 #[grammar(name = "case")]
@@ -1577,9 +1182,14 @@ pub enum SubstringArgsInternal {
 
 #[derive(Grammar)]
 pub enum TrimArgs {
-    SpecScalxScalx(TrimSpec, Scalx, Option<(StringEq!("FROM"), Scalx)>),
-    SpecScalx(TrimSpec, StringEq!("FROM"), Scalx),
-    ScalxScalx(Option<(Scalx, StringEq!("FROM"))>, Scalx),
+    SpecScalx(TrimSpec, Space, StringEqCI!("FROM"), Space, Scalx),
+    SpecScalxScalx(
+        TrimSpec,
+        Space,
+        Scalx,
+        Option<(Space, StringEqCI!("FROM"), Space, Scalx)>,
+    ),
+    ScalxScalx(Option<(Scalx, Space, StringEqCI!("FROM"), Space)>, Scalx),
 }
 
 #[derive(Grammar)]
@@ -2001,8 +1611,8 @@ pub struct DTSVal {
 #[grammar(name = "dts type")]
 pub enum DTSType {
     Date(StringEqCI!("D")),
-    Time(StringEqCI!("T")),
     Timestamp(StringEqCI!("TS")),
+    Time(StringEqCI!("T")),
 }
 
 #[derive(Grammar)]
@@ -2016,7 +1626,7 @@ pub enum DTSValSpec {
 #[grammar(name = "agg")]
 pub enum Agg {
     AggFuncArgs(AggFunc, Space, Parenthesized<AggArg>),
-    CountStar(StringEqCI!("COUNT"), Space, StringEq!("(*)")),
+    CountStar(StringEqCI!("COUNT"), Space, Parenthesized<StringEq!("*")>),
     UserDefinedFunction(UserDefinedFunction),
 }
 
@@ -2060,7 +1670,7 @@ pub enum Dist {
     All(StringEqCI!("ALL")),
 }
 
-pub type SQLDistinctBy = Prefix<(StringEqCI!("BY"), Space), List>;
+pub type SQLDistinctBy = Wrap<(StringEqCI!("BY"), Space), List, Space>;
 
 pub type List = Wrap<
     (StringEq!("("), Space),
@@ -2074,7 +1684,7 @@ pub type SQLForEachClause = Prefix<(Space, StringEqCI!("%FOREACH"), Space), List
 #[grammar(name = "window")]
 pub struct Window {
     pub fun: WindowFunc,
-    pub arg: Parenthesized<Option<Scalx>>,
+    pub arg: Parenthesized<Option<Either<StringEq!("*"), Scalx>>>,
     pub over_kw: (Space, StringEqCI!("OVER"), Space),
     pub open: (StringEq!("("), Space),
     pub partition: Option<WindowPartition>,
@@ -2309,6 +1919,10 @@ pub enum Comparison {
         json_kw: StringEqCI!("JSON"),
         constraint: Option<JSONPredicateTypeConstraint>,
     },
+    Contains {
+        kw: Either<StringEqCI!("%CONTAINSTERM"), StringEqCI!("%CONTAINS")>,
+        list: Args1Plus,
+    },
     Query {
         op: CmpOp,
         sp1: Space,
@@ -2328,8 +1942,8 @@ pub type EscapeScalx = Prefix<(Space, StringEqCI!("ESCAPE"), Space), Scalx>;
 #[derive(Grammar)]
 #[grammar(name = "in spec")]
 pub enum InSpec {
-    Scalxes(VecSep<Scalx, (Space, StringEq!(","), Space)>),
     Query(Box<Query>),
+    Scalxes(VecSep<Scalx, (Space, StringEq!(","), Space)>),
 }
 
 pub type SQLSubquery = Wrap<(StringEq!("("), Space), Box<Query>, (Space, StringEq!(")"))>;
@@ -2605,6 +2219,7 @@ pub enum Join {
     Natural {
         natural_kw: (Space, StringEqCI!("NATURAL"), Space),
         join_type: JOp,
+        space: Space,
         table: Box<JTab>,
     },
     Qualified {
@@ -2642,6 +2257,14 @@ pub struct JCond(Prdct);
 
 #[derive(Grammar)]
 pub enum Frmit {
+    JSONTable {
+        json_table: JSONTable,
+        alias: Option<SQLTableAlias>,
+    },
+    TVF {
+        function: TVF,
+        alias: Option<SQLTableAlias>,
+    },
     Table {
         name: Table,
         alias: Option<SQLTableAlias>,
@@ -2651,14 +2274,6 @@ pub enum Frmit {
         open: (StringEq!("("), Space),
         query: Box<Query>,
         close: (Space, StringEq!(")")),
-        alias: Option<SQLTableAlias>,
-    },
-    JSONTable {
-        json_table: JSONTable,
-        alias: Option<SQLTableAlias>,
-    },
-    TVF {
-        function: TVF,
         alias: Option<SQLTableAlias>,
     },
     JTab {
@@ -2823,18 +2438,25 @@ pub type Limit = Prefix<(Space, StringEqCI!("LIMIT"), Space), LimitSpec>;
 #[derive(Grammar)]
 #[grammar(name = "limit spec")]
 pub enum LimitSpec {
-    Val(ValSpec),
+    Val(RowCount),
     All(StringEqCI!("ALL")),
 }
 
+#[derive(Grammar)]
+#[grammar(name = "row count")]
+pub enum RowCount {
+    Val(ValSpec),
+    Scalx(Scalx),
+}
+
 pub type Offset =
-    Wrap<(Space, StringEqCI!("OFFSET"), Space), ValSpec, Option<(Space, RowRowsInline)>>;
+    Wrap<(Space, StringEqCI!("OFFSET"), Space), RowCount, Option<(Space, RowRowsInline)>>;
 
 #[derive(Grammar)]
 pub struct Fetch {
     pub keyword: (Space, StringEqCI!("FETCH"), Space),
     pub direction: Option<(Either<StringEqCI!("FIRST"), StringEqCI!("NEXT")>, Space)>,
-    pub valspec: ValSpec,
+    pub valspec: RowCount,
     pub row_keyword: Option<(Space, RowRowsInline)>,
     pub only: Option<(Space, StringEqCI!("ONLY"))>,
 }
@@ -2867,7 +2489,7 @@ pub enum QueryOp {
 
 #[derive(Grammar)]
 pub enum QTerm {
-    Query(StringEq!("("), Box<Query>, StringEq!(")")),
+    Query((StringEq!("("), Space), Box<Query>, (Space, StringEq!(")"))),
     Selex(Selex),
 }
 #[derive(Grammar)]
@@ -3951,13 +3573,8 @@ pub enum DatypInternal {
     Token(Ident, Option<SQLSizeSpec>),
 }
 
-type OptParenScalx = Option<(StringEq!("("), Scalx, StringEq!(")"))>;
-type OptParenScalx2 = Option<(
-    StringEq!("("),
-    Scalx,
-    Option<(StringEq!(","), Scalx)>,
-    StringEq!(")"),
-)>;
+type OptParenScalx = Option<Parenthesized<Scalx>>;
+type OptParenScalx2 = Option<Parenthesized<(Scalx, Option<(Space, StringEq!(","), Space, Scalx)>)>>;
 
 #[derive(Grammar)]
 #[grammar(name = "cast type")]
@@ -3971,13 +3588,6 @@ pub enum CastType {
     ),
     Binary(StringEqCI!("BINARY"), OptParenScalx),
     Bit(StringEqCI!("BIT")),
-    CharVarying(
-        StringEqCI!("CHAR"),
-        Space,
-        StringEqCI!("VARYING"),
-        OptParenScalx,
-    ),
-    Char(StringEqCI!("CHAR"), OptParenScalx),
     CharacterVarying(
         StringEqCI!("CHARACTER"),
         Space,
@@ -3985,28 +3595,33 @@ pub enum CastType {
         OptParenScalx,
     ),
     Character(StringEqCI!("CHARACTER"), OptParenScalx),
-    Date(StringEqCI!("DATE")),
+    CharVarying(
+        StringEqCI!("CHAR"),
+        Space,
+        StringEqCI!("VARYING"),
+        OptParenScalx,
+    ),
+    Char(StringEqCI!("CHAR"), OptParenScalx),
     Datetime(StringEqCI!("DATETIME")),
+    Date(StringEqCI!("DATE")),
+    Decimal(StringEqCI!("DECIMAL"), OptParenScalx2),
     Dec(StringEqCI!("DEC"), OptParenScalx2),
     Double(StringEqCI!("DOUBLE")),
     Float(StringEqCI!("FLOAT")),
     Guid(StringEqCI!("GUID")),
-    Int(StringEqCI!("INT")),
     Integer(StringEqCI!("INTEGER")),
+    Int(StringEqCI!("INT")),
+    Money(StringEqCI!("MONEY")),
     Nchar(StringEqCI!("NCHAR"), OptParenScalx),
     Numeric(StringEqCI!("NUMERIC"), OptParenScalx2),
     Nvarchar(StringEqCI!("NVARCHAR"), OptParenScalx),
-    RealDecimal(
-        StringEqCI!("REAL"),
-        Space,
-        StringEqCI!("DECIMAL"),
-        OptParenScalx2,
-    ),
-    SmalldatetimeMoney(StringEqCI!("SMALLDATETIME"), Space, StringEqCI!("MONEY")),
+    Posixtime(StringEqCI!("POSIXTIME")),
+    Real(StringEqCI!("REAL")),
+    Smalldatetime(StringEqCI!("SMALLDATETIME")),
     Smallint(StringEqCI!("SMALLINT")),
     Smallmoney(StringEqCI!("SMALLMONEY")),
-    Time(StringEqCI!("TIME")),
     Timestamp(StringEqCI!("TIMESTAMP")),
+    Time(StringEqCI!("TIME")),
     Tinyint(StringEqCI!("TINYINT")),
     Varbinary(StringEqCI!("VARBINARY"), OptParenScalx),
     Varchar(StringEqCI!("VARCHAR"), OptParenScalx),
@@ -4431,6 +4046,37 @@ pub enum DDL {
         name: QualifiedSPName,
         spec: (Space, CodeSpecification),
     },
+    CreateTrigger {
+        kw: (StringEqCI!("CREATE"), Space),
+        or_replace: Option<(StringEqCI!("OR"), Space, StringEqCI!("REPLACE"), Space)>,
+        trigger_kw: (StringEqCI!("TRIGGER"), Space),
+        name: TName,
+        time: (Space, TriggerTime, Space),
+        events: VecSep<TriggerEvent, (Space, StringEq!(","), Space)>,
+        order: Option<(Space, StringEqCI!("ORDER"), Space, NonNegativeInteger)>,
+        on: (Space, StringEqCI!("ON"), Space, TName),
+        referencing: Option<(
+            Space,
+            StringEqCI!("REFERENCING"),
+            Vec1<(Space, TriggerReferencing)>,
+        )>,
+        for_each: Option<(
+            Space,
+            StringEqCI!("FOR"),
+            Space,
+            StringEqCI!("EACH"),
+            Space,
+            TriggerOrientation,
+        )>,
+        when: Option<(Space, StringEqCI!("WHEN"), Space, Parenthesized<Prdct>)>,
+        body: (Space, TriggerBody),
+    },
+    DropTrigger {
+        kw: (StringEqCI!("DROP"), Space, StringEqCI!("TRIGGER"), Space),
+        if_exists: Option<(StringEqCI!("IF"), Space, StringEqCI!("EXISTS"), Space)>,
+        name: TName,
+        from: Option<((Space, StringEqCI!("FROM"), Space), TName)>,
+    },
     CreateQuery {
         kw: (StringEqCI!("CREATE"), Space),
         or_replace: Option<(StringEqCI!("OR"), Space, StringEqCI!("REPLACE"), Space)>,
@@ -4488,6 +4134,13 @@ pub enum DDL {
         name: QualifiedSPName,
         from: Option<((Space, StringEqCI!("FROM"), Space), ClassName)>,
     },
+    DropIndexDot {
+        kw: (StringEqCI!("DROP"), Space, StringEqCI!("INDEX"), Space),
+        if_exists: Option<(StringEqCI!("IF"), Space, StringEqCI!("EXISTS"), Space)>,
+        nojourn: Option<(StringEqCI!("%NOJOURN"), Space)>,
+        tname: Ident,
+        name: Vec1<((Space, StringEq!("."), Space), Ident)>,
+    },
     DropIndexOn {
         kw: (StringEqCI!("DROP"), Space, StringEqCI!("INDEX"), Space),
         if_exists: Option<(StringEqCI!("IF"), Space, StringEqCI!("EXISTS"), Space)>,
@@ -4497,14 +4150,6 @@ pub enum DDL {
             Option<(StringEqCI!("TABLE"), Space)>,
             TName,
         )>,
-    },
-    DropIndexDot {
-        kw: (StringEqCI!("DROP"), Space, StringEqCI!("INDEX"), Space),
-        if_exists: Option<(StringEqCI!("IF"), Space, StringEqCI!("EXISTS"), Space)>,
-        nojourn: Option<(StringEqCI!("%NOJOURN"), Space)>,
-        tname: TName,
-        dot: (Space, StringEq!("."), Space),
-        name: IndexName,
     },
     DropMethod {
         kw: (StringEqCI!("DROP"), Space, StringEqCI!("METHOD"), Space),
@@ -5136,7 +4781,7 @@ pub struct IndexWithOptions(Ident);
 
 #[derive(Grammar)]
 #[grammar(name = "qualified SPname")]
-pub struct QualifiedSPName(Ident);
+pub struct QualifiedSPName(DottedIdent);
 
 #[derive(Grammar)]
 #[grammar(name = "table name")]
@@ -5145,6 +4790,56 @@ pub struct TableName(TName);
 #[derive(Grammar)]
 #[grammar(name = "classname")]
 pub struct ClassName(Ident);
+
+#[derive(Grammar)]
+#[grammar(name = "trigger time")]
+pub enum TriggerTime {
+    Before(StringEqCI!("BEFORE")),
+    After(StringEqCI!("AFTER")),
+}
+
+#[derive(Grammar)]
+#[grammar(name = "trigger event")]
+pub enum TriggerEvent {
+    Insert(StringEqCI!("INSERT")),
+    Delete(StringEqCI!("DELETE")),
+    Update {
+        kw: StringEqCI!("UPDATE"),
+        of: Option<(
+            Space,
+            StringEqCI!("OF"),
+            Space,
+            VecSep<Ident, (Space, StringEq!(","), Space)>,
+        )>,
+    },
+}
+
+#[derive(Grammar)]
+#[grammar(name = "trigger referencing")]
+pub struct TriggerReferencing {
+    old_new: Either<StringEqCI!("OLD"), StringEqCI!("NEW")>,
+    row: Option<(Space, StringEqCI!("ROW"))>,
+    as_kw: Option<(Space, StringEqCI!("AS"))>,
+    alias: (Space, Ident),
+}
+
+#[derive(Grammar)]
+#[grammar(name = "trigger orientation")]
+pub enum TriggerOrientation {
+    RowAndObject(StringEqCI!("ROW_AND_OBJECT")),
+    Row(StringEqCI!("ROW")),
+    Statement(StringEqCI!("STATEMENT")),
+}
+
+#[derive(Grammar)]
+#[grammar(name = "trigger body")]
+pub enum TriggerBody {
+    Code(CodeBody),
+    Stat {
+        lang: Option<(StringEqCI!("LANGUAGE"), Space, StringEqCI!("SQL"), Space)>,
+        stat: Box<Stat>,
+    },
+}
 
 #[derive(Grammar)]
 pub struct SQLCreateTableAsSelect {
@@ -6280,37 +5975,37 @@ pub struct COSQueryBody {
 pub enum QueryMethod {
     Close {
         kw: (StringEqCI!("CLOSE"), Space),
-        params: ParameterList,
+        params: Parenthesized<ParameterList>,
         body: (Space, COSMethodBody),
     },
     Execute {
         kw: (StringEqCI!("EXECUTE"), Space),
-        params: ParameterList,
+        params: Parenthesized<ParameterList>,
         body: (Space, COSMethodBody),
     },
     Fetch {
         kw: (StringEqCI!("FETCH"), Space),
-        params: ParameterList,
+        params: Parenthesized<ParameterList>,
         body: (Space, COSMethodBody),
     },
     FetchOdbc {
         kw: (StringEqCI!("FETCHODBC"), Space),
-        params: ParameterList,
+        params: Parenthesized<ParameterList>,
         body: (Space, COSMethodBody),
     },
     FetchRows {
         kw: (StringEqCI!("FETCHROWS"), Space),
-        params: ParameterList,
+        params: Parenthesized<ParameterList>,
         body: (Space, COSMethodBody),
     },
     GetInfo {
         kw: (StringEqCI!("GETINFO"), Space),
-        params: ParameterList,
+        params: Parenthesized<ParameterList>,
         body: (Space, COSMethodBody),
     },
 }
 
-pub type COSMethodBody = Prefix<StringEq!("{"), StringEndsWith<StringEq!("}")>>;
+pub type COSMethodBody = crate::cos::Brace<crate::cos::OSText>;
 
 pub type PythonMethodBody = Prefix<StringEq!("{"), StringEndsWith<StringEq!("}")>>;
 
@@ -6411,7 +6106,6 @@ pub struct IndexName(Ident);
 #[derive(Grammar)]
 #[grammar(name = "index qualifiers")]
 pub enum IndexQualifiers {
-    Cluster(Cluster),
     Bitmap(StringEqCI!("BITMAP")),
     Bitslice(StringEqCI!("BITSLICE")),
     Columnar(StringEqCI!("COLUMNAR")),
@@ -6419,6 +6113,7 @@ pub enum IndexQualifiers {
         kw: (StringEqCI!("UNIQUE"), Space),
         cluster: Cluster,
     },
+    Cluster(Cluster),
 }
 
 #[derive(Grammar)]
@@ -6495,11 +6190,8 @@ pub enum AlterAction {
         kw: (Space, StringEqCI!("ALL"), Space, StringEqCI!("PARTITIONS")),
     },
     Add {
-        kw: StringEqCI!("ADD"),
-        open_paren: Option<(Space, StringEq!("("))>,
-        first: (Space, AddAction),
-        rest: Vec<(Space, StringEq!(","), Space, AddAction)>,
-        close_paren: Option<(Space, StringEq!(")"))>,
+        kw: (StringEqCI!("ADD"), Space),
+        actions: Either<Parenthesized<AddActionList>, AddActionList>,
     },
     Alter {
         kw: StringEqCI!("ALTER"),
@@ -6525,11 +6217,8 @@ pub enum AlterAction {
         close: (Space, StringEq!(")")),
     },
     Modify {
-        kw: StringEqCI!("MODIFY"),
-        open_paren: Option<(Space, StringEq!("("))>,
-        first: (Space, ModSpec),
-        rest: Vec<(Space, StringEq!(","), Space, ModSpec)>,
-        close_paren: Option<(Space, StringEq!(")"))>,
+        kw: (StringEqCI!("MODIFY"), Space),
+        specs: Either<Parenthesized<ModSpecList>, ModSpecList>,
     },
     Move {
         kw: (StringEqCI!("MOVE"), Space),
@@ -6739,6 +6428,8 @@ pub enum ModSpec {
     },
 }
 
+pub type ModSpecList = VecSep<ModSpec, (Space, StringEq!(","), Space)>;
+
 #[derive(Grammar)]
 #[grammar(name = "mod col")]
 pub struct ModCol {
@@ -6794,6 +6485,8 @@ pub struct AddAction {
     constraint: Option<(StringEqCI!("CONSTRAINT"), Space, NotInformix, Space)>,
     body: AddBody,
 }
+
+pub type AddActionList = VecSep<AddAction, (Space, StringEq!(","), Space)>;
 
 #[derive(Grammar)]
 #[grammar(name = "add body")]
@@ -7081,7 +6774,6 @@ pub struct Sharded {
 #[derive(Grammar)]
 #[grammar(name = "table_option_list")]
 pub enum TableOptionList {
-    InformixCompat(InformixCompatability),
     WithOptions {
         shard: Option<(Shard, Space)>,
         partition: Option<(PartitionOption, Space)>,
@@ -7089,6 +6781,7 @@ pub enum TableOptionList {
         first: TableOption,
         rest: Vec<(Space, StringEq!(","), Space, TableOption)>,
     },
+    InformixCompat(InformixCompatability),
 }
 
 #[derive(Grammar)]
@@ -7280,8 +6973,7 @@ pub enum FldQualifier {
     },
     ComputeCode {
         kw: (StringEqCI!("COMPUTECODE"), Space),
-        open: StringEq!("{"),
-        body: StringEndsWith<StringEq!("}")>,
+        body: COSMethodBody,
     },
     ComputeOnChange {
         kw: (StringEqCI!("COMPUTEONCHANGE"), Space, StringEq!("("), Space),
@@ -7398,30 +7090,40 @@ pub enum DatypSpec {
         varying: Option<(Space, StringEqCI!("VARYING"))>,
     },
     Bit(StringEqCI!("BIT")),
-    Char {
-        kw: StringEqCI!("CHAR"),
-        varying: Option<(Space, StringEqCI!("VARYING"))>,
-    },
     Character {
         kw: StringEqCI!("CHARACTER"),
         varying: Option<(Space, StringEqCI!("VARYING"))>,
     },
+    Char {
+        kw: StringEqCI!("CHAR"),
+        varying: Option<(Space, StringEqCI!("VARYING"))>,
+    },
+    Datetime(StringEqCI!("DATETIME")),
     Date(StringEqCI!("DATE")),
-    Dec(StringEqCI!("DEC")),
     Decimal(StringEqCI!("DECIMAL")),
+    Dec(StringEqCI!("DEC")),
     Double {
         kw: StringEqCI!("DOUBLE"),
         precision: Option<(Space, StringEqCI!("PRECISION"))>,
     },
     Float(StringEqCI!("FLOAT")),
     Image(StringEqCI!("IMAGE")),
-    Int(StringEqCI!("INT")),
     Integer(StringEqCI!("INTEGER")),
-    Long(StringEqCI!("LONG")),
+    Int(StringEqCI!("INT")),
     LongVarchar(StringEqCI!("LONG"), Space, StringEqCI!("VARCHAR")),
     Longvarbinary(StringEqCI!("LONGVARBINARY")),
     Longvarchar(StringEqCI!("LONGVARCHAR")),
+    Long(StringEqCI!("LONG")),
     Money(StringEqCI!("MONEY")),
+    NationalVarchar(StringEqCI!("NATIONAL"), Space, StringEqCI!("VARCHAR")),
+    NationalCharacter {
+        kw: StringEqCI!("NATIONAL"),
+        character_kw: (
+            Space,
+            StringEqCI!("CHARACTER"),
+            Option<(Space, StringEqCI!("VARYING"))>,
+        ),
+    },
     NationalChar {
         kw: StringEqCI!("NATIONAL"),
         char_kw: Option<(
@@ -7429,18 +7131,6 @@ pub enum DatypSpec {
             StringEqCI!("CHAR"),
             Option<(Space, StringEqCI!("VARYING"))>,
         )>,
-    },
-    NationalCharacter {
-        kw: StringEqCI!("NATIONAL"),
-        character_kw: Option<(
-            Space,
-            StringEqCI!("CHARACTER"),
-            Option<(Space, StringEqCI!("VARYING"))>,
-        )>,
-    },
-    NationalVarchar {
-        kw: StringEqCI!("NATIONAL"),
-        varchar_kw: Option<(Space, StringEqCI!("VARCHAR"))>,
     },
     Nchar(StringEqCI!("NCHAR")),
     Ntext(StringEqCI!("NTEXT")),
@@ -7450,14 +7140,14 @@ pub enum DatypSpec {
     Smallint(StringEqCI!("SMALLINT")),
     Smallmoney(StringEqCI!("SMALLMONEY")),
     Text(StringEqCI!("TEXT")),
-    Time(StringEqCI!("TIME")),
     Timestamp(StringEqCI!("TIMESTAMP")),
+    Time(StringEqCI!("TIME")),
     Tinyint(StringEqCI!("TINYINT")),
     Varbinary(StringEqCI!("VARBINARY")),
-    Varchar(StringEqCI!("VARCHAR")),
     Varchar2(StringEqCI!("VARCHAR2")),
+    Varchar(StringEqCI!("VARCHAR")),
     Vector(StringEqCI!("VECTOR")),
-    AnyToken(Ident),
+    AnyToken(DottedIdent),
 }
 
 #[derive(Grammar)]
@@ -7487,7 +7177,11 @@ pub enum Fcon {
     },
     Null(StringEqCI!("NULL")),
     Primary {
-        kw: (StringEqCI!("PRIMARY"), Space),
+        kw: (
+            StringEqCI!("PRIMARY"),
+            Option<(Space, StringEqCI!("KEY"))>,
+            Space,
+        ),
         cluster: Cluster,
         informix: Informix,
     },
@@ -8086,4 +7780,272 @@ pub enum StatsScope {
 pub enum StatsProperty {
     IgnoreFixedStats(StringEqCI!("IGNOREFIXEDSTATS")),
     SkipAutomaticStatsCollection(StringEqCI!("SKIPAUTOMATICSTATSCOLLECTION")),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn all_ok(cases: &[&str]) {
+        let failed: Vec<_> = cases.iter().filter(|c| SQL::parse(c).is_err()).collect();
+        assert!(failed.is_empty(), "failed to parse: {failed:#?}");
+    }
+
+    #[test]
+    fn malformed_nested_parens_fail_fast() {
+        let sql = format!(
+            "SELECT a FROM t WHERE {}a = = 1{}",
+            "(".repeat(20),
+            ")".repeat(20)
+        );
+        let start = std::time::Instant::now();
+        let _ = SQL::parse(&sql);
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn in_subquery() {
+        all_ok(&[
+            "SELECT a FROM t WHERE x IN (SELECT y FROM u)",
+            "SELECT a FROM t WHERE x IN (1,2,3)",
+            "SELECT a FROM t WHERE x IN (:a,:b)",
+            "SELECT a FROM t WHERE x IN ((SELECT y FROM u))",
+            "SELECT a FROM t WHERE x NOT IN (SELECT y FROM u WHERE z = 1)",
+        ]);
+    }
+
+    #[test]
+    fn window_functions() {
+        all_ok(&[
+            "SELECT ROW_NUMBER() OVER (ORDER BY Name) FROM t",
+            "SELECT SUM(x) OVER (PARTITION BY d) FROM t",
+            "SELECT COUNT(*) OVER () FROM t",
+            "SELECT COUNT(*), COUNT( * ), SUM(x), MyFunc(1, 2) FROM t",
+            "SELECT COUNT(DISTINCT a), MAX(b), LIST(c) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn cast_types() {
+        all_ok(&[
+            "SELECT CAST(a AS INTEGER) FROM t",
+            "SELECT CAST(a AS INT) FROM t",
+            "SELECT CAST(a AS DECIMAL(10,2)) FROM t",
+            "SELECT CAST(a AS DEC) FROM t",
+            "SELECT CAST(a AS NUMERIC(10, 2)) FROM t",
+            "SELECT CAST(a AS TIMESTAMP) FROM t",
+            "SELECT CAST(a AS TIME) FROM t",
+            "SELECT CAST(a AS DATETIME) FROM t",
+            "SELECT CAST(a AS DATE) FROM t",
+            "SELECT CAST(a AS SMALLDATETIME) FROM t",
+            "SELECT CAST(a AS CHARACTER(10)) FROM t",
+            "SELECT CAST(a AS CHARACTER VARYING(10)) FROM t",
+            "SELECT CAST(a AS CHAR VARYING) FROM t",
+            "SELECT CAST(a AS CHAR(5)) FROM t",
+            "SELECT CAST(a AS MONEY) FROM t",
+            "SELECT CAST(a AS SMALLMONEY) FROM t",
+            "SELECT CAST(a AS POSIXTIME) FROM t",
+            "SELECT CAST(a AS VARCHAR(50)) FROM t",
+            "SELECT CAST(a AS BINARY VARYING(10)) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn non_reserved_aliases() {
+        all_ok(&[
+            "SELECT p.Name AS Name FROM Sample.Person p",
+            "SELECT a AS Value, b AS Text, c AS Number, d Version FROM t",
+            "SELECT a AS State, b AS Year, c AS Month, d AS Day FROM t",
+            "SELECT a AS Comment, b AS Result, c AS Path, d AS Size FROM t",
+            "SELECT a AS Source, b AS Mode, c AS Owner FROM t",
+            "SELECT * FROM Sample.Person Path WHERE Path.Age > 1",
+            "SELECT a FROM t GROUP BY a HAVING COUNT(*) > 1",
+            "SELECT a FROM t ORDER BY a, b DESC",
+            "SELECT a FROM t WHERE a = 1 ORDER BY a",
+            "SELECT a FROM t UNION SELECT b FROM u",
+            "SELECT a, b INTO :x, :y FROM t",
+            "UPDATE t SET a = 1 WHERE b = 2",
+            "DELETE FROM t WHERE b = 2",
+        ]);
+    }
+
+    #[test]
+    fn datatype_specs() {
+        all_ok(&[
+            "CREATE TABLE t (a INTEGER)",
+            "CREATE TABLE t (a INT)",
+            "CREATE TABLE t (a TIMESTAMP)",
+            "CREATE TABLE t (a TIME)",
+            "CREATE TABLE t (a DATETIME)",
+            "CREATE TABLE t (a DATE)",
+            "CREATE TABLE t (a DECIMAL(10,2))",
+            "CREATE TABLE t (a DEC)",
+            "CREATE TABLE t (a CHARACTER(10))",
+            "CREATE TABLE t (a CHAR(10))",
+            "CREATE TABLE t (a LONGVARCHAR)",
+            "CREATE TABLE t (a LONG VARCHAR)",
+            "CREATE TABLE t (a LONGVARBINARY)",
+            "CREATE TABLE t (a LONG)",
+            "CREATE TABLE t (a VARCHAR2(10))",
+            "CREATE TABLE t (a VARCHAR(10))",
+            "CREATE TABLE t (a NATIONAL CHARACTER VARYING(10))",
+            "CREATE TABLE t (a NATIONAL VARCHAR(10))",
+            "CREATE TABLE t (a %Library.String(MAXLEN=50))",
+            "CREATE FUNCTION F(x INT) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { QUIT x }",
+        ]);
+    }
+
+    #[test]
+    fn procedure_names_and_bodies() {
+        all_ok(&[
+            "CREATE PROCEDURE Sample.MyProc(IN a INT) LANGUAGE OBJECTSCRIPT { QUIT }",
+            "DROP PROCEDURE Sample.MyProc",
+            "CREATE PROCEDURE P() LANGUAGE OBJECTSCRIPT { IF a { SET b = \"}\" } QUIT }",
+            "CREATE TABLE t (a INT, b INT COMPUTECODE { SET {b} = 1 })",
+        ]);
+    }
+
+    #[test]
+    fn alter_table_inside_esql_parens() {
+        all_ok(&[
+            "ALTER TABLE t ADD COLUMN x INT",
+            "ALTER TABLE t ADD (x INT, y INT)",
+            "ALTER TABLE t MODIFY x VARCHAR(10)",
+            "ALTER TABLE t MODIFY (x VARCHAR(10), y INT)",
+            "ALTER TABLE t ADD x INT, y INT",
+            "ALTER TABLE t ADD CONSTRAINT c UNIQUE (a)",
+        ]);
+        assert!(crate::cos::Command::parse("&sql(ALTER TABLE t ADD COLUMN x INT)").is_ok());
+    }
+
+    #[test]
+    fn nullable_first_variants() {
+        all_ok(&[
+            "CREATE UNIQUE INDEX i ON t (a)",
+            "CREATE BITMAP INDEX i ON t (a)",
+            "CREATE BITSLICE INDEX i ON t (a)",
+            "CREATE COLUMNAR INDEX i ON t (a)",
+            "CREATE INDEX i ON t (a)",
+            "CREATE TABLE t (a INT) WITH %CLASSPARAMETER DEFAULTGLOBAL = '^x'",
+        ]);
+    }
+
+    #[test]
+    fn table_valued_functions() {
+        all_ok(&[
+            "SELECT * FROM Sample.SP_Sample_By_Name('A')",
+            "SELECT * FROM JSON_TABLE('[1]', '$' COLUMNS (a INT PATH '$'))",
+            "SELECT * FROM Sample.Person",
+            "SELECT * FROM Sample.Person p, Sample.Company c",
+            "SELECT * FROM (SELECT a FROM t) x",
+            "SELECT * FROM (t1 JOIN t2 ON t1.a = t2.a)",
+        ]);
+    }
+
+    #[test]
+    fn host_variables() {
+        all_ok(&[
+            "SELECT a INTO :row() FROM t",
+            "SELECT a, b INTO :arr() FROM t",
+            "SELECT a FROM t WHERE b = :obj.Prop.Sub",
+            "SELECT a FROM t WHERE b = :obj.Prop.Sub.Deep",
+            "SELECT a FROM t WHERE b = :i%Prop()",
+            "SELECT a FROM t WHERE b = :i%%Data",
+            "SELECT a FROM t WHERE b = :Person.\"Home City\"",
+            "SELECT a FROM t WHERE b = :naïve",
+            "SELECT a FROM t WHERE b = :x",
+            "SELECT a FROM t WHERE b = :%x",
+            "SELECT a FROM t WHERE b = :arr(1,2)",
+            "SELECT a FROM t WHERE b = :arr(\"k\")",
+            "SELECT a FROM t WHERE b = :arr(:i)",
+            "SELECT a FROM t WHERE b = :obj.Prop",
+            "SELECT a FROM t WHERE b = :oref.%Prop",
+            "SELECT a FROM t WHERE b = :i%Name",
+            "SELECT a FROM t WHERE b = :request.GetValueAt(\"PID:SetIDPID\")",
+        ]);
+    }
+
+    #[test]
+    fn row_limiting() {
+        all_ok(&[
+            "SELECT a FROM t LIMIT 10",
+            "SELECT a FROM t ORDER BY a LIMIT 10 OFFSET 5",
+            "SELECT a FROM t OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY",
+            "SELECT a FROM t LIMIT :n",
+            "SELECT a FROM t LIMIT (10)",
+            "SELECT a FROM t x ORDER BY a LIMIT 10 OFFSET 5",
+        ]);
+    }
+
+    #[test]
+    fn joins() {
+        all_ok(&[
+            "SELECT * FROM t1 NATURAL JOIN t2",
+            "SELECT * FROM t1 NATURAL INNER JOIN t2",
+            "SELECT * FROM t1 NATURAL LEFT OUTER JOIN t2",
+            "SELECT * FROM t1 LEFT JOIN t2 ON t1.a = t2.a",
+            "SELECT * FROM t1 CROSS JOIN t2",
+        ]);
+    }
+
+    #[test]
+    fn distinct_by() {
+        all_ok(&[
+            "SELECT DISTINCT BY (Name) Name, Age FROM t",
+            "SELECT DISTINCT Name FROM t",
+            "SELECT COUNT(DISTINCT BY (a) b) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn column_primary_key() {
+        all_ok(&[
+            "CREATE TABLE t (a INT PRIMARY KEY)",
+            "CREATE TABLE t (a INT PRIMARY KEY, b INT NOT NULL)",
+            "CREATE TABLE t (a INT, PRIMARY KEY (a))",
+        ]);
+    }
+
+    #[test]
+    fn odbc_escapes() {
+        all_ok(&[
+            "SELECT a FROM t WHERE d = {ts '2020-01-01 00:00:00'}",
+            "SELECT a FROM t WHERE d = {d '2020-01-01'}",
+            "SELECT a FROM t WHERE d = {t '00:00:00'}",
+        ]);
+    }
+
+    #[test]
+    fn misc_low() {
+        all_ok(&[
+            "SELECT TRIM(LEADING ' ' FROM Name) FROM t",
+            "SELECT TRIM(BOTH FROM Name) FROM t",
+            "SELECT TRIM(' ' FROM Name) FROM t",
+            "SELECT TRIM(Name) FROM t",
+            "SELECT TRIM(BOTH ' ' FROM Name) FROM t",
+            "SELECT COUNT( * ) FROM t",
+            "DROP INDEX t.i",
+            "DROP INDEX Sample.Person.NameIdx",
+            "DROP INDEX i ON t",
+            "DROP INDEX i",
+            "CREATE QUERY Q(a INT) LANGUAGE OBJECTSCRIPT EXECUTE (INOUT QHandle BINARY(255)) { QUIT } FETCH (INOUT QHandle BINARY(255), INOUT Row %List, INOUT AtEnd INT) { QUIT } CLOSE (INOUT QHandle BINARY(255)) { QUIT }",
+            "SELECT $$$MyMacro(1) FROM t",
+            "SELECT $$$MyMacro FROM t",
+            "SELECT a FROM t WHERE a not> 1 OR a not< 2 OR a not[ 'x' OR a %contains ('y')",
+            "SELECT a FROM t WHERE a NOT> 1 OR a %CONTAINS ('y', 'z') OR a %CONTAINSTERM ('w')",
+            "SELECT a FROM t WHERE a NOT] 'x' AND a %STARTSWITH 'y' AND a <= 1",
+            "( SELECT a FROM t ) UNION ( SELECT b FROM u )",
+        ]);
+    }
+
+    #[test]
+    fn create_trigger() {
+        all_ok(&[
+            "CREATE TRIGGER trg AFTER INSERT ON t LANGUAGE OBJECTSCRIPT { QUIT }",
+            "CREATE OR REPLACE TRIGGER TrigBUOF BEFORE UPDATE OF Home_Street,Home_City ON Sample.Person REFERENCING OLD ROW AS o NEW ROW AS n FOR EACH ROW WHEN (o.Age > 1) LANGUAGE SQL BEGIN INSERT INTO log VALUES (1); END",
+            "CREATE TRIGGER TrigAD AFTER UPDATE,DELETE ORDER 4 ON Sample.Person FOR EACH STATEMENT BEGIN INSERT INTO log VALUES (1); END",
+            "DROP TRIGGER trg",
+            "DROP TRIGGER IF EXISTS trg FROM t",
+        ]);
+    }
 }
