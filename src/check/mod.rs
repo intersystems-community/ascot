@@ -2480,34 +2480,17 @@ fn check_param_arg<'a>(
             });
         }
     }
+    // A mode mismatch compiles (the caller's `.` alone decides by-reference; `ByRef`/`Output`
+    // document intent), so it's reported softly and the rest of the call is still checked.
     match (&par.mode, arg.deref()) {
-        (ArgMode::Default, Some(cos::MthArg::ByRef { .. })) => {
-            return Err(TypeError::mismatch_argument_mode(
-                par.name.clone(),
-                ArgMode::Default,
-                ArgMode::ByRef,
-                env.range(arg),
-                declared_at,
-            )
-            .into());
-        }
-        (ArgMode::Output, Some(cos::MthArg::Expr { .. })) => {
-            return Err(TypeError::mismatch_argument_mode(
-                par.name.clone(),
-                par.mode,
-                ArgMode::Default,
-                env.range(arg),
-                declared_at,
-            )
-            .into());
-        }
         (_, Some(cos::MthArg::Expr { expr, expand })) => {
-            // A value where `ByRef` is declared: the callee's changes never reach the caller.
-            if par.mode == ArgMode::ByRef {
+            // A value where `ByRef`/`Output` is declared: the callee's changes never reach the
+            // caller.
+            if par.mode != ArgMode::Default {
                 flow.add_soft_diagnostic(QuasiTypeError::WithRange(
                     TypeError::mismatch_argument_mode(
                         par.name.clone(),
-                        ArgMode::ByRef,
+                        par.mode,
                         ArgMode::Default,
                         env.range(arg),
                         declared_at.clone(),
@@ -2526,6 +2509,17 @@ fn check_param_arg<'a>(
                 .map_err(|err| err.assign(par.name))?;
         }
         (_, Some(cos::MthArg::ByRef { target, .. })) => {
+            if par.mode == ArgMode::Default {
+                flow.add_soft_diagnostic(QuasiTypeError::WithRange(
+                    TypeError::mismatch_argument_mode(
+                        par.name.clone(),
+                        ArgMode::Default,
+                        ArgMode::ByRef,
+                        env.range(arg),
+                        declared_at.clone(),
+                    ),
+                ));
+            }
             let source = PowerTy::from(par.ty.clone().unwrap_or_default());
             match target.as_variable() {
                 // The callee may read the prior value before writing, so `invalidate` — not a
@@ -2663,13 +2657,14 @@ pub(crate) fn top_similar<'a>(
     n: usize,
 ) -> Vec<String> {
     let target = name.to_lowercase();
-    let mut seen = std::collections::HashSet::new();
     let mut scored: Vec<(f64, &str)> = candidates
         .filter(|candidate| !candidate.eq_ignore_ascii_case(name))
-        .filter(|candidate| seen.insert(candidate.to_lowercase()))
         .map(|candidate| (jaro_winkler(&target, &candidate.to_lowercase()), candidate))
         .collect();
     scored.sort_by(|(s1, n1), (s2, n2)| s2.total_cmp(s1).then_with(|| n1.cmp(n2)));
+    // Case variants score the same, so they're adjacent here, and which one survives is fixed
+    // by the sort -- not by the (hash-map) order the candidates arrived in.
+    scored.dedup_by_key(|(_, name)| name.to_lowercase());
     scored
         .into_iter()
         .take(n)
