@@ -90,10 +90,6 @@ pub struct MGap(Raw<Vec<MGapUnit>>);
 
 #[derive(Grammar)]
 #[grammar(inline)]
-pub struct MGap1(Raw<Vec1<MGapUnit>>);
-
-#[derive(Grammar)]
-#[grammar(inline)]
 pub enum MGapUnit {
     SGap(SGapUnit),
     NL(NL),
@@ -176,20 +172,6 @@ type LGapX<T> = Prefix<LGap, T>;
 
 #[derive(Grammar)]
 #[grammar(inline)]
-pub struct SGapX<T> {
-    pub before: SGap,
-    pub it: T,
-}
-
-impl<T> Deref for SGapX<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.it
-    }
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
 pub struct SGap1X<T> {
     before: SGap1,
     it: T,
@@ -197,21 +179,6 @@ pub struct SGap1X<T> {
 
 impl<T> Deref for SGap1X<T> {
     type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.it
-    }
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub struct XEGap<T> {
-    pub it: T,
-    after: SGap,
-}
-
-impl<T> Deref for XEGap<T> {
-    type Target = T;
-
     fn deref(&self) -> &Self::Target {
         &self.it
     }
@@ -5932,10 +5899,6 @@ pub struct SpaceOrTab(StringOf<IsSpaceOrTab>);
 #[derive(Grammar)]
 #[grammar(hidden)]
 pub struct SpaceOrTab1(StringOf1<IsSpaceOrTab>);
-
-char_class!(pub IsRoutineNameStart, "routine_name_start", |ch| {
-    ch.is_ascii_alphabetic() || ch == '%'
-});
 
 char_class!(pub IsRoutineNamePart, "routine_name_part", |ch| {
     ch.is_alphanumeric() || ch == '.'
