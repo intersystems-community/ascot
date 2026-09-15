@@ -2722,10 +2722,38 @@ pub struct Method {
 
 type OSBody = Prefix<Space, Brace<Range<OSText>>>;
 
+// What may follow a member's closing `}`: another member, a `///` doc comment, or the class's own
+// closing `}` ending the document (a bare `}` may just as well be the enclosing method's).
+#[derive(Grammar)]
+enum AfterMember {
+    Method(MethodKeyword),
+    Property(Raw<(StringEqCI!("Property"), Space1)>),
+    Relationship(Raw<(StringEqCI!("Relationship"), Space1)>),
+    Parameter(Raw<(StringEqCI!("Parameter"), Space1)>),
+    Index(Raw<(StringEqCI!("Index"), Space1)>),
+    ForeignKey(Raw<(StringEqCI!("ForeignKey"), Space1)>),
+    Query(Raw<(StringEqCI!("Query"), Space1)>),
+    Trigger(Raw<(StringEqCI!("Trigger"), Space1)>),
+    XData(Raw<(StringEqCI!("XData"), Space1)>),
+    Projection(Raw<(StringEqCI!("Projection"), Space1)>),
+    Storage(Raw<(StringEqCI!("Storage"), Space1)>),
+    Doc(StringEq!("///")),
+    Close(
+        (
+            StringEq!("}"),
+            ImportIncludeGap,
+            NotFollowedBy<CharOf<AnyChar>>,
+        ),
+    ),
+}
+
 // A body in another language (`[ Language = python ]`) can't be brace-matched with ObjectScript
-// string/comment rules; as in IRIS's UDL loader, it ends at the first `}` starting a line.
+// string/comment rules. It ends at a `}` starting a line that is followed by what may follow a
+// member -- not at the first such `}`, which is routinely a `switch`'s or block's in JavaScript.
+type ForeignBodyEnd = (StringEq!("\n}"), Vec<CharOf<IsWhitespace>>, AfterMember);
+
 type ForeignBody = Raw<(
-    Vec<(NotFollowedBy<StringEq!("\n}")>, CharOf<AnyChar>)>,
+    Vec<(NotFollowedBy<ForeignBodyEnd>, CharOf<AnyChar>)>,
     StringEq!("\n"),
 )>;
 
@@ -6375,6 +6403,25 @@ mod regression_tests {
                 .wrapped
                 .print()
                 .contains("return x")
+        );
+        assert_eq!(methods[1].body.prefixed.wrapped.print(), "\n quit 1\n");
+    }
+
+    #[test]
+    fn javascript_method_body_may_close_a_block_at_column_zero() {
+        let cls = ClassDefinition::parse(
+            "Class A.E\n{\n\nClientMethod f(n) [ Language = javascript ]\n{\n\tswitch (n) {\n\tcase 1:\n\t\tfor (var i=0;i<n;i++) { x(i); }\n\t\tbreak;\n}\n// done\nreturn n;\n}\n\n/// Doc\nMethod N()\n{\n quit 1\n}\n\n}\n",
+        )
+        .expect("Ok");
+        let methods = methods(&cls);
+        assert_eq!(methods.len(), 2);
+        assert!(
+            methods[0]
+                .body
+                .prefixed
+                .wrapped
+                .print()
+                .contains("return n")
         );
         assert_eq!(methods[1].body.prefixed.wrapped.print(), "\n quit 1\n");
     }
