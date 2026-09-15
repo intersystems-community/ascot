@@ -291,6 +291,7 @@ pub enum TypeErrorKind {
     },
     CannotFindRoutine(String),
     CannotFindInclude(String),
+    MacroExpansionTooDeep(String),
     AccessInstanceOnlyMemberFromClassContext {
         name: String,
     },
@@ -412,6 +413,7 @@ impl TypeErrorKind {
             TypeErrorKind::CannotFindLabel { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::CannotFindRoutine(_) => DiagnosticSeverity::Error,
             TypeErrorKind::CannotFindInclude(_) => DiagnosticSeverity::Error,
+            TypeErrorKind::MacroExpansionTooDeep(_) => DiagnosticSeverity::Error,
             TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { .. } => {
                 DiagnosticSeverity::Error
             }
@@ -497,6 +499,9 @@ impl std::fmt::Display for TypeErrorKind {
                     f,
                     "Include file '{name}' is not defined in the current workspace"
                 )
+            }
+            TypeErrorKind::MacroExpansionTooDeep(name) => {
+                write!(f, "The macro '{name}' expands recursively without end")
             }
             TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name } => {
                 write!(
@@ -797,6 +802,10 @@ impl TypeError {
     // yet to attach one lazily this early (during macro expansion).
     pub fn cannot_find_include(name: String, range: Range) -> Self {
         Self::new(TypeErrorKind::CannotFindInclude(name), range, vec![])
+    }
+
+    pub fn macro_expansion_too_deep(name: String, range: Range) -> Self {
+        Self::new(TypeErrorKind::MacroExpansionTooDeep(name), range, vec![])
     }
 
     pub fn mismatch_argument_mode(

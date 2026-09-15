@@ -344,7 +344,19 @@ impl<'a> WorkspaceEnv<'a> {
     // `%RegisteredObject`/`%SerialObject` inherits a meaningless default implementation of them
     // from `%Library.SystemBase`, so a match only counts if its declaring class differs.
     fn find_dispatch_hook(&self, cls: &str, mem: &str) -> Option<MemberTy> {
+        self.find_dispatch_hook_in(cls, mem, &mut HashSet::new())
+    }
+
+    fn find_dispatch_hook_in(
+        &self,
+        cls: &str,
+        mem: &str,
+        seen: &mut HashSet<String>,
+    ) -> Option<MemberTy> {
         const DISPATCH_DEFAULT_ORIGIN: &str = "%Library.SystemBase";
+        if !seen.insert(cls.to_string()) {
+            return None;
+        }
         if let Some(uri) = self.workspace.resolve_cls_uri(cls) {
             self.touched.borrow_mut().insert(uri.clone());
             let details = self.workspace.cls_details(&uri).ok()?;
@@ -355,7 +367,7 @@ impl<'a> WorkspaceEnv<'a> {
             }
             self.qualified_extends(cls, &details)
                 .into_iter()
-                .find_map(|sup| self.find_dispatch_hook(&sup, mem))
+                .find_map(|sup| self.find_dispatch_hook_in(&sup, mem, seen))
         } else if let Some(iris) = self.workspace.iris.as_ref() {
             let found = iris.get_cls(cls)?.members.into_iter().find(|m| {
                 m.name.content.eq_ignore_ascii_case(mem)
@@ -368,6 +380,18 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     fn generatable_kind(&self, cls: &str, name: &str) -> Option<GeneratableKind> {
+        self.generatable_kind_in(cls, name, &mut HashSet::new())
+    }
+
+    fn generatable_kind_in(
+        &self,
+        cls: &str,
+        name: &str,
+        seen: &mut HashSet<String>,
+    ) -> Option<GeneratableKind> {
+        if !seen.insert(cls.to_string()) {
+            return None;
+        }
         let uri = self.workspace.resolve_cls_uri(cls)?;
         self.touched.borrow_mut().insert(uri.clone());
         let details = self.workspace.cls_details(&uri).ok()?;
@@ -388,7 +412,7 @@ impl<'a> WorkspaceEnv<'a> {
         }
         self.qualified_extends(cls, &details)
             .into_iter()
-            .find_map(|sup| self.generatable_kind(&sup, name))
+            .find_map(|sup| self.generatable_kind_in(&sup, name, seen))
     }
 
     // Best-effort: a superclass outside the workspace (or an IRIS-only generated member) isn't
@@ -689,6 +713,19 @@ impl<'a> WorkspaceEnv<'a> {
 
     // `order`: which kinds of member `mem` may be, most likely first (see `lookup_order`).
     fn get_member_internal(&self, cls: &str, mem: &str, order: &[MemberNs]) -> Option<MemberTy> {
+        self.get_member_in(cls, mem, order, &mut HashSet::new())
+    }
+
+    fn get_member_in(
+        &self,
+        cls: &str,
+        mem: &str,
+        order: &[MemberNs],
+        seen: &mut HashSet<String>,
+    ) -> Option<MemberTy> {
+        if !seen.insert(cls.to_string()) {
+            return None;
+        }
         if let Some(uri) = self.workspace.resolve_cls_uri(cls) {
             self.touched.borrow_mut().insert(uri.clone());
             let details = self.workspace.cls_details(&uri).ok()?;
@@ -709,7 +746,7 @@ impl<'a> WorkspaceEnv<'a> {
                 .or_else(|| {
                     self.qualified_extends(cls, &details)
                         .into_iter()
-                        .find_map(|sup| self.get_member_internal(&sup, mem, order))
+                        .find_map(|sup| self.get_member_in(&sup, mem, order, seen))
                 })
         } else if self.workspace.iris.is_some() {
             self.iris_member(cls, mem, order)
@@ -930,6 +967,14 @@ impl<'a> WorkspaceEnv<'a> {
 
     // `None` means we can't tell (class outside the workspace with no IRIS connection).
     pub(crate) fn is_datatype(&self, cls: &str) -> Option<bool> {
+        self.is_datatype_in(cls, &mut HashSet::new())
+    }
+
+    fn is_datatype_in(&self, cls: &str, seen: &mut HashSet<String>) -> Option<bool> {
+        // A class reached twice (an inheritance cycle) adds nothing to the answer.
+        if !seen.insert(cls.to_string()) {
+            return Some(false);
+        }
         if cls == "%Library.DataType" {
             return Some(true);
         }
@@ -947,7 +992,7 @@ impl<'a> WorkspaceEnv<'a> {
                 }
                 let mut yes = false;
                 for sup in self.qualified_extends(cls, &details) {
-                    yes |= self.is_datatype(&sup)?;
+                    yes |= self.is_datatype_in(&sup, seen)?;
                 }
                 Some(yes)
             }
@@ -966,6 +1011,17 @@ impl<'a> WorkspaceEnv<'a> {
     // or an isolated one-off like `%Library.Any`. `Some(true)` means `cls` is confirmed to land
     // outside `%Library.SystemBase` specifically -- i.e. one of the other three.
     fn confirmed_outside_system_base(&self, cls: &str) -> Option<bool> {
+        self.confirmed_outside_system_base_in(cls, &mut HashSet::new())
+    }
+
+    fn confirmed_outside_system_base_in(
+        &self,
+        cls: &str,
+        seen: &mut HashSet<String>,
+    ) -> Option<bool> {
+        if !seen.insert(cls.to_string()) {
+            return Some(true);
+        }
         if cls == "%Library.SystemBase" {
             return Some(false);
         }
@@ -986,7 +1042,7 @@ impl<'a> WorkspaceEnv<'a> {
         for sup in &extends {
             let mut sup = sup.clone();
             normalize_class_name(&mut sup);
-            confirmed &= self.confirmed_outside_system_base(&sup)?;
+            confirmed &= self.confirmed_outside_system_base_in(&sup, seen)?;
         }
         Some(confirmed)
     }

@@ -2099,23 +2099,30 @@ fn check_infix<'a, X>(
                         term: Term::infix(term.clone(), o, Term::Const(c.clone())),
                     });
                 }
+                // A fold that overflows or divides by zero falls through to the plain typing.
                 (PowerTy::Const(x), Ok(o), PowerTy::Const(y)) => {
-                    return Ok(PowerTy::Const(eval(x, o, y)));
+                    if let Some(c) = eval(x, o, y) {
+                        return Ok(PowerTy::Const(c));
+                    }
                 }
                 (PowerTy::Union(x1, x2, xn), Ok(o), PowerTy::Const(y)) => {
                     let xs = once(x1).chain(once(x2)).chain(xn.iter());
-                    return Ok(PowerTy::union(xs.map(|x| eval(x, o, y)).collect()));
+                    if let Some(cs) = xs.map(|x| eval(x, o, y)).collect() {
+                        return Ok(PowerTy::union(cs));
+                    }
                 }
                 (PowerTy::Const(x), Ok(o), PowerTy::Union(y1, y2, yn)) => {
                     let ys = once(y1).chain(once(y2)).chain(yn.iter());
-                    return Ok(PowerTy::union(ys.map(|y| eval(x, o, y)).collect()));
+                    if let Some(cs) = ys.map(|y| eval(x, o, y)).collect() {
+                        return Ok(PowerTy::union(cs));
+                    }
                 }
                 (PowerTy::Union(x1, x2, xn), Ok(o), PowerTy::Union(y1, y2, yn)) => {
                     let xs = once(x1).chain(once(x2)).chain(xn.iter());
                     let ys = once(y1).chain(once(y2)).chain(yn.iter());
-                    return Ok(PowerTy::union(
-                        xs.flat_map(|x| ys.clone().map(|y| eval(x, o, y))).collect(),
-                    ));
+                    if let Some(cs) = xs.flat_map(|x| ys.clone().map(|y| eval(x, o, y))).collect() {
+                        return Ok(PowerTy::union(cs));
+                    }
                 }
                 _ => (),
             }
@@ -2152,7 +2159,7 @@ fn check_infix<'a, X>(
     }
 }
 
-fn eval(x: &Const, o: TermOp, y: &Const) -> Const {
+fn eval(x: &Const, o: TermOp, y: &Const) -> Option<Const> {
     let t = Term::infix(Term::Const(x.clone()), o, Term::Const(y.clone()));
     // the const doesn't matter
     t.eval(&types::Const::Integer(0))

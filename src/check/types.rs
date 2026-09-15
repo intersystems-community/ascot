@@ -125,8 +125,9 @@ impl Term {
         }
     }
 
+    // An evaluation that overflows or divides by zero is no constraint at all, so it keeps `val`.
     fn filter(&self, val: &Const) -> bool {
-        self.eval(val).as_integer() != 0
+        self.eval(val).is_none_or(|c| c.as_integer() != 0)
     }
 
     fn exact(&self) -> bool {
@@ -143,14 +144,15 @@ impl Term {
         }
     }
 
-    pub(crate) fn eval(&self, val: &Const) -> Const {
-        match self {
+    // `None` when the arithmetic overflows `u32` or divides by zero: no constant to fold to.
+    pub(crate) fn eval(&self, val: &Const) -> Option<Const> {
+        Some(match self {
             Term::Target => val.clone(),
             Term::Const(c) => c.clone(),
-            Term::Neg(term) => (term.eval(val).as_integer() == 0).into(),
+            Term::Neg(term) => (term.eval(val)?.as_integer() == 0).into(),
             Term::Infix { l, o, r } => {
-                let l = l.eval(val);
-                let r = r.eval(val);
+                let l = l.eval(val)?;
+                let r = r.eval(val)?;
                 match o {
                     TermOp::Eq => (l.as_string() == r.as_string()).into(),
                     TermOp::Ne => (l.as_string() != r.as_string()).into(),
@@ -158,15 +160,15 @@ impl Term {
                     TermOp::Lt => (l.as_integer() < r.as_integer()).into(),
                     TermOp::Ge | TermOp::Nl => (l.as_integer() >= r.as_integer()).into(),
                     TermOp::Gt => (l.as_integer() > r.as_integer()).into(),
-                    TermOp::Add => (l.as_integer() + r.as_integer()).into(),
-                    TermOp::Sub => (l.as_integer() - r.as_integer()).into(),
-                    TermOp::Pow => (l.as_integer().pow(r.as_integer())).into(),
-                    TermOp::Mul => (l.as_integer() * r.as_integer()).into(),
-                    TermOp::IntDiv => (l.as_integer() / r.as_integer()).into(),
-                    TermOp::Mod => (l.as_integer() % r.as_integer()).into(),
+                    TermOp::Add => l.as_integer().checked_add(r.as_integer())?.into(),
+                    TermOp::Sub => l.as_integer().checked_sub(r.as_integer())?.into(),
+                    TermOp::Pow => l.as_integer().checked_pow(r.as_integer())?.into(),
+                    TermOp::Mul => l.as_integer().checked_mul(r.as_integer())?.into(),
+                    TermOp::IntDiv => l.as_integer().checked_div(r.as_integer())?.into(),
+                    TermOp::Mod => l.as_integer().checked_rem(r.as_integer())?.into(),
                 }
             }
-        }
+        })
     }
 }
 
@@ -259,11 +261,11 @@ pub enum PowerTy {
     Union(Const, Const, Vec<Const>),
     Never,
     Term {
-        target: u8,
+        target: u32,
         term: Term,
     },
     Case {
-        target: u8,
+        target: u32,
         cases: Vec<(&'static str, Option<Ty>)>,
         // The outer Option determines if there is a default branch.
         //   There can be no default branches when all possible values are listed by cases.
@@ -297,7 +299,7 @@ impl PowerTy {
         }
     }
 
-    pub fn bind(target: u8) -> Self {
+    pub fn bind(target: u32) -> Self {
         Self::Term {
             target,
             term: Term::Target,
@@ -305,7 +307,7 @@ impl PowerTy {
     }
 
     pub fn case(
-        target: u8,
+        target: u32,
         mut cases: Vec<(&'static str, Option<Ty>)>,
         default: Option<Option<Ty>>,
     ) -> Self {
@@ -355,7 +357,7 @@ impl PowerTy {
         self.to_maybe_ty(env).to_ty()
     }
 
-    pub fn refine_on_prop(self, target: u8, term: &Term) -> Self {
+    pub fn refine_on_prop(self, target: u32, term: &Term) -> Self {
         match self {
             PowerTy::Case {
                 target: case_target,
