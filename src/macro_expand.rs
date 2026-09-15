@@ -879,15 +879,22 @@ fn substitute_macro_body<'a>(
         text: String,
         origin: Origin,
         precise: bool,
+        // A pasted argument: literal text, not rescanned for the remaining parameters' names.
+        argument: bool,
     }
     let mut spans = vec![Span {
         text: body.to_string(),
         origin: call_origin.clone(),
         precise: false,
+        argument: false,
     }];
     for (name, replacement, arg_origin, arg_precise) in param_map {
         let mut next = Vec::with_capacity(spans.len());
         for span in spans {
+            if span.argument {
+                next.push(span);
+                continue;
+            }
             let mut rest = span.text.as_str();
             loop {
                 match rest.find(name.as_str()) {
@@ -897,6 +904,7 @@ fn substitute_macro_body<'a>(
                                 text: rest.to_string(),
                                 origin: span.origin.clone(),
                                 precise: span.precise,
+                                argument: false,
                             });
                         }
                         break;
@@ -907,12 +915,14 @@ fn substitute_macro_body<'a>(
                                 text: rest[..idx].to_string(),
                                 origin: span.origin.clone(),
                                 precise: span.precise,
+                                argument: false,
                             });
                         }
                         next.push(Span {
                             text: replacement.clone(),
                             origin: arg_origin.clone(),
                             precise: *arg_precise,
+                            argument: true,
                         });
                         rest = &rest[idx + name.len()..];
                     }
@@ -947,13 +957,15 @@ fn substitute_macro_body<'a>(
                     }
                 }
             }
+            // Never precise: a redex's own argument offsets are relative to this re-tokenized
+            // text, not to the source, so `MacroRedex::DDD` couldn't map them back.
             MacroedUnit::Redex(_) => {
                 let mut overlapping = overlapping;
-                let (origin, precise) = match (overlapping.next(), overlapping.next()) {
-                    (Some((_, _, span)), None) => (span.origin.clone(), span.precise),
-                    _ => (call_origin.clone(), false),
+                let origin = match (overlapping.next(), overlapping.next()) {
+                    (Some((_, _, span)), None) => span.origin.clone(),
+                    _ => call_origin.clone(),
                 };
-                items.push((Cow::Owned(unit.into_inner()), origin, precise));
+                items.push((Cow::Owned(unit.into_inner()), origin, false));
             }
         }
     }

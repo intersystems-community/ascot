@@ -4911,4 +4911,25 @@ mod tests {
             Some("B.cls".to_string())
         );
     }
+
+    // `%flag` inside the pasted argument is the caller's variable, not `Has`'s second parameter.
+    #[test]
+    fn macro_arguments_are_not_rescanned_for_other_parameters() {
+        let workspace = Workspace::new(None);
+        let uri = "Sub.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE Sub\n#define Wrap(%flag) $$Wrap^Other(%flag)\n#define Has(%flags,%flag) (%flags[%flag)\n\tWrite $$$Has($$$Wrap($g(%flag)),\"D\")\n\tQuit\n".to_string(),
+        );
+        let expansion = workspace
+            .macro_expansion(
+                uri,
+                bindings::Position {
+                    line: 3,
+                    character: 8,
+                },
+            )
+            .expect("expansion");
+        assert_eq!(expansion.trim(), "($$Wrap^Other($g(%flag))[\"D\")");
+    }
 }
