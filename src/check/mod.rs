@@ -365,6 +365,7 @@ impl MethodDetails {
             return Ok(());
         }
         let (expanded, source_map, definitions) = match env.base.expand_method_body(
+            env.uri(),
             &self.header_text,
             self.body.it.as_str(),
             &cls.macro_definitions,

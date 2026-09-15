@@ -820,7 +820,7 @@ impl WorkspaceStruct {
                 }
                 None => {
                     let error = tygr_error_to_diagnostics(error, &map.expanded_text);
-                    Err(map.relocate_diagnostics(vec![error], "").pop().unwrap())
+                    Err(map.relocate_diagnostics(vec![error], uri).pop().unwrap())
                 }
             },
         }
@@ -863,6 +863,7 @@ impl WorkspaceStruct {
     // `expand_rtn_helper` pushes a routine's own header -- so both share one coordinate space.
     pub(crate) fn expand_method_body(
         &self,
+        uri: &str,
         header: &str,
         body: &str,
         base_definitions: &MacroDefinitions,
@@ -903,7 +904,7 @@ impl WorkspaceStruct {
             }
             Err(error) => {
                 let error = tygr_error_to_diagnostics(error, &map.expanded_text);
-                Err(map.relocate_diagnostics(vec![error], "").pop().unwrap())
+                Err(map.relocate_diagnostics(vec![error], uri).pop().unwrap())
             }
         }
     }
