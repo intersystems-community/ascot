@@ -1374,7 +1374,15 @@ fn check_get<'a>(
     };
     match target.deref() {
         GetTarget::Var(target) => match target.as_local(env, flow)? {
-            Left(local) => Ok(flow.handle_get(local)?.to_ty(env).unwrap_or(default).into()),
+            Left(local) => {
+                let ty = flow.handle_get(local)?.to_maybe_ty(env);
+                Ok(match ty.maybe_defined() {
+                    Some(defined) if ty.maybe_undefined() => env.merge_ty(defined.clone(), default),
+                    Some(defined) => defined.clone(),
+                    None => default,
+                }
+                .into())
+            }
             Right(_) => Ok(PowerTy::from("%DataType")),
         },
         // `Member`/`Indirection`/`Sub` are never flow-tracked locals -- read the plain type.
@@ -1384,9 +1392,11 @@ fn check_get<'a>(
 
 pub(super) fn check_number(number: &Number) -> Result<PowerTy, QuasiTypeError> {
     match number {
-        Number::FromDigit(numeric, None, None) => Ok(PowerTy::Const(types::Const::Integer(
-            str::parse(&numeric.print()).unwrap_or(0),
-        ))),
+        // Too big for a constant is still a number, just not a known one.
+        Number::FromDigit(numeric, None, None) => Ok(str::parse(&numeric.print())
+            .map_or(PowerTy::from("%DataType"), |n| {
+                PowerTy::Const(types::Const::Integer(n))
+            })),
         _ => Ok(PowerTy::from("%DataType")),
     }
 }
@@ -1523,31 +1533,16 @@ fn check_data<'a>(
             Right(Ty::Any.into())
         }
     };
-    let Left(local) = local else {
-        // Nothing is known about a glvn, so the value is only tied to `target` (when there is
-        // one) so conditions on it refine the target's definedness.
-        if let Some(target) = target
-            && let Left(local) = target.as_local(env, flow)?
-        {
-            let old_ty = flow.handle_get(local.clone())?.to_ty(env).ok();
-            let var = flow.fresh();
-            let cases = vec![
-                ("0", old_ty.clone()),
-                ("1", Some(Ty::Any)),
-                ("10", old_ty),
-                ("11", Some(Ty::Any)),
-            ];
-            flow.handle_set(local, PowerTy::case(var, cases, None), env.range(target))?;
-            return Ok(PowerTy::bind(var));
+    let variable = match local {
+        Left(local) if local.subs.is_empty() => local,
+        // Individual subscripts aren't tracked, so a subscripted local is as opaque as a glvn --
+        // though still a read of the variable.
+        Left(local) => {
+            flow.handle_get(Local::bare(local.name))?;
+            return check_data_opaque(env, flow, target);
         }
-        return Ok(PowerTy::union(vec![
-            0.into(),
-            1.into(),
-            10.into(),
-            11.into(),
-        ]));
+        Right(_) => return check_data_opaque(env, flow, target),
     };
-    let variable = Local::bare(local.name);
     let new_ty = flow.handle_get(variable.clone())?.to_maybe_ty(env);
     let maybe_subscript = flow.subscriptable(&variable.name)?;
     let var = flow.fresh();
@@ -1591,6 +1586,35 @@ fn check_data<'a>(
     } else {
         Ok(PowerTy::bind(var))
     }
+}
+
+// `$DATA` of something nothing is known about: the value is only tied to `target` (when there
+// is one) so conditions on it refine the target's definedness.
+fn check_data_opaque<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    target: Option<&Range<Variable>>,
+) -> Result<PowerTy, QuasiTypeError> {
+    if let Some(target) = target
+        && let Left(local) = target.as_local(env, flow)?
+    {
+        let old_ty = flow.handle_get(local.clone())?.to_ty(env).ok();
+        let var = flow.fresh();
+        let cases = vec![
+            ("0", old_ty.clone()),
+            ("1", Some(Ty::Any)),
+            ("10", old_ty),
+            ("11", Some(Ty::Any)),
+        ];
+        flow.handle_set(local, PowerTy::case(var, cases, None), env.range(target))?;
+        return Ok(PowerTy::bind(var));
+    }
+    Ok(PowerTy::union(vec![
+        0.into(),
+        1.into(),
+        10.into(),
+        11.into(),
+    ]))
 }
 
 fn check_order<'a>(

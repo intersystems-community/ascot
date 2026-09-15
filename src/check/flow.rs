@@ -376,6 +376,16 @@ impl<'a> Flow<'a> {
         .with_range(|| range)?;
         self.loop_context = Some(LoopContext::new(range));
         handler(self)?;
+        // A `Continue` heads back to the loop head just like falling off the end of the body.
+        for bindings in self.loop_context.as_mut().unwrap().continues.drain(..) {
+            merge_all_bindings(
+                &mut self.bindings,
+                Some(bindings),
+                self.shared.env,
+                self.shared.procedure_block,
+            )
+            .with_range(|| range)?;
+        }
         if infinite {
             self.bindings = None;
         }
@@ -417,6 +427,32 @@ impl<'a> Flow<'a> {
             }
         }
         Ok(())
+    }
+
+    // Merges the state a `Try` block was entered in into the state it left behind, for the
+    // `Catch` block, which may be entered from anywhere in between. The transaction level is kept
+    // as it was at entry: whether the exception came before or after a `TSTART` isn't knowable,
+    // and the idiomatic `If tranOpen { TROLLBACK }` would otherwise be flagged as inconsistent.
+    pub(crate) fn merge_for_catch(&mut self, before: Self) -> Result<(), QuasiTypeError> {
+        let tlevel = before.bindings.as_ref().map(|b| b.tlevel);
+        let was_suppressed = self.suppress_diagnostics();
+        let result = self.merge(before);
+        self.restore_diagnostics(was_suppressed);
+        result?;
+        if let (Some(mine), Some(tlevel)) = (self.bindings.as_mut(), tlevel) {
+            mine.tlevel = tlevel;
+        }
+        Ok(())
+    }
+
+    // Merges a state split off inside the loop just left, as another way out of it: its loop
+    // context is the loop's own (and empty, being split at the condition), not this flow's.
+    pub(crate) fn merge_loop_exit(&mut self, mut them: Self) -> Result<(), QuasiTypeError> {
+        them.loop_context = self
+            .loop_context
+            .as_ref()
+            .map(|c| LoopContext::new(c.range));
+        self.merge(them)
     }
 
     pub(crate) fn split(&mut self) -> Self {
@@ -663,6 +699,10 @@ impl<'a> Flow<'a> {
         }
         binding.new = Some(true);
         binding.new_at = Some(range);
+        // Like `Kill`: undefined until set again.
+        binding.assigned = PowerTy::undefined();
+        binding.assigned_at = HashSet::new();
+        binding.subscript_assigned = None;
         Ok(())
     }
 

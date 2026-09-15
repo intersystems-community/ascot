@@ -246,21 +246,30 @@ impl<'a> WorkspaceEnv<'a> {
                 .or_else(|| self.unverified_any());
         }
         if mem == "%New" {
+            // Every object class has `%New`; `%OnNew` only decides its arguments, so failing to
+            // resolve it (a superclass outside the workspace, no IRIS connection) leaves the
+            // arguments unchecked rather than making `%New` itself unverified.
+            let was_unverified = self.unverified.get();
             let proc: TyProcedureOrAny = self
                 .get_member_internal(obj, "%OnNew", &[MemberNs::HigherOrder])
                 .and_then(|mem| mem.ty.as_procedure().ok())
                 .unwrap_or_default();
-            let ty = match proc {
-                TyProcedureOrAny::Any => HOTy::Value(Ty::Any),
-                TyProcedureOrAny::Procedure(p) => {
-                    let mut proc = p.as_ref().clone();
-                    proc.out = Some(Ty::from(obj.to_string()));
-                    HOTy::Procedure(Arc::new(proc))
-                }
+            self.unverified.set(was_unverified);
+            let mut proc = match proc {
+                TyProcedureOrAny::Procedure(p) => p.as_ref().clone(),
+                TyProcedureOrAny::Any => TyProcedure {
+                    normal_args: vec![],
+                    variadic_arg: Some(VariadicArg::new(ArgMode::Default, "args".into(), None)),
+                    out: None,
+                    procedure_block: None,
+                    uri: None,
+                    declared_at: None,
+                },
             };
+            proc.out = Some(Ty::from(obj.to_string()));
             Some(MemberTy {
                 is_instance_only: false,
-                ty,
+                ty: HOTy::Procedure(Arc::new(proc)),
                 ..MemberTy::default()
             })
         } else if REGISTERED_OBJECT_MEMBERS.contains(&mem)
