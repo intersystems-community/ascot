@@ -4402,6 +4402,18 @@ mod tests {
         );
     }
 
+    // A quoted member name is the name without its quotes; a `{$$$X}` parameter default doesn't
+    // shift the body; a parameterless macro called with arguments keeps them; a by-reference
+    // argument to an unknown callee may define subscripts; `$ZCONVERT`'s handle is written.
+    #[test]
+    fn quoted_members_header_defaults_macro_args_and_byref_to_unknown() {
+        let diagnostics = class_diagnostics(
+            "Property \"grant_types\" As %String;\nProperty Plain As %String;\nMethod M(x, y As %String = {$$$OK}) As %String\n{\n #define OK 1\n #define Rows ..Two\n Set ..\"grant_types\" = ..Plain\n Do $$$Rows(x, y)\n Do ##class(%SYS.Unknown).Fill(.arr)\n Set h = \"\"\n Quit ..\"grant_types\"_arr(1)_$zcvt(x, \"I\", \"UTF8\", h)\n}\nMethod Two(a, b) As %String\n{\n Quit a_b\n}\n",
+        );
+        let diagnostics = without_hints(diagnostics);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
     // `$CLASSMETHOD`/`$METHOD` take an `args...` expansion; `&javascript<` is `&js<`.
     #[test]
     fn expanded_arguments_in_reflection_calls_and_javascript_marker() {

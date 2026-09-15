@@ -961,10 +961,19 @@ fn check_simple_function<'a>(
     call: &cos::SimpleFunctionCall,
 ) -> Result<PowerTy, QuasiTypeError> {
     let function = cos::simple_function(&call.name.print()).expect("validated by the grammar");
-    for arg in call.args.items.iter() {
-        if let Some(arg) = arg.deref() {
-            let _ = arg.to_ty(env, flow)?;
+    for (i, arg) in call.args.items.iter().enumerate() {
+        let Some(expr) = arg.deref() else { continue };
+        let expr = Range::new(arg.start, expr, arg.end);
+        // `$ZCONVERT(s, mode, table, handle)`: the handle is state the call writes.
+        if function.names[0] == "ZCONVERT"
+            && i == 3
+            && let Some(variable) = expr.as_variable()
+            && let Left(local) = variable.as_local(env, flow)?
+        {
+            flow.invalidate(local, Ty::from("%String").into())?;
+            continue;
         }
+        let _ = expr.to_ty(env, flow)?;
     }
     Ok(Ty::from(function.ret).into())
 }
@@ -1164,9 +1173,25 @@ pub(super) fn check_args_any<'a, 'b>(
             Some(cos::MthArg::Expr { expr, .. }) => {
                 expr.to_ty(env, flow)?;
             }
+            // An unknown callee may set anything through a by-reference argument, subscripts
+            // included.
             Some(cos::MthArg::ByRef { target, .. }) => {
-                check_set_target(target, PowerTy::from(Ty::Any), env.range(arg), env, flow)
-                    .map_err(|err| err.into_error(|| env.range(arg)))?;
+                let local = match target.as_variable() {
+                    Some(variable) => variable
+                        .as_local(env, flow)
+                        .map_err(|err| err.into_error(|| env.range(arg)))?
+                        .left(),
+                    None => None,
+                };
+                match local {
+                    Some(local) => flow
+                        .invalidate(local, Ty::Any.into())
+                        .map_err(|err| err.into_error(|| env.range(arg)))?,
+                    None => {
+                        check_set_target(target, PowerTy::from(Ty::Any), env.range(arg), env, flow)
+                            .map_err(|err| err.into_error(|| env.range(arg)))?
+                    }
+                }
             }
             None => {}
         }

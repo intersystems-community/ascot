@@ -679,7 +679,7 @@ impl MemberRef {
     pub fn id(&self) -> String {
         match self {
             MemberRef::Parameter { id, .. } => id.print(),
-            MemberRef::Normal { id } => id.print(),
+            MemberRef::Normal { id } => id.name(),
         }
     }
 
@@ -1914,6 +1914,18 @@ impl Deref for QuotableClassMemberName {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl QuotableClassMemberName {
+    // `"%%OID"` names the member `%%OID`; a doubled quote inside is one quote.
+    pub fn name(&self) -> String {
+        match self.0.deref() {
+            QuotableClassMemberNameEnum::Symbol(symbol) => symbol.print(),
+            QuotableClassMemberNameEnum::String(string) => {
+                string.print().trim_matches('"').replace("\"\"", "\"")
+            }
+        }
     }
 }
 

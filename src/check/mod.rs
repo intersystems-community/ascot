@@ -2224,6 +2224,23 @@ impl<T> CheckExprInner for ExprOps<T> {
                     return Ok(Ty::OREF(ClsOrIns::Cls(cls)).into());
                 }
                 let ty = base_hoty(base, env, flow)?;
+                // `$SYSTEM.Security.System.M()`, `$system.Context.SQL()`: a nested `%SYSTEM`
+                // class, the latter reached through a kernel accessor that yields its instance.
+                if let HOTy::Value(Ty::OREF(ClsOrIns::Cls(cls))) = &ty
+                    && cls.name.starts_with("%SYSTEM.")
+                    && !op.mem.is_parameter()
+                {
+                    let nested = format!("{}.{}", cls.name, op.mem.id());
+                    if env.class_exists(&nested) {
+                        let nested = env.resolve_class(&nested);
+                        return Ok(Ty::OREF(if op.args.is_none() {
+                            ClsOrIns::Cls(nested)
+                        } else {
+                            ClsOrIns::Ins(nested)
+                        })
+                        .into());
+                    }
+                }
                 let ty = check_member_of(ty, &op.mem, op.args.as_ref(), env, flow)?;
                 if let Some(ty) = ty {
                     Ok(ty.into())
@@ -3138,12 +3155,7 @@ impl VariableExt for Variable {
 
 // `i%"%%OID"` names the member without its quotes.
 fn quotable_name(name: &QuotableClassMemberName) -> String {
-    match name.deref().deref() {
-        QuotableClassMemberNameEnum::Symbol(symbol) => symbol.print(),
-        QuotableClassMemberNameEnum::String(string) => {
-            string.print().trim_matches('"').replace("\"\"", "\"")
-        }
-    }
+    name.name()
 }
 
 fn check_instance_member(

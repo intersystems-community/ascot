@@ -831,7 +831,7 @@ impl<'a> WorkspaceEnv<'a> {
             .unwrap_or(name)
     }
 
-    fn class_exists(&self, cls: &str) -> bool {
+    pub(crate) fn class_exists(&self, cls: &str) -> bool {
         self.workspace.resolve_cls_uri(cls).is_some()
             || self
                 .workspace
@@ -1419,6 +1419,10 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
+    pub(crate) fn class_exists(&self, cls: &str) -> bool {
+        self.base.base.class_exists(cls)
+    }
+
     pub(crate) fn qualify_class_name(&self, name: &str) -> String {
         self.base
             .base
