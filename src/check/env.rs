@@ -1102,12 +1102,13 @@ impl<'a> WorkspaceEnv<'a> {
 
     pub(crate) fn expand_method_body(
         &self,
+        uri: &str,
         header: &str,
         body: &str,
         base_definitions: &MacroDefinitions,
     ) -> Result<(String, SourceMap, MacroDefinitions), bindings::Diagnostic> {
         self.workspace
-            .expand_method_body(header, body, base_definitions)
+            .expand_method_body(uri, header, body, base_definitions)
     }
 
     // A workspace-wide routine's label -> signature map, for a cross-routine label call

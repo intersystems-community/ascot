@@ -4985,4 +4985,19 @@ mod tests {
         );
         assert!(d.is_empty(), "{d:?}");
     }
+
+    // The "Expands to" step of a parse error inside a macro expansion names the file, so an LSP
+    // client (which needs a real uri) shows it instead of dropping it.
+    #[test]
+    fn parse_error_in_an_expansion_relates_to_the_file_itself() {
+        let uri = "Bad.mac";
+        let diagnostics =
+            diagnostics_for(&[(uri, "ROUTINE Bad\n#define BAD set =\n\t$$$BAD\n\tQuit\n")]);
+        let expands_to = diagnostics
+            .iter()
+            .flat_map(|d| &d.related_information)
+            .find(|info| info.message.contains("Expands to"))
+            .unwrap_or_else(|| panic!("{diagnostics:?}"));
+        assert_eq!(expands_to.location.uri, uri, "{diagnostics:?}");
+    }
 }
