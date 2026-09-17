@@ -2410,6 +2410,7 @@ impl CheckExprInner for cos::GetTarget {
                     .ok_or_else(QuasiTypeError::undefined)
             }
             cos::GetTarget::Indirection(ind) => Ok(ind.to_power_ty(env, flow)?),
+            cos::GetTarget::Fun(call) => call.to_power_ty(env, flow),
             cos::GetTarget::Sub { base, op } => {
                 let base = base_hoty(base, env, flow)?;
                 check_member_of(base, &op.mem, op.args.as_ref(), env, flow)?

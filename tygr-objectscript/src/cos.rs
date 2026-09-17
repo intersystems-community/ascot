@@ -331,6 +331,8 @@ pub enum GetTarget {
         base: Range<ExprOps<()>>,
         op: SufOp,
     },
+    // A `$z...` system function standing for a reference, e.g. `$order($zobjval(...))`.
+    Fun(Box<Prefix<StringEq!("$"), FunctionCall>>),
 }
 
 impl GrammarFrom for GetTarget {
@@ -347,6 +349,7 @@ impl GrammarFrom for GetTarget {
                 Grammar::print_to(base, buf);
                 op.print_to(buf);
             }
+            GetTarget::Fun(call) => call.print_to(buf),
         }
     }
 }
@@ -363,6 +366,11 @@ impl TryFrom<Range<ExprOps<()>>> for GetTarget {
                     AtomicExpr::Variable(variable) => Ok(GetTarget::Var(variable)),
                     AtomicExpr::Member { member, args } => Ok(GetTarget::Member { member, args }),
                     AtomicExpr::Indirection(ind) => Ok(GetTarget::Indirection(ind)),
+                    AtomicExpr::FunctionCall(call)
+                        if call.print().to_ascii_lowercase().starts_with("$z") =>
+                    {
+                        Ok(GetTarget::Fun(Box::new(call)))
+                    }
                     _ => Err(err),
                 },
                 ParenedExpr::Paren(..) => Err(err),
@@ -2580,7 +2588,7 @@ type OSBody = Prefix<Space, Brace<Range<OSText>>>;
 // What may follow a member's closing `}`: another member, a `///` doc comment, or the class's own
 // closing `}` ending the document (a bare `}` may just as well be the enclosing method's).
 #[derive(Grammar)]
-enum AfterMember {
+pub enum AfterMember {
     Method(MethodKeyword),
     Property(Raw<(StringEqCI!("Property"), Space1)>),
     Relationship(Raw<(StringEqCI!("Relationship"), Space1)>),
@@ -2605,12 +2613,38 @@ enum AfterMember {
 // A body in another language (`[ Language = python ]`) can't be brace-matched with ObjectScript
 // string/comment rules. It ends at a `}` starting a line that is followed by what may follow a
 // member -- not at the first such `}`, which is routinely a `switch`'s or block's in JavaScript.
-type ForeignBodyEnd = (StringEq!("\n}"), Vec<CharOf<IsWhitespace>>, AfterMember);
+pub type ForeignBodyEnd = (StringEq!("\n}"), ImportIncludeGap, AfterMember);
 
-type ForeignBody = Raw<(
+pub type ForeignBody = Raw<(
     Vec<(NotFollowedBy<ForeignBodyEnd>, CharOf<AnyChar>)>,
     StringEq!("\n"),
 )>;
+
+// What must follow a member's closing `}` for an ObjectScript brace-matching of its body to be
+// believed -- a `'}'` in embedded SQL or Python would otherwise end the body early, unnoticed.
+pub type MemberEnd = NotFollowedBy<NotFollowedBy<(ImportIncludeGap, AfterMember)>>;
+
+// A `Query`/`Trigger` body: SQL, TSQL or ObjectScript, with no keyword to tell which reliably, so
+// brace-matched as ObjectScript when that ends where a member may end, else like a foreign body.
+#[derive(Grammar)]
+pub enum MemberBody {
+    OS(
+        Raw<(Space, StringEq!("{"))>,
+        OSText,
+        StringEq!("}"),
+        MemberEnd,
+    ),
+    Foreign(Raw<(Space, StringEq!("{"))>, ForeignBody, StringEq!("}")),
+}
+
+fn foreign_body(input: &str, pos: usize, mut state: State) -> Option<(OSBody, usize)> {
+    let (space, pos) = Space::parse_at(input, pos, state.reborrow())?;
+    let (open, start) = <StringEq!("{")>::parse_at(input, pos, state.reborrow())?;
+    let end = ForeignBody::scan_at(input, start, state.reborrow())?;
+    let text = Range::new(start, OSText(input[start..end].into()), end);
+    let (close, pos) = <StringEq!("}")>::parse_at(input, end, state)?;
+    Some((Prefix::new(space, Wrap::new(open, text, close)), pos))
+}
 
 impl MethodHeader {
     fn is_objectscript(&self) -> bool {
@@ -2627,22 +2661,26 @@ impl MethodHeader {
     }
 }
 
-// Hand-written so the body scanner can depend on the header's `Language` keyword.
+// Hand-written so the body scanner can depend on the header's `Language` keyword. Without one
+// the body is brace-matched as ObjectScript -- but only believed if that ends where a member may
+// end, since the class-level `[ Language = python ]` default isn't visible here.
 impl Grammar for Method {
     type First = <MethodHeader as Grammar>::First;
 
     fn parse_at(input: &str, pos: usize, mut state: State) -> Option<(Self, usize)> {
         let (header, pos) = MethodHeader::parse_at(input, pos, state.reborrow())?;
+        let os_body = |mut state: State| {
+            let (body, end) = OSBody::parse_at(input, pos, state.reborrow())?;
+            MemberEnd::scan_at(input, end, state)?;
+            Some((body, end))
+        };
         let (body, pos) = if header.is_objectscript() {
-            OSBody::parse_at(input, pos, state)?
+            os_body(state.reborrow())
+                .or_else(|| foreign_body(input, pos, state.reborrow()))
+                .or_else(|| OSBody::parse_at(input, pos, state))?
         } else {
-            let (space, pos) = Space::parse_at(input, pos, state.reborrow())?;
-            let (open, start) = <StringEq!("{")>::parse_at(input, pos, state.reborrow())?;
-            let end = ForeignBody::scan_at(input, start, state.reborrow())
-                .or_else(|| OSText::scan_at(input, start, state.reborrow()))?;
-            let text = Range::new(start, OSText(input[start..end].into()), end);
-            let (close, pos) = <StringEq!("}")>::parse_at(input, end, state)?;
-            (Prefix::new(space, Wrap::new(open, text, close)), pos)
+            foreign_body(input, pos, state.reborrow())
+                .or_else(|| OSBody::parse_at(input, pos, state))?
         };
         Some((Method { header, body }, pos))
     }
@@ -2799,9 +2837,7 @@ pub struct Query {
     formal_spec: Option<FormalSpec>,
     return_type: Option<As<Type>>,
     pub keywords: Option<KeywordList>,
-    open: Raw<(Space, StringEq!("{"))>,
-    body: OSText,
-    close: StringEq!("}"),
+    body: MemberBody,
 }
 
 #[derive(Grammar)]
@@ -2819,9 +2855,7 @@ pub struct Trigger {
     keyword: Raw<(StringEqCI!("Trigger"), Space1)>,
     pub name: QuotableClassMemberName,
     pub keywords: Option<KeywordList>,
-    open: Raw<(Space, StringEq!("{"))>,
-    body: OSText,
-    close: StringEq!("}"),
+    body: MemberBody,
 }
 
 #[derive(Grammar)]
@@ -6129,6 +6163,9 @@ pub enum LineCommentStart {
     ELineComment(StringEq!(";")),
     HELineComment(StringEq!("#;")),
     HHELineComment(StringEq!("##;")),
+    // `##lit(;...)` shields a `;` from the preprocessor; once expanded it's this comment. Only
+    // the unexpanded (standalone parser) path sees it spelled out.
+    LitELineComment(StringEqCI!("##lit(;")),
 }
 
 #[derive(Grammar)]
@@ -6243,6 +6280,53 @@ mod regression_tests {
                 .contains("return x")
         );
         assert_eq!(methods[1].body.prefixed.wrapped.print(), "\n quit 1\n");
+    }
+
+    #[test]
+    fn order_of_a_system_function_reference() {
+        routine(" s k=$order($zobjval(a,b,0,3,b,k)) q:k=\"\"\n s n=$data($zobjref(o))\n")
+            .expect("Ok");
+        routine(" s k=$order($piece(x,1))\n").expect_err("only $z functions are references");
+    }
+
+    #[test]
+    fn lit_shielded_semicolon_starts_a_comment() {
+        let cls = ClassDefinition::parse(
+            "Class A.L\n{\n\nClassMethod M()\n{\n Quit\nINIT ;Name        Type\n ##lit(;;) $$$SourceA ##lit(;) \"x\"        ##lit(;) 0\n ##lit(;;) /api/x         ##lit(;) 1\n}\n\n}\n",
+        )
+        .expect("Ok");
+        for method in methods(&cls) {
+            ProcedureBody::scan(&method.body.prefixed.wrapped.print()).expect("Ok");
+        }
+    }
+
+    // A class-level `[ Language = python ]` default isn't visible to the method grammar; an
+    // ObjectScript brace-matching that doesn't end where a member may end is not believed.
+    #[test]
+    fn python_default_language_method_body_falls_back_to_the_foreign_scan() {
+        let cls = ClassDefinition::parse(
+            "Class A.P [ Language = python ]\n{\n\nMethod M()\n{\n    x = '}'\n    return x\n}\n\nMethod N() [ Language = objectscript ]\n{\n quit 1\n}\n\n}\n",
+        )
+        .expect("Ok");
+        let methods = methods(&cls);
+        assert_eq!(methods.len(), 2);
+        assert!(
+            methods[0]
+                .body
+                .prefixed
+                .wrapped
+                .print()
+                .contains("return x")
+        );
+        assert_eq!(methods[1].body.prefixed.wrapped.print(), "\n quit 1\n");
+    }
+
+    #[test]
+    fn query_and_trigger_bodies_may_contain_a_quoted_brace() {
+        ClassDefinition::parse(
+            "Class A.Q\n{\n\nQuery Q() As %SQLQuery\n{\nSELECT Name FROM T WHERE Name = '}'\n}\n\nTrigger T [ Event = INSERT, Language = tsql ]\n{\n SET @x = '}'\n}\n\nMethod N()\n{\n quit 1\n}\n\n}\n",
+        )
+        .expect("Ok");
     }
 
     #[test]
