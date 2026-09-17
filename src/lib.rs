@@ -1878,10 +1878,29 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn type_param_not_on_the_real_type_is_reported_via_iris() {
+        // IRIS knows the class, and it has no parameters at all.
         struct NoSuchParamIris;
         impl crate::atelier::IrisClient for NoSuchParamIris {
-            fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
-                None
+            fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
+                let zero = bindings::Position {
+                    line: 0,
+                    character: 0,
+                };
+                Some(bindings::ClassInfo {
+                    doc: String::new(),
+                    name: bindings::NameInfo {
+                        before: zero,
+                        content: cls.to_string(),
+                        after: zero,
+                    },
+                    extends: vec![],
+                    deprecated: false,
+                    members: vec![],
+                    property_class_names: vec![],
+                    includes: vec![],
+                    is_datatype: Some(true),
+                    uri: None,
+                })
             }
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
@@ -4316,6 +4335,44 @@ mod tests {
                 .contains("Class keyword 'CompileAfter' has no value"),
             "{diagnostics:?}"
         );
+        // Flagged at the keyword, not at the class name.
+        let header = "Class Test.E Extends %RegisteredObject [ CompileAfter = , System = 4 ]";
+        let start = header.find("CompileAfter").unwrap() as u32;
+        assert_eq!(diagnostics[0].range.start.line, 0);
+        assert_eq!(diagnostics[0].range.start.character, start);
+        assert_eq!(
+            diagnostics[0].range.end.character,
+            start + "CompileAfter".len() as u32
+        );
+    }
+
+    // With IRIS to ask, a `##class(...)` naming no class is reported at that expression, not
+    // at whatever member is then accessed on it.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn missing_class_is_reported_at_the_class_expression() {
+        let workspace = Workspace::new_with_iris(Some(Box::new(OccErrorsIris)));
+        let uri = "M.cls".to_string();
+        let line = " quit ##class(No.Such.Class).Method()";
+        workspace.open(
+            uri.clone(),
+            format!("Class Test.M {{\nClassMethod M() As %Status {{\n{line}\n}}\n}}\n"),
+        );
+        let diagnostics = without_hints(workspace.diagnostics(uri));
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find class 'No.Such.Class'"),
+            "{diagnostics:?}"
+        );
+        let start = line.find("##class").unwrap() as u32;
+        assert_eq!(diagnostics[0].range.start.line, 2);
+        assert_eq!(diagnostics[0].range.start.character, start);
+        assert_eq!(
+            diagnostics[0].range.end.character,
+            start + "##class(No.Such.Class)".len() as u32
+        );
     }
 
     #[test]
@@ -4999,5 +5056,26 @@ mod tests {
             .find(|info| info.message.contains("Expands to"))
             .unwrap_or_else(|| panic!("{diagnostics:?}"));
         assert_eq!(expands_to.location.uri, uri, "{diagnostics:?}");
+    }
+
+    // IRIS answering nothing for a class says nothing about its parameters: no "'MAXLEN' is not
+    // a parameter of %Library.String".
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn type_parameter_of_an_unresolvable_class_is_not_reported() {
+        let workspace = Workspace::new_with_iris(Some(Box::new(OccErrorsIris)));
+        let uri = "P.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.P Extends %RegisteredObject {\nProperty Name As %String(MAXLEN = 50);\n}\n"
+                .to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| !d.message.contains("is not a parameter")),
+            "{diagnostics:?}"
+        );
     }
 }

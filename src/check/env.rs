@@ -681,6 +681,11 @@ impl<'a> WorkspaceEnv<'a> {
     // Whether `name` is a declared `Parameter` on `cls` -- e.g. %Integer's `MINVAL`, referenced
     // from a property's `(...)` list. `None` if it can't be determined at all.
     pub(crate) fn parameter_exists(&self, cls: &str, name: &str) -> Option<bool> {
+        // A class that can't be found says nothing about its parameters; the class itself is
+        // what to report (see `check_declared_class_exists`).
+        if !self.class_exists(cls) {
+            return None;
+        }
         self.unverified.set(false);
         let found = self
             .get_member_internal(cls, name, &[MemberNs::Parameter])
@@ -875,6 +880,10 @@ impl<'a> WorkspaceEnv<'a> {
             .into_iter()
             .find(|candidate| self.class_exists(candidate))
             .unwrap_or(name)
+    }
+
+    pub(crate) fn has_iris(&self) -> bool {
+        self.workspace.iris.is_some()
     }
 
     pub(crate) fn class_exists(&self, cls: &str) -> bool {
@@ -1485,6 +1494,10 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
+    pub(crate) fn has_iris(&self) -> bool {
+        self.base.base.has_iris()
+    }
+
     pub(crate) fn class_exists(&self, cls: &str) -> bool {
         self.base.base.class_exists(cls)
     }

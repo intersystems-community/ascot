@@ -2907,10 +2907,18 @@ impl CheckExprInner for AtomicExpr {
             AtomicExpr::SpecialVariable { var, .. } => var.to_power_ty(env, flow),
             AtomicExpr::This(..) => Ok(check_this(env)?.into()),
             // `##class(X)` denotes the class itself, not an instance of it — unlike every
-            // other string-to-`Ty` conversion here, which always produces an instance.
-            AtomicExpr::Class { cls, .. } => Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(
-                env.resolve_class(&env.qualify_class_name(&cls.deref().print())),
-            )))),
+            // other string-to-`Ty` conversion here, which always produces an instance. A class
+            // that doesn't exist is reported here, at the `##class(...)`, not at whatever member
+            // is then accessed on it; only an IRIS connection can say so for sure.
+            AtomicExpr::Class { cls, .. } => {
+                let name = env.qualify_class_name(&cls.deref().print());
+                if env.has_iris() && !env.class_exists(&name) {
+                    return Err(QuasiTypeError::cannot_find_class(name));
+                }
+                Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(
+                    env.resolve_class(&name),
+                ))))
+            }
             AtomicExpr::Member { member, args } => {
                 let obj = Ty::OREF(env.this()?);
                 match check_member(obj, member.deref(), args.as_ref(), env, flow)? {

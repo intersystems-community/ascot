@@ -406,7 +406,7 @@ fn keyword_value(keywords: &Option<KeywordList>, name: &str) -> Option<String> {
         .iter()
         .flat_map(|keywords| keywords.entries.iter())
         .flat_map(|entries| entries.items.iter())
-        .find_map(|entry| match entry.deref() {
+        .find_map(|entry| match &***entry {
             cos::KeywordEntry::Assign { keyword, value, .. }
                 if keyword.print().eq_ignore_ascii_case(name) =>
             {
@@ -427,7 +427,7 @@ fn keyword_names(keywords: &Option<KeywordList>) -> Vec<String> {
         .flat_map(|keywords| keywords.entries.iter())
         .flat_map(|entries| entries.items.iter())
         .map(|entry| {
-            match entry.deref() {
+            match &***entry {
                 cos::KeywordEntry::Assign { keyword, .. } => keyword,
                 cos::KeywordEntry::Not { keyword, .. } => keyword,
                 cos::KeywordEntry::Flag(keyword) => keyword,
@@ -519,12 +519,17 @@ impl TryFrom<&str> for ClassDetails {
             .iter()
             .flat_map(|keywords| keywords.entries.iter())
             .flat_map(|entries| entries.items.iter())
-            .filter_map(|entry| match entry.deref() {
+            .filter_map(|entry| match &***entry {
                 cos::KeywordEntry::Assign {
                     keyword,
                     value: None,
                     ..
-                } => Some(WithRange::new(keyword.print(), range(&cls.name, &olc))),
+                } => {
+                    // The keyword leads its entry.
+                    let keyword = keyword.print();
+                    let at = Range::new(entry.start, (), entry.start + keyword.len());
+                    Some(WithRange::new(keyword, range(&at, &olc)))
+                }
                 _ => None,
             })
             .collect();

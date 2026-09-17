@@ -2299,7 +2299,7 @@ impl KeywordList {
         self.entries
             .iter()
             .flat_map(|entries| entries.items.iter())
-            .map(|entry| entry.deref())
+            .map(|entry| &***entry)
             .find(|entry| entry.keyword().print().eq_ignore_ascii_case(key))
     }
 }
@@ -2308,7 +2308,8 @@ impl KeywordList {
 #[grammar(inline)]
 pub struct CommaWithSpace(Raw<(StringEq!(","), Space)>);
 
-pub type KeywordEntryWithSpace = Suffix<KeywordEntry, Space>;
+// Ranged so a diagnostic about one keyword (`[ CompileAfter = , ... ]`) can point at it.
+pub type KeywordEntryWithSpace = Range<Suffix<KeywordEntry, Space>>;
 
 #[derive(Grammar)]
 pub enum KeywordEntry {
@@ -2903,7 +2904,7 @@ impl Validate for KeywordListWithMimeTypeIsXML {
     const REQUIREMENT: &'static str = "have MimeType end with /xml";
     fn validate(&self) -> bool {
         if let Some(entries) = &self.0.entries {
-            entries.items.iter().all(|entry| match entry.deref() {
+            entries.items.iter().all(|entry| match &***entry {
                 KeywordEntry::Assign { keyword, value, .. }
                     if keyword.0.0.as_str() == "MimeType" =>
                 {
