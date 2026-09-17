@@ -125,9 +125,23 @@ pub struct SourceMap {
     invocations: Vec<std::ops::Range<usize>>,
     // Unresolved `#include`s, already positioned — must NOT go through `relocate_diagnostics`.
     pub(crate) unresolved: Vec<Diagnostic>,
+    // The top-level file's own `#include` directives: source span and the include's name.
+    include_directives: Vec<(std::ops::Range<usize>, String)>,
 }
 
 impl SourceMap {
+    pub(crate) fn include_directives(&self) -> impl Iterator<Item = (bindings::Range, &str)> {
+        self.include_directives.iter().map(|(span, name)| {
+            (
+                bindings::Range {
+                    start: Position::from(self.source_olc.offset_to_line_character(span.start)),
+                    end: Position::from(self.source_olc.offset_to_line_character(span.end)),
+                },
+                name.as_str(),
+            )
+        })
+    }
+
     pub(crate) fn included_uris(&self) -> impl Iterator<Item = &String> {
         self.included.keys()
     }
@@ -532,6 +546,11 @@ impl WorkspaceStruct {
                         }
                         HMacroCommand::Include(included_name) => {
                             let included_name = included_name.deref();
+                            if origin.uri.is_none() {
+                                dones
+                                    .include_directives
+                                    .push((origin.range.clone(), included_name.print()));
+                            }
                             match self.resolve_include(&included_name.print()) {
                                 // IRIS processes a repeated `#include` once; this also ends
                                 // include cycles.
@@ -1039,6 +1058,7 @@ struct DoneList {
     // literally, since the raw `#include Name` text rarely re-parses and would otherwise mask
     // this diagnostic behind a generic syntax error.
     unresolved: Vec<(UnresolvedError, String, Origin)>,
+    include_directives: Vec<(std::ops::Range<usize>, String)>,
 }
 
 impl DoneList {
@@ -1049,6 +1069,7 @@ impl DoneList {
             included: HashMap::new(),
             invocations: Vec::new(),
             unresolved: Vec::new(),
+            include_directives: Vec::new(),
         }
     }
 
@@ -1140,6 +1161,7 @@ impl DoneList {
             included: self.included,
             invocations,
             unresolved,
+            include_directives: self.include_directives,
         }
     }
 }

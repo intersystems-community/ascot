@@ -116,7 +116,7 @@ pub(crate) struct ClassDetails {
     // One namespace per syntax (see `MemberNs`), so a same-named pair within one is a conflict.
     // The other kinds are only reachable through the members they generate.
     pub(crate) members_by_name: HashMap<(MemberNs, String), usize>,
-    pub(crate) include_names: Vec<String>,
+    pub(crate) include_names: Vec<WithRange<String>>,
     // The `Include (...)` clause's own span, for pointing a "cannot find include" diagnostic at
     // it instead of at the class's declaration -- `None` only when there's no `Include` at all,
     // in which case `include_names` is also empty and this is never read.
@@ -408,7 +408,7 @@ fn keyword_value(keywords: &Option<KeywordList>, name: &str) -> Option<String> {
         .iter()
         .flat_map(|keywords| keywords.entries.iter())
         .flat_map(|entries| entries.items.iter())
-        .find_map(|entry| match entry.deref() {
+        .find_map(|entry| match &***entry {
             cos::KeywordEntry::Assign { keyword, value, .. }
                 if keyword.print().eq_ignore_ascii_case(name) =>
             {
@@ -429,7 +429,7 @@ fn keyword_names(keywords: &Option<KeywordList>) -> Vec<String> {
         .flat_map(|keywords| keywords.entries.iter())
         .flat_map(|entries| entries.items.iter())
         .map(|entry| {
-            match entry.deref() {
+            match &***entry {
                 cos::KeywordEntry::Assign { keyword, .. } => keyword,
                 cos::KeywordEntry::Not { keyword, .. } => keyword,
                 cos::KeywordEntry::Flag(keyword) => keyword,
@@ -508,7 +508,7 @@ impl TryFrom<&str> for ClassDetails {
                 .files
                 .classes()
                 .into_iter()
-                .map(|c| c.print())
+                .map(|c| WithRange::new(c.print(), range(c, &olc)))
                 .collect()
         });
         let include_range = cls
@@ -521,12 +521,17 @@ impl TryFrom<&str> for ClassDetails {
             .iter()
             .flat_map(|keywords| keywords.entries.iter())
             .flat_map(|entries| entries.items.iter())
-            .filter_map(|entry| match entry.deref() {
+            .filter_map(|entry| match &***entry {
                 cos::KeywordEntry::Assign {
                     keyword,
                     value: None,
                     ..
-                } => Some(WithRange::new(keyword.print(), range(&cls.name, &olc))),
+                } => {
+                    // The keyword leads its entry.
+                    let keyword = keyword.print();
+                    let at = Range::new(entry.start, (), entry.start + keyword.len());
+                    Some(WithRange::new(keyword, range(&at, &olc)))
+                }
                 _ => None,
             })
             .collect();

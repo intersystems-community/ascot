@@ -513,7 +513,7 @@ impl std::fmt::Display for TypeErrorKind {
             TypeErrorKind::RedundantNew(name) => {
                 write!(
                     f,
-                    "Variable '{}' is already NEW'd; this NEW resets it to undefined, discarding its current value",
+                    "Variable '{}' is already NEW'd; this NEW resets it to undefined, discarding its current value — `Kill {0}` says that explicitly",
                     name
                 )
             }

@@ -916,11 +916,8 @@ impl CheckCommandInner for cos::Command {
                 })?;
                 check_while(env, flow, cnds, env.range(bdy), bdy.as_ref().deref())?;
 
-                let bdy_range = bdy.as_ref();
-                let mut position = env.position(bdy_range.end);
-                position.character += 1;
                 env.hint(InlayHint {
-                    position,
+                    position: env.position(bdy.as_ref().end),
                     label: "end while".to_string(),
                     padding_left: true,
                     padding_right: false,
@@ -2920,10 +2917,18 @@ impl CheckExprInner for AtomicExpr {
             AtomicExpr::SpecialVariable { var, .. } => var.to_power_ty(env, flow),
             AtomicExpr::This(..) => Ok(check_this(env)?.into()),
             // `##class(X)` denotes the class itself, not an instance of it — unlike every
-            // other string-to-`Ty` conversion here, which always produces an instance.
-            AtomicExpr::Class { cls, .. } => Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(
-                env.resolve_class(&env.qualify_class_name(&cls.deref().print())),
-            )))),
+            // other string-to-`Ty` conversion here, which always produces an instance. A class
+            // that doesn't exist is reported here, at the `##class(...)`, not at whatever member
+            // is then accessed on it; only an IRIS connection can say so for sure.
+            AtomicExpr::Class { cls, .. } => {
+                let name = env.qualify_class_name(&cls.deref().print());
+                if env.has_iris() && !env.class_exists(&name) {
+                    return Err(QuasiTypeError::cannot_find_class(name));
+                }
+                Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(
+                    env.resolve_class(&name),
+                ))))
+            }
             AtomicExpr::Member { member, args } => {
                 let obj = Ty::OREF(env.this()?);
                 match check_member(obj, member.deref(), args.as_ref(), env, flow)? {
@@ -3363,7 +3368,13 @@ pub(crate) fn check_cls(
         .base
         .resolve_class_includes(&env.base.inherited_include_names(cls));
     macro_definitions.extend(inherited_definitions);
-    let (own_definitions, failed_includes) = env.base.resolve_class_includes(&cls.include_names);
+    let include_names: Vec<String> = cls.include_names.iter().map(|i| i.it.clone()).collect();
+    let (own_definitions, failed_includes) = env.base.resolve_class_includes(&include_names);
+    for include in &cls.include_names {
+        if let Some(location) = env.base.include_definition(&include.it) {
+            env.base.reference(include.range, location);
+        }
+    }
     macro_definitions.extend(own_definitions);
     let has_unresolved_include = !failed_includes.is_empty();
     // `include_range` is only `None` when there's no `Include` at all, in which case

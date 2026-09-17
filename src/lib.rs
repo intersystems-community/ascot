@@ -308,6 +308,14 @@ impl WorkspaceStruct {
         depends_on.insert(uri.to_string(), deps);
     }
 
+    // The include file `name` (a `ROUTINE name [Type=INC]` header) open in the workspace, at
+    // its header name. An include fetched from IRIS has no document to point at.
+    pub(crate) fn inc_definition(&self, name: &str) -> Option<Location> {
+        let uri = self.inc_index.borrow().get(name).cloned()?;
+        let range = self.doc_cache.get(&uri)?.as_ref().ok()?.borrow().name.range;
+        Some(Location::new(uri, range))
+    }
+
     fn doc_text(&self, uri: &str) -> Option<String> {
         let cell = self.doc_cache.get(uri)?.as_ref().ok()?;
         Some(cell.borrow().text.clone())
@@ -634,7 +642,7 @@ impl WorkspaceStruct {
                     .into_iter()
                     .filter_map(|(range, ty)| Some((rtn.map.relocate_source_range(range)?, ty)))
                     .collect();
-                let references = env
+                let mut references: Vec<_> = env
                     .references()
                     .into_iter()
                     .filter_map(|(range, mut location)| {
@@ -647,6 +655,12 @@ impl WorkspaceStruct {
                         Some((range, location))
                     })
                     .collect();
+                // The routine's own `#include` directives, for go-to-definition on them.
+                references.extend(
+                    rtn.map
+                        .include_directives()
+                        .filter_map(|(range, name)| Some((range, self.inc_definition(name)?))),
+                );
                 let mut deps = env.touched_uris();
                 deps.extend(rtn.map.included_uris().cloned());
                 self.record_deps(uri, deps);
@@ -1892,10 +1906,29 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn type_param_not_on_the_real_type_is_reported_via_iris() {
+        // IRIS knows the class, and it has no parameters at all.
         struct NoSuchParamIris;
         impl crate::atelier::IrisClient for NoSuchParamIris {
-            fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
-                None
+            fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
+                let zero = bindings::Position {
+                    line: 0,
+                    character: 0,
+                };
+                Some(bindings::ClassInfo {
+                    doc: String::new(),
+                    name: bindings::NameInfo {
+                        before: zero,
+                        content: cls.to_string(),
+                        after: zero,
+                    },
+                    extends: vec![],
+                    deprecated: false,
+                    members: vec![],
+                    property_class_names: vec![],
+                    includes: vec![],
+                    is_datatype: Some(true),
+                    uri: None,
+                })
             }
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
@@ -4330,6 +4363,44 @@ mod tests {
                 .contains("Class keyword 'CompileAfter' has no value"),
             "{diagnostics:?}"
         );
+        // Flagged at the keyword, not at the class name.
+        let header = "Class Test.E Extends %RegisteredObject [ CompileAfter = , System = 4 ]";
+        let start = header.find("CompileAfter").unwrap() as u32;
+        assert_eq!(diagnostics[0].range.start.line, 0);
+        assert_eq!(diagnostics[0].range.start.character, start);
+        assert_eq!(
+            diagnostics[0].range.end.character,
+            start + "CompileAfter".len() as u32
+        );
+    }
+
+    // With IRIS to ask, a `##class(...)` naming no class is reported at that expression, not
+    // at whatever member is then accessed on it.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn missing_class_is_reported_at_the_class_expression() {
+        let workspace = Workspace::new_with_iris(Some(Box::new(OccErrorsIris)));
+        let uri = "M.cls".to_string();
+        let line = " quit ##class(No.Such.Class).Method()";
+        workspace.open(
+            uri.clone(),
+            format!("Class Test.M {{\nClassMethod M() As %Status {{\n{line}\n}}\n}}\n"),
+        );
+        let diagnostics = without_hints(workspace.diagnostics(uri));
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find class 'No.Such.Class'"),
+            "{diagnostics:?}"
+        );
+        let start = line.find("##class").unwrap() as u32;
+        assert_eq!(diagnostics[0].range.start.line, 2);
+        assert_eq!(diagnostics[0].range.start.character, start);
+        assert_eq!(
+            diagnostics[0].range.end.character,
+            start + "##class(No.Such.Class)".len() as u32
+        );
     }
 
     #[test]
@@ -5013,5 +5084,89 @@ mod tests {
             .find(|info| info.message.contains("Expands to"))
             .unwrap_or_else(|| panic!("{diagnostics:?}"));
         assert_eq!(expands_to.location.uri, uri, "{diagnostics:?}");
+    }
+
+    // IRIS answering nothing for a class says nothing about its parameters: no "'MAXLEN' is not
+    // a parameter of %Library.String".
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn type_parameter_of_an_unresolvable_class_is_not_reported() {
+        let workspace = Workspace::new_with_iris(Some(Box::new(OccErrorsIris)));
+        let uri = "P.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.P Extends %RegisteredObject {\nProperty Name As %String(MAXLEN = 50);\n}\n"
+                .to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| !d.message.contains("is not a parameter")),
+            "{diagnostics:?}"
+        );
+    }
+
+    // Both land right after the closing brace; the `end while` one used to be pushed one
+    // character further, past the newline, onto the next line.
+    #[test]
+    fn loop_end_hints_sit_after_the_closing_brace() {
+        let workspace = Workspace::new(None);
+        let uri = "Loops.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Loops {\nClassMethod M() {\n Set i = 0\n While i < 3 {\n  Set i = i + 1\n }\n For j = 1:1:3 {\n  Set i = i + j\n }\n Write i\n}\n}\n".to_string(),
+        );
+        let ends: Vec<(String, u32, u32)> = workspace
+            .inlay_hint(uri, bindings::Range::default())
+            .into_iter()
+            .filter(|h| h.label.starts_with("end "))
+            .map(|h| (h.label, h.position.line, h.position.character))
+            .collect();
+        assert_eq!(
+            ends,
+            vec![
+                ("end while".to_string(), 5, 2),
+                ("end for".to_string(), 8, 2)
+            ]
+        );
+    }
+
+    // Go to definition on a class's `Include X` or a routine's `#include X` opens `X.inc`.
+    #[test]
+    fn include_names_have_a_definition() {
+        let workspace = Workspace::new(None);
+        let inc = "ROUTINE Test.Shared [Type=INC]\n#define X 1\n";
+        let cls = "Include (Test.Other, Test.Shared)\n\nClass Test.C {\nClassMethod M() {\n Write $$$X\n}\n}\n";
+        let mac = "ROUTINE R\n#include Test.Shared\n\tWrite $$$X\n\tQuit\n";
+        for (uri, text) in [("Shared.inc", inc), ("C.cls", cls), ("R.mac", mac)] {
+            workspace.open(uri.to_string(), text.to_string());
+        }
+        let expected = bindings::Location::new(
+            "Shared.inc".to_string(),
+            bindings::Range {
+                start: bindings::Position {
+                    line: 0,
+                    character: 8,
+                },
+                end: bindings::Position {
+                    line: 0,
+                    character: 19,
+                },
+            },
+        );
+        let at = |uri: &str, line, character| {
+            workspace.definition(uri.to_string(), bindings::Position { line, character })
+        };
+        assert_eq!(
+            at("C.cls", 0, cls.find("Test.Shared").unwrap() as u32 + 3),
+            Some(expected.clone())
+        );
+        // The other, unresolvable include has none.
+        assert_eq!(
+            at("C.cls", 0, cls.find("Test.Other").unwrap() as u32 + 3),
+            None
+        );
+        assert_eq!(at("R.mac", 1, 12), Some(expected));
     }
 }
