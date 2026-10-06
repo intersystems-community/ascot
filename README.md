@@ -3,7 +3,7 @@
 Ties together knowledge from across your ObjectScript code base.
 
 A type checker and code intelligence engine for InterSystems ObjectScript.
-Use it as an **MCP** server, an **LSP** server, a **CLI** tool, or via the
+Use it as a **CLI** tool, via popular [protocols](#ascot-via-protocols), or via the
 [**InterSystems Language Server**](https://github.com/intersystems/language-server/).
 
 ## Features
@@ -23,28 +23,7 @@ Use it as an **MCP** server, an **LSP** server, a **CLI** tool, or via the
 
 ## Usage
 
-### Use as an MCP server
-
-```sh
-ascot mcp
-```
-
-Starts the MCP server (stdio). To register it with Claude Code:
-
-```sh
-claude mcp add ascot -- /path/to/ascot mcp
-```
-
-### Use as an LSP server
-
-```sh
-ascot lsp
-```
-
-Starts the LSP server (stdio), providing the features listed above to any
-LSP client.
-
-### Use as a CLI tool
+### `ascot` as a CLI tool
 
 ```sh
 ascot analyze [PATH] ...
@@ -71,6 +50,29 @@ ascot parse FILE
 Only parses `FILE` (no type checking) and prints the syntax error, if any.
 Exits non-zero on a syntax error.
 
+### `ascot` via protocols
+
+#### MCP server
+
+```sh
+ascot mcp
+```
+
+Starts the MCP server (stdio). To register it with Claude Code:
+
+```sh
+claude mcp add ascot -- /path/to/ascot mcp
+```
+
+### LSP server
+
+```sh
+ascot lsp
+```
+
+Starts the LSP server (stdio), providing the features listed above to any
+LSP client.
+
 ### Connecting to IRIS
 
 Every command can use a live IRIS instance, reached through the Atelier REST
@@ -90,6 +92,24 @@ metadata. The commands take the connection differently:
 
 - `mcp` takes no flags. The connection is set per workspace, through the
   `iris` and `iris_namespace` arguments of the `create_workspace` tool call.
+
+## Installation
+
+### Rust
+
+The first publication is WIP. Once completed, you can install with the following command
+
+```sh
+cargo install ascot
+```
+
+### JavaScript binding
+
+The first publication is WIP. Once completed, you can install with the following command
+
+```sh
+npm install -g @intersystems-community/ascot
+```
 
 ## Contributing
 
