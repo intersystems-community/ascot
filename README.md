@@ -21,6 +21,27 @@ Use it as a **CLI** tool, via popular [protocols](#ascot-via-protocols), or via 
 - **Inlay Hints**: inferred types, argument names, and parameter default
   values shown inline.
 
+## Installation
+
+Prebuilt `ascot` binaries for Linux, macOS and Windows are attached to each
+[GitHub release](../../releases). The packages below are not published yet; once
+they are:
+
+### Rust
+
+```sh
+cargo install ascot
+```
+
+### JavaScript binding
+
+A library for Node and other JS consumers (the one the InterSystems Language
+Server uses); it does not provide an `ascot` executable.
+
+```sh
+npm install @intersystems-community/ascot
+```
+
 ## Usage
 
 ### `ascot` as a CLI tool
@@ -64,7 +85,7 @@ Starts the MCP server (stdio). To register it with Claude Code:
 claude mcp add ascot -- /path/to/ascot mcp
 ```
 
-### LSP server
+#### LSP server
 
 ```sh
 ascot lsp
@@ -92,24 +113,6 @@ metadata. The commands take the connection differently:
 
 - `mcp` takes no flags. The connection is set per workspace, through the
   `iris` and `iris_namespace` arguments of the `create_workspace` tool call.
-
-## Installation
-
-### Rust
-
-The first publication is WIP. Once completed, you can install with the following command
-
-```sh
-cargo install ascot
-```
-
-### JavaScript binding
-
-The first publication is WIP. Once completed, you can install with the following command
-
-```sh
-npm install -g @intersystems-community/ascot
-```
 
 ## Contributing
 
