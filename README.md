@@ -26,18 +26,16 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
 
 ### GitHub release
 
-Prebuilt `ascot` binaries for Linux, macOS (Intel and Apple silicon) and
-Windows are attached to each [GitHub release](../../releases).
+Prebuilt `ascot` binaries for Linux, macOS (one universal binary for Intel and
+Apple silicon) and Windows are attached to each [GitHub release](../../releases).
 
 > [!WARNING]
 > macOS quarantines executables downloaded through a browser and refuses to run
 > them. Download with `curl` instead, which sets no quarantine flag:
 >
 > ```sh
-> curl -L https://github.com/intersystems-community/ascot/releases/latest/download/ascot-cli-aarch64-apple-darwin.tar.gz | tar xz
+> curl -L https://github.com/intersystems-community/ascot/releases/latest/download/ascot-cli-universal-apple-darwin.tar.gz | tar xz
 > ```
->
-> Use `x86_64-apple-darwin` on an Intel Mac.
 
 The packages below are not published yet; once they are:
 
