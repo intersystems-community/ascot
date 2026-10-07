@@ -3,8 +3,8 @@
 Ties together knowledge from across your ObjectScript code base.
 
 A type checker and code intelligence engine for InterSystems ObjectScript.
-Use it as a **CLI** tool, from **AI coding agents** such as Claude Code via
-[MCP or LSP](#ascot-with-ai-coding-agents), or via the
+Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
+[MCP or LSP](#ascot-with-ai-agents) protocols, or via the
 [**InterSystems Language Server**](https://github.com/intersystems/language-server/).
 
 ## Features
@@ -72,7 +72,7 @@ ascot parse FILE
 Only parses `FILE` (no type checking) and prints the syntax error, if any.
 Exits non-zero on a syntax error.
 
-### `ascot` with AI coding agents
+### `ascot` with AI agents
 
 Claude Code can use `ascot` in two complementary ways.
 
