@@ -127,6 +127,7 @@ pub struct SourceMap {
     pub(crate) unresolved: Vec<Diagnostic>,
     // The top-level file's own `#include` directives: source span and the include's name.
     include_directives: Vec<(std::ops::Range<usize>, String)>,
+    include_names: HashSet<String>,
 }
 
 impl SourceMap {
@@ -142,8 +143,9 @@ impl SourceMap {
         })
     }
 
-    pub(crate) fn included_uris(&self) -> impl Iterator<Item = &String> {
-        self.included.keys()
+    // Every `#include` name this expansion asked for, resolved or not, nested ones included.
+    pub(crate) fn include_names(&self) -> impl Iterator<Item = &String> {
+        self.include_names.iter()
     }
 
     fn expanded_line_count(&self) -> usize {
@@ -551,6 +553,7 @@ impl WorkspaceStruct {
                                     .include_directives
                                     .push((origin.range.clone(), included_name.print()));
                             }
+                            dones.include_names.insert(included_name.print());
                             match self.resolve_include(&included_name.print()) {
                                 // IRIS processes a repeated `#include` once; this also ends
                                 // include cycles.
@@ -861,11 +864,11 @@ impl WorkspaceStruct {
     ) -> (MacroDefinitions, Vec<String>, HashSet<String>) {
         let mut definitions = HashMap::new();
         let mut failed = Vec::new();
-        let mut resolved_uris = HashSet::new();
+        let mut include_names = HashSet::new();
         for name in names {
+            include_names.insert(name.clone());
             match self.resolve_include(name) {
                 Some((inc_uri, inc_text, inc_units)) => {
-                    resolved_uris.insert(inc_uri.clone());
                     let mut dones = DoneList::new();
                     dones.note_included_file(inc_uri.clone(), &inc_text);
                     let mut todos = TodoList::new(
@@ -880,12 +883,12 @@ impl WorkspaceStruct {
                     );
                     let _ = self.expand_units(&mut definitions, &mut todos, &mut dones);
                     // Whatever the include itself included: an edit there changes this class too.
-                    resolved_uris.extend(dones.included.into_keys());
+                    include_names.extend(dones.include_names);
                 }
                 None => failed.push(name.clone()),
             }
         }
-        (definitions, failed, resolved_uris)
+        (definitions, failed, include_names)
     }
 
     // `header` is pushed verbatim, unexpanded, ahead of the expanded `body` -- like
@@ -1059,6 +1062,7 @@ struct DoneList {
     // this diagnostic behind a generic syntax error.
     unresolved: Vec<(UnresolvedError, String, Origin)>,
     include_directives: Vec<(std::ops::Range<usize>, String)>,
+    include_names: HashSet<String>,
 }
 
 impl DoneList {
@@ -1070,6 +1074,7 @@ impl DoneList {
             invocations: Vec::new(),
             unresolved: Vec::new(),
             include_directives: Vec::new(),
+            include_names: HashSet::new(),
         }
     }
 
@@ -1162,6 +1167,7 @@ impl DoneList {
             invocations,
             unresolved,
             include_directives: self.include_directives,
+            include_names: self.include_names,
         }
     }
 }
