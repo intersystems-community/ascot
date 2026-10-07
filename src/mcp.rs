@@ -15,7 +15,7 @@ use rmcp::{
         router::tool::ToolRouter,
         wrapper::{Json, Parameters},
     },
-    model::{ServerCapabilities, ServerInfo},
+    model::{ServerCapabilities, ServerConfig},
     schemars, tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
@@ -358,8 +358,8 @@ impl AnalyzerMcpServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for AnalyzerMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "Real ObjectScript/COS parser and type-checker. Use this instead of guessing at \
              ObjectScript syntax, semantics, or types, or hand-rolling regex/grep checks over \
              .cls/.mac/.int/.inc source — it understands the language's grammar, class \
