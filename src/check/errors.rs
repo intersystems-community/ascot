@@ -1,3 +1,10 @@
+//! Every diagnostic the checker can raise, as the `TypeErrorKind` enum, with its message text,
+//! severity and related-information locations (`TypeError` converts into `bindings::Diagnostic`).
+//!
+//! `QuasiTypeError` is an error found before its source range is known; rules in `mod.rs` attach
+//! the range with `IntoTypeError::with_range`. Adding or rewording a user-visible message means
+//! editing this file.
+
 use crate::{
     bindings::{ArgMode, DiagnosticRelatedInformation, DiagnosticSeverity, Location, Range},
     check::types::*,

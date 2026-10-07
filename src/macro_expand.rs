@@ -1,3 +1,13 @@
+//! Macro preprocessing for routines: `#define`/`#def1arg`, `#include`, and the `$$$name` calls
+//! that use them.
+//!
+//! `.mac`/`.int` files are type-checked in expanded form, so this module (1) collects
+//! `MacroDefinitions` from a routine and the `.inc` files it includes (found in the `Workspace`,
+//! or via IRIS), (2) produces the expanded text, and (3) builds a `SourceMap` that translates
+//! positions in the expanded text back to the original file. The map is how diagnostics from
+//! `check/` land on the right line and how hover shows "Expands to". Classes are not
+//! macro-expanded yet.
+
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},

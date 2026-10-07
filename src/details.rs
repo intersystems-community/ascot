@@ -1,12 +1,14 @@
-/*
-
-We extract information from parse results to there levels:
-
-- Details: The most detailed level.
-- Info: The level needed to expose through WIT to let language servers do what they need.
-- Ty: The type-relevant details for type checkers and similar logic
-
- */
+//! Digests a parsed class or routine (from `tygr-objectscript`) into structured facts.
+//!
+//! Three levels of detail come out of a parse:
+//! - *Details* (`ClassDetails`, `MemberDetails`, `RoutineElementDetails`): everything, with
+//!   source ranges. This is what `lib.rs` caches per document and what `check/` reads.
+//! - *Info* (`bindings::ClassInfo`, `MemberInfo`, ...): the subset exposed through WIT to
+//!   language servers; the conversions live in `bindings.rs`.
+//! - *Ty* (`check::types`): just what the type checker needs from a signature or property.
+//!
+//! Hover, go-to-definition, document/workspace symbols and reference search are all answered
+//! from these details without re-running the type checker.
 
 use std::collections::HashMap;
 use std::ops::Deref;

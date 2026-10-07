@@ -1,3 +1,7 @@
+//! A grammar-debugging binary (`tygr-objectscript <file>`): parses one class or routine with
+//! `cos.rs`, then separately parses each method body, since the class grammar captures bodies
+//! as raw text and would otherwise hide syntax errors inside them. Not part of the `ascot` CLI.
+
 use std::ops::Deref;
 use std::{env, fs, process::exit};
 use tygr::{Grammar, OLC};

@@ -1,3 +1,12 @@
+//! The checker's type vocabulary: `Ty` (a class, a literal kind, a collection, ...), `MaybeTy`
+//! (possibly undefined) and `PowerTy` (a set of possibilities, the result of merging branches),
+//! plus method signatures (`TyProcedure`, `NormalArg`, `VariadicArg`) and the property/parameter
+//! keyword tables.
+//!
+//! Built from `details.rs` facts by `env.rs`, consumed by every rule in `mod.rs`/`builtins.rs`,
+//! and rendered for inlay hints and hover text. Mostly plain data; the few class lookups needed
+//! to normalize a type go through `WorkspaceEnv`.
+
 use std::ops::Deref;
 use std::sync::Arc;
 

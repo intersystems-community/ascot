@@ -1,3 +1,11 @@
+//! Typing rules for ObjectScript's built-in `$`-functions (`$PIECE`, `$LIST*`, `$EXTRACT`,
+//! `$BIT*`, `$VECTOR`, `$PROPERTY`, ...): argument counts, which arguments are outputs, and
+//! result types.
+//!
+//! Implements `CheckExprInner` for `cos::FunctionCall` so `mod.rs` treats a `$`-function call
+//! like any other expression. Class-library calls (`##class(...)`) are resolved through `env.rs`
+//! instead, and `$`-special variables are handled in `mod.rs`; nothing here touches the workspace.
+
 use super::*;
 
 // An argument that may be left empty (`$FN(x,,0)`): the expression inside, if any.

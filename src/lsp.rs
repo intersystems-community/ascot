@@ -1,3 +1,12 @@
+//! The LSP front end (`ascot lsp`): a stdio Language Server Protocol server over one `Workspace`.
+//!
+//! Translates between `lsp-types` and `bindings.rs` types and maps each request to a `Workspace`
+//! method: `didOpen`/`didChange` re-run `open` and republish diagnostics; hover, definition,
+//! references, document/workspace symbols and inlay hints call their namesakes. Only
+//! `.cls`/`.mac`/`.int`/`.inc` documents are tracked. This is what the Claude Code `ascot-lsp`
+//! plugin (`bindings/claude-lsp-plugin`) launches. The InterSystems Language Server does not use
+//! it; it embeds the wasm build instead (see `bindings.rs`).
+
 use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};

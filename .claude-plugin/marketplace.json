@@ -5,6 +5,11 @@
     },
     "plugins": [
         {
+            "name": "ascot-mcp",
+            "source": "./bindings/claude-mcp-plugin",
+            "description": "ascot as an MCP server for InterSystems ObjectScript (expects `ascot` on PATH)"
+        },
+        {
             "name": "ascot-lsp",
             "source": "./bindings/claude-lsp-plugin",
             "description": "ascot as an LSP server for InterSystems ObjectScript (expects `ascot` on PATH)"

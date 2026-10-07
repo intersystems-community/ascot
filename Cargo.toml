@@ -8,6 +8,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A type checker and code intelligence engine for InterSystems ObjectScript, usable as a CLI, an LSP or MCP server, or a library."
 repository = "https://github.com/intersystems-community/ascot"
+exclude = [".github", ".claude-plugin", "bindings"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

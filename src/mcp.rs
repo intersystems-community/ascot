@@ -1,3 +1,12 @@
+//! The MCP front end (`ascot mcp`): a stdio Model Context Protocol server exposing workspace
+//! analysis as tools for AI agents (Claude Code via the `ascot-mcp` plugin, or `claude mcp add`).
+//!
+//! Unlike the LSP server it holds many `Workspace`s, keyed by an id the agent chooses:
+//! `create_workspace` (optionally with IRIS connection details, see `atelier.rs`) and
+//! `delete_workspace`; `insert`/`remove` documents; then `check`, `inlay_hint`, `hover`,
+//! `definition` and `references`. Tool parameter and result schemas derive from the
+//! `bindings.rs` types via `schemars`. Built on the `rmcp` crate; native builds only.
+
 use std::{collections::HashMap, sync::Arc};
 
 use rmcp::{

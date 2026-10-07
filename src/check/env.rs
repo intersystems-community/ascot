@@ -1,3 +1,15 @@
+//! Static context for the checker, in three nested scopes:
+//! - `WorkspaceEnv`: one per check run. Resolves classes and members across every open document
+//!   (and IRIS, when connected), records cross-file references, and raises "soft" diagnostics
+//!   for anything it couldn't confirm.
+//! - `DocumentEnv`/`ClassDocument`: the file being checked, with its macros, labels and
+//!   `#include`s and, for a class, its inheritance chain and member tables.
+//! - `CodeEnv`: one method body or routine block, with `this`, formal arguments and local labels.
+//!
+//! Reads `details.rs` and `lib.rs`'s `WorkspaceStruct`; produces `types.rs` values for
+//! `mod.rs`/`flow.rs` to check against. `lib.rs` also builds a `WorkspaceEnv` to resolve members
+//! for hover and go-to-definition, so member lookup rules live here only once.
+
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;

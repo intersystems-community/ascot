@@ -1,3 +1,9 @@
+//! The ObjectScript grammar: class definitions (`ClassDefinition`, members, keywords), routines
+//! (`Routine`, labels, `#` preprocessor lines and `$$$` macros) and the command and expression
+//! language inside method bodies. Each `#[derive(Grammar)]` type is both the parser and the AST
+//! node; `ascot`'s `details.rs`, `macro_expand.rs` and `check/` all pattern match on these types.
+//! Embedded `&sql(...)` hands off to `sql.rs`.
+
 use std::ops::Deref;
 use std::str::FromStr;
 

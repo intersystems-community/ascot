@@ -1,3 +1,11 @@
+//! Flow-sensitive state for one code block: which local variables are defined on the current
+//! path, with what type, and whether they have been read yet.
+//!
+//! `Flow` is forked at `If`/`Else`, loops, `Try`/`Catch` and `Quit`/`Return`, and the branches
+//! are merged back with `merge_all_bindings`. That merge is where "may be undefined", "assigned
+//! but never read" and "inconsistent declaration across branches" diagnostics come from. Driven
+//! by the command rules in `mod.rs`; produces `types.rs` values; reports through `errors.rs`.
+
 use crate::bindings;
 use crate::bindings::ArgMode;
 use crate::bindings::Location;
