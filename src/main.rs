@@ -186,7 +186,10 @@ fn analyze_workspace<'a>(
     for path in paths {
         match fs::canonicalize(path) {
             Ok(path) => collect_doc(&path, &mut diagnose_files),
-            Err(e) => eprintln!("Error resolving {}: {}", path.display(), e),
+            Err(e) => {
+                eprintln!("Error resolving {}: {}", path.display(), e);
+                exit(1);
+            }
         }
     }
     diagnose_files.sort();
