@@ -5,7 +5,7 @@
 //! This file walks commands and expressions (`CheckCommand`/`CheckExprInner`), threading a `Flow`
 //! (`flow.rs`) for what each local variable holds on the current path and a `CodeEnv` (`env.rs`)
 //! for everything static around it. Submodules:
-//! - `types.rs`: the type lattice (`Ty`, `PowerTy`, `MaybeTy`, ...) and signatures.
+//! - `types.rs`: the type lattice (`Ty`, `MaybeTy`, `PowerTy`, ...) and signatures.
 //! - `env.rs`: workspace/document/code-block environments; class and member resolution.
 //! - `flow.rs`: flow-sensitive variable state, branch merging, loop handling.
 //! - `builtins.rs`: typing rules for `$`-functions.

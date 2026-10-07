@@ -1,5 +1,5 @@
-//! The checker's type vocabulary: `Ty` (a class, a literal kind, a collection, ...), `PowerTy`
-//! (a set of possibilities, the result of merging branches) and `MaybeTy` (possibly undefined),
+//! The checker's type vocabulary: `Ty` (a class, a literal kind, a collection, ...), `MaybeTy`
+//! (possibly undefined) and `PowerTy` (a set of possibilities, the result of merging branches),
 //! plus method signatures (`TyProcedure`, `NormalArg`, `VariadicArg`) and the property/parameter
 //! keyword tables.
 //!
