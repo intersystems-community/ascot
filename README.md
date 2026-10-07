@@ -4,7 +4,7 @@ Ties together knowledge from across your ObjectScript code base.
 
 A type checker and code intelligence engine for InterSystems ObjectScript.
 Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
-[MCP or LSP](#ascot-with-ai-agents) protocols, or via the
+[MCP](#ascot-as-an-mcp-server) or [LSP](#ascot-as-an-lsp-server) protocols, or via the
 [**InterSystems Language Server**](https://github.com/intersystems/language-server/).
 
 ## Features
@@ -72,18 +72,15 @@ ascot parse FILE
 Only parses `FILE` (no type checking) and prints the syntax error, if any.
 Exits non-zero on a syntax error.
 
-### `ascot` with AI agents
-
-Claude Code can use `ascot` in two complementary ways.
-
-#### MCP server
+### `ascot` as an MCP server
 
 ```sh
 ascot mcp
 ```
 
-Starts the MCP server (stdio), exposing workspace analysis as tools the agent
-calls on demand. To register it with Claude Code, either install the
+Starts the MCP server (stdio), exposing workspace analysis as tools an AI agent
+calls on demand; it pairs well with the LSP plugin below. To register it with
+Claude Code, either install the
 `ascot-mcp` plugin (expects `ascot` on `PATH`):
 
 ```sh
@@ -97,7 +94,7 @@ or add the server directly:
 claude mcp add ascot -- /path/to/ascot mcp
 ```
 
-#### LSP server
+### `ascot` as an LSP server
 
 ```sh
 ascot lsp
