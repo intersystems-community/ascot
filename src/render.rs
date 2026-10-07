@@ -1,3 +1,7 @@
+//! Markdown rendering of a class member's signature (`MemberInfo` from `bindings.rs`) for hover
+//! text. Used by `Workspace::hover` in `lib.rs`; the LSP and MCP front ends pass the result
+//! through unchanged.
+
 use crate::bindings::{ArgMode, CollectionKind, MemberInfo, MemberKind, MethodInfo};
 
 pub(crate) fn format_member_hover(member: &MemberInfo) -> String {

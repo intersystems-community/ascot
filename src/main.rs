@@ -1,3 +1,11 @@
+//! The `ascot` command-line binary: argument parsing and the `analyze`, `analyze-workspace`,
+//! `parse`, `mcp` and `lsp` subcommands documented in README.md.
+//!
+//! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
+//! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
+//! process over to `lsp.rs`/`mcp.rs` for the server modes. `--iris` connections are built with
+//! `atelier.rs`. None of this is part of the wasm/JS build (see `bindings.rs`).
+
 use ascot::Workspace;
 use ascot::bindings::GuestWorkspace;
 use ascot::cos;

@@ -24,6 +24,20 @@
 //! workspace/caching layer — see [`cos`] (grammar) and [`check`] (the type checker built on it).
 //! [`lsp`] and [`mcp`] wrap the same [`Workspace`] as a stdio LSP server and an MCP server,
 //! respectively; both are also available as `ascot lsp`/`ascot mcp` from the CLI binary.
+//!
+//! # Where things live
+//!
+//! - `tygr-objectscript/` (separate crate): the ObjectScript and SQL grammars; parsing only.
+//! - `details.rs`: digests a parsed class/routine into the facts the rest of the crate needs.
+//! - `macro_expand.rs`: `#define`/`#include` expansion for routines, plus the source map that
+//!   points diagnostics back at the unexpanded text.
+//! - `check/`: the type checker, producing diagnostics and inlay hints.
+//! - this file: the `Workspace`. Document cache, dependency tracking, incremental rechecking,
+//!   and the hover/definition/references/symbol queries built on the above.
+//! - `bindings.rs`: the WIT-generated types shared by every front end, and the wasm export.
+//! - `render.rs`: Markdown formatting for hover text.
+//! - `lsp.rs`, `mcp.rs`, `main.rs`: front ends (editor protocol, AI-agent protocol, CLI).
+//! - `atelier.rs`: optional live-IRIS lookups for classes not in the workspace (native only).
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod atelier;

@@ -1,3 +1,13 @@
+//! The crate's shared data model, generated from `wit/analyzer.wit` by `wit-bindgen`.
+//!
+//! Every `Position`, `Range`, `Diagnostic`, `InlayHint`, `ClassInfo`, `MemberInfo`, ... used by
+//! `lib.rs`, `check/`, `lsp.rs` and `mcp.rs` is defined once in the WIT file and re-exported here,
+//! so the native front ends and the wasm component (`bindings/js`, which the InterSystems
+//! Language Server embeds) speak the same types. `GuestWorkspace` is the trait `Workspace`
+//! implements to satisfy the WIT `workspace` resource; `IrisConnection` is the host-provided
+//! import that `atelier.rs` stands in for on native builds. The rest of this file converts
+//! `details.rs`/`check/types.rs` values into those WIT records.
+
 pub struct Analyzer;
 
 mod wit_bind {

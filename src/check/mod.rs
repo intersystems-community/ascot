@@ -1,3 +1,16 @@
+//! The type checker. Entry points are `check_cls` (every member of a class) and `check_rtn` (a
+//! macro-expanded routine); both return the `Diagnostic`s behind the README's "Diagnostics"
+//! feature and collect inlay hints and cross-file references along the way.
+//!
+//! This file walks commands and expressions (`CheckCommand`/`CheckExprInner`), threading a `Flow`
+//! (`flow.rs`) for what each local variable holds on the current path and a `CodeEnv` (`env.rs`)
+//! for everything static around it. Submodules:
+//! - `types.rs`: the type lattice (`Ty`, `PowerTy`, `MaybeTy`, ...) and signatures.
+//! - `env.rs`: workspace/document/code-block environments; class and member resolution.
+//! - `flow.rs`: flow-sensitive variable state, branch merging, loop handling.
+//! - `builtins.rs`: typing rules for `$`-functions.
+//! - `errors.rs`: the catalog of diagnostics (`TypeErrorKind`) and their messages.
+
 // `TypeError`/`QuasiTypeError` carry diagnostic context and are legitimately large; they're
 // returned rarely enough that boxing them isn't worth the churn.
 #![allow(clippy::result_large_err)]

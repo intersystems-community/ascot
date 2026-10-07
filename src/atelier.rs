@@ -1,3 +1,11 @@
+//! Optional live-IRIS lookups over the Atelier REST API (`--iris <url>` on the CLI and LSP, the
+//! `iris` argument of the MCP `create_workspace` tool).
+//!
+//! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
+//! library code above all, so the checker can confirm them instead of leaving a hint. Results
+//! are cached per connection. `IrisClient` is the trait `lib.rs` depends on; `AtelierConnection`
+//! is its HTTP implementation.
+//!
 //! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
 //! `language-server`'s `server/src/ascot/index.ts` `IrisConnection` class -- the JS host-side
 //! implementation of the same WIT `imported.iris-connection` interface, which can't be
