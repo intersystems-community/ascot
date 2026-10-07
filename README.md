@@ -83,7 +83,15 @@ ascot mcp
 ```
 
 Starts the MCP server (stdio), exposing workspace analysis as tools the agent
-calls on demand. To register it with Claude Code:
+calls on demand. To register it with Claude Code, either install the
+`ascot-mcp` plugin (expects `ascot` on `PATH`):
+
+```sh
+claude plugin marketplace add intersystems-community/ascot
+claude plugin install ascot-mcp@ascot-plugins
+```
+
+or add the server directly:
 
 ```sh
 claude mcp add ascot -- /path/to/ascot mcp

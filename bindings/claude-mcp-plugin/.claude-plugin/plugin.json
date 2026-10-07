@@ -1,0 +1,13 @@
+{
+    "name": "ascot-mcp",
+    "version": "0.1.0",
+    "description": "ascot as an MCP server for InterSystems ObjectScript",
+    "mcpServers": {
+        "ascot": {
+            "command": "ascot",
+            "args": [
+                "mcp"
+            ]
+        }
+    }
+}
