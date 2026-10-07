@@ -14,7 +14,7 @@ env:
   BIN: ascot
 
 jobs:
-  release:
+  build:
     strategy:
       matrix:
         include:
@@ -57,8 +57,23 @@ jobs:
             tar czf "$name.tar.gz" -C "target/${{ matrix.target }}/release" "$BIN"
           fi
 
-      - name: Release
-        uses: softprops/action-gh-release@v3
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            *.tar.gz
+            *.zip
+          if-no-files-found: error
+
+  # One job publishes the release, so the generated notes appear once and all assets land together.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             *.tar.gz
