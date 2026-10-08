@@ -5298,4 +5298,26 @@ mod tests {
         )]);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
+
+    // Labels inside a routine's procedure block are checked like a method body's: `Goto`
+    // targets and `Do` subroutines of their own, with the routine's labels still in scope.
+    #[test]
+    fn labels_inside_a_routine_procedure_block_are_checked() {
+        let diagnostics = diagnostics_for(&[(
+            "Blk.mac",
+            "ROUTINE Blk\n\tQuit\nOuter\n\tQuit 1\nProc(x) public {\n\tIf x Goto exitEarly\n\tDo inner\n\tSet y = $$Outer\n\tQuit y\nexitEarly\n\tQuit 0\ninner\n\tSet ^g = 1\n\tQuit\n}\n",
+        )]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let diagnostics = diagnostics_for(&[(
+            "Bad.mac",
+            "ROUTINE Bad\n\tQuit\nProc() public {\n\tGoto nowhere\n\tQuit\nexitEarly\n\tQuit\n}\n",
+        )]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find label 'nowhere'"),
+            "{diagnostics:?}"
+        );
+    }
 }

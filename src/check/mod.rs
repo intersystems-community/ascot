@@ -529,18 +529,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                         err,
                     )
                 })?;
-                let labels = body
-                    .subroutines
-                    .iter()
-                    .flat_map(|subs| subs.items.iter())
-                    .filter_map(|sub| label_details(env, sub))
-                    .map(|details| {
-                        let procedure = details.to_ty_procedure(Some(env.uri()));
-                        (details.name.it, Arc::new(procedure))
-                    })
-                    .collect();
-                let env = env.with_labels(labels);
-                check_method_body(&body, &env, flow)
+                check_block_body(&body, env, flow)
             }
             (
                 Option::None | Option::Some(cos::MethodLanguage::ObjectScript(..)),
@@ -610,14 +599,26 @@ fn label_details(
     })
 }
 
-// A method body's own labels (`Set $ZT="Trap"` handlers, `Goto` targets, `Do`/`$$` subroutines)
-// are checked the way a routine's labels are: each on its own, with nothing assumed about how it
-// is entered. The main body's end runs into the first label, which then quits for the method.
-fn check_method_body<'a>(
+// A brace-delimited body -- a method's, or a routine procedure block's -- with its own labels
+// (`Set $ZT="Trap"` handlers, `Goto` targets, `Do`/`$$` subroutines). They're checked the way a
+// routine's labels are: each on its own, with nothing assumed about how it is entered. The main
+// body's end runs into the first label, which then quits for the body.
+fn check_block_body<'a>(
     body: &cos::ProcedureBody,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), TypeError> {
+    let labels: Labels = body
+        .subroutines
+        .iter()
+        .flat_map(|subs| subs.items.iter())
+        .filter_map(|sub| label_details(env, sub))
+        .map(|details| {
+            let procedure = details.to_ty_procedure(Some(env.uri()));
+            (details.name.it, Arc::new(procedure))
+        })
+        .collect();
+    let env = &env.with_nested_labels(labels);
     body.main.check(env, flow)?;
     let subroutines: Vec<_> = body
         .subroutines
@@ -659,23 +660,7 @@ impl CheckCommand for cos::ProcedureMain {
 
 impl CheckCommand for cos::ProcedureBody {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        self.main.check(env, flow)?;
-        if let Some(sub) = self
-            .subroutines
-            .iter()
-            .flat_map(|subs| subs.items.iter())
-            .next()
-        {
-            let range = match &sub.header {
-                AllowMacro::Plain(header) => env.range(&header.label),
-                AllowMacro::Macro(call) => env.range(&call.name.0),
-            };
-            return Err(TypeError::unimplemented(
-                "Labels and subroutines".into(),
-                range,
-            ));
-        }
-        Ok(())
+        check_block_body(self, env, flow)
     }
 }
 

@@ -1534,6 +1534,15 @@ impl<'a> CodeEnv<'a> {
     }
 
     // The same scope, plus the labels of the method body being checked.
+    // The labels of a brace-delimited body, on top of the enclosing ones: a routine's labels
+    // stay callable from inside its procedure blocks, and a nested label shadows a same-named
+    // outer one.
+    pub(crate) fn with_nested_labels(&self, nested: Labels) -> CodeEnv<'a> {
+        let mut labels = self.labels.as_deref().cloned().unwrap_or_default();
+        labels.extend(nested);
+        self.with_labels(labels)
+    }
+
     pub(crate) fn with_labels(&self, labels: Labels) -> CodeEnv<'a> {
         CodeEnv {
             this: self.this,
