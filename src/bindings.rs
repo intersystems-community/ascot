@@ -248,7 +248,7 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
                 .map(wit_bind::MemberInfo::from)
                 .collect(),
             property_class_names: details.property_class_names.clone(),
-            includes: details.include_names.clone(),
+            includes: details.include_names.iter().map(|i| i.it.clone()).collect(),
             is_datatype: Some(details.is_datatype),
             // `exported.workspace.query-cls` already returns this class's real uri as its own
             // tuple element -- redundant to repeat it here.

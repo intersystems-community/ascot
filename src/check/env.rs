@@ -25,7 +25,7 @@ use crate::check::errors::*;
 use crate::check::types::*;
 use crate::cos::{CodeMode, MethodLanguage};
 use crate::details::{MemberDetails, MemberKindSpecificDetails, MemberNs, WithRange};
-use crate::{MacroDefinitions, SourceMap, WorkspaceStruct, bindings, cos};
+use crate::{DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos};
 
 #[derive(Clone)]
 pub struct MemberTy {
@@ -378,8 +378,7 @@ impl<'a> WorkspaceEnv<'a> {
         if !seen.insert(cls.to_string()) {
             return None;
         }
-        if let Some(uri) = self.workspace.resolve_cls_uri(cls) {
-            self.touched.borrow_mut().insert(uri.clone());
+        if let Some(uri) = self.resolve_cls_uri(cls) {
             let details = self.workspace.cls_details(&uri).ok()?;
             if let Some(member) = details.member(MemberNs::HigherOrder, mem) {
                 let mut ty: MemberTy = member.deref().try_into().ok()?;
@@ -413,8 +412,7 @@ impl<'a> WorkspaceEnv<'a> {
         if !seen.insert(cls.to_string()) {
             return None;
         }
-        let uri = self.workspace.resolve_cls_uri(cls)?;
-        self.touched.borrow_mut().insert(uri.clone());
+        let uri = self.resolve_cls_uri(cls)?;
         let details = self.workspace.cls_details(&uri).ok()?;
         if let Some(member) = details
             .member(MemberNs::Property, name)
@@ -449,7 +447,7 @@ impl<'a> WorkspaceEnv<'a> {
         if !seen.insert(cls.to_string()) {
             return;
         }
-        let Some(uri) = self.workspace.resolve_cls_uri(cls) else {
+        let Some(uri) = self.resolve_cls_uri(cls) else {
             // Not a workspace class (e.g. a datatype like %Integer) -- IRIS is the only other
             // source, and doesn't expose superclass-walking the way `cls_details.extends` does,
             // so this is a single, non-recursive lookup rather than a further `collect_*` call.
@@ -463,7 +461,6 @@ impl<'a> WorkspaceEnv<'a> {
             }
             return;
         };
-        self.touched.borrow_mut().insert(uri.clone());
         let Ok(details) = self.workspace.cls_details(&uri) else {
             return;
         };
@@ -493,7 +490,7 @@ impl<'a> WorkspaceEnv<'a> {
         if !seen.insert(cls.to_string()) {
             return;
         }
-        let Some(uri) = self.workspace.resolve_cls_uri(cls) else {
+        let Some(uri) = self.resolve_cls_uri(cls) else {
             if let Some(iris) = self.workspace.iris.as_ref()
                 && let Some(ci) = iris.get_cls(cls)
             {
@@ -504,7 +501,6 @@ impl<'a> WorkspaceEnv<'a> {
             }
             return;
         };
-        self.touched.borrow_mut().insert(uri.clone());
         let Ok(details) = self.workspace.cls_details(&uri) else {
             return;
         };
@@ -693,6 +689,11 @@ impl<'a> WorkspaceEnv<'a> {
     // Whether `name` is a declared `Parameter` on `cls` -- e.g. %Integer's `MINVAL`, referenced
     // from a property's `(...)` list. `None` if it can't be determined at all.
     pub(crate) fn parameter_exists(&self, cls: &str, name: &str) -> Option<bool> {
+        // A class that can't be found says nothing about its parameters; the class itself is
+        // what to report (see `check_declared_class_exists`).
+        if !self.class_exists(cls) {
+            return None;
+        }
         self.unverified.set(false);
         let found = self
             .get_member_internal(cls, name, &[MemberNs::Parameter])
@@ -707,16 +708,15 @@ impl<'a> WorkspaceEnv<'a> {
     // "Did you mean" candidates for `parameter_exists`'s negative case -- `cls`'s own other
     // `Parameter`s (workspace) or `Parameter`-tagged members (IRIS's `get_cls`).
     pub(crate) fn parameter_names(&self, cls: &str) -> Vec<String> {
-        if let Some(uri) = self.workspace.resolve_cls_uri(cls) {
-            self.touched.borrow_mut().insert(uri.clone());
-            if let Ok(details) = self.workspace.cls_details(&uri) {
-                return details
-                    .members_by_name
-                    .keys()
-                    .filter(|(ns, _)| *ns == MemberNs::Parameter)
-                    .map(|(_, name)| name.clone())
-                    .collect();
-            }
+        if let Some(uri) = self.resolve_cls_uri(cls)
+            && let Ok(details) = self.workspace.cls_details(&uri)
+        {
+            return details
+                .members_by_name
+                .keys()
+                .filter(|(ns, _)| *ns == MemberNs::Parameter)
+                .map(|(_, name)| name.clone())
+                .collect();
         }
         self.workspace
             .iris
@@ -747,8 +747,7 @@ impl<'a> WorkspaceEnv<'a> {
         if !seen.insert(cls.to_string()) {
             return None;
         }
-        if let Some(uri) = self.workspace.resolve_cls_uri(cls) {
-            self.touched.borrow_mut().insert(uri.clone());
+        if let Some(uri) = self.resolve_cls_uri(cls) {
             let details = self.workspace.cls_details(&uri).ok()?;
             order
                 .iter()
@@ -793,8 +792,7 @@ impl<'a> WorkspaceEnv<'a> {
 
     // `cls`'s direct superclasses, normalized. `None` when `cls` itself can't be resolved.
     fn direct_supers(&self, cls: &str) -> Option<Vec<String>> {
-        let mut supers: Vec<String> = if let Some(uri) = self.workspace.resolve_cls_uri(cls) {
-            self.touched.borrow_mut().insert(uri.clone());
+        let mut supers: Vec<String> = if let Some(uri) = self.resolve_cls_uri(cls) {
             let details = self.workspace.cls_details(&uri).ok()?;
             return Some(self.qualified_extends(cls, &details));
         } else if let Some(iris) = self.workspace.iris.as_ref() {
@@ -832,7 +830,7 @@ impl<'a> WorkspaceEnv<'a> {
             if !seen.insert(sup.clone()) {
                 continue;
             }
-            let Some(uri) = self.workspace.resolve_cls_uri(&sup) else {
+            let Some(uri) = self.resolve_cls_uri(&sup) else {
                 if let Some(info) = self
                     .workspace
                     .iris
@@ -844,11 +842,10 @@ impl<'a> WorkspaceEnv<'a> {
                 }
                 continue;
             };
-            self.touched.borrow_mut().insert(uri.clone());
             let Ok(details) = self.workspace.cls_details(&uri) else {
                 continue;
             };
-            names.extend(details.include_names.iter().cloned());
+            names.extend(details.include_names.iter().map(|i| i.it.clone()));
             pending.extend(self.qualified_extends(&sup, &details));
         }
         names
@@ -876,7 +873,7 @@ impl<'a> WorkspaceEnv<'a> {
             if let Some((package, _)) = context.rsplit_once('.') {
                 candidates.push(format!("{package}.{name}"));
             }
-            if let Some(uri) = self.workspace.resolve_cls_uri(context)
+            if let Some(uri) = self.resolve_cls_uri(context)
                 && let Ok(details) = self.workspace.cls_details(&uri)
             {
                 candidates.extend(details.imports.iter().map(|p| format!("{p}.{name}")));
@@ -889,8 +886,12 @@ impl<'a> WorkspaceEnv<'a> {
             .unwrap_or(name)
     }
 
+    pub(crate) fn has_iris(&self) -> bool {
+        self.workspace.iris.is_some()
+    }
+
     pub(crate) fn class_exists(&self, cls: &str) -> bool {
-        self.workspace.resolve_cls_uri(cls).is_some()
+        self.resolve_cls_uri(cls).is_some()
             || self
                 .workspace
                 .iris
@@ -949,8 +950,7 @@ impl<'a> WorkspaceEnv<'a> {
 
     pub fn resolve_class(&self, name: &str) -> ClassTy {
         let mut cty = ClassTy::from(name.to_string());
-        if let Some(uri) = self.workspace.resolve_cls_uri(&cty.name) {
-            self.touched.borrow_mut().insert(uri.clone());
+        if let Some(uri) = self.resolve_cls_uri(&cty.name) {
             if let Ok(details) = self.workspace.cls_details(&uri) {
                 cty.location = Some(bindings::Location::new(uri, details.name.range));
             }
@@ -1004,9 +1004,8 @@ impl<'a> WorkspaceEnv<'a> {
         if cls == "%Library.RegisteredObject" {
             return Some(false);
         }
-        match self.workspace.resolve_cls_uri(cls) {
+        match self.resolve_cls_uri(cls) {
             Some(uri) => {
-                self.touched.borrow_mut().insert(uri.clone());
                 let details = self.workspace.cls_details(&uri).ok()?;
                 if details.is_datatype {
                     return Some(true);
@@ -1049,11 +1048,8 @@ impl<'a> WorkspaceEnv<'a> {
         if cls == "%Library.DataType" || cls == "%Library.FunctionalIndex" {
             return Some(true);
         }
-        let extends = match self.workspace.resolve_cls_uri(cls) {
-            Some(uri) => {
-                self.touched.borrow_mut().insert(uri.clone());
-                self.workspace.cls_details(&uri).ok()?.extends.clone()
-            }
+        let extends = match self.resolve_cls_uri(cls) {
+            Some(uri) => self.workspace.cls_details(&uri).ok()?.extends.clone(),
             None => self.workspace.iris.as_ref()?.get_cls(cls)?.extends,
         };
         if extends.is_empty() {
@@ -1076,8 +1072,7 @@ impl<'a> WorkspaceEnv<'a> {
         if cls.starts_with('%') {
             return;
         }
-        if let Some(uri) = self.workspace.resolve_cls_uri(cls) {
-            self.touched.borrow_mut().insert(uri);
+        if self.resolve_cls_uri(cls).is_some() {
             return;
         }
         if self
@@ -1103,12 +1098,19 @@ impl<'a> WorkspaceEnv<'a> {
         });
     }
 
+    // Where the include file `name` is declared, for go-to-definition on an `Include`.
+    pub(crate) fn include_definition(&self, name: &str) -> Option<bindings::Location> {
+        self.workspace.inc_definition(name)
+    }
+
     pub(crate) fn resolve_class_includes(
         &self,
         names: &[String],
     ) -> (MacroDefinitions, Vec<String>) {
-        let (definitions, failed, resolved_uris) = self.workspace.resolve_class_includes(names);
-        self.touched.borrow_mut().extend(resolved_uris);
+        let (definitions, failed, include_names) = self.workspace.resolve_class_includes(names);
+        self.touched
+            .borrow_mut()
+            .extend(include_names.into_iter().map(|name| (DocKind::Inc, name)));
         (definitions, failed)
     }
 
@@ -1130,21 +1132,27 @@ impl<'a> WorkspaceEnv<'a> {
     // `None` when there is no such routine; `Some(None)` when there is one but it can't be
     // parsed (a grammar gap), so its labels are simply unknown.
     pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Option<Option<Labels>> {
-        if let Some(uri) = self.workspace.resolve_rtn_uri(name) {
-            self.touched.borrow_mut().insert(uri.clone());
+        if let Some(uri) = self.resolve_rtn_uri(name) {
             let rtn = self.workspace.rtn_details(&uri).ok();
             return Some(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
         }
         let source = self.workspace.iris.as_ref()?.get_int_or_mac(name)?;
+        if let Some((text, labels)) = self.workspace.iris_rtn_labels.borrow().get(name)
+            && *text == source.text
+        {
+            return Some(labels.clone());
+        }
         let expanded = self
             .workspace
             .expand_rtn(source.uri.as_deref().unwrap_or(name), &source.text)
             .ok();
-        Some(
-            expanded.map(|(routine, map, _)| {
-                labels_of(&map.expanded_olc, &routine, source.uri.as_deref())
-            }),
-        )
+        let labels = expanded
+            .map(|(routine, map, _)| labels_of(&map.expanded_olc, &routine, source.uri.as_deref()));
+        self.workspace
+            .iris_rtn_labels
+            .borrow_mut()
+            .insert(name.to_string(), (source.text, labels.clone()));
+        Some(labels)
     }
 
     // `""` is also the null OREF (`$$$NULLOREF`), so it goes wherever an object is expected:
@@ -1211,8 +1219,7 @@ impl<'a> WorkspaceEnv<'a> {
             if !seen.insert(c.clone()) {
                 continue;
             }
-            let supers = if let Some(uri) = self.workspace.resolve_cls_uri(&c) {
-                self.touched.borrow_mut().insert(uri.clone());
+            let supers = if let Some(uri) = self.resolve_cls_uri(&c) {
                 self.workspace
                     .cls_details(&uri)
                     .map(|details| self.qualified_extends(&c, &details))
@@ -1242,8 +1249,22 @@ impl<'a> WorkspaceEnv<'a> {
         }
     }
 
-    pub fn touched_uris(&self) -> HashSet<String> {
+    pub(crate) fn touched_names(&self) -> HashSet<Name> {
         self.touched.borrow().clone()
+    }
+
+    fn resolve_cls_uri(&self, cls: &str) -> Option<String> {
+        self.touched
+            .borrow_mut()
+            .insert((DocKind::Cls, cls.to_string()));
+        self.workspace.resolve_cls_uri(cls)
+    }
+
+    fn resolve_rtn_uri(&self, name: &str) -> Option<String> {
+        self.touched
+            .borrow_mut()
+            .insert((DocKind::Routine, name.to_string()));
+        self.workspace.resolve_rtn_uri(name)
     }
 
     pub fn reference(&self, source: bindings::Range, target: bindings::Location) {
@@ -1342,7 +1363,8 @@ impl Incompatible {
 
 pub struct WorkspaceEnv<'a> {
     workspace: &'a WorkspaceStruct,
-    touched: RefCell<HashSet<String>>,
+    // Every name this check looked up, found or not -- see `WorkspaceStruct::record_deps`.
+    touched: RefCell<HashSet<Name>>,
     references: RefCell<Vec<(bindings::Range, bindings::Location)>>,
     soft_diagnostics: RefCell<Vec<bindings::Diagnostic>>,
     // Set by `get_member_internal`'s final fallback (a class chain touches something outside
@@ -1497,6 +1519,10 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
+    pub(crate) fn has_iris(&self) -> bool {
+        self.base.base.has_iris()
+    }
+
     pub(crate) fn class_exists(&self, cls: &str) -> bool {
         self.base.base.class_exists(cls)
     }

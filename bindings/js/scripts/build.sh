@@ -27,9 +27,10 @@ echo "transpiling to $GEN ..."
 rm -rf "$GEN"
 mkdir -p "$GEN"
 # --async-mode jspi is what lets the sync get-cls/get-inc/get-int-or-mac imports suspend on an async
-# host (JS Promise Integration) instead of needing a worker. The async-exports list is
-# every exported method that can transitively call one of those imports during type
-# resolution -- open/close never do (they only parse/cache), so they stay sync.
+# host (JS Promise Integration) instead of needing a worker. Every query export is listed as
+# async: any of them may need a routine's macro expansion, which fetches `#include`s through
+# get-inc, and a suspend inside an export not listed here throws `SuspendError`. open/close
+# never reach an import (they only parse the header and cache), so they stay sync.
 npx jco transpile "$COMPONENT" \
 	--name ascot \
 	--instantiation async \
@@ -44,6 +45,10 @@ npx jco transpile "$COMPONENT" \
 		"iris:ascot/exported#[method]workspace.definition" \
 		"iris:ascot/exported#[method]workspace.references" \
 		"iris:ascot/exported#[method]workspace.hover" \
+		"iris:ascot/exported#[method]workspace.query-cls" \
+		"iris:ascot/exported#[method]workspace.query-mem" \
+		"iris:ascot/exported#[method]workspace.document-symbol" \
+		"iris:ascot/exported#[method]workspace.workspace-symbol" \
 	--no-nodejs-compat \
 	-o "$GEN"
 

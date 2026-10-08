@@ -77,12 +77,15 @@ use crate::{
 // The only thing that decides how a document is analyzed: `.cls` files are checked as classes;
 // `.inc` files are never checked standalone, only pulled in via another file's `#include`; `.mac`
 // and `.int` routines are otherwise identical for our purposes, so share one variant.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum DocKind {
     Cls,
     Inc,
     Routine,
 }
+
+// A header name qualified by kind: `#include X` and `$$^X` are different lookups.
+pub(crate) type Name = (DocKind, String);
 
 impl DocKind {
     // Purely a function of `uri`'s extension -- known even for a uri that failed tier A (or
@@ -100,7 +103,7 @@ impl DocKind {
 // A routine's macro-expanded form — the expensive part of analyzing it. Unlike `ClassDetails`,
 // this depends on more than just the routine's own text: expansion inlines every `#include`d
 // `.inc` file's content, so a change to any of its dependencies (recorded via
-// `SourceMap::included_uris`) drops it too, not just its own edit.
+// `SourceMap::include_names`) drops it too, not just its own edit.
 pub(crate) struct RtnDetails {
     pub(crate) routine: Routine,
     pub(crate) map: SourceMap,
@@ -156,11 +159,11 @@ pub struct WorkspaceStruct {
     // one uri's cached tiers (e.g. resolving a `#include` mid-expansion) can't conflict with
     // any other uri's; an `Err` entry is inert, only ever changing by `open` replacing it.
     pub(crate) doc_cache: HashMap<String, Result<RefCell<DocCache>, Diagnostic>>,
-    // uri -> the uris it referenced the last time it was checked, and the reverse index —
-    // uri -> the uris that reference it. Both are rebuilt for a uri each time it's (re)checked,
-    // and used to decide what else needs rechecking when a uri changes.
-    depends_on: RefCell<HashMap<String, HashSet<String>>>,
-    dependents: RefCell<HashMap<String, HashSet<String>>>,
+    // Name -> the names it looked up when last checked (found or not), and the reverse. Keyed by
+    // name, not uri, so a lookup that found nothing is still an edge: whichever document later
+    // claims the name stales its dependents like any other change of owner (`invalidate_name`).
+    depends_on: RefCell<HashMap<Name, HashSet<Name>>>,
+    dependents: RefCell<HashMap<Name, HashSet<Name>>>,
     // Name -> uri, populated as a byproduct of tier A — lets `resolve_cls_uri` be a plain O(1)
     // lookup once a class has been opened. A rename or removal is fixed up against `doc_cache`'s
     // own (old) entry directly, rather than keeping a uri -> name reverse index just for that.
@@ -170,6 +173,12 @@ pub struct WorkspaceStruct {
     // Same idea as `class_index`, but for `ROUTINE` header names — see `resolve_rtn_uri`.
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
+    // Labels of routines fetched from IRIS (not open in the workspace), by routine name, with
+    // the text they were parsed from: reused only while the connection hands back that same
+    // text, so this follows the connection's own cache policy rather than adding one. Without
+    // it, every `$$Label^Routine` call into a 15k-line system routine re-expanded and re-parsed
+    // it, and a single file took half a minute.
+    pub(crate) iris_rtn_labels: RefCell<HashMap<String, (String, Option<check::Labels>)>>,
 }
 
 // `bindings::IrisConnection` is a WIT *imported* resource, producible only by a wasm host --
@@ -242,60 +251,84 @@ impl WorkspaceStruct {
             let kind = DocKind::from_uri(uri)
                 .expect("a uri in doc_cache always has a recognized extension");
             affected.extend(self.unindex(kind, uri, &name));
-        }
-        if let Some(deps) = self.depends_on.borrow_mut().remove(uri) {
-            let mut dependents = self.dependents.borrow_mut();
-            for dep in deps {
-                if let Some(set) = dependents.get_mut(&dep) {
-                    set.remove(uri);
+            let key = (kind, name);
+            if let Some(deps) = self.depends_on.borrow_mut().remove(&key) {
+                let mut dependents = self.dependents.borrow_mut();
+                for dep in deps {
+                    if let Some(set) = dependents.get_mut(&dep) {
+                        set.remove(&key);
+                    }
                 }
             }
         }
         affected
     }
 
+    fn name_of(&self, uri: &str) -> Option<Name> {
+        let kind = DocKind::from_uri(uri)?;
+        let cell = self.doc_cache.get(uri)?.as_ref().ok()?;
+        Some((kind, cell.borrow().name(uri)))
+    }
+
     fn invalidate(&self, uri: &str) -> Vec<String> {
         let mut affected = vec![uri.to_string()];
-        let mut seen: HashSet<String> = affected.iter().cloned().collect();
-        let mut queue = affected.clone();
+        if let Some(name) = self.name_of(uri) {
+            affected.extend(self.invalidate_name(&name));
+        }
+        affected
+    }
+
+    // Every document declaring `name` or (transitively) depending on it: caches dropped, uris returned.
+    fn invalidate_name(&self, name: &Name) -> Vec<String> {
+        let mut seen: HashSet<Name> = HashSet::from([name.clone()]);
+        let mut queue = vec![name.clone()];
         while let Some(next) = queue.pop() {
             let Some(deps) = self.dependents.borrow().get(&next).cloned() else {
                 continue;
             };
             for dep in deps {
                 if seen.insert(dep.clone()) {
-                    affected.push(dep.clone());
                     queue.push(dep);
                 }
             }
         }
-        for a in &affected {
-            let Some(Ok(cell)) = self.doc_cache.get(a) else {
+        let mut affected = vec![];
+        for (uri, entry) in &self.doc_cache {
+            let Ok(cell) = entry else {
                 continue;
             };
+            let kind = DocKind::from_uri(uri)
+                .expect("a uri in doc_cache always has a recognized extension");
+            if !seen.contains(&(kind, cell.borrow().name(uri))) {
+                continue;
+            }
             // A routine's expansion inlines its `#include`s, so every dependent's own expansion
             // needs dropping too, not just its check -- unlike a class's own parse (unaffected
             // by anything but its own edit) or a `.inc`'s tier B (never stale as a *dependent*
             // at all, since substitution happens in whoever includes it, not here).
-            if DocKind::from_uri(a) == Some(DocKind::Routine) {
+            if kind == DocKind::Routine {
                 cell.borrow_mut().details = None;
             } else if let Some(Ok(DocDetails::Cls(_, check))) = &mut cell.borrow_mut().details {
                 *check = None;
             }
+            affected.push(uri.clone());
         }
         affected
     }
 
-    fn record_deps(&self, uri: &str, mut deps: HashSet<String>) {
-        deps.remove(uri);
+    fn record_deps(&self, uri: &str, mut deps: HashSet<Name>) {
+        let Some(name) = self.name_of(uri) else {
+            return;
+        };
+        deps.remove(&name);
         let mut depends_on = self.depends_on.borrow_mut();
         let mut dependents = self.dependents.borrow_mut();
-        if let Some(old) = depends_on.get(uri) {
+        if let Some(old) = depends_on.get(&name) {
             for old_dep in old {
                 if !deps.contains(old_dep)
                     && let Some(set) = dependents.get_mut(old_dep)
                 {
-                    set.remove(uri);
+                    set.remove(&name);
                 }
             }
         }
@@ -303,9 +336,17 @@ impl WorkspaceStruct {
             dependents
                 .entry(dep.clone())
                 .or_default()
-                .insert(uri.to_string());
+                .insert(name.clone());
         }
-        depends_on.insert(uri.to_string(), deps);
+        depends_on.insert(name, deps);
+    }
+
+    // The include file `name` (a `ROUTINE name [Type=INC]` header) open in the workspace, at
+    // its header name. An include fetched from IRIS has no document to point at.
+    pub(crate) fn inc_definition(&self, name: &str) -> Option<Location> {
+        let uri = self.inc_index.borrow().get(name).cloned()?;
+        let range = self.doc_cache.get(&uri)?.as_ref().ok()?.borrow().name.range;
+        Some(Location::new(uri, range))
     }
 
     fn doc_text(&self, uri: &str) -> Option<String> {
@@ -343,18 +384,11 @@ impl WorkspaceStruct {
         {
             affected.extend(self.unindex(kind, uri, &old_name));
         }
-        let previous_owner = self.index_for(kind).borrow().get(&name).cloned();
+        // `open` then invalidates by name, reaching a previous owner (checked before this one
+        // existed, so unaware of the conflict) and everything that looked `name` up and missed.
         self.index_for(kind)
             .borrow_mut()
-            .insert(name.clone(), uri.to_string());
-        // A newly-discovered conflict: the other file was checked (and cached) before this one
-        // existed, so it never got a chance to see it. Invalidate it so its diagnostics catch
-        // up next time they're asked for, instead of staying silent about the conflict forever.
-        if let Some(previous_owner) = previous_owner
-            && previous_owner != uri
-        {
-            affected.extend(self.invalidate(&previous_owner));
-        }
+            .insert(name, uri.to_string());
         affected
     }
 
@@ -382,10 +416,7 @@ impl WorkspaceStruct {
                     .insert(name.to_string(), successor.clone());
             }
         }
-        others
-            .iter()
-            .flat_map(|other| self.invalidate(other))
-            .collect()
+        self.invalidate_name(&(kind, name.to_string()))
     }
 
     // `class_index` only ever remembers one owner per name (whichever claimed it last), so it
@@ -476,8 +507,9 @@ impl WorkspaceStruct {
         // `rtn_details` (symbols, another routine's label lookup) may get here before
         // `ensure_checked` records the full dependency set; the `#include`s just resolved must
         // invalidate this expansion either way.
+        drop(entry); // `record_deps` reads this cell
         if fresh && let Ok(DocDetails::Rtn(rtn, _)) = &details {
-            self.record_deps(uri, rtn.map.included_uris().cloned().collect());
+            self.record_deps(uri, include_names(&rtn.map));
         }
         details
     }
@@ -602,7 +634,7 @@ impl WorkspaceStruct {
                 let hints = doc_env.inlay_hints.into_inner();
                 let hover_types = doc_env.hover_types.into_inner();
                 let references = env.references();
-                self.record_deps(uri, env.touched_uris());
+                self.record_deps(uri, env.touched_names());
                 CachedCheck {
                     diagnostics,
                     hints,
@@ -634,7 +666,7 @@ impl WorkspaceStruct {
                     .into_iter()
                     .filter_map(|(range, ty)| Some((rtn.map.relocate_source_range(range)?, ty)))
                     .collect();
-                let references = env
+                let mut references: Vec<_> = env
                     .references()
                     .into_iter()
                     .filter_map(|(range, mut location)| {
@@ -647,8 +679,14 @@ impl WorkspaceStruct {
                         Some((range, location))
                     })
                     .collect();
-                let mut deps = env.touched_uris();
-                deps.extend(rtn.map.included_uris().cloned());
+                // The routine's own `#include` directives, for go-to-definition on them.
+                references.extend(
+                    rtn.map
+                        .include_directives()
+                        .filter_map(|(range, name)| Some((range, self.inc_definition(name)?))),
+                );
+                let mut deps = env.touched_names();
+                deps.extend(include_names(&rtn.map));
                 self.record_deps(uri, deps);
                 CachedCheck {
                     diagnostics,
@@ -684,6 +722,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>) -> WorkspaceStruct {
         inc_index: RefCell::new(HashMap::new()),
         rtn_index: RefCell::new(HashMap::new()),
         iris,
+        iris_rtn_labels: RefCell::new(HashMap::new()),
     }
 }
 
@@ -1065,6 +1104,12 @@ impl Workspace {
     }
 }
 
+fn include_names(map: &SourceMap) -> HashSet<Name> {
+    map.include_names()
+        .map(|name| (DocKind::Inc, name.clone()))
+        .collect()
+}
+
 fn position_in_range(position: Position, range: bindings::Range) -> bool {
     fn le(a: Position, b: Position) -> bool {
         (a.line, a.character) <= (b.line, b.character)
@@ -1205,6 +1250,70 @@ mod tests {
             .collect();
         assert!(affected.contains(&inc_uri));
         assert!(affected.contains(&mac_uri));
+    }
+
+    #[test]
+    fn opening_a_missing_include_later_invalidates_its_includers() {
+        let workspace = Workspace::new(None);
+        let mac_uri = "Main.mac".to_string();
+        let cls_uri = "User.cls".to_string();
+        let inc_uri = "Shared.inc".to_string();
+        workspace.open(
+            mac_uri.clone(),
+            "ROUTINE Main\n\n#include Shared\n\tQuit\n".to_string(),
+        );
+        workspace.open(
+            cls_uri.clone(),
+            "Include Shared\nClass Test.User {\nClassMethod Foo() {\n}\n}\n".to_string(),
+        );
+        for uri in [&mac_uri, &cls_uri] {
+            let diagnostics = workspace.diagnostics(uri.clone());
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.message.contains("Include file 'Shared' is not defined")),
+                "{diagnostics:?}"
+            );
+        }
+
+        let affected: HashSet<String> = workspace
+            .open(
+                inc_uri.clone(),
+                "ROUTINE Shared [Type=INC]\n#define GREETING \"hi\"\n".to_string(),
+            )
+            .into_iter()
+            .collect();
+        assert!(affected.contains(&mac_uri), "{affected:?}");
+        assert!(affected.contains(&cls_uri), "{affected:?}");
+        for uri in [&mac_uri, &cls_uri] {
+            let diagnostics = workspace.diagnostics(uri.clone());
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
+    }
+
+    #[test]
+    fn opening_a_missing_class_later_invalidates_its_users() {
+        let workspace = Workspace::new(None);
+        let base_uri = "Base.cls".to_string();
+        let sub_uri = "Sub.cls".to_string();
+        workspace.open(
+            sub_uri.clone(),
+            "Class Test.Sub {\nClassMethod Bar() {\n do ##class(Test.Base).Foo()\n}\n}\n"
+                .to_string(),
+        );
+        let before = workspace.diagnostics(sub_uri.clone());
+        assert!(!before.is_empty(), "{before:?}");
+
+        let affected: HashSet<String> = workspace
+            .open(
+                base_uri.clone(),
+                "Class Test.Base {\nClassMethod Foo() {\n}\n}\n".to_string(),
+            )
+            .into_iter()
+            .collect();
+        assert!(affected.contains(&sub_uri), "{affected:?}");
+        let diagnostics = workspace.diagnostics(sub_uri.clone());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     #[test]
@@ -1892,10 +2001,29 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn type_param_not_on_the_real_type_is_reported_via_iris() {
+        // IRIS knows the class, and it has no parameters at all.
         struct NoSuchParamIris;
         impl crate::atelier::IrisClient for NoSuchParamIris {
-            fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
-                None
+            fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
+                let zero = bindings::Position {
+                    line: 0,
+                    character: 0,
+                };
+                Some(bindings::ClassInfo {
+                    doc: String::new(),
+                    name: bindings::NameInfo {
+                        before: zero,
+                        content: cls.to_string(),
+                        after: zero,
+                    },
+                    extends: vec![],
+                    deprecated: false,
+                    members: vec![],
+                    property_class_names: vec![],
+                    includes: vec![],
+                    is_datatype: Some(true),
+                    uri: None,
+                })
             }
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
@@ -4330,6 +4458,44 @@ mod tests {
                 .contains("Class keyword 'CompileAfter' has no value"),
             "{diagnostics:?}"
         );
+        // Flagged at the keyword, not at the class name.
+        let header = "Class Test.E Extends %RegisteredObject [ CompileAfter = , System = 4 ]";
+        let start = header.find("CompileAfter").unwrap() as u32;
+        assert_eq!(diagnostics[0].range.start.line, 0);
+        assert_eq!(diagnostics[0].range.start.character, start);
+        assert_eq!(
+            diagnostics[0].range.end.character,
+            start + "CompileAfter".len() as u32
+        );
+    }
+
+    // With IRIS to ask, a `##class(...)` naming no class is reported at that expression, not
+    // at whatever member is then accessed on it.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn missing_class_is_reported_at_the_class_expression() {
+        let workspace = Workspace::new_with_iris(Some(Box::new(OccErrorsIris)));
+        let uri = "M.cls".to_string();
+        let line = " quit ##class(No.Such.Class).Method()";
+        workspace.open(
+            uri.clone(),
+            format!("Class Test.M {{\nClassMethod M() As %Status {{\n{line}\n}}\n}}\n"),
+        );
+        let diagnostics = without_hints(workspace.diagnostics(uri));
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find class 'No.Such.Class'"),
+            "{diagnostics:?}"
+        );
+        let start = line.find("##class").unwrap() as u32;
+        assert_eq!(diagnostics[0].range.start.line, 2);
+        assert_eq!(diagnostics[0].range.start.character, start);
+        assert_eq!(
+            diagnostics[0].range.end.character,
+            start + "##class(No.Such.Class)".len() as u32
+        );
     }
 
     #[test]
@@ -5013,5 +5179,123 @@ mod tests {
             .find(|info| info.message.contains("Expands to"))
             .unwrap_or_else(|| panic!("{diagnostics:?}"));
         assert_eq!(expands_to.location.uri, uri, "{diagnostics:?}");
+    }
+
+    // IRIS answering nothing for a class says nothing about its parameters: no "'MAXLEN' is not
+    // a parameter of %Library.String".
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn type_parameter_of_an_unresolvable_class_is_not_reported() {
+        let workspace = Workspace::new_with_iris(Some(Box::new(OccErrorsIris)));
+        let uri = "P.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.P Extends %RegisteredObject {\nProperty Name As %String(MAXLEN = 50);\n}\n"
+                .to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| !d.message.contains("is not a parameter")),
+            "{diagnostics:?}"
+        );
+    }
+
+    // Both land right after the closing brace; the `end while` one used to be pushed one
+    // character further, past the newline, onto the next line.
+    #[test]
+    fn loop_end_hints_sit_after_the_closing_brace() {
+        let workspace = Workspace::new(None);
+        let uri = "Loops.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Loops {\nClassMethod M() {\n Set i = 0\n While i < 3 {\n  Set i = i + 1\n }\n For j = 1:1:3 {\n  Set i = i + j\n }\n Write i\n}\n}\n".to_string(),
+        );
+        let ends: Vec<(String, u32, u32)> = workspace
+            .inlay_hint(uri, bindings::Range::default())
+            .into_iter()
+            .filter(|h| h.label.starts_with("end "))
+            .map(|h| (h.label, h.position.line, h.position.character))
+            .collect();
+        assert_eq!(
+            ends,
+            vec![
+                ("end while".to_string(), 5, 2),
+                ("end for".to_string(), 8, 2)
+            ]
+        );
+    }
+
+    // Go to definition on a class's `Include X` or a routine's `#include X` opens `X.inc`.
+    #[test]
+    fn include_names_have_a_definition() {
+        let workspace = Workspace::new(None);
+        let inc = "ROUTINE Test.Shared [Type=INC]\n#define X 1\n";
+        let cls = "Include (Test.Other, Test.Shared)\n\nClass Test.C {\nClassMethod M() {\n Write $$$X\n}\n}\n";
+        let mac = "ROUTINE R\n#include Test.Shared\n\tWrite $$$X\n\tQuit\n";
+        for (uri, text) in [("Shared.inc", inc), ("C.cls", cls), ("R.mac", mac)] {
+            workspace.open(uri.to_string(), text.to_string());
+        }
+        let expected = bindings::Location::new(
+            "Shared.inc".to_string(),
+            bindings::Range {
+                start: bindings::Position {
+                    line: 0,
+                    character: 8,
+                },
+                end: bindings::Position {
+                    line: 0,
+                    character: 19,
+                },
+            },
+        );
+        let at = |uri: &str, line, character| {
+            workspace.definition(uri.to_string(), bindings::Position { line, character })
+        };
+        assert_eq!(
+            at("C.cls", 0, cls.find("Test.Shared").unwrap() as u32 + 3),
+            Some(expected.clone())
+        );
+        // The other, unresolvable include has none.
+        assert_eq!(
+            at("C.cls", 0, cls.find("Test.Other").unwrap() as u32 + 3),
+            None
+        );
+        assert_eq!(at("R.mac", 1, 12), Some(expected));
+    }
+
+    // `SET $LISTGET(a,,b)=list` assigns `a` and `b`; a variable's span is its own, not relative
+    // to the call it was re-read from.
+    #[test]
+    fn set_listget_assigns_its_variables() {
+        let diagnostics =
+            class_diagnostics("ClassMethod M(list) {\n Set $lg(a,,b,c)=list\n Write a, b\n}\n");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("'c' is assigned but never read"),
+            "{diagnostics:?}"
+        );
+        assert_eq!(
+            (
+                diagnostics[0].range.start.line,
+                diagnostics[0].range.start.character,
+                diagnostics[0].range.end.character
+            ),
+            (2, 14, 15)
+        );
+    }
+
+    // `#define GetMsg $$$Inner ` (trailing space) called as `$$$GetMsg(x)`: the parameterless
+    // macro hands its arguments on, as `$$$Inner (x)`, which must still be a call of `Inner`.
+    #[test]
+    fn parameterless_macro_with_trailing_space_hands_its_arguments_on() {
+        let diagnostics = diagnostics_for(&[(
+            "Fwd.mac",
+            "ROUTINE Fwd\n#define Inner(%a,%b) (%a_%b)\n#define Fwd $$$Inner \n\tSet x = $$$Fwd(\"a\",\"b\")\n\tWrite x\n\tQuit\n",
+        )]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 }

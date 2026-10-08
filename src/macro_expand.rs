@@ -125,11 +125,27 @@ pub struct SourceMap {
     invocations: Vec<std::ops::Range<usize>>,
     // Unresolved `#include`s, already positioned — must NOT go through `relocate_diagnostics`.
     pub(crate) unresolved: Vec<Diagnostic>,
+    // The top-level file's own `#include` directives: source span and the include's name.
+    include_directives: Vec<(std::ops::Range<usize>, String)>,
+    include_names: HashSet<String>,
 }
 
 impl SourceMap {
-    pub(crate) fn included_uris(&self) -> impl Iterator<Item = &String> {
-        self.included.keys()
+    pub(crate) fn include_directives(&self) -> impl Iterator<Item = (bindings::Range, &str)> {
+        self.include_directives.iter().map(|(span, name)| {
+            (
+                bindings::Range {
+                    start: Position::from(self.source_olc.offset_to_line_character(span.start)),
+                    end: Position::from(self.source_olc.offset_to_line_character(span.end)),
+                },
+                name.as_str(),
+            )
+        })
+    }
+
+    // Every `#include` name this expansion asked for, resolved or not, nested ones included.
+    pub(crate) fn include_names(&self) -> impl Iterator<Item = &String> {
+        self.include_names.iter()
     }
 
     fn expanded_line_count(&self) -> usize {
@@ -319,7 +335,7 @@ impl SourceMap {
     // can splice further macros (each with their own origin) and unbraced control commands
     // (`if`, `for`, ...) that swallow the rest of the line into their scope. Showing the whole
     // line is what actually explains the diagnostic in those cases.
-    fn expanded_line_text(&self, offset: usize) -> Option<&str> {
+    fn expanded_line_text(&self, offset: usize) -> Option<String> {
         let start = self.expanded_text[..offset]
             .rfind('\n')
             .map_or(0, |i| i + 1);
@@ -331,11 +347,15 @@ impl SourceMap {
         if text.is_empty() {
             return None;
         }
-        let mut cut = MAX_LEN.min(text.len());
+        if text.len() <= MAX_LEN {
+            return Some(text.to_string());
+        }
+        let mut cut = MAX_LEN;
         while !text.is_char_boundary(cut) {
             cut -= 1;
         }
-        Some(&text[..cut])
+        // Marked as cut, so a long expansion isn't mistaken for the whole of it.
+        Some(format!("{}…", &text[..cut]))
     }
 
     // The primary (top-level-file) range, plus one `related_information` entry per further
@@ -532,6 +552,12 @@ impl WorkspaceStruct {
                         }
                         HMacroCommand::Include(included_name) => {
                             let included_name = included_name.deref();
+                            if origin.uri.is_none() {
+                                dones
+                                    .include_directives
+                                    .push((origin.range.clone(), included_name.print()));
+                            }
+                            dones.include_names.insert(included_name.print());
                             match self.resolve_include(&included_name.print()) {
                                 // IRIS processes a repeated `#include` once; this also ends
                                 // include cycles.
@@ -842,11 +868,11 @@ impl WorkspaceStruct {
     ) -> (MacroDefinitions, Vec<String>, HashSet<String>) {
         let mut definitions = HashMap::new();
         let mut failed = Vec::new();
-        let mut resolved_uris = HashSet::new();
+        let mut include_names = HashSet::new();
         for name in names {
+            include_names.insert(name.clone());
             match self.resolve_include(name) {
                 Some((inc_uri, inc_text, inc_units)) => {
-                    resolved_uris.insert(inc_uri.clone());
                     let mut dones = DoneList::new();
                     dones.note_included_file(inc_uri.clone(), &inc_text);
                     let mut todos = TodoList::new(
@@ -861,12 +887,12 @@ impl WorkspaceStruct {
                     );
                     let _ = self.expand_units(&mut definitions, &mut todos, &mut dones);
                     // Whatever the include itself included: an edit there changes this class too.
-                    resolved_uris.extend(dones.included.into_keys());
+                    include_names.extend(dones.include_names);
                 }
                 None => failed.push(name.clone()),
             }
         }
-        (definitions, failed, resolved_uris)
+        (definitions, failed, include_names)
     }
 
     // `header` is pushed verbatim, unexpanded, ahead of the expanded `body` -- like
@@ -1039,6 +1065,8 @@ struct DoneList {
     // literally, since the raw `#include Name` text rarely re-parses and would otherwise mask
     // this diagnostic behind a generic syntax error.
     unresolved: Vec<(UnresolvedError, String, Origin)>,
+    include_directives: Vec<(std::ops::Range<usize>, String)>,
+    include_names: HashSet<String>,
 }
 
 impl DoneList {
@@ -1049,6 +1077,8 @@ impl DoneList {
             included: HashMap::new(),
             invocations: Vec::new(),
             unresolved: Vec::new(),
+            include_directives: Vec::new(),
+            include_names: HashSet::new(),
         }
     }
 
@@ -1140,6 +1170,8 @@ impl DoneList {
             included: self.included,
             invocations,
             unresolved,
+            include_directives: self.include_directives,
+            include_names: self.include_names,
         }
     }
 }
