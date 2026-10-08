@@ -173,6 +173,12 @@ pub struct WorkspaceStruct {
     // Same idea as `class_index`, but for `ROUTINE` header names — see `resolve_rtn_uri`.
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
+    // Labels of routines fetched from IRIS (not open in the workspace), by routine name, with
+    // the text they were parsed from: reused only while the connection hands back that same
+    // text, so this follows the connection's own cache policy rather than adding one. Without
+    // it, every `$$Label^Routine` call into a 15k-line system routine re-expanded and re-parsed
+    // it, and a single file took half a minute.
+    pub(crate) iris_rtn_labels: RefCell<HashMap<String, (String, Option<check::Labels>)>>,
 }
 
 // `bindings::IrisConnection` is a WIT *imported* resource, producible only by a wasm host --
@@ -716,6 +722,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>) -> WorkspaceStruct {
         inc_index: RefCell::new(HashMap::new()),
         rtn_index: RefCell::new(HashMap::new()),
         iris,
+        iris_rtn_labels: RefCell::new(HashMap::new()),
     }
 }
 

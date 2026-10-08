@@ -11,7 +11,7 @@
 //! implementation of the same WIT `imported.iris-connection` interface, which can't be
 //! implemented by native Rust guest code at all (see `src/lib.rs`'s `IrisHandle`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -249,10 +249,10 @@ fn get_cls_uncached(conn: &AtelierConnection, cls: &str) -> Option<ClassInfo> {
         line: 0,
         character: 0,
     };
-    let members = all_mem_uncached(conn, cls)
+    let members = resolve_stubs(conn, cls, all_mem_uncached(conn, cls))
         .into_iter()
         .filter(|row| !row.name.is_empty())
-        .map(|row| member_row_to_info(conn, cls, row))
+        .map(member_row_to_info)
         .collect();
     Some(ClassInfo {
         doc: str_field("Description").to_string(),
@@ -351,33 +351,65 @@ fn all_mem_uncached(conn: &AtelierConnection, cls: &str) -> Vec<MemberRow> {
 
 // A method row with a `Stub` is a compiler-generated accessor (index/query/property/
 // constraint-backed) -- its real metadata lives in a different table, keyed by the stub's
-// `origin.subname.kindchar` segments.
-fn resolve_stub(conn: &AtelierConnection, cls: &str, row: MemberRow) -> MemberRow {
+// `origin.subname.kindchar` segments: `(origin, subname, table)`.
+fn stub_parts(row: &MemberRow) -> Option<(&str, &str, &'static str)> {
     if row.member_type != "method" {
-        return row;
+        return None;
     }
-    let Some(stub) = row.stub.as_deref() else {
-        return row;
-    };
-    let mut parts = stub.split('.');
-    let origin = parts.next().unwrap_or_default().to_string();
-    let subname = parts.next().unwrap_or_default().to_string();
+    let mut parts = row.stub.as_deref()?.split('.');
+    let origin = parts.next().unwrap_or_default();
+    let subname = parts.next().unwrap_or_default();
     let table = match parts.next() {
         Some("i") => "Index",
         Some("q") => "Query",
         Some("a") => "Property",
         Some("n") => "Constraint",
-        _ => return row,
+        _ => return None,
     };
-    let sql2 = format!(
-        "SELECT 'method' AS MemberType, Description, FormalSpec, ReturnType, '' AS Stub, \
-         ClassMethod, Deprecated FROM %Dictionary.Compiled{table}Method WHERE Name = ? AND \
-         parent->Parent = ? AND parent->Name = ?"
-    );
-    conn.query(&sql2, &[&subname, cls, &origin])
-        .and_then(|rows| rows.into_iter().next())
-        .and_then(|r| serde_json::from_value::<MemberRow>(r).ok())
-        .unwrap_or(row)
+    Some((origin, subname, table))
+}
+
+// Replaces each stub row with its real metadata -- one query per stub table the class uses,
+// not one per stub (a property-heavy class has dozens of generated accessors).
+fn resolve_stubs(conn: &AtelierConnection, cls: &str, rows: Vec<MemberRow>) -> Vec<MemberRow> {
+    let tables: HashSet<&str> = rows
+        .iter()
+        .filter_map(stub_parts)
+        .map(|(_, _, t)| t)
+        .collect();
+    let mut resolved: HashMap<(String, String, &str), MemberRow> = HashMap::new();
+    for table in tables {
+        let sql = |description: &str| {
+            format!(
+                "SELECT Name, parent->Name AS StubOrigin, 'method' AS MemberType, {description}, \
+                 FormalSpec, ReturnType, '' AS Stub, ClassMethod, Deprecated FROM \
+                 %Dictionary.Compiled{table}Method WHERE parent->Parent = ?"
+            )
+        };
+        // Same `{`-leading-text failure mode `all_mem_uncached` guards against.
+        let found = conn
+            .query(&sql("Description"), &[cls])
+            .or_else(|| conn.query(&sql("'' AS Description"), &[cls]))
+            .unwrap_or_default();
+        for value in found {
+            let origin = value
+                .get("StubOrigin")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let Ok(row) = serde_json::from_value::<MemberRow>(value.clone()) else {
+                continue;
+            };
+            resolved.insert((origin.to_string(), row.name.clone(), table), row);
+        }
+    }
+    rows.into_iter()
+        .map(|row| match stub_parts(&row) {
+            Some((origin, subname, table)) => resolved
+                .remove(&(origin.to_string(), subname.to_string(), table))
+                .unwrap_or(row),
+            None => row,
+        })
+        .collect()
 }
 
 // A property's alias list is a comma-separated %Translate'd string.
@@ -393,11 +425,10 @@ fn split_aliases(aliases: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn member_row_to_info(conn: &AtelierConnection, cls: &str, row: MemberRow) -> MemberInfo {
+fn member_row_to_info(row: MemberRow) -> MemberInfo {
     let name = row.name.clone();
     let aliases = split_aliases(row.aliases.as_deref());
     let origin = row.origin.clone();
-    let row = resolve_stub(conn, cls, row);
     let zero = Position {
         line: 0,
         character: 0,

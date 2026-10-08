@@ -1137,15 +1137,22 @@ impl<'a> WorkspaceEnv<'a> {
             return Some(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
         }
         let source = self.workspace.iris.as_ref()?.get_int_or_mac(name)?;
+        if let Some((text, labels)) = self.workspace.iris_rtn_labels.borrow().get(name)
+            && *text == source.text
+        {
+            return Some(labels.clone());
+        }
         let expanded = self
             .workspace
             .expand_rtn(source.uri.as_deref().unwrap_or(name), &source.text)
             .ok();
-        Some(
-            expanded.map(|(routine, map, _)| {
-                labels_of(&map.expanded_olc, &routine, source.uri.as_deref())
-            }),
-        )
+        let labels = expanded
+            .map(|(routine, map, _)| labels_of(&map.expanded_olc, &routine, source.uri.as_deref()));
+        self.workspace
+            .iris_rtn_labels
+            .borrow_mut()
+            .insert(name.to_string(), (source.text, labels.clone()));
+        Some(labels)
     }
 
     // `""` is also the null OREF (`$$$NULLOREF`), so it goes wherever an object is expected:

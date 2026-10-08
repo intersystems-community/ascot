@@ -28,7 +28,7 @@ use std::{collections::HashMap, iter::once, ops::Deref, sync::Arc};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
 use types::*;
 
-pub use env::{DocumentEnv, WorkspaceEnv};
+pub use env::{DocumentEnv, Labels, WorkspaceEnv};
 use errors::TypeErrorKind;
 pub use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
