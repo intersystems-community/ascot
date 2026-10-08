@@ -405,7 +405,7 @@ pub enum SetTargetFun {
     Piece(PieceCall),
     Extract(ExtractCall),
     List(ListPlainCall),
-    ListGet(ListGetCall),
+    ListGet(ListGetForSet),
     ListBuild(ListBuildForSet),
     Bit(BitCall),
     Vector(VectorCall),
@@ -415,8 +415,17 @@ pub enum SetTargetFun {
     MV(MVCall),
 }
 
+// A SET target is an expression of a settable shape -- except `$LISTGET(var1,var2,...)`, which
+// is a variable list of any length (like `SET $LISTBUILD(...)=`), nothing like the function's
+// own arguments, so it's read as that first.
+#[derive(Grammar)]
+pub enum SetTargetSource {
+    ListGet(Prefix<StringEq!("$"), ListGetForSet>),
+    Expr(Range<ExprOps<()>>),
+}
+
 impl GrammarFrom for SetTarget {
-    type Source = Range<ExprOps<()>>;
+    type Source = SetTargetSource;
     fn print_to(&self, buf: &mut String) {
         match self {
             SetTarget::Var(base) => Grammar::print_to(base, buf),
@@ -438,11 +447,17 @@ impl GrammarFrom for SetTarget {
     }
 }
 
-impl TryFrom<Range<ExprOps<()>>> for SetTarget {
+impl TryFrom<SetTargetSource> for SetTarget {
     type Error = &'static str;
 
-    fn try_from(value: Range<ExprOps<()>>) -> Result<Self, Self::Error> {
+    fn try_from(value: SetTargetSource) -> Result<Self, Self::Error> {
         let err = "be a valid SET target";
+        let value = match value {
+            SetTargetSource::ListGet(call) => {
+                return Ok(SetTarget::Fun(SetTargetFun::ListGet(call.prefixed)));
+            }
+            SetTargetSource::Expr(value) => value,
+        };
         match value.into_inner() {
             ExprOps::Then { base, op } => Ok(SetTarget::Sub { obj: *base, op }),
             ExprOps::Base(base) => match *base {
@@ -474,7 +489,6 @@ impl TryFrom<FunctionCall> for SetTargetFun {
             FunctionCall::Extract(c) => Ok(SetTargetFun::Extract(c)),
             // Only the plain form is settable; ListRange is read-only.
             FunctionCall::ListPlain(c) => Ok(SetTargetFun::List(c)),
-            FunctionCall::ListGet(c) => Ok(SetTargetFun::ListGet(c)),
             FunctionCall::Bit(c) => Ok(SetTargetFun::Bit(c)),
             FunctionCall::Vector(c) => Ok(SetTargetFun::Vector(c)),
             FunctionCall::WExtract(c) => Ok(SetTargetFun::WExtract(c)),
@@ -4279,6 +4293,17 @@ pub struct ListBuildForSet {
     pub rp: StringEq!(")"),
 }
 
+// `SET $LISTGET(var1,var2,...)=list`: any number of variables, a placeholder comma for one to
+// skip -- see `SetTargetSource`.
+#[derive(Grammar)]
+pub struct ListGetForSet {
+    pub kw: Either<StringEqCI!("LISTGET"), StringEqCI!("LG")>,
+    pub lp: StringEq!("("),
+    pub first: ArgOf<Option<Variable>>,
+    pub rest: Vec<More<ArgOf<Option<Variable>>>>,
+    pub rp: StringEq!(")"),
+}
+
 fun_args!("$LENGTH" LengthArgs {
     expression: ArgOf<Expr>,
     delimitor: Option<More<ArgOf<Expr>>>,
@@ -6287,6 +6312,13 @@ mod regression_tests {
                 .contains("return x")
         );
         assert_eq!(methods[1].body.prefixed.wrapped.print(), "\n quit 1\n");
+    }
+
+    #[test]
+    fn listget_set_target_is_a_variable_list() {
+        routine(" set $lg(a,b,,,,,lockHash,,proto,%qfun,x(1),^g(2))=data\n").expect("Ok");
+        routine(" set $LISTGET(a)=data\n set $ListBuild(a,,b)=data\n").expect("Ok");
+        routine(" set $lg(a,2)=data\n").expect_err("a position is not a variable");
     }
 
     #[test]

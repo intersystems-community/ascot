@@ -5257,4 +5257,27 @@ mod tests {
         );
         assert_eq!(at("R.mac", 1, 12), Some(expected));
     }
+
+    // `SET $LISTGET(a,,b)=list` assigns `a` and `b`; a variable's span is its own, not relative
+    // to the call it was re-read from.
+    #[test]
+    fn set_listget_assigns_its_variables() {
+        let diagnostics =
+            class_diagnostics("ClassMethod M(list) {\n Set $lg(a,,b,c)=list\n Write a, b\n}\n");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("'c' is assigned but never read"),
+            "{diagnostics:?}"
+        );
+        assert_eq!(
+            (
+                diagnostics[0].range.start.line,
+                diagnostics[0].range.start.character,
+                diagnostics[0].range.end.character
+            ),
+            (2, 14, 15)
+        );
+    }
 }

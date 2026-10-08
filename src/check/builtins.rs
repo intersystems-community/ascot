@@ -656,10 +656,7 @@ pub(super) fn check_settarget_fun<'a>(
             define_set_target_base(env, flow, &c.list)?;
             let _ = check_list_plain_call(env, flow, c)?;
         }
-        ListGet(c) => {
-            define_set_target_base(env, flow, &c.list)?;
-            let _ = check_listget_call(env, flow, c)?;
-        }
+        ListGet(c) => check_set_var_list(env, flow, &c.first, &c.rest)?,
         Bit(c) => {
             define_set_target_base(env, flow, &c.bits)?;
             let _ = check_bit_call(env, flow, c)?;
@@ -678,7 +675,7 @@ pub(super) fn check_settarget_fun<'a>(
         Sequence(c) => {
             let _ = check_sequence_call(env, flow, c)?;
         }
-        ListBuild(c) => check_set_listbuild(env, flow, c)?,
+        ListBuild(c) => check_set_var_list(env, flow, &c.first, &c.rest)?,
         MV(c) => {
             let _ = check_mv_call(env, flow, c)?;
         }
@@ -686,10 +683,15 @@ pub(super) fn check_settarget_fun<'a>(
     Ok(())
 }
 
-fn check_set_listbuild<'a>(
+// One variable slot of `SET $LISTBUILD(a,,b)=` / `SET $LISTGET(a,,b)=`, empty for a placeholder.
+type SetVarArg = Wrap<MGap, Range<Option<Variable>>, MGap>;
+
+// `SET $LISTBUILD(a,,b)=list` / `SET $LISTGET(a,,b)=list`: every named variable is assigned.
+fn check_set_var_list<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    ListBuildForSet { first, rest, .. }: &ListBuildForSet,
+    first: &SetVarArg,
+    rest: &[Prefix<StringEq!(","), SetVarArg>],
 ) -> Result<(), QuasiTypeError> {
     for arg in once(first.deref()).chain(rest.iter().map(|rest| rest.deref().deref())) {
         let range = env.range(arg);
