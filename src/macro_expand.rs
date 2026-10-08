@@ -335,7 +335,7 @@ impl SourceMap {
     // can splice further macros (each with their own origin) and unbraced control commands
     // (`if`, `for`, ...) that swallow the rest of the line into their scope. Showing the whole
     // line is what actually explains the diagnostic in those cases.
-    fn expanded_line_text(&self, offset: usize) -> Option<&str> {
+    fn expanded_line_text(&self, offset: usize) -> Option<String> {
         let start = self.expanded_text[..offset]
             .rfind('\n')
             .map_or(0, |i| i + 1);
@@ -347,11 +347,15 @@ impl SourceMap {
         if text.is_empty() {
             return None;
         }
-        let mut cut = MAX_LEN.min(text.len());
+        if text.len() <= MAX_LEN {
+            return Some(text.to_string());
+        }
+        let mut cut = MAX_LEN;
         while !text.is_char_boundary(cut) {
             cut -= 1;
         }
-        Some(&text[..cut])
+        // Marked as cut, so a long expansion isn't mistaken for the whole of it.
+        Some(format!("{}…", &text[..cut]))
     }
 
     // The primary (top-level-file) range, plus one `related_information` entry per further

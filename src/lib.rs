@@ -5280,4 +5280,15 @@ mod tests {
             (2, 14, 15)
         );
     }
+
+    // `#define GetMsg $$$Inner ` (trailing space) called as `$$$GetMsg(x)`: the parameterless
+    // macro hands its arguments on, as `$$$Inner (x)`, which must still be a call of `Inner`.
+    #[test]
+    fn parameterless_macro_with_trailing_space_hands_its_arguments_on() {
+        let diagnostics = diagnostics_for(&[(
+            "Fwd.mac",
+            "ROUTINE Fwd\n#define Inner(%a,%b) (%a_%b)\n#define Fwd $$$Inner \n\tSet x = $$$Fwd(\"a\",\"b\")\n\tWrite x\n\tQuit\n",
+        )]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
 }

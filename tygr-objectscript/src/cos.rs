@@ -1263,10 +1263,12 @@ pub struct LabelOffsetRoutine {
 
 pub type MacroCall = Prefix<StringEq!("$$$"), MacroCallStruct>;
 
+// `$$$Name (args)` is tolerated: a parameterless macro that keeps its argument list hands them
+// on to its body, and a body defined with a trailing space puts one there.
 #[derive(Grammar, Clone)]
 pub struct MacroCallStruct {
     pub name: MacroName,
-    pub args: Option<MacroArgList>,
+    pub args: Option<Prefix<StringOf<IsSpaceOrTab>, MacroArgList>>,
 }
 
 char_class!(pub IsMacroArgSafe, "any but comma or paren", |ch| !matches!(
@@ -6312,6 +6314,18 @@ mod regression_tests {
                 .contains("return x")
         );
         assert_eq!(methods[1].body.prefixed.wrapped.print(), "\n quit 1\n");
+    }
+
+    #[test]
+    fn macro_call_may_have_space_before_its_arguments() {
+        let units = <Vec<MacroedUnit>>::parse("$$$M (1,2)").expect("Ok");
+        assert_eq!(
+            units.len(),
+            1,
+            "{:?}",
+            units.iter().map(|u| u.print()).collect::<Vec<_>>()
+        );
+        routine("#define M(%a,%b) %a+%b\n s x=$$$M (1,2)\n").expect("Ok");
     }
 
     #[test]
