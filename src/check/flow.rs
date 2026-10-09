@@ -40,7 +40,7 @@ struct Shared<'a> {
     // `None` is for subroutines and procedures only. It means that the output expectation
     // is unclear until the first return/quit command. Shared (the `Rc`) with the labels that
     // return for this body (see `check_block_body`).
-    output: OutputExpectation,
+    output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
     ty_var: RefCell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
     // Kept in declaration order for a deterministic diagnostic when more than one is never
@@ -56,8 +56,6 @@ struct Shared<'a> {
     // read"/"never assigned" reports can't be trusted after that.
     incomplete: std::cell::Cell<bool>,
 }
-
-pub(crate) type OutputExpectation = Rc<RefCell<Option<WithRange<Option<Ty>>>>>;
 
 struct LoopContext {
     range: bindings::Range,
@@ -152,14 +150,21 @@ impl<'a> Flow<'a> {
 
     // A label. `carried` is the output expectation to share (e.g. the previous label's, when
     // it fell through into this one); hands its own on when this one falls through.
+    #[allow(clippy::type_complexity)]
     pub(crate) fn with_label(
         uri: &'a str,
         env: &'a WorkspaceEnv,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
-        carried: Option<OutputExpectation>,
+        carried: Option<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
-    ) -> Result<(Vec<String>, Option<OutputExpectation>), TypeError> {
+    ) -> Result<
+        (
+            Vec<String>,
+            Option<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
+        ),
+        TypeError,
+    > {
         let output = carried.unwrap_or_default();
         let (creates, fell_through) = Self::run(
             uri,
@@ -175,7 +180,7 @@ impl<'a> Flow<'a> {
         Ok((creates, fell_through.then_some(output)))
     }
 
-    pub(crate) fn output_expectation(&self) -> OutputExpectation {
+    pub(crate) fn output_expectation(&self) -> Rc<RefCell<Option<WithRange<Option<Ty>>>>> {
         self.shared.output.clone()
     }
 
@@ -220,7 +225,7 @@ impl<'a> Flow<'a> {
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
         public_list: ProcedureBlock,
-        output: OutputExpectation,
+        output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
         auto_return: bool,
         inherited_signature: bool,

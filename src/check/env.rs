@@ -23,7 +23,6 @@ use tygr::{IntoInner, OLC, Range};
 
 use crate::bindings::{ArgMode, InlayHint, MemberKind};
 use crate::check::errors::*;
-use crate::check::flow::OutputExpectation;
 use crate::check::types::*;
 use crate::cos::{CodeMode, MethodLanguage};
 use crate::details::{MemberDetails, MemberKindSpecificDetails, MemberNs, WithRange};
@@ -1491,10 +1490,13 @@ impl<'a> DocumentEnv<'a> {
     }
 }
 
-/// label -> signature, for the subroutines/procedures declared in a routine.
+/// label -> signature, for the subroutines/procedures declared in a routine. Plain data: built
+/// once per routine and memoized on the workspace (which the MCP server needs to be `Send`), for
+/// resolving `label^routine` calls into it.
 pub type Signatures = HashMap<String, Arc<TyProcedure>>;
 
-/// The labels in scope while checking a body.
+/// The labels in scope while checking one body: the signatures plus per-entry state that exists
+/// only during checking (`LabelEntry::output` is a live `Rc` cell, so this map isn't `Send`).
 pub type Labels = HashMap<String, LabelEntry>;
 
 #[derive(Clone)]
@@ -1505,7 +1507,8 @@ pub struct LabelEntry {
     pub outside_block: bool,
     // What its returns are held to: the enclosing method's or procedure block's, shared with
     // that body. `None` for a routine-level label, which has its own.
-    pub output: Option<OutputExpectation>,
+    #[allow(clippy::type_complexity)]
+    pub output: Option<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
 }
 
 impl From<Arc<TyProcedure>> for LabelEntry {
