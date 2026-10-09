@@ -24,7 +24,7 @@ pub mod types;
 use either::Either::{self, Left, Right};
 use env::*;
 use flow::*;
-use std::{cell::RefCell, collections::HashMap, iter::once, ops::Deref, rc::Rc};
+use std::{collections::HashMap, iter::once, ops::Deref};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
 use types::*;
 
@@ -640,13 +640,8 @@ fn check_block_body<'a>(
     if subroutines.is_empty() {
         return Ok(());
     }
-    // The main body falling off its end runs into the first label, which then returns for it.
-    if flow.falls_through()
-        && let Some(first) = details.first().and_then(|d| env.label_entry(&d.name.it))
-    {
-        let _ = first.output.set(flow.output_expectation());
-    }
-    flow.handle_void()?;
+    let first = details.first().and_then(|d| env.label_entry(&d.name.it));
+    flow.tail_call(first.map(|first| &first.output), flow.current_range())?;
     // The labels read the body's variables from their own flows, so the deferred
     // "never read"/"never assigned" reports for the main body can't be trusted.
     flow.mark_incomplete();
@@ -659,8 +654,6 @@ fn check_block_body<'a>(
     Ok(())
 }
 
-// A label that falls off its end runs into the next one, which then returns for both; with no
-// next label, that's worth a word.
 fn check_label_body<'a>(
     env: &CodeEnv<'a>,
     details: &details::RoutineElementDetails,
@@ -679,22 +672,17 @@ fn check_label_body<'a>(
         return Ok(vec![]);
     };
     let output = entry.output.get_or_init(Default::default);
-    let (creates, fell_through) = Flow::with_label(
+    Flow::with_label(
         env.uri(),
         env.deref(),
         range,
         details.args(),
         output.clone(),
-        |flow| sub.check(env, flow),
-    )?;
-    match (fell_through, next) {
-        (true, Some(next)) => {
-            let _ = next.output.set(output.clone());
-        }
-        (true, None) => env.add_soft_diagnostic(TypeError::missing_quit(range).into()),
-        (false, _) => {}
-    }
-    Ok(creates)
+        |flow| {
+            sub.check(env, flow)?;
+            flow.tail_call(next.map(|next| &next.output), range)
+        },
+    )
 }
 
 impl CheckCommand for cos::ProcedureMain {
@@ -3354,28 +3342,22 @@ pub fn check_rtn(
     // tags-only routine — there's no meaningful position to blame it falling through on, so
     // don't check it at all rather than flag every such routine with a bogus range.
     if let Some(range) = body_end_range(&env, &rtn.main) {
-        let output: Rc<RefCell<Option<WithRange<Option<Ty>>>>> = Default::default();
+        let first = labels
+            .first()
+            .filter(|(_, is_procedure)| !is_procedure)
+            .and_then(|(details, _)| env.label_entry(&details.name.it));
         match Flow::with_label(
             env.uri(),
             env.deref(),
             range,
             vec![],
-            output.clone(),
-            |flow| rtn.main.check(&env, flow),
+            Default::default(),
+            |flow| {
+                rtn.main.check(&env, flow)?;
+                flow.tail_call(first.map(|first| &first.output), range)
+            },
         ) {
-            Ok((creates, fell_through)) => {
-                // Falling off its end runs into the first label, which then returns for it.
-                let first = labels
-                    .first()
-                    .filter(|(_, is_procedure)| !is_procedure)
-                    .and_then(|(details, _)| env.label_entry(&details.name.it));
-                match (fell_through, first) {
-                    (true, Some(first)) => {
-                        let _ = first.output.set(output);
-                    }
-                    (true, None) => env.add_soft_diagnostic(TypeError::missing_quit(range).into()),
-                    (false, _) => {}
-                }
+            Ok(creates) => {
                 if let Some(hint) = creates_hint(range.start, creates) {
                     env.hint(hint);
                 }

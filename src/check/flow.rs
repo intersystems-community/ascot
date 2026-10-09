@@ -13,7 +13,7 @@ use crate::check::env::*;
 use crate::check::errors::*;
 use crate::check::types::*;
 use crate::details::WithRange;
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -138,8 +138,7 @@ impl<'a> Flow<'a> {
         self.shared.env.restore_soft_diagnostics(was_suppressed);
     }
 
-    // A label, held to `output` (see `LabelEntry::output`). Returns what it creates, and whether
-    // it fell off its end.
+    // A label, held to `output` (see `LabelEntry::output`). Returns what it creates.
     pub(crate) fn with_label(
         uri: &'a str,
         env: &'a WorkspaceEnv,
@@ -147,7 +146,7 @@ impl<'a> Flow<'a> {
         args: Vec<WithRange<NormalArg>>,
         output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
-    ) -> Result<(Vec<String>, bool), TypeError> {
+    ) -> Result<Vec<String>, TypeError> {
         Self::run(uri, env, range, args, None, output, handler, false, false)
     }
 
@@ -155,12 +154,34 @@ impl<'a> Flow<'a> {
         self.shared.output.clone()
     }
 
+    pub(crate) fn current_range(&self) -> bindings::Range {
+        self.current_range
+    }
+
     pub(crate) fn is_procedure_block(&self) -> bool {
         self.shared.procedure_block
     }
 
-    pub(crate) fn falls_through(&self) -> bool {
-        self.bindings.is_some()
+    // Falling off the end of a body is a tail call of the label that follows it: that label
+    // returns for this body, and reads what it assigned (so the deferred "never read" reports
+    // can't be trusted). With nothing to run into, that's worth a word.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn tail_call(
+        &mut self,
+        next: Option<&OnceCell<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>>,
+        range: bindings::Range,
+    ) -> Result<(), TypeError> {
+        if self.bindings.is_none() {
+            return Ok(());
+        }
+        match next {
+            Some(next) => {
+                let _ = next.set(self.shared.output.clone());
+                self.mark_incomplete();
+            }
+            None => self.add_soft_diagnostic(TypeError::missing_quit(range).into()),
+        }
+        self.handle_void()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -192,11 +213,9 @@ impl<'a> Flow<'a> {
             auto_return,
             inherited_signature,
         )
-        .map(|(creates, _)| creates)
     }
 
-    // Runs `handler` in a fresh flow for a body with `args`; returns what the body creates, and
-    // whether it fell off its end (into whatever label follows it).
+    // Runs `handler` in a fresh flow for a body with `args`; returns what the body creates.
     #[allow(clippy::too_many_arguments)]
     fn run(
         uri: &'a str,
@@ -208,7 +227,7 @@ impl<'a> Flow<'a> {
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
         auto_return: bool,
         inherited_signature: bool,
-    ) -> Result<(Vec<String>, bool), TypeError> {
+    ) -> Result<Vec<String>, TypeError> {
         let procedure_block = public_list.is_some();
         let mut bindings = HashMap::new();
         let mut reading_list = HashMap::new();
@@ -309,12 +328,8 @@ impl<'a> Flow<'a> {
                 },
             ))?;
         }
-        // Falling off the end runs the next label (see `check_label_body`), whose code may read
-        // what this one assigned: the "never read" report below can't be trusted then.
-        let fell_through = flow.bindings.is_some();
         // Deferred until every split flow has run: still `false` means never read.
-        if !fell_through
-            && !flow.shared.incomplete.get()
+        if !flow.shared.incomplete.get()
             && let Some((w, _)) = flow
                 .shared
                 .reading_list
@@ -345,7 +360,7 @@ impl<'a> Flow<'a> {
             .cloned()
             .collect();
         creates.sort();
-        Ok((creates, fell_through))
+        Ok(creates)
     }
 
     pub(crate) fn with_loop(
