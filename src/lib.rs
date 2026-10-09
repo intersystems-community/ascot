@@ -5373,17 +5373,9 @@ mod tests {
         let diagnostics = class_diagnostics(
             "ClassMethod M(x) As %Status [ ProcedureBlock = 0 ] {\n Quit 1\nA\n If x Quit\n Set y = 1\nB\n Quit y\n}\n",
         );
-        let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("Missing an explicit QUIT")),
-            "{diagnostics:?}"
-        );
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("Unexpected return value")),
+            diagnostics[0].message.contains("Unexpected return value"),
             "{diagnostics:?}"
         );
     }
@@ -5406,7 +5398,7 @@ mod tests {
     }
 
     // A routine-level label that falls off its end runs into the next label, which then
-    // returns for both: their return shapes must agree.
+    // returns for both: their return shapes must agree. The fall-through itself isn't reported.
     #[test]
     fn label_falling_through_shares_the_next_labels_return_shape() {
         // Directly, and across an alias label (`B`, no commands) in between.
@@ -5415,17 +5407,9 @@ mod tests {
             "ROUTINE Ft\n\tQuit\nA(y)\n\tIf y Quit\n\tSet x = 1\nB\nC\n\tQuit x\n",
         ] {
             let diagnostics = diagnostics_for(&[("Ft.mac", text)]);
-            let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
             assert!(
-                messages
-                    .iter()
-                    .any(|m| m.contains("Missing an explicit QUIT")),
-                "{diagnostics:?}"
-            );
-            assert!(
-                messages
-                    .iter()
-                    .any(|m| m.contains("Unexpected return value")),
+                diagnostics[0].message.contains("Unexpected return value"),
                 "{diagnostics:?}"
             );
         }

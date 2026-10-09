@@ -138,16 +138,6 @@ impl<'a> Flow<'a> {
         self.shared.env.restore_soft_diagnostics(was_suppressed);
     }
 
-    pub(crate) fn with_subroutine(
-        uri: &'a str,
-        env: &'a WorkspaceEnv,
-        range: bindings::Range,
-        args: Vec<WithRange<NormalArg>>,
-        handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
-    ) -> Result<Vec<String>, TypeError> {
-        Self::with_label(uri, env, range, args, None, handler).map(|(creates, _)| creates)
-    }
-
     // A label. `carried` is the output expectation to share (e.g. the previous label's, when
     // it fell through into this one); hands its own on when this one falls through.
     #[allow(clippy::type_complexity)]
@@ -338,14 +328,12 @@ impl<'a> Flow<'a> {
                 },
             ))?;
         }
-        // Bad style rather than a fault: the next label's code simply runs, so the deferred
-        // checks below still apply.
+        // Falling off the end runs the next label (see `check_label_body`), whose code may read
+        // what this one assigned: the "never read" report below can't be trusted then.
         let fell_through = flow.bindings.is_some();
-        if fell_through {
-            flow.add_soft_diagnostic(TypeError::missing_quit(range).into());
-        }
         // Deferred until every split flow has run: still `false` means never read.
-        if !flow.shared.incomplete.get()
+        if !fell_through
+            && !flow.shared.incomplete.get()
             && let Some((w, _)) = flow
                 .shared
                 .reading_list

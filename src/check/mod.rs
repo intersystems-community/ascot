@@ -659,7 +659,8 @@ fn check_block_body<'a>(
     Ok(())
 }
 
-// A label that falls off its end runs into the next one, which then returns for both.
+// A label that falls off its end runs into the next one, which then returns for both; with no
+// next label, that's worth a word.
 fn check_label_body<'a>(
     env: &CodeEnv<'a>,
     details: &details::RoutineElementDetails,
@@ -668,16 +669,12 @@ fn check_label_body<'a>(
     let Some(entry) = env.label_entry(&details.name.it) else {
         return Ok(vec![]);
     };
-    let fall_into_next = |output| {
-        if let Some(next) = entry.next.as_deref().and_then(|next| env.label_entry(next)) {
-            let _ = next.output.set(output);
-        }
-    };
+    let next = entry.next.as_deref().and_then(|next| env.label_entry(next));
     // No commands at all (an alias label, or comments only) falls through to the next label --
     // nothing to check, and nothing to demand a QUIT from.
     let Some(range) = body_end_range(env, &sub.body) else {
-        if let Some(output) = entry.output.get() {
-            fall_into_next(output.clone());
+        if let (Some(output), Some(next)) = (entry.output.get(), next) {
+            let _ = next.output.set(output.clone());
         }
         return Ok(vec![]);
     };
@@ -689,8 +686,12 @@ fn check_label_body<'a>(
         entry.output.get().cloned(),
         |flow| sub.check(env, flow),
     )?;
-    if let Some(output) = fell_through {
-        fall_into_next(output);
+    match (fell_through, next) {
+        (Some(output), Some(next)) => {
+            let _ = next.output.set(output);
+        }
+        (Some(_), None) => env.add_soft_diagnostic(TypeError::missing_quit(range).into()),
+        (None, _) => {}
     }
     Ok(creates)
 }
@@ -3352,10 +3353,24 @@ pub fn check_rtn(
     // tags-only routine — there's no meaningful position to blame it falling through on, so
     // don't check it at all rather than flag every such routine with a bogus range.
     if let Some(range) = body_end_range(&env, &rtn.main) {
-        match Flow::with_subroutine(env.uri(), env.deref(), range, vec![], |flow| {
+        match Flow::with_label(env.uri(), env.deref(), range, vec![], None, |flow| {
             rtn.main.check(&env, flow)
         }) {
-            Ok(creates) => {
+            Ok((creates, fell_through)) => {
+                // Falling off its end runs into the first label, which then returns for it.
+                let first = labels
+                    .first()
+                    .filter(|(_, is_procedure)| !is_procedure)
+                    .and_then(|(details, _)| env.label_entry(&details.name.it));
+                match (fell_through, first) {
+                    (Some(output), Some(first)) => {
+                        let _ = first.output.set(output);
+                    }
+                    (Some(_), None) => {
+                        env.add_soft_diagnostic(TypeError::missing_quit(range).into())
+                    }
+                    (None, _) => {}
+                }
                 if let Some(hint) = creates_hint(range.start, creates) {
                     env.hint(hint);
                 }
