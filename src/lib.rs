@@ -178,7 +178,7 @@ pub struct WorkspaceStruct {
     // text, so this follows the connection's own cache policy rather than adding one. Without
     // it, every `$$Label^Routine` call into a 15k-line system routine re-expanded and re-parsed
     // it, and a single file took half a minute.
-    pub(crate) iris_rtn_labels: RefCell<HashMap<String, (String, Option<check::Labels>)>>,
+    pub(crate) iris_rtn_labels: RefCell<HashMap<String, (String, Option<check::Signatures>)>>,
 }
 
 // `bindings::IrisConnection` is a WIT *imported* resource, producible only by a wasm host --
@@ -4715,7 +4715,7 @@ mod tests {
             "ClassMethod Trap(Data As %String) As %Status {\n s $zt=\"Error\"\n s ^x=Data\n q 1\nError s $zt=\"\"\n q $ze\n}\n\
              ClassMethod TrapGoto() As %Status {\n Set tSC=1\n Set $ZT=\"Trap\"\n do {\n  Set ^h=$ZF(-6,1,2)\n } while (0)\nExit\n Quit tSC\nTrap\n Set $ZT=\"\",tSC=$ze\n Goto Exit\n}\n\
              ClassMethod Computed(Progress As %Integer) As %String {\n Goto $Case(Progress,1:Initial,2:Called,:error)\nerror\n Quit \"error\"\nInitial\n If Progress = 1 Quit \"initial\"\n Quit \"other\"\nCalled\n Quit \"called\"\n}\n\
-             ClassMethod Sub(dir As %String) As %Status {\n Set n=1\n Do step\n Set n=n+$$twice(n)\n Quit n\nstep\n Set ^x(dir)=n\n Quit\ntwice(x)\n Quit x*2\n}\n",
+             ClassMethod Sub(dir As %String) As %Status {\n Set n=1\n Do step\n Set n=n+$$twice(n)\n Quit n\nstep\n Set ^x(dir)=n\n Quit 1\ntwice(x)\n Quit x*2\n}\n",
         );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let diagnostics = class_diagnostics(
@@ -5299,15 +5299,23 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
-    // Labels inside a routine's procedure block are checked like a method body's: `Goto`
-    // targets and `Do` subroutines of their own, with the routine's labels still in scope.
+    // Labels inside a routine's procedure block are checked like a method body's, with the
+    // routine's labels still in scope. They return for the block: once its first return has
+    // established a value, a label's bare `Quit` is reported, even one only ever `Do`ne.
     #[test]
     fn labels_inside_a_routine_procedure_block_are_checked() {
         let diagnostics = diagnostics_for(&[(
             "Blk.mac",
             "ROUTINE Blk\n\tQuit\nOuter\n\tQuit 1\nProc(x) public {\n\tIf x Goto exitEarly\n\tDo inner\n\tSet y = $$Outer\n\tQuit y\nexitEarly\n\tQuit 0\ninner\n\tSet ^g = 1\n\tQuit\n}\n",
         )]);
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Expected return value of type 'Any' but got nothing"),
+            "{diagnostics:?}"
+        );
+        assert_eq!(diagnostics[0].range.start.line, 13, "{diagnostics:?}");
         let diagnostics = diagnostics_for(&[(
             "Bad.mac",
             "ROUTINE Bad\n\tQuit\nProc() public {\n\tGoto nowhere\n\tQuit\nexitEarly\n\tQuit\n}\n",
@@ -5335,27 +5343,23 @@ mod tests {
         assert_eq!(diagnostics[0].range.start.line, 6, "{diagnostics:?}");
     }
 
-    // A label a method body `Goto`es returns for the method, so its `Quit` is held to the
-    // method's declared return type; a label it `Do`es returns to the `Do` and is not.
+    // Every label inside a method returns for the method, so its `Quit` is held to the declared
+    // return type -- also one only ever `Do`ne, whose bare `Quit` is then reported.
     #[test]
-    fn goto_target_label_inside_a_method_returns_for_the_method() {
+    fn labels_inside_a_method_return_for_the_method() {
         let diagnostics = class_diagnostics(
             "ClassMethod M(x) As %Status {\n If x Goto Done\n Do step\n Quit 1\nDone\n Quit\nstep\n Set ^x = 1\n Quit\n}\n",
         );
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0]
-                .message
-                .contains("Expected return value of type '%Status' but got nothing"),
-            "{diagnostics:?}"
-        );
-        assert_eq!(diagnostics[0].range.start.line, 6, "{diagnostics:?}");
-        // The `Goto` may sit in a nested block, or in a label checked after its target.
-        let diagnostics = class_diagnostics(
-            "ClassMethod M(x) As %Status {\n If x {\n  Goto Done\n }\n Do step\n Quit 1\nDone\n Quit\nstep\n Set ^x = 1\n Goto Done\n}\n",
-        );
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].range.start.line, 8, "{diagnostics:?}");
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        for (diagnostic, line) in diagnostics.iter().zip([6, 9]) {
+            assert!(
+                diagnostic
+                    .message
+                    .contains("Expected return value of type '%Status' but got nothing"),
+                "{diagnostics:?}"
+            );
+            assert_eq!(diagnostic.range.start.line, line, "{diagnostics:?}");
+        }
     }
 
     // A procedure block's return shape is whatever its first return establishes, and a label

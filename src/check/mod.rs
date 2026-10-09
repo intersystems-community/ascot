@@ -24,15 +24,11 @@ pub mod types;
 use either::Either::{self, Left, Right};
 use env::*;
 use flow::*;
-use std::{
-    collections::{HashMap, HashSet},
-    iter::once,
-    ops::Deref,
-};
+use std::{collections::HashMap, iter::once, ops::Deref, sync::Arc};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
 use types::*;
 
-pub use env::{DocumentEnv, Labels, WorkspaceEnv};
+pub use env::{DocumentEnv, Signatures, WorkspaceEnv};
 use errors::TypeErrorKind;
 pub use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
@@ -604,18 +600,17 @@ fn label_details(
 }
 
 // A brace-delimited body -- a method's, or a routine procedure block's -- with its own labels
-// (`Set $ZT="Trap"` handlers, `Goto` targets, `Do`/`$$` subroutines), checked the way a routine's
-// labels are. A label that returns for the body (one the main body falls into or `Goto`es, or one
-// a label falls through into) shares the body's output expectation; a `Do`/`$$` subroutine returns
-// to its caller and has its own. `is_procedure` is false for a control-flow block (`If {...}`),
-// which a `Goto` may leave.
+// (`Set $ZT="Trap"` handlers, `Goto` targets), checked the way a routine's labels are, except
+// that they return for the body: a method's declared return type, or whatever a procedure's
+// first return establishes. (A label meant for `Do` belongs at class level.) `is_procedure` is
+// false for a control-flow block (`If {...}`), which a `Goto` may leave.
 fn check_block_body<'a>(
     body: &cos::ProcedureBody,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     is_procedure: bool,
 ) -> Result<(), TypeError> {
-    let goto_targets = goto_targets_of(body);
+    let output = flow.output_expectation();
     let labels: Labels = body
         .subroutines
         .iter()
@@ -623,8 +618,8 @@ fn check_block_body<'a>(
         .filter_map(|sub| label_details(env, sub))
         .map(|details| {
             let label = LabelEntry {
-                goto_target: goto_targets.contains(&details.name.it),
-                ..details.to_ty_procedure(Some(env.uri())).into()
+                output: Some(output.clone()),
+                ..Arc::new(details.to_ty_procedure(Some(env.uri()))).into()
             };
             (details.name.it, label)
         })
@@ -645,7 +640,6 @@ fn check_block_body<'a>(
     if subroutines.is_empty() {
         return Ok(());
     }
-    let mut carried = flow.falls_through().then(|| flow.output_expectation());
     flow.handle_void()?;
     // The labels read the body's variables from their own flows, so the deferred
     // "never read"/"never assigned" reports for the main body can't be trusted.
@@ -657,114 +651,22 @@ fn check_block_body<'a>(
         let Some(range) = body_end_range(env, &sub.body) else {
             continue;
         };
-        let output = carried.take().or_else(|| {
-            env.is_goto_target(&details.name.it)
-                .then(|| flow.output_expectation())
-        });
-        let (_, fell_through) = Flow::with_label(
+        let output = env
+            .label_entry(&details.name.it)
+            .and_then(|label| label.output.clone());
+        // Each label is checked on its own: one's hard error doesn't hide the next one's.
+        if let Err(err) = Flow::with_label(
             env.uri(),
             env.deref(),
             range,
             details.args(),
             output,
             |flow| sub.check(env, flow),
-        )?;
-        carried = fell_through;
+        ) {
+            env.add_soft_diagnostic(err.into());
+        }
     }
     Ok(())
-}
-
-// The bare labels `body` (its main part and its labels) `Goto`es.
-fn goto_targets_of(body: &cos::ProcedureBody) -> HashSet<String> {
-    fn block(block: &cos::Block, out: &mut HashSet<String>) {
-        match block {
-            cos::Block::Curry(body) => procedure_body(body, out),
-            cos::Block::Command(commands) => {
-                commands.items.iter().for_each(|cmd| command(cmd, out));
-            }
-        }
-    }
-    fn procedure_body(body: &cos::ProcedureBody, out: &mut HashSet<String>) {
-        let lines = body
-            .main
-            .line_1
-            .iter()
-            .flat_map(|line| line.commands.iter().flat_map(|cmds| cmds.items.iter()))
-            .chain(body.main.line_n.iter().flat_map(|lines| {
-                lines
-                    .items
-                    .iter()
-                    .flat_map(|line| line.commands.iter().flat_map(|cmds| cmds.items.iter()))
-            }));
-        lines.for_each(|cmd| command(cmd, out));
-        for sub in body.subroutines.iter().flat_map(|subs| subs.items.iter()) {
-            sub.body
-                .as_command_lines()
-                .flat_map(|line| line.commands.iter().flat_map(|cmds| cmds.items.iter()))
-                .for_each(|cmd| command(cmd, out));
-        }
-    }
-    fn command(cmd: &cos::Command, out: &mut HashSet<String>) {
-        match cmd {
-            cos::Command::Goto {
-                args: Some(args), ..
-            } => {
-                for GoToArg { location, .. } in args.items.iter() {
-                    match location {
-                        AllowCase::Plain(cos::Location(AllowIndirection::Plain(location))) => {
-                            if let LegacyEntryRef::Label(lor) = location.deref()
-                                && lor.routine.is_none()
-                            {
-                                out.insert(lor.label.print());
-                            }
-                        }
-                        AllowCase::Plain(_) => {}
-                        AllowCase::Case(cases) => {
-                            for (i, arg) in cases.items.iter().enumerate() {
-                                let target = match arg.deref() {
-                                    Some(cos::FunArg::ColonNormal(cos::ExpColExp {
-                                        e2, ..
-                                    })) if i > 0 => e2,
-                                    Some(cos::FunArg::ColonDefault(default)) if i > 0 => default,
-                                    _ => continue,
-                                };
-                                if let Some(label) = target.as_variable() {
-                                    out.insert(label.print());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            cos::Command::If {
-                branches: Some(cos::IfBranches { thn, eifs, els }),
-                ..
-            } => {
-                block(thn, out);
-                eifs.iter().for_each(|eif| block(&eif.thn, out));
-                if let Some(els) = els.as_deref().and_then(|els| els.as_deref()) {
-                    block(els, out);
-                }
-            }
-            cos::Command::ElseIf(eif) => block(&eif.thn, out),
-            cos::Command::Else(els) => {
-                if let Some(els) = els.as_deref() {
-                    block(els, out);
-                }
-            }
-            cos::Command::While { bdy, .. } => procedure_body(bdy, out),
-            cos::Command::For { bdy: Some(bdy), .. } => block(bdy, out),
-            cos::Command::DoWhile { iter, .. } => procedure_body(iter, out),
-            cos::Command::Try { b1, b2, .. } => {
-                block(b1, out);
-                block(b2, out);
-            }
-            _ => {}
-        }
-    }
-    let mut out = HashSet::new();
-    procedure_body(body, &mut out);
-    out
 }
 
 impl CheckCommand for cos::ProcedureMain {
@@ -3411,7 +3313,7 @@ pub fn check_rtn(
         .flat_map(|srs| srs.items.iter())
         .map(|elem| (elem, details::routine_element_kind(olc, elem)))
         .collect();
-    let labels: Labels = env::labels_of(olc, rtn, Some(env.uri()));
+    let labels = env::labels_of(olc, rtn, Some(env.uri()));
     let env = env.for_routine(labels, definitions);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a

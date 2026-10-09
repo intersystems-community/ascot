@@ -175,10 +175,6 @@ impl<'a> Flow<'a> {
         Ok((creates, fell_through.then_some(output)))
     }
 
-    pub(crate) fn falls_through(&self) -> bool {
-        self.bindings.is_some()
-    }
-
     pub(crate) fn output_expectation(&self) -> OutputExpectation {
         self.shared.output.clone()
     }

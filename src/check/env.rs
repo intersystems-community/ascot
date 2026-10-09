@@ -12,6 +12,7 @@
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -22,6 +23,7 @@ use tygr::{IntoInner, OLC, Range};
 
 use crate::bindings::{ArgMode, InlayHint, MemberKind};
 use crate::check::errors::*;
+use crate::check::flow::OutputExpectation;
 use crate::check::types::*;
 use crate::cos::{CodeMode, MethodLanguage};
 use crate::details::{MemberDetails, MemberKindSpecificDetails, MemberNs, WithRange};
@@ -1131,7 +1133,7 @@ impl<'a> WorkspaceEnv<'a> {
     // open in the workspace; `None` only when neither finds it (or there's no IRIS connection).
     // `None` when there is no such routine; `Some(None)` when there is one but it can't be
     // parsed (a grammar gap), so its labels are simply unknown.
-    pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Option<Option<Labels>> {
+    pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Option<Option<Signatures>> {
         if let Some(uri) = self.resolve_rtn_uri(name) {
             let rtn = self.workspace.rtn_details(&uri).ok();
             return Some(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
@@ -1433,7 +1435,7 @@ impl<'a> DocumentEnv<'a> {
 
     pub fn for_routine<'b>(
         &'b self,
-        labels: Labels,
+        labels: Signatures,
         macro_definitions: &'b MacroDefinitions,
     ) -> CodeEnv<'b> {
         CodeEnv {
@@ -1441,7 +1443,12 @@ impl<'a> DocumentEnv<'a> {
             is_instance: false,
             offset: 0,
             this: None,
-            labels: Some(Arc::new(labels)),
+            labels: Some(Rc::new(
+                labels
+                    .into_iter()
+                    .map(|(name, proc)| (name, proc.into()))
+                    .collect(),
+            )),
             method_name: None,
             macro_definitions: Some(macro_definitions),
         }
@@ -1484,7 +1491,10 @@ impl<'a> DocumentEnv<'a> {
     }
 }
 
-/// label -> signature, for the subroutines/procedures declared in the current routine.
+/// label -> signature, for the subroutines/procedures declared in a routine.
+pub type Signatures = HashMap<String, Arc<TyProcedure>>;
+
+/// The labels in scope while checking a body.
 pub type Labels = HashMap<String, LabelEntry>;
 
 #[derive(Clone)]
@@ -1493,29 +1503,35 @@ pub struct LabelEntry {
     // Inside a procedure block, the routine's own labels: a bare `Goto` to one fails to compile
     // (IRIS: <NOLINE>), though `Do`/`$$` may call them.
     pub outside_block: bool,
-    // One the enclosing body `Goto`es (see `check_block_body`).
-    pub goto_target: bool,
+    // What its returns are held to: the enclosing method's or procedure block's, shared with
+    // that body. `None` for a routine-level label, which has its own.
+    pub output: Option<OutputExpectation>,
 }
 
-impl From<TyProcedure> for LabelEntry {
-    fn from(proc: TyProcedure) -> Self {
+impl From<Arc<TyProcedure>> for LabelEntry {
+    fn from(proc: Arc<TyProcedure>) -> Self {
         LabelEntry {
-            proc: Arc::new(proc),
+            proc,
             outside_block: false,
-            goto_target: false,
+            output: None,
         }
     }
 }
 
 /// Builds `routine`'s label map — shared by `check_rtn` (the current routine) and
 /// `WorkspaceEnv::resolve_rtn_labels` (some other routine already in the workspace).
-pub(crate) fn labels_of(olc: &OLC, routine: &cos::Routine, uri: Option<&str>) -> Labels {
+pub(crate) fn labels_of(olc: &OLC, routine: &cos::Routine, uri: Option<&str>) -> Signatures {
     routine
         .subroutines
         .iter()
         .flat_map(|subs| subs.items.iter())
         .filter_map(|elem| crate::details::routine_element_kind(olc, elem))
-        .map(|details| (details.name.it.clone(), details.to_ty_procedure(uri).into()))
+        .map(|details| {
+            (
+                details.name.it.clone(),
+                Arc::new(details.to_ty_procedure(uri)),
+            )
+        })
         .collect()
 }
 
@@ -1524,7 +1540,7 @@ pub struct CodeEnv<'a> {
     base: &'a DocumentEnv<'a>,
     is_instance: bool,
     offset: usize,
-    labels: Option<Arc<Labels>>,
+    labels: Option<Rc<Labels>>,
     // The enclosing method's name, when known — `##super(...)` calls the superclass's version
     // of this same method, so resolving it needs to know which method that is.
     method_name: Option<&'a str>,
@@ -1569,24 +1585,19 @@ impl<'a> CodeEnv<'a> {
             base: self.base,
             is_instance: self.is_instance,
             offset: self.offset,
-            labels: Some(Arc::new(labels)),
+            labels: Some(Rc::new(labels)),
             method_name: self.method_name,
             macro_definitions: self.macro_definitions,
         }
     }
 
-    pub(crate) fn goto_leaves_block(&self, label: &str) -> bool {
-        self.labels
-            .as_ref()
-            .and_then(|labels| labels.get(label))
-            .is_some_and(|label| label.outside_block)
+    pub(crate) fn label_entry(&self, label: &str) -> Option<&LabelEntry> {
+        self.labels.as_ref().and_then(|labels| labels.get(label))
     }
 
-    pub(crate) fn is_goto_target(&self, label: &str) -> bool {
-        self.labels
-            .as_ref()
-            .and_then(|labels| labels.get(label))
-            .is_some_and(|label| label.goto_target)
+    pub(crate) fn goto_leaves_block(&self, label: &str) -> bool {
+        self.label_entry(label)
+            .is_some_and(|label| label.outside_block)
     }
 
     pub(crate) fn is_defined_macro(&self, name: &str) -> bool {
@@ -1753,7 +1764,7 @@ impl<'a> CodeEnv<'a> {
             Some(routine) => match (label, offset) {
                 (Some(label), None) => match self.resolve_rtn_labels(&routine) {
                     Some(Some(labels)) => match labels.get(&label) {
-                        Some(label) => Ok(TyProcedureOrAny::Procedure(label.proc.clone())),
+                        Some(proc) => Ok(TyProcedureOrAny::Procedure(proc.clone())),
                         None => Err(QuasiTypeError::cannot_find_label(label, Some(routine))),
                     },
                     Some(None) => Ok(TyProcedureOrAny::Any),
