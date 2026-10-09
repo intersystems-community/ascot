@@ -12,6 +12,7 @@
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -1444,6 +1445,8 @@ impl<'a> DocumentEnv<'a> {
             labels: Some(Arc::new(labels)),
             method_name: None,
             macro_definitions: Some(macro_definitions),
+            goto_targets: Rc::default(),
+            block_labels: None,
         }
     }
 
@@ -1462,6 +1465,8 @@ impl<'a> DocumentEnv<'a> {
             labels: None,
             method_name: Some(method_name),
             macro_definitions: Some(macro_definitions),
+            goto_targets: Rc::default(),
+            block_labels: None,
         }
     }
 
@@ -1480,6 +1485,8 @@ impl<'a> DocumentEnv<'a> {
             method_name: Some(method_name),
             labels: None,
             macro_definitions: Some(macro_definitions),
+            goto_targets: Rc::default(),
+            block_labels: None,
         }
     }
 }
@@ -1516,6 +1523,12 @@ pub struct CodeEnv<'a> {
     // The enclosing class's own resolved `Include`s, for suggesting a similarly named macro on
     // an undefined-macro error -- `None` outside a class method (e.g. a routine).
     macro_definitions: Option<&'a MacroDefinitions>,
+    // The labels this body `Goto`es: such a label returns for the body, where a `Do`/`$$`
+    // subroutine returns to its caller (see `check_block_body`).
+    goto_targets: Rc<RefCell<HashSet<String>>>,
+    // Inside a procedure block: the labels defined in it. `Goto` can't leave the block (IRIS
+    // fails to compile with <NOLINE>), though `Do`/`$$` may still call the routine's labels.
+    block_labels: Option<Rc<HashSet<String>>>,
 }
 
 impl<'a> CodeEnv<'a> {
@@ -1537,10 +1550,41 @@ impl<'a> CodeEnv<'a> {
     // The labels of a brace-delimited body, on top of the enclosing ones: a routine's labels
     // stay callable from inside its procedure blocks, and a nested label shadows a same-named
     // outer one.
-    pub(crate) fn with_nested_labels(&self, nested: Labels) -> CodeEnv<'a> {
+    pub(crate) fn with_nested_labels(&self, nested: Labels, is_procedure: bool) -> CodeEnv<'a> {
         let mut labels = self.labels.as_deref().cloned().unwrap_or_default();
+        let (block_labels, goto_targets) = if is_procedure {
+            (
+                Some(Rc::new(nested.keys().cloned().collect())),
+                Rc::default(),
+            )
+        } else {
+            (self.block_labels.clone(), self.goto_targets.clone())
+        };
         labels.extend(nested);
-        self.with_labels(labels)
+        CodeEnv {
+            block_labels,
+            goto_targets,
+            ..self.with_labels(labels)
+        }
+    }
+
+    // A `Goto` to a routine-level label from inside a procedure block.
+    pub(crate) fn goto_leaves_block(&self, label: &str) -> bool {
+        self.block_labels
+            .as_ref()
+            .is_some_and(|block| !block.contains(label))
+            && self
+                .labels
+                .as_ref()
+                .is_some_and(|labels| labels.contains_key(label))
+    }
+
+    pub(crate) fn note_goto_target(&self, label: String) {
+        self.goto_targets.borrow_mut().insert(label);
+    }
+
+    pub(crate) fn is_goto_target(&self, label: &str) -> bool {
+        self.goto_targets.borrow().contains(label)
     }
 
     pub(crate) fn with_labels(&self, labels: Labels) -> CodeEnv<'a> {
@@ -1552,6 +1596,8 @@ impl<'a> CodeEnv<'a> {
             labels: Some(Arc::new(labels)),
             method_name: self.method_name,
             macro_definitions: self.macro_definitions,
+            goto_targets: Rc::default(),
+            block_labels: None,
         }
     }
 

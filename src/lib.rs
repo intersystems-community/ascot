@@ -5319,5 +5319,75 @@ mod tests {
                 .contains("Cannot find label 'nowhere'"),
             "{diagnostics:?}"
         );
+        // `Goto` can't leave the block (IRIS: <NOLINE>), though `Do` may call out of it.
+        let diagnostics = diagnostics_for(&[(
+            "Out.mac",
+            "ROUTINE Out\n\tQuit\nOuter\n\tQuit\nProc() public {\n\tDo Outer\n\tGoto Outer\n}\n",
+        )]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot GOTO label 'Outer' from inside a procedure block"),
+            "{diagnostics:?}"
+        );
+        assert_eq!(diagnostics[0].range.start.line, 6, "{diagnostics:?}");
+    }
+
+    // A label a method body `Goto`es returns for the method, so its `Quit` is held to the
+    // method's declared return type; a label it `Do`es returns to the `Do` and is not.
+    #[test]
+    fn goto_target_label_inside_a_method_returns_for_the_method() {
+        let diagnostics = class_diagnostics(
+            "ClassMethod M(x) As %Status {\n If x Goto Done\n Do step\n Quit 1\nDone\n Quit\nstep\n Set ^x = 1\n Quit\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Expected return value of type '%Status' but got nothing"),
+            "{diagnostics:?}"
+        );
+        assert_eq!(diagnostics[0].range.start.line, 6, "{diagnostics:?}");
+    }
+
+    // A procedure block's return shape is whatever its first return establishes, and a label
+    // it `Goto`es shares that.
+    #[test]
+    fn goto_target_label_inside_a_procedure_block_shares_its_return_shape() {
+        let diagnostics = diagnostics_for(&[(
+            "Pb.mac",
+            "ROUTINE Pb\n\tQuit\nProc(x) public {\n\tIf x Quit 1\n\tGoto fin\nfin\n\tQuit\n}\n",
+        )]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Expected return value of type 'Any' but got nothing"),
+            "{diagnostics:?}"
+        );
+    }
+
+    // A routine-level label that falls off its end runs into the next label, which then
+    // returns for both: their return shapes must agree.
+    #[test]
+    fn label_falling_through_shares_the_next_labels_return_shape() {
+        let diagnostics = diagnostics_for(&[(
+            "Ft.mac",
+            "ROUTINE Ft\n\tQuit\nA(y)\n\tIf y Quit\n\tSet x = 1\nB\n\tQuit x\n",
+        )]);
+        let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("Missing an explicit QUIT")),
+            "{diagnostics:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("Unexpected return value")),
+            "{diagnostics:?}"
+        );
     }
 }

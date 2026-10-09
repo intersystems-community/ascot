@@ -529,7 +529,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                         err,
                     )
                 })?;
-                check_block_body(&body, env, flow)
+                check_block_body(&body, env, flow, true)
             }
             (
                 Option::None | Option::Some(cos::MethodLanguage::ObjectScript(..)),
@@ -603,10 +603,12 @@ fn label_details(
 // (`Set $ZT="Trap"` handlers, `Goto` targets, `Do`/`$$` subroutines). They're checked the way a
 // routine's labels are: each on its own, with nothing assumed about how it is entered. The main
 // body's end runs into the first label, which then quits for the body.
+// `is_procedure` is false for a control-flow block (`If {...}`), which `Goto` may still leave.
 fn check_block_body<'a>(
     body: &cos::ProcedureBody,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
+    is_procedure: bool,
 ) -> Result<(), TypeError> {
     let labels: Labels = body
         .subroutines
@@ -618,7 +620,13 @@ fn check_block_body<'a>(
             (details.name.it, Arc::new(procedure))
         })
         .collect();
-    let env = &env.with_nested_labels(labels);
+    let nested;
+    let env = if is_procedure || !labels.is_empty() {
+        nested = env.with_nested_labels(labels, is_procedure);
+        &nested
+    } else {
+        env
+    };
     body.main.check(env, flow)?;
     let subroutines: Vec<_> = body
         .subroutines
@@ -628,8 +636,13 @@ fn check_block_body<'a>(
     if subroutines.is_empty() {
         return Ok(());
     }
+    // A label that returns for the body shares its output expectation (a method's declared
+    // return type; whatever a procedure's first return establishes): one the main body falls
+    // into, one it `Goto`es, or one a label falls through into. A `Do`/`$$` subroutine returns
+    // to its caller instead, so its expectation is its own.
+    let mut carried = flow.falls_through().then(|| flow.output_expectation());
     flow.handle_void()?;
-    // The labels read the method's variables from their own flows, so the deferred
+    // The labels read the body's variables from their own flows, so the deferred
     // "never read"/"never assigned" reports for the main body can't be trusted.
     flow.mark_incomplete();
     for sub in subroutines {
@@ -639,9 +652,19 @@ fn check_block_body<'a>(
         let Some(range) = body_end_range(env, &sub.body) else {
             continue;
         };
-        Flow::with_subroutine(env.uri(), env.deref(), range, details.args(), |flow| {
-            sub.check(env, flow)
-        })?;
+        let output = carried.take().or_else(|| {
+            env.is_goto_target(&details.name.it)
+                .then(|| flow.output_expectation())
+        });
+        let (_, fell_through) = Flow::with_label(
+            env.uri(),
+            env.deref(),
+            range,
+            details.args(),
+            output,
+            |flow| sub.check(env, flow),
+        )?;
+        carried = fell_through;
     }
     Ok(())
 }
@@ -660,7 +683,7 @@ impl CheckCommand for cos::ProcedureMain {
 
 impl CheckCommand for cos::ProcedureBody {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        check_block_body(self, env, flow)
+        check_block_body(self, env, flow, false)
     }
 }
 
@@ -928,6 +951,15 @@ impl CheckCommandInner for cos::Command {
                 check_pc(pc, env, flow, |flow| match location {
                     AllowCase::Plain(cos::Location(location)) => match location {
                         AllowIndirection::Plain(location) => {
+                            if let LegacyEntryRef::Label(lor) = location.deref()
+                                && lor.routine.is_none()
+                            {
+                                let label = lor.label.print();
+                                if env.goto_leaves_block(&label) {
+                                    return Err(QuasiTypeError::goto_out_of_block(label));
+                                }
+                                env.note_goto_target(label);
+                            }
                             let _ = check_legacy_label_call(env, flow, location, &None)?;
                             Ok(flow.handle_void()?)
                         }
@@ -3243,7 +3275,7 @@ fn check_procedure(
             details::RoutineElementKind::Procedure { public_list } => Some(public_list.clone()),
         },
         env.with_range(this.header.as_ref().map(|_| None)),
-        |flow| this.body.check(env, flow),
+        |flow| check_block_body(&this.body, env, flow, true),
         true,
         false,
     )?;
@@ -3300,20 +3332,31 @@ pub fn check_rtn(
             Err(err) => diagnostics.push(err.into()),
         }
     }
+    // A label that falls off its end runs into the next one, which then returns for both.
+    let mut carried = None;
     for (elem, details) in &elements {
         let Some(details) = details else { continue };
         let result = match elem {
-            cos::RoutineElement::Procedure(procedure) => check_procedure(procedure, details, &env),
+            cos::RoutineElement::Procedure(procedure) => {
+                carried = None;
+                check_procedure(procedure, details, &env)
+            }
             cos::RoutineElement::Subroutine(subroutine) => {
                 // No commands at all (an alias label, or comments only) falls through to the
                 // next label -- nothing to check, and nothing to demand a QUIT from.
                 let Some(range) = body_end_range(&env, &subroutine.body) else {
                     continue;
                 };
-                Flow::with_subroutine(env.uri(), env.deref(), range, details.args(), |flow| {
-                    subroutine.check(&env, flow)
-                })
-                .map(|creates| {
+                Flow::with_label(
+                    env.uri(),
+                    env.deref(),
+                    range,
+                    details.args(),
+                    carried.take(),
+                    |flow| subroutine.check(&env, flow),
+                )
+                .map(|(creates, fell_through)| {
+                    carried = fell_through;
                     if let Some(hint) = creates_hint(details.name.range.end, creates) {
                         env.hint(hint);
                     }

@@ -237,6 +237,10 @@ impl QuasiTypeError {
         Self::WithoutRange(TypeErrorKind::CannotFindLabel { label, routine }, vec![])
     }
 
+    pub fn goto_out_of_block(label: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::GotoOutOfBlock(label), vec![])
+    }
+
     pub fn cannot_find_routine(routine: String) -> Self {
         Self::WithoutRange(TypeErrorKind::CannotFindRoutine(routine), vec![])
     }
@@ -292,6 +296,7 @@ pub enum TypeErrorKind {
         label: String,
         routine: Option<String>,
     },
+    GotoOutOfBlock(String),
     CannotFindRoutine(String),
     CannotFindInclude(String),
     MacroExpansionTooDeep(String),
@@ -410,6 +415,7 @@ impl TypeErrorKind {
             TypeErrorKind::CannotFindClass { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::CannotFindMember { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::CannotFindLabel { .. } => DiagnosticSeverity::Error,
+            TypeErrorKind::GotoOutOfBlock(_) => DiagnosticSeverity::Error,
             TypeErrorKind::CannotFindRoutine(_) => DiagnosticSeverity::Error,
             TypeErrorKind::CannotFindInclude(_) => DiagnosticSeverity::Error,
             TypeErrorKind::MacroExpansionTooDeep(_) => DiagnosticSeverity::Error,
@@ -486,6 +492,10 @@ impl std::fmt::Display for TypeErrorKind {
                 Some(routine) => write!(f, "Cannot find label '{label}' in routine '{routine}'"),
                 None => write!(f, "Cannot find label '{label}' in this routine"),
             },
+            TypeErrorKind::GotoOutOfBlock(label) => write!(
+                f,
+                "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"
+            ),
             TypeErrorKind::CannotFindRoutine(routine) => {
                 write!(
                     f,

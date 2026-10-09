@@ -38,8 +38,10 @@ struct Shared<'a> {
     env: &'a WorkspaceEnv<'a>,
     procedure_block: bool,
     // `None` is for subroutines and procedures only. It means that the output expectation
-    // is unclear until the first return/quit command.
-    output: RefCell<Option<WithRange<Option<Ty>>>>,
+    // is unclear until the first return/quit command. Shared (the `Rc`) with the labels inside
+    // a method body or procedure block, which return for that body, and with the label a
+    // routine-level label falls through into.
+    output: OutputExpectation,
     ty_var: RefCell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
     // Kept in declaration order for a deterministic diagnostic when more than one is never
@@ -55,6 +57,8 @@ struct Shared<'a> {
     // read"/"never assigned" reports can't be trusted after that.
     incomplete: std::cell::Cell<bool>,
 }
+
+pub(crate) type OutputExpectation = Rc<RefCell<Option<WithRange<Option<Ty>>>>>;
 
 struct LoopContext {
     range: bindings::Range,
@@ -144,17 +148,42 @@ impl<'a> Flow<'a> {
         args: Vec<WithRange<NormalArg>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
     ) -> Result<Vec<String>, TypeError> {
-        Self::with_procedure(
+        Self::with_label(uri, env, range, args, None, handler).map(|(creates, _)| creates)
+    }
+
+    // A routine-level label. `carried` is the previous label's output expectation, when that
+    // label fell through into this one: whatever this one returns is what the previous one
+    // returns too. Likewise hands its own on when it falls through.
+    pub(crate) fn with_label(
+        uri: &'a str,
+        env: &'a WorkspaceEnv,
+        range: bindings::Range,
+        args: Vec<WithRange<NormalArg>>,
+        carried: Option<OutputExpectation>,
+        handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
+    ) -> Result<(Vec<String>, Option<OutputExpectation>), TypeError> {
+        let output = carried.unwrap_or_default();
+        let (creates, fell_through) = Self::run(
             uri,
             env,
             range,
             args,
             None,
-            WithRange { it: None, range },
+            output.clone(),
             handler,
             false,
             false,
-        )
+        )?;
+        Ok((creates, fell_through.then_some(output)))
+    }
+
+    // Whether control can still reach the end of what's been checked so far.
+    pub(crate) fn falls_through(&self) -> bool {
+        self.bindings.is_some()
+    }
+
+    pub(crate) fn output_expectation(&self) -> OutputExpectation {
+        self.shared.output.clone()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -172,6 +201,37 @@ impl<'a> Flow<'a> {
         // mistake of this method's.
         inherited_signature: bool,
     ) -> Result<Vec<String>, TypeError> {
+        let output = Rc::new(RefCell::new(
+            output.it.map(|it| WithRange::new(it, output.range)),
+        ));
+        Self::run(
+            uri,
+            env,
+            range,
+            args,
+            public_list,
+            output,
+            handler,
+            auto_return,
+            inherited_signature,
+        )
+        .map(|(creates, _)| creates)
+    }
+
+    // Runs `handler` in a fresh flow for a body with `args`; returns what the body creates, and
+    // whether it fell off its end (into whatever label follows it).
+    #[allow(clippy::too_many_arguments)]
+    fn run(
+        uri: &'a str,
+        env: &'a WorkspaceEnv,
+        range: bindings::Range,
+        args: Vec<WithRange<NormalArg>>,
+        public_list: ProcedureBlock,
+        output: OutputExpectation,
+        handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
+        auto_return: bool,
+        inherited_signature: bool,
+    ) -> Result<(Vec<String>, bool), TypeError> {
         let procedure_block = public_list.is_some();
         let mut bindings = HashMap::new();
         let mut reading_list = HashMap::new();
@@ -244,10 +304,6 @@ impl<'a> Flow<'a> {
                 }
             }
         }
-        let output = RefCell::new(match output.it {
-            Some(it) => Some(WithRange::new(it, output.range)),
-            None => None,
-        });
         let mut flow = Self {
             shared: Rc::new(Shared {
                 uri,
@@ -278,7 +334,8 @@ impl<'a> Flow<'a> {
         }
         // Bad style rather than a fault: the next label's code simply runs, so the deferred
         // checks below still apply.
-        if flow.bindings.is_some() {
+        let fell_through = flow.bindings.is_some();
+        if fell_through {
             flow.add_soft_diagnostic(TypeError::missing_quit(range).into());
         }
         // Deferred until every split flow has run: still `false` means never read.
@@ -313,7 +370,7 @@ impl<'a> Flow<'a> {
             .cloned()
             .collect();
         creates.sort();
-        Ok(creates)
+        Ok((creates, fell_through))
     }
 
     pub(crate) fn with_loop(
