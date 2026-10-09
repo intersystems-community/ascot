@@ -24,7 +24,7 @@ pub mod types;
 use either::Either::{self, Left, Right};
 use env::*;
 use flow::*;
-use std::{collections::HashMap, iter::once, ops::Deref, sync::Arc};
+use std::{collections::HashMap, iter::once, ops::Deref};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
 use types::*;
 
@@ -610,20 +610,17 @@ fn check_block_body<'a>(
     flow: &mut Flow<'a>,
     is_procedure: bool,
 ) -> Result<(), TypeError> {
-    let output = flow.output_expectation();
-    let labels: ScopedLabels = body
+    let details: Vec<_> = body
         .subroutines
         .iter()
         .flat_map(|subs| subs.items.iter())
         .filter_map(|sub| label_details(env, sub))
-        .map(|details| {
-            let label = LabelEntry {
-                output: Some(output.clone()),
-                ..Arc::new(details.to_ty_procedure(Some(env.uri()))).into()
-            };
-            (details.name.it, label)
-        })
         .collect();
+    let labels = env::scoped_labels(
+        env.uri(),
+        &details.iter().map(|d| (d, false)).collect::<Vec<_>>(),
+        Some(flow.output_expectation()),
+    );
     let nested;
     let env = if is_procedure || !labels.is_empty() {
         nested = env.with_nested_labels(labels, is_procedure);
@@ -653,7 +650,7 @@ fn check_block_body<'a>(
         };
         let output = env
             .label_entry(&details.name.it)
-            .and_then(|label| label.output.clone());
+            .and_then(|label| label.output.get().cloned());
         // Each label is checked on its own: one's hard error doesn't hide the next one's.
         if let Err(err) = Flow::with_label(
             env.uri(),
@@ -3313,8 +3310,14 @@ pub fn check_rtn(
         .flat_map(|srs| srs.items.iter())
         .map(|elem| (elem, details::routine_element_kind(olc, elem)))
         .collect();
-    let labels = env::labels_of(olc, rtn, Some(env.uri()));
-    let env = env.for_routine(labels, definitions);
+    let labels: Vec<_> = elements
+        .iter()
+        .filter_map(|(elem, details)| {
+            let details = details.as_ref()?;
+            Some((details, matches!(elem, cos::RoutineElement::Procedure(_))))
+        })
+        .collect();
+    let env = env.for_routine(env::scoped_labels(env.uri(), &labels, None), definitions);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a
     // tags-only routine — there's no meaningful position to blame it falling through on, so
@@ -3332,18 +3335,25 @@ pub fn check_rtn(
         }
     }
     // A label that falls off its end runs into the next one, which then returns for both.
-    let mut carried = None;
+    let fall_into_next = |entry: &LabelEntry, output| {
+        if let Some(next) = entry.next.as_deref().and_then(|next| env.label_entry(next)) {
+            let _ = next.output.set(output);
+        }
+    };
     for (elem, details) in &elements {
         let Some(details) = details else { continue };
         let result = match elem {
-            cos::RoutineElement::Procedure(procedure) => {
-                carried = None;
-                check_procedure(procedure, details, &env)
-            }
+            cos::RoutineElement::Procedure(procedure) => check_procedure(procedure, details, &env),
             cos::RoutineElement::Subroutine(subroutine) => {
+                let Some(entry) = env.label_entry(&details.name.it) else {
+                    continue;
+                };
                 // No commands at all (an alias label, or comments only) falls through to the
                 // next label -- nothing to check, and nothing to demand a QUIT from.
                 let Some(range) = body_end_range(&env, &subroutine.body) else {
+                    if let Some(output) = entry.output.get() {
+                        fall_into_next(entry, output.clone());
+                    }
                     continue;
                 };
                 Flow::with_label(
@@ -3351,11 +3361,13 @@ pub fn check_rtn(
                     env.deref(),
                     range,
                     details.args(),
-                    carried.take(),
+                    entry.output.get().cloned(),
                     |flow| subroutine.check(&env, flow),
                 )
                 .map(|(creates, fell_through)| {
-                    carried = fell_through;
+                    if let Some(output) = fell_through {
+                        fall_into_next(entry, output);
+                    }
                     if let Some(hint) = creates_hint(details.name.range.end, creates) {
                         env.hint(hint);
                     }

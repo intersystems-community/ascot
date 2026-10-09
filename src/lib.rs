@@ -5383,22 +5383,25 @@ mod tests {
     // returns for both: their return shapes must agree.
     #[test]
     fn label_falling_through_shares_the_next_labels_return_shape() {
-        let diagnostics = diagnostics_for(&[(
-            "Ft.mac",
+        // Directly, and across an alias label (`B`, no commands) in between.
+        for text in [
             "ROUTINE Ft\n\tQuit\nA(y)\n\tIf y Quit\n\tSet x = 1\nB\n\tQuit x\n",
-        )]);
-        let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("Missing an explicit QUIT")),
-            "{diagnostics:?}"
-        );
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("Unexpected return value")),
-            "{diagnostics:?}"
-        );
+            "ROUTINE Ft\n\tQuit\nA(y)\n\tIf y Quit\n\tSet x = 1\nB\nC\n\tQuit x\n",
+        ] {
+            let diagnostics = diagnostics_for(&[("Ft.mac", text)]);
+            let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m.contains("Missing an explicit QUIT")),
+                "{diagnostics:?}"
+            );
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m.contains("Unexpected return value")),
+                "{diagnostics:?}"
+            );
+        }
     }
 }

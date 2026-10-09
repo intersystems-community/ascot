@@ -11,7 +11,7 @@
 //! for hover and go-to-definition, so member lookup rules live here only once.
 
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{
@@ -25,7 +25,9 @@ use crate::bindings::{ArgMode, InlayHint, MemberKind};
 use crate::check::errors::*;
 use crate::check::types::*;
 use crate::cos::{CodeMode, MethodLanguage};
-use crate::details::{MemberDetails, MemberKindSpecificDetails, MemberNs, WithRange};
+use crate::details::{
+    MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
+};
 use crate::{DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos};
 
 #[derive(Clone)]
@@ -1434,7 +1436,7 @@ impl<'a> DocumentEnv<'a> {
 
     pub fn for_routine<'b>(
         &'b self,
-        labels: Labels,
+        labels: ScopedLabels,
         macro_definitions: &'b MacroDefinitions,
     ) -> CodeEnv<'b> {
         CodeEnv {
@@ -1442,12 +1444,7 @@ impl<'a> DocumentEnv<'a> {
             is_instance: false,
             offset: 0,
             this: None,
-            labels: Some(Rc::new(
-                labels
-                    .into_iter()
-                    .map(|(name, proc)| (name, proc.into()))
-                    .collect(),
-            )),
+            labels: Some(Rc::new(labels)),
             method_name: None,
             macro_definitions: Some(macro_definitions),
         }
@@ -1505,20 +1502,41 @@ pub struct LabelEntry {
     // Inside a procedure block, the routine's own labels: a bare `Goto` to one fails to compile
     // (IRIS: <NOLINE>), though `Do`/`$$` may call them.
     pub outside_block: bool,
-    // What its returns are held to: the enclosing method's or procedure block's, shared with
-    // that body. `None` for a routine-level label, which has its own.
+    // The label after this one, which it runs into when it falls off its end. `None` for the
+    // last, or when a procedure block follows.
+    pub next: Option<String>,
+    // What its returns are held to. Set up front for a label in a method or procedure block (the
+    // body's own); for a routine-level label, set by the label before it when that one falls
+    // through, else it gets its own when checked.
     #[allow(clippy::type_complexity)]
-    pub output: Option<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
+    pub output: OnceCell<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
 }
 
-impl From<Arc<TyProcedure>> for LabelEntry {
-    fn from(proc: Arc<TyProcedure>) -> Self {
-        LabelEntry {
-            proc,
-            outside_block: false,
-            output: None,
-        }
-    }
+// `labels` in source order, each flagged when it's a procedure block. `output` is the enclosing
+// body's, for labels nested in one.
+#[allow(clippy::type_complexity)]
+pub(crate) fn scoped_labels(
+    uri: &str,
+    labels: &[(&RoutineElementDetails, bool)],
+    output: Option<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
+) -> ScopedLabels {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(i, (details, _))| {
+            let next = labels
+                .get(i + 1)
+                .filter(|(_, is_procedure)| !is_procedure)
+                .map(|(next, _)| next.name.it.clone());
+            let entry = LabelEntry {
+                proc: Arc::new(details.to_ty_procedure(Some(uri))),
+                outside_block: false,
+                next,
+                output: output.clone().map_or_else(OnceCell::new, OnceCell::from),
+            };
+            (details.name.it.clone(), entry)
+        })
+        .collect()
 }
 
 /// Builds `routine`'s label map — shared by `check_rtn` (the current routine) and
