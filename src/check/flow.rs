@@ -38,9 +38,8 @@ struct Shared<'a> {
     env: &'a WorkspaceEnv<'a>,
     procedure_block: bool,
     // `None` is for subroutines and procedures only. It means that the output expectation
-    // is unclear until the first return/quit command. Shared (the `Rc`) with the labels inside
-    // a method body or procedure block, which return for that body, and with the label a
-    // routine-level label falls through into.
+    // is unclear until the first return/quit command. Shared (the `Rc`) with the labels that
+    // return for this body (see `check_block_body`).
     output: OutputExpectation,
     ty_var: RefCell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
@@ -151,9 +150,8 @@ impl<'a> Flow<'a> {
         Self::with_label(uri, env, range, args, None, handler).map(|(creates, _)| creates)
     }
 
-    // A routine-level label. `carried` is the previous label's output expectation, when that
-    // label fell through into this one: whatever this one returns is what the previous one
-    // returns too. Likewise hands its own on when it falls through.
+    // A label. `carried` is the output expectation to share (e.g. the previous label's, when
+    // it fell through into this one); hands its own on when this one falls through.
     pub(crate) fn with_label(
         uri: &'a str,
         env: &'a WorkspaceEnv,
@@ -177,7 +175,6 @@ impl<'a> Flow<'a> {
         Ok((creates, fell_through.then_some(output)))
     }
 
-    // Whether control can still reach the end of what's been checked so far.
     pub(crate) fn falls_through(&self) -> bool {
         self.bindings.is_some()
     }

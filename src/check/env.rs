@@ -12,7 +12,6 @@
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -1442,10 +1441,9 @@ impl<'a> DocumentEnv<'a> {
             is_instance: false,
             offset: 0,
             this: None,
-            labels: Some(Arc::new(CodeEnv::scoped(labels).collect())),
+            labels: Some(Arc::new(labels)),
             method_name: None,
             macro_definitions: Some(macro_definitions),
-            goto_targets: Rc::default(),
         }
     }
 
@@ -1464,7 +1462,6 @@ impl<'a> DocumentEnv<'a> {
             labels: None,
             method_name: Some(method_name),
             macro_definitions: Some(macro_definitions),
-            goto_targets: Rc::default(),
         }
     }
 
@@ -1483,19 +1480,31 @@ impl<'a> DocumentEnv<'a> {
             method_name: Some(method_name),
             labels: None,
             macro_definitions: Some(macro_definitions),
-            goto_targets: Rc::default(),
         }
     }
 }
 
 /// label -> signature, for the subroutines/procedures declared in the current routine.
-pub type Labels = HashMap<String, Arc<TyProcedure>>;
+pub type Labels = HashMap<String, LabelEntry>;
 
-// A label in scope. Inside a procedure block, the routine's own labels are `outside_block`: a
-// bare `Goto` to one fails to compile (IRIS: <NOLINE>), though `Do`/`$$` may call them.
-struct ScopedLabel {
-    proc: Arc<TyProcedure>,
-    outside_block: bool,
+#[derive(Clone)]
+pub struct LabelEntry {
+    pub proc: Arc<TyProcedure>,
+    // Inside a procedure block, the routine's own labels: a bare `Goto` to one fails to compile
+    // (IRIS: <NOLINE>), though `Do`/`$$` may call them.
+    pub outside_block: bool,
+    // One the enclosing body `Goto`es (see `check_block_body`).
+    pub goto_target: bool,
+}
+
+impl From<TyProcedure> for LabelEntry {
+    fn from(proc: TyProcedure) -> Self {
+        LabelEntry {
+            proc: Arc::new(proc),
+            outside_block: false,
+            goto_target: false,
+        }
+    }
 }
 
 /// Builds `routine`'s label map — shared by `check_rtn` (the current routine) and
@@ -1506,12 +1515,7 @@ pub(crate) fn labels_of(olc: &OLC, routine: &cos::Routine, uri: Option<&str>) ->
         .iter()
         .flat_map(|subs| subs.items.iter())
         .filter_map(|elem| crate::details::routine_element_kind(olc, elem))
-        .map(|details| {
-            (
-                details.name.it.clone(),
-                Arc::new(details.to_ty_procedure(uri)),
-            )
-        })
+        .map(|details| (details.name.it.clone(), details.to_ty_procedure(uri).into()))
         .collect()
 }
 
@@ -1520,16 +1524,13 @@ pub struct CodeEnv<'a> {
     base: &'a DocumentEnv<'a>,
     is_instance: bool,
     offset: usize,
-    labels: Option<Arc<HashMap<String, ScopedLabel>>>,
+    labels: Option<Arc<Labels>>,
     // The enclosing method's name, when known — `##super(...)` calls the superclass's version
     // of this same method, so resolving it needs to know which method that is.
     method_name: Option<&'a str>,
     // The enclosing class's own resolved `Include`s, for suggesting a similarly named macro on
     // an undefined-macro error -- `None` outside a class method (e.g. a routine).
     macro_definitions: Option<&'a MacroDefinitions>,
-    // The labels this body `Goto`es: such a label returns for the body, where a `Do`/`$$`
-    // subroutine returns to its caller (see `check_block_body`).
-    goto_targets: Rc<RefCell<HashSet<String>>>,
 }
 
 impl<'a> CodeEnv<'a> {
@@ -1547,62 +1548,22 @@ impl<'a> CodeEnv<'a> {
             .qualify_class_name(name, self.this.map(|this| this.name.as_str()))
     }
 
-    // The labels of a brace-delimited body, on top of the enclosing ones: a routine's labels
-    // stay callable from inside its procedure blocks (but `outside_block`), and a nested label
-    // shadows a same-named outer one.
+    // The labels of a brace-delimited body on top of the enclosing ones; a nested label shadows
+    // a same-named outer one.
     pub(crate) fn with_nested_labels(&self, nested: Labels, is_procedure: bool) -> CodeEnv<'a> {
-        let mut labels: HashMap<_, _> = self
+        let mut labels: Labels = self
             .labels
             .iter()
             .flat_map(|labels| labels.iter())
             .map(|(name, label)| {
-                let label = ScopedLabel {
-                    proc: label.proc.clone(),
+                let label = LabelEntry {
                     outside_block: is_procedure || label.outside_block,
+                    ..label.clone()
                 };
                 (name.clone(), label)
             })
             .collect();
-        labels.extend(Self::scoped(nested));
-        let goto_targets = if is_procedure {
-            Rc::default()
-        } else {
-            self.goto_targets.clone()
-        };
-        self.with_scoped_labels(labels, goto_targets)
-    }
-
-    // A `Goto` to a routine-level label from inside a procedure block.
-    pub(crate) fn goto_leaves_block(&self, label: &str) -> bool {
-        self.labels
-            .as_ref()
-            .and_then(|labels| labels.get(label))
-            .is_some_and(|label| label.outside_block)
-    }
-
-    pub(crate) fn note_goto_target(&self, label: String) {
-        self.goto_targets.borrow_mut().insert(label);
-    }
-
-    pub(crate) fn is_goto_target(&self, label: &str) -> bool {
-        self.goto_targets.borrow().contains(label)
-    }
-
-    fn scoped(labels: Labels) -> impl Iterator<Item = (String, ScopedLabel)> {
-        labels.into_iter().map(|(name, proc)| {
-            let label = ScopedLabel {
-                proc,
-                outside_block: false,
-            };
-            (name, label)
-        })
-    }
-
-    fn with_scoped_labels(
-        &self,
-        labels: HashMap<String, ScopedLabel>,
-        goto_targets: Rc<RefCell<HashSet<String>>>,
-    ) -> CodeEnv<'a> {
+        labels.extend(nested);
         CodeEnv {
             this: self.this,
             base: self.base,
@@ -1611,8 +1572,21 @@ impl<'a> CodeEnv<'a> {
             labels: Some(Arc::new(labels)),
             method_name: self.method_name,
             macro_definitions: self.macro_definitions,
-            goto_targets,
         }
+    }
+
+    pub(crate) fn goto_leaves_block(&self, label: &str) -> bool {
+        self.labels
+            .as_ref()
+            .and_then(|labels| labels.get(label))
+            .is_some_and(|label| label.outside_block)
+    }
+
+    pub(crate) fn is_goto_target(&self, label: &str) -> bool {
+        self.labels
+            .as_ref()
+            .and_then(|labels| labels.get(label))
+            .is_some_and(|label| label.goto_target)
     }
 
     pub(crate) fn is_defined_macro(&self, name: &str) -> bool {
@@ -1779,7 +1753,7 @@ impl<'a> CodeEnv<'a> {
             Some(routine) => match (label, offset) {
                 (Some(label), None) => match self.resolve_rtn_labels(&routine) {
                     Some(Some(labels)) => match labels.get(&label) {
-                        Some(proc) => Ok(TyProcedureOrAny::Procedure(proc.clone())),
+                        Some(label) => Ok(TyProcedureOrAny::Procedure(label.proc.clone())),
                         None => Err(QuasiTypeError::cannot_find_label(label, Some(routine))),
                     },
                     Some(None) => Ok(TyProcedureOrAny::Any),

@@ -5350,6 +5350,12 @@ mod tests {
             "{diagnostics:?}"
         );
         assert_eq!(diagnostics[0].range.start.line, 6, "{diagnostics:?}");
+        // The `Goto` may sit in a nested block, or in a label checked after its target.
+        let diagnostics = class_diagnostics(
+            "ClassMethod M(x) As %Status {\n If x {\n  Goto Done\n }\n Do step\n Quit 1\nDone\n Quit\nstep\n Set ^x = 1\n Goto Done\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].range.start.line, 8, "{diagnostics:?}");
     }
 
     // A procedure block's return shape is whatever its first return establishes, and a label
