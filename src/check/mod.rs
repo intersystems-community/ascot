@@ -599,16 +599,18 @@ fn label_details(
     })
 }
 
-// A brace-delimited body -- a method's, or a routine procedure block's -- with its own labels
-// (`Set $ZT="Trap"` handlers, `Goto` targets), checked the way a routine's labels are, except
-// that they return for the body: a method's declared return type, or whatever a procedure's
-// first return establishes. (A label meant for `Do` belongs at class level.) `is_procedure` is
-// false for a control-flow block (`If {...}`), which a `Goto` may leave.
+// A method body or routine procedure block, with its own labels (`Set $ZT="Trap"` handlers,
+// `Goto` targets), checked the way a routine's labels are. In a procedure (a routine's `{...}`
+// block; a method unless `ProcedureBlock = 0`) they return for the body: a method's declared
+// return type, or whatever a procedure's first return establishes. (A label meant for `Do`
+// belongs at class level.) A `Not ProcedureBlock` method's labels are subroutines like a
+// routine's, with their own returns, falling through into one another. `is_body` is false for
+// a control-flow block (`If {...}`), which a `Goto` may leave.
 fn check_block_body<'a>(
     body: &cos::ProcedureBody,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    is_procedure: bool,
+    is_body: bool,
 ) -> Result<(), TypeError> {
     let details: Vec<_> = body
         .subroutines
@@ -616,13 +618,14 @@ fn check_block_body<'a>(
         .flat_map(|subs| subs.items.iter())
         .filter_map(|sub| label_details(env, sub))
         .collect();
+    let is_procedure = is_body && flow.is_procedure_block();
     let labels = env::scoped_labels(
         env.uri(),
         &details.iter().map(|d| (d, false)).collect::<Vec<_>>(),
-        Some(flow.output_expectation()),
+        flow.is_procedure_block().then(|| flow.output_expectation()),
     );
     let nested;
-    let env = if is_procedure || !labels.is_empty() {
+    let env = if is_body || !labels.is_empty() {
         nested = env.with_nested_labels(labels, is_procedure);
         &nested
     } else {
@@ -637,33 +640,59 @@ fn check_block_body<'a>(
     if subroutines.is_empty() {
         return Ok(());
     }
+    // The main body falling off its end runs into the first label, which then returns for it.
+    if flow.falls_through()
+        && let Some(first) = details.first().and_then(|d| env.label_entry(&d.name.it))
+    {
+        let _ = first.output.set(flow.output_expectation());
+    }
     flow.handle_void()?;
     // The labels read the body's variables from their own flows, so the deferred
     // "never read"/"never assigned" reports for the main body can't be trusted.
     flow.mark_incomplete();
-    for sub in subroutines {
-        let Some(details) = label_details(env, sub) else {
-            continue;
-        };
-        let Some(range) = body_end_range(env, &sub.body) else {
-            continue;
-        };
-        let output = env
-            .label_entry(&details.name.it)
-            .and_then(|label| label.output.get().cloned());
+    for (sub, details) in subroutines.iter().zip(&details) {
         // Each label is checked on its own: one's hard error doesn't hide the next one's.
-        if let Err(err) = Flow::with_label(
-            env.uri(),
-            env.deref(),
-            range,
-            details.args(),
-            output,
-            |flow| sub.check(env, flow),
-        ) {
+        if let Err(err) = check_label_body(env, details, sub) {
             env.add_soft_diagnostic(err.into());
         }
     }
     Ok(())
+}
+
+// A label that falls off its end runs into the next one, which then returns for both.
+fn check_label_body<'a>(
+    env: &CodeEnv<'a>,
+    details: &details::RoutineElementDetails,
+    sub: &cos::Subroutine,
+) -> Result<Vec<String>, TypeError> {
+    let Some(entry) = env.label_entry(&details.name.it) else {
+        return Ok(vec![]);
+    };
+    let fall_into_next = |output| {
+        if let Some(next) = entry.next.as_deref().and_then(|next| env.label_entry(next)) {
+            let _ = next.output.set(output);
+        }
+    };
+    // No commands at all (an alias label, or comments only) falls through to the next label --
+    // nothing to check, and nothing to demand a QUIT from.
+    let Some(range) = body_end_range(env, &sub.body) else {
+        if let Some(output) = entry.output.get() {
+            fall_into_next(output.clone());
+        }
+        return Ok(vec![]);
+    };
+    let (creates, fell_through) = Flow::with_label(
+        env.uri(),
+        env.deref(),
+        range,
+        details.args(),
+        entry.output.get().cloned(),
+        |flow| sub.check(env, flow),
+    )?;
+    if let Some(output) = fell_through {
+        fall_into_next(output);
+    }
+    Ok(creates)
 }
 
 impl CheckCommand for cos::ProcedureMain {
@@ -3334,40 +3363,12 @@ pub fn check_rtn(
             Err(err) => diagnostics.push(err.into()),
         }
     }
-    // A label that falls off its end runs into the next one, which then returns for both.
-    let fall_into_next = |entry: &LabelEntry, output| {
-        if let Some(next) = entry.next.as_deref().and_then(|next| env.label_entry(next)) {
-            let _ = next.output.set(output);
-        }
-    };
     for (elem, details) in &elements {
         let Some(details) = details else { continue };
         let result = match elem {
             cos::RoutineElement::Procedure(procedure) => check_procedure(procedure, details, &env),
             cos::RoutineElement::Subroutine(subroutine) => {
-                let Some(entry) = env.label_entry(&details.name.it) else {
-                    continue;
-                };
-                // No commands at all (an alias label, or comments only) falls through to the
-                // next label -- nothing to check, and nothing to demand a QUIT from.
-                let Some(range) = body_end_range(&env, &subroutine.body) else {
-                    if let Some(output) = entry.output.get() {
-                        fall_into_next(entry, output.clone());
-                    }
-                    continue;
-                };
-                Flow::with_label(
-                    env.uri(),
-                    env.deref(),
-                    range,
-                    details.args(),
-                    entry.output.get().cloned(),
-                    |flow| subroutine.check(&env, flow),
-                )
-                .map(|(creates, fell_through)| {
-                    if let Some(output) = fell_through {
-                        fall_into_next(entry, output);
-                    }
+                check_label_body(&env, details, subroutine).map(|creates| {
                     if let Some(hint) = creates_hint(details.name.range.end, creates) {
                         env.hint(hint);
                     }

@@ -5362,6 +5362,32 @@ mod tests {
         }
     }
 
+    // With `ProcedureBlock = 0` a method is a subroutine: its labels have their own returns, not
+    // the method's, and fall through into one another like a routine's.
+    #[test]
+    fn labels_inside_a_non_procedure_block_method_are_subroutines() {
+        let diagnostics = class_diagnostics(
+            "ClassMethod M(x) As %Status [ ProcedureBlock = 0 ] {\n Do step\n Quit 1\nstep\n Set ^x = 1\n Quit\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let diagnostics = class_diagnostics(
+            "ClassMethod M(x) As %Status [ ProcedureBlock = 0 ] {\n Quit 1\nA\n If x Quit\n Set y = 1\nB\n Quit y\n}\n",
+        );
+        let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("Missing an explicit QUIT")),
+            "{diagnostics:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("Unexpected return value")),
+            "{diagnostics:?}"
+        );
+    }
+
     // A procedure block's return shape is whatever its first return establishes, and a label
     // it `Goto`es shares that.
     #[test]

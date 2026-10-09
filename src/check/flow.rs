@@ -184,6 +184,14 @@ impl<'a> Flow<'a> {
         self.shared.output.clone()
     }
 
+    pub(crate) fn is_procedure_block(&self) -> bool {
+        self.shared.procedure_block
+    }
+
+    pub(crate) fn falls_through(&self) -> bool {
+        self.bindings.is_some()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_procedure(
         uri: &'a str,
