@@ -28,7 +28,7 @@ use std::{collections::HashMap, iter::once, ops::Deref, sync::Arc};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
 use types::*;
 
-pub use env::{DocumentEnv, Signatures, WorkspaceEnv};
+pub use env::{DocumentEnv, Labels, WorkspaceEnv};
 use errors::TypeErrorKind;
 pub use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
@@ -611,7 +611,7 @@ fn check_block_body<'a>(
     is_procedure: bool,
 ) -> Result<(), TypeError> {
     let output = flow.output_expectation();
-    let labels: Labels = body
+    let labels: ScopedLabels = body
         .subroutines
         .iter()
         .flat_map(|subs| subs.items.iter())

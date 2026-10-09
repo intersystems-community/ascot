@@ -178,7 +178,7 @@ pub struct WorkspaceStruct {
     // text, so this follows the connection's own cache policy rather than adding one. Without
     // it, every `$$Label^Routine` call into a 15k-line system routine re-expanded and re-parsed
     // it, and a single file took half a minute.
-    pub(crate) iris_rtn_labels: RefCell<HashMap<String, (String, Option<check::Signatures>)>>,
+    pub(crate) iris_rtn_labels: RefCell<HashMap<String, (String, Option<check::Labels>)>>,
 }
 
 // `bindings::IrisConnection` is a WIT *imported* resource, producible only by a wasm host --

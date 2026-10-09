@@ -1132,7 +1132,7 @@ impl<'a> WorkspaceEnv<'a> {
     // open in the workspace; `None` only when neither finds it (or there's no IRIS connection).
     // `None` when there is no such routine; `Some(None)` when there is one but it can't be
     // parsed (a grammar gap), so its labels are simply unknown.
-    pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Option<Option<Signatures>> {
+    pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Option<Option<Labels>> {
         if let Some(uri) = self.resolve_rtn_uri(name) {
             let rtn = self.workspace.rtn_details(&uri).ok();
             return Some(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
@@ -1434,7 +1434,7 @@ impl<'a> DocumentEnv<'a> {
 
     pub fn for_routine<'b>(
         &'b self,
-        labels: Signatures,
+        labels: Labels,
         macro_definitions: &'b MacroDefinitions,
     ) -> CodeEnv<'b> {
         CodeEnv {
@@ -1493,11 +1493,11 @@ impl<'a> DocumentEnv<'a> {
 /// label -> signature, for the subroutines/procedures declared in a routine. Plain data: built
 /// once per routine and memoized on the workspace (which the MCP server needs to be `Send`), for
 /// resolving `label^routine` calls into it.
-pub type Signatures = HashMap<String, Arc<TyProcedure>>;
+pub type Labels = HashMap<String, Arc<TyProcedure>>;
 
 /// The labels in scope while checking one body: the signatures plus per-entry state that exists
 /// only during checking (`LabelEntry::output` is a live `Rc` cell, so this map isn't `Send`).
-pub type Labels = HashMap<String, LabelEntry>;
+pub type ScopedLabels = HashMap<String, LabelEntry>;
 
 #[derive(Clone)]
 pub struct LabelEntry {
@@ -1523,7 +1523,7 @@ impl From<Arc<TyProcedure>> for LabelEntry {
 
 /// Builds `routine`'s label map — shared by `check_rtn` (the current routine) and
 /// `WorkspaceEnv::resolve_rtn_labels` (some other routine already in the workspace).
-pub(crate) fn labels_of(olc: &OLC, routine: &cos::Routine, uri: Option<&str>) -> Signatures {
+pub(crate) fn labels_of(olc: &OLC, routine: &cos::Routine, uri: Option<&str>) -> Labels {
     routine
         .subroutines
         .iter()
@@ -1543,7 +1543,7 @@ pub struct CodeEnv<'a> {
     base: &'a DocumentEnv<'a>,
     is_instance: bool,
     offset: usize,
-    labels: Option<Rc<Labels>>,
+    labels: Option<Rc<ScopedLabels>>,
     // The enclosing method's name, when known — `##super(...)` calls the superclass's version
     // of this same method, so resolving it needs to know which method that is.
     method_name: Option<&'a str>,
@@ -1569,8 +1569,12 @@ impl<'a> CodeEnv<'a> {
 
     // The labels of a brace-delimited body on top of the enclosing ones; a nested label shadows
     // a same-named outer one.
-    pub(crate) fn with_nested_labels(&self, nested: Labels, is_procedure: bool) -> CodeEnv<'a> {
-        let mut labels: Labels = self
+    pub(crate) fn with_nested_labels(
+        &self,
+        nested: ScopedLabels,
+        is_procedure: bool,
+    ) -> CodeEnv<'a> {
+        let mut labels: ScopedLabels = self
             .labels
             .iter()
             .flat_map(|labels| labels.iter())
