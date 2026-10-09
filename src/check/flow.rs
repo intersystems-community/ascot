@@ -138,36 +138,17 @@ impl<'a> Flow<'a> {
         self.shared.env.restore_soft_diagnostics(was_suppressed);
     }
 
-    // A label. `carried` is the output expectation to share (e.g. the previous label's, when
-    // it fell through into this one); hands its own on when this one falls through.
-    #[allow(clippy::type_complexity)]
+    // A label, held to `output` (see `LabelEntry::output`). Returns what it creates, and whether
+    // it fell off its end.
     pub(crate) fn with_label(
         uri: &'a str,
         env: &'a WorkspaceEnv,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
-        carried: Option<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
+        output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
-    ) -> Result<
-        (
-            Vec<String>,
-            Option<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
-        ),
-        TypeError,
-    > {
-        let output = carried.unwrap_or_default();
-        let (creates, fell_through) = Self::run(
-            uri,
-            env,
-            range,
-            args,
-            None,
-            output.clone(),
-            handler,
-            false,
-            false,
-        )?;
-        Ok((creates, fell_through.then_some(output)))
+    ) -> Result<(Vec<String>, bool), TypeError> {
+        Self::run(uri, env, range, args, None, output, handler, false, false)
     }
 
     pub(crate) fn output_expectation(&self) -> Rc<RefCell<Option<WithRange<Option<Ty>>>>> {
