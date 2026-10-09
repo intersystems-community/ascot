@@ -24,7 +24,7 @@ pub mod types;
 use either::Either::{self, Left, Right};
 use env::*;
 use flow::*;
-use std::{collections::HashMap, iter::once, ops::Deref, sync::Arc};
+use std::{collections::HashMap, iter::once, ops::Deref};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
 use types::*;
 
@@ -529,18 +529,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                         err,
                     )
                 })?;
-                let labels = body
-                    .subroutines
-                    .iter()
-                    .flat_map(|subs| subs.items.iter())
-                    .filter_map(|sub| label_details(env, sub))
-                    .map(|details| {
-                        let procedure = details.to_ty_procedure(Some(env.uri()));
-                        (details.name.it, Arc::new(procedure))
-                    })
-                    .collect();
-                let env = env.with_labels(labels);
-                check_method_body(&body, &env, flow)
+                check_block_body(&body, env, flow, true)
             }
             (
                 Option::None | Option::Some(cos::MethodLanguage::ObjectScript(..)),
@@ -610,14 +599,38 @@ fn label_details(
     })
 }
 
-// A method body's own labels (`Set $ZT="Trap"` handlers, `Goto` targets, `Do`/`$$` subroutines)
-// are checked the way a routine's labels are: each on its own, with nothing assumed about how it
-// is entered. The main body's end runs into the first label, which then quits for the method.
-fn check_method_body<'a>(
+// A method body or routine procedure block, with its own labels (`Set $ZT="Trap"` handlers,
+// `Goto` targets), checked the way a routine's labels are. In a procedure (a routine's `{...}`
+// block; a method unless `ProcedureBlock = 0`) they return for the body: a method's declared
+// return type, or whatever a procedure's first return establishes. (A label meant for `Do`
+// belongs at class level.) A `Not ProcedureBlock` method's labels are subroutines like a
+// routine's, with their own returns, falling through into one another. `is_body` is false for
+// a control-flow block (`If {...}`), which a `Goto` may leave.
+fn check_block_body<'a>(
     body: &cos::ProcedureBody,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
+    is_body: bool,
 ) -> Result<(), TypeError> {
+    let details: Vec<_> = body
+        .subroutines
+        .iter()
+        .flat_map(|subs| subs.items.iter())
+        .filter_map(|sub| label_details(env, sub))
+        .collect();
+    let is_procedure = is_body && flow.is_procedure_block();
+    let labels = env::scoped_labels(
+        env.uri(),
+        &details.iter().map(|d| (d, false)).collect::<Vec<_>>(),
+        flow.is_procedure_block().then(|| flow.output_expectation()),
+    );
+    let nested;
+    let env = if is_body || !labels.is_empty() {
+        nested = env.with_nested_labels(labels, is_procedure);
+        &nested
+    } else {
+        env
+    };
     body.main.check(env, flow)?;
     let subroutines: Vec<_> = body
         .subroutines
@@ -627,22 +640,49 @@ fn check_method_body<'a>(
     if subroutines.is_empty() {
         return Ok(());
     }
-    flow.handle_void()?;
-    // The labels read the method's variables from their own flows, so the deferred
+    let first = details.first().and_then(|d| env.label_entry(&d.name.it));
+    flow.tail_call(first.map(|first| &first.output), flow.current_range())?;
+    // The labels read the body's variables from their own flows, so the deferred
     // "never read"/"never assigned" reports for the main body can't be trusted.
     flow.mark_incomplete();
-    for sub in subroutines {
-        let Some(details) = label_details(env, sub) else {
-            continue;
-        };
-        let Some(range) = body_end_range(env, &sub.body) else {
-            continue;
-        };
-        Flow::with_subroutine(env.uri(), env.deref(), range, details.args(), |flow| {
-            sub.check(env, flow)
-        })?;
+    for (sub, details) in subroutines.iter().zip(&details) {
+        // Each label is checked on its own: one's hard error doesn't hide the next one's.
+        if let Err(err) = check_label_body(env, details, sub) {
+            env.add_soft_diagnostic(err.into());
+        }
     }
     Ok(())
+}
+
+fn check_label_body<'a>(
+    env: &CodeEnv<'a>,
+    details: &details::RoutineElementDetails,
+    sub: &cos::Subroutine,
+) -> Result<Vec<String>, TypeError> {
+    let Some(entry) = env.label_entry(&details.name.it) else {
+        return Ok(vec![]);
+    };
+    let next = entry.next.as_deref().and_then(|next| env.label_entry(next));
+    // No commands at all (an alias label, or comments only) falls through to the next label --
+    // nothing to check, and nothing to demand a QUIT from.
+    let Some(range) = body_end_range(env, &sub.body) else {
+        if let (Some(output), Some(next)) = (entry.output.get(), next) {
+            let _ = next.output.set(output.clone());
+        }
+        return Ok(vec![]);
+    };
+    let output = entry.output.get_or_init(Default::default);
+    Flow::with_label(
+        env.uri(),
+        env.deref(),
+        range,
+        details.args(),
+        output.clone(),
+        |flow| {
+            sub.check(env, flow)?;
+            flow.tail_call(next.map(|next| &next.output), range)
+        },
+    )
 }
 
 impl CheckCommand for cos::ProcedureMain {
@@ -659,23 +699,7 @@ impl CheckCommand for cos::ProcedureMain {
 
 impl CheckCommand for cos::ProcedureBody {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        self.main.check(env, flow)?;
-        if let Some(sub) = self
-            .subroutines
-            .iter()
-            .flat_map(|subs| subs.items.iter())
-            .next()
-        {
-            let range = match &sub.header {
-                AllowMacro::Plain(header) => env.range(&header.label),
-                AllowMacro::Macro(call) => env.range(&call.name.0),
-            };
-            return Err(TypeError::unimplemented(
-                "Labels and subroutines".into(),
-                range,
-            ));
-        }
-        Ok(())
+        check_block_body(self, env, flow, false)
     }
 }
 
@@ -943,6 +967,14 @@ impl CheckCommandInner for cos::Command {
                 check_pc(pc, env, flow, |flow| match location {
                     AllowCase::Plain(cos::Location(location)) => match location {
                         AllowIndirection::Plain(location) => {
+                            if let LegacyEntryRef::Label(lor) = location.deref()
+                                && lor.routine.is_none()
+                            {
+                                let label = lor.label.print();
+                                if env.goto_leaves_block(&label) {
+                                    return Err(QuasiTypeError::goto_out_of_block(label));
+                                }
+                            }
                             let _ = check_legacy_label_call(env, flow, location, &None)?;
                             Ok(flow.handle_void()?)
                         }
@@ -3258,7 +3290,7 @@ fn check_procedure(
             details::RoutineElementKind::Procedure { public_list } => Some(public_list.clone()),
         },
         env.with_range(this.header.as_ref().map(|_| None)),
-        |flow| this.body.check(env, flow),
+        |flow| check_block_body(&this.body, env, flow, true),
         true,
         false,
     )?;
@@ -3297,16 +3329,34 @@ pub fn check_rtn(
         .flat_map(|srs| srs.items.iter())
         .map(|elem| (elem, details::routine_element_kind(olc, elem)))
         .collect();
-    let labels: Labels = env::labels_of(olc, rtn, Some(env.uri()));
-    let env = env.for_routine(labels, definitions);
+    let labels: Vec<_> = elements
+        .iter()
+        .filter_map(|(elem, details)| {
+            let details = details.as_ref()?;
+            Some((details, matches!(elem, cos::RoutineElement::Procedure(_))))
+        })
+        .collect();
+    let env = env.for_routine(env::scoped_labels(env.uri(), &labels, None), definitions);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a
     // tags-only routine — there's no meaningful position to blame it falling through on, so
     // don't check it at all rather than flag every such routine with a bogus range.
     if let Some(range) = body_end_range(&env, &rtn.main) {
-        match Flow::with_subroutine(env.uri(), env.deref(), range, vec![], |flow| {
-            rtn.main.check(&env, flow)
-        }) {
+        let first = labels
+            .first()
+            .filter(|(_, is_procedure)| !is_procedure)
+            .and_then(|(details, _)| env.label_entry(&details.name.it));
+        match Flow::with_label(
+            env.uri(),
+            env.deref(),
+            range,
+            vec![],
+            Default::default(),
+            |flow| {
+                rtn.main.check(&env, flow)?;
+                flow.tail_call(first.map(|first| &first.output), range)
+            },
+        ) {
             Ok(creates) => {
                 if let Some(hint) = creates_hint(range.start, creates) {
                     env.hint(hint);
@@ -3320,15 +3370,7 @@ pub fn check_rtn(
         let result = match elem {
             cos::RoutineElement::Procedure(procedure) => check_procedure(procedure, details, &env),
             cos::RoutineElement::Subroutine(subroutine) => {
-                // No commands at all (an alias label, or comments only) falls through to the
-                // next label -- nothing to check, and nothing to demand a QUIT from.
-                let Some(range) = body_end_range(&env, &subroutine.body) else {
-                    continue;
-                };
-                Flow::with_subroutine(env.uri(), env.deref(), range, details.args(), |flow| {
-                    subroutine.check(&env, flow)
-                })
-                .map(|creates| {
+                check_label_body(&env, details, subroutine).map(|creates| {
                     if let Some(hint) = creates_hint(details.name.range.end, creates) {
                         env.hint(hint);
                     }

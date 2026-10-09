@@ -4715,7 +4715,7 @@ mod tests {
             "ClassMethod Trap(Data As %String) As %Status {\n s $zt=\"Error\"\n s ^x=Data\n q 1\nError s $zt=\"\"\n q $ze\n}\n\
              ClassMethod TrapGoto() As %Status {\n Set tSC=1\n Set $ZT=\"Trap\"\n do {\n  Set ^h=$ZF(-6,1,2)\n } while (0)\nExit\n Quit tSC\nTrap\n Set $ZT=\"\",tSC=$ze\n Goto Exit\n}\n\
              ClassMethod Computed(Progress As %Integer) As %String {\n Goto $Case(Progress,1:Initial,2:Called,:error)\nerror\n Quit \"error\"\nInitial\n If Progress = 1 Quit \"initial\"\n Quit \"other\"\nCalled\n Quit \"called\"\n}\n\
-             ClassMethod Sub(dir As %String) As %Status {\n Set n=1\n Do step\n Set n=n+$$twice(n)\n Quit n\nstep\n Set ^x(dir)=n\n Quit\ntwice(x)\n Quit x*2\n}\n",
+             ClassMethod Sub(dir As %String) As %Status {\n Set n=1\n Do step\n Set n=n+$$twice(n)\n Quit n\nstep\n Set ^x(dir)=n\n Quit 1\ntwice(x)\n Quit x*2\n}\n",
         );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let diagnostics = class_diagnostics(
@@ -5297,5 +5297,143 @@ mod tests {
             "ROUTINE Fwd\n#define Inner(%a,%b) (%a_%b)\n#define Fwd $$$Inner \n\tSet x = $$$Fwd(\"a\",\"b\")\n\tWrite x\n\tQuit\n",
         )]);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    // Labels inside a routine's procedure block are checked like a method body's, with the
+    // routine's labels still in scope. They return for the block: once its first return has
+    // established a value, a label's bare `Quit` is reported, even one only ever `Do`ne.
+    #[test]
+    fn labels_inside_a_routine_procedure_block_are_checked() {
+        let diagnostics = diagnostics_for(&[(
+            "Blk.mac",
+            "ROUTINE Blk\n\tQuit\nOuter\n\tQuit 1\nProc(x) public {\n\tIf x Goto exitEarly\n\tDo inner\n\tSet y = $$Outer\n\tQuit y\nexitEarly\n\tQuit 0\ninner\n\tSet ^g = 1\n\tQuit\n}\n",
+        )]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Expected return value of type 'Any' but got nothing"),
+            "{diagnostics:?}"
+        );
+        assert_eq!(diagnostics[0].range.start.line, 13, "{diagnostics:?}");
+        let diagnostics = diagnostics_for(&[(
+            "Bad.mac",
+            "ROUTINE Bad\n\tQuit\nProc() public {\n\tGoto nowhere\n\tQuit\nexitEarly\n\tQuit\n}\n",
+        )]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find label 'nowhere'"),
+            "{diagnostics:?}"
+        );
+        // A bare `Goto` can't leave the block (IRIS: <NOLINE>), though `Do` may call out of it
+        // and a routine-qualified `Goto Outer^Out` may too.
+        let diagnostics = diagnostics_for(&[(
+            "Out.mac",
+            "ROUTINE Out\n\tQuit\nOuter\n\tQuit\nProc() public {\n\tDo Outer\n\tGoto Outer\n\tGoto Outer^Out\n}\n",
+        )]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot GOTO label 'Outer' from inside a procedure block"),
+            "{diagnostics:?}"
+        );
+        assert_eq!(diagnostics[0].range.start.line, 6, "{diagnostics:?}");
+    }
+
+    // Every label inside a method returns for the method, so its `Quit` is held to the declared
+    // return type -- also one only ever `Do`ne, whose bare `Quit` is then reported.
+    #[test]
+    fn labels_inside_a_method_return_for_the_method() {
+        let diagnostics = class_diagnostics(
+            "ClassMethod M(x) As %Status {\n If x Goto Done\n Do step\n Quit 1\nDone\n Quit\nstep\n Set ^x = 1\n Quit\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        for (diagnostic, line) in diagnostics.iter().zip([6, 9]) {
+            assert!(
+                diagnostic
+                    .message
+                    .contains("Expected return value of type '%Status' but got nothing"),
+                "{diagnostics:?}"
+            );
+            assert_eq!(diagnostic.range.start.line, line, "{diagnostics:?}");
+        }
+    }
+
+    // With `ProcedureBlock = 0` a method is a subroutine: its labels have their own returns, not
+    // the method's, and fall through into one another like a routine's.
+    #[test]
+    fn labels_inside_a_non_procedure_block_method_are_subroutines() {
+        let diagnostics = class_diagnostics(
+            "ClassMethod M(x) As %Status [ ProcedureBlock = 0 ] {\n Do step\n Quit 1\nstep\n Set ^x = 1\n Quit\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let diagnostics = class_diagnostics(
+            "ClassMethod M(x) As %Status [ ProcedureBlock = 0 ] {\n Quit 1\nA\n If x Quit\n Set y = 1\nB\n Quit y\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("Unexpected return value"),
+            "{diagnostics:?}"
+        );
+    }
+
+    // A procedure block's return shape is whatever its first return establishes, and a label
+    // it `Goto`es shares that.
+    #[test]
+    fn goto_target_label_inside_a_procedure_block_shares_its_return_shape() {
+        let diagnostics = diagnostics_for(&[(
+            "Pb.mac",
+            "ROUTINE Pb\n\tQuit\nProc(x) public {\n\tIf x Quit 1\n\tGoto fin\nfin\n\tQuit\n}\n",
+        )]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Expected return value of type 'Any' but got nothing"),
+            "{diagnostics:?}"
+        );
+    }
+
+    // A routine-level label that falls off its end runs into the next label, which then
+    // returns for both: their return shapes must agree. The fall-through itself isn't reported.
+    #[test]
+    fn label_falling_through_shares_the_next_labels_return_shape() {
+        // Directly, and across an alias label (`B`, no commands) in between.
+        for text in [
+            "ROUTINE Ft\n\tQuit\nA(y)\n\tIf y Quit\n\tSet x = 1\nB\n\tQuit x\n",
+            "ROUTINE Ft\n\tQuit\nA(y)\n\tIf y Quit\n\tSet x = 1\nB\nC\n\tQuit x\n",
+        ] {
+            let diagnostics = diagnostics_for(&[("Ft.mac", text)]);
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert!(
+                diagnostics[0].message.contains("Unexpected return value"),
+                "{diagnostics:?}"
+            );
+        }
+    }
+
+    // A `$$$Call(args)` left as is (not a `#define`d macro) still has its arguments expanded. A
+    // range ending inside it maps back to the source, not to the shorter expanded text.
+    #[test]
+    fn ranges_over_an_unexpanded_macro_call_with_expanded_arguments_map_to_the_source() {
+        let line = " return $$$NotAMacro($$$LongCode,\"x\")";
+        let diagnostics = class_diagnostics(&format!(
+            "ClassMethod M() {{\n#define LongCode 5001\n{line}\n}}\n"
+        ));
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let range = diagnostics[0].range;
+        assert!(
+            diagnostics[0].message.contains("'NotAMacro' is undefined"),
+            "{diagnostics:?}"
+        );
+        assert_eq!(
+            (range.start.line, range.start.character),
+            (3, 8),
+            "{diagnostics:?}"
+        );
+        assert_eq!(range.end.character as usize, line.len(), "{diagnostics:?}");
     }
 }

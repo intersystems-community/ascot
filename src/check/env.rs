@@ -11,7 +11,8 @@
 //! for hover and go-to-definition, so member lookup rules live here only once.
 
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -24,7 +25,9 @@ use crate::bindings::{ArgMode, InlayHint, MemberKind};
 use crate::check::errors::*;
 use crate::check::types::*;
 use crate::cos::{CodeMode, MethodLanguage};
-use crate::details::{MemberDetails, MemberKindSpecificDetails, MemberNs, WithRange};
+use crate::details::{
+    MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
+};
 use crate::{DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos};
 
 #[derive(Clone)]
@@ -1433,7 +1436,7 @@ impl<'a> DocumentEnv<'a> {
 
     pub fn for_routine<'b>(
         &'b self,
-        labels: Labels,
+        labels: ScopedLabels,
         macro_definitions: &'b MacroDefinitions,
     ) -> CodeEnv<'b> {
         CodeEnv {
@@ -1441,7 +1444,7 @@ impl<'a> DocumentEnv<'a> {
             is_instance: false,
             offset: 0,
             this: None,
-            labels: Some(Arc::new(labels)),
+            labels: Some(Rc::new(labels)),
             method_name: None,
             macro_definitions: Some(macro_definitions),
         }
@@ -1484,8 +1487,57 @@ impl<'a> DocumentEnv<'a> {
     }
 }
 
-/// label -> signature, for the subroutines/procedures declared in the current routine.
+/// label -> signature, for the subroutines/procedures declared in a routine. Plain data: built
+/// once per routine and memoized on the workspace (which the MCP server needs to be `Send`), for
+/// resolving `label^routine` calls into it.
 pub type Labels = HashMap<String, Arc<TyProcedure>>;
+
+/// The labels in scope while checking one body: the signatures plus per-entry state that exists
+/// only during checking (`LabelEntry::output` is a live `Rc` cell, so this map isn't `Send`).
+pub type ScopedLabels = HashMap<String, LabelEntry>;
+
+#[derive(Clone)]
+pub struct LabelEntry {
+    pub proc: Arc<TyProcedure>,
+    // Inside a procedure block, the routine's own labels: a bare `Goto` to one fails to compile
+    // (IRIS: <NOLINE>), though `Do`/`$$` may call them.
+    pub outside_block: bool,
+    // The label after this one, which it runs into when it falls off its end. `None` for the
+    // last, or when a procedure block follows.
+    pub next: Option<String>,
+    // What its returns are held to. Set up front for a label in a method or procedure block (the
+    // body's own); for a routine-level label, set by the label before it when that one falls
+    // through, else it gets its own when checked.
+    #[allow(clippy::type_complexity)]
+    pub output: OnceCell<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
+}
+
+// `labels` in source order, each flagged when it's a procedure block. `output` is the enclosing
+// body's, for labels nested in one.
+#[allow(clippy::type_complexity)]
+pub(crate) fn scoped_labels(
+    uri: &str,
+    labels: &[(&RoutineElementDetails, bool)],
+    output: Option<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
+) -> ScopedLabels {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(i, (details, _))| {
+            let next = labels
+                .get(i + 1)
+                .filter(|(_, is_procedure)| !is_procedure)
+                .map(|(next, _)| next.name.it.clone());
+            let entry = LabelEntry {
+                proc: Arc::new(details.to_ty_procedure(Some(uri))),
+                outside_block: false,
+                next,
+                output: output.clone().map_or_else(OnceCell::new, OnceCell::from),
+            };
+            (details.name.it.clone(), entry)
+        })
+        .collect()
+}
 
 /// Builds `routine`'s label map — shared by `check_rtn` (the current routine) and
 /// `WorkspaceEnv::resolve_rtn_labels` (some other routine already in the workspace).
@@ -1509,7 +1561,7 @@ pub struct CodeEnv<'a> {
     base: &'a DocumentEnv<'a>,
     is_instance: bool,
     offset: usize,
-    labels: Option<Arc<Labels>>,
+    labels: Option<Rc<ScopedLabels>>,
     // The enclosing method's name, when known — `##super(...)` calls the superclass's version
     // of this same method, so resolving it needs to know which method that is.
     method_name: Option<&'a str>,
@@ -1533,17 +1585,44 @@ impl<'a> CodeEnv<'a> {
             .qualify_class_name(name, self.this.map(|this| this.name.as_str()))
     }
 
-    // The same scope, plus the labels of the method body being checked.
-    pub(crate) fn with_labels(&self, labels: Labels) -> CodeEnv<'a> {
+    // The labels of a brace-delimited body on top of the enclosing ones; a nested label shadows
+    // a same-named outer one.
+    pub(crate) fn with_nested_labels(
+        &self,
+        nested: ScopedLabels,
+        is_procedure: bool,
+    ) -> CodeEnv<'a> {
+        let mut labels: ScopedLabels = self
+            .labels
+            .iter()
+            .flat_map(|labels| labels.iter())
+            .map(|(name, label)| {
+                let label = LabelEntry {
+                    outside_block: is_procedure || label.outside_block,
+                    ..label.clone()
+                };
+                (name.clone(), label)
+            })
+            .collect();
+        labels.extend(nested);
         CodeEnv {
             this: self.this,
             base: self.base,
             is_instance: self.is_instance,
             offset: self.offset,
-            labels: Some(Arc::new(labels)),
+            labels: Some(Rc::new(labels)),
             method_name: self.method_name,
             macro_definitions: self.macro_definitions,
         }
+    }
+
+    pub(crate) fn label_entry(&self, label: &str) -> Option<&LabelEntry> {
+        self.labels.as_ref().and_then(|labels| labels.get(label))
+    }
+
+    pub(crate) fn goto_leaves_block(&self, label: &str) -> bool {
+        self.label_entry(label)
+            .is_some_and(|label| label.outside_block)
     }
 
     pub(crate) fn is_defined_macro(&self, name: &str) -> bool {
@@ -1725,7 +1804,7 @@ impl<'a> CodeEnv<'a> {
             None => match (label, offset) {
                 (Some(label), None) => {
                     match self.labels.as_ref().and_then(|labels| labels.get(&label)) {
-                        Some(proc) => Ok(TyProcedureOrAny::Procedure(proc.clone())),
+                        Some(label) => Ok(TyProcedureOrAny::Procedure(label.proc.clone())),
                         None => Err(QuasiTypeError::cannot_find_label(label, None)),
                     }
                 }

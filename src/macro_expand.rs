@@ -16,7 +16,7 @@ use std::{
 };
 
 use tygr::{Grammar, IntoInner, OLC, Range};
-use tygr_objectscript::cos::{HMacro, MacroCallStruct, MacroedUnit};
+use tygr_objectscript::cos::{HMacro, MacroArg, MacroCallStruct, MacroedUnit};
 
 use crate::{
     DocDetails, WorkspaceStruct,
@@ -705,16 +705,56 @@ impl WorkspaceStruct {
                         if !substituted {
                             match args.as_deref() {
                                 Some(args) => {
-                                    let mut arg_texts = Vec::with_capacity(args.items.len());
-                                    for arg in args.items.iter() {
-                                        arg_texts
-                                            .push(self.expand_text(definitions, &arg.print())?);
+                                    let text = unit.print();
+                                    let base = origin.range.start;
+                                    let arg_span = |arg: &Range<MacroArg>| {
+                                        Some(
+                                            arg.start.checked_sub(base)?
+                                                ..arg.end.checked_sub(base)?,
+                                        )
+                                    };
+                                    // Precise means `text` sits at `origin.range`, so it's pushed
+                                    // piecewise: an argument whose expansion changed its length
+                                    // maps to the argument's own span, the rest stays exact.
+                                    let piecewise = precise
+                                        && args.items.iter().all(|arg| {
+                                            arg_span(arg).and_then(|span| text.get(span))
+                                                == Some(arg.print().as_str())
+                                        });
+                                    if piecewise {
+                                        let mut done = 0;
+                                        for arg in args.items.iter() {
+                                            let span = arg_span(arg).unwrap();
+                                            let piece =
+                                                origin.with_range(base + done..base + span.start);
+                                            dones.push(&text[done..span.start], &piece, true);
+                                            let expanded =
+                                                self.expand_text(definitions, &text[span.clone()])?;
+                                            let exact = expanded == text[span.clone()];
+                                            let piece = origin
+                                                .with_range(base + span.start..base + span.end);
+                                            dones.push(&expanded, &piece, exact);
+                                            done = span.end;
+                                        }
+                                        let piece =
+                                            origin.with_range(base + done..origin.range.end);
+                                        dones.push(&text[done..], &piece, true);
+                                    } else {
+                                        let mut arg_texts = Vec::with_capacity(args.items.len());
+                                        for arg in args.items.iter() {
+                                            arg_texts
+                                                .push(self.expand_text(definitions, &arg.print())?);
+                                        }
+                                        dones.push(
+                                            &format!(
+                                                "$$${}({})",
+                                                name.print(),
+                                                arg_texts.join(",")
+                                            ),
+                                            &origin,
+                                            false,
+                                        );
                                     }
-                                    dones.push(
-                                        &format!("$$${}({})", name.print(), arg_texts.join(",")),
-                                        &origin,
-                                        precise,
-                                    );
                                 }
                                 None => dones.push(&unit.print(), &origin, precise),
                             }

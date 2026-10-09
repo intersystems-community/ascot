@@ -13,7 +13,7 @@ use crate::check::env::*;
 use crate::check::errors::*;
 use crate::check::types::*;
 use crate::details::WithRange;
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -38,8 +38,9 @@ struct Shared<'a> {
     env: &'a WorkspaceEnv<'a>,
     procedure_block: bool,
     // `None` is for subroutines and procedures only. It means that the output expectation
-    // is unclear until the first return/quit command.
-    output: RefCell<Option<WithRange<Option<Ty>>>>,
+    // is unclear until the first return/quit command. Shared (the `Rc`) with the labels that
+    // return for this body (see `check_block_body`).
+    output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
     ty_var: RefCell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
     // Kept in declaration order for a deterministic diagnostic when more than one is never
@@ -137,24 +138,50 @@ impl<'a> Flow<'a> {
         self.shared.env.restore_soft_diagnostics(was_suppressed);
     }
 
-    pub(crate) fn with_subroutine(
+    // A label, held to `output` (see `LabelEntry::output`). Returns what it creates.
+    pub(crate) fn with_label(
         uri: &'a str,
         env: &'a WorkspaceEnv,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
+        output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
     ) -> Result<Vec<String>, TypeError> {
-        Self::with_procedure(
-            uri,
-            env,
-            range,
-            args,
-            None,
-            WithRange { it: None, range },
-            handler,
-            false,
-            false,
-        )
+        Self::run(uri, env, range, args, None, output, handler, false, false)
+    }
+
+    pub(crate) fn output_expectation(&self) -> Rc<RefCell<Option<WithRange<Option<Ty>>>>> {
+        self.shared.output.clone()
+    }
+
+    pub(crate) fn current_range(&self) -> bindings::Range {
+        self.current_range
+    }
+
+    pub(crate) fn is_procedure_block(&self) -> bool {
+        self.shared.procedure_block
+    }
+
+    // Falling off the end of a body is a tail call of the label that follows it: that label
+    // returns for this body, and reads what it assigned (so the deferred "never read" reports
+    // can't be trusted). With nothing to run into, that's worth a word.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn tail_call(
+        &mut self,
+        next: Option<&OnceCell<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>>,
+        range: bindings::Range,
+    ) -> Result<(), TypeError> {
+        if self.bindings.is_none() {
+            return Ok(());
+        }
+        match next {
+            Some(next) => {
+                let _ = next.set(self.shared.output.clone());
+                self.mark_incomplete();
+            }
+            None => self.add_soft_diagnostic(TypeError::missing_quit(range).into()),
+        }
+        self.handle_void()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -170,6 +197,35 @@ impl<'a> Flow<'a> {
         // The parameter list is dictated by an inherited declaration (an override), so a
         // parameter the body never reads -- or an `Output` one it never assigns -- isn't a
         // mistake of this method's.
+        inherited_signature: bool,
+    ) -> Result<Vec<String>, TypeError> {
+        let output = Rc::new(RefCell::new(
+            output.it.map(|it| WithRange::new(it, output.range)),
+        ));
+        Self::run(
+            uri,
+            env,
+            range,
+            args,
+            public_list,
+            output,
+            handler,
+            auto_return,
+            inherited_signature,
+        )
+    }
+
+    // Runs `handler` in a fresh flow for a body with `args`; returns what the body creates.
+    #[allow(clippy::too_many_arguments)]
+    fn run(
+        uri: &'a str,
+        env: &'a WorkspaceEnv,
+        range: bindings::Range,
+        args: Vec<WithRange<NormalArg>>,
+        public_list: ProcedureBlock,
+        output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
+        handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
+        auto_return: bool,
         inherited_signature: bool,
     ) -> Result<Vec<String>, TypeError> {
         let procedure_block = public_list.is_some();
@@ -244,10 +300,6 @@ impl<'a> Flow<'a> {
                 }
             }
         }
-        let output = RefCell::new(match output.it {
-            Some(it) => Some(WithRange::new(it, output.range)),
-            None => None,
-        });
         let mut flow = Self {
             shared: Rc::new(Shared {
                 uri,
@@ -275,11 +327,6 @@ impl<'a> Flow<'a> {
                     end: range.end,
                 },
             ))?;
-        }
-        // Bad style rather than a fault: the next label's code simply runs, so the deferred
-        // checks below still apply.
-        if flow.bindings.is_some() {
-            flow.add_soft_diagnostic(TypeError::missing_quit(range).into());
         }
         // Deferred until every split flow has run: still `false` means never read.
         if !flow.shared.incomplete.get()
