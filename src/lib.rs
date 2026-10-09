@@ -5319,10 +5319,11 @@ mod tests {
                 .contains("Cannot find label 'nowhere'"),
             "{diagnostics:?}"
         );
-        // `Goto` can't leave the block (IRIS: <NOLINE>), though `Do` may call out of it.
+        // A bare `Goto` can't leave the block (IRIS: <NOLINE>), though `Do` may call out of it
+        // and a routine-qualified `Goto Outer^Out` may too.
         let diagnostics = diagnostics_for(&[(
             "Out.mac",
-            "ROUTINE Out\n\tQuit\nOuter\n\tQuit\nProc() public {\n\tDo Outer\n\tGoto Outer\n}\n",
+            "ROUTINE Out\n\tQuit\nOuter\n\tQuit\nProc() public {\n\tDo Outer\n\tGoto Outer\n\tGoto Outer^Out\n}\n",
         )]);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
