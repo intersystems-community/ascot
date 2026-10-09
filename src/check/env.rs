@@ -1442,11 +1442,10 @@ impl<'a> DocumentEnv<'a> {
             is_instance: false,
             offset: 0,
             this: None,
-            labels: Some(Arc::new(labels)),
+            labels: Some(Arc::new(CodeEnv::scoped(labels).collect())),
             method_name: None,
             macro_definitions: Some(macro_definitions),
             goto_targets: Rc::default(),
-            block_labels: None,
         }
     }
 
@@ -1466,7 +1465,6 @@ impl<'a> DocumentEnv<'a> {
             method_name: Some(method_name),
             macro_definitions: Some(macro_definitions),
             goto_targets: Rc::default(),
-            block_labels: None,
         }
     }
 
@@ -1486,13 +1484,19 @@ impl<'a> DocumentEnv<'a> {
             labels: None,
             macro_definitions: Some(macro_definitions),
             goto_targets: Rc::default(),
-            block_labels: None,
         }
     }
 }
 
 /// label -> signature, for the subroutines/procedures declared in the current routine.
 pub type Labels = HashMap<String, Arc<TyProcedure>>;
+
+// A label in scope. Inside a procedure block, the routine's own labels are `outside_block`: a
+// bare `Goto` to one fails to compile (IRIS: <NOLINE>), though `Do`/`$$` may call them.
+struct ScopedLabel {
+    proc: Arc<TyProcedure>,
+    outside_block: bool,
+}
 
 /// Builds `routine`'s label map — shared by `check_rtn` (the current routine) and
 /// `WorkspaceEnv::resolve_rtn_labels` (some other routine already in the workspace).
@@ -1516,7 +1520,7 @@ pub struct CodeEnv<'a> {
     base: &'a DocumentEnv<'a>,
     is_instance: bool,
     offset: usize,
-    labels: Option<Arc<Labels>>,
+    labels: Option<Arc<HashMap<String, ScopedLabel>>>,
     // The enclosing method's name, when known — `##super(...)` calls the superclass's version
     // of this same method, so resolving it needs to know which method that is.
     method_name: Option<&'a str>,
@@ -1526,9 +1530,6 @@ pub struct CodeEnv<'a> {
     // The labels this body `Goto`es: such a label returns for the body, where a `Do`/`$$`
     // subroutine returns to its caller (see `check_block_body`).
     goto_targets: Rc<RefCell<HashSet<String>>>,
-    // Inside a procedure block: the labels defined in it. `Goto` can't leave the block (IRIS
-    // fails to compile with <NOLINE>), though `Do`/`$$` may still call the routine's labels.
-    block_labels: Option<Rc<HashSet<String>>>,
 }
 
 impl<'a> CodeEnv<'a> {
@@ -1546,37 +1547,37 @@ impl<'a> CodeEnv<'a> {
             .qualify_class_name(name, self.this.map(|this| this.name.as_str()))
     }
 
-    // The same scope, plus the labels of the method body being checked.
     // The labels of a brace-delimited body, on top of the enclosing ones: a routine's labels
-    // stay callable from inside its procedure blocks, and a nested label shadows a same-named
-    // outer one.
+    // stay callable from inside its procedure blocks (but `outside_block`), and a nested label
+    // shadows a same-named outer one.
     pub(crate) fn with_nested_labels(&self, nested: Labels, is_procedure: bool) -> CodeEnv<'a> {
-        let mut labels = self.labels.as_deref().cloned().unwrap_or_default();
-        let (block_labels, goto_targets) = if is_procedure {
-            (
-                Some(Rc::new(nested.keys().cloned().collect())),
-                Rc::default(),
-            )
+        let mut labels: HashMap<_, _> = self
+            .labels
+            .iter()
+            .flat_map(|labels| labels.iter())
+            .map(|(name, label)| {
+                let label = ScopedLabel {
+                    proc: label.proc.clone(),
+                    outside_block: is_procedure || label.outside_block,
+                };
+                (name.clone(), label)
+            })
+            .collect();
+        labels.extend(Self::scoped(nested));
+        let goto_targets = if is_procedure {
+            Rc::default()
         } else {
-            (self.block_labels.clone(), self.goto_targets.clone())
+            self.goto_targets.clone()
         };
-        labels.extend(nested);
-        CodeEnv {
-            block_labels,
-            goto_targets,
-            ..self.with_labels(labels)
-        }
+        self.with_scoped_labels(labels, goto_targets)
     }
 
     // A `Goto` to a routine-level label from inside a procedure block.
     pub(crate) fn goto_leaves_block(&self, label: &str) -> bool {
-        self.block_labels
+        self.labels
             .as_ref()
-            .is_some_and(|block| !block.contains(label))
-            && self
-                .labels
-                .as_ref()
-                .is_some_and(|labels| labels.contains_key(label))
+            .and_then(|labels| labels.get(label))
+            .is_some_and(|label| label.outside_block)
     }
 
     pub(crate) fn note_goto_target(&self, label: String) {
@@ -1587,7 +1588,21 @@ impl<'a> CodeEnv<'a> {
         self.goto_targets.borrow().contains(label)
     }
 
-    pub(crate) fn with_labels(&self, labels: Labels) -> CodeEnv<'a> {
+    fn scoped(labels: Labels) -> impl Iterator<Item = (String, ScopedLabel)> {
+        labels.into_iter().map(|(name, proc)| {
+            let label = ScopedLabel {
+                proc,
+                outside_block: false,
+            };
+            (name, label)
+        })
+    }
+
+    fn with_scoped_labels(
+        &self,
+        labels: HashMap<String, ScopedLabel>,
+        goto_targets: Rc<RefCell<HashSet<String>>>,
+    ) -> CodeEnv<'a> {
         CodeEnv {
             this: self.this,
             base: self.base,
@@ -1596,8 +1611,7 @@ impl<'a> CodeEnv<'a> {
             labels: Some(Arc::new(labels)),
             method_name: self.method_name,
             macro_definitions: self.macro_definitions,
-            goto_targets: Rc::default(),
-            block_labels: None,
+            goto_targets,
         }
     }
 
@@ -1780,7 +1794,7 @@ impl<'a> CodeEnv<'a> {
             None => match (label, offset) {
                 (Some(label), None) => {
                     match self.labels.as_ref().and_then(|labels| labels.get(&label)) {
-                        Some(proc) => Ok(TyProcedureOrAny::Procedure(proc.clone())),
+                        Some(label) => Ok(TyProcedureOrAny::Procedure(label.proc.clone())),
                         None => Err(QuasiTypeError::cannot_find_label(label, None)),
                     }
                 }
