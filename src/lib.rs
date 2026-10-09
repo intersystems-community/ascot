@@ -5414,4 +5414,26 @@ mod tests {
             );
         }
     }
+
+    // A `$$$Call(args)` left as is (not a `#define`d macro) still has its arguments expanded. A
+    // range ending inside it maps back to the source, not to the shorter expanded text.
+    #[test]
+    fn ranges_over_an_unexpanded_macro_call_with_expanded_arguments_map_to_the_source() {
+        let line = " return $$$NotAMacro($$$LongCode,\"x\")";
+        let diagnostics = class_diagnostics(&format!(
+            "ClassMethod M() {{\n#define LongCode 5001\n{line}\n}}\n"
+        ));
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let range = diagnostics[0].range;
+        assert!(
+            diagnostics[0].message.contains("'NotAMacro' is undefined"),
+            "{diagnostics:?}"
+        );
+        assert_eq!(
+            (range.start.line, range.start.character),
+            (3, 8),
+            "{diagnostics:?}"
+        );
+        assert_eq!(range.end.character as usize, line.len(), "{diagnostics:?}");
+    }
 }
