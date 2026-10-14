@@ -22,7 +22,7 @@
     "build": "bash scripts/build.sh"
   },
   "devDependencies": {
-    "@bytecodealliance/jco": "^1.35.0",
+    "@bytecodealliance/jco": "^1.37.0",
     "@types/node": "^26.6.4",
     "typescript": "^7.0.2"
   }
