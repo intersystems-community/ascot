@@ -1,5 +1,9 @@
 # Ascot
 
+[![crates.io](https://img.shields.io/crates/v/ascot)](https://crates.io/crates/ascot)
+[![npm](https://img.shields.io/npm/v/%40intersystems-community%2Fascot)](https://www.npmjs.com/package/@intersystems-community/ascot)
+[![Claude Code plugins](https://img.shields.io/badge/Claude_Code-plugins-blue)](#ascot-as-an-mcp-server)
+
 Ties together knowledge from across your ObjectScript code base.
 
 A type checker and code intelligence engine for InterSystems ObjectScript.
@@ -48,7 +52,8 @@ Prebuilt `ascot` binaries are attached to each
 
 ### Rust
 
-Not published yet. Once it is:
+Not published yet. Once it is, the crate will live at
+[crates.io/crates/ascot](https://crates.io/crates/ascot):
 
 ```sh
 cargo install ascot
@@ -58,7 +63,8 @@ cargo install ascot
 
 A library for Node and other JS consumers (the one the InterSystems Language
 Server uses); it does not provide an `ascot` executable. Not published yet.
-Once it is:
+Once it is, the package will live at
+[npmjs.com/package/@intersystems-community/ascot](https://www.npmjs.com/package/@intersystems-community/ascot):
 
 ```sh
 npm install @intersystems-community/ascot
@@ -101,9 +107,12 @@ ascot mcp
 ```
 
 Starts the MCP server (stdio), exposing workspace analysis as tools an AI agent
-calls on demand; it pairs well with the LSP plugin below. To register it with
-Claude Code, either install the
-`ascot-mcp` plugin (expects `ascot` on `PATH`):
+calls on demand; it pairs well with the LSP plugin below.
+
+#### Claude Code
+
+This repository is a Claude Code plugin marketplace. Either install the
+`ascot-mcp` plugin from it (expects `ascot` on `PATH`):
 
 ```sh
 claude plugin marketplace add intersystems-community/ascot
@@ -114,6 +123,38 @@ or add the server directly:
 
 ```sh
 claude mcp add ascot -- /path/to/ascot mcp
+```
+
+#### Other MCP clients
+
+Any MCP client that can launch a stdio server works: the command is `ascot`
+(or its full path) and the single argument is `mcp`.
+
+OpenAI Codex CLI:
+
+```sh
+codex mcp add ascot -- ascot mcp
+```
+
+Cursor (`.cursor/mcp.json`), Claude Desktop (`claude_desktop_config.json`) and
+Gemini CLI (`~/.gemini/settings.json`) share one shape:
+
+```json
+{
+  "mcpServers": {
+    "ascot": { "command": "ascot", "args": ["mcp"] }
+  }
+}
+```
+
+VS Code (`.vscode/mcp.json`):
+
+```json
+{
+  "servers": {
+    "ascot": { "type": "stdio", "command": "ascot", "args": ["mcp"] }
+  }
+}
 ```
 
 ### `ascot` as an LSP server
