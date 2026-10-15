@@ -189,6 +189,14 @@ metadata. The commands take the connection differently:
   `iris` and `iris_namespace` (default `%SYS`) arguments of the
   `create_workspace` tool call.
 
+Not every workflow has a live instance at hand, for example CI or analysis of
+code exported from another system. If you need system and library code resolved
+without a connection, we'd like to hear how you'd want to supply it: a
+pre-exported metadata bundle, a snapshot cached from an earlier connection, or
+something else. Please
+[open a feature request](https://github.com/intersystems-community/ascot/issues/new?template=feature_request.yml)
+describing your setup.
+
 ## Contributing
 
 Please [open an issue](https://github.com/intersystems-community/ascot/issues/new/choose)
