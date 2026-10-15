@@ -2,13 +2,14 @@
 
 [![crates.io](https://img.shields.io/crates/v/ascot)](https://crates.io/crates/ascot)
 [![npm](https://img.shields.io/npm/v/%40intersystems-community%2Fascot)](https://www.npmjs.com/package/@intersystems-community/ascot)
-[![Claude Code plugins](https://img.shields.io/badge/Claude_Code-plugins-blue)](#ascot-as-an-mcp-server)
+[![Claude Code plugins](https://img.shields.io/badge/Claude_Code-plugins-blue)](#claude-code-plugins)
 
 Ties together knowledge from across your ObjectScript code base.
 
 A type checker and code intelligence engine for InterSystems ObjectScript.
 Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
-[MCP](#ascot-as-an-mcp-server) or [LSP](#ascot-as-an-lsp-server) protocols, or via the
+[MCP](#ascot-as-an-mcp-server) or [LSP](#ascot-as-an-lsp-server) protocols
+(including [Claude Code plugins](#claude-code-plugins)), or via the
 [**InterSystems Language Server**](https://github.com/intersystems/language-server/).
 
 ## Features
@@ -107,28 +108,14 @@ ascot mcp
 ```
 
 Starts the MCP server (stdio), exposing workspace analysis as tools an AI agent
-calls on demand; it pairs well with the LSP plugin below.
+calls on demand. Any MCP client that can launch a stdio server works: the
+command is `ascot` (or its full path) and the single argument is `mcp`.
 
-#### Claude Code
-
-This repository is a Claude Code plugin marketplace. Either install the
-`ascot-mcp` plugin from it (expects `ascot` on `PATH`):
+Claude Code:
 
 ```sh
-claude plugin marketplace add intersystems-community/ascot
-claude plugin install ascot-mcp@ascot-plugins
+claude mcp add ascot -- ascot mcp
 ```
-
-or add the server directly:
-
-```sh
-claude mcp add ascot -- /path/to/ascot mcp
-```
-
-#### Other MCP clients
-
-Any MCP client that can launch a stdio server works: the command is `ascot`
-(or its full path) and the single argument is `mcp`.
 
 OpenAI Codex CLI:
 
@@ -163,12 +150,18 @@ VS Code (`.vscode/mcp.json`):
 ascot lsp
 ```
 
-Starts the LSP server (stdio). Through the `ascot-lsp` plugin, Claude Code
-feeds its diagnostics back into the conversation after every edit. The plugin
-expects `ascot` on `PATH`:
+Starts the LSP server (stdio).
+
+### Claude Code plugins
+
+This repository is a Claude Code plugin marketplace with two plugins, both
+expecting `ascot` on `PATH`: `ascot-mcp` registers the MCP server above, and
+`ascot-lsp` runs the LSP server and feeds its diagnostics back into the
+conversation after every edit.
 
 ```sh
 claude plugin marketplace add intersystems-community/ascot
+claude plugin install ascot-mcp@ascot-plugins
 claude plugin install ascot-lsp@ascot-plugins
 ```
 
