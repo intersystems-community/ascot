@@ -157,6 +157,7 @@ impl AtelierConnection {
             Err(ureq::Error::StatusCode(status)) => {
                 Err(format!("{} answered http status {status}", self.base_url))
             }
+            Err(ureq::Error::Timeout(_)) => Err(format!("cannot reach {}", self.api_root)),
             Err(err) => Err(format!("cannot reach {}: {err}", self.api_root)),
         }
     }
