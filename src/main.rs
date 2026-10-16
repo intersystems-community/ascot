@@ -99,7 +99,10 @@ fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
         None
     })?;
     let namespace = namespace.unwrap_or_else(|| DEFAULT_IRIS_NAMESPACE.to_string());
-    match ascot::atelier::AtelierConnection::connect(&url, &namespace) {
+    match ascot::atelier::AtelierConnection::connect(&url, &namespace).and_then(|conn| {
+        conn.check()?;
+        Ok(conn)
+    }) {
         Ok(conn) => Some(Box::new(conn)),
         Err(err) => {
             eprintln!("--iris: {err}");

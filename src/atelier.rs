@@ -61,6 +61,10 @@ impl<V: Clone> Cache<V> {
 
 pub struct AtelierConnection {
     base_url: String,
+    // `scheme://host:port/prefix/api/atelier`, for the namespace listing in `check`'s message.
+    api_root: String,
+    namespace: String,
+    username: String,
     auth_header: String,
     agent: ureq::Agent,
     // Set on the first request failure, so we warn once (not once per lookup) and short-circuit
@@ -96,11 +100,12 @@ impl AtelierConnection {
             "Basic {}",
             base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
         );
+        let api_root = format!("{scheme}://{host}:{port}{path_prefix}/api/atelier");
         Ok(Self {
-            base_url: format!(
-                "{scheme}://{host}:{port}{path_prefix}/api/atelier/v1/{}",
-                percent_encode(namespace)
-            ),
+            base_url: format!("{api_root}/v1/{}", percent_encode(namespace)),
+            api_root,
+            namespace: namespace.to_string(),
+            username: username.into_owned(),
             auth_header,
             agent: ureq::Agent::new_with_config(
                 ureq::Agent::config_builder()
@@ -112,6 +117,48 @@ impl AtelierConnection {
             cls_cache: Cache::new(),
             routine_cache: Cache::new(),
         })
+    }
+
+    /// One request up front, so a wrong URL, password or namespace is a clear error at startup
+    /// rather than a one-line warning followed by every system macro reported undefined.
+    pub fn check(&self) -> Result<(), String> {
+        let get = |url: &str| {
+            self.agent
+                .get(url)
+                .header("Authorization", &self.auth_header)
+                .call()
+        };
+        match get(&self.base_url) {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::StatusCode(404)) => {
+                let namespaces: Option<Vec<String>> =
+                    get(&format!("{}/", self.api_root)).ok().and_then(|resp| {
+                        let body: Value = resp.into_body().read_json().ok()?;
+                        let names = body.get("result")?.get("content")?.get("namespaces")?;
+                        serde_json::from_value(names.clone()).ok()
+                    });
+                Err(match namespaces {
+                    Some(names) => format!(
+                        "namespace '{}' does not exist at {}; it has: {}",
+                        self.namespace,
+                        self.api_root,
+                        names.join(", ")
+                    ),
+                    None => format!(
+                        "no Atelier API at {} (http status 404); check the URL's path prefix",
+                        self.api_root
+                    ),
+                })
+            }
+            Err(ureq::Error::StatusCode(401)) => Err(format!(
+                "authentication failed for user '{}' at {} (http status 401)",
+                self.username, self.api_root
+            )),
+            Err(ureq::Error::StatusCode(status)) => {
+                Err(format!("{} answered http status {status}", self.base_url))
+            }
+            Err(err) => Err(format!("cannot reach {}: {err}", self.api_root)),
+        }
     }
 
     fn fail(&self, context: &str, err: ureq::Error) {
@@ -671,6 +718,83 @@ mod tests {
             conn.base_url,
             "http://localhost:8080/iris/api/atelier/v1/%25SYS"
         );
+    }
+
+    // An HTTP server answering each request with the first of `routes` whose path suffix
+    // matches the request's path (`("", ...)` matches anything).
+    fn stub_server(routes: &'static [(&str, &str, &str)]) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://user:pass@{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut buf = [0; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]);
+                let path = request.split_whitespace().nth(1).unwrap_or("");
+                let (_, status, body) = routes
+                    .iter()
+                    .find(|(suffix, ..)| path.ends_with(suffix))
+                    .unwrap();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        url
+    }
+
+    #[test]
+    fn check_names_the_available_namespaces_when_the_requested_one_is_missing() {
+        // The listing lives at `/api/atelier/` (trailing slash); the namespace itself 404s.
+        let url = stub_server(&[
+            (
+                "/api/atelier/",
+                "200 OK",
+                r#"{"result":{"content":{"namespaces":["%SYS","USER"]}}}"#,
+            ),
+            ("", "404 Not Found", ""),
+        ]);
+        let err = AtelierConnection::connect(&url, "NOPE")
+            .unwrap()
+            .check()
+            .unwrap_err();
+        assert!(err.contains("namespace 'NOPE' does not exist"), "{err}");
+        assert!(err.contains("%SYS, USER"), "{err}");
+    }
+
+    #[test]
+    fn check_blames_the_path_prefix_when_there_is_no_atelier_api_at_all() {
+        let url = stub_server(&[("", "404 Not Found", "")]);
+        let err = AtelierConnection::connect(&url, "USER")
+            .unwrap()
+            .check()
+            .unwrap_err();
+        assert!(err.contains("no Atelier API at"), "{err}");
+    }
+
+    #[test]
+    fn check_reports_a_bad_password() {
+        let url = stub_server(&[("", "401 Unauthorized", "")]);
+        let err = AtelierConnection::connect(&url, "USER")
+            .unwrap()
+            .check()
+            .unwrap_err();
+        assert!(
+            err.contains("authentication failed for user 'user'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn check_passes_on_a_reachable_namespace() {
+        let url = stub_server(&[("", "200 OK", r#"{"result":{"content":{"name":"USER"}}}"#)]);
+        AtelierConnection::connect(&url, "USER")
+            .unwrap()
+            .check()
+            .unwrap();
     }
 
     #[test]
