@@ -1,5 +1,8 @@
 changelog:
   exclude:
+    labels:
+      # Version-bump PRs: the release itself, not something it ships.
+      - release
     authors:
       - dependabot
       - dependabot[bot]
