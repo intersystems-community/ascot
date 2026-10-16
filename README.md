@@ -53,8 +53,7 @@ Prebuilt `ascot` binaries are attached to each
 
 ### Rust
 
-Not published yet. Once it is, the crate will live at
-[crates.io/crates/ascot](https://crates.io/crates/ascot):
+From [crates.io/crates/ascot](https://crates.io/crates/ascot):
 
 ```sh
 cargo install ascot
@@ -62,9 +61,8 @@ cargo install ascot
 
 ### JavaScript binding
 
-A library for Node and other JS consumers (the one the InterSystems Language
-Server uses); it does not provide an `ascot` executable. Not published yet.
-Once it is, the package will live at
+A library for Node 24+ and other JS consumers (the one the InterSystems Language
+Server uses); it does not provide an `ascot` executable. From
 [npmjs.com/package/@intersystems-community/ascot](https://www.npmjs.com/package/@intersystems-community/ascot):
 
 ```sh

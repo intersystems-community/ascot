@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "description": "ascot, a type checker and code intelligence engine for InterSystems ObjectScript, for Node and other JS consumers.",
   "license": "MIT OR Apache-2.0",
+  "keywords": [
+    "intersystems",
+    "iris",
+    "objectscript",
+    "type-checker",
+    "static-analysis",
+    "language-server",
+    "wasm"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/intersystems-community/ascot.git",
@@ -16,7 +25,7 @@
     "lib/*.core*.wasm"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "scripts": {
     "build": "bash scripts/build.sh"
