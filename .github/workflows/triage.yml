@@ -3,8 +3,7 @@ name: Triage
 on:
   issues:
     types: [opened]
-  # Runs in the base repository's context, so it has write access for PRs from forks too; it
-  # never checks out or runs the PR's code.
+  # Base-repo context: write access on fork PRs too. Never checks out PR code.
   pull_request_target:
     types: [opened, ready_for_review]
 
@@ -22,7 +21,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ github.event.issue.number }}
 
-  # Non-blocking: not a code owner, so the ruleset's required review is still a code owner's.
   request-manager-review:
     if: >-
       github.event_name == 'pull_request_target'
