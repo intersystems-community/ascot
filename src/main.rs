@@ -3,9 +3,8 @@
 //!
 //! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
 //! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
-//! process over to `lsp.rs`/`mcp.rs` for the server modes. `--iris` connections (live, or a
-//! declaration file `declare` wrote) are built with `atelier.rs`. None of this is part of the
-//! wasm/JS build (see `bindings.rs`).
+//! process over to `lsp.rs`/`mcp.rs` for the server modes. `--iris` connections are built with
+//! `iris.rs`. None of this is part of the wasm/JS build (see `bindings.rs`).
 
 use ascot::Workspace;
 use ascot::bindings::GuestWorkspace;
@@ -18,9 +17,10 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::exit;
+use std::time::Instant;
 use tygr::Grammar;
 
-use ascot::atelier::AtelierConnection;
+use ascot::atelier::{AtelierConnection, DocKind};
 use ascot::iris::IrisClient;
 
 fn main() {
@@ -117,8 +117,7 @@ fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
     }
 }
 
-/// Writes the classes, include files and routine labels of the namespace at `url` to `out`, for
-/// a later `--iris <out>`.
+/// Writes the declarations of the namespace at `url` to `out`, for a later `--iris <out>`.
 fn declare(url: &str, namespace: Option<&str>, out: &Path) {
     let namespace = namespace.unwrap_or(ascot::iris::DEFAULT_NAMESPACE);
     let conn = match AtelierConnection::connect(url, namespace).and_then(|conn| {
@@ -131,23 +130,22 @@ fn declare(url: &str, namespace: Option<&str>, out: &Path) {
             exit(1);
         }
     };
-    let terminal = std::io::stderr().is_terminal();
-    let declarations = conn.declarations(|status| {
-        if terminal {
-            eprint!("\r\x1b[K{status}");
+    let started = Instant::now();
+    let mut bars = std::io::stderr().is_terminal().then(ProgressBars::default);
+    let declarations = conn.declarations(|kind, done, total| {
+        if let Some(bars) = &mut bars {
+            bars.update(kind, done, total);
         }
     });
-    if terminal {
-        eprintln!();
-    }
     match declarations.and_then(|decls| decls.save(out).map(|()| decls)) {
         Ok(decls) => eprintln!(
-            "{} class(es), {} include file(s), {} routine(s) of namespace {} written to {}",
+            "{} class(es), {} include file(s), {} routine(s) of namespace {} written to {} in {}s",
             decls.classes.len(),
             decls.includes.len(),
             decls.routines.len(),
             decls.namespace,
-            out.display()
+            out.display(),
+            started.elapsed().as_secs()
         ),
         Err(err) => {
             eprintln!("declare: {err}");
@@ -276,6 +274,34 @@ fn analyze_workspace<'a>(
     );
     if count > 0 {
         exit(1);
+    }
+}
+
+/// One bar per kind of document `declare` fetches, redrawn in place on stderr.
+#[derive(Default)]
+struct ProgressBars {
+    counts: [(usize, usize); 3],
+    drawn: bool,
+}
+
+impl ProgressBars {
+    const LABELS: [&str; 3] = ["classes", "include files", "routines"];
+    const WIDTH: usize = 30;
+
+    fn update(&mut self, kind: DocKind, done: usize, total: usize) {
+        self.counts[kind as usize] = (done, total);
+        if self.drawn {
+            eprint!("\x1b[{}A", Self::LABELS.len());
+        }
+        for (label, (done, total)) in Self::LABELS.iter().zip(self.counts) {
+            let filled = (done * Self::WIDTH).checked_div(total).unwrap_or(0);
+            eprintln!(
+                "\x1b[K{label:<13} [{}{}] {done}/{total}",
+                "#".repeat(filled),
+                "-".repeat(Self::WIDTH - filled)
+            );
+        }
+        self.drawn = true;
     }
 }
 

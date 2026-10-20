@@ -13,8 +13,8 @@
 //! implemented by native Rust guest code at all (see `src/lib.rs`'s `IrisHandle`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -28,8 +28,18 @@ use crate::bindings::{
 };
 use crate::iris::{DECLARATIONS_VERSION, Declarations, IrisClient};
 
-// Classes or documents per round trip in `AtelierConnection::declarations`.
+// Classes or documents per round trip in `AtelierConnection::declarations`, and round trips in
+// flight at once.
 const BATCH: usize = 100;
+const WORKERS: usize = 8;
+
+/// What a batch of `AtelierConnection::declarations` work is fetching, for progress reporting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DocKind {
+    Class,
+    Include,
+    Routine,
+}
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -154,26 +164,26 @@ impl AtelierConnection {
         }
     }
 
-    /// Every class, include file and routine in the namespace, `BATCH` at a time: one
-    /// round trip per dictionary table (or per document batch), not per class or document.
-    /// `progress` gets a one-line status after each batch.
-    pub fn declarations(&self, mut progress: impl FnMut(&str)) -> Result<Declarations, String> {
+    /// Every class, include file and routine in the namespace, `BATCH` at a time and `WORKERS`
+    /// batches at a time: one round trip per dictionary table (or per document batch), not per
+    /// class or document. `progress(kind, done, total)` is called once each kind's total is
+    /// known and after each of its batches.
+    pub fn declarations(
+        &self,
+        mut progress: impl FnMut(DocKind, usize, usize),
+    ) -> Result<Declarations, String> {
         let failed = || format!("IRIS connection at {} failed", self.base_url);
-        let classes = self.declare_classes(&failed, &mut progress)?;
-
-        let mut includes = BTreeMap::new();
+        // `%sqlcq.*` are SQL cached queries, not code anyone references -- and these very queries
+        // create some, so without the filter each run would add classes to the next run's file.
+        let mut class_names: Vec<String> = self
+            .query("SELECT Name FROM %Dictionary.CompiledClass", &[])
+            .ok_or_else(failed)?
+            .into_iter()
+            .filter_map(|row| Some(row.get("Name")?.as_str()?.to_string()))
+            .filter(|name| !name.starts_with("%sqlcq."))
+            .collect();
+        class_names.sort();
         let inc_names = self.docnames("INC").ok_or_else(failed)?;
-        for (i, batch) in inc_names.chunks(BATCH).enumerate() {
-            for (doc, source) in self.docs(batch).ok_or_else(failed)? {
-                includes.insert(doc_basename(&doc), source);
-            }
-            progress(&format!(
-                "{}/{} include files",
-                i * BATCH + batch.len(),
-                inc_names.len()
-            ));
-        }
-
         // Hand-written routines only (`generated=0` skips a class's `.int`s). Read as the `.int`
         // where there is one -- the compiled, macro-expanded form, as `get_int_or_mac` prefers --
         // else as the `.mac`.
@@ -187,64 +197,107 @@ impl AtelierConnection {
         .collect();
         rtn_names.sort();
         rtn_names.dedup();
-        let mut routines = BTreeMap::new();
-        for (i, batch) in rtn_names.chunks(BATCH).enumerate() {
-            let ints: Vec<String> = batch.iter().map(|name| format!("{name}.int")).collect();
-            let mut found = self.docs(&ints).ok_or_else(failed)?;
-            let macs: Vec<String> = batch
-                .iter()
-                .filter(|name| !found.contains_key(&format!("{name}.int")))
-                .map(|name| format!("{name}.mac"))
-                .collect();
-            if !macs.is_empty() {
-                found.extend(self.docs(&macs).ok_or_else(failed)?);
-            }
-            for (doc, source) in found {
-                routines.insert(doc_basename(&doc), source);
-            }
-            progress(&format!(
-                "{}/{} routines",
-                i * BATCH + batch.len(),
-                rtn_names.len()
-            ));
-        }
 
+        let totals = [class_names.len(), inc_names.len(), rtn_names.len()];
+        for kind in [DocKind::Class, DocKind::Include, DocKind::Routine] {
+            progress(kind, 0, totals[kind as usize]);
+        }
+        let jobs: Vec<(DocKind, &[String])> = (class_names.chunks(BATCH))
+            .map(|batch| (DocKind::Class, batch))
+            .chain(
+                inc_names
+                    .chunks(BATCH)
+                    .map(|batch| (DocKind::Include, batch)),
+            )
+            .chain(
+                rtn_names
+                    .chunks(BATCH)
+                    .map(|batch| (DocKind::Routine, batch)),
+            )
+            .collect();
+        let next = AtomicUsize::new(0);
+        let classes = Mutex::new(BTreeMap::new());
+        let includes = Mutex::new(BTreeMap::new());
+        let routines = Mutex::new(BTreeMap::new());
+        let (tx, rx) = mpsc::channel();
+        let mut done = [0; 3];
+        std::thread::scope(|scope| {
+            let (jobs, next) = (&jobs, &next);
+            let (classes, includes, routines) = (&classes, &includes, &routines);
+            for _ in 0..WORKERS.min(jobs.len()) {
+                let tx = tx.clone();
+                scope.spawn(move || {
+                    while !self.broken.load(Ordering::Relaxed) {
+                        let Some(&(kind, batch)) = jobs.get(next.fetch_add(1, Ordering::Relaxed))
+                        else {
+                            break;
+                        };
+                        let ok = match kind {
+                            DocKind::Class => {
+                                let params: Vec<&str> = batch.iter().map(String::as_str).collect();
+                                let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
+                                let found = class_infos(self, &filter, &params);
+                                classes.lock().unwrap().extend(found);
+                                true
+                            }
+                            DocKind::Include => match self.docs(batch) {
+                                Some(found) => {
+                                    includes.lock().unwrap().extend(by_basename(found));
+                                    true
+                                }
+                                None => false,
+                            },
+                            DocKind::Routine => self.fetch_routines(batch, routines),
+                        };
+                        if !ok {
+                            break;
+                        }
+                        let _ = tx.send((kind, batch.len()));
+                    }
+                });
+            }
+            drop(tx);
+            // Rendered here, on the calling thread, so `progress` needn't be `Send`.
+            for (kind, count) in rx {
+                done[kind as usize] += count;
+                progress(kind, done[kind as usize], totals[kind as usize]);
+            }
+        });
+        if self.broken.load(Ordering::Relaxed) || done != totals {
+            return Err(failed());
+        }
         Ok(Declarations {
             version: DECLARATIONS_VERSION,
             namespace: self.namespace.clone(),
-            classes,
-            includes,
-            routines,
+            classes: classes.into_inner().unwrap(),
+            includes: includes.into_inner().unwrap(),
+            routines: routines.into_inner().unwrap(),
         })
     }
 
-    fn declare_classes(
+    // One batch of routines into `out`; `false` if the connection failed.
+    fn fetch_routines(
         &self,
-        failed: &impl Fn() -> String,
-        progress: &mut impl FnMut(&str),
-    ) -> Result<BTreeMap<String, ClassInfo>, String> {
-        let mut names: Vec<String> = self
-            .query("SELECT Name FROM %Dictionary.CompiledClass", &[])
-            .ok_or_else(failed)?
-            .into_iter()
-            .filter_map(|row| Some(row.get("Name")?.as_str()?.to_string()))
+        batch: &[String],
+        out: &Mutex<BTreeMap<String, RoutineSource>>,
+    ) -> bool {
+        let ints: Vec<String> = batch.iter().map(|name| format!("{name}.int")).collect();
+        let Some(mut found) = self.docs(&ints) else {
+            return false;
+        };
+        let macs: Vec<String> = batch
+            .iter()
+            .filter(|name| !found.contains_key(&format!("{name}.int")))
+            .map(|name| format!("{name}.mac"))
             .collect();
-        names.sort();
-        let mut classes = BTreeMap::new();
-        for (i, batch) in names.chunks(BATCH).enumerate() {
-            let params: Vec<&str> = batch.iter().map(String::as_str).collect();
-            let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
-            classes.extend(class_infos(self, &filter, &params));
-            if self.broken.load(Ordering::Relaxed) {
-                return Err(failed());
-            }
-            progress(&format!(
-                "{}/{} classes",
-                i * BATCH + batch.len(),
-                names.len()
-            ));
+        if !macs.is_empty() {
+            let Some(more) = self.docs(&macs) else {
+                return false;
+            };
+            found.extend(more);
         }
-        Ok(classes)
+        out.lock().unwrap().extend(by_basename(found));
+        true
     }
 
     // The names (with extension) of the namespace's non-generated documents of routine type
@@ -362,6 +415,13 @@ impl AtelierConnection {
                 .collect(),
         )
     }
+}
+
+fn by_basename(
+    docs: HashMap<String, RoutineSource>,
+) -> impl Iterator<Item = (String, RoutineSource)> {
+    docs.into_iter()
+        .map(|(doc, source)| (doc_basename(&doc), source))
 }
 
 // `Foo.Bar.inc` -> `Foo.Bar`.
