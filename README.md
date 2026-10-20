@@ -191,8 +191,8 @@ metadata. The commands take the connection differently:
 
 Not every workflow has a live instance at hand, for example CI or analysis of
 code exported from another system, and a live connection costs one round of
-REST requests per class looked up, every run. A snapshot fetches the class
-metadata of a namespace once, into a file:
+REST requests per class or routine looked up, every run. A snapshot fetches
+everything a connection would be asked for, once, into a file:
 
 ```sh
 ascot snapshot --iris http://user:password@localhost:8080/iris --iris-namespace USER user.json
@@ -206,11 +206,11 @@ ascot analyze --iris user.json <PATH>...
 ```
 
 `--iris-namespace` is then optional; if given, it must match the namespace the
-snapshot was taken from. The snapshot is types only: every class's superclasses,
-members and their signatures and types, as a live connection would report them,
-but no `.inc` or routine source. A system macro such as `$$$OK` therefore
-resolves only if the include file defining it is part of the workspace. Retake
-the snapshot after the instance's classes change.
+snapshot was taken from. The snapshot holds no class or routine code: every
+class's superclasses, members and their signatures and types, as a live
+connection would report them; every routine's labels and their argument lists;
+and, since they are macro definitions, every `.inc` file in full. Retake the
+snapshot after the instance's code changes.
 
 ## Contributing
 

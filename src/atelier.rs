@@ -1,6 +1,6 @@
 //! Optional live-IRIS lookups over the Atelier REST API (`--iris <url>` on the CLI and LSP, the
-//! `iris` argument of the MCP `create_workspace` tool), or the same class metadata read back from
-//! a file `ascot snapshot` wrote (`--iris <file>`).
+//! `iris` argument of the MCP `create_workspace` tool), or the same answers read back from a
+//! file `ascot snapshot` wrote (`--iris <file>`).
 //!
 //! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
 //! library code above all, so the checker can confirm them instead of leaving a hint. Results
@@ -22,11 +22,14 @@ use base64::Engine;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tygr::{Grammar, OLC};
 
 use crate::bindings::{
     ArgMode, ClassInfo, CollectionKind, MemberInfo, MemberKind, MethodInfo, NameInfo, NormalArg,
     ParameterInfo, Position, PropertyInfo, Range, RoutineSource, VariadicArg,
 };
+use crate::cos;
+use crate::details::{RoutineElementKind, routine_element_kind};
 
 pub trait IrisClient: Send + Sync {
     // `cls`'s own (not inherited) members, superclasses, and other class-level metadata --
@@ -65,18 +68,113 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, 
 }
 
 const SNAPSHOT_VERSION: u32 = 1;
-// Classes per round trip in `AtelierConnection::snapshot`.
+// Classes or documents per round trip in `AtelierConnection::snapshot`.
 const SNAPSHOT_BATCH: usize = 100;
 
-/// One namespace's class dictionary as `ascot snapshot` writes it: every class's `get_cls`
-/// answer, so analysis can run against a file instead of a live instance. Types only -- no
-/// `.inc` or routine source, so `get_inc`/`get_int_or_mac` answer `None` and a system macro
-/// resolves only if its include file is in the workspace.
-#[derive(Serialize, Deserialize)]
+/// One namespace as `ascot snapshot` writes it: everything the three `IrisClient` lookups can
+/// answer, so analysis can run against a file instead of a live instance. No class or routine
+/// code: a class is its `get_cls` metadata and a routine its labels' signatures; only an include
+/// file, being macro definitions, is kept whole.
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Snapshot {
     pub version: u32,
     pub namespace: String,
     pub classes: BTreeMap<String, ClassInfo>,
+    /// `.inc` files' full source, by name without the extension.
+    pub includes: BTreeMap<String, String>,
+    /// Routines' labels, by name without the extension. `None` when the routine's source didn't
+    /// parse, so its labels are unknown (and a call to any of them is taken on trust).
+    pub routines: BTreeMap<String, Option<Vec<LabelInfo>>>,
+}
+
+/// A routine label's signature: what a `Label^Routine` call is checked against.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LabelInfo {
+    pub name: String,
+    pub args: Vec<NormalArg>,
+    pub variadic: Option<VariadicArg>,
+    /// `Some` for a procedure block, with its public variable list.
+    pub public_list: Option<Vec<String>>,
+}
+
+/// The labels of a routine's source (a `.int`, or a `.mac` without macros in its label lines),
+/// or `None` if it doesn't parse.
+pub fn routine_labels(text: &str) -> Option<Vec<LabelInfo>> {
+    let routine = cos::Routine::parse(text).ok()?;
+    let olc = OLC::new(text);
+    Some(
+        routine
+            .subroutines
+            .iter()
+            .flat_map(|subs| subs.items.iter())
+            .filter_map(|elem| routine_element_kind(&olc, elem))
+            .map(|details| LabelInfo {
+                name: details.name.it,
+                args: details
+                    .normal_args
+                    .iter()
+                    .map(|arg| NormalArg::from(&arg.it))
+                    .collect(),
+                variadic: details
+                    .variadic_arg
+                    .as_ref()
+                    .map(|arg| VariadicArg::from(&arg.it)),
+                public_list: match details.kind {
+                    RoutineElementKind::Subroutine => None,
+                    RoutineElementKind::Procedure { public_list } => {
+                        Some(public_list.into_iter().map(|name| name.it).collect())
+                    }
+                },
+            })
+            .collect(),
+    )
+}
+
+// A routine with `labels`' signatures and no code, for `check::env::resolve_rtn_labels` to parse
+// as it would the live source. `None` (labels unknown) is a stub that doesn't parse either, which
+// the checker takes the same way.
+fn stub_routine(name: &str, labels: Option<&[LabelInfo]>) -> String {
+    let mut out = format!("ROUTINE {name} [Type=INT]\n");
+    let Some(labels) = labels else {
+        out.push_str("{\n");
+        return out;
+    };
+    let prefix = |mode: ArgMode| if mode == ArgMode::ByRef { "&" } else { "" };
+    for label in labels {
+        let mut args: Vec<String> = label
+            .args
+            .iter()
+            .map(|arg| {
+                let default = arg.default.as_ref().map(|d| format!("={d}"));
+                format!(
+                    "{}{}{}",
+                    prefix(arg.mode),
+                    arg.name,
+                    default.unwrap_or_default()
+                )
+            })
+            .collect();
+        if let Some(arg) = &label.variadic {
+            args.push(format!("{}{}...", prefix(arg.mode), arg.name));
+        }
+        out.push_str(&label.name);
+        match &label.public_list {
+            Some(publics) => {
+                out.push_str(&format!("({})", args.join(",")));
+                if !publics.is_empty() {
+                    out.push_str(&format!(" [{}]", publics.join(",")));
+                }
+                out.push_str(" {\n Quit\n}\n");
+            }
+            None => {
+                if !args.is_empty() {
+                    out.push_str(&format!("({})", args.join(",")));
+                }
+                out.push_str("\n Quit\n");
+            }
+        }
+    }
+    out
 }
 
 impl Snapshot {
@@ -106,12 +204,18 @@ impl IrisClient for Snapshot {
         self.classes.get(cls).cloned()
     }
 
-    fn get_inc(&self, _name: &str) -> Option<RoutineSource> {
-        None
+    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+        Some(RoutineSource {
+            text: self.includes.get(name)?.clone(),
+            uri: None,
+        })
     }
 
-    fn get_int_or_mac(&self, _name: &str) -> Option<RoutineSource> {
-        None
+    fn get_int_or_mac(&self, name: &str) -> Option<RoutineSource> {
+        Some(RoutineSource {
+            text: stub_routine(name, self.routines.get(name)?.as_deref()),
+            uri: None,
+        })
     }
 }
 
@@ -238,10 +342,75 @@ impl AtelierConnection {
         }
     }
 
-    /// Every class in the namespace, `SNAPSHOT_BATCH` at a time: one round trip per dictionary
-    /// table per batch, not per class. `progress(done, total)` is called after each batch.
-    pub fn snapshot(&self, mut progress: impl FnMut(usize, usize)) -> Result<Snapshot, String> {
+    /// Every class, include file and routine in the namespace, `SNAPSHOT_BATCH` at a time: one
+    /// round trip per dictionary table (or per document batch), not per class or document.
+    /// `progress` gets a one-line status after each batch.
+    pub fn snapshot(&self, mut progress: impl FnMut(&str)) -> Result<Snapshot, String> {
         let failed = || format!("IRIS connection at {} failed", self.base_url);
+        let classes = self.snapshot_classes(&failed, &mut progress)?;
+
+        let mut includes = BTreeMap::new();
+        let inc_names = self.docnames("INC").ok_or_else(failed)?;
+        for (i, batch) in inc_names.chunks(SNAPSHOT_BATCH).enumerate() {
+            for (doc, text) in self.docs(batch).ok_or_else(failed)? {
+                includes.insert(doc_basename(&doc), text);
+            }
+            progress(&format!(
+                "{}/{} include files",
+                i * SNAPSHOT_BATCH + batch.len(),
+                inc_names.len()
+            ));
+        }
+
+        // Hand-written routines only (`generated=0` skips a class's `.int`s). Read as the `.int`
+        // where there is one -- the compiled, macro-expanded form, as `get_int_or_mac` prefers --
+        // else as the `.mac`.
+        let mut rtn_names: Vec<String> = [
+            self.docnames("MAC").ok_or_else(failed)?,
+            self.docnames("INT").ok_or_else(failed)?,
+        ]
+        .concat()
+        .iter()
+        .map(|doc| doc_basename(doc))
+        .collect();
+        rtn_names.sort();
+        rtn_names.dedup();
+        let mut routines = BTreeMap::new();
+        for (i, batch) in rtn_names.chunks(SNAPSHOT_BATCH).enumerate() {
+            let ints: Vec<String> = batch.iter().map(|name| format!("{name}.int")).collect();
+            let mut found = self.docs(&ints).ok_or_else(failed)?;
+            let macs: Vec<String> = batch
+                .iter()
+                .filter(|name| !found.contains_key(&format!("{name}.int")))
+                .map(|name| format!("{name}.mac"))
+                .collect();
+            if !macs.is_empty() {
+                found.extend(self.docs(&macs).ok_or_else(failed)?);
+            }
+            for (doc, text) in found {
+                routines.insert(doc_basename(&doc), routine_labels(&text));
+            }
+            progress(&format!(
+                "{}/{} routines",
+                i * SNAPSHOT_BATCH + batch.len(),
+                rtn_names.len()
+            ));
+        }
+
+        Ok(Snapshot {
+            version: SNAPSHOT_VERSION,
+            namespace: self.namespace.clone(),
+            classes,
+            includes,
+            routines,
+        })
+    }
+
+    fn snapshot_classes(
+        &self,
+        failed: &impl Fn() -> String,
+        progress: &mut impl FnMut(&str),
+    ) -> Result<BTreeMap<String, ClassInfo>, String> {
         let mut names: Vec<String> = self
             .query("SELECT Name FROM %Dictionary.CompiledClass", &[])
             .ok_or_else(failed)?
@@ -257,13 +426,69 @@ impl AtelierConnection {
             if self.broken.load(Ordering::Relaxed) {
                 return Err(failed());
             }
-            progress(i * SNAPSHOT_BATCH + batch.len(), names.len());
+            progress(&format!(
+                "{}/{} classes",
+                i * SNAPSHOT_BATCH + batch.len(),
+                names.len()
+            ));
         }
-        Ok(Snapshot {
-            version: SNAPSHOT_VERSION,
-            namespace: self.namespace.clone(),
-            classes,
-        })
+        Ok(classes)
+    }
+
+    // The names (with extension) of the namespace's non-generated documents of routine type
+    // `kind` (`INC`, `MAC`, `INT`).
+    fn docnames(&self, kind: &str) -> Option<Vec<String>> {
+        if self.broken.load(Ordering::Relaxed) {
+            return None;
+        }
+        let resp = self
+            .agent
+            .get(&format!(
+                "{}/docnames/RTN/{kind}?generated=0",
+                self.base_url
+            ))
+            .header("Authorization", &self.auth_header)
+            .call()
+            .map_err(|err| self.fail("docnames", err))
+            .ok()?;
+        let body: Value = resp.into_body().read_json().ok()?;
+        let docs = body.get("result")?.get("content")?.as_array()?;
+        Some(
+            docs.iter()
+                .filter_map(|doc| Some(doc.get("name")?.as_str()?.to_string()))
+                .collect(),
+        )
+    }
+
+    // The source of each of `names` (with extension) that exists, by name -- one request for the
+    // whole batch. A document that doesn't exist comes back with an error `status` and no
+    // content.
+    fn docs(&self, names: &[String]) -> Option<HashMap<String, String>> {
+        if self.broken.load(Ordering::Relaxed) {
+            return None;
+        }
+        let resp = self
+            .agent
+            .post(&format!("{}/docs", self.base_url))
+            .header("Authorization", &self.auth_header)
+            .header("Content-Type", "application/json")
+            .send_json(names)
+            .map_err(|err| self.fail("docs", err))
+            .ok()?;
+        let body: Value = resp.into_body().read_json().ok()?;
+        let docs = body.get("result")?.get("content")?.as_array()?;
+        Some(
+            docs.iter()
+                .filter_map(|doc| {
+                    let lines = doc.get("content")?.as_array()?;
+                    if lines.is_empty() {
+                        return None;
+                    }
+                    let text: Vec<&str> = lines.iter().filter_map(Value::as_str).collect();
+                    Some((doc.get("name")?.as_str()?.to_string(), text.join("\n")))
+                })
+                .collect(),
+        )
     }
 
     fn fail(&self, context: &str, err: ureq::Error) {
@@ -320,6 +545,13 @@ impl AtelierConnection {
                 .collect(),
         )
     }
+}
+
+// `Foo.Bar.inc` -> `Foo.Bar`.
+fn doc_basename(doc: &str) -> String {
+    doc.rsplit_once('.')
+        .map_or(doc, |(name, _)| name)
+        .to_string()
 }
 
 fn percent_encode(s: &str) -> String {
@@ -909,12 +1141,45 @@ mod tests {
         assert_eq!(c.members[0].name.content, "P");
     }
 
+    const LIB_ROUTINE: &str = "ROUTINE Lib [Type=INT]\n Quit\nPlain\n Quit\nWithArgs(a,&b,c...)\n \
+                               Quit\nProc(a,b) [x,y] {\n Quit\n}\nProc2() {\n Quit\n}\n";
+
     #[test]
-    fn a_snapshot_round_trips_through_its_file_and_answers_only_get_cls() {
+    fn routine_labels_survive_the_stub_round_trip() {
+        let labels = routine_labels(LIB_ROUTINE).unwrap();
+        assert_eq!(labels.len(), 4, "{labels:?}");
+        assert_eq!(labels[0].name, "Plain");
+        assert!(labels[0].args.is_empty() && labels[0].public_list.is_none());
+        assert_eq!(labels[1].args.len(), 2);
+        assert_eq!(labels[1].args[1].mode, ArgMode::ByRef);
+        assert_eq!(labels[1].variadic.as_ref().unwrap().name, "c");
+        assert_eq!(
+            labels[2].public_list,
+            Some(vec!["x".to_string(), "y".to_string()])
+        );
+        assert_eq!(labels[3].public_list, Some(vec![]));
+        let stub = stub_routine("Lib", Some(&labels));
+        assert_eq!(routine_labels(&stub).unwrap(), labels, "{stub}");
+        assert_eq!(routine_labels(&stub_routine("Lib", None)), None);
+        assert_eq!(doc_basename("Foo.Bar.inc"), "Foo.Bar");
+    }
+
+    #[test]
+    fn a_snapshot_round_trips_through_its_file_and_answers_every_lookup() {
         let snapshot = Snapshot {
             version: SNAPSHOT_VERSION,
             namespace: "USER".to_string(),
             classes: [("A.B".to_string(), class_info("A.B"))].into(),
+            includes: [(
+                "MyInc".to_string(),
+                "ROUTINE MyInc [Type=INC]\n#define FIVE 5\n".to_string(),
+            )]
+            .into(),
+            routines: [
+                ("Lib".to_string(), routine_labels(LIB_ROUTINE)),
+                ("Unparsed".to_string(), None),
+            ]
+            .into(),
         };
         let path = snapshot_file("round-trip", &snapshot);
         let loaded = Snapshot::load(&path).unwrap();
@@ -922,8 +1187,51 @@ mod tests {
         assert_eq!(loaded.namespace, "USER");
         assert_eq!(loaded.get_cls("A.B"), Some(class_info("A.B")));
         assert_eq!(loaded.get_cls("A.C"), None);
+        assert_eq!(
+            loaded.get_inc("MyInc").unwrap().text,
+            snapshot.includes["MyInc"]
+        );
         assert_eq!(loaded.get_inc("%occErrors"), None);
-        assert_eq!(loaded.get_int_or_mac("%occErrors"), None);
+        assert_eq!(loaded.get_int_or_mac("Nope"), None);
+
+        // Through the checker: the include's macro, a call checked against a label's signature,
+        // and a call into a routine whose labels are unknown (taken on trust).
+        use crate::bindings::{DiagnosticSeverity, GuestWorkspace};
+        let check = |body: &str| {
+            let workspace = crate::Workspace::new_with_iris(Some(Box::new(loaded.clone())));
+            let uri = "Test.mac".to_string();
+            workspace.open(
+                uri.clone(),
+                format!("ROUTINE Test [Type=MAC]\n#include MyInc\n{body}\n Quit\n"),
+            );
+            let diagnostics: Vec<String> = workspace
+                .diagnostics(uri)
+                .into_iter()
+                .filter(|d| {
+                    matches!(
+                        d.severity,
+                        DiagnosticSeverity::Error | DiagnosticSeverity::Warning
+                    )
+                })
+                .map(|d| d.message)
+                .collect();
+            diagnostics
+        };
+        assert_eq!(
+            check(
+                " Write $$$FIVE\n Do Plain^Lib\n Do WithArgs^Lib(1,.v,2,3)\n Do Proc^Lib(1,2)\n Do Anything^Unparsed(1)"
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            check(" Do Nope^Lib"),
+            vec!["Cannot find label 'Nope' in routine 'Lib'"]
+        );
+        assert_eq!(check(" Do Proc^Lib(1,2,3)"), vec!["Too many arguments"]);
+        assert_eq!(
+            check(" Do Plain^NoSuchRoutine"),
+            vec!["Routine 'NoSuchRoutine' is not defined in the current workspace"]
+        );
     }
 
     #[test]
@@ -932,6 +1240,8 @@ mod tests {
             version: SNAPSHOT_VERSION,
             namespace: "USER".to_string(),
             classes: BTreeMap::new(),
+            includes: BTreeMap::new(),
+            routines: BTreeMap::new(),
         };
         let path = snapshot_file("open", &snapshot);
         let arg = path.to_str().unwrap();
@@ -948,7 +1258,11 @@ mod tests {
     #[test]
     fn open_rejects_a_snapshot_of_another_version_or_no_snapshot_at_all() {
         let path = std::env::temp_dir().join(format!("ascot-version-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"version":2,"namespace":"USER","classes":{}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"version":2,"namespace":"USER","classes":{},"includes":{},"routines":{}}"#,
+        )
+        .unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
         assert!(err.contains("is a version 2 snapshot"), "{err}");
         std::fs::write(&path, "Class A.B {}").unwrap();

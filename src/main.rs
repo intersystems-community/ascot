@@ -116,7 +116,8 @@ fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
     }
 }
 
-/// Writes every class of the namespace at `url` to `out`, for a later `--iris <out>`.
+/// Writes the classes, include files and routine labels of the namespace at `url` to `out`, for
+/// a later `--iris <out>`.
 fn snapshot(url: &str, namespace: Option<&str>, out: &Path) {
     let namespace = namespace.unwrap_or(ascot::atelier::DEFAULT_NAMESPACE);
     let conn = match AtelierConnection::connect(url, namespace).and_then(|conn| {
@@ -130,9 +131,9 @@ fn snapshot(url: &str, namespace: Option<&str>, out: &Path) {
         }
     };
     let terminal = std::io::stderr().is_terminal();
-    let snapshot = conn.snapshot(|done, total| {
+    let snapshot = conn.snapshot(|status| {
         if terminal {
-            eprint!("\r{done}/{total} classes");
+            eprint!("\r\x1b[K{status}");
         }
     });
     if terminal {
@@ -140,8 +141,10 @@ fn snapshot(url: &str, namespace: Option<&str>, out: &Path) {
     }
     match snapshot.and_then(|snapshot| snapshot.save(out).map(|()| snapshot)) {
         Ok(snapshot) => eprintln!(
-            "{} class(es) of namespace {} written to {}",
+            "{} class(es), {} include file(s), {} routine(s) of namespace {} written to {}",
             snapshot.classes.len(),
+            snapshot.includes.len(),
+            snapshot.routines.len(),
             snapshot.namespace,
             out.display()
         ),
