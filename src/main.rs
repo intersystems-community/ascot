@@ -20,8 +20,7 @@ use std::process::exit;
 use std::time::Instant;
 use tygr::Grammar;
 
-use ascot::atelier::{AtelierConnection, DocKind};
-use ascot::iris::IrisClient;
+use ascot::{AtelierConnection, DocKind, IrisClient};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -108,7 +107,7 @@ fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
         }
         None
     })?;
-    match ascot::iris::open(&iris, namespace.as_deref()) {
+    match ascot::open_iris(&iris, namespace.as_deref()) {
         Ok(iris) => Some(iris),
         Err(err) => {
             eprintln!("--iris: {err}");
@@ -119,7 +118,7 @@ fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
 
 /// Writes the declarations of the namespace at `url` to `out`, for a later `--iris <out>`.
 fn declare(url: &str, namespace: Option<&str>, out: &Path) {
-    let namespace = namespace.unwrap_or(ascot::iris::DEFAULT_NAMESPACE);
+    let namespace = namespace.unwrap_or(ascot::DEFAULT_IRIS_NAMESPACE);
     let conn = match AtelierConnection::connect(url, namespace).and_then(|conn| {
         conn.check()?;
         Ok(conn)

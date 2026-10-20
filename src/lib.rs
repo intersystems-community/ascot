@@ -41,18 +41,22 @@
 //! - `iris.rs`: the `IrisClient` trait behind those, and declaration files answering it offline.
 
 #[cfg(not(target_arch = "wasm32"))]
-pub mod atelier;
+mod atelier;
 pub mod bindings;
 pub mod check;
 pub mod details;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod iris;
+mod iris;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lsp;
 mod macro_expand;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
 mod render;
+#[cfg(not(target_arch = "wasm32"))]
+pub use atelier::AtelierConnection;
+#[cfg(not(target_arch = "wasm32"))]
+pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, IrisClient, open as open_iris};
 pub(crate) use macro_expand::MacroDefinitions;
 pub use macro_expand::SourceMap;
 use tygr_objectscript::cos::ClassDefinitionHeader;
@@ -81,7 +85,7 @@ use crate::{
 // `.inc` files are never checked standalone, only pulled in via another file's `#include`; `.mac`
 // and `.int` routines are otherwise identical for our purposes, so share one variant.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum DocKind {
+pub enum DocKind {
     Cls,
     Inc,
     Routine,
