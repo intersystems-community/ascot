@@ -85,8 +85,14 @@ pub struct Declarations {
 
 impl Declarations {
     pub fn load(path: &Path) -> Result<Self, String> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| format!("cannot read declaration file {}: {e}", path.display()))?;
+        // Anything without `://` lands here, so a URL missing its scheme reads as a file name.
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            format!(
+                "cannot read declaration file {}: {e} (a live instance's URL starts with http:// \
+                 or https://)",
+                path.display()
+            )
+        })?;
         let declarations: Self = serde_json::from_str(&text)
             .map_err(|e| format!("{} is not an ascot declaration file: {e}", path.display()))?;
         if declarations.version != DECLARATIONS_VERSION {
