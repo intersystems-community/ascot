@@ -185,17 +185,13 @@ impl AtelierConnection {
         rtn_names.dedup();
 
         let totals = [class_names.len(), inc_names.len(), rtn_names.len()];
-        for kind in [DocKind::Cls, DocKind::Inc, DocKind::Routine] {
+        for kind in [DocKind::Cls, DocKind::Inc, DocKind::Rtn] {
             progress(kind, 0, totals[kind as usize]);
         }
         let jobs: Vec<(DocKind, &[String])> = (class_names.chunks(BATCH))
             .map(|batch| (DocKind::Cls, batch))
             .chain(inc_names.chunks(BATCH).map(|batch| (DocKind::Inc, batch)))
-            .chain(
-                rtn_names
-                    .chunks(BATCH)
-                    .map(|batch| (DocKind::Routine, batch)),
-            )
+            .chain(rtn_names.chunks(BATCH).map(|batch| (DocKind::Rtn, batch)))
             .collect();
         let next = AtomicUsize::new(0);
         let classes = Mutex::new(BTreeMap::new());
@@ -229,7 +225,7 @@ impl AtelierConnection {
                                 }
                                 None => false,
                             },
-                            DocKind::Routine => self.fetch_routines(batch, routines),
+                            DocKind::Rtn => self.fetch_routines(batch, routines),
                         };
                         if !ok {
                             break;
