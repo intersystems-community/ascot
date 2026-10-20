@@ -63,7 +63,7 @@ There are three kinds of "gap" between elements:
 #[derive(Grammar, Clone)]
 #[grammar(inline)]
 pub enum SGapUnit {
-    RangeComment(StringEq!("/*"), StringEndsWith<StringEq!("*/")>),
+    RangeComment(RangeComment),
     Space(StringOf1<IsNotLineBreakingWhitespace>),
     HMacro(HMacro),
 }
@@ -1821,7 +1821,7 @@ char_class!(pub IsNotStar, "not_star", |ch| ch != '*');
 pub type Space = Hidden<StringOf<IsWhitespace>>;
 pub type Space1 = Hidden<StringOf1<IsWhitespace>>;
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 pub struct RangeComment(Raw<(StringEq!("/*"), StringEndsWith<StringEq!("*/")>)>);
 
 #[derive(Grammar, Clone)]
@@ -6149,6 +6149,8 @@ pub enum MacroRedex {
     H(HMacro),
     // Passed through whole, so a `;` inside (`&nbsp;`, a JavaScript statement) isn't a comment.
     Embedded(Raw<EmbeddedBlock>),
+    // Passed through whole, so a `//` or `;` inside isn't a line comment eating the `*/`.
+    RC(RangeComment),
     LC(LineComment),
     DDD(MacroCall),
     STR(OSString),
