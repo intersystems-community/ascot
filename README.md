@@ -187,11 +187,29 @@ metadata. The commands take the connection differently:
   `iris` and `iris_namespace` (default `%SYS`) arguments of the
   `create_workspace` tool call.
 
+#### Declaration files
+
 Not every workflow has a live instance at hand, for example CI or analysis of
-code exported from another system. If you need system and library code resolved
-without a connection, we'd like to hear how you'd want to supply relevant information. Please
-[open a feature request](https://github.com/intersystems-community/ascot/issues/new?template=feature_request.yml)
-describing your setup.
+code exported from another system, and a live connection costs one round of
+REST requests per class or routine looked up, every run. A declaration file
+holds everything a connection would be asked for, fetched once:
+
+```sh
+ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER user.d.json
+```
+
+Wherever `--iris` (or the MCP `iris` argument) takes a URL, it also takes the
+path of such a file, and no REST request is made:
+
+```sh
+ascot analyze --iris user.d.json <PATH>...
+```
+
+`--iris-namespace` is then optional; if given, it must match the namespace the
+file declares. The file holds every class's superclasses, members and their
+signatures and types, as a live connection would report them (no method code),
+and the full source of every `.inc` file and routine. Regenerate it after the
+instance's code changes.
 
 ## Contributing
 

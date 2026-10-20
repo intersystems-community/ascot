@@ -3,17 +3,16 @@
 //!
 //! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
 //! library code above all, so the checker can confirm them instead of leaving a hint. Results
-//! are cached per connection. `IrisClient` is the trait `lib.rs` depends on; `AtelierConnection`
-//! is its HTTP implementation.
+//! are cached per connection. `AtelierConnection` is the HTTP implementation of `iris::IrisClient`.
 //!
 //! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
 //! `language-server`'s `server/src/ascot/index.ts` `IrisConnection` class -- the JS host-side
 //! implementation of the same WIT `imported.iris-connection` interface, which can't be
 //! implemented by native Rust guest code at all (see `src/lib.rs`'s `IrisHandle`).
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -25,18 +24,16 @@ use crate::bindings::{
     ArgMode, ClassInfo, CollectionKind, MemberInfo, MemberKind, MethodInfo, NameInfo, NormalArg,
     ParameterInfo, Position, PropertyInfo, Range, RoutineSource, VariadicArg,
 };
+use crate::iris::{DECLARATIONS_VERSION, Declarations, IrisClient};
 
-pub trait IrisClient: Send + Sync {
-    // `cls`'s own (not inherited) members, superclasses, and other class-level metadata --
-    // everything ascot needs to resolve a member, "did you mean" a name, or check a type
-    // parameter, in one round trip. `None` if `cls` doesn't exist (or can't be reached).
-    fn get_cls(&self, cls: &str) -> Option<ClassInfo>;
-    // The raw source of the include file `name.inc` (an `#include`d name), for one that isn't
-    // already open in the workspace.
-    fn get_inc(&self, name: &str) -> Option<RoutineSource>;
-    // The raw source of the routine `name` (`.mac` if it exists, else `.int`), for a `Label^name`
-    // call into a routine that isn't open in the workspace.
-    fn get_int_or_mac(&self, name: &str) -> Option<RoutineSource>;
+const BATCH: usize = 100;
+const WORKERS: usize = 8;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DocKind {
+    Class,
+    Include,
+    Routine,
 }
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
@@ -162,6 +159,195 @@ impl AtelierConnection {
         }
     }
 
+    /// Every class, include file and routine in the namespace, for `ascot declare`;
+    /// `progress(kind, done, total)` once each total is known and after each batch.
+    pub fn declarations(
+        &self,
+        mut progress: impl FnMut(DocKind, usize, usize),
+    ) -> Result<Declarations, String> {
+        let failed = || format!("IRIS connection at {} failed", self.base_url);
+        // `%sqlcq.*` are SQL cached queries; `declare`'s own queries create some, so without this
+        // each run would add classes to the next run's file.
+        let mut class_names: Vec<String> = self
+            .query("SELECT Name FROM %Dictionary.CompiledClass", &[])
+            .ok_or_else(failed)?
+            .into_iter()
+            .filter_map(|row| Some(row.get("Name")?.as_str()?.to_string()))
+            .filter(|name| !name.starts_with("%sqlcq."))
+            .collect();
+        class_names.sort();
+        let inc_names = self.docnames("INC").ok_or_else(failed)?;
+        // Hand-written routines only (`generated=0` skips a class's `.int`s), read as the `.int`
+        // where there is one (compiled, macro-expanded; what `get_int_or_mac` prefers), else the `.mac`.
+        let mut rtn_names: Vec<String> = [
+            self.docnames("MAC").ok_or_else(failed)?,
+            self.docnames("INT").ok_or_else(failed)?,
+        ]
+        .concat()
+        .iter()
+        .map(|doc| doc_basename(doc))
+        .collect();
+        rtn_names.sort();
+        rtn_names.dedup();
+
+        let totals = [class_names.len(), inc_names.len(), rtn_names.len()];
+        for kind in [DocKind::Class, DocKind::Include, DocKind::Routine] {
+            progress(kind, 0, totals[kind as usize]);
+        }
+        let jobs: Vec<(DocKind, &[String])> = (class_names.chunks(BATCH))
+            .map(|batch| (DocKind::Class, batch))
+            .chain(
+                inc_names
+                    .chunks(BATCH)
+                    .map(|batch| (DocKind::Include, batch)),
+            )
+            .chain(
+                rtn_names
+                    .chunks(BATCH)
+                    .map(|batch| (DocKind::Routine, batch)),
+            )
+            .collect();
+        let next = AtomicUsize::new(0);
+        let classes = Mutex::new(BTreeMap::new());
+        let includes = Mutex::new(BTreeMap::new());
+        let routines = Mutex::new(BTreeMap::new());
+        let (tx, rx) = mpsc::channel();
+        let mut done = [0; 3];
+        std::thread::scope(|scope| {
+            let (jobs, next) = (&jobs, &next);
+            let (classes, includes, routines) = (&classes, &includes, &routines);
+            for _ in 0..WORKERS.min(jobs.len()) {
+                let tx = tx.clone();
+                scope.spawn(move || {
+                    while !self.broken.load(Ordering::Relaxed) {
+                        let Some(&(kind, batch)) = jobs.get(next.fetch_add(1, Ordering::Relaxed))
+                        else {
+                            break;
+                        };
+                        let ok = match kind {
+                            DocKind::Class => {
+                                let params: Vec<&str> = batch.iter().map(String::as_str).collect();
+                                let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
+                                let found = class_infos(self, &filter, &params);
+                                classes.lock().unwrap().extend(found);
+                                true
+                            }
+                            DocKind::Include => match self.docs(batch) {
+                                Some(found) => {
+                                    includes.lock().unwrap().extend(by_basename(found));
+                                    true
+                                }
+                                None => false,
+                            },
+                            DocKind::Routine => self.fetch_routines(batch, routines),
+                        };
+                        if !ok {
+                            break;
+                        }
+                        let _ = tx.send((kind, batch.len()));
+                    }
+                });
+            }
+            drop(tx);
+            for (kind, count) in rx {
+                done[kind as usize] += count;
+                progress(kind, done[kind as usize], totals[kind as usize]);
+            }
+        });
+        if self.broken.load(Ordering::Relaxed) || done != totals {
+            return Err(failed());
+        }
+        Ok(Declarations {
+            version: DECLARATIONS_VERSION,
+            namespace: self.namespace.clone(),
+            classes: classes.into_inner().unwrap(),
+            includes: includes.into_inner().unwrap(),
+            routines: routines.into_inner().unwrap(),
+        })
+    }
+
+    fn fetch_routines(
+        &self,
+        batch: &[String],
+        out: &Mutex<BTreeMap<String, RoutineSource>>,
+    ) -> bool {
+        let ints: Vec<String> = batch.iter().map(|name| format!("{name}.int")).collect();
+        let Some(mut found) = self.docs(&ints) else {
+            return false;
+        };
+        let macs: Vec<String> = batch
+            .iter()
+            .filter(|name| !found.contains_key(&format!("{name}.int")))
+            .map(|name| format!("{name}.mac"))
+            .collect();
+        if !macs.is_empty() {
+            let Some(more) = self.docs(&macs) else {
+                return false;
+            };
+            found.extend(more);
+        }
+        out.lock().unwrap().extend(by_basename(found));
+        true
+    }
+
+    // Non-generated documents of routine type `kind` (`INC`, `MAC`, `INT`), with extension.
+    fn docnames(&self, kind: &str) -> Option<Vec<String>> {
+        if self.broken.load(Ordering::Relaxed) {
+            return None;
+        }
+        let resp = self
+            .agent
+            .get(&format!(
+                "{}/docnames/RTN/{kind}?generated=0",
+                self.base_url
+            ))
+            .header("Authorization", &self.auth_header)
+            .call()
+            .map_err(|err| self.fail("docnames", err))
+            .ok()?;
+        let body: Value = resp.into_body().read_json().ok()?;
+        let docs = body.get("result")?.get("content")?.as_array()?;
+        Some(
+            docs.iter()
+                .filter_map(|doc| Some(doc.get("name")?.as_str()?.to_string()))
+                .collect(),
+        )
+    }
+
+    // A document that doesn't exist comes back with an error `status` and no content.
+    fn docs(&self, names: &[String]) -> Option<HashMap<String, RoutineSource>> {
+        if self.broken.load(Ordering::Relaxed) {
+            return None;
+        }
+        let resp = self
+            .agent
+            .post(&format!("{}/docs", self.base_url))
+            .header("Authorization", &self.auth_header)
+            .header("Content-Type", "application/json")
+            .send_json(names)
+            .map_err(|err| self.fail("docs", err))
+            .ok()?;
+        let body: Value = resp.into_body().read_json().ok()?;
+        let docs = body.get("result")?.get("content")?.as_array()?;
+        Some(
+            docs.iter()
+                .filter_map(|doc| {
+                    let lines = doc.get("content")?.as_array()?;
+                    if lines.is_empty() {
+                        return None;
+                    }
+                    let text: Vec<&str> = lines.iter().filter_map(Value::as_str).collect();
+                    let source = RoutineSource {
+                        text: text.join("\n"),
+                        // The Atelier REST API has no uri scheme of its own to offer here.
+                        uri: None,
+                    };
+                    Some((doc.get("name")?.as_str()?.to_string(), source))
+                })
+                .collect(),
+        )
+    }
+
     fn fail(&self, context: &str, err: ureq::Error) {
         if !self.broken.swap(true, Ordering::Relaxed) {
             eprintln!(
@@ -218,6 +404,19 @@ impl AtelierConnection {
     }
 }
 
+fn by_basename(
+    docs: HashMap<String, RoutineSource>,
+) -> impl Iterator<Item = (String, RoutineSource)> {
+    docs.into_iter()
+        .map(|(doc, source)| (doc_basename(&doc), source))
+}
+
+fn doc_basename(doc: &str) -> String {
+    doc.rsplit_once('.')
+        .map_or(doc, |(name, _)| name)
+        .to_string()
+}
+
 fn percent_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
@@ -236,7 +435,7 @@ impl IrisClient for AtelierConnection {
         if let Some(cached) = self.cls_cache.get(cls) {
             return cached;
         }
-        let result = get_cls_uncached(self, cls);
+        let result = class_infos(self, "= ?", &[cls]).into_values().next();
         self.cls_cache.set(cls.to_string(), result.clone());
         result
     }
@@ -280,44 +479,72 @@ fn split_classes(s: &str) -> Vec<String> {
         .collect()
 }
 
-fn get_cls_uncached(conn: &AtelierConnection, cls: &str) -> Option<ClassInfo> {
+// Every class satisfying `Name {filter}` (`= ?`, `IN (?,?)`; `params` bind the `?`s) with its
+// own members, keyed by name: one round trip per dictionary table for the whole set.
+fn class_infos(
+    conn: &AtelierConnection,
+    filter: &str,
+    params: &[&str],
+) -> HashMap<String, ClassInfo> {
     let sql = |description: &str| {
         format!(
-            "SELECT {description}, Super, PropertyClass, IncludeCode, ClassType, Deprecated FROM \
-             %Dictionary.CompiledClass WHERE Name = ?"
+            "SELECT Name, {description}, Super, PropertyClass, IncludeCode, ClassType, Deprecated \
+             FROM %Dictionary.CompiledClass WHERE Name {filter}"
         )
     };
-    // Same `{`-leading-text failure mode `all_mem_uncached` guards against.
-    let row = conn
-        .query(&sql("Description"), &[cls])
-        .or_else(|| conn.query(&sql("'' AS Description"), &[cls]))
-        .and_then(|rows| rows.into_iter().next())?;
-    let str_field = |key: &str| row.get(key).and_then(Value::as_str).unwrap_or_default();
+    // Same `{`-leading-text failure mode `all_mem_rows` guards against.
+    let rows = conn
+        .query(&sql("Description"), params)
+        .or_else(|| conn.query(&sql("'' AS Description"), params))
+        .unwrap_or_default();
+    if rows.is_empty() {
+        return HashMap::new();
+    }
+    let members = resolve_stubs(conn, filter, params, all_mem_rows(conn, filter, params));
+    assemble(rows, members)
+}
+
+fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<String, ClassInfo> {
+    let mut members: HashMap<String, Vec<MemberInfo>> = HashMap::new();
+    for row in member_rows {
+        if !row.name.is_empty() {
+            members
+                .entry(row.parent.clone())
+                .or_default()
+                .push(member_row_to_info(row));
+        }
+    }
     let zero = Position {
         line: 0,
         character: 0,
     };
-    let members = resolve_stubs(conn, cls, all_mem_uncached(conn, cls))
+    class_rows
         .into_iter()
-        .filter(|row| !row.name.is_empty())
-        .map(member_row_to_info)
-        .collect();
-    Some(ClassInfo {
-        doc: str_field("Description").to_string(),
-        name: NameInfo {
-            before: zero,
-            content: cls.to_string(),
-            after: zero,
-        },
-        extends: split_classes(str_field("Super")),
-        deprecated: is_truthy(&row.get("Deprecated").cloned().unwrap_or(Value::Null)),
-        members,
-        property_class_names: split_classes(str_field("PropertyClass")),
-        includes: split_classes(str_field("IncludeCode")),
-        is_datatype: Some(str_field("ClassType") == "datatype"),
-        // The Atelier REST API has no uri scheme of its own to offer here.
-        uri: None,
-    })
+        .filter_map(|row| {
+            let str_field = |key: &str| row.get(key).and_then(Value::as_str).unwrap_or_default();
+            let cls = str_field("Name").to_string();
+            if cls.is_empty() {
+                return None;
+            }
+            let info = ClassInfo {
+                doc: str_field("Description").to_string(),
+                name: NameInfo {
+                    before: zero,
+                    content: cls.clone(),
+                    after: zero,
+                },
+                extends: split_classes(str_field("Super")),
+                deprecated: is_truthy(&row.get("Deprecated").cloned().unwrap_or(Value::Null)),
+                members: members.remove(&cls).unwrap_or_default(),
+                property_class_names: split_classes(str_field("PropertyClass")),
+                includes: split_classes(str_field("IncludeCode")),
+                is_datatype: Some(str_field("ClassType") == "datatype"),
+                // The Atelier REST API has no uri scheme of its own to offer here.
+                uri: None,
+            };
+            Some((cls, info))
+        })
+        .collect()
 }
 
 // Uniform row shape across all three member tables `all_mem_uncached` unions together. IRIS
@@ -327,6 +554,8 @@ fn get_cls_uncached(conn: &AtelierConnection, cls: &str) -> Option<ClassInfo> {
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 struct MemberRow {
+    #[serde(default)]
+    parent: String,
     #[serde(default)]
     name: String,
     #[serde(default, deserialize_with = "empty_string_as_none")]
@@ -367,28 +596,31 @@ fn is_truthy(v: &Value) -> bool {
     matches!(v, Value::Bool(true)) || v.as_str() == Some("1") || v.as_i64() == Some(1)
 }
 
-// Every member declared directly on `cls`, across all three tables -- one query per class
-// instead of one per member, since `get_cls` always wants the whole list at once.
-fn all_mem_uncached(conn: &AtelierConnection, cls: &str) -> Vec<MemberRow> {
+// Every member declared directly on the classes matching `Parent {filter}`, across all three
+// tables -- one query per batch instead of one per member, since `get_cls` always wants the
+// whole list at once.
+fn all_mem_rows(conn: &AtelierConnection, filter: &str, params: &[&str]) -> Vec<MemberRow> {
     let sql = |description: &str| {
         format!(
-            "SELECT Name, NULL AS Aliases, 'method' AS MemberType, {description}, FormalSpec, \
-             ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS Relationship, NULL AS \
-             Cardinality, Stub, ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledMethod \
-             WHERE Parent = ? UNION ALL SELECT Name, Aliases, 'property' AS MemberType, \
-             {description}, NULL AS FormalSpec, Type AS ReturnType, Collection, MultiDimensional, \
-             Relationship, Cardinality, NULL AS Stub, 0 AS ClassMethod, Deprecated, Origin FROM \
-             %Dictionary.CompiledProperty WHERE Parent = ? UNION ALL SELECT Name, NULL AS \
-             Aliases, 'parameter' AS MemberType, {description}, NULL AS FormalSpec, Type AS \
-             ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS Relationship, NULL AS \
-             Cardinality, NULL AS Stub, 0 AS ClassMethod, Deprecated, Origin FROM \
-             %Dictionary.CompiledParameter WHERE Parent = ?"
+            "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, {description}, \
+             FormalSpec, ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS \
+             Relationship, NULL AS Cardinality, Stub, ClassMethod, Deprecated, Origin FROM \
+             %Dictionary.CompiledMethod WHERE Parent {filter} UNION ALL SELECT Parent, Name, \
+             Aliases, 'property' AS MemberType, {description}, NULL AS FormalSpec, Type AS \
+             ReturnType, Collection, MultiDimensional, Relationship, Cardinality, NULL AS Stub, \
+             0 AS ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledProperty WHERE Parent \
+             {filter} UNION ALL SELECT Parent, Name, NULL AS Aliases, 'parameter' AS MemberType, \
+             {description}, NULL AS FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS \
+             MultiDimensional, 0 AS Relationship, NULL AS Cardinality, NULL AS Stub, 0 AS \
+             ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledParameter WHERE Parent \
+             {filter}"
         )
     };
+    let params = [params, params, params].concat();
     // The Atelier query API fails the whole query over a text value that merely starts with `{`
     // (e.g. a `/// {$$$CPFSave+...}` parameter comment); retry without descriptions.
-    conn.query(&sql("Description"), &[cls, cls, cls])
-        .or_else(|| conn.query(&sql("'' AS Description"), &[cls, cls, cls]))
+    conn.query(&sql("Description"), &params)
+        .or_else(|| conn.query(&sql("'' AS Description"), &params))
         .map(|rows| {
             rows.into_iter()
                 .filter_map(|row| serde_json::from_value(row).ok())
@@ -417,27 +649,32 @@ fn stub_parts(row: &MemberRow) -> Option<(&str, &str, &'static str)> {
     Some((origin, subname, table))
 }
 
-// Replaces each stub row with its real metadata -- one query per stub table the class uses,
+// Replaces each stub row with its real metadata -- one query per stub table the classes use,
 // not one per stub (a property-heavy class has dozens of generated accessors).
-fn resolve_stubs(conn: &AtelierConnection, cls: &str, rows: Vec<MemberRow>) -> Vec<MemberRow> {
+fn resolve_stubs(
+    conn: &AtelierConnection,
+    filter: &str,
+    params: &[&str],
+    rows: Vec<MemberRow>,
+) -> Vec<MemberRow> {
     let tables: HashSet<&str> = rows
         .iter()
         .filter_map(stub_parts)
         .map(|(_, _, t)| t)
         .collect();
-    let mut resolved: HashMap<(String, String, &str), MemberRow> = HashMap::new();
+    let mut resolved: HashMap<(String, String, String, &str), MemberRow> = HashMap::new();
     for table in tables {
         let sql = |description: &str| {
             format!(
-                "SELECT Name, parent->Name AS StubOrigin, 'method' AS MemberType, {description}, \
-                 FormalSpec, ReturnType, '' AS Stub, ClassMethod, Deprecated FROM \
-                 %Dictionary.Compiled{table}Method WHERE parent->Parent = ?"
+                "SELECT parent->Parent AS Parent, Name, parent->Name AS StubOrigin, 'method' AS \
+                 MemberType, {description}, FormalSpec, ReturnType, '' AS Stub, ClassMethod, \
+                 Deprecated FROM %Dictionary.Compiled{table}Method WHERE parent->Parent {filter}"
             )
         };
-        // Same `{`-leading-text failure mode `all_mem_uncached` guards against.
+        // Same `{`-leading-text failure mode `all_mem_rows` guards against.
         let found = conn
-            .query(&sql("Description"), &[cls])
-            .or_else(|| conn.query(&sql("'' AS Description"), &[cls]))
+            .query(&sql("Description"), params)
+            .or_else(|| conn.query(&sql("'' AS Description"), params))
             .unwrap_or_default();
         for value in found {
             let origin = value
@@ -447,13 +684,26 @@ fn resolve_stubs(conn: &AtelierConnection, cls: &str, rows: Vec<MemberRow>) -> V
             let Ok(row) = serde_json::from_value::<MemberRow>(value.clone()) else {
                 continue;
             };
-            resolved.insert((origin.to_string(), row.name.clone(), table), row);
+            resolved.insert(
+                (
+                    row.parent.clone(),
+                    origin.to_string(),
+                    row.name.clone(),
+                    table,
+                ),
+                row,
+            );
         }
     }
     rows.into_iter()
         .map(|row| match stub_parts(&row) {
             Some((origin, subname, table)) => resolved
-                .remove(&(origin.to_string(), subname.to_string(), table))
+                .remove(&(
+                    row.parent.clone(),
+                    origin.to_string(),
+                    subname.to_string(),
+                    table,
+                ))
                 .unwrap_or(row),
             None => row,
         })
@@ -682,6 +932,7 @@ fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iris::open;
 
     #[test]
     fn a_collection_property_keeps_its_element_type() {
@@ -694,6 +945,48 @@ mod tests {
             property_type(None, Some("%String".into()), false).collection,
             None
         );
+    }
+
+    #[test]
+    fn assemble_groups_member_rows_by_their_parent_class() {
+        let class_rows = vec![
+            serde_json::json!({"Name": "A.B", "Super": "%RegisteredObject", "ClassType": ""}),
+            serde_json::json!({"Name": "A.C", "Super": "", "ClassType": "datatype", "Deprecated": 1}),
+        ];
+        let member_rows: Vec<MemberRow> = [
+            serde_json::json!({"Parent": "A.C", "Name": "P", "MemberType": "property", "Description": "", "FormalSpec": "", "ReturnType": "%String", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
+            serde_json::json!({"Parent": "A.B", "Name": "M", "MemberType": "method", "Description": "", "FormalSpec": "x:%String", "ReturnType": "%Status", "Stub": "", "ClassMethod": 1, "Deprecated": 0}),
+            serde_json::json!({"Parent": "A.B", "Name": "", "MemberType": "method", "Description": "", "FormalSpec": "", "ReturnType": "", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
+        ]
+        .into_iter()
+        .map(|row| serde_json::from_value(row).unwrap())
+        .collect();
+        let classes = assemble(class_rows, member_rows);
+        assert_eq!(classes.len(), 2);
+        let b = &classes["A.B"];
+        assert_eq!(b.extends, vec!["%RegisteredObject"]);
+        assert_eq!(b.is_datatype, Some(false));
+        assert_eq!(b.members.len(), 1, "the nameless row is dropped");
+        assert_eq!(b.members[0].name.content, "M");
+        assert!(matches!(b.members[0].kind, MemberKind::ClassMethod(_)));
+        let c = &classes["A.C"];
+        assert!(c.deprecated);
+        assert_eq!(c.is_datatype, Some(true));
+        assert_eq!(c.members[0].name.content, "P");
+    }
+
+    #[test]
+    fn doc_basename_strips_the_extension() {
+        assert_eq!(doc_basename("Foo.Bar.inc"), "Foo.Bar");
+    }
+
+    #[test]
+    fn open_treats_anything_with_a_scheme_as_a_url() {
+        let err = open("ftp://user:pass@localhost:8080", None).err().unwrap();
+        assert!(err.contains("must be http or https"), "{err}");
+        let url = stub_server(&[("", "401 Unauthorized", "")]);
+        let err = open(&url, Some("USER")).err().unwrap();
+        assert!(err.contains("authentication failed"), "{err}");
     }
 
     #[test]

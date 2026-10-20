@@ -2,7 +2,7 @@
 //! analysis as tools for AI agents (Claude Code via the `ascot-mcp` plugin, or `claude mcp add`).
 //!
 //! Unlike the LSP server it holds many `Workspace`s, keyed by an id the agent chooses:
-//! `create_workspace` (optionally with IRIS connection details, see `atelier.rs`) and
+//! `create_workspace` (optionally with IRIS connection details, see `iris.rs`) and
 //! `delete_workspace`; `insert`/`remove` documents; then `check`, `inlay_hint`, `hover`,
 //! `definition` and `references`. Tool parameter and result schemas derive from the
 //! `bindings.rs` types via `schemars`. Built on the `rmcp` crate; native builds only.
@@ -23,8 +23,8 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     Workspace,
-    atelier::AtelierConnection,
     bindings::{Diagnostic, GuestWorkspace, InlayHint, Location, Position, Range},
+    iris,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -32,16 +32,16 @@ struct WorkspaceIdRequest {
     workspace: String,
 }
 
-const DEFAULT_IRIS_NAMESPACE: &str = "%SYS";
-
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CreateWorkspaceRequest {
     workspace: String,
-    /// Optional IRIS connection: `scheme://user:pass@host:port`. When set, lookups that can't be
-    /// resolved from documents already in this workspace (e.g. a class that isn't open here)
-    /// fall back to querying this IRIS instance via the Atelier REST API.
+    /// Optional IRIS connection: `scheme://user:pass@host:port`, or the path of a declaration
+    /// file written by `ascot declare`. When set, lookups that can't be resolved from documents
+    /// already in this workspace (e.g. a class that isn't open here) fall back to this IRIS
+    /// instance via the Atelier REST API, or to the file.
     iris: Option<String>,
-    /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`.
+    /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
+    /// for a URL; for a declaration file it must match the namespace it declares.
     iris_namespace: Option<String>,
 }
 
@@ -157,7 +157,8 @@ impl AnalyzerMcpServer {
     #[tool(
         description = "Create a new empty workspace with the given id; fails if it already exists. \
                         Do this first, before inserting any ObjectScript source. Pass `iris` to \
-                        also resolve out-of-workspace lookups against a real IRIS instance."
+                        also resolve out-of-workspace lookups against a real IRIS instance (or a \
+                        declaration file `ascot declare` wrote)."
     )]
     async fn create_workspace(
         &self,
@@ -171,17 +172,10 @@ impl AnalyzerMcpServer {
         if workspaces.contains_key(&workspace) {
             return Err(format!("workspace already exists: {workspace:?}"));
         }
-        let iris = match iris {
-            Some(url) => {
-                let namespace =
-                    iris_namespace.unwrap_or_else(|| DEFAULT_IRIS_NAMESPACE.to_string());
-                Some(Box::new(
-                    AtelierConnection::connect(&url, &namespace)
-                        .map_err(|err| format!("iris: {err}"))?,
-                ) as Box<_>)
-            }
-            None => None,
-        };
+        let iris = iris
+            .map(|iris| iris::open(&iris, iris_namespace.as_deref()))
+            .transpose()
+            .map_err(|err| format!("iris: {err}"))?;
         workspaces.insert(
             workspace.clone(),
             Arc::new(Mutex::new(Workspace::new_with_iris(iris))),
