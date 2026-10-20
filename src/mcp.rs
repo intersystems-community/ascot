@@ -22,8 +22,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
-    Workspace,
-    atelier::AtelierConnection,
+    Workspace, atelier,
     bindings::{Diagnostic, GuestWorkspace, InlayHint, Location, Position, Range},
 };
 
@@ -32,16 +31,16 @@ struct WorkspaceIdRequest {
     workspace: String,
 }
 
-const DEFAULT_IRIS_NAMESPACE: &str = "%SYS";
-
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CreateWorkspaceRequest {
     workspace: String,
-    /// Optional IRIS connection: `scheme://user:pass@host:port`. When set, lookups that can't be
-    /// resolved from documents already in this workspace (e.g. a class that isn't open here)
-    /// fall back to querying this IRIS instance via the Atelier REST API.
+    /// Optional IRIS connection: `scheme://user:pass@host:port`, or the path of a snapshot file
+    /// written by `ascot snapshot`. When set, lookups that can't be resolved from documents
+    /// already in this workspace (e.g. a class that isn't open here) fall back to this IRIS
+    /// instance via the Atelier REST API, or to the snapshot.
     iris: Option<String>,
-    /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`.
+    /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
+    /// for a URL; for a snapshot it must match the namespace the snapshot was taken from.
     iris_namespace: Option<String>,
 }
 
@@ -157,7 +156,8 @@ impl AnalyzerMcpServer {
     #[tool(
         description = "Create a new empty workspace with the given id; fails if it already exists. \
                         Do this first, before inserting any ObjectScript source. Pass `iris` to \
-                        also resolve out-of-workspace lookups against a real IRIS instance."
+                        also resolve out-of-workspace lookups against a real IRIS instance (or a \
+                        snapshot file `ascot snapshot` wrote)."
     )]
     async fn create_workspace(
         &self,
@@ -171,17 +171,10 @@ impl AnalyzerMcpServer {
         if workspaces.contains_key(&workspace) {
             return Err(format!("workspace already exists: {workspace:?}"));
         }
-        let iris = match iris {
-            Some(url) => {
-                let namespace =
-                    iris_namespace.unwrap_or_else(|| DEFAULT_IRIS_NAMESPACE.to_string());
-                Some(Box::new(
-                    AtelierConnection::connect(&url, &namespace)
-                        .map_err(|err| format!("iris: {err}"))?,
-                ) as Box<_>)
-            }
-            None => None,
-        };
+        let iris = iris
+            .map(|iris| atelier::open(&iris, iris_namespace.as_deref()))
+            .transpose()
+            .map_err(|err| format!("iris: {err}"))?;
         workspaces.insert(
             workspace.clone(),
             Arc::new(Mutex::new(Workspace::new_with_iris(iris))),

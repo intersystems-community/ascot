@@ -1,10 +1,11 @@
 //! The `ascot` command-line binary: argument parsing and the `analyze`, `analyze-workspace`,
-//! `parse`, `mcp` and `lsp` subcommands documented in README.md.
+//! `parse`, `snapshot`, `mcp` and `lsp` subcommands documented in README.md.
 //!
 //! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
 //! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
-//! process over to `lsp.rs`/`mcp.rs` for the server modes. `--iris` connections are built with
-//! `atelier.rs`. None of this is part of the wasm/JS build (see `bindings.rs`).
+//! process over to `lsp.rs`/`mcp.rs` for the server modes. `--iris` connections (live, or a
+//! snapshot file `snapshot` wrote) are built with `atelier.rs`. None of this is part of the
+//! wasm/JS build (see `bindings.rs`).
 
 use ascot::Workspace;
 use ascot::bindings::GuestWorkspace;
@@ -19,7 +20,7 @@ use std::process;
 use std::process::exit;
 use tygr::Grammar;
 
-use ascot::atelier::IrisClient;
+use ascot::atelier::{AtelierConnection, IrisClient};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -53,6 +54,16 @@ fn main() {
             };
             scan_file(file_path);
         }
+        Some("snapshot") => {
+            let mut rest: Vec<String> = args[2..].to_vec();
+            let url = extract_flag(&mut rest, "--iris");
+            let namespace = extract_flag(&mut rest, "--iris-namespace");
+            let (Some(url), [out]) = (url, rest.as_slice()) else {
+                eprintln!("usage: snapshot --iris <url> [--iris-namespace <ns>] <file>");
+                exit(1);
+            };
+            snapshot(&url, namespace.as_deref(), Path::new(out));
+        }
         Some("mcp") => {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
             rt.block_on(run_mcp_server());
@@ -67,14 +78,12 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: parse <file> | analyze [--iris <url>] [--iris-namespace <ns>] <path>... | analyze-workspace [--iris <url>] [--iris-namespace <ns>] <root> <path>... | mcp | lsp [--iris <url>] [--iris-namespace <ns>]"
+                "usage: parse <file> | analyze [--iris <url|file>] [--iris-namespace <ns>] <path>... | analyze-workspace [--iris <url|file>] [--iris-namespace <ns>] <root> <path>... | snapshot --iris <url> [--iris-namespace <ns>] <file> | mcp | lsp [--iris <url|file>] [--iris-namespace <ns>]"
             );
             exit(1);
         }
     }
 }
-
-const DEFAULT_IRIS_NAMESPACE: &str = "%SYS";
 
 /// Pulls `--flag <value>` out of `args` (in place), wherever it appears, leaving the rest.
 fn extract_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
@@ -87,25 +96,57 @@ fn extract_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
     Some(args.remove(idx))
 }
 
-/// Pulls `--iris`/`--iris-namespace` out of `args` and connects, if `--iris` was given.
-/// `--iris-namespace` defaults to `%SYS` and is ignored (with a warning) if `--iris` is absent.
+/// Pulls `--iris`/`--iris-namespace` out of `args` and opens the connection or snapshot file, if
+/// `--iris` was given. `--iris-namespace` is ignored (with a warning) if `--iris` is absent.
 fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
-    let url = extract_flag(args, "--iris");
+    let iris = extract_flag(args, "--iris");
     let namespace = extract_flag(args, "--iris-namespace");
-    let url = url.or_else(|| {
+    let iris = iris.or_else(|| {
         if namespace.is_some() {
             eprintln!("--iris-namespace has no effect without --iris");
         }
         None
     })?;
-    let namespace = namespace.unwrap_or_else(|| DEFAULT_IRIS_NAMESPACE.to_string());
-    match ascot::atelier::AtelierConnection::connect(&url, &namespace).and_then(|conn| {
+    match ascot::atelier::open(&iris, namespace.as_deref()) {
+        Ok(iris) => Some(iris),
+        Err(err) => {
+            eprintln!("--iris: {err}");
+            exit(1);
+        }
+    }
+}
+
+/// Writes every class of the namespace at `url` to `out`, for a later `--iris <out>`.
+fn snapshot(url: &str, namespace: Option<&str>, out: &Path) {
+    let namespace = namespace.unwrap_or(ascot::atelier::DEFAULT_NAMESPACE);
+    let conn = match AtelierConnection::connect(url, namespace).and_then(|conn| {
         conn.check()?;
         Ok(conn)
     }) {
-        Ok(conn) => Some(Box::new(conn)),
+        Ok(conn) => conn,
         Err(err) => {
             eprintln!("--iris: {err}");
+            exit(1);
+        }
+    };
+    let terminal = std::io::stderr().is_terminal();
+    let snapshot = conn.snapshot(|done, total| {
+        if terminal {
+            eprint!("\r{done}/{total} classes");
+        }
+    });
+    if terminal {
+        eprintln!();
+    }
+    match snapshot.and_then(|snapshot| snapshot.save(out).map(|()| snapshot)) {
+        Ok(snapshot) => eprintln!(
+            "{} class(es) of namespace {} written to {}",
+            snapshot.classes.len(),
+            snapshot.namespace,
+            out.display()
+        ),
+        Err(err) => {
+            eprintln!("snapshot: {err}");
             exit(1);
         }
     }

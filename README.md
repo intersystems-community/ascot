@@ -187,11 +187,30 @@ metadata. The commands take the connection differently:
   `iris` and `iris_namespace` (default `%SYS`) arguments of the
   `create_workspace` tool call.
 
+#### Snapshots
+
 Not every workflow has a live instance at hand, for example CI or analysis of
-code exported from another system. If you need system and library code resolved
-without a connection, we'd like to hear how you'd want to supply relevant information. Please
-[open a feature request](https://github.com/intersystems-community/ascot/issues/new?template=feature_request.yml)
-describing your setup.
+code exported from another system, and a live connection costs one round of
+REST requests per class looked up, every run. A snapshot fetches the class
+metadata of a namespace once, into a file:
+
+```sh
+ascot snapshot --iris http://user:password@localhost:8080/iris --iris-namespace USER user.json
+```
+
+Wherever `--iris` (or the MCP `iris` argument) takes a URL, it also takes the
+path of such a file, and no REST request is made:
+
+```sh
+ascot analyze --iris user.json <PATH>...
+```
+
+`--iris-namespace` is then optional; if given, it must match the namespace the
+snapshot was taken from. The snapshot is types only: every class's superclasses,
+members and their signatures and types, as a live connection would report them,
+but no `.inc` or routine source. A system macro such as `$$$OK` therefore
+resolves only if the include file defining it is part of the workspace. Retake
+the snapshot after the instance's classes change.
 
 ## Contributing
 

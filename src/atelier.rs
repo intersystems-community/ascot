@@ -1,24 +1,26 @@
 //! Optional live-IRIS lookups over the Atelier REST API (`--iris <url>` on the CLI and LSP, the
-//! `iris` argument of the MCP `create_workspace` tool).
+//! `iris` argument of the MCP `create_workspace` tool), or the same class metadata read back from
+//! a file `ascot snapshot` wrote (`--iris <file>`).
 //!
 //! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
 //! library code above all, so the checker can confirm them instead of leaving a hint. Results
 //! are cached per connection. `IrisClient` is the trait `lib.rs` depends on; `AtelierConnection`
-//! is its HTTP implementation.
+//! is its HTTP implementation and `Snapshot` the offline one; `open` picks between them.
 //!
 //! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
 //! `language-server`'s `server/src/ascot/index.ts` `IrisConnection` class -- the JS host-side
 //! implementation of the same WIT `imported.iris-connection` interface, which can't be
 //! implemented by native Rust guest code at all (see `src/lib.rs`'s `IrisHandle`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use percent_encoding::percent_decode_str;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::bindings::{
@@ -37,6 +39,80 @@ pub trait IrisClient: Send + Sync {
     // The raw source of the routine `name` (`.mac` if it exists, else `.int`), for a `Label^name`
     // call into a routine that isn't open in the workspace.
     fn get_int_or_mac(&self, name: &str) -> Option<RoutineSource>;
+}
+
+pub const DEFAULT_NAMESPACE: &str = "%SYS";
+
+/// Opens an `--iris` argument: a `scheme://user:pass@host:port[/prefix]` URL is a live
+/// connection (checked up front), anything else the path of a file `ascot snapshot` wrote.
+/// `namespace` defaults to `%SYS` for a URL; for a snapshot it must match the one recorded in it.
+pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, String> {
+    if iris.contains("://") {
+        let conn = AtelierConnection::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
+        conn.check()?;
+        return Ok(Box::new(conn));
+    }
+    let snapshot = Snapshot::load(Path::new(iris))?;
+    if let Some(namespace) = namespace
+        && namespace != snapshot.namespace
+    {
+        return Err(format!(
+            "{iris} is a snapshot of namespace '{}', not '{namespace}'",
+            snapshot.namespace
+        ));
+    }
+    Ok(Box::new(snapshot))
+}
+
+const SNAPSHOT_VERSION: u32 = 1;
+// Classes per round trip in `AtelierConnection::snapshot`.
+const SNAPSHOT_BATCH: usize = 100;
+
+/// One namespace's class dictionary as `ascot snapshot` writes it: every class's `get_cls`
+/// answer, so analysis can run against a file instead of a live instance. Types only -- no
+/// `.inc` or routine source, so `get_inc`/`get_int_or_mac` answer `None` and a system macro
+/// resolves only if its include file is in the workspace.
+#[derive(Serialize, Deserialize)]
+pub struct Snapshot {
+    pub version: u32,
+    pub namespace: String,
+    pub classes: BTreeMap<String, ClassInfo>,
+}
+
+impl Snapshot {
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read snapshot {}: {e}", path.display()))?;
+        let snapshot: Self = serde_json::from_str(&text)
+            .map_err(|e| format!("{} is not an ascot snapshot: {e}", path.display()))?;
+        if snapshot.version != SNAPSHOT_VERSION {
+            return Err(format!(
+                "{} is a version {} snapshot; this ascot reads version {SNAPSHOT_VERSION}",
+                path.display(),
+                snapshot.version
+            ));
+        }
+        Ok(snapshot)
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let text = serde_json::to_string(self).map_err(|e| e.to_string())?;
+        std::fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    }
+}
+
+impl IrisClient for Snapshot {
+    fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
+        self.classes.get(cls).cloned()
+    }
+
+    fn get_inc(&self, _name: &str) -> Option<RoutineSource> {
+        None
+    }
+
+    fn get_int_or_mac(&self, _name: &str) -> Option<RoutineSource> {
+        None
+    }
 }
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
@@ -162,6 +238,34 @@ impl AtelierConnection {
         }
     }
 
+    /// Every class in the namespace, `SNAPSHOT_BATCH` at a time: one round trip per dictionary
+    /// table per batch, not per class. `progress(done, total)` is called after each batch.
+    pub fn snapshot(&self, mut progress: impl FnMut(usize, usize)) -> Result<Snapshot, String> {
+        let failed = || format!("IRIS connection at {} failed", self.base_url);
+        let mut names: Vec<String> = self
+            .query("SELECT Name FROM %Dictionary.CompiledClass", &[])
+            .ok_or_else(failed)?
+            .into_iter()
+            .filter_map(|row| Some(row.get("Name")?.as_str()?.to_string()))
+            .collect();
+        names.sort();
+        let mut classes = BTreeMap::new();
+        for (i, batch) in names.chunks(SNAPSHOT_BATCH).enumerate() {
+            let params: Vec<&str> = batch.iter().map(String::as_str).collect();
+            let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
+            classes.extend(class_infos(self, &filter, &params));
+            if self.broken.load(Ordering::Relaxed) {
+                return Err(failed());
+            }
+            progress(i * SNAPSHOT_BATCH + batch.len(), names.len());
+        }
+        Ok(Snapshot {
+            version: SNAPSHOT_VERSION,
+            namespace: self.namespace.clone(),
+            classes,
+        })
+    }
+
     fn fail(&self, context: &str, err: ureq::Error) {
         if !self.broken.swap(true, Ordering::Relaxed) {
             eprintln!(
@@ -236,7 +340,7 @@ impl IrisClient for AtelierConnection {
         if let Some(cached) = self.cls_cache.get(cls) {
             return cached;
         }
-        let result = get_cls_uncached(self, cls);
+        let result = class_infos(self, "= ?", &[cls]).into_values().next();
         self.cls_cache.set(cls.to_string(), result.clone());
         result
     }
@@ -280,44 +384,74 @@ fn split_classes(s: &str) -> Vec<String> {
         .collect()
 }
 
-fn get_cls_uncached(conn: &AtelierConnection, cls: &str) -> Option<ClassInfo> {
+// Every class whose name satisfies `Name {filter}` (`= ?`, `IN (?,?,...)`; `params` bind the
+// `?`s), keyed by name, with its own (not inherited) members. One round trip per dictionary
+// table for the whole set.
+fn class_infos(
+    conn: &AtelierConnection,
+    filter: &str,
+    params: &[&str],
+) -> HashMap<String, ClassInfo> {
     let sql = |description: &str| {
         format!(
-            "SELECT {description}, Super, PropertyClass, IncludeCode, ClassType, Deprecated FROM \
-             %Dictionary.CompiledClass WHERE Name = ?"
+            "SELECT Name, {description}, Super, PropertyClass, IncludeCode, ClassType, Deprecated \
+             FROM %Dictionary.CompiledClass WHERE Name {filter}"
         )
     };
-    // Same `{`-leading-text failure mode `all_mem_uncached` guards against.
-    let row = conn
-        .query(&sql("Description"), &[cls])
-        .or_else(|| conn.query(&sql("'' AS Description"), &[cls]))
-        .and_then(|rows| rows.into_iter().next())?;
-    let str_field = |key: &str| row.get(key).and_then(Value::as_str).unwrap_or_default();
+    // Same `{`-leading-text failure mode `all_mem_rows` guards against.
+    let rows = conn
+        .query(&sql("Description"), params)
+        .or_else(|| conn.query(&sql("'' AS Description"), params))
+        .unwrap_or_default();
+    if rows.is_empty() {
+        return HashMap::new();
+    }
+    let members = resolve_stubs(conn, filter, params, all_mem_rows(conn, filter, params));
+    assemble(rows, members)
+}
+
+// Pairs each `%Dictionary.CompiledClass` row with the member rows whose `Parent` it is.
+fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<String, ClassInfo> {
+    let mut members: HashMap<String, Vec<MemberInfo>> = HashMap::new();
+    for row in member_rows {
+        if !row.name.is_empty() {
+            members
+                .entry(row.parent.clone())
+                .or_default()
+                .push(member_row_to_info(row));
+        }
+    }
     let zero = Position {
         line: 0,
         character: 0,
     };
-    let members = resolve_stubs(conn, cls, all_mem_uncached(conn, cls))
+    class_rows
         .into_iter()
-        .filter(|row| !row.name.is_empty())
-        .map(member_row_to_info)
-        .collect();
-    Some(ClassInfo {
-        doc: str_field("Description").to_string(),
-        name: NameInfo {
-            before: zero,
-            content: cls.to_string(),
-            after: zero,
-        },
-        extends: split_classes(str_field("Super")),
-        deprecated: is_truthy(&row.get("Deprecated").cloned().unwrap_or(Value::Null)),
-        members,
-        property_class_names: split_classes(str_field("PropertyClass")),
-        includes: split_classes(str_field("IncludeCode")),
-        is_datatype: Some(str_field("ClassType") == "datatype"),
-        // The Atelier REST API has no uri scheme of its own to offer here.
-        uri: None,
-    })
+        .filter_map(|row| {
+            let str_field = |key: &str| row.get(key).and_then(Value::as_str).unwrap_or_default();
+            let cls = str_field("Name").to_string();
+            if cls.is_empty() {
+                return None;
+            }
+            let info = ClassInfo {
+                doc: str_field("Description").to_string(),
+                name: NameInfo {
+                    before: zero,
+                    content: cls.clone(),
+                    after: zero,
+                },
+                extends: split_classes(str_field("Super")),
+                deprecated: is_truthy(&row.get("Deprecated").cloned().unwrap_or(Value::Null)),
+                members: members.remove(&cls).unwrap_or_default(),
+                property_class_names: split_classes(str_field("PropertyClass")),
+                includes: split_classes(str_field("IncludeCode")),
+                is_datatype: Some(str_field("ClassType") == "datatype"),
+                // The Atelier REST API has no uri scheme of its own to offer here.
+                uri: None,
+            };
+            Some((cls, info))
+        })
+        .collect()
 }
 
 // Uniform row shape across all three member tables `all_mem_uncached` unions together. IRIS
@@ -327,6 +461,8 @@ fn get_cls_uncached(conn: &AtelierConnection, cls: &str) -> Option<ClassInfo> {
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 struct MemberRow {
+    #[serde(default)]
+    parent: String,
     #[serde(default)]
     name: String,
     #[serde(default, deserialize_with = "empty_string_as_none")]
@@ -367,28 +503,31 @@ fn is_truthy(v: &Value) -> bool {
     matches!(v, Value::Bool(true)) || v.as_str() == Some("1") || v.as_i64() == Some(1)
 }
 
-// Every member declared directly on `cls`, across all three tables -- one query per class
-// instead of one per member, since `get_cls` always wants the whole list at once.
-fn all_mem_uncached(conn: &AtelierConnection, cls: &str) -> Vec<MemberRow> {
+// Every member declared directly on the classes matching `Parent {filter}`, across all three
+// tables -- one query per batch instead of one per member, since `get_cls` always wants the
+// whole list at once.
+fn all_mem_rows(conn: &AtelierConnection, filter: &str, params: &[&str]) -> Vec<MemberRow> {
     let sql = |description: &str| {
         format!(
-            "SELECT Name, NULL AS Aliases, 'method' AS MemberType, {description}, FormalSpec, \
-             ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS Relationship, NULL AS \
-             Cardinality, Stub, ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledMethod \
-             WHERE Parent = ? UNION ALL SELECT Name, Aliases, 'property' AS MemberType, \
-             {description}, NULL AS FormalSpec, Type AS ReturnType, Collection, MultiDimensional, \
-             Relationship, Cardinality, NULL AS Stub, 0 AS ClassMethod, Deprecated, Origin FROM \
-             %Dictionary.CompiledProperty WHERE Parent = ? UNION ALL SELECT Name, NULL AS \
-             Aliases, 'parameter' AS MemberType, {description}, NULL AS FormalSpec, Type AS \
-             ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS Relationship, NULL AS \
-             Cardinality, NULL AS Stub, 0 AS ClassMethod, Deprecated, Origin FROM \
-             %Dictionary.CompiledParameter WHERE Parent = ?"
+            "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, {description}, \
+             FormalSpec, ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS \
+             Relationship, NULL AS Cardinality, Stub, ClassMethod, Deprecated, Origin FROM \
+             %Dictionary.CompiledMethod WHERE Parent {filter} UNION ALL SELECT Parent, Name, \
+             Aliases, 'property' AS MemberType, {description}, NULL AS FormalSpec, Type AS \
+             ReturnType, Collection, MultiDimensional, Relationship, Cardinality, NULL AS Stub, \
+             0 AS ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledProperty WHERE Parent \
+             {filter} UNION ALL SELECT Parent, Name, NULL AS Aliases, 'parameter' AS MemberType, \
+             {description}, NULL AS FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS \
+             MultiDimensional, 0 AS Relationship, NULL AS Cardinality, NULL AS Stub, 0 AS \
+             ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledParameter WHERE Parent \
+             {filter}"
         )
     };
+    let params = [params, params, params].concat();
     // The Atelier query API fails the whole query over a text value that merely starts with `{`
     // (e.g. a `/// {$$$CPFSave+...}` parameter comment); retry without descriptions.
-    conn.query(&sql("Description"), &[cls, cls, cls])
-        .or_else(|| conn.query(&sql("'' AS Description"), &[cls, cls, cls]))
+    conn.query(&sql("Description"), &params)
+        .or_else(|| conn.query(&sql("'' AS Description"), &params))
         .map(|rows| {
             rows.into_iter()
                 .filter_map(|row| serde_json::from_value(row).ok())
@@ -417,27 +556,32 @@ fn stub_parts(row: &MemberRow) -> Option<(&str, &str, &'static str)> {
     Some((origin, subname, table))
 }
 
-// Replaces each stub row with its real metadata -- one query per stub table the class uses,
+// Replaces each stub row with its real metadata -- one query per stub table the classes use,
 // not one per stub (a property-heavy class has dozens of generated accessors).
-fn resolve_stubs(conn: &AtelierConnection, cls: &str, rows: Vec<MemberRow>) -> Vec<MemberRow> {
+fn resolve_stubs(
+    conn: &AtelierConnection,
+    filter: &str,
+    params: &[&str],
+    rows: Vec<MemberRow>,
+) -> Vec<MemberRow> {
     let tables: HashSet<&str> = rows
         .iter()
         .filter_map(stub_parts)
         .map(|(_, _, t)| t)
         .collect();
-    let mut resolved: HashMap<(String, String, &str), MemberRow> = HashMap::new();
+    let mut resolved: HashMap<(String, String, String, &str), MemberRow> = HashMap::new();
     for table in tables {
         let sql = |description: &str| {
             format!(
-                "SELECT Name, parent->Name AS StubOrigin, 'method' AS MemberType, {description}, \
-                 FormalSpec, ReturnType, '' AS Stub, ClassMethod, Deprecated FROM \
-                 %Dictionary.Compiled{table}Method WHERE parent->Parent = ?"
+                "SELECT parent->Parent AS Parent, Name, parent->Name AS StubOrigin, 'method' AS \
+                 MemberType, {description}, FormalSpec, ReturnType, '' AS Stub, ClassMethod, \
+                 Deprecated FROM %Dictionary.Compiled{table}Method WHERE parent->Parent {filter}"
             )
         };
-        // Same `{`-leading-text failure mode `all_mem_uncached` guards against.
+        // Same `{`-leading-text failure mode `all_mem_rows` guards against.
         let found = conn
-            .query(&sql("Description"), &[cls])
-            .or_else(|| conn.query(&sql("'' AS Description"), &[cls]))
+            .query(&sql("Description"), params)
+            .or_else(|| conn.query(&sql("'' AS Description"), params))
             .unwrap_or_default();
         for value in found {
             let origin = value
@@ -447,13 +591,26 @@ fn resolve_stubs(conn: &AtelierConnection, cls: &str, rows: Vec<MemberRow>) -> V
             let Ok(row) = serde_json::from_value::<MemberRow>(value.clone()) else {
                 continue;
             };
-            resolved.insert((origin.to_string(), row.name.clone(), table), row);
+            resolved.insert(
+                (
+                    row.parent.clone(),
+                    origin.to_string(),
+                    row.name.clone(),
+                    table,
+                ),
+                row,
+            );
         }
     }
     rows.into_iter()
         .map(|row| match stub_parts(&row) {
             Some((origin, subname, table)) => resolved
-                .remove(&(origin.to_string(), subname.to_string(), table))
+                .remove(&(
+                    row.parent.clone(),
+                    origin.to_string(),
+                    subname.to_string(),
+                    table,
+                ))
                 .unwrap_or(row),
             None => row,
         })
@@ -694,6 +851,121 @@ mod tests {
             property_type(None, Some("%String".into()), false).collection,
             None
         );
+    }
+
+    fn class_info(name: &str) -> ClassInfo {
+        let zero = Position {
+            line: 0,
+            character: 0,
+        };
+        ClassInfo {
+            doc: String::new(),
+            name: NameInfo {
+                before: zero,
+                content: name.to_string(),
+                after: zero,
+            },
+            extends: vec!["%RegisteredObject".to_string()],
+            deprecated: false,
+            members: vec![],
+            property_class_names: vec![],
+            includes: vec![],
+            is_datatype: Some(false),
+            uri: None,
+        }
+    }
+
+    fn snapshot_file(name: &str, snapshot: &Snapshot) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("ascot-{name}-{}.json", std::process::id()));
+        snapshot.save(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn assemble_groups_member_rows_by_their_parent_class() {
+        let class_rows = vec![
+            serde_json::json!({"Name": "A.B", "Super": "%RegisteredObject", "ClassType": ""}),
+            serde_json::json!({"Name": "A.C", "Super": "", "ClassType": "datatype", "Deprecated": 1}),
+        ];
+        let member_rows: Vec<MemberRow> = [
+            serde_json::json!({"Parent": "A.C", "Name": "P", "MemberType": "property", "Description": "", "FormalSpec": "", "ReturnType": "%String", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
+            serde_json::json!({"Parent": "A.B", "Name": "M", "MemberType": "method", "Description": "", "FormalSpec": "x:%String", "ReturnType": "%Status", "Stub": "", "ClassMethod": 1, "Deprecated": 0}),
+            serde_json::json!({"Parent": "A.B", "Name": "", "MemberType": "method", "Description": "", "FormalSpec": "", "ReturnType": "", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
+        ]
+        .into_iter()
+        .map(|row| serde_json::from_value(row).unwrap())
+        .collect();
+        let classes = assemble(class_rows, member_rows);
+        assert_eq!(classes.len(), 2);
+        let b = &classes["A.B"];
+        assert_eq!(b.extends, vec!["%RegisteredObject"]);
+        assert_eq!(b.is_datatype, Some(false));
+        assert_eq!(b.members.len(), 1, "the nameless row is dropped");
+        assert_eq!(b.members[0].name.content, "M");
+        assert!(matches!(b.members[0].kind, MemberKind::ClassMethod(_)));
+        let c = &classes["A.C"];
+        assert!(c.deprecated);
+        assert_eq!(c.is_datatype, Some(true));
+        assert_eq!(c.members[0].name.content, "P");
+    }
+
+    #[test]
+    fn a_snapshot_round_trips_through_its_file_and_answers_only_get_cls() {
+        let snapshot = Snapshot {
+            version: SNAPSHOT_VERSION,
+            namespace: "USER".to_string(),
+            classes: [("A.B".to_string(), class_info("A.B"))].into(),
+        };
+        let path = snapshot_file("round-trip", &snapshot);
+        let loaded = Snapshot::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(loaded.namespace, "USER");
+        assert_eq!(loaded.get_cls("A.B"), Some(class_info("A.B")));
+        assert_eq!(loaded.get_cls("A.C"), None);
+        assert_eq!(loaded.get_inc("%occErrors"), None);
+        assert_eq!(loaded.get_int_or_mac("%occErrors"), None);
+    }
+
+    #[test]
+    fn open_reads_a_snapshot_path_and_checks_its_namespace() {
+        let snapshot = Snapshot {
+            version: SNAPSHOT_VERSION,
+            namespace: "USER".to_string(),
+            classes: BTreeMap::new(),
+        };
+        let path = snapshot_file("open", &snapshot);
+        let arg = path.to_str().unwrap();
+        assert!(open(arg, None).is_ok());
+        assert!(open(arg, Some("USER")).is_ok());
+        let err = open(arg, Some("%SYS")).err().unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            err.contains("snapshot of namespace 'USER', not '%SYS'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn open_rejects_a_snapshot_of_another_version_or_no_snapshot_at_all() {
+        let path = std::env::temp_dir().join(format!("ascot-version-{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"version":2,"namespace":"USER","classes":{}}"#).unwrap();
+        let err = open(path.to_str().unwrap(), None).err().unwrap();
+        assert!(err.contains("is a version 2 snapshot"), "{err}");
+        std::fs::write(&path, "Class A.B {}").unwrap();
+        let err = open(path.to_str().unwrap(), None).err().unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(err.contains("is not an ascot snapshot"), "{err}");
+        let err = open("/no/such/snapshot.json", None).err().unwrap();
+        assert!(err.contains("cannot read snapshot"), "{err}");
+    }
+
+    #[test]
+    fn open_treats_anything_with_a_scheme_as_a_url() {
+        let err = open("ftp://user:pass@localhost:8080", None).err().unwrap();
+        assert!(err.contains("must be http or https"), "{err}");
+        let url = stub_server(&[("", "401 Unauthorized", "")]);
+        let err = open(&url, Some("USER")).err().unwrap();
+        assert!(err.contains("authentication failed"), "{err}");
     }
 
     #[test]
