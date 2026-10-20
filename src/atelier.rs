@@ -20,6 +20,7 @@ use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::DocKind;
 use crate::bindings::{
     ArgMode, ClassInfo, CollectionKind, MemberInfo, MemberKind, MethodInfo, NameInfo, NormalArg,
     ParameterInfo, Position, PropertyInfo, Range, RoutineSource, VariadicArg,
@@ -28,13 +29,6 @@ use crate::iris::{DECLARATIONS_VERSION, Declarations, IrisClient};
 
 const BATCH: usize = 100;
 const WORKERS: usize = 8;
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum DocKind {
-    Class,
-    Include,
-    Routine,
-}
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -191,21 +185,13 @@ impl AtelierConnection {
         rtn_names.dedup();
 
         let totals = [class_names.len(), inc_names.len(), rtn_names.len()];
-        for kind in [DocKind::Class, DocKind::Include, DocKind::Routine] {
+        for kind in [DocKind::Cls, DocKind::Inc, DocKind::Rtn] {
             progress(kind, 0, totals[kind as usize]);
         }
         let jobs: Vec<(DocKind, &[String])> = (class_names.chunks(BATCH))
-            .map(|batch| (DocKind::Class, batch))
-            .chain(
-                inc_names
-                    .chunks(BATCH)
-                    .map(|batch| (DocKind::Include, batch)),
-            )
-            .chain(
-                rtn_names
-                    .chunks(BATCH)
-                    .map(|batch| (DocKind::Routine, batch)),
-            )
+            .map(|batch| (DocKind::Cls, batch))
+            .chain(inc_names.chunks(BATCH).map(|batch| (DocKind::Inc, batch)))
+            .chain(rtn_names.chunks(BATCH).map(|batch| (DocKind::Rtn, batch)))
             .collect();
         let next = AtomicUsize::new(0);
         let classes = Mutex::new(BTreeMap::new());
@@ -225,21 +211,21 @@ impl AtelierConnection {
                             break;
                         };
                         let ok = match kind {
-                            DocKind::Class => {
+                            DocKind::Cls => {
                                 let params: Vec<&str> = batch.iter().map(String::as_str).collect();
                                 let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
                                 let found = class_infos(self, &filter, &params);
                                 classes.lock().unwrap().extend(found);
                                 true
                             }
-                            DocKind::Include => match self.docs(batch) {
+                            DocKind::Inc => match self.docs(batch) {
                                 Some(found) => {
                                     includes.lock().unwrap().extend(by_basename(found));
                                     true
                                 }
                                 None => false,
                             },
-                            DocKind::Routine => self.fetch_routines(batch, routines),
+                            DocKind::Rtn => self.fetch_routines(batch, routines),
                         };
                         if !ok {
                             break;

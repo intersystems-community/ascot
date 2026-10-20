@@ -41,18 +41,22 @@
 //! - `iris.rs`: the `IrisClient` trait behind those, and declaration files answering it offline.
 
 #[cfg(not(target_arch = "wasm32"))]
-pub mod atelier;
+mod atelier;
 pub mod bindings;
 pub mod check;
 pub mod details;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod iris;
+mod iris;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lsp;
 mod macro_expand;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
 mod render;
+#[cfg(not(target_arch = "wasm32"))]
+pub use atelier::AtelierConnection;
+#[cfg(not(target_arch = "wasm32"))]
+pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, IrisClient, open as open_iris};
 pub(crate) use macro_expand::MacroDefinitions;
 pub use macro_expand::SourceMap;
 use tygr_objectscript::cos::ClassDefinitionHeader;
@@ -81,10 +85,10 @@ use crate::{
 // `.inc` files are never checked standalone, only pulled in via another file's `#include`; `.mac`
 // and `.int` routines are otherwise identical for our purposes, so share one variant.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum DocKind {
+pub enum DocKind {
     Cls,
     Inc,
-    Routine,
+    Rtn,
 }
 
 // A header name qualified by kind: `#include X` and `$$^X` are different lookups.
@@ -97,7 +101,7 @@ impl DocKind {
         match uri.rsplit('.').next() {
             Some("cls") => Some(DocKind::Cls),
             Some("inc") => Some(DocKind::Inc),
-            Some("mac" | "int") => Some(DocKind::Routine),
+            Some("mac" | "int") => Some(DocKind::Rtn),
             _ => None,
         }
     }
@@ -215,7 +219,7 @@ impl WorkspaceStruct {
             // `.mac`/`.int`/`.inc` all share the same `ROUTINE Name [Type=...]` header grammar --
             // which of the two this is only matters once something asks for tier B (see
             // `ensure_details`), not here.
-            DocKind::Inc | DocKind::Routine => match cos::RoutineHeader::parse_prefix(&text) {
+            DocKind::Inc | DocKind::Rtn => match cos::RoutineHeader::parse_prefix(&text) {
                 Ok((header, _)) => {
                     let name = with_range_name(&header.name, &OLC::new(&text));
                     Ok(DocCache {
@@ -309,7 +313,7 @@ impl WorkspaceStruct {
             // needs dropping too, not just its check -- unlike a class's own parse (unaffected
             // by anything but its own edit) or a `.inc`'s tier B (never stale as a *dependent*
             // at all, since substitution happens in whoever includes it, not here).
-            if kind == DocKind::Routine {
+            if kind == DocKind::Rtn {
                 cell.borrow_mut().details = None;
             } else if let Some(Ok(DocDetails::Cls(_, check))) = &mut cell.borrow_mut().details {
                 *check = None;
@@ -367,7 +371,7 @@ impl WorkspaceStruct {
     fn index_for(&self, kind: DocKind) -> &RefCell<HashMap<String, String>> {
         match kind {
             DocKind::Cls => &self.class_index,
-            DocKind::Routine => &self.rtn_index,
+            DocKind::Rtn => &self.rtn_index,
             DocKind::Inc => &self.inc_index,
         }
     }
@@ -488,7 +492,7 @@ impl WorkspaceStruct {
                 Some(DocKind::Cls) => ClassDetails::try_from(text)
                     .map(|details| DocDetails::Cls(Arc::new(details), None))
                     .map_err(|err| tygr_error_to_diagnostics(err, text)),
-                Some(DocKind::Routine) => {
+                Some(DocKind::Rtn) => {
                     self.expand_rtn(uri, text)
                         .map(|(routine, map, definitions)| {
                             DocDetails::Rtn(
@@ -949,7 +953,7 @@ impl bindings::GuestWorkspace for Workspace {
                         .collect(),
                 })
             }
-            DocKind::Routine => this.routine_symbol(&uri),
+            DocKind::Rtn => this.routine_symbol(&uri),
             DocKind::Inc => None,
         }
     }
@@ -997,9 +1001,8 @@ impl bindings::GuestWorkspace for Workspace {
             .iter()
             .filter_map(|(uri, entry)| {
                 let doc = entry.as_ref().ok()?.borrow();
-                (DocKind::from_uri(uri) == Some(DocKind::Routine)
-                    && doc.name.it.starts_with(&query))
-                .then(|| uri.clone())
+                (DocKind::from_uri(uri) == Some(DocKind::Rtn) && doc.name.it.starts_with(&query))
+                    .then(|| uri.clone())
             })
             .collect();
         let rtn_symbols = candidates
@@ -1097,7 +1100,7 @@ impl Workspace {
     fn macro_expansion(&self, uri: String, position: bindings::Position) -> Option<String> {
         let this = self.borrow();
         this.doc_cache.get(&uri)?;
-        if DocKind::from_uri(&uri) != Some(DocKind::Routine) {
+        if DocKind::from_uri(&uri) != Some(DocKind::Rtn) {
             return None;
         }
         this.rtn_details(&uri)

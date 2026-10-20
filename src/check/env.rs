@@ -1266,7 +1266,7 @@ impl<'a> WorkspaceEnv<'a> {
     fn resolve_rtn_uri(&self, name: &str) -> Option<String> {
         self.touched
             .borrow_mut()
-            .insert((DocKind::Routine, name.to_string()));
+            .insert((DocKind::Rtn, name.to_string()));
         self.workspace.resolve_rtn_uri(name)
     }
 
