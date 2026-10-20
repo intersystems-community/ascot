@@ -3,7 +3,7 @@ members = ["tygr-objectscript"]
 
 [package]
 name = "ascot"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A type checker and code intelligence engine for InterSystems ObjectScript, usable as a CLI, an LSP or MCP server, or a library."
@@ -16,7 +16,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 either = "1.15.0"
 tygr = "0.6.0"
-tygr-objectscript = { version = "0.1.1", path = "tygr-objectscript" }
+tygr-objectscript = { version = "0.2.0", path = "tygr-objectscript" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.149"
 wit-bindgen = "0.62.0"
