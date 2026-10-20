@@ -34,13 +34,13 @@ struct WorkspaceIdRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CreateWorkspaceRequest {
     workspace: String,
-    /// Optional IRIS connection: `scheme://user:pass@host:port`, or the path of a snapshot file
-    /// written by `ascot snapshot`. When set, lookups that can't be resolved from documents
+    /// Optional IRIS connection: `scheme://user:pass@host:port`, or the path of a declaration
+    /// file written by `ascot declare`. When set, lookups that can't be resolved from documents
     /// already in this workspace (e.g. a class that isn't open here) fall back to this IRIS
-    /// instance via the Atelier REST API, or to the snapshot.
+    /// instance via the Atelier REST API, or to the file.
     iris: Option<String>,
     /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
-    /// for a URL; for a snapshot it must match the namespace the snapshot was taken from.
+    /// for a URL; for a declaration file it must match the namespace it declares.
     iris_namespace: Option<String>,
 }
 
@@ -157,7 +157,7 @@ impl AnalyzerMcpServer {
         description = "Create a new empty workspace with the given id; fails if it already exists. \
                         Do this first, before inserting any ObjectScript source. Pass `iris` to \
                         also resolve out-of-workspace lookups against a real IRIS instance (or a \
-                        snapshot file `ascot snapshot` wrote)."
+                        declaration file `ascot declare` wrote)."
     )]
     async fn create_workspace(
         &self,

@@ -1,10 +1,10 @@
 //! The `ascot` command-line binary: argument parsing and the `analyze`, `analyze-workspace`,
-//! `parse`, `snapshot`, `mcp` and `lsp` subcommands documented in README.md.
+//! `parse`, `declare`, `mcp` and `lsp` subcommands documented in README.md.
 //!
 //! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
 //! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
 //! process over to `lsp.rs`/`mcp.rs` for the server modes. `--iris` connections (live, or a
-//! snapshot file `snapshot` wrote) are built with `atelier.rs`. None of this is part of the
+//! declaration file `declare` wrote) are built with `atelier.rs`. None of this is part of the
 //! wasm/JS build (see `bindings.rs`).
 
 use ascot::Workspace;
@@ -54,15 +54,15 @@ fn main() {
             };
             scan_file(file_path);
         }
-        Some("snapshot") => {
+        Some("declare") => {
             let mut rest: Vec<String> = args[2..].to_vec();
             let url = extract_flag(&mut rest, "--iris");
             let namespace = extract_flag(&mut rest, "--iris-namespace");
             let (Some(url), [out]) = (url, rest.as_slice()) else {
-                eprintln!("usage: snapshot --iris <url> [--iris-namespace <ns>] <file>");
+                eprintln!("usage: declare --iris <url> [--iris-namespace <ns>] <file>");
                 exit(1);
             };
-            snapshot(&url, namespace.as_deref(), Path::new(out));
+            declare(&url, namespace.as_deref(), Path::new(out));
         }
         Some("mcp") => {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
@@ -78,7 +78,7 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: parse <file> | analyze [--iris <url|file>] [--iris-namespace <ns>] <path>... | analyze-workspace [--iris <url|file>] [--iris-namespace <ns>] <root> <path>... | snapshot --iris <url> [--iris-namespace <ns>] <file> | mcp | lsp [--iris <url|file>] [--iris-namespace <ns>]"
+                "usage: parse <file> | analyze [--iris <url|file>] [--iris-namespace <ns>] <path>... | analyze-workspace [--iris <url|file>] [--iris-namespace <ns>] <root> <path>... | declare --iris <url> [--iris-namespace <ns>] <file> | mcp | lsp [--iris <url|file>] [--iris-namespace <ns>]"
             );
             exit(1);
         }
@@ -96,7 +96,7 @@ fn extract_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
     Some(args.remove(idx))
 }
 
-/// Pulls `--iris`/`--iris-namespace` out of `args` and opens the connection or snapshot file, if
+/// Pulls `--iris`/`--iris-namespace` out of `args` and opens the connection or declaration file, if
 /// `--iris` was given. `--iris-namespace` is ignored (with a warning) if `--iris` is absent.
 fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
     let iris = extract_flag(args, "--iris");
@@ -118,7 +118,7 @@ fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
 
 /// Writes the classes, include files and routine labels of the namespace at `url` to `out`, for
 /// a later `--iris <out>`.
-fn snapshot(url: &str, namespace: Option<&str>, out: &Path) {
+fn declare(url: &str, namespace: Option<&str>, out: &Path) {
     let namespace = namespace.unwrap_or(ascot::atelier::DEFAULT_NAMESPACE);
     let conn = match AtelierConnection::connect(url, namespace).and_then(|conn| {
         conn.check()?;
@@ -131,7 +131,7 @@ fn snapshot(url: &str, namespace: Option<&str>, out: &Path) {
         }
     };
     let terminal = std::io::stderr().is_terminal();
-    let snapshot = conn.snapshot(|status| {
+    let declarations = conn.declarations(|status| {
         if terminal {
             eprint!("\r\x1b[K{status}");
         }
@@ -139,17 +139,17 @@ fn snapshot(url: &str, namespace: Option<&str>, out: &Path) {
     if terminal {
         eprintln!();
     }
-    match snapshot.and_then(|snapshot| snapshot.save(out).map(|()| snapshot)) {
-        Ok(snapshot) => eprintln!(
+    match declarations.and_then(|decls| decls.save(out).map(|()| decls)) {
+        Ok(decls) => eprintln!(
             "{} class(es), {} include file(s), {} routine(s) of namespace {} written to {}",
-            snapshot.classes.len(),
-            snapshot.includes.len(),
-            snapshot.routines.len(),
-            snapshot.namespace,
+            decls.classes.len(),
+            decls.includes.len(),
+            decls.routines.len(),
+            decls.namespace,
             out.display()
         ),
         Err(err) => {
-            eprintln!("snapshot: {err}");
+            eprintln!("declare: {err}");
             exit(1);
         }
     }

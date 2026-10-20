@@ -1,11 +1,11 @@
 //! Optional live-IRIS lookups over the Atelier REST API (`--iris <url>` on the CLI and LSP, the
 //! `iris` argument of the MCP `create_workspace` tool), or the same answers read back from a
-//! file `ascot snapshot` wrote (`--iris <file>`).
+//! declaration file `ascot declare` wrote (`--iris <file>`).
 //!
 //! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
 //! library code above all, so the checker can confirm them instead of leaving a hint. Results
 //! are cached per connection. `IrisClient` is the trait `lib.rs` depends on; `AtelierConnection`
-//! is its HTTP implementation and `Snapshot` the offline one; `open` picks between them.
+//! is its HTTP implementation and `Declarations` the offline one; `open` picks between them.
 //!
 //! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
 //! `language-server`'s `server/src/ascot/index.ts` `IrisConnection` class -- the JS host-side
@@ -44,36 +44,36 @@ pub trait IrisClient: Send + Sync {
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
 /// Opens an `--iris` argument: a `scheme://user:pass@host:port[/prefix]` URL is a live
-/// connection (checked up front), anything else the path of a file `ascot snapshot` wrote.
-/// `namespace` defaults to `%SYS` for a URL; for a snapshot it must match the one recorded in it.
+/// connection (checked up front), anything else the path of a declaration file `ascot declare`
+/// wrote. `namespace` defaults to `%SYS` for a URL; for a file it must match the one declared.
 pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, String> {
     if iris.contains("://") {
         let conn = AtelierConnection::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
         conn.check()?;
         return Ok(Box::new(conn));
     }
-    let snapshot = Snapshot::load(Path::new(iris))?;
+    let declarations = Declarations::load(Path::new(iris))?;
     if let Some(namespace) = namespace
-        && namespace != snapshot.namespace
+        && namespace != declarations.namespace
     {
         return Err(format!(
-            "{iris} is a snapshot of namespace '{}', not '{namespace}'",
-            snapshot.namespace
+            "{iris} declares namespace '{}', not '{namespace}'",
+            declarations.namespace
         ));
     }
-    Ok(Box::new(snapshot))
+    Ok(Box::new(declarations))
 }
 
-const SNAPSHOT_VERSION: u32 = 1;
-// Classes or documents per round trip in `AtelierConnection::snapshot`.
-const SNAPSHOT_BATCH: usize = 100;
+const DECLARATIONS_VERSION: u32 = 1;
+// Classes or documents per round trip in `AtelierConnection::declarations`.
+const BATCH: usize = 100;
 
-/// One namespace as `ascot snapshot` writes it: the three `IrisClient` lookups, each as a map
+/// One namespace as `ascot declare` writes it: the three `IrisClient` lookups, each as a map
 /// from its argument to its answer, so analysis can run against a file instead of a live
 /// instance. A class is its `get_cls` metadata (no method code); an include file or routine is
 /// its source, as `get_inc`/`get_int_or_mac` would fetch it.
 #[derive(Serialize, Deserialize, Clone)]
-pub struct Snapshot {
+pub struct Declarations {
     pub version: u32,
     pub namespace: String,
     pub classes: BTreeMap<String, ClassInfo>,
@@ -83,20 +83,20 @@ pub struct Snapshot {
     pub routines: BTreeMap<String, RoutineSource>,
 }
 
-impl Snapshot {
+impl Declarations {
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path)
-            .map_err(|e| format!("cannot read snapshot {}: {e}", path.display()))?;
-        let snapshot: Self = serde_json::from_str(&text)
-            .map_err(|e| format!("{} is not an ascot snapshot: {e}", path.display()))?;
-        if snapshot.version != SNAPSHOT_VERSION {
+            .map_err(|e| format!("cannot read declaration file {}: {e}", path.display()))?;
+        let declarations: Self = serde_json::from_str(&text)
+            .map_err(|e| format!("{} is not an ascot declaration file: {e}", path.display()))?;
+        if declarations.version != DECLARATIONS_VERSION {
             return Err(format!(
-                "{} is a version {} snapshot; this ascot reads version {SNAPSHOT_VERSION}",
+                "{} is a version {} declaration file; this ascot reads version {DECLARATIONS_VERSION}",
                 path.display(),
-                snapshot.version
+                declarations.version
             ));
         }
-        Ok(snapshot)
+        Ok(declarations)
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
@@ -105,7 +105,7 @@ impl Snapshot {
     }
 }
 
-impl IrisClient for Snapshot {
+impl IrisClient for Declarations {
     fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
         self.classes.get(cls).cloned()
     }
@@ -242,22 +242,22 @@ impl AtelierConnection {
         }
     }
 
-    /// Every class, include file and routine in the namespace, `SNAPSHOT_BATCH` at a time: one
+    /// Every class, include file and routine in the namespace, `BATCH` at a time: one
     /// round trip per dictionary table (or per document batch), not per class or document.
     /// `progress` gets a one-line status after each batch.
-    pub fn snapshot(&self, mut progress: impl FnMut(&str)) -> Result<Snapshot, String> {
+    pub fn declarations(&self, mut progress: impl FnMut(&str)) -> Result<Declarations, String> {
         let failed = || format!("IRIS connection at {} failed", self.base_url);
-        let classes = self.snapshot_classes(&failed, &mut progress)?;
+        let classes = self.declare_classes(&failed, &mut progress)?;
 
         let mut includes = BTreeMap::new();
         let inc_names = self.docnames("INC").ok_or_else(failed)?;
-        for (i, batch) in inc_names.chunks(SNAPSHOT_BATCH).enumerate() {
+        for (i, batch) in inc_names.chunks(BATCH).enumerate() {
             for (doc, source) in self.docs(batch).ok_or_else(failed)? {
                 includes.insert(doc_basename(&doc), source);
             }
             progress(&format!(
                 "{}/{} include files",
-                i * SNAPSHOT_BATCH + batch.len(),
+                i * BATCH + batch.len(),
                 inc_names.len()
             ));
         }
@@ -276,7 +276,7 @@ impl AtelierConnection {
         rtn_names.sort();
         rtn_names.dedup();
         let mut routines = BTreeMap::new();
-        for (i, batch) in rtn_names.chunks(SNAPSHOT_BATCH).enumerate() {
+        for (i, batch) in rtn_names.chunks(BATCH).enumerate() {
             let ints: Vec<String> = batch.iter().map(|name| format!("{name}.int")).collect();
             let mut found = self.docs(&ints).ok_or_else(failed)?;
             let macs: Vec<String> = batch
@@ -292,13 +292,13 @@ impl AtelierConnection {
             }
             progress(&format!(
                 "{}/{} routines",
-                i * SNAPSHOT_BATCH + batch.len(),
+                i * BATCH + batch.len(),
                 rtn_names.len()
             ));
         }
 
-        Ok(Snapshot {
-            version: SNAPSHOT_VERSION,
+        Ok(Declarations {
+            version: DECLARATIONS_VERSION,
             namespace: self.namespace.clone(),
             classes,
             includes,
@@ -306,7 +306,7 @@ impl AtelierConnection {
         })
     }
 
-    fn snapshot_classes(
+    fn declare_classes(
         &self,
         failed: &impl Fn() -> String,
         progress: &mut impl FnMut(&str),
@@ -319,7 +319,7 @@ impl AtelierConnection {
             .collect();
         names.sort();
         let mut classes = BTreeMap::new();
-        for (i, batch) in names.chunks(SNAPSHOT_BATCH).enumerate() {
+        for (i, batch) in names.chunks(BATCH).enumerate() {
             let params: Vec<&str> = batch.iter().map(String::as_str).collect();
             let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
             classes.extend(class_infos(self, &filter, &params));
@@ -328,7 +328,7 @@ impl AtelierConnection {
             }
             progress(&format!(
                 "{}/{} classes",
-                i * SNAPSHOT_BATCH + batch.len(),
+                i * BATCH + batch.len(),
                 names.len()
             ));
         }
@@ -1012,9 +1012,9 @@ mod tests {
         }
     }
 
-    fn snapshot_file(name: &str, snapshot: &Snapshot) -> std::path::PathBuf {
+    fn declaration_file(name: &str, declarations: &Declarations) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("ascot-{name}-{}.json", std::process::id()));
-        snapshot.save(&path).unwrap();
+        declarations.save(&path).unwrap();
         path
     }
 
@@ -1054,9 +1054,9 @@ mod tests {
     }
 
     #[test]
-    fn a_snapshot_round_trips_through_its_file_and_answers_every_lookup() {
-        let snapshot = Snapshot {
-            version: SNAPSHOT_VERSION,
+    fn declarations_round_trip_through_their_file_and_answer_every_lookup() {
+        let declarations = Declarations {
+            version: DECLARATIONS_VERSION,
             namespace: "USER".to_string(),
             classes: [("A.B".to_string(), class_info("A.B"))].into(),
             includes: [(
@@ -1081,15 +1081,15 @@ mod tests {
             ]
             .into(),
         };
-        let path = snapshot_file("round-trip", &snapshot);
-        let loaded = Snapshot::load(&path).unwrap();
+        let path = declaration_file("round-trip", &declarations);
+        let loaded = Declarations::load(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(loaded.namespace, "USER");
         assert_eq!(loaded.get_cls("A.B"), Some(class_info("A.B")));
         assert_eq!(loaded.get_cls("A.C"), None);
         assert_eq!(
             loaded.get_inc("MyInc"),
-            Some(snapshot.includes["MyInc"].clone())
+            Some(declarations.includes["MyInc"].clone())
         );
         assert_eq!(loaded.get_inc("%occErrors"), None);
         assert_eq!(loaded.get_int_or_mac("Nope"), None);
@@ -1136,28 +1136,28 @@ mod tests {
     }
 
     #[test]
-    fn open_reads_a_snapshot_path_and_checks_its_namespace() {
-        let snapshot = Snapshot {
-            version: SNAPSHOT_VERSION,
+    fn open_reads_a_declaration_file_and_checks_its_namespace() {
+        let declarations = Declarations {
+            version: DECLARATIONS_VERSION,
             namespace: "USER".to_string(),
             classes: BTreeMap::new(),
             includes: BTreeMap::new(),
             routines: BTreeMap::new(),
         };
-        let path = snapshot_file("open", &snapshot);
+        let path = declaration_file("open", &declarations);
         let arg = path.to_str().unwrap();
         assert!(open(arg, None).is_ok());
         assert!(open(arg, Some("USER")).is_ok());
         let err = open(arg, Some("%SYS")).err().unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(
-            err.contains("snapshot of namespace 'USER', not '%SYS'"),
+            err.contains("declares namespace 'USER', not '%SYS'"),
             "{err}"
         );
     }
 
     #[test]
-    fn open_rejects_a_snapshot_of_another_version_or_no_snapshot_at_all() {
+    fn open_rejects_a_declaration_file_of_another_version_or_no_such_file_at_all() {
         let path = std::env::temp_dir().join(format!("ascot-version-{}.json", std::process::id()));
         std::fs::write(
             &path,
@@ -1165,13 +1165,13 @@ mod tests {
         )
         .unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
-        assert!(err.contains("is a version 2 snapshot"), "{err}");
+        assert!(err.contains("is a version 2 declaration file"), "{err}");
         std::fs::write(&path, "Class A.B {}").unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
         let _ = std::fs::remove_file(&path);
-        assert!(err.contains("is not an ascot snapshot"), "{err}");
-        let err = open("/no/such/snapshot.json", None).err().unwrap();
-        assert!(err.contains("cannot read snapshot"), "{err}");
+        assert!(err.contains("is not an ascot declaration file"), "{err}");
+        let err = open("/no/such/declarations.json", None).err().unwrap();
+        assert!(err.contains("cannot read declaration file"), "{err}");
     }
 
     #[test]
