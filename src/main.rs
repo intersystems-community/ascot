@@ -277,7 +277,6 @@ fn analyze_workspace<'a>(
     }
 }
 
-/// One bar per kind of document `declare` fetches, redrawn in place on stderr.
 #[derive(Default)]
 struct ProgressBars {
     counts: [(usize, usize); 3],

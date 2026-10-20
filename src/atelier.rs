@@ -3,9 +3,7 @@
 //!
 //! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
 //! library code above all, so the checker can confirm them instead of leaving a hint. Results
-//! are cached per connection. `AtelierConnection` is the HTTP implementation of `iris::IrisClient`
-//! (`iris.rs` has the offline one); `AtelierConnection::declarations` is what `ascot declare`
-//! runs to write such a file.
+//! are cached per connection. `AtelierConnection` is the HTTP implementation of `iris::IrisClient`.
 //!
 //! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
 //! `language-server`'s `server/src/ascot/index.ts` `IrisConnection` class -- the JS host-side
@@ -28,12 +26,9 @@ use crate::bindings::{
 };
 use crate::iris::{DECLARATIONS_VERSION, Declarations, IrisClient};
 
-// Classes or documents per round trip in `AtelierConnection::declarations`, and round trips in
-// flight at once.
 const BATCH: usize = 100;
 const WORKERS: usize = 8;
 
-/// What a batch of `AtelierConnection::declarations` work is fetching, for progress reporting.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DocKind {
     Class,
@@ -164,17 +159,15 @@ impl AtelierConnection {
         }
     }
 
-    /// Every class, include file and routine in the namespace, `BATCH` at a time and `WORKERS`
-    /// batches at a time: one round trip per dictionary table (or per document batch), not per
-    /// class or document. `progress(kind, done, total)` is called once each kind's total is
-    /// known and after each of its batches.
+    /// Every class, include file and routine in the namespace, for `ascot declare`;
+    /// `progress(kind, done, total)` once each total is known and after each batch.
     pub fn declarations(
         &self,
         mut progress: impl FnMut(DocKind, usize, usize),
     ) -> Result<Declarations, String> {
         let failed = || format!("IRIS connection at {} failed", self.base_url);
-        // `%sqlcq.*` are SQL cached queries, not code anyone references -- and these very queries
-        // create some, so without the filter each run would add classes to the next run's file.
+        // `%sqlcq.*` are SQL cached queries; `declare`'s own queries create some, so without this
+        // each run would add classes to the next run's file.
         let mut class_names: Vec<String> = self
             .query("SELECT Name FROM %Dictionary.CompiledClass", &[])
             .ok_or_else(failed)?
@@ -184,9 +177,8 @@ impl AtelierConnection {
             .collect();
         class_names.sort();
         let inc_names = self.docnames("INC").ok_or_else(failed)?;
-        // Hand-written routines only (`generated=0` skips a class's `.int`s). Read as the `.int`
-        // where there is one -- the compiled, macro-expanded form, as `get_int_or_mac` prefers --
-        // else as the `.mac`.
+        // Hand-written routines only (`generated=0` skips a class's `.int`s), read as the `.int`
+        // where there is one (compiled, macro-expanded; what `get_int_or_mac` prefers), else the `.mac`.
         let mut rtn_names: Vec<String> = [
             self.docnames("MAC").ok_or_else(failed)?,
             self.docnames("INT").ok_or_else(failed)?,
@@ -257,7 +249,6 @@ impl AtelierConnection {
                 });
             }
             drop(tx);
-            // Rendered here, on the calling thread, so `progress` needn't be `Send`.
             for (kind, count) in rx {
                 done[kind as usize] += count;
                 progress(kind, done[kind as usize], totals[kind as usize]);
@@ -275,7 +266,6 @@ impl AtelierConnection {
         })
     }
 
-    // One batch of routines into `out`; `false` if the connection failed.
     fn fetch_routines(
         &self,
         batch: &[String],
@@ -300,8 +290,7 @@ impl AtelierConnection {
         true
     }
 
-    // The names (with extension) of the namespace's non-generated documents of routine type
-    // `kind` (`INC`, `MAC`, `INT`).
+    // Non-generated documents of routine type `kind` (`INC`, `MAC`, `INT`), with extension.
     fn docnames(&self, kind: &str) -> Option<Vec<String>> {
         if self.broken.load(Ordering::Relaxed) {
             return None;
@@ -325,9 +314,7 @@ impl AtelierConnection {
         )
     }
 
-    // The source of each of `names` (with extension) that exists, by name -- one request for the
-    // whole batch. A document that doesn't exist comes back with an error `status` and no
-    // content.
+    // A document that doesn't exist comes back with an error `status` and no content.
     fn docs(&self, names: &[String]) -> Option<HashMap<String, RoutineSource>> {
         if self.broken.load(Ordering::Relaxed) {
             return None;
@@ -424,7 +411,6 @@ fn by_basename(
         .map(|(doc, source)| (doc_basename(&doc), source))
 }
 
-// `Foo.Bar.inc` -> `Foo.Bar`.
 fn doc_basename(doc: &str) -> String {
     doc.rsplit_once('.')
         .map_or(doc, |(name, _)| name)
@@ -493,9 +479,8 @@ fn split_classes(s: &str) -> Vec<String> {
         .collect()
 }
 
-// Every class whose name satisfies `Name {filter}` (`= ?`, `IN (?,?,...)`; `params` bind the
-// `?`s), keyed by name, with its own (not inherited) members. One round trip per dictionary
-// table for the whole set.
+// Every class satisfying `Name {filter}` (`= ?`, `IN (?,?)`; `params` bind the `?`s) with its
+// own members, keyed by name: one round trip per dictionary table for the whole set.
 fn class_infos(
     conn: &AtelierConnection,
     filter: &str,
@@ -519,7 +504,6 @@ fn class_infos(
     assemble(rows, members)
 }
 
-// Pairs each `%Dictionary.CompiledClass` row with the member rows whose `Parent` it is.
 fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<String, ClassInfo> {
     let mut members: HashMap<String, Vec<MemberInfo>> = HashMap::new();
     for row in member_rows {

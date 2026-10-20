@@ -1,8 +1,6 @@
-//! What ascot asks IRIS for, and the ways an `--iris` argument can answer it. `IrisClient` is the
-//! trait `lib.rs` depends on for classes, `.inc` files and routines that aren't in the local
-//! workspace. `open` turns an `--iris` argument into one: a URL becomes a live
-//! `atelier::AtelierConnection`; a path becomes a `Declarations` file, a namespace's answers to
-//! every lookup as `ascot declare` serialized them, which never connects to anything.
+//! `IrisClient`, the lookups `lib.rs` makes for code outside the workspace, and `open`, which
+//! answers an `--iris` argument with a live `atelier::AtelierConnection` (a URL) or a
+//! `Declarations` file `ascot declare` wrote (a path), which never connects to anything.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -27,9 +25,8 @@ pub trait IrisClient: Send + Sync {
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
-/// Opens an `--iris` argument: a `scheme://user:pass@host:port[/prefix]` URL is a live
-/// connection (checked up front), anything else the path of a declaration file `ascot declare`
-/// wrote. `namespace` defaults to `%SYS` for a URL; for a file it must match the one declared.
+/// A URL is a live connection (checked up front), anything else a declaration file's path.
+/// `namespace` defaults to `%SYS` for a URL; for a file it must match the one declared.
 pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, String> {
     if iris.contains("://") {
         let conn = AtelierConnection::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
@@ -50,10 +47,8 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, 
 
 pub(crate) const DECLARATIONS_VERSION: u32 = 1;
 
-/// One namespace as `ascot declare` writes it: the three `IrisClient` lookups, each as a map
-/// from its argument to its answer, so analysis can run against a file instead of a live
-/// instance. A class is its `get_cls` metadata (no method code); an include file or routine is
-/// its source, as `get_inc`/`get_int_or_mac` would fetch it.
+/// One namespace as `ascot declare` writes it: each `IrisClient` lookup as a map from its
+/// argument to its answer.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Declarations {
     pub version: u32,
@@ -166,8 +161,7 @@ mod tests {
                          Quit\nProc(a,b) [x,y] {\n Quit\n}\n",
                     ),
                 ),
-                // Doesn't parse: its labels are unknown, so a call to any of them is taken on
-                // trust, as it is live.
+                // Doesn't parse, so its labels are unknown and any call into it is taken on trust.
                 (
                     "Unparsed".to_string(),
                     source("ROUTINE Unparsed [Type=INT]\n{\n"),
@@ -188,8 +182,6 @@ mod tests {
         assert_eq!(loaded.get_inc("%occErrors"), None);
         assert_eq!(loaded.get_int_or_mac("Nope"), None);
 
-        // Through the checker: the include's macro, a call checked against a label's signature,
-        // and a call into the routine whose labels are unknown.
         use crate::bindings::{DiagnosticSeverity, GuestWorkspace};
         let check = |body: &str| {
             let workspace = crate::Workspace::new_with_iris(Some(Box::new(loaded.clone())));
