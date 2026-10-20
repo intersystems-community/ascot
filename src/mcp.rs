@@ -2,7 +2,7 @@
 //! analysis as tools for AI agents (Claude Code via the `ascot-mcp` plugin, or `claude mcp add`).
 //!
 //! Unlike the LSP server it holds many `Workspace`s, keyed by an id the agent chooses:
-//! `create_workspace` (optionally with IRIS connection details, see `atelier.rs`) and
+//! `create_workspace` (optionally with IRIS connection details, see `iris.rs`) and
 //! `delete_workspace`; `insert`/`remove` documents; then `check`, `inlay_hint`, `hover`,
 //! `definition` and `references`. Tool parameter and result schemas derive from the
 //! `bindings.rs` types via `schemars`. Built on the `rmcp` crate; native builds only.
@@ -22,8 +22,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
-    Workspace, atelier,
+    Workspace,
     bindings::{Diagnostic, GuestWorkspace, InlayHint, Location, Position, Range},
+    iris,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -172,7 +173,7 @@ impl AnalyzerMcpServer {
             return Err(format!("workspace already exists: {workspace:?}"));
         }
         let iris = iris
-            .map(|iris| atelier::open(&iris, iris_namespace.as_deref()))
+            .map(|iris| iris::open(&iris, iris_namespace.as_deref()))
             .transpose()
             .map_err(|err| format!("iris: {err}"))?;
         workspaces.insert(

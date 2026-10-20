@@ -38,12 +38,15 @@
 //! - `render.rs`: Markdown formatting for hover text.
 //! - `lsp.rs`, `mcp.rs`, `main.rs`: front ends (editor protocol, AI-agent protocol, CLI).
 //! - `atelier.rs`: optional live-IRIS lookups for classes not in the workspace (native only).
+//! - `iris.rs`: the `IrisClient` trait behind those, and declaration files answering it offline.
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod atelier;
 pub mod bindings;
 pub mod check;
 pub mod details;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod iris;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lsp;
 mod macro_expand;
@@ -183,12 +186,12 @@ pub struct WorkspaceStruct {
 
 // `bindings::IrisConnection` is a WIT *imported* resource, producible only by a wasm host --
 // every method on it is `unreachable!()` on a native build. Native builds get a real connection
-// through `atelier::IrisClient` instead (`Workspace::new_with_iris`); both share the same method
+// through `iris::IrisClient` instead (`Workspace::new_with_iris`); both share the same method
 // names/signatures, so no call site under `check::env`/`macro_expand` needs to know which.
 #[cfg(target_arch = "wasm32")]
 type IrisHandle = IrisConnection;
 #[cfg(not(target_arch = "wasm32"))]
-type IrisHandle = Box<dyn atelier::IrisClient>;
+type IrisHandle = Box<dyn iris::IrisClient>;
 
 impl WorkspaceStruct {
     // Doubles as both open and edit; kind is inferred from `uri`'s extension. Returns the uris
@@ -731,7 +734,7 @@ impl Workspace {
     /// The native equivalent of [`GuestWorkspace::new`] (see `IrisHandle`) -- how a native
     /// consumer (CLI, LSP, MCP, or a direct library user) backs a `Workspace` with a real IRIS
     /// connection.
-    pub fn new_with_iris(iris: Option<Box<dyn atelier::IrisClient>>) -> Self {
+    pub fn new_with_iris(iris: Option<Box<dyn iris::IrisClient>>) -> Self {
         Workspace(RefCell::new(build_workspace_struct(iris)))
     }
 }
@@ -1489,7 +1492,7 @@ mod tests {
     struct OccErrorsIris;
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl crate::atelier::IrisClient for OccErrorsIris {
+    impl crate::iris::IrisClient for OccErrorsIris {
         fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
             None
         }
@@ -1661,7 +1664,7 @@ mod tests {
         // property a caller mistakenly wrote instead (`AtEnd`) -- so this must not depend on
         // `top_similar`'s ranking to surface it.
         struct GetterIris;
-        impl crate::atelier::IrisClient for GetterIris {
+        impl crate::iris::IrisClient for GetterIris {
             fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
                 let zero = bindings::Position {
                     line: 0,
@@ -2003,7 +2006,7 @@ mod tests {
     fn type_param_not_on_the_real_type_is_reported_via_iris() {
         // IRIS knows the class, and it has no parameters at all.
         struct NoSuchParamIris;
-        impl crate::atelier::IrisClient for NoSuchParamIris {
+        impl crate::iris::IrisClient for NoSuchParamIris {
             fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
                 let zero = bindings::Position {
                     line: 0,
@@ -2137,7 +2140,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl crate::atelier::IrisClient for MockIrisClient {
+    impl crate::iris::IrisClient for MockIrisClient {
         fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
             let zero = bindings::Position {
                 line: 0,
@@ -2396,7 +2399,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl crate::atelier::IrisClient for DispatchOriginIris {
+    impl crate::iris::IrisClient for DispatchOriginIris {
         fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
             let zero = bindings::Position {
                 line: 0,
@@ -3405,7 +3408,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn definition_resolves_a_class_reference_via_the_iris_hosts_own_uri() {
         struct ExternalClassIris;
-        impl crate::atelier::IrisClient for ExternalClassIris {
+        impl crate::iris::IrisClient for ExternalClassIris {
             fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
                 let zero = bindings::Position {
                     line: 0,
@@ -3533,7 +3536,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn cross_routine_label_call_resolves_via_iris_when_not_in_the_workspace() {
         struct ExternalRoutineIris;
-        impl crate::atelier::IrisClient for ExternalRoutineIris {
+        impl crate::iris::IrisClient for ExternalRoutineIris {
             fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
                 None
             }

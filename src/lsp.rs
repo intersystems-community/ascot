@@ -24,11 +24,11 @@ use lsp_types::{
 
 use crate::{
     Workspace,
-    atelier::IrisClient,
     bindings::{
         Diagnostic, DiagnosticSeverity, GuestWorkspace, InlayHint, Position, Range, SymbolInfo,
         SymbolKind,
     },
+    iris::IrisClient,
 };
 
 pub fn run(
