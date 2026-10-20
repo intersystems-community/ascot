@@ -4219,6 +4219,18 @@ mod tests {
     }
 
     #[test]
+    fn a_line_comment_start_inside_a_range_comment_is_not_a_line_comment() {
+        let workspace = Workspace::new(None);
+        let uri = "example.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE example\nf()\n    /* // */\n    /* ; */\n    quit\n".to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
     fn a_failed_branch_ending_in_a_return_still_ends_its_path() {
         let workspace = Workspace::new(None);
         let uri = "T.cls".to_string();
