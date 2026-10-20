@@ -206,11 +206,10 @@ ascot analyze --iris user.json <PATH>...
 ```
 
 `--iris-namespace` is then optional; if given, it must match the namespace the
-snapshot was taken from. The snapshot holds no class or routine code: every
-class's superclasses, members and their signatures and types, as a live
-connection would report them; every routine's labels and their argument lists;
-and, since they are macro definitions, every `.inc` file in full. Retake the
-snapshot after the instance's code changes.
+snapshot was taken from. The snapshot holds every class's superclasses,
+members and their signatures and types, as a live connection would report them
+(no method code), and the full source of every `.inc` file and routine. Retake
+it after the instance's code changes.
 
 ## Contributing
 

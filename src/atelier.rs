@@ -22,14 +22,11 @@ use base64::Engine;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tygr::{Grammar, OLC};
 
 use crate::bindings::{
     ArgMode, ClassInfo, CollectionKind, MemberInfo, MemberKind, MethodInfo, NameInfo, NormalArg,
     ParameterInfo, Position, PropertyInfo, Range, RoutineSource, VariadicArg,
 };
-use crate::cos;
-use crate::details::{RoutineElementKind, routine_element_kind};
 
 pub trait IrisClient: Send + Sync {
     // `cls`'s own (not inherited) members, superclasses, and other class-level metadata --
@@ -71,110 +68,19 @@ const SNAPSHOT_VERSION: u32 = 1;
 // Classes or documents per round trip in `AtelierConnection::snapshot`.
 const SNAPSHOT_BATCH: usize = 100;
 
-/// One namespace as `ascot snapshot` writes it: everything the three `IrisClient` lookups can
-/// answer, so analysis can run against a file instead of a live instance. No class or routine
-/// code: a class is its `get_cls` metadata and a routine its labels' signatures; only an include
-/// file, being macro definitions, is kept whole.
+/// One namespace as `ascot snapshot` writes it: the three `IrisClient` lookups, each as a map
+/// from its argument to its answer, so analysis can run against a file instead of a live
+/// instance. A class is its `get_cls` metadata (no method code); an include file or routine is
+/// its source, as `get_inc`/`get_int_or_mac` would fetch it.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Snapshot {
     pub version: u32,
     pub namespace: String,
     pub classes: BTreeMap<String, ClassInfo>,
-    /// `.inc` files' full source, by name without the extension.
-    pub includes: BTreeMap<String, String>,
-    /// Routines' labels, by name without the extension. `None` when the routine's source didn't
-    /// parse, so its labels are unknown (and a call to any of them is taken on trust).
-    pub routines: BTreeMap<String, Option<Vec<LabelInfo>>>,
-}
-
-/// A routine label's signature: what a `Label^Routine` call is checked against.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct LabelInfo {
-    pub name: String,
-    pub args: Vec<NormalArg>,
-    pub variadic: Option<VariadicArg>,
-    /// `Some` for a procedure block, with its public variable list.
-    pub public_list: Option<Vec<String>>,
-}
-
-/// The labels of a routine's source (a `.int`, or a `.mac` without macros in its label lines),
-/// or `None` if it doesn't parse.
-pub fn routine_labels(text: &str) -> Option<Vec<LabelInfo>> {
-    let routine = cos::Routine::parse(text).ok()?;
-    let olc = OLC::new(text);
-    Some(
-        routine
-            .subroutines
-            .iter()
-            .flat_map(|subs| subs.items.iter())
-            .filter_map(|elem| routine_element_kind(&olc, elem))
-            .map(|details| LabelInfo {
-                name: details.name.it,
-                args: details
-                    .normal_args
-                    .iter()
-                    .map(|arg| NormalArg::from(&arg.it))
-                    .collect(),
-                variadic: details
-                    .variadic_arg
-                    .as_ref()
-                    .map(|arg| VariadicArg::from(&arg.it)),
-                public_list: match details.kind {
-                    RoutineElementKind::Subroutine => None,
-                    RoutineElementKind::Procedure { public_list } => {
-                        Some(public_list.into_iter().map(|name| name.it).collect())
-                    }
-                },
-            })
-            .collect(),
-    )
-}
-
-// A routine with `labels`' signatures and no code, for `check::env::resolve_rtn_labels` to parse
-// as it would the live source. `None` (labels unknown) is a stub that doesn't parse either, which
-// the checker takes the same way.
-fn stub_routine(name: &str, labels: Option<&[LabelInfo]>) -> String {
-    let mut out = format!("ROUTINE {name} [Type=INT]\n");
-    let Some(labels) = labels else {
-        out.push_str("{\n");
-        return out;
-    };
-    let prefix = |mode: ArgMode| if mode == ArgMode::ByRef { "&" } else { "" };
-    for label in labels {
-        let mut args: Vec<String> = label
-            .args
-            .iter()
-            .map(|arg| {
-                let default = arg.default.as_ref().map(|d| format!("={d}"));
-                format!(
-                    "{}{}{}",
-                    prefix(arg.mode),
-                    arg.name,
-                    default.unwrap_or_default()
-                )
-            })
-            .collect();
-        if let Some(arg) = &label.variadic {
-            args.push(format!("{}{}...", prefix(arg.mode), arg.name));
-        }
-        out.push_str(&label.name);
-        match &label.public_list {
-            Some(publics) => {
-                out.push_str(&format!("({})", args.join(",")));
-                if !publics.is_empty() {
-                    out.push_str(&format!(" [{}]", publics.join(",")));
-                }
-                out.push_str(" {\n Quit\n}\n");
-            }
-            None => {
-                if !args.is_empty() {
-                    out.push_str(&format!("({})", args.join(",")));
-                }
-                out.push_str("\n Quit\n");
-            }
-        }
-    }
-    out
+    /// `.inc` files by name without the extension.
+    pub includes: BTreeMap<String, RoutineSource>,
+    /// Routines by name without the extension: the `.int` where there is one, else the `.mac`.
+    pub routines: BTreeMap<String, RoutineSource>,
 }
 
 impl Snapshot {
@@ -205,17 +111,11 @@ impl IrisClient for Snapshot {
     }
 
     fn get_inc(&self, name: &str) -> Option<RoutineSource> {
-        Some(RoutineSource {
-            text: self.includes.get(name)?.clone(),
-            uri: None,
-        })
+        self.includes.get(name).cloned()
     }
 
     fn get_int_or_mac(&self, name: &str) -> Option<RoutineSource> {
-        Some(RoutineSource {
-            text: stub_routine(name, self.routines.get(name)?.as_deref()),
-            uri: None,
-        })
+        self.routines.get(name).cloned()
     }
 }
 
@@ -352,8 +252,8 @@ impl AtelierConnection {
         let mut includes = BTreeMap::new();
         let inc_names = self.docnames("INC").ok_or_else(failed)?;
         for (i, batch) in inc_names.chunks(SNAPSHOT_BATCH).enumerate() {
-            for (doc, text) in self.docs(batch).ok_or_else(failed)? {
-                includes.insert(doc_basename(&doc), text);
+            for (doc, source) in self.docs(batch).ok_or_else(failed)? {
+                includes.insert(doc_basename(&doc), source);
             }
             progress(&format!(
                 "{}/{} include files",
@@ -387,8 +287,8 @@ impl AtelierConnection {
             if !macs.is_empty() {
                 found.extend(self.docs(&macs).ok_or_else(failed)?);
             }
-            for (doc, text) in found {
-                routines.insert(doc_basename(&doc), routine_labels(&text));
+            for (doc, source) in found {
+                routines.insert(doc_basename(&doc), source);
             }
             progress(&format!(
                 "{}/{} routines",
@@ -463,7 +363,7 @@ impl AtelierConnection {
     // The source of each of `names` (with extension) that exists, by name -- one request for the
     // whole batch. A document that doesn't exist comes back with an error `status` and no
     // content.
-    fn docs(&self, names: &[String]) -> Option<HashMap<String, String>> {
+    fn docs(&self, names: &[String]) -> Option<HashMap<String, RoutineSource>> {
         if self.broken.load(Ordering::Relaxed) {
             return None;
         }
@@ -485,7 +385,12 @@ impl AtelierConnection {
                         return None;
                     }
                     let text: Vec<&str> = lines.iter().filter_map(Value::as_str).collect();
-                    Some((doc.get("name")?.as_str()?.to_string(), text.join("\n")))
+                    let source = RoutineSource {
+                        text: text.join("\n"),
+                        // The Atelier REST API has no uri scheme of its own to offer here.
+                        uri: None,
+                    };
+                    Some((doc.get("name")?.as_str()?.to_string(), source))
                 })
                 .collect(),
         )
@@ -1141,27 +1046,11 @@ mod tests {
         assert_eq!(c.members[0].name.content, "P");
     }
 
-    const LIB_ROUTINE: &str = "ROUTINE Lib [Type=INT]\n Quit\nPlain\n Quit\nWithArgs(a,&b,c...)\n \
-                               Quit\nProc(a,b) [x,y] {\n Quit\n}\nProc2() {\n Quit\n}\n";
-
-    #[test]
-    fn routine_labels_survive_the_stub_round_trip() {
-        let labels = routine_labels(LIB_ROUTINE).unwrap();
-        assert_eq!(labels.len(), 4, "{labels:?}");
-        assert_eq!(labels[0].name, "Plain");
-        assert!(labels[0].args.is_empty() && labels[0].public_list.is_none());
-        assert_eq!(labels[1].args.len(), 2);
-        assert_eq!(labels[1].args[1].mode, ArgMode::ByRef);
-        assert_eq!(labels[1].variadic.as_ref().unwrap().name, "c");
-        assert_eq!(
-            labels[2].public_list,
-            Some(vec!["x".to_string(), "y".to_string()])
-        );
-        assert_eq!(labels[3].public_list, Some(vec![]));
-        let stub = stub_routine("Lib", Some(&labels));
-        assert_eq!(routine_labels(&stub).unwrap(), labels, "{stub}");
-        assert_eq!(routine_labels(&stub_routine("Lib", None)), None);
-        assert_eq!(doc_basename("Foo.Bar.inc"), "Foo.Bar");
+    fn source(text: &str) -> RoutineSource {
+        RoutineSource {
+            text: text.to_string(),
+            uri: None,
+        }
     }
 
     #[test]
@@ -1172,12 +1061,23 @@ mod tests {
             classes: [("A.B".to_string(), class_info("A.B"))].into(),
             includes: [(
                 "MyInc".to_string(),
-                "ROUTINE MyInc [Type=INC]\n#define FIVE 5\n".to_string(),
+                source("ROUTINE MyInc [Type=INC]\n#define FIVE 5\n"),
             )]
             .into(),
             routines: [
-                ("Lib".to_string(), routine_labels(LIB_ROUTINE)),
-                ("Unparsed".to_string(), None),
+                (
+                    "Lib".to_string(),
+                    source(
+                        "ROUTINE Lib [Type=INT]\n Quit\nPlain\n Quit\nWithArgs(a,&b,c...)\n \
+                         Quit\nProc(a,b) [x,y] {\n Quit\n}\n",
+                    ),
+                ),
+                // Doesn't parse: its labels are unknown, so a call to any of them is taken on
+                // trust, as it is live.
+                (
+                    "Unparsed".to_string(),
+                    source("ROUTINE Unparsed [Type=INT]\n{\n"),
+                ),
             ]
             .into(),
         };
@@ -1188,14 +1088,15 @@ mod tests {
         assert_eq!(loaded.get_cls("A.B"), Some(class_info("A.B")));
         assert_eq!(loaded.get_cls("A.C"), None);
         assert_eq!(
-            loaded.get_inc("MyInc").unwrap().text,
-            snapshot.includes["MyInc"]
+            loaded.get_inc("MyInc"),
+            Some(snapshot.includes["MyInc"].clone())
         );
         assert_eq!(loaded.get_inc("%occErrors"), None);
         assert_eq!(loaded.get_int_or_mac("Nope"), None);
+        assert_eq!(doc_basename("Foo.Bar.inc"), "Foo.Bar");
 
         // Through the checker: the include's macro, a call checked against a label's signature,
-        // and a call into a routine whose labels are unknown (taken on trust).
+        // and a call into the routine whose labels are unknown.
         use crate::bindings::{DiagnosticSeverity, GuestWorkspace};
         let check = |body: &str| {
             let workspace = crate::Workspace::new_with_iris(Some(Box::new(loaded.clone())));
