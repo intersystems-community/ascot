@@ -1,0 +1,34 @@
+name: Triage
+
+on:
+  issues:
+    types: [opened]
+  # Base-repo context: write access on fork PRs too. Never checks out PR code.
+  pull_request_target:
+    types: [opened, ready_for_review]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  assign-issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-assignee isc-klu
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+
+  request-manager-review:
+    if: >-
+      github.event_name == 'pull_request_target'
+      && !github.event.pull_request.draft
+      && github.event.pull_request.user.login != 'isc-bsaviano'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh pr edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-reviewer isc-bsaviano
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
