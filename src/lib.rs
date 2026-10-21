@@ -735,9 +735,9 @@ fn build_workspace_struct(iris: Option<IrisHandle>) -> WorkspaceStruct {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Workspace {
-    /// The native equivalent of [`GuestWorkspace::new`] (see `IrisHandle`) -- how a native
-    /// consumer (CLI, LSP, MCP, or a direct library user) backs a `Workspace` with a real IRIS
-    /// connection.
+    /// The native equivalent of [`GuestWorkspace::new`](bindings::GuestWorkspace::new) (see
+    /// `IrisHandle`) -- how a native consumer (CLI, LSP, MCP, or a direct library user) backs a
+    /// `Workspace` with a real IRIS connection.
     pub fn new_with_iris(iris: Option<Box<dyn iris::IrisClient>>) -> Self {
         Workspace(RefCell::new(build_workspace_struct(iris)))
     }
