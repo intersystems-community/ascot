@@ -7,7 +7,7 @@ import * as path from "node:path";
 // bundlers commonly substitute it with a literal path resolved at *build* time, which
 // breaks the moment the built package runs on a different machine.
 import type { Root } from "../generated/ascot.js" with { "resolution-mode": "import" };
-import type { ClassInfo, RoutineSource } from "../generated/interfaces/iris-ascot-common.js" with {
+import type { ClassInfo, RoutineSource, Style } from "../generated/interfaces/iris-ascot-common.js" with {
 	"resolution-mode": "import",
 };
 
@@ -80,8 +80,8 @@ function serialize(instance: RawWorkspace): Workspace {
  * calls (e.g. from two documents' diagnostics resolving concurrently) can't trip ascot's
  * internal `RefCell` borrows or jco's single-in-flight-call constraint.
  */
-export async function createWorkspace(imported: Imported): Promise<Workspace> {
+export async function createWorkspace(imported: Imported, style?: Style): Promise<Workspace> {
 	const IrisConnection = Object.getPrototypeOf(imported).constructor;
 	const root = await loadWasm(IrisConnection);
-	return serialize(new root.exported.Workspace(imported));
+	return serialize(new root.exported.Workspace(imported, style));
 }

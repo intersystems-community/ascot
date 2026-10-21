@@ -23,6 +23,7 @@ impl CheckExprInner for cos::FunctionCall {
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
     ) -> Result<PowerTy, QuasiTypeError> {
+        super::report_style(env, self.name());
         match self {
             FunctionCall::Length {
                 args:
@@ -642,6 +643,7 @@ pub(super) fn check_settarget_fun<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
+    super::report_style(env, [fun.name()]);
     use cos::SetTargetFun::*;
     match fun {
         Piece(c) => {
@@ -975,7 +977,7 @@ fn check_simple_function<'a>(
         let Some(expr) = arg.deref() else { continue };
         let expr = Range::new(arg.start, expr, arg.end);
         // `$ZCONVERT(s, mode, table, handle)`: the handle is state the call writes.
-        if function.names[0] == "ZCONVERT"
+        if function.names[0] == "ZConvert"
             && i == 3
             && let Some(variable) = expr.as_variable()
             && let Left(local) = variable.as_local(env, flow)?

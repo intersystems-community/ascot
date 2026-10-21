@@ -356,6 +356,12 @@ pub enum TypeErrorKind {
     },
     NumberImplicitlyConvertedToString(String),
     DiscardedReturnValue(String),
+    KeywordStyle {
+        // "Command keyword" or "Function".
+        what: &'static str,
+        found: String,
+        expected: String,
+    },
     InvalidFNumberFormat {
         format: String,
         reason: String,
@@ -442,6 +448,7 @@ impl TypeErrorKind {
             TypeErrorKind::InvalidZStripAction { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::NumberImplicitlyConvertedToString(_) => DiagnosticSeverity::Warning,
             TypeErrorKind::DiscardedReturnValue(_) => DiagnosticSeverity::Warning,
+            TypeErrorKind::KeywordStyle { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::InvalidFNumberFormat { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::ReturnNothingForX { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::QuitXInControl { .. } => DiagnosticSeverity::Error,
@@ -718,6 +725,13 @@ impl std::fmt::Display for TypeErrorKind {
                     "{value} is a number here, implicitly converted to the string \"{value}\""
                 )
             }
+            TypeErrorKind::KeywordStyle {
+                what,
+                found,
+                expected,
+            } => {
+                write!(f, "{what} `{found}` should be written `{expected}`")
+            }
             TypeErrorKind::DiscardedReturnValue(class) => {
                 write!(
                     f,
@@ -886,6 +900,23 @@ impl TypeError {
                 location: previous,
                 message: "Previous declaration".into(),
             }],
+        )
+    }
+
+    pub fn keyword_style(
+        what: &'static str,
+        found: String,
+        expected: String,
+        range: Range,
+    ) -> Self {
+        Self::new(
+            TypeErrorKind::KeywordStyle {
+                what,
+                found,
+                expected,
+            },
+            range,
+            vec![],
         )
     }
 

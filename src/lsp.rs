@@ -25,14 +25,15 @@ use lsp_types::{
 use crate::{
     Workspace,
     bindings::{
-        Diagnostic, DiagnosticSeverity, GuestWorkspace, InlayHint, Position, Range, SymbolInfo,
-        SymbolKind,
+        Diagnostic, DiagnosticSeverity, GuestWorkspace, InlayHint, Position, Range, Style,
+        SymbolInfo, SymbolKind,
     },
     iris::IrisClient,
 };
 
 pub fn run(
     iris: Option<Box<dyn IrisClient>>,
+    style: Option<Style>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let (connection, io_threads) = Connection::stdio();
 
@@ -49,7 +50,7 @@ pub fn run(
     let initialize_params = connection.initialize(serde_json::to_value(capabilities)?)?;
     let params: InitializeParams = serde_json::from_value(initialize_params)?;
 
-    let workspace = Workspace::new_with_iris(iris);
+    let workspace = Workspace::new_with_iris(iris, style);
     // Insert every `.cls`/`.mac`/`.int`/`.inc` file under the workspace root up front, so
     // cross-file references (`##class(...)`, `#include`) resolve correctly from the start —
     // otherwise a file that's opened on its own, without whatever it `#include`s also being

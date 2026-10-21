@@ -48,13 +48,19 @@ await ws.hover("file:///T.cls", { line: 5, character: 7 }); // the `x` being wri
 // "```objectscript\n%DataType = 1\n```"
 ```
 
+`createWorkspace` takes an optional second argument, a `Style` applied to every document:
+
+```ts
+const strict = await createWorkspace(new NoIris(), { command: { form: "long" }, function: { case: "pascal" }, commandDo: { form: "short" } });
+```
+
 Load every file of a project into one `Workspace` so cross-file references resolve, and
 call `open` again on each edit. `close(uri)` removes a document; a closed editor tab is
 usually not a removal, so keep the on-disk text open instead.
 
 ## API
 
-`createWorkspace(imported)` returns a `Workspace` whose methods mirror the engine's
+`createWorkspace(imported, style?)` returns a `Workspace` whose methods mirror the engine's
 exports, all returning promises. Positions and ranges are zero-based line/character pairs,
 as in the Language Server Protocol.
 

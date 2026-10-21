@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     Workspace,
     bindings::{Diagnostic, GuestWorkspace, InlayHint, Location, Position, Range},
-    iris,
+    iris, style,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -43,6 +43,12 @@ struct CreateWorkspaceRequest {
     /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
     /// for a URL; for a declaration file it must match the namespace it declares.
     iris_namespace: Option<String>,
+    /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
+    /// have every command keyword but `Do`'s written in full; `function` and `function_<name>` do
+    /// the same for intrinsic functions. Applies to every document.
+    // Taken raw so `style::from_value` can reject unknown keys, which `Style` itself ignores.
+    #[schemars(with = "Option<crate::bindings::Style>")]
+    style: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -166,19 +172,24 @@ impl AnalyzerMcpServer {
             workspace,
             iris,
             iris_namespace,
+            style,
         }): Parameters<CreateWorkspaceRequest>,
     ) -> Result<String, String> {
         let mut workspaces = self.workspaces.write().await;
         if workspaces.contains_key(&workspace) {
             return Err(format!("workspace already exists: {workspace:?}"));
         }
+        let style = style
+            .map(style::from_value)
+            .transpose()
+            .map_err(|err| format!("style: {err}"))?;
         let iris = iris
             .map(|iris| iris::open(&iris, iris_namespace.as_deref()))
             .transpose()
             .map_err(|err| format!("iris: {err}"))?;
         workspaces.insert(
             workspace.clone(),
-            Arc::new(Mutex::new(Workspace::new_with_iris(iris))),
+            Arc::new(Mutex::new(Workspace::new_with_iris(iris, style))),
         );
         Ok(format!("created workspace {workspace:?}"))
     }
