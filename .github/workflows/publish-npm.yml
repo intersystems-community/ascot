@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  # npm trusted publishing: the job's OIDC token stands in for a long-lived npm token.
   id-token: write
 
 env:
@@ -36,8 +35,6 @@ jobs:
         working-directory: bindings/js
         run: bash scripts/build.sh
 
-      # Staged, not live: a maintainer approves it on npmjs.com (Staged Packages) with 2FA.
-      # Unlike `npm publish`, staging doesn't add provenance unless asked.
       - name: Stage
         working-directory: bindings/js
         run: npm stage publish --provenance
