@@ -26,7 +26,7 @@ use env::*;
 use flow::*;
 use std::{collections::HashMap, iter::once, ops::Deref};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
-use tygr_objectscript::cos::{CommandLike, Commands, KeywordKind, KeywordUse};
+use tygr_objectscript::cos::{CommandLike, KeywordKind, KeywordUse, Spelled};
 use types::*;
 
 pub use env::{DocumentEnv, Labels, WorkspaceEnv};
@@ -493,6 +493,11 @@ impl MethodDetails {
 trait CheckCommandInner {
     fn inner_check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>)
     -> Result<(), QuasiTypeError>;
+
+    // The keywords this spells out, given where it starts -- checked against the style.
+    fn keywords_at(&self, _start: usize) -> Vec<KeywordUse> {
+        vec![]
+    }
 }
 
 trait CheckCommand {
@@ -501,6 +506,7 @@ trait CheckCommand {
 
 impl<T: CheckCommandInner> CheckCommand for Range<T> {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
+        report_style(env, self.deref().keywords_at(self.start));
         flow.with_range(env.range(self), |flow| {
             self.inner_check(env, flow).with_range(|| env.range(self))
         })
@@ -521,7 +527,6 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 Option::None | Option::Some(cos::CodeMode::Code(..)),
                 body,
             ) => {
-                let text = body.it.as_str();
                 let body = <cos::ProcedureBody>::parse(body).map_err(|err| {
                     TypeError::invalid_syntax(
                         bindings::Range {
@@ -531,7 +536,6 @@ impl<'b> CheckCommand for MethodBody<'b> {
                         err,
                     )
                 })?;
-                check_style(env, text, &body);
                 check_block_body(&body, env, flow, true)
             }
             (
@@ -550,7 +554,6 @@ impl<'b> CheckCommand for MethodBody<'b> {
                         )
                     })?
                     .into_inner();
-                report_style(env, cos::function_uses(body.it, 0));
                 let body_type = body_expr.to_power_ty(env, flow)?;
                 body_type
                     .to_ty(env)
@@ -888,30 +891,8 @@ impl CheckCommandInner for cos::Block {
     }
 }
 
-// How every command and function in `code` is written, independent of how far type checking
-// gets. `text` is what `code` was parsed from.
-fn check_style(env: &CodeEnv, text: &str, code: &impl Commands) {
-    if env.keyword_styles().is_none() {
-        return;
-    }
-    let mut keywords = vec![];
-    // Functions are found in each outermost command's text, which covers the commands nested
-    // in it too.
-    let mut scanned = 0;
-    code.for_each_command(&mut |command| {
-        keywords.extend(command.keywords(command.start));
-        if command.start >= scanned {
-            keywords.extend(cos::function_uses(
-                &text[command.start..command.end],
-                command.start,
-            ));
-            scanned = command.end;
-        }
-    });
-    report_style(env, keywords);
-}
-
-fn report_style(env: &CodeEnv, keywords: Vec<KeywordUse>) {
+// How each keyword in `keywords` is written, if a style was given.
+fn report_style(env: &CodeEnv, keywords: impl IntoIterator<Item = KeywordUse>) {
     let Some(styles) = env.keyword_styles() else {
         return;
     };
@@ -933,6 +914,10 @@ fn report_style(env: &CodeEnv, keywords: Vec<KeywordUse>) {
 }
 
 impl CheckCommandInner for cos::Command {
+    fn keywords_at(&self, start: usize) -> Vec<KeywordUse> {
+        self.keywords(start)
+    }
+
     fn inner_check<'a>(
         &self,
         env: &CodeEnv<'a>,
@@ -1034,7 +1019,10 @@ impl CheckCommandInner for cos::Command {
                                 Ok(flow.handle_void()?)
                             }
                         },
-                        AllowCase::Case(cases) => check_goto_case(env, flow, cases),
+                        AllowCase::Case(_, kw, cases) => {
+                            report_style(env, [kw.spelled()]);
+                            check_goto_case(env, flow, cases)
+                        }
                     })
                 })
             }
@@ -3416,7 +3404,6 @@ impl CheckCommand for Subroutine {
 
 pub fn check_rtn(
     env: &DocumentEnv,
-    text: &str,
     rtn: &Routine,
     definitions: &crate::MacroDefinitions,
 ) -> Vec<bindings::Diagnostic> {
@@ -3435,7 +3422,6 @@ pub fn check_rtn(
         })
         .collect();
     let env = env.for_routine(env::scoped_labels(env.uri(), &labels, None), definitions);
-    check_style(&env, text, rtn);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a
     // tags-only routine — there's no meaningful position to blame it falling through on, so

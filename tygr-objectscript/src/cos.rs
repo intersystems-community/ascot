@@ -862,14 +862,15 @@ pub struct SetArgument {
     pub value: Range<Expr>,
 }
 
-// A command keyword: its documented spelling and abbreviation.
+// A command or function name: its documented spelling and abbreviation.
 pub trait Keyword: Grammar {
+    const KIND: KeywordKind;
     const FULL: &'static str;
     const ABBR: Option<&'static str>;
 }
 
-macro_rules! command_keywords {
-    ($($name:ident: $full:literal $(/ $abbr:literal)?;)*) => {
+macro_rules! keywords {
+    ($kind:ident, $names:ident [$($extra:literal),*]; $($name:ident: $full:literal $(/ $abbr:literal)?;)*) => {
         $(
             #[derive(Grammar)]
             #[grammar(inline)]
@@ -879,23 +880,27 @@ macro_rules! command_keywords {
             }
 
             impl Keyword for $name {
+                const KIND: KeywordKind = KeywordKind::$kind;
                 const FULL: &'static str = $full;
-                const ABBR: Option<&'static str> = command_keywords!(@abbr $($abbr)?);
+                const ABBR: Option<&'static str> = keywords!(@abbr $($abbr)?);
             }
         )*
 
-        // Every command's full name, for `UnknownCommand`'s error message. `#Dim` is included
-        // even though it itself never reaches `UnknownCommand` (it starts with `#`, not a
-        // letter): a user who drops the `#` and just writes `Dim` produces a plain alphabetic
-        // word that *does* land here, and `#Dim` is the useful suggestion for that typo. The
-        // `&sql(`/`##sql`/`&html<`/`&js<` markers are left out for now.
-        pub const COMMAND_NAMES: &[&str] = &[$($full,)* "H", "#Dim"];
+        // Each name with its abbreviation.
+        pub const $names: &[(&str, Option<&str>)] =
+            &[$(($full, keywords!(@abbr $($abbr)?)),)* $(($extra, None)),*];
     };
     (@abbr) => { None };
     (@abbr $abbr:literal) => { Some($abbr) };
 }
 
-command_keywords! {
+// `COMMAND_NAMES` is every command's full name, for `UnknownCommand`'s error message. `#Dim` is
+// included even though it itself never reaches `UnknownCommand` (it starts with `#`, not a
+// letter): a user who drops the `#` and just writes `Dim` produces a plain alphabetic word that
+// *does* land here, and `#Dim` is the useful suggestion for that typo. The
+// `&sql(`/`##sql`/`&html<`/`&js<` markers are left out for now.
+keywords! {
+    Command, COMMAND_NAMES ["H", "#Dim"];
     KwDo: "Do" / "D";
     KwIf: "If" / "I";
     KwElseIf: "ElseIf";
@@ -941,6 +946,76 @@ command_keywords! {
     KwMVCrt: "MVCrt" / "MVC";
 }
 
+// Every hand-written function's name (those in `SIMPLE_FUNCTIONS` are spelled there).
+keywords! {
+    Function, FUNCTION_KEYWORDS [];
+    FnBit: "Bit";
+    FnBitCount: "BitCount";
+    FnBitFind: "BitFind";
+    FnBitLogic: "BitLogic";
+    FnCase: "Case";
+    FnChange: "Change";
+    FnChar: "Char" / "C";
+    FnClassMethod: "ClassMethod";
+    FnClassName: "ClassName";
+    FnCompile: "Compile";
+    FnData: "Data" / "D";
+    FnDecimal: "Decimal";
+    FnDouble: "Double";
+    FnExtract: "Extract" / "E";
+    FnFNumber: "FNumber" / "FN";
+    FnGet: "Get" / "G";
+    FnIncrement: "Increment" / "I";
+    FnIsObject: "IsObject" / "ISO";
+    FnLength: "Length" / "L";
+    FnList: "List" / "LI";
+    FnListBuild: "ListBuild" / "LB";
+    FnListData: "ListData" / "LD";
+    FnListGet: "ListGet" / "LG";
+    FnListNext: "ListNext";
+    FnListUpdate: "ListUpdate" / "LU";
+    FnLocate: "Locate";
+    FnMethod: "Method";
+    FnMV: "MV";
+    FnName: "Name" / "NA";
+    FnNext: "Next" / "N";
+    FnOrder: "Order" / "O";
+    FnParameter: "Parameter";
+    FnPiece: "Piece" / "P";
+    FnPrefetchOff: "PrefetchOff";
+    FnPrefetchOn: "PrefetchOn";
+    FnProperty: "Property";
+    FnQuery: "Query" / "Q";
+    FnSelect: "Select" / "S";
+    FnSequence: "Sequence" / "SEQ";
+    FnSortBegin: "SortBegin";
+    FnSortEnd: "SortEnd";
+    FnText: "Text" / "T";
+    FnVector: "Vector" / "VE";
+    FnVectorDefined: "VectorDefined" / "VD";
+    FnVectorOp: "VectorOp" / "VOP";
+    FnWChar: "WChar" / "WC";
+    FnWExtract: "WExtract" / "WE";
+    FnXecute: "Xecute";
+    FnZDate: "ZDate" / "ZD";
+    FnZDateH: "ZDateH" / "ZDH";
+    FnZDateTime: "ZDateTime" / "ZDT";
+    FnZDateTimeH: "ZDateTimeH" / "ZDTH";
+    FnZF: "ZF";
+    FnZIncrement: "ZIncrement" / "ZINCR";
+    FnZObjClass: "ZObjClass";
+    FnZObjClassMethod: "ZObjClassMethod";
+    FnZObjMethod: "ZObjMethod";
+    FnZObjProperty: "ZObjProperty";
+    FnZObjRef: "ZObjRef";
+    FnZOrder: "ZOrder" / "ZO";
+    FnZPrevious: "ZPrevious" / "ZP";
+    FnZStrip: "ZStrip";
+    FnZTime: "ZTime" / "ZT";
+    FnZTimeH: "ZTimeH" / "ZTH";
+    FnZUtil: "ZUtil" / "ZU";
+}
+
 // `H` alone halts; with an argument it hangs -- so only `HCommand` knows its full name.
 #[derive(Grammar)]
 #[grammar(inline)]
@@ -967,11 +1042,31 @@ pub enum KeywordKind {
 impl KeywordUse {
     fn of<K: Keyword>(kw: &K, start: usize) -> Self {
         KeywordUse {
-            kind: KeywordKind::Command,
+            kind: K::KIND,
             start,
             text: kw.print(),
             full: K::FULL,
             abbr: K::ABBR,
+        }
+    }
+}
+
+// A keyword as written, with where it starts.
+pub trait Spelled {
+    fn spelled(&self) -> KeywordUse;
+}
+
+impl<K: Keyword> Spelled for Range<K> {
+    fn spelled(&self) -> KeywordUse {
+        KeywordUse::of(&**self, self.start)
+    }
+}
+
+impl<A: Spelled, B: Spelled> Spelled for Either<A, B> {
+    fn spelled(&self) -> KeywordUse {
+        match self {
+            Either::Left(a) => a.spelled(),
+            Either::Right(b) => b.spelled(),
         }
     }
 }
@@ -984,102 +1079,6 @@ pub trait CommandLike {
 
     fn postcondition(&self) -> Option<&PostCondition> {
         None
-    }
-
-    // The commands in this command's own blocks (`If {...}`, `For ... {...}`, ...).
-    fn for_each_nested(&self, _f: &mut dyn FnMut(&Range<Command>)) {}
-}
-
-// Every command in a piece of code, nested ones included, in source order -- for checks on
-// commands as written, which must see all of them, not just those the type checker reaches.
-pub trait Commands {
-    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>));
-}
-
-impl Commands for Range<Command> {
-    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        f(self);
-        self.for_each_nested(f);
-    }
-}
-
-impl<Start> Commands for CommandLine<Start> {
-    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        for command in self
-            .commands
-            .iter()
-            .flat_map(|commands| commands.items.iter())
-        {
-            command.for_each_command(f);
-        }
-    }
-}
-
-impl Commands for Block {
-    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        match self {
-            Block::Curry(block) => block.prefixed.wrapped.for_each_command(f),
-            Block::Command(commands) => {
-                for command in commands.items.iter() {
-                    command.for_each_command(f);
-                }
-            }
-        }
-    }
-}
-
-impl Commands for ProcedureMain {
-    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        self.line_1.iter().for_each(|line| line.for_each_command(f));
-        for line in self
-            .line_n
-            .iter()
-            .flat_map(|lines| lines.prefixed.items.iter())
-        {
-            line.for_each_command(f);
-        }
-    }
-}
-
-impl Commands for RoutineMain {
-    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        self.line_1.iter().for_each(|line| line.for_each_command(f));
-        for line in self
-            .line_n
-            .iter()
-            .flat_map(|lines| lines.prefixed.items.iter())
-        {
-            line.for_each_command(f);
-        }
-    }
-}
-
-impl Commands for ProcedureBody {
-    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        self.main.for_each_command(f);
-        for subroutine in self
-            .subroutines
-            .iter()
-            .flat_map(|subs| subs.prefixed.items.iter())
-        {
-            subroutine.body.for_each_command(f);
-        }
-    }
-}
-
-impl Commands for Routine {
-    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        self.main.for_each_command(f);
-        for element in self
-            .subroutines
-            .iter()
-            .flat_map(|elems| elems.prefixed.items.iter())
-        {
-            match element {
-                RoutineElement::Procedure(procedure) => procedure.body.wrapped.for_each_command(f),
-                RoutineElement::Subroutine(subroutine) => subroutine.body.for_each_command(f),
-            }
-        }
     }
 }
 
@@ -1122,7 +1121,7 @@ pub struct GoToArg {
 #[derive(Grammar)]
 pub enum AllowCase<T> {
     Plain(T),
-    Case(Prefix<StringEqCI!("$CASE"), FunArgList>),
+    Case(StringEq!("$"), Range<FnCase>, FunArgList),
 }
 
 #[derive(Grammar)]
@@ -3470,19 +3469,11 @@ impl CommandLike for WhileCommand {
     fn keywords(&self, start: usize) -> Vec<KeywordUse> {
         vec![KeywordUse::of(&self.kw, start)]
     }
-
-    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        self.bdy.prefixed.wrapped.for_each_command(f)
-    }
 }
 
 impl CommandLike for ForCommand {
     fn keywords(&self, start: usize) -> Vec<KeywordUse> {
         vec![KeywordUse::of(&self.kw, start)]
-    }
-
-    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        self.bdy.iter().for_each(|bdy| bdy.for_each_command(f))
     }
 }
 
@@ -3492,10 +3483,6 @@ impl CommandLike for DoWhileCommand {
             KeywordUse::of(&self.kw, start),
             KeywordUse::of(&*self.kw_while, self.kw_while.start),
         ]
-    }
-
-    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        self.iter.wrapped.wrapped.for_each_command(f)
     }
 }
 
@@ -3512,37 +3499,17 @@ impl CommandLike for IfCommand {
         }
         keywords
     }
-
-    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        if let Some(branches) = &self.branches {
-            branches.thn.for_each_command(f);
-            for eif in &branches.eifs {
-                eif.prefixed.for_each_nested(f);
-            }
-            if let Some(els) = &branches.els {
-                els.prefixed.for_each_nested(f);
-            }
-        }
-    }
 }
 
 impl CommandLike for ElseIfBranch {
     fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
         vec![KeywordUse::of(&*self.kw, self.kw.start)]
     }
-
-    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        self.thn.for_each_command(f)
-    }
 }
 
 impl CommandLike for ElseBranch {
     fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
         vec![KeywordUse::of(&*self.kw, self.kw.start)]
-    }
-
-    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        self.body.iter().for_each(|body| body.for_each_command(f))
     }
 }
 
@@ -3552,11 +3519,6 @@ impl CommandLike for TryCommand {
             KeywordUse::of(&self.kw_try, start),
             KeywordUse::of(&*self.kw_catch, self.kw_catch.start),
         ]
-    }
-
-    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        self.b1.for_each_command(f);
-        self.b2.for_each_command(f);
     }
 }
 
@@ -3649,12 +3611,6 @@ impl CommandLike for Command {
     fn postcondition(&self) -> Option<&PostCondition> {
         self.as_command_like()?.postcondition()
     }
-
-    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
-        if let Some(command) = self.as_command_like() {
-            command.for_each_nested(f)
-        }
-    }
 }
 
 #[derive(GrammarFromStr)]
@@ -3674,7 +3630,11 @@ impl FromStr for UnknownCommand {
     fn from_str(s: &str) -> Result<Self, String> {
         Err(format!(
             "'{s}' is not a recognized command; available: {}",
-            COMMAND_NAMES.join(", ")
+            COMMAND_NAMES
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>()
+                .join(", ")
         ))
     }
 }
@@ -3810,10 +3770,8 @@ pub enum ParenedExpr<BeforeFirst = ()> {
 
 #[derive(Grammar)]
 pub struct DText {
-    fun: (
-        Either<StringEqCI!("TEXT"), StringEqCI!("T")>,
-        StringEq!("("),
-    ),
+    pub kw: Range<FnText>,
+    lp: StringEq!("("),
     pub arg: DTextArg,
     end: StringEq!(")"),
 }
@@ -4315,7 +4273,7 @@ fun_args!("$LIST" ListRangeCallArgs {
 /// `$LIST(list, start1:end1, ...)` -- read-only, not a valid SET target.
 #[derive(Grammar)]
 pub struct ListRangeCall {
-    pub kw: Either<StringEqCI!("LIST"), StringEqCI!("LI")>,
+    pub kw: Range<FnList>,
     pub lp: StringEq!("("),
     pub args: ListRangeCallArgs,
     pub rp: StringEq!(")"),
@@ -4337,7 +4295,7 @@ fun_args!("$LIST" ListPlainCallArgs {
 /// `$LIST(list, position, end)` -- the plain form, settable via `SET`.
 #[derive(Grammar)]
 pub struct ListPlainCall {
-    pub kw: Either<StringEqCI!("LIST"), StringEqCI!("LI")>,
+    pub kw: Range<FnList>,
     pub lp: StringEq!("("),
     pub args: ListPlainCallArgs,
     pub rp: StringEq!(")"),
@@ -4361,7 +4319,7 @@ fun_args!("$PIECE" PieceCallArgs {
 /// and [`SetTargetFun`] can hold them.
 #[derive(Grammar)]
 pub struct PieceCall {
-    pub kw: Either<StringEqCI!("PIECE"), StringEqCI!("P")>,
+    pub kw: Range<FnPiece>,
     pub lp: StringEq!("("),
     pub args: PieceCallArgs,
     pub rp: StringEq!(")"),
@@ -4385,7 +4343,7 @@ fun_args!("$MV" MVCallArgs {
 
 #[derive(Grammar)]
 pub struct MVCall {
-    pub kw: StringEqCI!("MV"),
+    pub kw: Range<FnMV>,
     pub lp: StringEq!("("),
     pub args: MVCallArgs,
     pub rp: StringEq!(")"),
@@ -4415,7 +4373,7 @@ fun_args!("$EXTRACT" ExtractCallArgs {
 
 #[derive(Grammar)]
 pub struct ExtractCall {
-    pub kw: Either<StringEqCI!("EXTRACT"), StringEqCI!("E")>,
+    pub kw: Range<FnExtract>,
     pub lp: StringEq!("("),
     pub args: ExtractCallArgs,
     pub rp: StringEq!(")"),
@@ -4436,7 +4394,7 @@ fun_args!("$LISTGET" ListGetCallArgs {
 
 #[derive(Grammar)]
 pub struct ListGetCall {
-    pub kw: Either<StringEqCI!("LISTGET"), StringEqCI!("LG")>,
+    pub kw: Range<FnListGet>,
     pub lp: StringEq!("("),
     pub args: ListGetCallArgs,
     pub rp: StringEq!(")"),
@@ -4456,7 +4414,7 @@ fun_args!("$BIT" BitCallArgs {
 
 #[derive(Grammar)]
 pub struct BitCall {
-    pub kw: StringEqCI!("BIT"),
+    pub kw: Range<FnBit>,
     pub lp: StringEq!("("),
     pub args: BitCallArgs,
     pub rp: StringEq!(")"),
@@ -4477,7 +4435,7 @@ fun_args!("$VECTOR" VectorCallArgs {
 
 #[derive(Grammar)]
 pub struct VectorCall {
-    pub kw: Either<StringEqCI!("VECTOR"), StringEqCI!("VE")>,
+    pub kw: Range<FnVector>,
     pub lp: StringEq!("("),
     pub args: VectorCallArgs,
     pub rp: StringEq!(")"),
@@ -4498,7 +4456,7 @@ fun_args!("$WEXTRACT" WExtractCallArgs {
 
 #[derive(Grammar)]
 pub struct WExtractCall {
-    pub kw: Either<StringEqCI!("WEXTRACT"), StringEqCI!("WE")>,
+    pub kw: Range<FnWExtract>,
     pub lp: StringEq!("("),
     pub args: WExtractCallArgs,
     pub rp: StringEq!(")"),
@@ -4519,7 +4477,7 @@ fun_args!("$PROPERTY" PropertyCallArgs {
 
 #[derive(Grammar)]
 pub struct PropertyCall {
-    pub kw: (Option<StringEqCI!("ZOBJ")>, StringEqCI!("PROPERTY")),
+    pub kw: Either<Range<FnProperty>, Range<FnZObjProperty>>,
     pub lp: StringEq!("("),
     pub args: PropertyCallArgs,
     pub rp: StringEq!(")"),
@@ -4538,7 +4496,7 @@ fun_args!("$SEQUENCE" SequenceCallArgs {
 
 #[derive(Grammar)]
 pub struct SequenceCall {
-    pub kw: Either<StringEqCI!("SEQUENCE"), StringEqCI!("SEQ")>,
+    pub kw: Range<FnSequence>,
     pub lp: StringEq!("("),
     pub args: SequenceCallArgs,
     pub rp: StringEq!(")"),
@@ -4558,7 +4516,7 @@ fun_args!("$LISTBUILD" ListBuildArgs {
 
 #[derive(Grammar)]
 pub struct ListBuild {
-    pub kw: Either<StringEqCI!("LISTBUILD"), StringEqCI!("LB")>,
+    pub kw: Range<FnListBuild>,
     pub lp: StringEq!("("),
     pub args: ListBuildArgs,
     pub rp: StringEq!(")"),
@@ -4573,7 +4531,7 @@ impl Deref for ListBuild {
 
 #[derive(Grammar)]
 pub struct ListBuildForSet {
-    pub kw: Either<StringEqCI!("LISTBUILD"), StringEqCI!("LB")>,
+    pub kw: Range<FnListBuild>,
     pub lp: StringEq!("("),
     pub first: ArgOf<Option<Variable>>,
     pub rest: Vec<More<ArgOf<Option<Variable>>>>,
@@ -4584,7 +4542,7 @@ pub struct ListBuildForSet {
 // skip -- see `SetTargetSource`.
 #[derive(Grammar)]
 pub struct ListGetForSet {
-    pub kw: Either<StringEqCI!("LISTGET"), StringEqCI!("LG")>,
+    pub kw: Range<FnListGet>,
     pub lp: StringEq!("("),
     pub first: ArgOf<Option<Variable>>,
     pub rest: Vec<More<ArgOf<Option<Variable>>>>,
@@ -4823,104 +4781,101 @@ fun_args!("$ZTIME/$ZTIMEH" ZTimeArgs {
 pub enum FunctionCall {
     DText(DText),
     Length {
-        kw: Either<StringEqCI!("LENGTH"), StringEqCI!("L")>,
+        kw: Range<FnLength>,
         lp: StringEq!("("),
         args: LengthArgs,
         rp: StringEq!(")"),
     },
     Data {
-        kw: Either<StringEqCI!("DATA"), StringEqCI!("D")>,
+        kw: Range<FnData>,
         lp: StringEq!("("),
         args: DataArgs,
         rp: StringEq!(")"),
     },
     Order {
-        kw: Either<StringEqCI!("ORDER"), StringEqCI!("O")>,
+        kw: Range<FnOrder>,
         lp: StringEq!("("),
         args: OrderArgs,
         rp: StringEq!(")"),
     },
     Get {
-        kw: Either<StringEqCI!("GET"), StringEqCI!("G")>,
+        kw: Range<FnGet>,
         lp: StringEq!("("),
         args: GetArgs,
         rp: StringEq!(")"),
     },
     Case {
-        kw: StringEqCI!("CASE"),
+        kw: Range<FnCase>,
         lp: StringEq!("("),
         args: CaseArgs,
         rp: StringEq!(")"),
     },
     Bit(BitCall),
     BitCount {
-        kw: StringEqCI!("BITCOUNT"),
+        kw: Range<FnBitCount>,
         lp: StringEq!("("),
         args: BitCountArgs,
         rp: StringEq!(")"),
     },
     BitFind {
-        kw: StringEqCI!("BITFIND"),
+        kw: Range<FnBitFind>,
         lp: StringEq!("("),
         args: BitFindArgs,
         rp: StringEq!(")"),
     },
     BitLogic {
-        kw: StringEqCI!("BITLOGIC"),
+        kw: Range<FnBitLogic>,
         lp: StringEq!("("),
         expr: ArgOf<BitLogicExpr>,
         length: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
     Change {
-        kw: StringEqCI!("CHANGE"),
+        kw: Range<FnChange>,
         lp: StringEq!("("),
         args: ChangeArgs,
         rp: StringEq!(")"),
     },
     Char {
-        kw: Either<StringEqCI!("CHAR"), StringEqCI!("C")>,
+        kw: Range<FnChar>,
         lp: StringEq!("("),
         args: CharArgs,
         rp: StringEq!(")"),
     },
     ClassName {
-        kw: Either<StringEqCI!("CLASSNAME"), StringEqCI!("ZOBJCLASS")>,
+        kw: Either<Range<FnClassName>, Range<FnZObjClass>>,
         lp: StringEq!("("),
         args: ClassNameArgs,
         rp: StringEq!(")"),
     },
     Decimal {
-        kw: StringEqCI!("DECIMAL"),
+        kw: Range<FnDecimal>,
         lp: StringEq!("("),
         args: DecimalArgs,
         rp: StringEq!(")"),
     },
     Double {
-        kw: StringEqCI!("DOUBLE"),
+        kw: Range<FnDouble>,
         lp: StringEq!("("),
         args: DoubleArgs,
         rp: StringEq!(")"),
     },
     Extract(ExtractCall),
     FNumber {
-        kw: Either<StringEqCI!("FNUMBER"), StringEqCI!("FN")>,
+        kw: Range<FnFNumber>,
         lp: StringEq!("("),
         args: FNumberArgs,
         rp: StringEq!(")"),
     },
     IsObject {
-        kw: Either<StringEqCI!("ISOBJECT"), StringEqCI!("ISO")>,
+        kw: Range<FnIsObject>,
         lp: StringEq!("("),
         args: IsObjectArgs,
         rp: StringEq!(")"),
     },
     // The "I" case is dangerous
     Increment {
-        kw: Either<
-            Either<StringEqCI!("INCREMENT"), StringEqCI!("I")>,
-            Either<StringEqCI!("ZINCREMENT"), StringEqCI!("ZINCR")>,
-        >,
+        kw: Either<Range<FnIncrement>, Range<FnZIncrement>>,
         lp: StringEq!("("),
         args: IncrementArgs,
         rp: StringEq!(")"),
@@ -4929,122 +4884,122 @@ pub enum FunctionCall {
     ListRange(ListRangeCall),
     ListBuild(ListBuild),
     ListData {
-        kw: Either<StringEqCI!("LISTDATA"), StringEqCI!("LD")>,
+        kw: Range<FnListData>,
         lp: StringEq!("("),
         args: ListDataArgs,
         rp: StringEq!(")"),
     },
     ListGet(ListGetCall),
     ListNext {
-        kw: StringEqCI!("LISTNEXT"),
+        kw: Range<FnListNext>,
         lp: StringEq!("("),
         args: ListNextArgs,
         rp: StringEq!(")"),
     },
     ListUpdate {
-        kw: Either<StringEqCI!("LISTUPDATE"), StringEqCI!("LU")>,
+        kw: Range<FnListUpdate>,
         lp: StringEq!("("),
         args: ListUpdateArgs,
         rp: StringEq!(")"),
     },
     Locate {
-        kw: StringEqCI!("LOCATE"),
+        kw: Range<FnLocate>,
         lp: StringEq!("("),
         args: LocateArgs,
         rp: StringEq!(")"),
     },
     MV(MVCall),
     Method {
-        kw: (Option<StringEqCI!("ZOBJ")>, StringEqCI!("METHOD")),
+        kw: Either<Range<FnMethod>, Range<FnZObjMethod>>,
         lp: StringEq!("("),
         args: MethodArgs,
         rp: StringEq!(")"),
     },
     Name {
-        kw: Either<StringEqCI!("NAME"), StringEqCI!("NA")>,
+        kw: Range<FnName>,
         lp: StringEq!("("),
         args: NameArgs,
         rp: StringEq!(")"),
     },
     Parameter {
-        kw: StringEqCI!("PARAMETER"),
+        kw: Range<FnParameter>,
         lp: StringEq!("("),
         args: ParameterArgs,
         rp: StringEq!(")"),
     },
     Piece(PieceCall),
     PrefetchOff {
-        kw: StringEqCI!("PREFETCHOFF"),
+        kw: Range<FnPrefetchOff>,
         lp: StringEq!("("),
         args: PrefetchOffArgs,
         rp: StringEq!(")"),
     },
     PrefetchOn {
-        kw: StringEqCI!("PREFETCHON"),
+        kw: Range<FnPrefetchOn>,
         lp: StringEq!("("),
         args: PrefetchOnArgs,
         rp: StringEq!(")"),
     },
     Property(PropertyCall),
     Query {
-        kw: Either<StringEqCI!("QUERY"), StringEqCI!("Q")>,
+        kw: Range<FnQuery>,
         lp: StringEq!("("),
         args: QueryArgs,
         rp: StringEq!(")"),
     },
     Select {
-        kw: Either<StringEqCI!("SELECT"), StringEqCI!("S")>,
+        kw: Range<FnSelect>,
         lp: StringEq!("("),
         args: SelectArgs,
         rp: StringEq!(")"),
     },
     Sequence(SequenceCall),
     SortBegin {
-        kw: StringEqCI!("SORTBEGIN"),
+        kw: Range<FnSortBegin>,
         lp: StringEq!("("),
         args: SortBeginArgs,
         rp: StringEq!(")"),
     },
     SortEnd {
-        kw: StringEqCI!("SORTEND"),
+        kw: Range<FnSortEnd>,
         lp: StringEq!("("),
         args: SortEndArgs,
         rp: StringEq!(")"),
     },
     Vector(VectorCall),
     VectorDefined {
-        kw: Either<StringEqCI!("VECTORDEFINED"), StringEqCI!("VD")>,
+        kw: Range<FnVectorDefined>,
         lp: StringEq!("("),
         args: VectorDefinedArgs,
         rp: StringEq!(")"),
     },
     VectorOp {
-        kw: Either<StringEqCI!("VECTOROP"), StringEqCI!("VOP")>,
+        kw: Range<FnVectorOp>,
         lp: StringEq!("("),
         args: VectorOpArgs,
         rp: StringEq!(")"),
     },
     WChar {
-        kw: Either<StringEqCI!("WCHAR"), StringEqCI!("WC")>,
+        kw: Range<FnWChar>,
         lp: StringEq!("("),
         args: WCharArgs,
         rp: StringEq!(")"),
     },
     WExtract(WExtractCall),
     Xecute {
-        kw: StringEqCI!("XECUTE"),
+        kw: Range<FnXecute>,
         lp: StringEq!("("),
         args: XecuteArgs,
         rp: StringEq!(")"),
     },
     ClassMethod {
-        kw: (Option<StringEqCI!("ZOBJ")>, StringEqCI!("CLASSMETHOD")),
+        kw: Either<Range<FnClassMethod>, Range<FnZObjClassMethod>>,
         lp: StringEq!("("),
         args: ClassMethodArgs,
         rp: StringEq!(")"),
     },
     Compile {
-        kw: StringEqCI!("COMPILE"),
+        kw: Range<FnCompile>,
         lp: StringEq!("("),
         args: CompileArgs,
         rp: StringEq!(")"),
@@ -5055,7 +5010,7 @@ pub enum FunctionCall {
     // Legacy `$ZPREVIOUS(glvn)`/`$ZP`: the last subscript at that level, a one-argument reverse
     // `$ORDER`. Modeled on its own rather than folded into `Order`.
     ZP {
-        kw: Either<StringEqCI!("ZPREVIOUS"), StringEqCI!("ZP")>,
+        kw: Range<FnZPrevious>,
         lp: StringEq!("("),
         args: ZPArgs,
         rp: StringEq!(")"),
@@ -5066,56 +5021,45 @@ pub enum FunctionCall {
     // `$LOCK(lockname[, info_type])`: information about a held lock.
     // Legacy `$ZORDER(glvn)`/`$ZO` and `$NEXT(glvn)`/`$N`: the next node/subscript, like `$ORDER`.
     ZOrder {
-        kw: Either<StringEqCI!("ZORDER"), StringEqCI!("ZO")>,
+        kw: Range<FnZOrder>,
         lp: StringEq!("("),
         args: ZOrderArgs,
         rp: StringEq!(")"),
     },
     Next {
-        kw: Either<StringEqCI!("NEXT"), StringEqCI!("N")>,
+        kw: Range<FnNext>,
         lp: StringEq!("("),
         args: NextArgs,
         rp: StringEq!(")"),
     },
     // Internal: the object's underlying storage handle, used by system collection classes.
     ZObjRef {
-        kw: StringEqCI!("ZOBJREF"),
+        kw: Range<FnZObjRef>,
         lp: StringEq!("("),
         args: ZObjRefArgs,
         rp: StringEq!(")"),
     },
     ZStrip {
-        kw: StringEqCI!("ZSTRIP"),
+        kw: Range<FnZStrip>,
         lp: StringEq!("("),
         args: ZStripArgs,
         rp: StringEq!(")"),
     },
     ZDateTime {
-        kw: Either<
-            Either<
-                Either<StringEqCI!("ZDATETIMEH"), StringEqCI!("ZDATETIME")>,
-                StringEqCI!("ZDTH"),
-            >,
-            StringEqCI!("ZDT"),
-        >,
+        // The `H` forms first: `ZDATETIME` and `ZDT` are prefixes of them.
+        kw: Either<Range<FnZDateTimeH>, Range<FnZDateTime>>,
         lp: StringEq!("("),
         args: ZDateTimeArgs,
         rp: StringEq!(")"),
     },
     ZDate {
-        kw: Either<
-            Either<Either<StringEqCI!("ZDATEH"), StringEqCI!("ZDATE")>, StringEqCI!("ZDH")>,
-            StringEqCI!("ZD"),
-        >,
+        kw: Either<Range<FnZDateH>, Range<FnZDate>>,
         lp: StringEq!("("),
         args: ZDateArgs,
         rp: StringEq!(")"),
     },
     ZTime {
-        kw: Either<
-            Either<Either<StringEqCI!("ZTIMEH"), StringEqCI!("ZTIME")>, StringEqCI!("ZTH")>,
-            StringEqCI!("ZT"),
-        >,
+        kw: Either<Range<FnZTimeH>, Range<FnZTime>>,
         lp: StringEq!("("),
         args: ZTimeArgs,
         rp: StringEq!(")"),
@@ -5123,7 +5067,7 @@ pub enum FunctionCall {
     // `$ZF(-n, …)` callouts, per selector. `-100` precedes `-1` because
     // `StringEq` matches without a word boundary, so `-1` prefixes `-100`.
     ZFm100 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-100"), SGap>,
         flags: More<ArgOf<Expr>>,
@@ -5132,21 +5076,21 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm1 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-1"), SGap>,
         program: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
     ZFm2 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-2"), SGap>,
         program: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
     ZFm3 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-3"), SGap>,
         dll: More<ArgOf<Expr>>,
@@ -5154,7 +5098,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm4 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-4"), SGap>,
         n: More<ArgOf<Expr>>,
@@ -5163,7 +5107,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm5 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-5"), SGap>,
         dll_id: More<ArgOf<Expr>>,
@@ -5172,7 +5116,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm6 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-6"), SGap>,
         dll_index: More<ArgOf<Expr>>,
@@ -5180,7 +5124,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZU {
-        kw: Either<StringEqCI!("ZUTIL"), StringEqCI!("ZU")>,
+        kw: Range<FnZUtil>,
         args: FunArgList,
     },
     // Every function whose arguments are all plain expressions, parsed with any number of them
@@ -5191,6 +5135,98 @@ pub enum FunctionCall {
     Generic(GenericFunctionCall),
     // Anything else spelled like a function: accepted here, reported by the checker.
     Unknown(UnknownFunctionCall),
+}
+
+impl FunctionCall {
+    // The function's name as written; `None` for a call that names no known function.
+    pub fn name(&self) -> Option<KeywordUse> {
+        Some(match self {
+            FunctionCall::DText(call) => call.kw.spelled(),
+            FunctionCall::Length { kw, .. } => kw.spelled(),
+            FunctionCall::Data { kw, .. } => kw.spelled(),
+            FunctionCall::Order { kw, .. } => kw.spelled(),
+            FunctionCall::Get { kw, .. } => kw.spelled(),
+            FunctionCall::Case { kw, .. } => kw.spelled(),
+            FunctionCall::Bit(call) => call.kw.spelled(),
+            FunctionCall::BitCount { kw, .. } => kw.spelled(),
+            FunctionCall::BitFind { kw, .. } => kw.spelled(),
+            FunctionCall::BitLogic { kw, .. } => kw.spelled(),
+            FunctionCall::Change { kw, .. } => kw.spelled(),
+            FunctionCall::Char { kw, .. } => kw.spelled(),
+            FunctionCall::ClassName { kw, .. } => kw.spelled(),
+            FunctionCall::Decimal { kw, .. } => kw.spelled(),
+            FunctionCall::Double { kw, .. } => kw.spelled(),
+            FunctionCall::Extract(call) => call.kw.spelled(),
+            FunctionCall::FNumber { kw, .. } => kw.spelled(),
+            FunctionCall::IsObject { kw, .. } => kw.spelled(),
+            FunctionCall::Increment { kw, .. } => kw.spelled(),
+            FunctionCall::ListPlain(call) => call.kw.spelled(),
+            FunctionCall::ListRange(call) => call.kw.spelled(),
+            FunctionCall::ListBuild(call) => call.kw.spelled(),
+            FunctionCall::ListData { kw, .. } => kw.spelled(),
+            FunctionCall::ListGet(call) => call.kw.spelled(),
+            FunctionCall::ListNext { kw, .. } => kw.spelled(),
+            FunctionCall::ListUpdate { kw, .. } => kw.spelled(),
+            FunctionCall::Locate { kw, .. } => kw.spelled(),
+            FunctionCall::MV(call) => call.kw.spelled(),
+            FunctionCall::Method { kw, .. } => kw.spelled(),
+            FunctionCall::Name { kw, .. } => kw.spelled(),
+            FunctionCall::Parameter { kw, .. } => kw.spelled(),
+            FunctionCall::Piece(call) => call.kw.spelled(),
+            FunctionCall::PrefetchOff { kw, .. } => kw.spelled(),
+            FunctionCall::PrefetchOn { kw, .. } => kw.spelled(),
+            FunctionCall::Property(call) => call.kw.spelled(),
+            FunctionCall::Query { kw, .. } => kw.spelled(),
+            FunctionCall::Select { kw, .. } => kw.spelled(),
+            FunctionCall::Sequence(call) => call.kw.spelled(),
+            FunctionCall::SortBegin { kw, .. } => kw.spelled(),
+            FunctionCall::SortEnd { kw, .. } => kw.spelled(),
+            FunctionCall::Vector(call) => call.kw.spelled(),
+            FunctionCall::VectorDefined { kw, .. } => kw.spelled(),
+            FunctionCall::VectorOp { kw, .. } => kw.spelled(),
+            FunctionCall::WChar { kw, .. } => kw.spelled(),
+            FunctionCall::WExtract(call) => call.kw.spelled(),
+            FunctionCall::Xecute { kw, .. } => kw.spelled(),
+            FunctionCall::ClassMethod { kw, .. } => kw.spelled(),
+            FunctionCall::Compile { kw, .. } => kw.spelled(),
+            FunctionCall::ZP { kw, .. } => kw.spelled(),
+            FunctionCall::ZOrder { kw, .. } => kw.spelled(),
+            FunctionCall::Next { kw, .. } => kw.spelled(),
+            FunctionCall::ZObjRef { kw, .. } => kw.spelled(),
+            FunctionCall::ZStrip { kw, .. } => kw.spelled(),
+            FunctionCall::ZDateTime { kw, .. } => kw.spelled(),
+            FunctionCall::ZDate { kw, .. } => kw.spelled(),
+            FunctionCall::ZTime { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm100 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm1 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm2 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm3 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm4 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm5 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm6 { kw, .. } => kw.spelled(),
+            FunctionCall::ZU { kw, .. } => kw.spelled(),
+            FunctionCall::Simple(call) => call.spelled(),
+            FunctionCall::Generic(_) | FunctionCall::Unknown(_) => return None,
+        })
+    }
+}
+
+impl SetTargetFun {
+    pub fn name(&self) -> KeywordUse {
+        match self {
+            SetTargetFun::Piece(call) => call.kw.spelled(),
+            SetTargetFun::Extract(call) => call.kw.spelled(),
+            SetTargetFun::List(call) => call.kw.spelled(),
+            SetTargetFun::ListGet(call) => call.kw.spelled(),
+            SetTargetFun::ListBuild(call) => call.kw.spelled(),
+            SetTargetFun::Bit(call) => call.kw.spelled(),
+            SetTargetFun::Vector(call) => call.kw.spelled(),
+            SetTargetFun::WExtract(call) => call.kw.spelled(),
+            SetTargetFun::Property(call) => call.kw.spelled(),
+            SetTargetFun::Sequence(call) => call.kw.spelled(),
+            SetTargetFun::MV(call) => call.kw.spelled(),
+        }
+    }
 }
 
 pub struct SimpleFunction {
@@ -5204,259 +5240,259 @@ pub struct SimpleFunction {
 // arguments they take, and what they return.
 pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
     SimpleFunction {
-        names: &["ZARCCOS"],
+        names: &["ZArcCos"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZARCSIN"],
+        names: &["ZArcSin"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZARCTAN"],
+        names: &["ZArcTan"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZCOS"],
+        names: &["ZCos"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZCOT"],
+        names: &["ZCot"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZCSC"],
+        names: &["ZCsc"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZSEC"],
+        names: &["ZSec"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZSIN"],
+        names: &["ZSin"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZTAN"],
+        names: &["ZTan"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZABS"],
+        names: &["ZAbs"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZEXP"],
+        names: &["ZExp"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZLN"],
+        names: &["ZLn"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZLOG"],
+        names: &["ZLog"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZSQR"],
+        names: &["ZSqr"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZDASCII", "ZDA"],
+        names: &["ZDAscii", "ZDA"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZLASCII", "ZLA"],
+        names: &["ZLAscii", "ZLA"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZQASCII", "ZQA"],
+        names: &["ZQAscii", "ZQA"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZWASCII", "ZWA"],
+        names: &["ZWAscii", "ZWA"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZHEX", "ZH"],
+        names: &["ZHex", "ZH"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZDCHAR", "ZDC"],
+        names: &["ZDChar", "ZDC"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZLCHAR", "ZLC"],
+        names: &["ZLChar", "ZLC"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZQCHAR", "ZQC"],
+        names: &["ZQChar", "ZQC"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWCHAR", "ZWC"],
+        names: &["ZWChar", "ZWC"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWBPACK"],
+        names: &["ZWBPack"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWPACK"],
+        names: &["ZWPack"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWBUNPACK"],
+        names: &["ZWBUnpack"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWUNPACK"],
+        names: &["ZWUnpack"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ASCII", "A"],
+        names: &["Ascii", "A"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["FACTOR"],
+        names: &["Factor"],
         min: 1,
         max: 2,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["FIND", "F"],
+        names: &["Find", "F"],
         min: 2,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["INUMBER", "IN"],
+        names: &["INumber", "IN"],
         min: 2,
         max: 3,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ISVALIDDOUBLE"],
+        names: &["IsValidDouble"],
         min: 1,
         max: 4,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["ISVALIDNUM"],
+        names: &["IsValidNum"],
         min: 1,
         max: 4,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["ISVECTOR"],
+        names: &["IsVector"],
         min: 1,
         max: 1,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["JUSTIFY", "J"],
+        names: &["Justify", "J"],
         min: 2,
         max: 3,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["LISTFIND", "LF"],
+        names: &["ListFind", "LF"],
         min: 2,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["LISTFROMSTRING", "LFS"],
+        names: &["ListFromString", "LFS"],
         min: 1,
         max: 3,
         ret: "%List",
     },
     SimpleFunction {
-        names: &["LISTLENGTH", "LL"],
+        names: &["ListLength", "LL"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["LISTSAME", "LS"],
+        names: &["ListSame", "LS"],
         min: 2,
         max: 2,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["LISTTOSTRING", "LTS"],
+        names: &["ListToString", "LTS"],
         min: 1,
         max: 3,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["LISTVALID", "LV"],
+        names: &["ListValid", "LV"],
         min: 1,
         max: 1,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["LOCK"],
+        names: &["Lock"],
         min: 1,
         max: 2,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["MATCH"],
+        names: &["Match"],
         min: 2,
         max: 2,
         ret: "%Boolean",
@@ -5468,247 +5504,247 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
         ret: "%String",
     },
     SimpleFunction {
-        names: &["NCONVERT", "NC"],
+        names: &["NConvert", "NC"],
         min: 2,
         max: 3,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["NORMALIZE"],
+        names: &["Normalize"],
         min: 2,
         max: 2,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["NOW"],
+        names: &["Now"],
         min: 0,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["NUMBER", "NUM"],
+        names: &["Number", "NUM"],
         min: 1,
         max: 4,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["QLENGTH", "QL"],
+        names: &["QLength", "QL"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["QSUBSCRIPT", "QS"],
+        names: &["QSubscript", "QS"],
         min: 2,
         max: 2,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["RANDOM", "R"],
+        names: &["Random", "R"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["REPLACE"],
+        names: &["Replace"],
         min: 3,
         max: 6,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["REVERSE", "RE"],
+        names: &["Reverse", "RE"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["SCONVERT", "SC"],
+        names: &["SConvert", "SC"],
         min: 2,
         max: 4,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["STACK", "ST"],
+        names: &["Stack", "ST"],
         min: 1,
         max: 2,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["TRANSLATE", "TR"],
+        names: &["Translate", "TR"],
         min: 2,
         max: 3,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["VIEW", "V"],
+        names: &["View", "V"],
         min: 1,
         max: 3,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["WASCII", "WA"],
+        names: &["WAscii", "WA"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["WFIND", "WF"],
+        names: &["WFind", "WF"],
         min: 2,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["WISWIDE"],
+        names: &["WIsWide"],
         min: 1,
         max: 1,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["WLENGTH", "WL"],
+        names: &["WLength", "WL"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["WREVERSE", "WRE"],
+        names: &["WReverse", "WRE"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZBITAND"],
+        names: &["ZBitAnd"],
         min: 2,
         max: 2,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBITCOUNT"],
+        names: &["ZBitCount"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZBITFIND"],
+        names: &["ZBitFind"],
         min: 2,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZBITGET"],
+        names: &["ZBitGet"],
         min: 2,
         max: 2,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["ZBITLEN"],
+        names: &["ZBitLen"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZBITNOT"],
+        names: &["ZBitNot"],
         min: 1,
         max: 1,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBITOR"],
+        names: &["ZBitOr"],
         min: 2,
         max: 2,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBITSET"],
+        names: &["ZBitSet"],
         min: 3,
         max: 3,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBITSTR"],
+        names: &["ZBitStr"],
         min: 1,
         max: 2,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBITXOR"],
+        names: &["ZBitXor"],
         min: 2,
         max: 2,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBOOLEAN", "ZB"],
+        names: &["ZBoolean", "ZB"],
         min: 3,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZCONVERT", "ZCVT"],
+        names: &["ZConvert", "ZCVT"],
         min: 2,
         max: 4,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZCRC"],
+        names: &["ZCrc"],
         min: 2,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZCYC"],
+        names: &["ZCyc"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZISWIDE"],
+        names: &["ZIsWide"],
         min: 1,
         max: 1,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["ZNAME"],
+        names: &["ZName"],
         min: 1,
         max: 3,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["ZPOSITION"],
+        names: &["ZPosition"],
         min: 2,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZPOWER"],
+        names: &["ZPower"],
         min: 2,
         max: 2,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZSEARCH", "ZSE"],
+        names: &["ZSearch", "ZSE"],
         min: 1,
         max: 2,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZSEEK"],
+        names: &["ZSeek"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZVERSION"],
+        names: &["ZVersion"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWIDTH"],
+        names: &["ZWidth"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZZENKAKU"],
+        names: &["ZZenkaku"],
         min: 2,
         max: 3,
         ret: "%String",
@@ -5736,15 +5772,28 @@ pub type ExprArgList = ParenList<Range<Option<Expr>>, StringEq!(",")>;
 
 #[derive(Grammar)]
 pub struct SimpleFunctionCallSource {
-    name: SimpleFunctionName,
+    name: Range<SimpleFunctionName>,
     args: ExprArgList,
 }
 
 #[derive(GrammarTryFromOther)]
 #[grammar(name = "simple function call")]
 pub struct SimpleFunctionCall {
-    pub name: SimpleFunctionName,
+    pub name: Range<SimpleFunctionName>,
     pub args: ExprArgList,
+}
+
+impl Spelled for SimpleFunctionCall {
+    fn spelled(&self) -> KeywordUse {
+        let function = simple_function(&self.name.print()).expect("validated on parse");
+        KeywordUse {
+            kind: KeywordKind::Function,
+            start: self.name.start,
+            text: self.name.print(),
+            full: function.names[0],
+            abbr: function.names.get(1).copied(),
+        }
+    }
 }
 
 impl GrammarFrom for SimpleFunctionCall {
@@ -5886,221 +5935,6 @@ pub struct UnknownFunctionCall {
 
 // Every full function name (including nested Bit/Extract/DText/Z*Kw calls) -- kept in sync by
 // hand, for `UnknownSpecialVariable::from_str`'s error message.
-// Every intrinsic function: its documented spelling and abbreviation, for style checks. Tests
-// keep it in step with `FUNCTION_NAMES` and `SIMPLE_FUNCTIONS`.
-pub const FUNCTIONS: &[(&str, Option<&str>)] = &[
-    ("Ascii", Some("A")),
-    ("Bit", None),
-    ("BitCount", None),
-    ("BitFind", None),
-    ("BitLogic", None),
-    ("Case", None),
-    ("Change", None),
-    ("Char", Some("C")),
-    ("ClassMethod", None),
-    ("ClassName", None),
-    ("Compile", None),
-    ("Data", Some("D")),
-    ("Decimal", None),
-    ("Double", None),
-    ("Extract", Some("E")),
-    ("Factor", None),
-    ("Find", Some("F")),
-    ("FNumber", Some("FN")),
-    ("Get", Some("G")),
-    ("Increment", Some("I")),
-    ("INumber", Some("IN")),
-    ("IsObject", Some("ISO")),
-    ("IsValidDouble", None),
-    ("IsValidNum", None),
-    ("IsVector", None),
-    ("Justify", Some("J")),
-    ("Length", Some("L")),
-    ("List", Some("LI")),
-    ("ListBuild", Some("LB")),
-    ("ListData", Some("LD")),
-    ("ListFind", Some("LF")),
-    ("ListFromString", Some("LFS")),
-    ("ListGet", Some("LG")),
-    ("ListLength", Some("LL")),
-    ("ListNext", None),
-    ("ListSame", Some("LS")),
-    ("ListToString", Some("LTS")),
-    ("ListUpdate", Some("LU")),
-    ("ListValid", Some("LV")),
-    ("Locate", None),
-    ("Lock", None),
-    ("Match", None),
-    ("Method", None),
-    ("MV", None),
-    ("MVV", None),
-    ("Name", Some("NA")),
-    ("NConvert", Some("NC")),
-    ("Next", Some("N")),
-    ("Normalize", None),
-    ("Now", None),
-    ("Number", Some("NUM")),
-    ("Order", Some("O")),
-    ("Parameter", None),
-    ("Piece", Some("P")),
-    ("PrefetchOff", None),
-    ("PrefetchOn", None),
-    ("Property", None),
-    ("QLength", Some("QL")),
-    ("QSubscript", Some("QS")),
-    ("Query", Some("Q")),
-    ("Random", Some("R")),
-    ("Replace", None),
-    ("Reverse", Some("RE")),
-    ("SConvert", Some("SC")),
-    ("Select", Some("S")),
-    ("Sequence", Some("SEQ")),
-    ("SortBegin", None),
-    ("SortEnd", None),
-    ("Stack", Some("ST")),
-    ("Text", Some("T")),
-    ("Translate", Some("TR")),
-    ("Vector", Some("VE")),
-    ("VectorDefined", Some("VD")),
-    ("VectorOp", Some("VOP")),
-    ("View", Some("V")),
-    ("WAscii", Some("WA")),
-    ("WChar", Some("WC")),
-    ("WExtract", Some("WE")),
-    ("WFind", Some("WF")),
-    ("WIsWide", None),
-    ("WLength", Some("WL")),
-    ("WReverse", Some("WRE")),
-    ("Xecute", None),
-    ("ZAbs", None),
-    ("ZArcCos", None),
-    ("ZArcSin", None),
-    ("ZArcTan", None),
-    ("ZBitAnd", None),
-    ("ZBitCount", None),
-    ("ZBitFind", None),
-    ("ZBitGet", None),
-    ("ZBitLen", None),
-    ("ZBitNot", None),
-    ("ZBitOr", None),
-    ("ZBitSet", None),
-    ("ZBitStr", None),
-    ("ZBitXor", None),
-    ("ZBoolean", Some("ZB")),
-    ("ZConvert", Some("ZCVT")),
-    ("ZCos", None),
-    ("ZCot", None),
-    ("ZCrc", None),
-    ("ZCsc", None),
-    ("ZCyc", None),
-    ("ZDAscii", Some("ZDA")),
-    ("ZDate", Some("ZD")),
-    ("ZDateH", Some("ZDH")),
-    ("ZDateTime", Some("ZDT")),
-    ("ZDateTimeH", Some("ZDTH")),
-    ("ZDChar", Some("ZDC")),
-    ("ZExp", None),
-    ("ZF", None),
-    ("ZHex", Some("ZH")),
-    ("ZIncrement", Some("ZINCR")),
-    ("ZIsWide", None),
-    ("ZLAscii", Some("ZLA")),
-    ("ZLChar", Some("ZLC")),
-    ("ZLn", None),
-    ("ZLog", None),
-    ("ZName", None),
-    ("ZObjClass", None),
-    ("ZObjClassMethod", None),
-    ("ZObjMethod", None),
-    ("ZObjProperty", None),
-    ("ZObjRef", None),
-    ("ZOrder", Some("ZO")),
-    ("ZPosition", None),
-    ("ZPower", None),
-    ("ZPrevious", Some("ZP")),
-    ("ZQAscii", Some("ZQA")),
-    ("ZQChar", Some("ZQC")),
-    ("ZSearch", Some("ZSE")),
-    ("ZSec", None),
-    ("ZSeek", None),
-    ("ZSin", None),
-    ("ZSqr", None),
-    ("ZStrip", None),
-    ("ZTan", None),
-    ("ZTime", Some("ZT")),
-    ("ZTimeH", Some("ZTH")),
-    ("ZUtil", Some("ZU")),
-    ("ZVersion", None),
-    ("ZWAscii", Some("ZWA")),
-    ("ZWBPack", None),
-    ("ZWBUnpack", None),
-    ("ZWChar", Some("ZWC")),
-    ("ZWidth", None),
-    ("ZWPack", None),
-    ("ZWUnpack", None),
-    ("ZZenkaku", None),
-];
-
-char_class!(pub IsFunctionScanPlain, "plain", |ch| !matches!(
-    ch,
-    '"' | '/' | '$' | '&' | '#' | ';'
-));
-char_class!(pub IsExtrinsicNameChar, "extrinsic_name", |ch| ch.is_alphanumeric()
-    || matches!(ch, '$' | '%'));
-
-// What in a piece of ObjectScript calls an intrinsic function, skipping strings, comments,
-// embedded HTML/JS/SQL and `$$label`/`$$$macro` calls.
-#[derive(Grammar)]
-struct FunctionScan(Vec<FunctionScanUnit>);
-
-#[derive(Grammar)]
-enum FunctionScanUnit {
-    Extrinsic(StringEq!("$$"), StringOf<IsExtrinsicNameChar>),
-    Call(
-        StringEq!("$"),
-        Range<StringOf1<IsAlphabetic>>,
-        StringEq!("("),
-    ),
-    Str(OSString),
-    Rc(RangeComment),
-    Lc(LineComment),
-    Emb(EmbeddedBlock),
-    Sql(
-        Either<StringEqCI!("&sql("), StringEqCI!("##sql(")>,
-        Box<sql::SQL>,
-        StringEq!(")"),
-    ),
-    Plain(StringOf1<IsFunctionScanPlain>),
-    Other(CharOf<AnyChar>),
-}
-
-// The intrinsic function names in `text`, which starts at `offset`.
-pub fn function_uses(text: &str, offset: usize) -> Vec<KeywordUse> {
-    let Ok(scan) = FunctionScan::parse(text) else {
-        return vec![];
-    };
-    scan.0
-        .iter()
-        .filter_map(|unit| {
-            let FunctionScanUnit::Call(_, name, _) = unit else {
-                return None;
-            };
-            let text = name.print();
-            let (full, abbr) = FUNCTIONS.iter().find(|(full, abbr)| {
-                full.eq_ignore_ascii_case(&text)
-                    || abbr.is_some_and(|a| a.eq_ignore_ascii_case(&text))
-            })?;
-            Some(KeywordUse {
-                kind: KeywordKind::Function,
-                start: offset + name.start,
-                text,
-                full,
-                abbr: *abbr,
-            })
-        })
-        .collect()
-}
-
 pub const FUNCTION_NAMES: &[&str] = &[
     "TEXT",
     "LENGTH",
@@ -6762,40 +6596,6 @@ mod regression_tests {
         let keywords = methods(&cls)[0].header.keywords.as_ref().expect("keywords");
         assert!(keywords.get("CodeMode").is_some());
         assert!(keywords.get("Language").is_none());
-    }
-
-    #[test]
-    fn function_uses_skip_what_is_not_an_intrinsic_call() {
-        let names = |text: &str| -> Vec<(usize, String, &str)> {
-            function_uses(text, 10)
-                .into_iter()
-                .map(|kw| (kw.start, kw.text, kw.full))
-                .collect()
-        };
-        assert_eq!(
-            names("s x=$p(a,\",\",2)_$L(b)"),
-            [(15, "p".into(), "Piece"), (27, "L".into(), "Length")]
-        );
-        assert_eq!(
-            names("w $Select($Get(x):1,1:$zdth(y,3)),$Unknown(1)"),
-            [
-                (13, "Select".into(), "Select"),
-                (21, "Get".into(), "Get"),
-                (33, "zdth".into(), "ZDateTimeH")
-            ]
-        );
-        for skipped in [
-            "w \"$P(x)\"",
-            "d $$label(1),$$lbl^rtn(1),$$$Macro(1)",
-            "w /* $P(x) */ 1",
-            "w 1 ; $P(x)",
-            "w 1 // $E(x)",
-            "w $H,$ZTRAP,$system.Status.IsOK(sc)",
-            "&html<<b>$P(x)</b>>",
-            "&sql(SELECT $PIECE(a,',',1) INTO :x FROM t)",
-        ] {
-            assert_eq!(names(skipped), [], "{skipped}");
-        }
     }
 
     #[test]

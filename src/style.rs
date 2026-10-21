@@ -239,6 +239,7 @@ mod tests {
         use tygr_objectscript::cos::COMMAND_NAMES;
         let names: Vec<String> = COMMAND_NAMES
             .iter()
+            .map(|(name, _)| *name)
             .filter(|name| name.chars().all(|ch| ch.is_ascii_alphabetic()) && name.len() > 1)
             .map(|name| name.to_ascii_lowercase())
             .collect();
@@ -256,47 +257,41 @@ mod tests {
         }
     }
 
-    // `FUNCTIONS` names exactly the functions the grammar knows (`FUNCTION_NAMES` and
-    // `SIMPLE_FUNCTIONS`, which also list abbreviations), and the WIT has one field for each.
+    // The functions with a spelling (`FUNCTION_KEYWORDS` and `SIMPLE_FUNCTIONS`) are exactly
+    // those `FUNCTION_NAMES` lists, and the WIT has one field for each.
     #[test]
     fn every_function_has_a_style_field_and_every_field_a_function() {
-        use tygr_objectscript::cos::{FUNCTION_NAMES, FUNCTIONS, SIMPLE_FUNCTIONS};
-        let spellings: Vec<String> = FUNCTIONS
+        use tygr_objectscript::cos::{FUNCTION_KEYWORDS, FUNCTION_NAMES, SIMPLE_FUNCTIONS};
+        let spelled: Vec<&str> = FUNCTION_KEYWORDS
             .iter()
-            .flat_map(|(full, abbr)| std::iter::once(*full).chain(*abbr))
-            .map(str::to_ascii_uppercase)
+            .map(|(full, _)| *full)
+            .chain(SIMPLE_FUNCTIONS.iter().map(|f| f.names[0]))
             .collect();
-        let known: Vec<&str> = FUNCTION_NAMES
+        let abbreviations: Vec<&str> = FUNCTION_KEYWORDS
             .iter()
-            .copied()
+            .filter_map(|(_, abbr)| *abbr)
             .chain(
                 SIMPLE_FUNCTIONS
                     .iter()
-                    .flat_map(|f| f.names.iter().copied()),
+                    .filter_map(|f| f.names.get(1).copied()),
             )
             .collect();
-        for name in &known {
+        for name in FUNCTION_NAMES {
             assert!(
-                spellings.iter().any(|s| s == name),
-                "FUNCTIONS lacks {name}"
+                spelled
+                    .iter()
+                    .chain(&abbreviations)
+                    .any(|s| s.eq_ignore_ascii_case(name)),
+                "{name} has no spelling"
             );
         }
-        for (full, abbr) in FUNCTIONS {
+        for name in &spelled {
             assert!(
-                known.iter().any(|n| n.eq_ignore_ascii_case(full)),
-                "{full} is no function the grammar knows"
+                FUNCTION_NAMES.iter().any(|n| n.eq_ignore_ascii_case(name)),
+                "{name} is missing from FUNCTION_NAMES"
             );
-            if let Some(simple) = SIMPLE_FUNCTIONS
-                .iter()
-                .find(|f| f.names[0].eq_ignore_ascii_case(full))
-            {
-                assert_eq!(simple.names.get(1).copied(), *abbr, "{full}'s abbreviation");
-            }
         }
-        let names: Vec<String> = FUNCTIONS
-            .iter()
-            .map(|(f, _)| f.to_ascii_lowercase())
-            .collect();
+        let names: Vec<String> = spelled.iter().map(|f| f.to_ascii_lowercase()).collect();
         let json: serde_json::Map<String, Value> = names
             .iter()
             .map(|name| (format!("function_{name}"), serde_json::json!({})))

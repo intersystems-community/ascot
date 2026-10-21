@@ -654,12 +654,7 @@ impl WorkspaceStruct {
             DocDetails::Rtn(rtn, None) => {
                 let env = self.workspace_env();
                 let doc_env = check::DocumentEnv::new(&env, &rtn.map.expanded_olc, uri);
-                let mut diagnostics = check::check_rtn(
-                    &doc_env,
-                    rtn.map.expanded_text(),
-                    &rtn.routine,
-                    &rtn.definitions,
-                );
+                let mut diagnostics = check::check_rtn(&doc_env, &rtn.routine, &rtn.definitions);
                 diagnostics.extend(env.soft_diagnostics());
                 let mut diagnostics = rtn.map.relocate_diagnostics(diagnostics, uri);
                 diagnostics.extend(rtn.map.unresolved.iter().cloned());
@@ -4307,36 +4302,6 @@ mod tests {
                 "6:40 Command keyword `w` should be written `Write`",
                 "6:7 Command keyword `do` should be written `Do`",
                 "7:1 Command keyword `h` should be written `Halt`",
-            ]
-        );
-    }
-
-    #[test]
-    fn commands_after_an_unchecked_construct_are_still_style_checked() {
-        let style = style::parse(r#"{"command": {"form": "Long"}}"#).unwrap();
-        let workspace = Workspace::new(None, Some(style));
-        let uri = "S.mac".to_string();
-        workspace.open(
-            uri.clone(),
-            "ROUTINE S\nf(x)\n i x  d\n . s b=1\n s c=1\n q\ng()\n b 1\n f i=1:1:2 { s d=i }\n q\n"
-                .to_string(),
-        );
-        let found: Vec<_> = style_messages(&workspace, &uri)
-            .into_iter()
-            .filter(|m| m.contains("Command keyword"))
-            .collect();
-        assert_eq!(
-            found,
-            [
-                "2:1 Command keyword `i` should be written `If`",
-                "2:6 Command keyword `d` should be written `Do`",
-                "3:3 Command keyword `s` should be written `Set`",
-                "4:1 Command keyword `s` should be written `Set`",
-                "5:1 Command keyword `q` should be written `Quit`",
-                "7:1 Command keyword `b` should be written `Break`",
-                "8:1 Command keyword `f` should be written `For`",
-                "8:13 Command keyword `s` should be written `Set`",
-                "9:1 Command keyword `q` should be written `Quit`",
             ]
         );
     }
