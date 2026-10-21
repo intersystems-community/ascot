@@ -73,6 +73,9 @@ npm install @intersystems-community/ascot
 
 ### `ascot` as a CLI tool
 
+`ascot help` lists the commands, and `ascot help <COMMAND>` (or
+`ascot <COMMAND> --help`) shows one's options.
+
 ```sh
 ascot analyze <PATH>...
 ```

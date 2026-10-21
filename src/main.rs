@@ -1,5 +1,5 @@
 //! The `ascot` command-line binary: argument parsing and the `analyze`, `analyze-workspace`,
-//! `parse`, `declare`, `mcp` and `lsp` subcommands documented in README.md.
+//! `parse`, `declare`, `mcp`, `lsp` and `help` subcommands documented in README.md.
 //!
 //! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
 //! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
@@ -22,15 +22,35 @@ use tygr::Grammar;
 
 use ascot::{AtelierConnection, DocKind, IrisClient};
 
+mod help;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
-    match args.get(1).map(String::as_str) {
+    let command = args.get(1).map(String::as_str);
+    let is_help = |arg: &String| arg == "--help" || arg == "-h";
+    if matches!(command, Some("help" | "--help" | "-h")) {
+        match args.get(2) {
+            None => print!("{}", help::overview()),
+            Some(name) => match help::find(name) {
+                Some(cmd) => print!("{}", cmd.help()),
+                None => unknown_command(name),
+            },
+        }
+        return;
+    }
+    let cmd = command.and_then(help::find);
+    if let Some(cmd) = cmd
+        && args[2..].iter().any(is_help)
+    {
+        print!("{}", cmd.help());
+        return;
+    }
+    match command {
         Some("analyze") => {
             let mut rest: Vec<String> = args[2..].to_vec();
             let iris = connect_iris(&mut rest);
             if rest.is_empty() {
-                eprintln!("usage: analyze [--iris <url>] [--iris-namespace <ns>] <path>...");
-                exit(1);
+                cmd.unwrap().usage_error();
             }
             analyze(rest.iter().map(|s| Path::new(s.as_str())), iris);
         }
@@ -38,10 +58,7 @@ fn main() {
             let mut rest: Vec<String> = args[2..].to_vec();
             let iris = connect_iris(&mut rest);
             if rest.len() < 2 {
-                eprintln!(
-                    "usage: analyze-workspace [--iris <url>] [--iris-namespace <ns>] <workspace-root> <path>..."
-                );
-                exit(1);
+                cmd.unwrap().usage_error();
             }
             let root = PathBuf::from(&rest[0]);
             let paths: Vec<PathBuf> = rest[1..].iter().map(PathBuf::from).collect();
@@ -49,8 +66,7 @@ fn main() {
         }
         Some("parse") => {
             let Some(file_path) = args.get(2) else {
-                eprintln!("usage: parse <file>");
-                exit(1);
+                cmd.unwrap().usage_error();
             };
             scan_file(file_path);
         }
@@ -59,8 +75,7 @@ fn main() {
             let url = extract_flag(&mut rest, "--iris");
             let namespace = extract_flag(&mut rest, "--iris-namespace");
             let (Some(url), [out]) = (url, rest.as_slice()) else {
-                eprintln!("usage: declare --iris <url> [--iris-namespace <ns>] <file>");
-                exit(1);
+                cmd.unwrap().usage_error();
             };
             declare(&url, namespace.as_deref(), Path::new(out));
         }
@@ -76,13 +91,17 @@ fn main() {
                 exit(1);
             }
         }
-        _ => {
-            eprintln!(
-                "usage: parse <file> | analyze [--iris <url|file>] [--iris-namespace <ns>] <path>... | analyze-workspace [--iris <url|file>] [--iris-namespace <ns>] <root> <path>... | declare --iris <url> [--iris-namespace <ns>] <file> | mcp | lsp [--iris <url|file>] [--iris-namespace <ns>]"
-            );
+        Some(name) => unknown_command(name),
+        None => {
+            eprint!("{}", help::overview());
             exit(1);
         }
     }
+}
+
+fn unknown_command(name: &str) -> ! {
+    eprintln!("unknown command '{name}'; run `ascot help` for the list");
+    exit(1)
 }
 
 /// Pulls `--flag <value>` out of `args` (in place), wherever it appears, leaving the rest.
