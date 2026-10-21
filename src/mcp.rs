@@ -43,6 +43,9 @@ struct CreateWorkspaceRequest {
     /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
     /// for a URL; for a declaration file it must match the namespace it declares.
     iris_namespace: Option<String>,
+    /// Workspace-wide style rules, e.g. `{"commands": {"form": "Long", "case": "Pascal"}}` to
+    /// have every command keyword written as `Set`/`Quit`. Applies to every document.
+    style: Option<crate::bindings::Style>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -166,6 +169,7 @@ impl AnalyzerMcpServer {
             workspace,
             iris,
             iris_namespace,
+            style,
         }): Parameters<CreateWorkspaceRequest>,
     ) -> Result<String, String> {
         let mut workspaces = self.workspaces.write().await;
@@ -178,7 +182,7 @@ impl AnalyzerMcpServer {
             .map_err(|err| format!("iris: {err}"))?;
         workspaces.insert(
             workspace.clone(),
-            Arc::new(Mutex::new(Workspace::new_with_iris(iris))),
+            Arc::new(Mutex::new(Workspace::new_with_iris(iris, style))),
         );
         Ok(format!("created workspace {workspace:?}"))
     }

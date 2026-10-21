@@ -137,6 +137,29 @@ interface common {
         uri: option<string>,
     }
 
+    enum keyword-form {
+        long,
+        short,
+    }
+
+    enum keyword-case {
+        lower,
+        upper,
+        // As the documentation spells them: `Set`, `TStart`, `ZWrite`.
+        pascal,
+    }
+
+    // How command keywords are to be written; a field left out means "either way".
+    record command-style {
+        form: option<keyword-form>,
+        case: option<keyword-case>,
+    }
+
+    // Workspace-wide style rules, checked on every document.
+    record style {
+        commands: command-style,
+    }
+
     enum diagnostic-severity {
         error,
         warning,
@@ -224,12 +247,12 @@ interface exported {
     use common.{
         member-info, class-info, position,
         diagnostic, inlay-hint, range, location,
-        document-symbol, workspace-symbol,
+        document-symbol, workspace-symbol, style,
     };
     use imported.{iris-connection};
 
     resource workspace {
-        constructor(env: option<iris-connection>);
+        constructor(env: option<iris-connection>, style: option<style>);
         // Stores the raw source; no parsing happens here (kind is inferred from `uri`'s
         // extension). Doubles as both open and edit. Returns the uris (including this one)
         // whose cached analysis is now stale and should be rechecked.

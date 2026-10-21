@@ -3,3 +3,4 @@ target/
 *.pdb
 node_modules/
 .DS_Store
+bindings/vscode/

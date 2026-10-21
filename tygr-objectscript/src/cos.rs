@@ -862,263 +862,120 @@ pub struct SetArgument {
     pub value: Range<Expr>,
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwDo {
-    Full(StringEqCI!("Do")),
-    Abbr(StringEqCI!("D")),
+// A command keyword: its documented spelling and abbreviation.
+pub trait Keyword: Grammar {
+    const FULL: &'static str;
+    const ABBR: Option<&'static str>;
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwIf {
-    Full(StringEqCI!("If")),
-    Abbr(StringEqCI!("I")),
+macro_rules! command_keywords {
+    ($($name:ident: $full:literal $(/ $abbr:literal)?;)*) => {
+        $(
+            #[derive(Grammar)]
+            #[grammar(inline)]
+            pub enum $name {
+                Full(StringEqCI!($full)),
+                $(Abbr(StringEqCI!($abbr)),)?
+            }
+
+            impl Keyword for $name {
+                const FULL: &'static str = $full;
+                const ABBR: Option<&'static str> = command_keywords!(@abbr $($abbr)?);
+            }
+        )*
+
+        // Every command's full name, for `UnknownCommand`'s error message. `#Dim` is included
+        // even though it itself never reaches `UnknownCommand` (it starts with `#`, not a
+        // letter): a user who drops the `#` and just writes `Dim` produces a plain alphabetic
+        // word that *does* land here, and `#Dim` is the useful suggestion for that typo. The
+        // `&sql(`/`##sql`/`&html<`/`&js<` markers are left out for now.
+        pub(crate) const COMMAND_NAMES: &[&str] = &[$($full,)* "H", "#Dim"];
+    };
+    (@abbr) => { None };
+    (@abbr $abbr:literal) => { Some($abbr) };
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwElse {
-    Full(StringEqCI!("Else")),
-    Abbr(StringEqCI!("E")),
+command_keywords! {
+    KwDo: "Do" / "D";
+    KwIf: "If" / "I";
+    KwElseIf: "ElseIf";
+    KwElse: "Else" / "E";
+    KwWhile: "While";
+    KwFor: "For" / "F";
+    KwGoto: "GoTo" / "G";
+    KwBreak: "Break" / "B";
+    KwQuit: "Quit" / "Q";
+    KwZQuit: "ZQuit" / "Zq";
+    KwReturn: "Return" / "Ret";
+    KwContinue: "Continue";
+    KwSet: "Set" / "S";
+    KwKill: "Kill" / "K";
+    KwNew: "New" / "N";
+    KwMerge: "Merge" / "M";
+    KwTry: "Try";
+    KwCatch: "Catch";
+    KwThrow: "Throw";
+    KwZTrap: "ZTrap" / "Zt";
+    KwZZDump: "ZZDump";
+    KwWrite: "Write" / "W";
+    KwRead: "Read" / "R";
+    KwOpen: "Open" / "O";
+    KwClose: "Close" / "C";
+    KwUse: "Use" / "U";
+    KwLock: "Lock" / "L";
+    KwHalt: "Halt";
+    KwHang: "Hang";
+    KwJob: "Job" / "J";
+    KwTStart: "TStart" / "Ts";
+    KwTCommit: "TCommit" / "Tc";
+    KwTRollback: "TRollback" / "Tro";
+    KwZWrite: "ZWrite" / "Zw";
+    KwZKill: "ZKill" / "Zk";
+    KwZNspace: "ZNspace" / "Zn";
+    KwXecute: "Xecute" / "X";
+    KwView: "View" / "V";
+    KwZPrint: "ZPrint" / "Zp";
+    KwPrint: "Print" / "P";
+    KwZBreak: "ZBreak" / "Zb";
+    KwMVPrint: "MVPrint" / "MVP";
+    KwMVCrt: "MVCrt" / "MVC";
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwWhile {
-    Full(StringEqCI!("While")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwFor {
-    Full(StringEqCI!("For")),
-    Abbr(StringEqCI!("F")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwBreak {
-    Full(StringEqCI!("Break")),
-    Abbr(StringEqCI!("B")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwQuit {
-    Full(StringEqCI!("Quit")),
-    Abbr(StringEqCI!("Q")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZQuit {
-    Full(StringEqCI!("ZQuit")),
-    Abbr(StringEqCI!("Zq")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwReturn {
-    Full(StringEqCI!("Return")),
-    Abbr(StringEqCI!("Ret")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwContinue {
-    Full(StringEqCI!("Continue")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwSet {
-    Full(StringEqCI!("Set")),
-    Abbr(StringEqCI!("S")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwKill {
-    Full(StringEqCI!("Kill")),
-    Abbr(StringEqCI!("K")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwNew {
-    Full(StringEqCI!("New")),
-    Abbr(StringEqCI!("N")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwMerge {
-    Full(StringEqCI!("Merge")),
-    Abbr(StringEqCI!("M")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwTry {
-    Full(StringEqCI!("Try")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwCatch {
-    Full(StringEqCI!("Catch")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwThrow {
-    Full(StringEqCI!("Throw")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZTrap {
-    Full(StringEqCI!("ZTrap")),
-    Abbr(StringEqCI!("Zt")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwWrite {
-    Full(StringEqCI!("Write")),
-    Abbr(StringEqCI!("W")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwRead {
-    Full(StringEqCI!("Read")),
-    Abbr(StringEqCI!("R")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwOpen {
-    Full(StringEqCI!("Open")),
-    Abbr(StringEqCI!("O")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwClose {
-    Full(StringEqCI!("Close")),
-    Abbr(StringEqCI!("C")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwUse {
-    Full(StringEqCI!("Use")),
-    Abbr(StringEqCI!("U")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwLock {
-    Full(StringEqCI!("Lock")),
-    Abbr(StringEqCI!("L")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwHalt {
-    Full(StringEqCI!("Halt")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwHang {
-    Full(StringEqCI!("Hang")),
-}
-
-// Either Halt or Hang, depending on if it receives an arg
+// `H` alone halts; with an argument it hangs -- so only `HCommand` knows its full name.
 #[derive(Grammar)]
 #[grammar(inline)]
 pub enum KwH {
     Abbr(StringEqCI!("H")),
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwJob {
-    Full(StringEqCI!("Job")),
-    Abbr(StringEqCI!("J")),
+// One command keyword as written in the source.
+pub struct KeywordUse {
+    pub start: usize,
+    pub text: String,
+    pub full: &'static str,
+    pub abbr: Option<&'static str>,
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwTStart {
-    Full(StringEqCI!("TStart")),
-    Abbr(StringEqCI!("Ts")),
+impl KeywordUse {
+    fn of<K: Keyword>(kw: &K, start: usize) -> Self {
+        KeywordUse {
+            start,
+            text: kw.print(),
+            full: K::FULL,
+            abbr: K::ABBR,
+        }
+    }
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwTCommit {
-    Full(StringEqCI!("TCommit")),
-    Abbr(StringEqCI!("Tc")),
-}
+// What every kind of command exposes, so a check over commands as such (keyword style,
+// postconditionals, ...) needs no knowledge of the individual kinds.
+pub trait CommandLike {
+    // The keywords this command spells out, given where the command itself starts.
+    fn keywords(&self, start: usize) -> Vec<KeywordUse>;
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwTRollback {
-    Full(StringEqCI!("TRollback")),
-    Abbr(StringEqCI!("Tro")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZWrite {
-    Full(StringEqCI!("ZWrite")),
-    Abbr(StringEqCI!("Zw")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZPrint {
-    Full(StringEqCI!("ZPrint")),
-    Abbr(StringEqCI!("Zp")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZKill {
-    Full(StringEqCI!("ZKill")),
-    Abbr(StringEqCI!("Zk")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZNspace {
-    Full(StringEqCI!("ZNspace")),
-    Abbr(StringEqCI!("Zn")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwXecute {
-    Full(StringEqCI!("Xecute")),
-    Abbr(StringEqCI!("X")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwView {
-    Full(StringEqCI!("View")),
-    Abbr(StringEqCI!("V")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwGoto {
-    Full(StringEqCI!("GoTo")),
-    Abbr(StringEqCI!("G")),
+    fn postcondition(&self) -> Option<&PostCondition> {
+        None
+    }
 }
 
 #[derive(Grammar)]
@@ -1553,17 +1410,19 @@ char_class!(pub IsNotSpaceChar, "not_space", |ch| ch != ' ');
 
 #[derive(Grammar)]
 pub struct ElseIfBranch {
+    pub kw: Range<KwElseIf>,
     // `ElseIf  (x)` with extra spaces: every space but the last is the keyword's, the last
     // belongs to the condition (as after `If`). Unlike `If`, `ElseIf` is never argumentless.
-    kw_elseif: Raw<(
-        StringEqCI!("ElseIf"),
-        Vec<(StringEq!(" "), NotFollowedBy<CharOf<IsNotSpaceChar>>)>,
-    )>,
+    kw_spaces: Raw<Vec<(StringEq!(" "), NotFollowedBy<CharOf<IsNotSpaceChar>>)>>,
     pub cnds: IfConditions,
     pub thn: Range<Block>,
 }
 
-pub type ElseBranch = Prefix<KwElse, Option<Range<Block>>>;
+#[derive(Grammar)]
+pub struct ElseBranch {
+    pub kw: Range<KwElse>,
+    pub body: Option<Range<Block>>,
+}
 
 #[derive(Grammar)]
 pub enum SpecialVariable {
@@ -3058,251 +2917,385 @@ pub struct WhileConditions {
 }
 
 #[derive(Grammar)]
+pub struct DoWhileCommand {
+    pub kw: KwDo,
+    // Can't use block because iter must start with '{'
+    pub iter: Range<MGapXMGap<Box<Brace<ProcedureBody>>>>,
+    pub kw_while: Range<KwWhile>,
+    pub cnds: Option<WhileConditions>,
+}
+
+#[derive(Grammar)]
+pub struct DoCommand {
+    pub kw: KwDo,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<VecSep<DoArgument, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct IfCommand {
+    pub kw: KwIf,
+    pub cnds: Option<IfConditions>,
+    pub branches: Option<IfBranches>,
+}
+
+#[derive(Grammar)]
+pub struct WhileCommand {
+    pub kw: KwWhile,
+    pub cnds: Option<WhileConditions>,
+    pub bdy: CurryBlock,
+}
+
+#[derive(Grammar)]
+pub struct ForCommand {
+    pub kw: KwFor,
+    pub iter: Option<SGap1X<ForIterator>>,
+    // Some older code does not have an assoicated block
+    pub bdy: Option<Range<Block>>,
+}
+
+#[derive(Grammar)]
+pub struct GotoCommand {
+    pub kw: KwGoto,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<VecSep<GoToArg, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct BreakCommand {
+    pub kw: KwBreak,
+    pub pc: Option<PostCondition>,
+    pub exp: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct QuitCommand {
+    pub kw: KwQuit,
+    pub pc: Option<PostCondition>,
+    pub exp: Range<Option<CommandArgument<Expr>>>,
+}
+
+#[derive(Grammar)]
+pub struct ZQuitCommand {
+    pub kw: KwZQuit,
+    pub pc: Option<PostCondition>,
+    pub exp: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct ReturnCommand {
+    pub kw: KwReturn,
+    pub pc: Option<PostCondition>,
+    pub exp: Range<Option<CommandArgument<Expr>>>,
+}
+
+#[derive(Grammar)]
+pub struct ContinueCommand {
+    pub kw: KwContinue,
+    pub pc: Option<PostCondition>,
+}
+
+#[derive(Grammar)]
+pub struct DimCommand {
+    pub kw: StringEqCI!("#dim"),
+    pub g: SGap1,
+    pub name: VecSep<LocalVariableName, SGapXSGap<StringEq!(",")>>,
+    // The reference makes `As <Type>` mandatory; it is accepted as optional here.
+    pub as_type: Range<Option<As<DimType>>>,
+    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
+}
+
+#[derive(Grammar)]
+pub struct SetCommand {
+    pub kw: KwSet,
+    pub pc: Option<PostCondition>,
+    pub assignments:
+        CommandArgument<VecSep<Range<AllowIndirection<SetArgument>>, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct KillCommand {
+    pub kw: KwKill,
+    pub pc: Option<PostCondition>,
+    pub targets:
+        Option<CommandArgument<VecSep<Range<AllowMacro<KillArgument>>, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct NewCommand {
+    pub kw: KwNew,
+    pub pc: Option<PostCondition>,
+    pub targets: Option<CommandArgument<VecSep<Range<NewArgument>, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct MergeCommand {
+    pub kw: KwMerge,
+    pub pc: Option<PostCondition>,
+    pub merge_arguments: CommandArgument<VecSep<Range<MergeArgument>, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct TryCommand {
+    pub kw_try: KwTry,
+    pub b1: XMGap<Range<Block>>,
+    pub kw_catch: Range<KwCatch>,
+    pub g3: SGap,
+    pub catch_target: Option<CatchTarget>,
+    pub b2: Range<Block>,
+}
+
+#[derive(Grammar)]
+pub struct ThrowCommand {
+    pub kw: KwThrow,
+    pub pc: Option<PostCondition>,
+    pub e: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct ZTrapCommand {
+    pub kw: KwZTrap,
+    pub pc: Option<PostCondition>,
+    pub exp: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct ZZDumpCommand {
+    pub kw: KwZZDump,
+    pub pc: Option<PostCondition>,
+    pub exp: CommandArgument<VecSep<Expr, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct WriteCommand {
+    pub kw: KwWrite,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct ReadCommand {
+    pub kw: KwRead,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<ReadArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct OpenCommand {
+    pub kw: KwOpen,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<OpenArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct CloseCommand {
+    pub kw: KwClose,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<CloseArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct UseCommand {
+    pub kw: KwUse,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<UseArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct LockCommand {
+    pub kw: KwLock,
+    pub pc: Option<PostCondition>,
+    pub args: Option<
+        CommandArgument<
+            VecSep<
+                AllowMacro<(AllowMacro<LockArg>, Option<ReadTimeout>)>,
+                LGapXLGap<StringEq!(",")>,
+            >,
+        >,
+    >,
+}
+
+#[derive(Grammar)]
+pub struct HaltCommand {
+    pub kw: KwHalt,
+    pub pc: Option<PostCondition>,
+}
+
+#[derive(Grammar)]
+pub struct HangCommand {
+    pub kw: KwHang,
+    pub pc: Option<PostCondition>,
+    pub e: CommandArgument<Expr>,
+}
+
+#[derive(Grammar)]
+pub struct HCommand {
+    pub kw: KwH,
+    pub pc: Option<PostCondition>,
+    pub e: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct JobCommand {
+    pub kw: KwJob,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<JobArgument, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct TStartCommand {
+    pub kw: KwTStart,
+    pub pc: Option<PostCondition>,
+}
+
+#[derive(Grammar)]
+pub struct TCommitCommand {
+    pub kw: KwTCommit,
+    pub pc: Option<PostCondition>,
+}
+
+#[derive(Grammar)]
+pub struct TRollbackCommand {
+    pub kw: KwTRollback,
+    pub pc: Option<PostCondition>,
+    pub one: Option<CommandArgument<StringEq!("1")>>,
+}
+
+#[derive(Grammar)]
+pub struct ZWriteCommand {
+    pub kw: KwZWrite,
+    pub pc: Option<PostCondition>,
+    pub exp: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct ZKillCommand {
+    pub kw: KwZKill,
+    pub pc: Option<PostCondition>,
+    pub targets: CommandArgument<VecSep<Range<ZKillTarget>, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct ZNspaceCommand {
+    pub kw: KwZNspace,
+    pub pc: Option<PostCondition>,
+    pub e: CommandArgument<Expr>,
+}
+
+#[derive(Grammar)]
+pub struct XecuteCommand {
+    pub kw: KwXecute,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<XecuteArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct ViewCommand {
+    pub kw: KwView,
+    pub pc: Option<PostCondition>,
+    pub exp: Option<CommandArgument<VecSep<ViewArgument, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct ZPrintCommand {
+    pub kw: KwZPrint,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<PrintArgs>>,
+}
+
+#[derive(Grammar)]
+pub struct PrintCommand {
+    pub kw: KwPrint,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<PrintArgs>>,
+}
+
+#[derive(Grammar)]
+pub struct ZBreakCommand {
+    pub kw: KwZBreak,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<VecSep<ZBreakArg, LGapXLGap<StringEq!(",")>>>>,
+}
+
+// MVP and MVC are undocumented commands
+#[derive(Grammar)]
+pub struct MVPCommand {
+    pub kw: KwMVPrint,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct MVCCommand {
+    pub kw: KwMVCrt,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct JSCommand {
+    pub before: JsMarker,
+    pub content: EmbeddedJS,
+    pub after: StringEq!(">"),
+}
+
+#[derive(Grammar)]
 pub enum Command {
     Unknown(UnknownCommand),
-    DoWhile {
-        kw: KwDo,
-        // Can't use block because iter must start with '{'
-        iter: Range<MGapXMGap<Box<Brace<ProcedureBody>>>>,
-        kw_while: KwWhile,
-        cnds: Option<WhileConditions>,
-    },
-    Do {
-        kw: KwDo,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<VecSep<DoArgument, LGapXLGap<StringEq!(",")>>>>,
-    },
-    If {
-        kw: KwIf,
-        cnds: Option<IfConditions>,
-        branches: Option<IfBranches>,
-    },
+    DoWhile(DoWhileCommand),
+    Do(DoCommand),
+    If(IfCommand),
     // Stand-alone ElseIf and Else are needed to process dotted do block, modern tooling should ignore them.
     ElseIf(ElseIfBranch),
     Else(ElseBranch),
-    While {
-        kw: KwWhile,
-        cnds: Option<WhileConditions>,
-        bdy: CurryBlock,
-    },
-    For {
-        kw: KwFor,
-        iter: Option<SGap1X<ForIterator>>,
-        // Some older code does not have an assoicated block
-        bdy: Option<Range<Block>>,
-    },
-    Goto {
-        kw: KwGoto,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<VecSep<GoToArg, LGapXLGap<StringEq!(",")>>>>,
-    },
-    Break {
-        kw: KwBreak,
-        pc: Option<PostCondition>,
-        exp: Option<CommandArgument<Expr>>,
-    },
-    Quit {
-        kw: KwQuit,
-        pc: Option<PostCondition>,
-        exp: Range<Option<CommandArgument<Expr>>>,
-    },
-    ZQuit {
-        kw: KwZQuit,
-        pc: Option<PostCondition>,
-        exp: Option<CommandArgument<Expr>>,
-    },
-    Return {
-        kw: KwReturn,
-        pc: Option<PostCondition>,
-        exp: Range<Option<CommandArgument<Expr>>>,
-    },
-    Continue {
-        kw: KwContinue,
-        pc: Option<PostCondition>,
-    },
+    While(WhileCommand),
+    For(ForCommand),
+    Goto(GotoCommand),
+    Break(BreakCommand),
+    Quit(QuitCommand),
+    ZQuit(ZQuitCommand),
+    Return(ReturnCommand),
+    Continue(ContinueCommand),
 
-    Dim {
-        kw: StringEqCI!("#dim"),
-        g: SGap1,
-        name: VecSep<LocalVariableName, SGapXSGap<StringEq!(",")>>,
-        // The reference makes `As <Type>` mandatory; it is accepted as optional here.
-        as_type: Range<Option<As<DimType>>>,
-        default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
-    },
-    Set {
-        kw: KwSet,
-        pc: Option<PostCondition>,
-        assignments: CommandArgument<
-            VecSep<Range<AllowIndirection<SetArgument>>, LGapXLGap<StringEq!(",")>>,
-        >,
-    },
-    Kill {
-        kw: KwKill,
-        pc: Option<PostCondition>,
-        targets: Option<
-            CommandArgument<VecSep<Range<AllowMacro<KillArgument>>, LGapXLGap<StringEq!(",")>>>,
-        >,
-    },
-    New {
-        kw: KwNew,
-        pc: Option<PostCondition>,
-        targets: Option<CommandArgument<VecSep<Range<NewArgument>, LGapXLGap<StringEq!(",")>>>>,
-    },
-    Merge {
-        kw: KwMerge,
-        pc: Option<PostCondition>,
-        merge_arguments: CommandArgument<VecSep<Range<MergeArgument>, LGapXLGap<StringEq!(",")>>>,
-    },
+    Dim(DimCommand),
+    Set(SetCommand),
+    Kill(KillCommand),
+    New(NewCommand),
+    Merge(MergeCommand),
 
-    Try {
-        kw_try: KwTry,
-        b1: XMGap<Range<Block>>,
-        kw_catch: KwCatch,
-        g3: SGap,
-        catch_target: Option<CatchTarget>,
-        b2: Range<Block>,
-    },
-    Throw {
-        kw: KwThrow,
-        pc: Option<PostCondition>,
-        e: Option<CommandArgument<Expr>>,
-    },
-    ZTrap {
-        kw: KwZTrap,
-        pc: Option<PostCondition>,
-        exp: Option<CommandArgument<Expr>>,
-    },
-    ZZDump {
-        kw: StringEqCI!("ZZDUMP"),
-        pc: Option<PostCondition>,
-        exp: CommandArgument<VecSep<Expr, LGapXLGap<StringEq!(",")>>>,
-    },
-    Write {
-        kw: KwWrite,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>>,
-    },
-    Read {
-        kw: KwRead,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<ReadArg, LGapXLGap<StringEq!(",")>>>,
-    },
-    Open {
-        kw: KwOpen,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<OpenArg, LGapXLGap<StringEq!(",")>>>,
-    },
-    Close {
-        kw: KwClose,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<CloseArg, LGapXLGap<StringEq!(",")>>>,
-    },
-    Use {
-        kw: KwUse,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<UseArg, LGapXLGap<StringEq!(",")>>>,
-    },
+    Try(TryCommand),
+    Throw(ThrowCommand),
+    ZTrap(ZTrapCommand),
+    ZZDump(ZZDumpCommand),
+    Write(WriteCommand),
+    Read(ReadCommand),
+    Open(OpenCommand),
+    Close(CloseCommand),
+    Use(UseCommand),
 
-    Lock {
-        kw: KwLock,
-        pc: Option<PostCondition>,
-        args: Option<
-            CommandArgument<
-                VecSep<
-                    AllowMacro<(AllowMacro<LockArg>, Option<ReadTimeout>)>,
-                    LGapXLGap<StringEq!(",")>,
-                >,
-            >,
-        >,
-    },
-    Halt {
-        kw: KwHalt,
-        pc: Option<PostCondition>,
-    },
-    Hang {
-        kw: KwHang,
-        pc: Option<PostCondition>,
-        e: CommandArgument<Expr>,
-    },
-    H {
-        kw: KwH,
-        pc: Option<PostCondition>,
-        e: Option<CommandArgument<Expr>>,
-    },
-    Job {
-        kw: KwJob,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<JobArgument, LGapXLGap<StringEq!(",")>>>,
-    },
+    Lock(LockCommand),
+    Halt(HaltCommand),
+    Hang(HangCommand),
+    H(HCommand),
+    Job(JobCommand),
 
-    TStart {
-        kw: KwTStart,
-        pc: Option<PostCondition>,
-    },
-    TCommit {
-        kw: KwTCommit,
-        pc: Option<PostCondition>,
-    },
-    TRollback {
-        kw: KwTRollback,
-        pc: Option<PostCondition>,
-        one: Option<CommandArgument<StringEq!("1")>>,
-    },
+    TStart(TStartCommand),
+    TCommit(TCommitCommand),
+    TRollback(TRollbackCommand),
 
-    ZWrite {
-        kw: KwZWrite,
-        pc: Option<PostCondition>,
-        exp: Option<CommandArgument<Expr>>,
-    },
-    ZKill {
-        kw: KwZKill,
-        pc: Option<PostCondition>,
-        targets: CommandArgument<VecSep<Range<ZKillTarget>, LGapXLGap<StringEq!(",")>>>,
-    },
-    ZNspace {
-        kw: KwZNspace,
-        pc: Option<PostCondition>,
-        e: CommandArgument<Expr>,
-    },
-    Xecute {
-        kw: KwXecute,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<XecuteArg, LGapXLGap<StringEq!(",")>>>,
-    },
-    View {
-        kw: KwView,
-        pc: Option<PostCondition>,
-        exp: Option<CommandArgument<VecSep<ViewArgument, LGapXLGap<StringEq!(",")>>>>,
-    },
+    ZWrite(ZWriteCommand),
+    ZKill(ZKillCommand),
+    ZNspace(ZNspaceCommand),
+    Xecute(XecuteCommand),
+    View(ViewCommand),
 
-    ZPrint {
-        kw: KwZPrint,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<PrintArgs>>,
-    },
-    Print {
-        kw: Either<StringEqCI!("PRINT"), StringEqCI!("P")>,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<PrintArgs>>,
-    },
+    ZPrint(ZPrintCommand),
+    Print(PrintCommand),
 
-    ZBreak {
-        kw: Either<StringEqCI!("ZBREAK"), StringEqCI!("ZB")>,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<VecSep<ZBreakArg, LGapXLGap<StringEq!(",")>>>>,
-    },
+    ZBreak(ZBreakCommand),
 
-    // MVP and MVC are undocumented commands
-    MVP {
-        kw: Either<StringEqCI!("MVPRINT"), StringEqCI!("MVP")>,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>,
-    },
-    MVC {
-        kw: Either<StringEqCI!("MVCRT"), StringEqCI!("MVC")>,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>,
-    },
+    MVP(MVPCommand),
+    MVC(MVCCommand),
 
     CallMacro(MacroCall),
 
@@ -3312,11 +3305,207 @@ pub enum Command {
         StringEq!(")"),
     ),
     HTML(StringEqCI!("&html<"), HTML, StringEq!(">")),
-    JS {
-        before: JsMarker,
-        content: EmbeddedJS,
-        after: StringEq!(">"),
-    },
+    JS(JSCommand),
+}
+
+macro_rules! keyword_command {
+    ($($name:ident),* $(,)?) => { $(
+        impl CommandLike for $name {
+            fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+                vec![KeywordUse::of(&self.kw, start)]
+            }
+
+            fn postcondition(&self) -> Option<&PostCondition> {
+                self.pc.as_ref()
+            }
+        }
+    )* };
+}
+
+keyword_command! {
+    DoCommand,
+    GotoCommand,
+    BreakCommand,
+    QuitCommand,
+    ZQuitCommand,
+    ReturnCommand,
+    ContinueCommand,
+    SetCommand,
+    KillCommand,
+    NewCommand,
+    MergeCommand,
+    ThrowCommand,
+    ZTrapCommand,
+    ZZDumpCommand,
+    WriteCommand,
+    ReadCommand,
+    OpenCommand,
+    CloseCommand,
+    UseCommand,
+    LockCommand,
+    HaltCommand,
+    HangCommand,
+    JobCommand,
+    TStartCommand,
+    TCommitCommand,
+    TRollbackCommand,
+    ZWriteCommand,
+    ZKillCommand,
+    ZNspaceCommand,
+    XecuteCommand,
+    ViewCommand,
+    ZPrintCommand,
+    PrintCommand,
+    ZBreakCommand,
+    MVPCommand,
+    MVCCommand,
+}
+
+impl CommandLike for WhileCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        vec![KeywordUse::of(&self.kw, start)]
+    }
+}
+
+impl CommandLike for ForCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        vec![KeywordUse::of(&self.kw, start)]
+    }
+}
+
+impl CommandLike for DoWhileCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        vec![
+            KeywordUse::of(&self.kw, start),
+            KeywordUse::of(&*self.kw_while, self.kw_while.start),
+        ]
+    }
+}
+
+impl CommandLike for IfCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        let mut keywords = vec![KeywordUse::of(&self.kw, start)];
+        if let Some(branches) = &self.branches {
+            for eif in &branches.eifs {
+                keywords.extend(eif.prefixed.keywords(eif.prefixed.kw.start));
+            }
+            if let Some(els) = &branches.els {
+                keywords.extend(els.prefixed.keywords(els.prefixed.kw.start));
+            }
+        }
+        keywords
+    }
+}
+
+impl CommandLike for ElseIfBranch {
+    fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
+        vec![KeywordUse::of(&*self.kw, self.kw.start)]
+    }
+}
+
+impl CommandLike for ElseBranch {
+    fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
+        vec![KeywordUse::of(&*self.kw, self.kw.start)]
+    }
+}
+
+impl CommandLike for TryCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        vec![
+            KeywordUse::of(&self.kw_try, start),
+            KeywordUse::of(&*self.kw_catch, self.kw_catch.start),
+        ]
+    }
+}
+
+impl CommandLike for HCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        vec![KeywordUse {
+            start,
+            text: self.kw.print(),
+            full: if self.e.is_some() { "Hang" } else { "Halt" },
+            abbr: Some("H"),
+        }]
+    }
+
+    fn postcondition(&self) -> Option<&PostCondition> {
+        self.pc.as_ref()
+    }
+}
+
+// `#Dim` is a preprocessor directive, not a command keyword.
+impl CommandLike for DimCommand {
+    fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
+        vec![]
+    }
+}
+
+impl Command {
+    // `None` for what isn't a keyword command: a macro call or embedded SQL/HTML/JS.
+    pub fn as_command_like(&self) -> Option<&dyn CommandLike> {
+        Some(match self {
+            Command::Unknown(unknown) => match unknown.0 {},
+            Command::DoWhile(command) => command,
+            Command::Do(command) => command,
+            Command::If(command) => command,
+            Command::While(command) => command,
+            Command::For(command) => command,
+            Command::Goto(command) => command,
+            Command::Break(command) => command,
+            Command::Quit(command) => command,
+            Command::ZQuit(command) => command,
+            Command::Return(command) => command,
+            Command::Continue(command) => command,
+            Command::Dim(command) => command,
+            Command::Set(command) => command,
+            Command::Kill(command) => command,
+            Command::New(command) => command,
+            Command::Merge(command) => command,
+            Command::Try(command) => command,
+            Command::Throw(command) => command,
+            Command::ZTrap(command) => command,
+            Command::ZZDump(command) => command,
+            Command::Write(command) => command,
+            Command::Read(command) => command,
+            Command::Open(command) => command,
+            Command::Close(command) => command,
+            Command::Use(command) => command,
+            Command::Lock(command) => command,
+            Command::Halt(command) => command,
+            Command::Hang(command) => command,
+            Command::H(command) => command,
+            Command::Job(command) => command,
+            Command::TStart(command) => command,
+            Command::TCommit(command) => command,
+            Command::TRollback(command) => command,
+            Command::ZWrite(command) => command,
+            Command::ZKill(command) => command,
+            Command::ZNspace(command) => command,
+            Command::Xecute(command) => command,
+            Command::View(command) => command,
+            Command::ZPrint(command) => command,
+            Command::Print(command) => command,
+            Command::ZBreak(command) => command,
+            Command::MVP(command) => command,
+            Command::MVC(command) => command,
+            Command::ElseIf(branch) => branch,
+            Command::Else(branch) => branch,
+            Command::CallMacro(_) | Command::ESQL(..) | Command::HTML(..) | Command::JS(_) => {
+                return None;
+            }
+        })
+    }
+}
+
+impl CommandLike for Command {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        self.as_command_like()
+            .map_or_else(Vec::new, |command| command.keywords(start))
+    }
+
+    fn postcondition(&self) -> Option<&PostCondition> {
+        self.as_command_like()?.postcondition()
+    }
 }
 
 #[derive(GrammarFromStr)]
@@ -3340,59 +3529,6 @@ impl FromStr for UnknownCommand {
         ))
     }
 }
-
-// Every command's full name that's a plain alphabetic word -- kept in sync by hand, for
-// `UnknownCommand`'s error message. `#Dim` is included even though it itself never reaches
-// `UnknownCommand` (it starts with `#`, not a letter): a user who drops the `#` and just writes
-// `Dim` produces a plain alphabetic word that *does* land here, and `#Dim` is the useful
-// suggestion for that typo. The `&sql(`/`##sql`/`&html<`/`&js<` markers are left out for now.
-pub(crate) const COMMAND_NAMES: &[&str] = &[
-    "Do",
-    "If",
-    "ElseIf",
-    "Else",
-    "While",
-    "For",
-    "GoTo",
-    "Break",
-    "Quit",
-    "ZQuit",
-    "Return",
-    "Continue",
-    "Set",
-    "Kill",
-    "New",
-    "Merge",
-    "Try",
-    "Catch",
-    "Throw",
-    "ZTrap",
-    "ZZDump",
-    "Write",
-    "Read",
-    "Open",
-    "Close",
-    "Use",
-    "Lock",
-    "Halt",
-    "Hang",
-    "H",
-    "Job",
-    "TStart",
-    "TCommit",
-    "TRollback",
-    "ZWrite",
-    "ZKill",
-    "ZNspace",
-    "Xecute",
-    "View",
-    "ZPrint",
-    "Print",
-    "ZBreak",
-    "MVPrint",
-    "MVCrt",
-    "#Dim",
-];
 
 #[derive(Grammar)]
 pub struct XecuteArg {
@@ -6262,6 +6398,35 @@ mod regression_tests {
         let keywords = methods(&cls)[0].header.keywords.as_ref().expect("keywords");
         assert!(keywords.get("CodeMode").is_some());
         assert!(keywords.get("Language").is_none());
+    }
+
+    #[test]
+    fn command_keywords_carry_their_offsets_and_documented_spellings() {
+        let command =
+            Range::<Command>::parse("if x { Quit } elseif y { Quit } E { Quit }").expect("Ok");
+        let keywords = command.keywords(command.start);
+        let keywords: Vec<_> = keywords
+            .iter()
+            .map(|kw| (kw.start, kw.text.as_str(), kw.full, kw.abbr))
+            .collect();
+        assert_eq!(
+            keywords,
+            [
+                (0, "if", "If", Some("I")),
+                (14, "elseif", "ElseIf", None),
+                (32, "E", "Else", Some("E")),
+            ]
+        );
+        let halt = Command::parse("h").expect("Ok");
+        assert_eq!(halt.keywords(0)[0].full, "Halt");
+        let hang = Command::parse("h 1").expect("Ok");
+        assert_eq!(hang.keywords(0)[0].full, "Hang");
+        assert!(
+            Command::parse("$$$M(1)")
+                .expect("Ok")
+                .keywords(0)
+                .is_empty()
+        );
     }
 
     #[test]

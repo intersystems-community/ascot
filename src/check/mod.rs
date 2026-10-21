@@ -26,6 +26,7 @@ use env::*;
 use flow::*;
 use std::{collections::HashMap, iter::once, ops::Deref};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
+use tygr_objectscript::cos::CommandLike;
 use types::*;
 
 pub use env::{DocumentEnv, Labels, WorkspaceEnv};
@@ -492,6 +493,9 @@ impl MethodDetails {
 trait CheckCommandInner {
     fn inner_check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>)
     -> Result<(), QuasiTypeError>;
+
+    // Checks on how the command is written rather than what it does; `start` is its offset.
+    fn style_check<'a>(&self, _env: &CodeEnv<'a>, _start: usize) {}
 }
 
 trait CheckCommand {
@@ -500,6 +504,7 @@ trait CheckCommand {
 
 impl<T: CheckCommandInner> CheckCommand for Range<T> {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
+        self.deref().style_check(env, self.start);
         flow.with_range(env.range(self), |flow| {
             self.inner_check(env, flow).with_range(|| env.range(self))
         })
@@ -885,13 +890,25 @@ impl CheckCommandInner for cos::Block {
 }
 
 impl CheckCommandInner for cos::Command {
+    fn style_check<'a>(&self, env: &CodeEnv<'a>, start: usize) {
+        let Some(style) = env.command_style().filter(|style| style.is_set()) else {
+            return;
+        };
+        for kw in self.keywords(start) {
+            if let Some(expected) = style.expected(&kw) {
+                let range = env.span(kw.start, kw.start + kw.text.len());
+                env.soft_diagnostic(TypeError::command_keyword_style(kw.text, expected, range));
+            }
+        }
+    }
+
     fn inner_check<'a>(
         &self,
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
     ) -> Result<(), QuasiTypeError> {
         match self {
-            cos::Command::Do { pc, args, .. } => {
+            cos::Command::Do(cos::DoCommand { pc, args, .. }) => {
                 let args = args
                     .as_ref()
                     .ok_or_else(|| QuasiTypeError::unimplemented("Do without arguments".into()))?;
@@ -904,7 +921,7 @@ impl CheckCommandInner for cos::Command {
                     Ok(())
                 })
             }
-            cos::Command::DoWhile { iter, cnds, .. } => {
+            cos::Command::DoWhile(cos::DoWhileCommand { iter, cnds, .. }) => {
                 let cnds = cnds.as_ref().ok_or_else(|| {
                     QuasiTypeError::unimplemented("do-while without conditions".into())
                 })?;
@@ -916,17 +933,17 @@ impl CheckCommandInner for cos::Command {
                     cnds,
                 )
             }
-            cos::Command::If {
+            cos::Command::If(cos::IfCommand {
                 cnds: Some(cnds),
                 branches,
                 ..
-            } => check_if(env, flow, cnds, branches),
+            }) => check_if(env, flow, cnds, branches),
             // Legacy argumentless `If` tests `$TEST`, which isn't tracked: an optional branch.
-            cos::Command::If {
+            cos::Command::If(cos::IfCommand {
                 cnds: None,
                 branches,
                 ..
-            } => {
+            }) => {
                 let mut branch = flow.split();
                 if let Some(cos::IfBranches { thn, .. }) = branches {
                     let result = thn.check(env, &mut branch);
@@ -934,7 +951,7 @@ impl CheckCommandInner for cos::Command {
                 }
                 flow.merge(branch)
             }
-            cos::Command::While { cnds, bdy, .. } => {
+            cos::Command::While(cos::WhileCommand { cnds, bdy, .. }) => {
                 let cnds = cnds.as_ref().ok_or_else(|| {
                     QuasiTypeError::unimplemented("while without conditions".into())
                 })?;
@@ -949,73 +966,83 @@ impl CheckCommandInner for cos::Command {
 
                 Ok(())
             }
-            cos::Command::For { iter, bdy, .. } => {
+            cos::Command::For(cos::ForCommand { iter, bdy, .. }) => {
                 check_for(env, flow, iter.as_deref(), bdy.as_ref())
             }
-            cos::Command::Goto { pc, args, .. } => check_pc(pc, env, flow, |flow| {
-                let args = args
-                    .as_ref()
-                    .ok_or_else(|| QuasiTypeError::unimplemented("Goto without arguments".into()))?
-                    .deref();
-                let args: Vec<_> = args.items.iter().collect();
-                if args.len() != 1 {
-                    return Err(QuasiTypeError::unimplemented(
-                        "Only goto with exactly one arg is supported".into(),
-                    ));
-                }
-                let GoToArg { location, pc } = args[0];
-                check_pc(pc, env, flow, |flow| match location {
-                    AllowCase::Plain(cos::Location(location)) => match location {
-                        AllowIndirection::Plain(location) => {
-                            if let LegacyEntryRef::Label(lor) = location.deref()
-                                && lor.routine.is_none()
-                            {
-                                let label = lor.label.print();
-                                if env.goto_leaves_block(&label) {
-                                    return Err(QuasiTypeError::goto_out_of_block(label));
+            cos::Command::Goto(cos::GotoCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    let args = args
+                        .as_ref()
+                        .ok_or_else(|| {
+                            QuasiTypeError::unimplemented("Goto without arguments".into())
+                        })?
+                        .deref();
+                    let args: Vec<_> = args.items.iter().collect();
+                    if args.len() != 1 {
+                        return Err(QuasiTypeError::unimplemented(
+                            "Only goto with exactly one arg is supported".into(),
+                        ));
+                    }
+                    let GoToArg { location, pc } = args[0];
+                    check_pc(pc, env, flow, |flow| match location {
+                        AllowCase::Plain(cos::Location(location)) => match location {
+                            AllowIndirection::Plain(location) => {
+                                if let LegacyEntryRef::Label(lor) = location.deref()
+                                    && lor.routine.is_none()
+                                {
+                                    let label = lor.label.print();
+                                    if env.goto_leaves_block(&label) {
+                                        return Err(QuasiTypeError::goto_out_of_block(label));
+                                    }
                                 }
+                                let _ = check_legacy_label_call(env, flow, location, &None)?;
+                                Ok(flow.handle_void()?)
                             }
-                            let _ = check_legacy_label_call(env, flow, location, &None)?;
-                            Ok(flow.handle_void()?)
-                        }
-                        AllowIndirection::Indirection(indir) => {
-                            let _ = indir.to_ty(env, flow)?;
-                            Ok(flow.handle_void()?)
-                        }
-                    },
-                    AllowCase::Case(cases) => check_goto_case(env, flow, cases),
+                            AllowIndirection::Indirection(indir) => {
+                                let _ = indir.to_ty(env, flow)?;
+                                Ok(flow.handle_void()?)
+                            }
+                        },
+                        AllowCase::Case(cases) => check_goto_case(env, flow, cases),
+                    })
                 })
-            }),
-            cos::Command::Break { pc, exp, .. } => check_pc(pc, env, flow, |_flow| {
-                if exp.is_some() {
-                    Err(QuasiTypeError::unimplemented("Break w/ argument".into()))
-                } else {
-                    Ok(())
-                }
-            }),
-            cos::Command::Quit { pc, exp, .. } => check_pc(pc, env, flow, |flow| {
-                let exp_ty = match exp.deref() {
-                    Some(exp) => Some(exit_value(exp, env, flow)?),
-                    None => None,
-                };
-                flow.handle_quit(env.with_range(exp.as_ref().map(|_| exp_ty)))
-            }),
-            cos::Command::Return { pc, exp, .. } => check_pc(pc, env, flow, |flow| {
-                let ty = match exp.deref() {
-                    Some(exp) => Some(exit_value(exp, env, flow)?),
-                    None => None,
-                };
-                Ok(flow.handle_return(env.with_range(exp.as_ref().map(|_| ty)))?)
-            }),
-            cos::Command::Continue { pc, .. } => {
+            }
+            cos::Command::Break(cos::BreakCommand { pc, exp, .. }) => {
+                check_pc(pc, env, flow, |_flow| {
+                    if exp.is_some() {
+                        Err(QuasiTypeError::unimplemented("Break w/ argument".into()))
+                    } else {
+                        Ok(())
+                    }
+                })
+            }
+            cos::Command::Quit(cos::QuitCommand { pc, exp, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    let exp_ty = match exp.deref() {
+                        Some(exp) => Some(exit_value(exp, env, flow)?),
+                        None => None,
+                    };
+                    flow.handle_quit(env.with_range(exp.as_ref().map(|_| exp_ty)))
+                })
+            }
+            cos::Command::Return(cos::ReturnCommand { pc, exp, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    let ty = match exp.deref() {
+                        Some(exp) => Some(exit_value(exp, env, flow)?),
+                        None => None,
+                    };
+                    Ok(flow.handle_return(env.with_range(exp.as_ref().map(|_| ty)))?)
+                })
+            }
+            cos::Command::Continue(cos::ContinueCommand { pc, .. }) => {
                 check_pc(pc, env, flow, |flow| flow.handle_continue())
             }
-            cos::Command::Dim {
+            cos::Command::Dim(cos::DimCommand {
                 name,
                 as_type,
                 default,
                 ..
-            } => {
+            }) => {
                 let declared = match as_type.deref() {
                     Some(ty) => {
                         let ty = ty.deref();
@@ -1046,49 +1073,51 @@ impl CheckCommandInner for cos::Command {
                 }
                 Ok(())
             }
-            cos::Command::Set {
+            cos::Command::Set(cos::SetCommand {
                 pc, assignments, ..
-            } => check_pc(pc, env, flow, |flow: &mut Flow| {
+            }) => check_pc(pc, env, flow, |flow: &mut Flow| {
                 for assignment in assignments.items.iter() {
                     assignment.check(env, flow)?;
                 }
                 Ok(())
             }),
-            cos::Command::Kill { pc, targets, .. } => check_pc(pc, env, flow, |flow| {
-                for target in targets.iter().flat_map(|targets| targets.items.iter()) {
-                    match target.deref() {
-                        cos::AllowMacro::Plain(arg) => match &arg {
-                            cos::KillArgument::Single(target) => {
-                                if let Some(local) = target
-                                    .as_variable()
-                                    .and_then(|x| {
-                                        x.as_local(env, flow).map(|x| x.left()).transpose()
-                                    })
-                                    .transpose()?
-                                {
-                                    flow.handle_kill(local)?;
-                                }
-                            }
-                            cos::KillArgument::Except(keep) => {
-                                let mut names = Vec::new();
-                                for target in keep.items.iter() {
-                                    if let Some(variable) = target.as_variable()
-                                        && let Left(local) = variable.as_local(env, flow)?
+            cos::Command::Kill(cos::KillCommand { pc, targets, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for target in targets.iter().flat_map(|targets| targets.items.iter()) {
+                        match target.deref() {
+                            cos::AllowMacro::Plain(arg) => match &arg {
+                                cos::KillArgument::Single(target) => {
+                                    if let Some(local) = target
+                                        .as_variable()
+                                        .and_then(|x| {
+                                            x.as_local(env, flow).map(|x| x.left()).transpose()
+                                        })
+                                        .transpose()?
                                     {
-                                        names.push(local.name);
+                                        flow.handle_kill(local)?;
                                     }
                                 }
-                                flow.handle_kill_except(&names)?;
+                                cos::KillArgument::Except(keep) => {
+                                    let mut names = Vec::new();
+                                    for target in keep.items.iter() {
+                                        if let Some(variable) = target.as_variable()
+                                            && let Left(local) = variable.as_local(env, flow)?
+                                        {
+                                            names.push(local.name);
+                                        }
+                                    }
+                                    flow.handle_kill_except(&names)?;
+                                }
+                            },
+                            cos::AllowMacro::Macro(..) => {
+                                return Err(QuasiTypeError::unimplemented("Kill macro".into()));
                             }
-                        },
-                        cos::AllowMacro::Macro(..) => {
-                            return Err(QuasiTypeError::unimplemented("Kill macro".into()));
                         }
                     }
-                }
-                Ok(())
-            }),
-            cos::Command::New { pc, targets, .. } => {
+                    Ok(())
+                })
+            }
+            cos::Command::New(cos::NewCommand { pc, targets, .. }) => {
                 check_pc(pc, env, flow, |flow| match targets {
                     None => flow.handle_new_except(&[], flow.range()),
                     Some(targets) => {
@@ -1115,206 +1144,243 @@ impl CheckCommandInner for cos::Command {
                     }
                 })
             }
-            cos::Command::Merge {
+            cos::Command::Merge(cos::MergeCommand {
                 pc,
                 merge_arguments,
                 ..
-            } => check_pc(pc, env, flow, |flow| {
+            }) => check_pc(pc, env, flow, |flow| {
                 for merge_argument in merge_arguments.items.iter() {
                     merge_argument.check(env, flow)?;
                 }
                 Ok(())
             }),
-            cos::Command::Try {
+            cos::Command::Try(cos::TryCommand {
                 b1,
                 catch_target,
                 b2,
                 ..
-            } => check_try(env, flow, b1.deref(), catch_target.as_ref(), b2),
-            cos::Command::Throw { pc, e, .. } => check_pc(pc, env, flow, |flow| {
-                if let Some(e) = e {
-                    e.to_ty(env, flow)?;
-                }
-                flow.handle_throw()
-            }),
-            cos::Command::ZTrap { pc, exp, .. } => check_pc(pc, env, flow, |flow| {
-                if let Some(exp) = exp {
-                    exp.to_ty(env, flow)?;
-                }
-                flow.handle_throw()
-            }),
-            cos::Command::Write { pc, args, .. } => check_pc(pc, env, flow, |flow| {
-                for arg in args.iter().flat_map(|args| args.items.iter()) {
-                    if let cos::WriteArg::Expr(expr) = arg {
-                        let _ = expr.to_ty(env, flow)?;
+            }) => check_try(env, flow, b1.deref(), catch_target.as_ref(), b2),
+            cos::Command::Throw(cos::ThrowCommand { pc, e, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    if let Some(e) = e {
+                        e.to_ty(env, flow)?;
                     }
-                }
-                Ok(())
-            }),
-            cos::Command::Read { pc, args, .. } => check_pc(pc, env, flow, |flow| {
-                for arg in args.items.iter() {
-                    if let cos::ReadArg::Var(_, target, len, timeout) = arg {
-                        if let Some(len) = len {
-                            len.len.to_ty(env, flow)?;
+                    flow.handle_throw()
+                })
+            }
+            cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    if let Some(exp) = exp {
+                        exp.to_ty(env, flow)?;
+                    }
+                    flow.handle_throw()
+                })
+            }
+            cos::Command::Write(cos::WriteCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.iter().flat_map(|args| args.items.iter()) {
+                        if let cos::WriteArg::Expr(expr) = arg {
+                            let _ = expr.to_ty(env, flow)?;
                         }
-                        if let Some(timeout) = timeout {
-                            timeout.timeout.to_ty(env, flow)?;
+                    }
+                    Ok(())
+                })
+            }
+            cos::Command::Read(cos::ReadCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.items.iter() {
+                        if let cos::ReadArg::Var(_, target, len, timeout) = arg {
+                            if let Some(len) = len {
+                                len.len.to_ty(env, flow)?;
+                            }
+                            if let Some(timeout) = timeout {
+                                timeout.timeout.to_ty(env, flow)?;
+                            }
+                            let string = PowerTy::from(Ty::from("%String"));
+                            check_set_target(target, string, env.range(target), env, flow)?;
                         }
-                        let string = PowerTy::from(Ty::from("%String"));
-                        check_set_target(target, string, env.range(target), env, flow)?;
                     }
-                }
-                Ok(())
-            }),
-            cos::Command::Open { pc, args, .. } => check_pc(pc, env, flow, |flow| {
-                for arg in args.items.iter() {
-                    arg.device.to_ty(env, flow)?;
-                    check_io_parameters(env, flow, arg.parameters.as_deref())?;
-                    if let Some(Some(timeout)) = arg.timeout.as_deref() {
-                        timeout.to_ty(env, flow)?;
+                    Ok(())
+                })
+            }
+            cos::Command::Open(cos::OpenCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.items.iter() {
+                        arg.device.to_ty(env, flow)?;
+                        check_io_parameters(env, flow, arg.parameters.as_deref())?;
+                        if let Some(Some(timeout)) = arg.timeout.as_deref() {
+                            timeout.to_ty(env, flow)?;
+                        }
+                        if let Some(mnespace) = arg.mnespace.as_deref() {
+                            mnespace.to_ty(env, flow)?;
+                        }
                     }
-                    if let Some(mnespace) = arg.mnespace.as_deref() {
-                        mnespace.to_ty(env, flow)?;
-                    }
-                }
-                Ok(())
-            }),
-            cos::Command::Close { pc, args, .. } => check_pc(pc, env, flow, |flow| {
-                for arg in args.items.iter() {
-                    arg.device.to_ty(env, flow)?;
-                    if let Some(cos::CloseParameters::Many(parameters)) = arg.parameters.as_deref()
-                    {
-                        for parameter in parameters.items.iter() {
-                            if let Some(val) = &parameter.val {
-                                val.to_ty(env, flow)?;
+                    Ok(())
+                })
+            }
+            cos::Command::Close(cos::CloseCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.items.iter() {
+                        arg.device.to_ty(env, flow)?;
+                        if let Some(cos::CloseParameters::Many(parameters)) =
+                            arg.parameters.as_deref()
+                        {
+                            for parameter in parameters.items.iter() {
+                                if let Some(val) = &parameter.val {
+                                    val.to_ty(env, flow)?;
+                                }
                             }
                         }
                     }
-                }
-                Ok(())
-            }),
-            cos::Command::Use { pc, args, .. } => check_pc(pc, env, flow, |flow| {
-                for arg in args.items.iter() {
-                    arg.device.to_ty(env, flow)?;
-                    let parameters = arg.parameters.as_deref().and_then(Option::as_ref);
-                    check_io_parameters(env, flow, parameters)?;
-                    if let Some(mnespace) = arg.mnespace.as_deref() {
-                        mnespace.to_ty(env, flow)?;
+                    Ok(())
+                })
+            }
+            cos::Command::Use(cos::UseCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.items.iter() {
+                        arg.device.to_ty(env, flow)?;
+                        let parameters = arg.parameters.as_deref().and_then(Option::as_ref);
+                        check_io_parameters(env, flow, parameters)?;
+                        if let Some(mnespace) = arg.mnespace.as_deref() {
+                            mnespace.to_ty(env, flow)?;
+                        }
                     }
-                }
-                Ok(())
-            }),
-            cos::Command::Lock { .. } => Ok(()),
-            cos::Command::Hang { .. } => Ok(()),
-            cos::Command::Job { .. } => Ok(()),
+                    Ok(())
+                })
+            }
+            cos::Command::Lock(cos::LockCommand { .. }) => Ok(()),
+            cos::Command::Hang(cos::HangCommand { .. }) => Ok(()),
+            cos::Command::Job(cos::JobCommand { .. }) => Ok(()),
             // The transaction level isn't tracked: it depends on the run-time conditions around
             // each `TSTART`/`TCOMMIT`, and a flow-insensitive count only produced false alarms.
-            cos::Command::TStart { pc, .. }
-            | cos::Command::TCommit { pc, .. }
-            | cos::Command::TRollback { pc, .. } => check_pc(pc, env, flow, |_| Ok(())),
-            cos::Command::ZWrite { pc, exp, .. } => check_pc(pc, env, flow, |flow| {
-                if let Some(exp) = exp {
-                    let _ = exp.to_ty(env, flow)?;
-                }
-                Ok(())
-            }),
-            cos::Command::ZKill { pc, targets, .. } => check_pc(pc, env, flow, |flow| {
-                for target in targets.items.iter() {
-                    target.check(env, flow)?;
-                }
-                Ok(())
-            }),
-            cos::Command::ZNspace { pc, e, .. } => check_pc(pc, env, flow, |flow| {
-                let _ = e.to_ty(env, flow)?;
-                Ok(())
-            }),
-            cos::Command::Xecute { pc, args, .. } => check_pc(pc, env, flow, |flow| {
-                for arg in args.items.iter() {
-                    check_pc(&arg.pc, env, flow, |flow| {
-                        match &arg.arg {
-                            cos::XecuteArgEnum::Expr(code) => {
-                                code.to_ty(env, flow)?;
-                            }
-                            cos::XecuteArgEnum::Paren(call) => {
-                                call.code.to_ty(env, flow)?;
-                                for param in &call.params {
-                                    match param.deref() {
-                                        cos::MthArg::Expr { expr, .. } => {
-                                            expr.to_ty(env, flow)?;
-                                        }
-                                        cos::MthArg::ByRef { target, .. } => {
-                                            if let Some(variable) = target.as_variable()
-                                                && let Left(local) = variable.as_local(env, flow)?
-                                            {
-                                                flow.invalidate(local, Ty::Any.into())?;
+            cos::Command::TStart(cos::TStartCommand { pc, .. })
+            | cos::Command::TCommit(cos::TCommitCommand { pc, .. })
+            | cos::Command::TRollback(cos::TRollbackCommand { pc, .. }) => {
+                check_pc(pc, env, flow, |_| Ok(()))
+            }
+            cos::Command::ZWrite(cos::ZWriteCommand { pc, exp, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    if let Some(exp) = exp {
+                        let _ = exp.to_ty(env, flow)?;
+                    }
+                    Ok(())
+                })
+            }
+            cos::Command::ZKill(cos::ZKillCommand { pc, targets, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for target in targets.items.iter() {
+                        target.check(env, flow)?;
+                    }
+                    Ok(())
+                })
+            }
+            cos::Command::ZNspace(cos::ZNspaceCommand { pc, e, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    let _ = e.to_ty(env, flow)?;
+                    Ok(())
+                })
+            }
+            cos::Command::Xecute(cos::XecuteCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.items.iter() {
+                        check_pc(&arg.pc, env, flow, |flow| {
+                            match &arg.arg {
+                                cos::XecuteArgEnum::Expr(code) => {
+                                    code.to_ty(env, flow)?;
+                                }
+                                cos::XecuteArgEnum::Paren(call) => {
+                                    call.code.to_ty(env, flow)?;
+                                    for param in &call.params {
+                                        match param.deref() {
+                                            cos::MthArg::Expr { expr, .. } => {
+                                                expr.to_ty(env, flow)?;
+                                            }
+                                            cos::MthArg::ByRef { target, .. } => {
+                                                if let Some(variable) = target.as_variable()
+                                                    && let Left(local) =
+                                                        variable.as_local(env, flow)?
+                                                {
+                                                    flow.invalidate(local, Ty::Any.into())?;
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
-                        flow.read_write_publics()
-                    })?;
-                }
-                Ok(())
-            }),
-            cos::Command::View { pc, exp, .. } => check_pc(pc, env, flow, |flow| {
-                for arg in exp.iter().flat_map(|args| args.items.iter()) {
-                    match arg {
-                        cos::ViewArgument::Block(e) => {
-                            e.to_ty(env, flow)?;
-                        }
-                        cos::ViewArgument::Full {
-                            offset,
-                            mode,
-                            length,
-                            new_value,
-                        } => {
-                            offset.to_ty(env, flow)?;
-                            mode.to_ty(env, flow)?;
-                            length.to_ty(env, flow)?;
-                            if let Some(new_value) = new_value {
-                                new_value.to_ty(env, flow)?;
+                            flow.read_write_publics()
+                        })?;
+                    }
+                    Ok(())
+                })
+            }
+            cos::Command::View(cos::ViewCommand { pc, exp, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in exp.iter().flat_map(|args| args.items.iter()) {
+                        match arg {
+                            cos::ViewArgument::Block(e) => {
+                                e.to_ty(env, flow)?;
+                            }
+                            cos::ViewArgument::Full {
+                                offset,
+                                mode,
+                                length,
+                                new_value,
+                            } => {
+                                offset.to_ty(env, flow)?;
+                                mode.to_ty(env, flow)?;
+                                length.to_ty(env, flow)?;
+                                if let Some(new_value) = new_value {
+                                    new_value.to_ty(env, flow)?;
+                                }
                             }
                         }
                     }
-                }
-                Ok(())
-            }),
+                    Ok(())
+                })
+            }
             cos::Command::CallMacro(x) => x.deref().check_as_command(env, flow),
             cos::Command::ESQL(_, sql, _) => check_embedded_sql(flow, &sql.print()),
             cos::Command::HTML(_, html, _) => check_embedded_expressions(flow, &html.print()),
-            cos::Command::JS { content, .. } => check_embedded_expressions(flow, &content.print()),
-            cos::Command::ZQuit { pc, exp, .. } => check_pc(pc, env, flow, |flow| {
-                if let Some(exp) = exp {
-                    exp.to_ty(env, flow)?;
-                }
-                flow.handle_throw()
-            }),
+            cos::Command::JS(cos::JSCommand { content, .. }) => {
+                check_embedded_expressions(flow, &content.print())
+            }
+            cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    if let Some(exp) = exp {
+                        exp.to_ty(env, flow)?;
+                    }
+                    flow.handle_throw()
+                })
+            }
             cos::Command::ElseIf(..) => Err(QuasiTypeError::unimplemented(
                 "Stand-alone ElseIf Command".to_string(),
             )),
             cos::Command::Else(..) => Err(QuasiTypeError::unimplemented(
                 "Stand-alone Else Command".to_string(),
             )),
-            cos::Command::Halt { pc, .. } => {
+            cos::Command::Halt(cos::HaltCommand { pc, .. }) => {
                 check_pc(pc, env, flow, |flow| Ok(flow.handle_void()?))
             }
             // `H` alone halts; with an argument it hangs.
-            cos::Command::H { pc, e, .. } => check_pc(pc, env, flow, |flow| match e {
-                Some(e) => {
-                    e.to_ty(env, flow)?;
+            cos::Command::H(cos::HCommand { pc, e, .. }) => {
+                check_pc(pc, env, flow, |flow| match e {
+                    Some(e) => {
+                        e.to_ty(env, flow)?;
+                        Ok(())
+                    }
+                    None => Ok(flow.handle_void()?),
+                })
+            }
+            cos::Command::ZZDump(cos::ZZDumpCommand { pc, exp, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for e in exp.items.iter() {
+                        e.to_ty(env, flow)?;
+                    }
                     Ok(())
-                }
-                None => Ok(flow.handle_void()?),
-            }),
-            cos::Command::ZZDump { pc, exp, .. } => check_pc(pc, env, flow, |flow| {
-                for e in exp.items.iter() {
-                    e.to_ty(env, flow)?;
-                }
-                Ok(())
-            }),
-            cos::Command::MVP { pc, args, .. } | cos::Command::MVC { pc, args, .. } => {
+                })
+            }
+            cos::Command::MVP(cos::MVPCommand { pc, args, .. })
+            | cos::Command::MVC(cos::MVCCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.items.iter() {
                         if let cos::WriteArg::Expr(expr) = arg {
@@ -1324,9 +1390,9 @@ impl CheckCommandInner for cos::Command {
                     Ok(())
                 })
             }
-            cos::Command::ZBreak { .. }
-            | cos::Command::ZPrint { .. }
-            | cos::Command::Print { .. } => Ok(()),
+            cos::Command::ZBreak(cos::ZBreakCommand { .. })
+            | cos::Command::ZPrint(cos::ZPrintCommand { .. })
+            | cos::Command::Print(cos::PrintCommand { .. }) => Ok(()),
             cos::Command::Unknown(unknown) => match unknown.0 {},
         }
     }
@@ -1400,7 +1466,7 @@ fn check_if<'a>(
                 flow = if_false;
             }
             if let Some(els) = els.as_deref()
-                && let Some(els) = els.as_ref()
+                && let Some(els) = els.body.as_ref()
             {
                 let result = els.check(env, &mut flow);
                 check_branch(env, &mut flow, result);

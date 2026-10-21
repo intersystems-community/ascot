@@ -8,8 +8,10 @@
 
 use ascot::Workspace;
 use ascot::bindings::GuestWorkspace;
+use ascot::bindings::Style;
 use ascot::cos;
 use ascot::cos::Routine;
+use ascot::style;
 use std::collections::HashSet;
 use std::env;
 use std::fs;
@@ -28,24 +30,28 @@ fn main() {
         Some("analyze") => {
             let mut rest: Vec<String> = args[2..].to_vec();
             let iris = connect_iris(&mut rest);
+            let style = load_style(&mut rest);
             if rest.is_empty() {
-                eprintln!("usage: analyze [--iris <url>] [--iris-namespace <ns>] <path>...");
+                eprintln!(
+                    "usage: analyze [--iris <url>] [--iris-namespace <ns>] [--style <file>] <path>..."
+                );
                 exit(1);
             }
-            analyze(rest.iter().map(|s| Path::new(s.as_str())), iris);
+            analyze(rest.iter().map(|s| Path::new(s.as_str())), iris, style);
         }
         Some("analyze-workspace") => {
             let mut rest: Vec<String> = args[2..].to_vec();
             let iris = connect_iris(&mut rest);
+            let style = load_style(&mut rest);
             if rest.len() < 2 {
                 eprintln!(
-                    "usage: analyze-workspace [--iris <url>] [--iris-namespace <ns>] <workspace-root> <path>..."
+                    "usage: analyze-workspace [--iris <url>] [--iris-namespace <ns>] [--style <file>] <workspace-root> <path>..."
                 );
                 exit(1);
             }
             let root = PathBuf::from(&rest[0]);
             let paths: Vec<PathBuf> = rest[1..].iter().map(PathBuf::from).collect();
-            analyze_workspace(&root, paths.iter().map(PathBuf::as_path), iris);
+            analyze_workspace(&root, paths.iter().map(PathBuf::as_path), iris, style);
         }
         Some("parse") => {
             let Some(file_path) = args.get(2) else {
@@ -71,14 +77,15 @@ fn main() {
         Some("lsp") => {
             let mut rest: Vec<String> = args[2..].to_vec();
             let iris = connect_iris(&mut rest);
-            if let Err(err) = ascot::lsp::run(iris) {
+            let style = load_style(&mut rest);
+            if let Err(err) = ascot::lsp::run(iris, style) {
                 eprintln!("LSP server error: {err}");
                 exit(1);
             }
         }
         _ => {
             eprintln!(
-                "usage: parse <file> | analyze [--iris <url|file>] [--iris-namespace <ns>] <path>... | analyze-workspace [--iris <url|file>] [--iris-namespace <ns>] <root> <path>... | declare --iris <url> [--iris-namespace <ns>] <file> | mcp | lsp [--iris <url|file>] [--iris-namespace <ns>]"
+                "usage: parse <file> | analyze [--iris <url|file>] [--iris-namespace <ns>] [--style <file>] <path>... | analyze-workspace [--iris <url|file>] [--iris-namespace <ns>] [--style <file>] <root> <path>... | declare --iris <url> [--iris-namespace <ns>] <file> | mcp | lsp [--iris <url|file>] [--iris-namespace <ns>] [--style <file>]"
             );
             exit(1);
         }
@@ -94,6 +101,20 @@ fn extract_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
         exit(1);
     }
     Some(args.remove(idx))
+}
+
+/// Pulls `--style <file>` out of `args` and parses it. Like `--iris`, a file that can't be
+/// read or parsed is an error up front, not a silent fallback to the defaults.
+fn load_style(args: &mut Vec<String>) -> Option<Style> {
+    let path = extract_flag(args, "--style")?;
+    let text = fs::read_to_string(&path).unwrap_or_else(|err| {
+        eprintln!("--style: {path}: {err}");
+        exit(1);
+    });
+    Some(style::parse(&text).unwrap_or_else(|err| {
+        eprintln!("--style: {path}: {err}");
+        exit(1);
+    }))
 }
 
 /// Pulls `--iris`/`--iris-namespace` out of `args` and opens the connection or declaration file, if
@@ -195,7 +216,11 @@ fn scan_file(file_path: &str) {
 /// Add every `.cls`/`.mac`/`.int`/`.inc` file under each of `roots` to a workspace and report
 /// all diagnostics. A root that doesn't exist is an error, not an empty result: a typo'd path in
 /// a CI step must not pass forever.
-fn analyze<'a>(roots: impl Iterator<Item = &'a Path>, iris: Option<Box<dyn IrisClient>>) {
+fn analyze<'a>(
+    roots: impl Iterator<Item = &'a Path>,
+    iris: Option<Box<dyn IrisClient>>,
+    style: Option<Style>,
+) {
     let mut files = Vec::new();
     for root in roots {
         if !root.exists() {
@@ -206,7 +231,7 @@ fn analyze<'a>(roots: impl Iterator<Item = &'a Path>, iris: Option<Box<dyn IrisC
     }
     files.sort();
 
-    let workspace = Workspace::new_with_iris(iris);
+    let workspace = Workspace::new_with_iris(iris, style);
     insert_files(&workspace, &files);
 
     let count = report_diagnostics(&workspace, &files);
@@ -222,6 +247,7 @@ fn analyze_workspace<'a>(
     root: &Path,
     paths: impl Iterator<Item = &'a Path>,
     iris: Option<Box<dyn IrisClient>>,
+    style: Option<Style>,
 ) {
     let root = match fs::canonicalize(root) {
         Ok(root) => root,
@@ -248,7 +274,7 @@ fn analyze_workspace<'a>(
     diagnose_files.sort();
     diagnose_files.dedup();
 
-    let workspace = Workspace::new_with_iris(iris);
+    let workspace = Workspace::new_with_iris(iris, style);
     insert_files(&workspace, &all_files);
 
     let all_files_set: HashSet<&PathBuf> = all_files.iter().collect();

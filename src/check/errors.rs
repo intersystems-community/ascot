@@ -356,6 +356,10 @@ pub enum TypeErrorKind {
     },
     NumberImplicitlyConvertedToString(String),
     DiscardedReturnValue(String),
+    CommandKeywordStyle {
+        found: String,
+        expected: String,
+    },
     InvalidFNumberFormat {
         format: String,
         reason: String,
@@ -442,6 +446,7 @@ impl TypeErrorKind {
             TypeErrorKind::InvalidZStripAction { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::NumberImplicitlyConvertedToString(_) => DiagnosticSeverity::Warning,
             TypeErrorKind::DiscardedReturnValue(_) => DiagnosticSeverity::Warning,
+            TypeErrorKind::CommandKeywordStyle { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::InvalidFNumberFormat { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::ReturnNothingForX { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::QuitXInControl { .. } => DiagnosticSeverity::Error,
@@ -718,6 +723,12 @@ impl std::fmt::Display for TypeErrorKind {
                     "{value} is a number here, implicitly converted to the string \"{value}\""
                 )
             }
+            TypeErrorKind::CommandKeywordStyle { found, expected } => {
+                write!(
+                    f,
+                    "Command keyword `{found}` should be written `{expected}`"
+                )
+            }
             TypeErrorKind::DiscardedReturnValue(class) => {
                 write!(
                     f,
@@ -886,6 +897,14 @@ impl TypeError {
                 location: previous,
                 message: "Previous declaration".into(),
             }],
+        )
+    }
+
+    pub fn command_keyword_style(found: String, expected: String, range: Range) -> Self {
+        Self::new(
+            TypeErrorKind::CommandKeywordStyle { found, expected },
+            range,
+            vec![],
         )
     }
 

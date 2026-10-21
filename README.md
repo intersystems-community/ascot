@@ -211,6 +211,18 @@ signatures and types, as a live connection would report them (no method code),
 and the full source of every `.inc` file and routine. Regenerate it after the
 instance's code changes.
 
+### Style
+
+Style rules (the `style` record in [analyzer.wit](src/wit/analyzer.wit)) are a
+JSON file passed with `--style <file>` to `analyze`, `analyze-workspace` and
+`lsp`; the MCP `create_workspace` call and the JavaScript `createWorkspace` take
+the same record directly. Every key is optional; each command keyword written
+differently is reported as a warning.
+
+```json
+{ "commands": { "form": "Long", "case": "Pascal" } }
+```
+
 ## Contributing
 
 Please [open an issue](https://github.com/intersystems-community/ascot/issues/new/choose)
