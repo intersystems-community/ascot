@@ -4,8 +4,10 @@
 //! Unlike the LSP server it holds many `Workspace`s, keyed by an id the agent chooses:
 //! `create_workspace` (optionally with IRIS connection details, see `iris.rs`) and
 //! `delete_workspace`; `insert`/`remove` documents; then `check`, `inlay_hint`, `hover`,
-//! `definition` and `references`. Tool parameter and result schemas derive from the
-//! `bindings.rs` types via `schemars`. Built on the `rmcp` crate; native builds only.
+//! `definition` and `references`. Each tool is a method of [`AnalyzerMcpServer`], whose doc
+//! comment is also the description agents get from `tools/list`; parameter and result schemas
+//! derive from these types and the `bindings.rs` ones via `schemars`, field docs included. Built
+//! on the `rmcp` crate; native builds only.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -28,98 +30,115 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct WorkspaceIdRequest {
-    workspace: String,
+pub struct WorkspaceIdRequest {
+    /// The id given to `create_workspace`.
+    pub workspace: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct CreateWorkspaceRequest {
-    workspace: String,
+pub struct CreateWorkspaceRequest {
+    /// An id of your choice; every other tool names the workspace by it.
+    pub workspace: String,
     /// Optional IRIS connection: `scheme://user:pass@host:port`, or the path of a declaration
     /// file written by `ascot declare`. When set, lookups that can't be resolved from documents
     /// already in this workspace (e.g. a class that isn't open here) fall back to this IRIS
     /// instance via the Atelier REST API, or to the file.
-    iris: Option<String>,
+    pub iris: Option<String>,
     /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
     /// for a URL; for a declaration file it must match the namespace it declares.
-    iris_namespace: Option<String>,
+    pub iris_namespace: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct FileToInsert {
-    uri: String,
-    src: String,
+pub struct FileToInsert {
+    /// Names the document, e.g. its file path; the extension (.cls, .mac, .int or .inc) decides
+    /// how it is parsed.
+    pub uri: String,
+    /// The document's full text.
+    pub src: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct InsertRequest {
-    workspace: String,
-    files: Vec<FileToInsert>,
+pub struct InsertRequest {
+    /// The id given to `create_workspace`.
+    pub workspace: String,
+    /// The documents to add or update.
+    pub files: Vec<FileToInsert>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct UriRequest {
-    workspace: String,
-    uri: String,
+pub struct UriRequest {
+    /// The id given to `create_workspace`.
+    pub workspace: String,
+    /// A document's uri, as given to `insert`.
+    pub uri: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct UrisRequest {
-    workspace: String,
-    uris: Vec<String>,
+pub struct UrisRequest {
+    /// The id given to `create_workspace`.
+    pub workspace: String,
+    /// The documents to check, by the uris given to `insert`.
+    pub uris: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct InlayHintRequest {
-    workspace: String,
-    uri: String,
-    range: Range,
+pub struct InlayHintRequest {
+    /// The id given to `create_workspace`.
+    pub workspace: String,
+    /// A document's uri, as given to `insert`.
+    pub uri: String,
+    /// The zero-based line/character range to get hints for.
+    pub range: Range,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct PositionRequest {
-    workspace: String,
-    uri: String,
-    position: Position,
+pub struct PositionRequest {
+    /// The id given to `create_workspace`.
+    pub workspace: String,
+    /// A document's uri, as given to `insert`.
+    pub uri: String,
+    /// A zero-based line/character position in the document.
+    pub position: Position,
 }
 
 // MCP requires `outputSchema` to describe an object at the top level, so results that are
 // naturally an array or an enum get wrapped in a single-field struct rather than returned bare.
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-struct FileDiagnostics {
-    uri: String,
-    diagnostics: Vec<Diagnostic>,
+pub struct FileDiagnostics {
+    pub uri: String,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-struct DiagnosticsResult {
-    files: Vec<FileDiagnostics>,
+pub struct DiagnosticsResult {
+    pub files: Vec<FileDiagnostics>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-struct InlayHintsResult {
-    hints: Vec<InlayHint>,
+pub struct InlayHintsResult {
+    pub hints: Vec<InlayHint>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-struct InsertResult {
-    affected: Vec<String>,
+pub struct InsertResult {
+    pub affected: Vec<String>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-struct HoverResult {
-    hover: Option<String>,
+pub struct HoverResult {
+    pub hover: Option<String>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-struct DefinitionResult {
-    location: Option<Location>,
+pub struct DefinitionResult {
+    pub location: Option<Location>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-struct ReferencesResult {
-    locations: Vec<Location>,
+pub struct ReferencesResult {
+    pub locations: Vec<Location>,
 }
 
 #[derive(Clone)]
@@ -154,13 +173,11 @@ impl AnalyzerMcpServer {
 
 #[tool_router(router = tool_router)]
 impl AnalyzerMcpServer {
-    #[tool(
-        description = "Create a new empty workspace with the given id; fails if it already exists. \
-                        Do this first, before inserting any ObjectScript source. Pass `iris` to \
-                        also resolve out-of-workspace lookups against a real IRIS instance (or a \
-                        declaration file `ascot declare` wrote)."
-    )]
-    async fn create_workspace(
+    /// Create a new empty workspace with the given id; fails if it already exists. Do this first,
+    /// before inserting any ObjectScript source. Pass `iris` to also resolve out-of-workspace
+    /// lookups against a real IRIS instance (or a declaration file `ascot declare` wrote).
+    #[tool]
+    pub async fn create_workspace(
         &self,
         Parameters(CreateWorkspaceRequest {
             workspace,
@@ -183,11 +200,10 @@ impl AnalyzerMcpServer {
         Ok(format!("created workspace {workspace:?}"))
     }
 
-    #[tool(
-        description = "Delete a workspace and all its documents by id. Call this when done \
-                          with a workspace to free its resources."
-    )]
-    async fn delete_workspace(
+    /// Delete a workspace and all its documents by id. Call this when done with a workspace to free
+    /// its resources.
+    #[tool]
+    pub async fn delete_workspace(
         &self,
         Parameters(WorkspaceIdRequest { workspace }): Parameters<WorkspaceIdRequest>,
     ) -> Result<String, String> {
@@ -198,16 +214,14 @@ impl AnalyzerMcpServer {
         Ok(format!("deleted workspace {workspace:?}"))
     }
 
-    #[tool(
-        description = "Add .cls/.mac/.int/.inc ObjectScript sources to a workspace, or update \
-                        one already there. This only stores the raw text — nothing is parsed \
-                        or checked here, so it won't report syntax errors; call check() on the \
-                        returned `affected` uris to see up-to-date diagnostics. Insert every \
-                        related file, not just the one you're editing — cross-class and \
-                        cross-routine references (and the errors they can produce) are only \
-                        resolved against what's in the workspace."
-    )]
-    async fn insert(
+    /// Add .cls/.mac/.int/.inc ObjectScript sources to a workspace, or update one already there.
+    /// This only stores the raw text — nothing is parsed or checked here, so it won't report syntax
+    /// errors; call check() on the returned `affected` uris to see up-to-date diagnostics. Insert
+    /// every related file, not just the one you're editing — cross-class and cross-routine
+    /// references (and the errors they can produce) are only resolved against what's in the
+    /// workspace.
+    #[tool]
+    pub async fn insert(
         &self,
         Parameters(InsertRequest { workspace, files }): Parameters<InsertRequest>,
     ) -> Result<Json<InsertResult>, String> {
@@ -222,12 +236,11 @@ impl AnalyzerMcpServer {
         }))
     }
 
-    #[tool(
-        description = "Remove a document from a workspace by URI, e.g. after a file is \
-                        deleted or renamed on disk. Returns the uris whose cached analysis is \
-                        now stale — call check() on them to see up-to-date diagnostics."
-    )]
-    async fn remove(
+    /// Remove a document from a workspace by URI, e.g. after a file is deleted or renamed on disk.
+    /// Returns the uris whose cached analysis is now stale — call check() on them to see up-to-date
+    /// diagnostics.
+    #[tool]
+    pub async fn remove(
         &self,
         Parameters(UriRequest { workspace, uri }): Parameters<UriRequest>,
     ) -> Result<Json<InsertResult>, String> {
@@ -238,15 +251,12 @@ impl AnalyzerMcpServer {
         }))
     }
 
-    #[tool(
-        description = "Run the real ObjectScript parser/type-checker on previously-inserted \
-                        documents: syntax errors, undefined variables, class-context \
-                        violations, argument/type mismatches, and more. Call this after every \
-                        edit instead of guessing whether ObjectScript code is correct — it \
-                        understands cross-class references that pattern-matching or grepping \
-                        can't."
-    )]
-    async fn check(
+    /// Run the real ObjectScript parser/type-checker on previously-inserted documents: syntax
+    /// errors, undefined variables, class-context violations, argument/type mismatches, and more.
+    /// Call this after every edit instead of guessing whether ObjectScript code is correct — it
+    /// understands cross-class references that pattern-matching or grepping can't.
+    #[tool]
+    pub async fn check(
         &self,
         Parameters(UrisRequest { workspace, uris }): Parameters<UrisRequest>,
     ) -> Result<Json<DiagnosticsResult>, String> {
@@ -262,12 +272,10 @@ impl AnalyzerMcpServer {
         Ok(Json(DiagnosticsResult { files }))
     }
 
-    #[tool(
-        description = "Get inferred inlay hints (e.g. inferred types) for a range in a \
-                        previously-inserted document — use this to see what the checker \
-                        inferred for an expression instead of guessing its type."
-    )]
-    async fn inlay_hint(
+    /// Get inferred inlay hints (e.g. inferred types) for a range in a previously-inserted document
+    /// — use this to see what the checker inferred for an expression instead of guessing its type.
+    #[tool]
+    pub async fn inlay_hint(
         &self,
         Parameters(InlayHintRequest {
             workspace,
@@ -282,15 +290,13 @@ impl AnalyzerMcpServer {
         }))
     }
 
-    #[tool(
-        description = "Inspect a position in a previously-inserted document: the class member \
-                        (property/method/parameter) declared there, if any. Otherwise, the \
-                        inferred type of the local variable read there and/or what the macro \
-                        invocation there expanded to — both together when both apply. Rendered \
-                        as markdown. Prefer this over grepping when you need to inspect a class \
-                        member or check a variable's inferred type."
-    )]
-    async fn hover(
+    /// Inspect a position in a previously-inserted document: the class member
+    /// (property/method/parameter) declared there, if any. Otherwise, the inferred type of the
+    /// local variable read there and/or what the macro invocation there expanded to — both together
+    /// when both apply. Rendered as markdown. Prefer this over grepping when you need to inspect a
+    /// class member or check a variable's inferred type.
+    #[tool]
+    pub async fn hover(
         &self,
         Parameters(PositionRequest {
             workspace,
@@ -305,13 +311,11 @@ impl AnalyzerMcpServer {
         }))
     }
 
-    #[tool(
-        description = "Go to definition: find where the reference at a position is declared \
-                        (member/method access like `x.Foo`, `x.Foo()`, `i%Foo`). Doesn't cover \
-                        a bare `##class(Name)` or `..Method` self-reference — those have no \
-                        recorded declaration site yet."
-    )]
-    async fn definition(
+    /// Go to definition: find where the reference at a position is declared (member/method access
+    /// like `x.Foo`, `x.Foo()`, `i%Foo`). Doesn't cover a bare `##class(Name)` or `..Method`
+    /// self-reference — those have no recorded declaration site yet.
+    #[tool]
+    pub async fn definition(
         &self,
         Parameters(PositionRequest {
             workspace,
@@ -326,15 +330,12 @@ impl AnalyzerMcpServer {
         }))
     }
 
-    #[tool(
-        description = "Find references: every location across the workspace that refers to \
-                        whatever's declared or referenced at a position (the reverse of \
-                        definition) — call this before renaming or removing a member/label to \
-                        see every call site that would break. Includes the declaration site \
-                        itself. Works whether `position` is on a call site or on the \
-                        declaration."
-    )]
-    async fn references(
+    /// Find references: every location across the workspace that refers to whatever's declared or
+    /// referenced at a position (the reverse of definition) — call this before renaming or removing
+    /// a member/label to see every call site that would break. Includes the declaration site
+    /// itself. Works whether `position` is on a call site or on the declaration.
+    #[tool]
+    pub async fn references(
         &self,
         Parameters(PositionRequest {
             workspace,
