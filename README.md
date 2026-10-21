@@ -220,7 +220,7 @@ the same record directly. Every key is optional; each command keyword written
 differently is reported as a warning.
 
 ```json
-{ "commands": { "form": "Long", "case": "Pascal" } }
+{ "command": { "form": "Long", "case": "Pascal" }, "command_do": { "form": "Short" } }
 ```
 
 ## Contributing

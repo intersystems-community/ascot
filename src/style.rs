@@ -4,13 +4,53 @@
 
 use crate::bindings::{CommandStyle, KeywordCase, KeywordForm, Style};
 use serde_json::Value;
+use std::collections::HashMap;
 use tygr_objectscript::cos::KeywordUse;
 
-impl CommandStyle {
-    pub fn is_set(&self) -> bool {
-        self.form.is_some() || self.case.is_some()
+// A `Style`'s command rules, resolved once per workspace: `command` merged into each
+// `command-<name>`, keyed by the lowercased name.
+pub struct CommandStyles {
+    default: CommandStyle,
+    by_command: HashMap<String, CommandStyle>,
+}
+
+impl CommandStyles {
+    pub fn new(style: &Style) -> Self {
+        let default = style.command.unwrap_or(CommandStyle {
+            form: None,
+            case: None,
+        });
+        let Ok(Value::Object(fields)) = serde_json::to_value(style) else {
+            unreachable!("a record serializes to an object")
+        };
+        let by_command = fields
+            .into_iter()
+            .filter_map(|(key, value)| {
+                let name = key.strip_prefix("command_")?.to_string();
+                let style: CommandStyle = serde_json::from_value(value).ok()?;
+                Some((
+                    name,
+                    CommandStyle {
+                        form: style.form.or(default.form),
+                        case: style.case.or(default.case),
+                    },
+                ))
+            })
+            .collect();
+        CommandStyles {
+            default,
+            by_command,
+        }
     }
 
+    pub fn of(&self, kw: &KeywordUse) -> &CommandStyle {
+        self.by_command
+            .get(&kw.full.to_ascii_lowercase())
+            .unwrap_or(&self.default)
+    }
+}
+
+impl CommandStyle {
     // How `kw` should have been written under this style, or `None` if it already conforms.
     pub fn expected(&self, kw: &KeywordUse) -> Option<String> {
         let base = match self.form {
@@ -30,7 +70,7 @@ impl CommandStyle {
     }
 }
 
-// `{"commands": {"form": "Long", "case": "Pascal"}}` -- variant names as the WIT-generated
+// `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` -- variant names as the WIT-generated
 // types spell them.
 pub fn parse(json: &str) -> Result<Style, String> {
     let input: Value = serde_json::from_str(json).map_err(|err| err.to_string())?;
@@ -117,7 +157,6 @@ mod tests {
 
     #[test]
     fn unset_style_accepts_everything() {
-        assert!(!style(None, None).is_set());
         assert_eq!(
             style(None, None).expected(&kw("sEt", "Set", Some("S"))),
             None
@@ -125,14 +164,61 @@ mod tests {
     }
 
     #[test]
+    fn a_command_overrides_the_default_field_by_field() {
+        let styles = CommandStyles::new(
+            &parse(r#"{"command": {"form": "Long", "case": "Pascal"}, "command_do": {"form": "Short"}}"#)
+                .unwrap(),
+        );
+        let style = styles.of(&kw("do", "Do", Some("D")));
+        assert_eq!(
+            style.expected(&kw("do", "Do", Some("D"))).as_deref(),
+            Some("D")
+        );
+        let style = styles.of(&kw("s", "Set", Some("S")));
+        assert_eq!(
+            style.expected(&kw("s", "Set", Some("S"))).as_deref(),
+            Some("Set")
+        );
+    }
+
+    // The WIT's `command-<name>` fields and the grammar's command keywords must list the same
+    // commands: one missing a field couldn't be styled on its own; a field without a command
+    // would never apply.
+    #[test]
+    fn every_command_has_a_style_field_and_every_field_a_command() {
+        use tygr_objectscript::cos::COMMAND_NAMES;
+        let names: Vec<String> = COMMAND_NAMES
+            .iter()
+            .filter(|name| name.chars().all(|ch| ch.is_ascii_alphabetic()) && name.len() > 1)
+            .map(|name| name.to_ascii_lowercase())
+            .collect();
+        let json: serde_json::Map<String, Value> = names
+            .iter()
+            .map(|name| (format!("command_{name}"), serde_json::json!({})))
+            .collect();
+        parse(&Value::Object(json).to_string()).expect("every command has a field");
+        let Value::Object(fields) = serde_json::to_value(parse("{}").unwrap()).unwrap() else {
+            unreachable!()
+        };
+        for key in fields.keys().filter(|key| *key != "command") {
+            let name = key
+                .strip_prefix("command_")
+                .expect("only command fields so far");
+            assert!(names.iter().any(|n| n == name), "{key} names no command");
+        }
+    }
+
+    #[test]
     fn parse_rejects_unknown_keys_and_values() {
-        let err = parse(r#"{"commands": {"from": "Long"}}"#).unwrap_err();
-        assert!(err.contains("unknown field `commands.from`"), "{err}");
-        let err = parse(r#"{"commands": {"form": "long"}}"#).unwrap_err();
+        let err = parse(r#"{"command": {"from": "Long"}}"#).unwrap_err();
+        assert!(err.contains("unknown field `command.from`"), "{err}");
+        let err = parse(r#"{"command_sett": {}}"#).unwrap_err();
+        assert!(err.contains("unknown field `command_sett`"), "{err}");
+        let err = parse(r#"{"command": {"form": "long"}}"#).unwrap_err();
         assert!(
             err.contains("unknown variant `long`, expected `Long` or `Short`"),
             "{err}"
         );
-        assert!(parse(r#"{"commands": {}}"#).is_ok());
+        assert!(parse("{}").is_ok());
     }
 }

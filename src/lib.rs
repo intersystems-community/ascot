@@ -187,7 +187,7 @@ pub struct WorkspaceStruct {
     // it, every `$$Label^Routine` call into a 15k-line system routine re-expanded and re-parsed
     // it, and a single file took half a minute.
     pub(crate) iris_rtn_labels: RefCell<HashMap<String, (String, Option<check::Labels>)>>,
-    pub(crate) style: Option<Style>,
+    pub(crate) style: Option<style::CommandStyles>,
 }
 
 // `bindings::IrisConnection` is a WIT *imported* resource, producible only by a wasm host --
@@ -732,7 +732,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         rtn_index: RefCell::new(HashMap::new()),
         iris,
         iris_rtn_labels: RefCell::new(HashMap::new()),
-        style,
+        style: style.as_ref().map(style::CommandStyles::new),
     }
 }
 
@@ -4277,7 +4277,7 @@ mod tests {
 
     #[test]
     fn command_keywords_follow_the_configured_style() {
-        let style = style::parse(r#"{"commands": {"form": "Long", "case": "Pascal"}}"#).unwrap();
+        let style = style::parse(r#"{"command": {"form": "Long", "case": "Pascal"}}"#).unwrap();
         let workspace = Workspace::new(None, Some(style));
         let uri = "Style.mac".to_string();
         workspace.open(
@@ -4308,7 +4308,10 @@ mod tests {
 
     #[test]
     fn method_body_commands_follow_the_configured_style() {
-        let style = style::parse(r#"{"commands": {"form": "Short"}}"#).unwrap();
+        let style = style::parse(
+            r#"{"command": {"form": "Short"}, "command_quit": {"form": "Long", "case": "Upper"}}"#,
+        )
+        .unwrap();
         let workspace = Workspace::new(None, Some(style));
         let uri = "T.cls".to_string();
         workspace.open(
@@ -4320,7 +4323,7 @@ mod tests {
             [
                 "2:1 Command keyword `Set` should be written `S`",
                 "3:1 Command keyword `Write` should be written `W`",
-                "4:1 Command keyword `Quit` should be written `Q`",
+                "4:1 Command keyword `Quit` should be written `QUIT`",
             ]
         );
     }

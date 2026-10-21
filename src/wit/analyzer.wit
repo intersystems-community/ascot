@@ -155,9 +155,54 @@ interface common {
         case: option<keyword-case>,
     }
 
-    // Workspace-wide style rules, checked on every document.
+    // Workspace-wide style rules, checked on every document. `command` applies to every command;
+    // `command-<name>` (the command's full name, lowercased) to that one, overriding `command`
+    // field by field. A later category follows the same rule: `function`, `function-piece`, ...
     record style {
-        commands: command-style,
+        command: option<command-style>,
+        command-do: option<command-style>,
+        command-if: option<command-style>,
+        command-elseif: option<command-style>,
+        command-else: option<command-style>,
+        command-while: option<command-style>,
+        command-for: option<command-style>,
+        command-goto: option<command-style>,
+        command-break: option<command-style>,
+        command-quit: option<command-style>,
+        command-zquit: option<command-style>,
+        command-return: option<command-style>,
+        command-continue: option<command-style>,
+        command-set: option<command-style>,
+        command-kill: option<command-style>,
+        command-new: option<command-style>,
+        command-merge: option<command-style>,
+        command-try: option<command-style>,
+        command-catch: option<command-style>,
+        command-throw: option<command-style>,
+        command-ztrap: option<command-style>,
+        command-zzdump: option<command-style>,
+        command-write: option<command-style>,
+        command-read: option<command-style>,
+        command-open: option<command-style>,
+        command-close: option<command-style>,
+        command-use: option<command-style>,
+        command-lock: option<command-style>,
+        command-halt: option<command-style>,
+        command-hang: option<command-style>,
+        command-job: option<command-style>,
+        command-tstart: option<command-style>,
+        command-tcommit: option<command-style>,
+        command-trollback: option<command-style>,
+        command-zwrite: option<command-style>,
+        command-zkill: option<command-style>,
+        command-znspace: option<command-style>,
+        command-xecute: option<command-style>,
+        command-view: option<command-style>,
+        command-zprint: option<command-style>,
+        command-print: option<command-style>,
+        command-zbreak: option<command-style>,
+        command-mvprint: option<command-style>,
+        command-mvcrt: option<command-style>,
     }
 
     enum diagnostic-severity {

@@ -889,7 +889,7 @@ macro_rules! command_keywords {
         // letter): a user who drops the `#` and just writes `Dim` produces a plain alphabetic
         // word that *does* land here, and `#Dim` is the useful suggestion for that typo. The
         // `&sql(`/`##sql`/`&html<`/`&js<` markers are left out for now.
-        pub(crate) const COMMAND_NAMES: &[&str] = &[$($full,)* "H", "#Dim"];
+        pub const COMMAND_NAMES: &[&str] = &[$($full,)* "H", "#Dim"];
     };
     (@abbr) => { None };
     (@abbr $abbr:literal) => { Some($abbr) };

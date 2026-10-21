@@ -1571,8 +1571,8 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
-    pub(crate) fn command_style(&self) -> Option<&bindings::CommandStyle> {
-        Some(&self.base.base.workspace.style.as_ref()?.commands)
+    pub(crate) fn command_styles(&self) -> Option<&crate::style::CommandStyles> {
+        self.base.base.workspace.style.as_ref()
     }
 
     pub(crate) fn span(&self, start: usize, end: usize) -> bindings::Range {

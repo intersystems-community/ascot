@@ -51,7 +51,7 @@ await ws.hover("file:///T.cls", { line: 5, character: 7 }); // the `x` being wri
 `createWorkspace` takes an optional second argument, a `Style` applied to every document:
 
 ```ts
-const strict = await createWorkspace(new NoIris(), { commands: { form: "long", case: "pascal" } });
+const strict = await createWorkspace(new NoIris(), { command: { form: "long", case: "pascal" }, commandDo: { form: "short" } });
 ```
 
 Load every file of a project into one `Workspace` so cross-file references resolve, and

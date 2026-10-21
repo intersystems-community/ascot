@@ -891,11 +891,11 @@ impl CheckCommandInner for cos::Block {
 
 impl CheckCommandInner for cos::Command {
     fn style_check<'a>(&self, env: &CodeEnv<'a>, start: usize) {
-        let Some(style) = env.command_style().filter(|style| style.is_set()) else {
+        let Some(styles) = env.command_styles() else {
             return;
         };
         for kw in self.keywords(start) {
-            if let Some(expected) = style.expected(&kw) {
+            if let Some(expected) = styles.of(&kw).expected(&kw) {
                 let range = env.span(kw.start, kw.start + kw.text.len());
                 env.soft_diagnostic(TypeError::command_keyword_style(kw.text, expected, range));
             }

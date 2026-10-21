@@ -43,8 +43,8 @@ struct CreateWorkspaceRequest {
     /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
     /// for a URL; for a declaration file it must match the namespace it declares.
     iris_namespace: Option<String>,
-    /// Workspace-wide style rules, e.g. `{"commands": {"form": "Long", "case": "Pascal"}}` to
-    /// have every command keyword written as `Set`/`Quit`. Applies to every document.
+    /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
+    /// have every command keyword but `Do`'s written in full. Applies to every document.
     style: Option<crate::bindings::Style>,
 }
 
