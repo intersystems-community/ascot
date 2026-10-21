@@ -82,7 +82,7 @@ impl std::fmt::Display for wit_bind::DiagnosticRelatedInformation {
 
 impl wit_bind::Diagnostic {
     pub fn describe(&self) -> String {
-        let mut s = format!(":{} - {}\n", self.range, self.message);
+        let mut s = format!(":{} - {} [{}]\n", self.range, self.message, self.code);
         for related in &self.related_information {
             s += &format!("- {}\n", related);
         }

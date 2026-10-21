@@ -281,127 +281,250 @@ impl<T> IntoTypeError<T> for Result<T, QuasiTypeError> {
     }
 }
 
-#[derive(Debug)]
-pub enum TypeErrorKind {
+// Declares `TypeErrorKind` with each variant's diagnostic code next to it, so the code, the
+// variant's docs.rs anchor and the code shown in its docs all come from one place.
+macro_rules! type_error_kinds {
+    ($(
+        $(#[doc = $doc:literal])*
+        #[code = $code:literal]
+        $variant:ident
+        $(( $($tuple:ty),* ))?
+        $({ $( $(#[doc = $fdoc:literal])* $field:ident: $fty:ty ),* $(,)? })?,
+    )*) => {
+        /// Every kind of diagnostic ascot reports.
+        ///
+        /// Each has a code, e.g. `A1234`, that clients can filter or key quick fixes on. A code is
+        /// fixed once assigned and never reused, whatever later happens to the variant's name or
+        /// message; it is random, so it says nothing about the kind.
+        #[derive(Debug)]
+        pub enum TypeErrorKind {
+            $(
+                $(#[doc = $doc])*
+                #[doc = concat!("Code: `", $code, "`")]
+                #[doc(alias = $code)]
+                $variant $(( $($tuple),* ))? $({ $( $(#[doc = $fdoc])* $field: $fty ),* })?,
+            )*
+        }
+
+        impl TypeErrorKind {
+            /// This kind's diagnostic code.
+            pub fn code(&self) -> &'static str {
+                match self {
+                    $(Self::$variant { .. } => $code,)*
+                }
+            }
+
+            /// This kind's documentation on docs.rs, for the running version.
+            pub fn code_description(&self) -> String {
+                let variant = match self {
+                    $(Self::$variant { .. } => stringify!($variant),)*
+                };
+                format!(
+                    "https://docs.rs/ascot/{}/ascot/check/enum.TypeErrorKind.html#variant.{variant}",
+                    env!("CARGO_PKG_VERSION")
+                )
+            }
+        }
+
+        #[cfg(test)]
+        const CODES: &[&str] = &[$($code),*];
+    };
+}
+
+type_error_kinds! {
+    #[code = "A8061"]
     CannotFindClass {
         cls: String,
     },
+    #[code = "A1054"]
+    UnconfirmedClass {
+        cls: String,
+        has_iris: bool,
+    },
+    #[code = "A3139"]
     CannotFindMember {
         cls: String,
         mem: String,
         suggestions: Vec<String>,
         has_get: bool,
     },
+    #[code = "A9360"]
+    UnconfirmedMember {
+        cls: String,
+        mem: String,
+        superclass: bool,
+        has_iris: bool,
+    },
+    #[code = "A6851"]
     CannotFindLabel {
         label: String,
         routine: Option<String>,
     },
+    #[code = "A1073"]
     GotoOutOfBlock(String),
+    #[code = "A3303"]
     CannotFindRoutine(String),
+    #[code = "A7831"]
     CannotFindInclude(String),
+    #[code = "A5090"]
     MacroExpansionTooDeep(String),
+    #[code = "A8914"]
     AccessInstanceOnlyMemberFromClassContext {
         name: String,
     },
+    #[code = "A4983"]
     RedeclareVariable(String),
+    #[code = "A1817"]
     RedundantNew(String),
+    #[code = "A6866"]
     NewInProcedureBlock(String),
+    #[code = "A5573"]
+    ClassKeywordWithoutValue(String),
+    #[code = "A9322"]
     UnrecognizedPropertyKeyword(String),
+    #[code = "A2357"]
     UnrecognizedTypeParam {
         name: String,
         class: String,
         is_property_keyword: bool,
         suggestions: Vec<String>,
     },
+    #[code = "A2174"]
     UnrecognizedParameterKeyword(String),
+    #[code = "A8317"]
     UnrecognizedParameterType(String),
+    #[code = "A7155"]
     MixedPrecedence,
+    #[code = "A5718"]
     UnreadAssignment(String),
+    #[code = "A4476"]
     OutputNeverAssigned(String),
+    #[code = "A8892"]
     InconsistentDeclaration {
         name: String,
         ty1: Option<Ty>,
         ty2: Option<Ty>,
     },
+    #[code = "A5967"]
     TypeIncompatible {
         source: Ty,
         target: Ty,
     },
+    #[code = "A9180"]
     AssignIncompatible {
         name: String,
         source: Ty,
         target: Ty,
     },
+    #[code = "A1203"]
     Unreachable,
+    #[code = "A8456"]
     ConditionAlways(bool),
+    #[code = "A8496"]
     NotProcedure(Ty),
+    #[code = "A3671"]
     ProcedureNotCalled,
+    #[code = "A6705"]
     TooFewArguments {
         next_arg: String,
     },
+    #[code = "A5523"]
     TooManyArguments,
+    #[code = "A7139"]
     CaseDefaultNotLast,
+    #[code = "A3850"]
     UnknownFunction {
         name: String,
         suggestions: Vec<String>,
     },
+    #[code = "A9399"]
     UnknownSpecialVariable {
         name: String,
         suggestions: Vec<String>,
     },
+    #[code = "A6587"]
     InvalidMacroArgument(String),
+    #[code = "A3286"]
     InvalidZStripAction {
         action: String,
         reason: &'static str,
     },
+    #[code = "A9421"]
     NumberImplicitlyConvertedToString(String),
+    #[code = "A4556"]
     DiscardedReturnValue(String),
+    #[code = "A2839"]
     KeywordStyle {
         // "Command keyword" or "Function".
         what: &'static str,
         found: String,
         expected: String,
     },
+    #[code = "A7895"]
     InvalidFNumberFormat {
         format: String,
         reason: String,
     },
+    #[code = "A6781"]
     ReturnNothingForX {
         wanted: Ty,
     },
+    #[code = "A8997"]
     ReturnXForNothing {
         actual: Ty,
     },
+    #[code = "A4963"]
     QuitXInControl {
         actual: Ty,
     },
+    #[code = "A5579"]
     MismatchArgumentAndArgumentMode {
         name: String,
         wanted: ArgMode,
         actual: ArgMode,
     },
+    #[code = "A6826"]
     MaybeUndefined {
         ty: Ty,
         expr: Option<String>,
     },
+    #[code = "A7095"]
     Undefined {
         expr: Option<String>,
     },
+    #[code = "A1368"]
     NotInClass,
+    #[code = "A7244"]
     ProcedureCallReturnsNothing,
+    #[code = "A4025"]
     RequirePrivateVariable(String),
+    #[code = "A4043"]
     Unimplemented(String),
+    #[code = "A2797"]
     UndefinedMacro {
         name: String,
         suggestions: Vec<String>,
     },
+    #[code = "A5789"]
     ContinueNotInLoop,
+    #[code = "A3119"]
     DuplicatedMemberName {
         name: String,
     },
+    #[code = "A3717"]
+    DuplicateClassName {
+        name: String,
+        other_uri: String,
+    },
+    #[code = "A8073"]
     InvalidSyntax {
         err: tygr::Error,
     },
+    #[code = "A1727"]
+    DocumentSyntaxError {
+        err: tygr::Error,
+    },
+    #[code = "A7548"]
     MissingQuit,
 }
 
@@ -461,6 +584,11 @@ impl TypeErrorKind {
             TypeErrorKind::UnreadAssignment(_) => DiagnosticSeverity::Warning,
             TypeErrorKind::OutputNeverAssigned(_) => DiagnosticSeverity::Warning,
             TypeErrorKind::MissingQuit => DiagnosticSeverity::Warning,
+            TypeErrorKind::UnconfirmedClass { .. } => DiagnosticSeverity::Hint,
+            TypeErrorKind::UnconfirmedMember { .. } => DiagnosticSeverity::Hint,
+            TypeErrorKind::ClassKeywordWithoutValue(_) => DiagnosticSeverity::Warning,
+            TypeErrorKind::DuplicateClassName { .. } => DiagnosticSeverity::Error,
+            TypeErrorKind::DocumentSyntaxError { .. } => DiagnosticSeverity::Warning,
         }
     }
 }
@@ -494,6 +622,48 @@ impl std::fmt::Display for TypeErrorKind {
                     write!(f, " (or, if it's a dynamic property, %Get(\"{mem}\"))")?;
                 }
                 Ok(())
+            }
+            TypeErrorKind::UnconfirmedClass {
+                cls,
+                has_iris: true,
+            } => {
+                write!(
+                    f,
+                    "Cannot find class '{cls}' in the workspace or on the IRIS instance"
+                )
+            }
+            TypeErrorKind::UnconfirmedClass {
+                cls,
+                has_iris: false,
+            } => write!(
+                f,
+                "Cannot confirm class '{cls}' exists — it isn't open in this workspace, with no IRIS connection to check it against"
+            ),
+            TypeErrorKind::UnconfirmedMember {
+                cls,
+                mem,
+                superclass,
+                has_iris,
+            } => {
+                let on = if *superclass { "a superclass of " } else { "" };
+                let reason = if *has_iris {
+                    "that isn't on the IRIS instance"
+                } else {
+                    "outside this workspace, with no IRIS connection to check it against"
+                };
+                write!(
+                    f,
+                    "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes a class {reason}"
+                )
+            }
+            TypeErrorKind::ClassKeywordWithoutValue(keyword) => {
+                write!(f, "Class keyword '{keyword}' has no value")
+            }
+            TypeErrorKind::DuplicateClassName { name, other_uri } => {
+                write!(f, "Class '{name}' is also declared in {other_uri}")
+            }
+            TypeErrorKind::DocumentSyntaxError { err } => {
+                write!(f, "Syntax error, looking for:\n{err}")
             }
             TypeErrorKind::CannotFindLabel { label, routine } => match routine {
                 Some(routine) => write!(f, "Cannot find label '{label}' in routine '{routine}'"),
@@ -819,6 +989,54 @@ impl TypeError {
 
     // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
     // yet to attach one lazily this early (during macro expansion).
+    pub(crate) fn unconfirmed_class(cls: String, has_iris: bool, range: Range) -> Self {
+        Self::new(
+            TypeErrorKind::UnconfirmedClass { cls, has_iris },
+            range,
+            vec![],
+        )
+    }
+
+    pub(crate) fn unconfirmed_member(
+        cls: String,
+        mem: String,
+        superclass: bool,
+        has_iris: bool,
+        range: Range,
+    ) -> Self {
+        let kind = TypeErrorKind::UnconfirmedMember {
+            cls,
+            mem,
+            superclass,
+            has_iris,
+        };
+        Self::new(kind, range, vec![])
+    }
+
+    pub(crate) fn class_keyword_without_value(keyword: String, range: Range) -> Self {
+        Self::new(
+            TypeErrorKind::ClassKeywordWithoutValue(keyword),
+            range,
+            vec![],
+        )
+    }
+
+    pub(crate) fn duplicate_class_name(range: Range, name: String, other: Location) -> Self {
+        let kind = TypeErrorKind::DuplicateClassName {
+            name,
+            other_uri: other.uri.clone(),
+        };
+        let related = DiagnosticRelatedInformation {
+            location: other,
+            message: "Also declared here".into(),
+        };
+        Self::new(kind, range, vec![related])
+    }
+
+    pub(crate) fn document_syntax_error(range: Range, err: tygr::Error) -> Self {
+        Self::new(TypeErrorKind::DocumentSyntaxError { err }, range, vec![])
+    }
+
     pub fn cannot_find_include(name: String, range: Range) -> Self {
         Self::new(TypeErrorKind::CannotFindInclude(name), range, vec![])
     }
@@ -976,5 +1194,23 @@ impl TypeError {
             range,
             vec![],
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codes_are_distinct_and_well_formed() {
+        let distinct: std::collections::HashSet<_> = CODES.iter().collect();
+        assert_eq!(distinct.len(), CODES.len(), "a code is used twice");
+        for code in CODES {
+            let digits = code.strip_prefix('A').unwrap_or_else(|| panic!("{code}"));
+            assert!(
+                digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit()),
+                "{code}"
+            );
+        }
     }
 }

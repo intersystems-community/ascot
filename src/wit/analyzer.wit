@@ -369,6 +369,10 @@ interface common {
         range: range,
         related-information: list<diagnostic-related-information>,
         severity: diagnostic-severity,
+        // A fixed id for the kind of finding, e.g. `A1234`, to filter on or key a quick fix to.
+        code: string,
+        // The kind's documentation: a docs.rs url for the running version.
+        code-description: string,
     }
 
     record inlay-hint {
