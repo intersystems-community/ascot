@@ -1,5 +1,5 @@
-//! The `ascot` command-line binary: argument parsing and the `analyze`, `analyze-workspace`,
-//! `parse`, `declare`, `mcp` and `lsp` subcommands documented in README.md.
+//! The `ascot` command-line binary: argument parsing (with `clap`) and the `analyze`,
+//! `analyze-workspace`, `parse`, `declare`, `mcp` and `lsp` subcommands documented in README.md.
 //!
 //! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
 //! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
@@ -11,7 +11,6 @@ use ascot::bindings::GuestWorkspace;
 use ascot::cos;
 use ascot::cos::Routine;
 use std::collections::HashSet;
-use std::env;
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -21,97 +20,136 @@ use std::time::Instant;
 use tygr::Grammar;
 
 use ascot::{AtelierConnection, DocKind, IrisClient};
+use clap::{Args, Parser, Subcommand};
+
+/// A type checker and code intelligence engine for InterSystems ObjectScript.
+#[derive(Parser)]
+#[command(
+    version,
+    arg_required_else_help = true,
+    after_help = "More: https://github.com/intersystems-community/ascot#usage"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Check every .cls/.mac/.int/.inc file under the given paths
+    ///
+    /// Loads every .cls/.mac/.int/.inc file under each path into one workspace and prints the
+    /// diagnostics of all of them. Exits non-zero if any error or warning was found, or if a path
+    /// doesn't exist; hints don't affect the exit code.
+    Analyze {
+        #[command(flatten)]
+        iris: IrisArgs,
+        /// Files or directories to check
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// Check some paths, with a whole workspace loaded
+    ///
+    /// Loads every .cls/.mac/.int/.inc file under the root, so cross-file references resolve, but
+    /// prints diagnostics only for the files under the given paths. Each path must exist; one
+    /// outside the root is skipped with a warning. Exits like `ascot analyze`.
+    AnalyzeWorkspace {
+        #[command(flatten)]
+        iris: IrisArgs,
+        /// The directory whose files are all loaded
+        root: PathBuf,
+        /// Files or directories under the root to check
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// Report a file's syntax error, if any
+    ///
+    /// Parses the file without type checking and prints its syntax error, if any. Exits non-zero
+    /// on a syntax error.
+    Parse {
+        /// A .cls, .mac, .int or .inc file
+        file: PathBuf,
+    },
+    /// Save an IRIS namespace's declarations to a file
+    ///
+    /// Fetches everything the other commands would ask a live instance for and writes it to the
+    /// file: every class's superclasses, members and their signatures and types, and the source of
+    /// every include file and routine. Pass the file as --iris to analyze without a live instance,
+    /// for example in CI. Regenerate it after the instance's code changes.
+    Declare {
+        /// The IRIS instance, as http://user:password@host:port[/prefix]
+        #[arg(long, value_name = "URL")]
+        iris: String,
+        /// The namespace to declare [default: %SYS]
+        #[arg(long, value_name = "NS")]
+        iris_namespace: Option<String>,
+        /// The declaration file to write, for example user.d.json
+        file: PathBuf,
+    },
+    /// Run the MCP server on stdio, for AI agents
+    ///
+    /// Exposes workspace analysis as tools an AI agent calls on demand. Takes no options: a
+    /// workspace's IRIS connection is set by the `iris` and `iris_namespace` arguments of the
+    /// `create_workspace` tool. For example: `claude mcp add ascot -- ascot mcp`.
+    Mcp,
+    /// Run the LSP server on stdio, for editors and AI agents
+    Lsp {
+        #[command(flatten)]
+        iris: IrisArgs,
+    },
+}
+
+#[derive(Args)]
+struct IrisArgs {
+    /// An IRIS instance, or a declaration file from `ascot declare`
+    ///
+    /// The instance is given as http://user:password@host:port[/prefix]. Resolves the classes,
+    /// include files and routines outside the workspace; without it, they are left unconfirmed.
+    #[arg(long, value_name = "URL|FILE")]
+    iris: Option<String>,
+    /// The namespace to use [default: %SYS]
+    ///
+    /// With a declaration file, it must match the file's.
+    #[arg(long, value_name = "NS", requires = "iris")]
+    iris_namespace: Option<String>,
+}
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    match args.get(1).map(String::as_str) {
-        Some("analyze") => {
-            let mut rest: Vec<String> = args[2..].to_vec();
-            let iris = connect_iris(&mut rest);
-            if rest.is_empty() {
-                eprintln!("usage: analyze [--iris <url>] [--iris-namespace <ns>] <path>...");
-                exit(1);
-            }
-            analyze(rest.iter().map(|s| Path::new(s.as_str())), iris);
+    match Cli::parse().command {
+        Command::Analyze { iris, paths } => {
+            analyze(paths.iter().map(PathBuf::as_path), iris.open())
         }
-        Some("analyze-workspace") => {
-            let mut rest: Vec<String> = args[2..].to_vec();
-            let iris = connect_iris(&mut rest);
-            if rest.len() < 2 {
-                eprintln!(
-                    "usage: analyze-workspace [--iris <url>] [--iris-namespace <ns>] <workspace-root> <path>..."
-                );
-                exit(1);
-            }
-            let root = PathBuf::from(&rest[0]);
-            let paths: Vec<PathBuf> = rest[1..].iter().map(PathBuf::from).collect();
-            analyze_workspace(&root, paths.iter().map(PathBuf::as_path), iris);
+        Command::AnalyzeWorkspace { iris, root, paths } => {
+            analyze_workspace(&root, paths.iter().map(PathBuf::as_path), iris.open())
         }
-        Some("parse") => {
-            let Some(file_path) = args.get(2) else {
-                eprintln!("usage: parse <file>");
-                exit(1);
-            };
-            scan_file(file_path);
-        }
-        Some("declare") => {
-            let mut rest: Vec<String> = args[2..].to_vec();
-            let url = extract_flag(&mut rest, "--iris");
-            let namespace = extract_flag(&mut rest, "--iris-namespace");
-            let (Some(url), [out]) = (url, rest.as_slice()) else {
-                eprintln!("usage: declare --iris <url> [--iris-namespace <ns>] <file>");
-                exit(1);
-            };
-            declare(&url, namespace.as_deref(), Path::new(out));
-        }
-        Some("mcp") => {
+        Command::Parse { file } => scan_file(&file),
+        Command::Declare {
+            iris,
+            iris_namespace,
+            file,
+        } => declare(&iris, iris_namespace.as_deref(), &file),
+        Command::Mcp => {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
             rt.block_on(run_mcp_server());
         }
-        Some("lsp") => {
-            let mut rest: Vec<String> = args[2..].to_vec();
-            let iris = connect_iris(&mut rest);
-            if let Err(err) = ascot::lsp::run(iris) {
+        Command::Lsp { iris } => {
+            if let Err(err) = ascot::lsp::run(iris.open()) {
                 eprintln!("LSP server error: {err}");
                 exit(1);
             }
         }
-        _ => {
-            eprintln!(
-                "usage: parse <file> | analyze [--iris <url|file>] [--iris-namespace <ns>] <path>... | analyze-workspace [--iris <url|file>] [--iris-namespace <ns>] <root> <path>... | declare --iris <url> [--iris-namespace <ns>] <file> | mcp | lsp [--iris <url|file>] [--iris-namespace <ns>]"
-            );
-            exit(1);
-        }
     }
 }
 
-/// Pulls `--flag <value>` out of `args` (in place), wherever it appears, leaving the rest.
-fn extract_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
-    let idx = args.iter().position(|a| a == flag)?;
-    args.remove(idx);
-    if idx >= args.len() {
-        eprintln!("{flag} requires a value");
-        exit(1);
-    }
-    Some(args.remove(idx))
-}
-
-/// Pulls `--iris`/`--iris-namespace` out of `args` and opens the connection or declaration file, if
-/// `--iris` was given. `--iris-namespace` is ignored (with a warning) if `--iris` is absent.
-fn connect_iris(args: &mut Vec<String>) -> Option<Box<dyn IrisClient>> {
-    let iris = extract_flag(args, "--iris");
-    let namespace = extract_flag(args, "--iris-namespace");
-    let iris = iris.or_else(|| {
-        if namespace.is_some() {
-            eprintln!("--iris-namespace has no effect without --iris");
-        }
-        None
-    })?;
-    match ascot::open_iris(&iris, namespace.as_deref()) {
-        Ok(iris) => Some(iris),
-        Err(err) => {
-            eprintln!("--iris: {err}");
-            exit(1);
+impl IrisArgs {
+    /// Opens the connection or declaration file, if `--iris` was given.
+    fn open(self) -> Option<Box<dyn IrisClient>> {
+        match ascot::open_iris(&self.iris?, self.iris_namespace.as_deref()) {
+            Ok(iris) => Some(iris),
+            Err(err) => {
+                eprintln!("--iris: {err}");
+                exit(1);
+            }
         }
     }
 }
@@ -173,7 +211,7 @@ async fn run_mcp_server() {
     }
 }
 
-fn scan_file(file_path: &str) {
+fn scan_file(file_path: &Path) {
     let content = match fs::read_to_string(file_path) {
         Ok(c) => c,
         Err(e) => {
@@ -181,7 +219,7 @@ fn scan_file(file_path: &str) {
             process::exit(1);
         }
     };
-    let result = if file_path.ends_with(".cls") {
+    let result = if file_path.extension().is_some_and(|ext| ext == "cls") {
         cos::ClassDefinition::scan(&content)
     } else {
         Routine::scan(&content)
