@@ -26,7 +26,7 @@ use env::*;
 use flow::*;
 use std::{collections::HashMap, iter::once, ops::Deref};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
-use tygr_objectscript::cos::CommandLike;
+use tygr_objectscript::cos::{CommandLike, Commands};
 use types::*;
 
 pub use env::{DocumentEnv, Labels, WorkspaceEnv};
@@ -493,9 +493,6 @@ impl MethodDetails {
 trait CheckCommandInner {
     fn inner_check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>)
     -> Result<(), QuasiTypeError>;
-
-    // Checks on how the command is written rather than what it does; `start` is its offset.
-    fn style_check<'a>(&self, _env: &CodeEnv<'a>, _start: usize) {}
 }
 
 trait CheckCommand {
@@ -504,7 +501,6 @@ trait CheckCommand {
 
 impl<T: CheckCommandInner> CheckCommand for Range<T> {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        self.deref().style_check(env, self.start);
         flow.with_range(env.range(self), |flow| {
             self.inner_check(env, flow).with_range(|| env.range(self))
         })
@@ -534,6 +530,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                         err,
                     )
                 })?;
+                check_style(env, &body);
                 check_block_body(&body, env, flow, true)
             }
             (
@@ -889,19 +886,22 @@ impl CheckCommandInner for cos::Block {
     }
 }
 
-impl CheckCommandInner for cos::Command {
-    fn style_check<'a>(&self, env: &CodeEnv<'a>, start: usize) {
-        let Some(styles) = env.command_styles() else {
-            return;
-        };
-        for kw in self.keywords(start) {
+// How every command in `code` is written, independent of how far type checking gets.
+fn check_style(env: &CodeEnv, code: &impl Commands) {
+    let Some(styles) = env.command_styles() else {
+        return;
+    };
+    code.for_each_command(&mut |command| {
+        for kw in command.keywords(command.start) {
             if let Some(expected) = styles.of(&kw).expected(&kw) {
                 let range = env.span(kw.start, kw.start + kw.text.len());
                 env.soft_diagnostic(TypeError::command_keyword_style(kw.text, expected, range));
             }
         }
-    }
+    });
+}
 
+impl CheckCommandInner for cos::Command {
     fn inner_check<'a>(
         &self,
         env: &CodeEnv<'a>,
@@ -3403,6 +3403,7 @@ pub fn check_rtn(
         })
         .collect();
     let env = env.for_routine(env::scoped_labels(env.uri(), &labels, None), definitions);
+    check_style(&env, rtn);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a
     // tags-only routine — there's no meaningful position to blame it falling through on, so

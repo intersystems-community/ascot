@@ -976,6 +976,102 @@ pub trait CommandLike {
     fn postcondition(&self) -> Option<&PostCondition> {
         None
     }
+
+    // The commands in this command's own blocks (`If {...}`, `For ... {...}`, ...).
+    fn for_each_nested(&self, _f: &mut dyn FnMut(&Range<Command>)) {}
+}
+
+// Every command in a piece of code, nested ones included, in source order -- for checks on
+// commands as written, which must see all of them, not just those the type checker reaches.
+pub trait Commands {
+    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>));
+}
+
+impl Commands for Range<Command> {
+    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        f(self);
+        self.for_each_nested(f);
+    }
+}
+
+impl<Start> Commands for CommandLine<Start> {
+    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        for command in self
+            .commands
+            .iter()
+            .flat_map(|commands| commands.items.iter())
+        {
+            command.for_each_command(f);
+        }
+    }
+}
+
+impl Commands for Block {
+    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        match self {
+            Block::Curry(block) => block.prefixed.wrapped.for_each_command(f),
+            Block::Command(commands) => {
+                for command in commands.items.iter() {
+                    command.for_each_command(f);
+                }
+            }
+        }
+    }
+}
+
+impl Commands for ProcedureMain {
+    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        self.line_1.iter().for_each(|line| line.for_each_command(f));
+        for line in self
+            .line_n
+            .iter()
+            .flat_map(|lines| lines.prefixed.items.iter())
+        {
+            line.for_each_command(f);
+        }
+    }
+}
+
+impl Commands for RoutineMain {
+    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        self.line_1.iter().for_each(|line| line.for_each_command(f));
+        for line in self
+            .line_n
+            .iter()
+            .flat_map(|lines| lines.prefixed.items.iter())
+        {
+            line.for_each_command(f);
+        }
+    }
+}
+
+impl Commands for ProcedureBody {
+    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        self.main.for_each_command(f);
+        for subroutine in self
+            .subroutines
+            .iter()
+            .flat_map(|subs| subs.prefixed.items.iter())
+        {
+            subroutine.body.for_each_command(f);
+        }
+    }
+}
+
+impl Commands for Routine {
+    fn for_each_command(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        self.main.for_each_command(f);
+        for element in self
+            .subroutines
+            .iter()
+            .flat_map(|elems| elems.prefixed.items.iter())
+        {
+            match element {
+                RoutineElement::Procedure(procedure) => procedure.body.wrapped.for_each_command(f),
+                RoutineElement::Subroutine(subroutine) => subroutine.body.for_each_command(f),
+            }
+        }
+    }
 }
 
 #[derive(Grammar)]
@@ -3365,11 +3461,19 @@ impl CommandLike for WhileCommand {
     fn keywords(&self, start: usize) -> Vec<KeywordUse> {
         vec![KeywordUse::of(&self.kw, start)]
     }
+
+    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        self.bdy.prefixed.wrapped.for_each_command(f)
+    }
 }
 
 impl CommandLike for ForCommand {
     fn keywords(&self, start: usize) -> Vec<KeywordUse> {
         vec![KeywordUse::of(&self.kw, start)]
+    }
+
+    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        self.bdy.iter().for_each(|bdy| bdy.for_each_command(f))
     }
 }
 
@@ -3379,6 +3483,10 @@ impl CommandLike for DoWhileCommand {
             KeywordUse::of(&self.kw, start),
             KeywordUse::of(&*self.kw_while, self.kw_while.start),
         ]
+    }
+
+    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        self.iter.wrapped.wrapped.for_each_command(f)
     }
 }
 
@@ -3395,17 +3503,37 @@ impl CommandLike for IfCommand {
         }
         keywords
     }
+
+    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        if let Some(branches) = &self.branches {
+            branches.thn.for_each_command(f);
+            for eif in &branches.eifs {
+                eif.prefixed.for_each_nested(f);
+            }
+            if let Some(els) = &branches.els {
+                els.prefixed.for_each_nested(f);
+            }
+        }
+    }
 }
 
 impl CommandLike for ElseIfBranch {
     fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
         vec![KeywordUse::of(&*self.kw, self.kw.start)]
     }
+
+    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        self.thn.for_each_command(f)
+    }
 }
 
 impl CommandLike for ElseBranch {
     fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
         vec![KeywordUse::of(&*self.kw, self.kw.start)]
+    }
+
+    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        self.body.iter().for_each(|body| body.for_each_command(f))
     }
 }
 
@@ -3415,6 +3543,11 @@ impl CommandLike for TryCommand {
             KeywordUse::of(&self.kw_try, start),
             KeywordUse::of(&*self.kw_catch, self.kw_catch.start),
         ]
+    }
+
+    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        self.b1.for_each_command(f);
+        self.b2.for_each_command(f);
     }
 }
 
@@ -3505,6 +3638,12 @@ impl CommandLike for Command {
 
     fn postcondition(&self) -> Option<&PostCondition> {
         self.as_command_like()?.postcondition()
+    }
+
+    fn for_each_nested(&self, f: &mut dyn FnMut(&Range<Command>)) {
+        if let Some(command) = self.as_command_like() {
+            command.for_each_nested(f)
+        }
     }
 }
 

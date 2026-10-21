@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     Workspace,
     bindings::{Diagnostic, GuestWorkspace, InlayHint, Location, Position, Range},
-    iris,
+    iris, style,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -45,7 +45,9 @@ struct CreateWorkspaceRequest {
     iris_namespace: Option<String>,
     /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
     /// have every command keyword but `Do`'s written in full. Applies to every document.
-    style: Option<crate::bindings::Style>,
+    // Taken raw so `style::from_value` can reject unknown keys, which `Style` itself ignores.
+    #[schemars(with = "Option<crate::bindings::Style>")]
+    style: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -176,6 +178,10 @@ impl AnalyzerMcpServer {
         if workspaces.contains_key(&workspace) {
             return Err(format!("workspace already exists: {workspace:?}"));
         }
+        let style = style
+            .map(style::from_value)
+            .transpose()
+            .map_err(|err| format!("style: {err}"))?;
         let iris = iris
             .map(|iris| iris::open(&iris, iris_namespace.as_deref()))
             .transpose()

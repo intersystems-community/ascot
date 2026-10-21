@@ -73,7 +73,10 @@ impl CommandStyle {
 // `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` -- variant names as the WIT-generated
 // types spell them.
 pub fn parse(json: &str) -> Result<Style, String> {
-    let input: Value = serde_json::from_str(json).map_err(|err| err.to_string())?;
+    from_value(serde_json::from_str(json).map_err(|err| err.to_string())?)
+}
+
+pub fn from_value(input: Value) -> Result<Style, String> {
     let style: Style = serde_json::from_value(input.clone()).map_err(|err| err.to_string())?;
     // The generated types ignore keys they don't know; a misspelled one must not silently do
     // nothing, so compare against what was actually understood.

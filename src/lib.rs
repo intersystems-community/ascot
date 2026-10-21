@@ -4307,6 +4307,36 @@ mod tests {
     }
 
     #[test]
+    fn commands_after_an_unchecked_construct_are_still_style_checked() {
+        let style = style::parse(r#"{"command": {"form": "Long"}}"#).unwrap();
+        let workspace = Workspace::new(None, Some(style));
+        let uri = "S.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE S\nf(x)\n i x  d\n . s b=1\n s c=1\n q\ng()\n b 1\n f i=1:1:2 { s d=i }\n q\n"
+                .to_string(),
+        );
+        let found: Vec<_> = style_messages(&workspace, &uri)
+            .into_iter()
+            .filter(|m| m.contains("Command keyword"))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                "2:1 Command keyword `i` should be written `If`",
+                "2:6 Command keyword `d` should be written `Do`",
+                "3:3 Command keyword `s` should be written `Set`",
+                "4:1 Command keyword `s` should be written `Set`",
+                "5:1 Command keyword `q` should be written `Quit`",
+                "7:1 Command keyword `b` should be written `Break`",
+                "8:1 Command keyword `f` should be written `For`",
+                "8:13 Command keyword `s` should be written `Set`",
+                "9:1 Command keyword `q` should be written `Quit`",
+            ]
+        );
+    }
+
+    #[test]
     fn method_body_commands_follow_the_configured_style() {
         let style = style::parse(
             r#"{"command": {"form": "Short"}, "command_quit": {"form": "Long", "case": "Upper"}}"#,
