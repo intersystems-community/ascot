@@ -30,8 +30,7 @@ use tygr_objectscript::cos::{CommandLike, KeywordKind, KeywordUse, Spelled};
 use types::*;
 
 pub use env::{DocumentEnv, Labels, WorkspaceEnv};
-use errors::TypeErrorKind;
-pub use errors::{IntoTypeError, QuasiTypeError, TypeError};
+pub use errors::{IntoTypeError, QuasiTypeError, TypeError, TypeErrorKind};
 
 trait CheckExprInner {
     fn to_power_ty<'a>(
@@ -3476,12 +3475,8 @@ pub(crate) fn check_cls(
     let mut diagnostics = Vec::new();
     let mut defined = HashMap::new();
     for keyword in &cls.keywords_without_value {
-        diagnostics.push(bindings::Diagnostic {
-            message: format!("Class keyword '{}' has no value", keyword.it),
-            range: keyword.range,
-            related_information: vec![],
-            severity: bindings::DiagnosticSeverity::Warning,
-        });
+        diagnostics
+            .push(TypeError::class_keyword_without_value(keyword.it.clone(), keyword.range).into());
     }
     // Available to every class without an explicit `Include` (see `CLASS_IMPLICIT_INCLUDES`) --
     // resolved silently (no diagnostic on failure, unlike an explicit `Include`).
@@ -3661,6 +3656,8 @@ impl From<TypeError> for bindings::Diagnostic {
             range: value.range,
             related_information: value.related_information,
             severity: value.kind.severity(),
+            code: value.kind.code().to_string(),
+            code_description: value.kind.code_description(),
         }
     }
 }

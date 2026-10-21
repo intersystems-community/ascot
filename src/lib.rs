@@ -74,8 +74,7 @@ use tygr::{Grammar, OLC, Range};
 
 use crate::{
     bindings::{
-        Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, InlayHint, IrisConnection,
-        Location, MemberInfo, NameInfo, Position, Style,
+        Diagnostic, InlayHint, IrisConnection, Location, MemberInfo, NameInfo, Position, Style,
     },
     check::WorkspaceEnv,
     cos::Routine,
@@ -445,15 +444,8 @@ impl WorkspaceStruct {
                 .then(|| other_uri.clone())
         })?;
         let other_range = self.cls_details(&other_uri).ok()?.name.range;
-        Some(Diagnostic {
-            message: format!("Class '{name}' is also declared in {other_uri}"),
-            range,
-            related_information: vec![DiagnosticRelatedInformation {
-                location: Location::new(other_uri, other_range),
-                message: "Also declared here".into(),
-            }],
-            severity: DiagnosticSeverity::Error,
-        })
+        let other = Location::new(other_uri, other_range);
+        Some(check::TypeError::duplicate_class_name(range, name.to_string(), other).into())
     }
 
     fn workspace_env(&self) -> WorkspaceEnv<'_> {
@@ -1135,12 +1127,7 @@ pub(crate) fn tygr_error_to_diagnostics(e: cos::Error, src: &str) -> Diagnostic 
         line,
         character: character + 1,
     };
-    Diagnostic {
-        message: format!("Syntax error, looking for:\n{e}"),
-        range: bindings::Range { start, end },
-        related_information: vec![],
-        severity: bindings::DiagnosticSeverity::Warning,
-    }
+    check::TypeError::document_syntax_error(bindings::Range { start, end }, e).into()
 }
 
 impl bindings::Guest for bindings::Analyzer {
@@ -4453,6 +4440,49 @@ mod tests {
         );
         let diagnostics = workspace.diagnostics(uri);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    // Every diagnostic carries its kind's code and a link to that kind's docs, including the ones
+    // raised outside the checker proper, such as the unconfirmed-class hint.
+    #[test]
+    fn diagnostics_carry_their_kinds_code_and_docs_link() {
+        let diagnostics = class_diagnostics(
+            "Property P As Other.Missing;\nClassMethod M() {\n Write $$$NoSuchMacro\n}\n",
+        );
+        let find = |text: &str| {
+            diagnostics
+                .iter()
+                .find(|d| d.message.contains(text))
+                .unwrap_or_else(|| panic!("{diagnostics:?}"))
+        };
+        let cases = [
+            (
+                find("NoSuchMacro"),
+                check::TypeErrorKind::UndefinedMacro {
+                    name: String::new(),
+                    suggestions: vec![],
+                },
+                "UndefinedMacro",
+            ),
+            (
+                find("Cannot confirm class"),
+                check::TypeErrorKind::UnconfirmedClass {
+                    cls: String::new(),
+                    has_iris: false,
+                },
+                "UnconfirmedClass",
+            ),
+        ];
+        for (diagnostic, kind, variant) in cases {
+            assert_eq!(diagnostic.code, kind.code());
+            assert_eq!(
+                diagnostic.code_description,
+                format!(
+                    "https://docs.rs/ascot/{}/ascot/check/enum.TypeErrorKind.html#variant.{variant}",
+                    env!("CARGO_PKG_VERSION")
+                )
+            );
+        }
     }
 
     fn class_diagnostics(body: &str) -> Vec<bindings::Diagnostic> {

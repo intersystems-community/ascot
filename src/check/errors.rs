@@ -281,127 +281,381 @@ impl<T> IntoTypeError<T> for Result<T, QuasiTypeError> {
     }
 }
 
-#[derive(Debug)]
-pub enum TypeErrorKind {
+// Declares `TypeErrorKind` with each variant's diagnostic code next to it, so the code, the
+// variant's docs.rs anchor and the code shown in its docs all come from one place.
+macro_rules! type_error_kinds {
+    ($(
+        $(#[doc = $doc:literal])*
+        #[code = $code:literal]
+        $variant:ident
+        $(( $($tuple:ty),* ))?
+        $({ $( $(#[doc = $fdoc:literal])* $field:ident: $fty:ty ),* $(,)? })?,
+    )*) => {
+        /// Every kind of diagnostic ascot reports.
+        ///
+        /// Each has a code, e.g. `A1234`, that clients can filter or key quick fixes on. A code is
+        /// fixed once assigned and never reused, whatever later happens to the variant's name or
+        /// message; it is random, so it says nothing about the kind.
+        #[derive(Debug)]
+        #[warn(missing_docs)]
+        pub enum TypeErrorKind {
+            $(
+                $(#[doc = $doc])*
+                #[doc = ""]
+                #[doc = concat!("Code: `", $code, "`")]
+                #[doc(alias = $code)]
+                $variant $(( $($tuple),* ))? $({ $( $(#[doc = $fdoc])* $field: $fty ),* })?,
+            )*
+        }
+
+        impl TypeErrorKind {
+            /// This kind's diagnostic code.
+            pub fn code(&self) -> &'static str {
+                match self {
+                    $(Self::$variant { .. } => $code,)*
+                }
+            }
+
+            /// This kind's documentation on docs.rs, for the running version.
+            pub fn code_description(&self) -> String {
+                let variant = match self {
+                    $(Self::$variant { .. } => stringify!($variant),)*
+                };
+                format!(
+                    "https://docs.rs/ascot/{}/ascot/check/enum.TypeErrorKind.html#variant.{variant}",
+                    env!("CARGO_PKG_VERSION")
+                )
+            }
+        }
+
+        #[cfg(test)]
+        const CODES: &[&str] = &[$($code),*];
+    };
+}
+
+type_error_kinds! {
+    /// A class is referenced that is neither in the workspace nor on the connected IRIS instance.
+    #[code = "A8061"]
     CannotFindClass {
+        /// The class name as written.
         cls: String,
     },
-    CannotFindMember {
+    /// A class named in a declaration (a type, a superclass) isn't in the workspace and can't be
+    /// confirmed: there is no IRIS connection, or the instance doesn't have it either. A hint, since
+    /// the class may well exist on the server the code runs on.
+    #[code = "A1054"]
+    UnconfirmedClass {
+        /// The class name as written.
         cls: String,
+        /// Whether an IRIS connection was available (and didn't have the class).
+        has_iris: bool,
+    },
+    /// A property, method or parameter is accessed that its class doesn't have.
+    #[code = "A3139"]
+    CannotFindMember {
+        /// The class searched.
+        cls: String,
+        /// The member name as written.
         mem: String,
+        /// Similarly named members of the class.
         suggestions: Vec<String>,
+        /// Whether the class has `%Get`, so `mem` could be a dynamic property.
         has_get: bool,
     },
+    /// A member can't be confirmed to exist because the class hierarchy it would come from includes a
+    /// class outside the workspace that IRIS couldn't supply. A hint, since the member may be
+    /// inherited from that class.
+    #[code = "A9360"]
+    UnconfirmedMember {
+        /// The class the member is looked up on.
+        cls: String,
+        /// The member name as written.
+        mem: String,
+        /// Whether it is looked up on a superclass (`##super`), not on `cls` itself.
+        superclass: bool,
+        /// Whether an IRIS connection was available (and didn't have the class).
+        has_iris: bool,
+    },
+    /// A `Do`, `Goto` or `$$` names a label its routine doesn't define.
+    #[code = "A6851"]
     CannotFindLabel {
+        /// The label as written.
         label: String,
+        /// The routine named after `^`, if any; otherwise the current one.
         routine: Option<String>,
     },
+    /// A `Goto` inside a procedure block targets a label outside it, which IRIS doesn't allow (a
+    /// `Do` may still call out, and `Goto label^routine` is allowed).
+    #[code = "A1073"]
     GotoOutOfBlock(String),
+    /// A `label^routine` reference names a routine that is neither in the workspace nor on the
+    /// connected IRIS instance.
+    #[code = "A3303"]
     CannotFindRoutine(String),
+    /// An `#include` or class `Include` names an include file that is neither in the workspace nor on
+    /// the connected IRIS instance, so its macros are unknown.
+    #[code = "A7831"]
     CannotFindInclude(String),
+    /// A macro's expansion includes itself, directly or through other macros, without end.
+    #[code = "A5090"]
     MacroExpansionTooDeep(String),
+    /// A class method uses an instance member (a property, or `..Method` of an instance method), which
+    /// needs an object it doesn't have.
+    #[code = "A8914"]
     AccessInstanceOnlyMemberFromClassContext {
+        /// The member name.
         name: String,
     },
+    /// A `#dim` declares a variable that is already declared.
+    #[code = "A4983"]
     RedeclareVariable(String),
+    /// A `New` names a variable that is already `New`'d, so it only discards the current value.
+    #[code = "A1817"]
     RedundantNew(String),
+    /// A `New` inside a procedure block, where every local variable is already private.
+    #[code = "A6866"]
     NewInProcedureBlock(String),
+    /// A class keyword that requires a value, such as `Extends`, is given without one.
+    #[code = "A5573"]
+    ClassKeywordWithoutValue(String),
+    /// A property's `[ ... ]` list has a keyword properties don't take.
+    #[code = "A9322"]
     UnrecognizedPropertyKeyword(String),
+    /// A type's `( ... )` parameters name one that type doesn't have, e.g. `%String(MAXLEN=10,
+    /// NOSUCH=1)`.
+    #[code = "A2357"]
     UnrecognizedTypeParam {
+        /// The parameter name as written.
         name: String,
+        /// The type it was given to.
         class: String,
+        /// Whether `name` is a property keyword, which belongs in `[ ... ]` instead.
         is_property_keyword: bool,
+        /// Similarly named parameters of the type.
         suggestions: Vec<String>,
     },
+    /// A class `Parameter`'s `[ ... ]` list has a keyword parameters don't take.
+    #[code = "A2174"]
     UnrecognizedParameterKeyword(String),
+    /// A class `Parameter` is declared `As` a type parameters can't have.
+    #[code = "A8317"]
     UnrecognizedParameterType(String),
+    /// An expression mixes operators as if they had precedence, which ObjectScript doesn't: `1+2*3`
+    /// is `9`, evaluated strictly left to right.
+    #[code = "A7155"]
     MixedPrecedence,
+    /// A variable is assigned a value that nothing reads before it is overwritten or goes out of
+    /// scope.
+    #[code = "A5718"]
     UnreadAssignment(String),
+    /// An `Output` parameter is never assigned on any path, so the caller gets an undefined value.
+    #[code = "A4476"]
     OutputNeverAssigned(String),
+    /// A variable is `#dim`'d differently, or only, in some of the branches that meet afterwards.
+    #[code = "A8892"]
     InconsistentDeclaration {
+        /// The variable.
         name: String,
+        /// Its declared type in one branch; `None` if undeclared there.
         ty1: Option<Ty>,
+        /// Its declared type in the other branch; `None` if undeclared there.
         ty2: Option<Ty>,
     },
+    /// A value's type doesn't fit where it is used, e.g. an argument of the wrong type.
+    #[code = "A5967"]
     TypeIncompatible {
+        /// The value's type.
         source: Ty,
+        /// The type expected there.
         target: Ty,
     },
+    /// A `Set` assigns a value whose type doesn't fit the variable's declared type.
+    #[code = "A9180"]
     AssignIncompatible {
+        /// The variable.
         name: String,
+        /// The value's type.
         source: Ty,
+        /// The variable's declared type.
         target: Ty,
     },
+    /// Code that can never run, e.g. after an unconditional `Quit`.
+    #[code = "A1203"]
     Unreachable,
+    /// A condition that always has the same value, so one of its branches never runs.
+    #[code = "A8456"]
     ConditionAlways(bool),
+    /// Something that isn't a method or routine is called like one.
+    #[code = "A8496"]
     NotProcedure(Ty),
+    /// A method is referenced without `()`: ObjectScript has no method values, so it must be called.
+    #[code = "A3671"]
     ProcedureNotCalled,
+    /// A call leaves out an argument that has no default value and isn't `Output`.
+    #[code = "A6705"]
     TooFewArguments {
+        /// The first missing parameter.
         next_arg: String,
     },
+    /// A call passes more arguments than the method or routine has parameters.
+    #[code = "A5523"]
     TooManyArguments,
+    /// A `$CASE` has its `:default` somewhere other than last.
+    #[code = "A7139"]
     CaseDefaultNotLast,
+    /// A `$name(...)` call names no intrinsic function.
+    #[code = "A3850"]
     UnknownFunction {
+        /// The name after `$`.
         name: String,
+        /// Similarly named functions.
         suggestions: Vec<String>,
     },
+    /// A `$name` names no special variable.
+    #[code = "A9399"]
     UnknownSpecialVariable {
+        /// The name after `$`.
         name: String,
+        /// Similarly named special variables.
         suggestions: Vec<String>,
     },
+    /// A macro is called with arguments its definition can't take.
+    #[code = "A6587"]
     InvalidMacroArgument(String),
+    /// A `$ZSTRIP` action string asks for something `$ZSTRIP` doesn't do.
+    #[code = "A3286"]
     InvalidZStripAction {
+        /// The action string.
         action: String,
+        /// What is wrong with it.
         reason: &'static str,
     },
+    /// A number literal is used where a string is expected, so IRIS converts it, in canonical form
+    /// (`007` becomes `"7"`).
+    #[code = "A9421"]
     NumberImplicitlyConvertedToString(String),
+    /// A `Do` calls a method that returns a value, such as a `%Status`, which `Do` throws away.
+    #[code = "A4556"]
     DiscardedReturnValue(String),
+    /// A command keyword or intrinsic function is written in a form the workspace's style rules don't
+    /// allow, e.g. `S` where the full `Set` is required.
+    #[code = "A2839"]
     KeywordStyle {
-        // "Command keyword" or "Function".
+        /// "Command keyword" or "Function".
         what: &'static str,
+        /// The keyword as written.
         found: String,
+        /// The form the style rules ask for.
         expected: String,
     },
+    /// A `$FNUMBER` format string asks for something `$FNUMBER` doesn't do.
+    #[code = "A7895"]
     InvalidFNumberFormat {
+        /// The format string.
         format: String,
+        /// What is wrong with it.
         reason: String,
     },
+    /// A `Quit` or `Return` without a value where the method declares a return type, or where an
+    /// earlier return in the same procedure returned a value.
+    #[code = "A6781"]
     ReturnNothingForX {
+        /// The type expected.
         wanted: Ty,
     },
+    /// A `Quit` or `Return` with a value where the method declares no return type, or where an earlier
+    /// return in the same procedure returned nothing.
+    #[code = "A8997"]
     ReturnXForNothing {
+        /// The value's type.
         actual: Ty,
     },
+    /// A `Quit` with a value inside a loop, where `Quit` only leaves the loop and can't return a value.
+    #[code = "A4963"]
     QuitXInControl {
+        /// The value's type.
         actual: Ty,
     },
+    /// An argument is passed by value where the parameter is `Output` or `ByRef`, or by reference
+    /// (`.x`) where it isn't.
+    #[code = "A5579"]
     MismatchArgumentAndArgumentMode {
+        /// The parameter.
         name: String,
+        /// The parameter's declared mode.
         wanted: ArgMode,
+        /// How the argument was passed.
         actual: ArgMode,
     },
+    /// A variable is read that is undefined on some of the paths reaching it.
+    #[code = "A6826"]
     MaybeUndefined {
+        /// The type it has where it is defined.
         ty: Ty,
+        /// The expression read, if it has a name.
         expr: Option<String>,
     },
+    /// A variable is read that is undefined on every path reaching it.
+    #[code = "A7095"]
     Undefined {
+        /// The expression read, if it has a name.
         expr: Option<String>,
     },
+    /// Something that needs an enclosing class, such as `..Member` or `##super`, is used in a
+    /// routine.
+    #[code = "A1368"]
     NotInClass,
+    /// A call's result is used, but the method or routine returns nothing.
+    #[code = "A7244"]
     ProcedureCallReturnsNothing,
+    /// A call to a procedure relies on a variable it can't see: the procedure would need the variable
+    /// in its public list.
+    #[code = "A4025"]
     RequirePrivateVariable(String),
+    /// Code ascot doesn't type check yet; the rest of the method isn't checked. Informational, not a
+    /// problem in the code.
+    #[code = "A4043"]
     Unimplemented(String),
+    /// A `$$$name` names a macro that no `#define` or include file in scope defines.
+    #[code = "A2797"]
     UndefinedMacro {
+        /// The macro name.
         name: String,
+        /// Similarly named macros in scope.
         suggestions: Vec<String>,
     },
+    /// A `Continue` outside any loop.
+    #[code = "A5789"]
     ContinueNotInLoop,
+    /// A class defines two members with the same name.
+    #[code = "A3119"]
     DuplicatedMemberName {
+        /// The member name.
         name: String,
     },
+    /// Two documents in the workspace declare the same class.
+    #[code = "A3717"]
+    DuplicateClassName {
+        /// The class name.
+        name: String,
+        /// The other document's uri.
+        other_uri: String,
+    },
+    /// A syntax error inside a method body or routine.
+    #[code = "A8073"]
     InvalidSyntax {
+        /// The parser's error.
         err: tygr::Error,
     },
+    /// The document as a whole can't be parsed, so nothing in it is checked. A warning, since the
+    /// cause may be syntax ascot's grammar doesn't cover yet.
+    #[code = "A1727"]
+    DocumentSyntaxError {
+        /// The parser's error.
+        err: tygr::Error,
+    },
+    /// A label's code runs off its end with no label to run into, falling through to whatever follows.
+    #[code = "A7548"]
     MissingQuit,
 }
 
@@ -461,6 +715,11 @@ impl TypeErrorKind {
             TypeErrorKind::UnreadAssignment(_) => DiagnosticSeverity::Warning,
             TypeErrorKind::OutputNeverAssigned(_) => DiagnosticSeverity::Warning,
             TypeErrorKind::MissingQuit => DiagnosticSeverity::Warning,
+            TypeErrorKind::UnconfirmedClass { .. } => DiagnosticSeverity::Hint,
+            TypeErrorKind::UnconfirmedMember { .. } => DiagnosticSeverity::Hint,
+            TypeErrorKind::ClassKeywordWithoutValue(_) => DiagnosticSeverity::Warning,
+            TypeErrorKind::DuplicateClassName { .. } => DiagnosticSeverity::Error,
+            TypeErrorKind::DocumentSyntaxError { .. } => DiagnosticSeverity::Warning,
         }
     }
 }
@@ -494,6 +753,48 @@ impl std::fmt::Display for TypeErrorKind {
                     write!(f, " (or, if it's a dynamic property, %Get(\"{mem}\"))")?;
                 }
                 Ok(())
+            }
+            TypeErrorKind::UnconfirmedClass {
+                cls,
+                has_iris: true,
+            } => {
+                write!(
+                    f,
+                    "Cannot find class '{cls}' in the workspace or on the IRIS instance"
+                )
+            }
+            TypeErrorKind::UnconfirmedClass {
+                cls,
+                has_iris: false,
+            } => write!(
+                f,
+                "Cannot confirm class '{cls}' exists — it isn't open in this workspace, with no IRIS connection to check it against"
+            ),
+            TypeErrorKind::UnconfirmedMember {
+                cls,
+                mem,
+                superclass,
+                has_iris,
+            } => {
+                let on = if *superclass { "a superclass of " } else { "" };
+                let reason = if *has_iris {
+                    "that isn't on the IRIS instance"
+                } else {
+                    "outside this workspace, with no IRIS connection to check it against"
+                };
+                write!(
+                    f,
+                    "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes a class {reason}"
+                )
+            }
+            TypeErrorKind::ClassKeywordWithoutValue(keyword) => {
+                write!(f, "Class keyword '{keyword}' has no value")
+            }
+            TypeErrorKind::DuplicateClassName { name, other_uri } => {
+                write!(f, "Class '{name}' is also declared in {other_uri}")
+            }
+            TypeErrorKind::DocumentSyntaxError { err } => {
+                write!(f, "Syntax error, looking for:\n{err}")
             }
             TypeErrorKind::CannotFindLabel { label, routine } => match routine {
                 Some(routine) => write!(f, "Cannot find label '{label}' in routine '{routine}'"),
@@ -819,6 +1120,54 @@ impl TypeError {
 
     // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
     // yet to attach one lazily this early (during macro expansion).
+    pub(crate) fn unconfirmed_class(cls: String, has_iris: bool, range: Range) -> Self {
+        Self::new(
+            TypeErrorKind::UnconfirmedClass { cls, has_iris },
+            range,
+            vec![],
+        )
+    }
+
+    pub(crate) fn unconfirmed_member(
+        cls: String,
+        mem: String,
+        superclass: bool,
+        has_iris: bool,
+        range: Range,
+    ) -> Self {
+        let kind = TypeErrorKind::UnconfirmedMember {
+            cls,
+            mem,
+            superclass,
+            has_iris,
+        };
+        Self::new(kind, range, vec![])
+    }
+
+    pub(crate) fn class_keyword_without_value(keyword: String, range: Range) -> Self {
+        Self::new(
+            TypeErrorKind::ClassKeywordWithoutValue(keyword),
+            range,
+            vec![],
+        )
+    }
+
+    pub(crate) fn duplicate_class_name(range: Range, name: String, other: Location) -> Self {
+        let kind = TypeErrorKind::DuplicateClassName {
+            name,
+            other_uri: other.uri.clone(),
+        };
+        let related = DiagnosticRelatedInformation {
+            location: other,
+            message: "Also declared here".into(),
+        };
+        Self::new(kind, range, vec![related])
+    }
+
+    pub(crate) fn document_syntax_error(range: Range, err: tygr::Error) -> Self {
+        Self::new(TypeErrorKind::DocumentSyntaxError { err }, range, vec![])
+    }
+
     pub fn cannot_find_include(name: String, range: Range) -> Self {
         Self::new(TypeErrorKind::CannotFindInclude(name), range, vec![])
     }
@@ -976,5 +1325,23 @@ impl TypeError {
             range,
             vec![],
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codes_are_distinct_and_well_formed() {
+        let distinct: std::collections::HashSet<_> = CODES.iter().collect();
+        assert_eq!(distinct.len(), CODES.len(), "a code is used twice");
+        for code in CODES {
+            let digits = code.strip_prefix('A').unwrap_or_else(|| panic!("{code}"));
+            assert!(
+                digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit()),
+                "{code}"
+            );
+        }
     }
 }

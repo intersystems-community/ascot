@@ -11,15 +11,17 @@ use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    Diagnostic as LspDiagnostic, DiagnosticRelatedInformation as LspDiagnosticRelatedInformation,
+    CodeDescription, Diagnostic as LspDiagnostic,
+    DiagnosticRelatedInformation as LspDiagnosticRelatedInformation,
     DiagnosticSeverity as LspDiagnosticSeverity, DidChangeTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbol as LspDocumentSymbol, DocumentSymbolParams,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
     HoverProviderCapability, InitializeParams, InlayHint as LspInlayHint,
     InlayHintLabel as LspInlayHintLabel, InlayHintParams, Location as LspLocation, MarkupContent,
-    MarkupKind, OneOf, Position as LspPosition, PublishDiagnosticsParams, Range as LspRange,
-    ReferenceParams, ServerCapabilities, SymbolInformation, SymbolKind as LspSymbolKind, SymbolTag,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkspaceSymbolParams,
+    MarkupKind, NumberOrString, OneOf, Position as LspPosition, PublishDiagnosticsParams,
+    Range as LspRange, ReferenceParams, ServerCapabilities, SymbolInformation,
+    SymbolKind as LspSymbolKind, SymbolTag, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    WorkspaceSymbolParams,
 };
 
 use crate::{
@@ -404,8 +406,12 @@ fn to_lsp_diagnostic(diagnostic: Diagnostic) -> LspDiagnostic {
             DiagnosticSeverity::Information => LspDiagnosticSeverity::INFORMATION,
             DiagnosticSeverity::Hint => LspDiagnosticSeverity::HINT,
         }),
-        code: None,
-        code_description: None,
+        code: Some(NumberOrString::String(diagnostic.code)),
+        code_description: diagnostic
+            .code_description
+            .parse()
+            .ok()
+            .map(|href| CodeDescription { href }),
         source: Some("ascot".to_string()),
         message: diagnostic.message,
         related_information: (!related_information.is_empty()).then_some(related_information),
@@ -424,6 +430,25 @@ mod tests {
         let scan = url::Url::from_file_path(uri_to_path(&client).unwrap()).unwrap();
         assert_eq!(workspace_key(&client), scan.to_string());
         assert!(!workspace_key(&client).contains("%3A"));
+    }
+
+    #[test]
+    fn a_diagnostic_keeps_its_code_and_documentation_link() {
+        let range = crate::bindings::Range::default();
+        let diagnostic = Diagnostic {
+            message: "m".into(),
+            range,
+            related_information: vec![],
+            severity: DiagnosticSeverity::Error,
+            code: "A1234".into(),
+            code_description: "https://docs.rs/ascot".into(),
+        };
+        let lsp = to_lsp_diagnostic(diagnostic);
+        assert_eq!(lsp.code, Some(NumberOrString::String("A1234".into())));
+        assert_eq!(
+            lsp.code_description.unwrap().href.as_str(),
+            "https://docs.rs/ascot"
+        );
     }
 
     #[test]

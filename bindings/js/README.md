@@ -42,7 +42,8 @@ ClassMethod M() As %Status
 
 await ws.diagnostics("file:///T.cls");
 // [{ severity: "error", message: "Expected return value of type '%Status' but got nothing",
-//    range: { start: { line: 6, character: 5 }, ... }, relatedInformation: [...] }]
+//    range: { start: { line: 6, character: 5 }, ... }, relatedInformation: [...],
+//    code: "A6781", codeDescription: "https://docs.rs/ascot/.../enum.TypeErrorKind.html#variant.ReturnNothingForX" }]
 
 await ws.hover("file:///T.cls", { line: 5, character: 7 }); // the `x` being written
 // "```objectscript\n%DataType = 1\n```"

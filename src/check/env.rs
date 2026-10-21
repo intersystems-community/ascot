@@ -930,14 +930,6 @@ impl<'a> WorkspaceEnv<'a> {
         ty
     }
 
-    fn unverified_reason(&self) -> &'static str {
-        if self.workspace.iris.is_some() {
-            "that isn't on the IRIS instance"
-        } else {
-            "outside this workspace, with no IRIS connection to check it against"
-        }
-    }
-
     fn iris_member(&self, cls: &str, mem: &str, order: &[MemberNs]) -> Option<MemberTy> {
         let iris = self.workspace.iris.as_ref()?;
         let members = iris.get_cls(cls)?.members;
@@ -1086,19 +1078,10 @@ impl<'a> WorkspaceEnv<'a> {
         {
             return;
         }
-        let message = if self.workspace.iris.is_some() {
-            format!("Cannot find class '{cls}' in the workspace or on the IRIS instance")
-        } else {
-            format!(
-                "Cannot confirm class '{cls}' exists — it isn't open in this workspace, with no IRIS connection to check it against"
-            )
-        };
-        self.add_soft_diagnostic(bindings::Diagnostic {
-            message,
-            range,
-            related_information: vec![],
-            severity: bindings::DiagnosticSeverity::Hint,
-        });
+        let has_iris = self.workspace.iris.is_some();
+        self.add_soft_diagnostic(
+            TypeError::unconfirmed_class(cls.to_string(), has_iris, range).into(),
+        );
     }
 
     // Where the include file `name` is declared, for go-to-definition on an `Include`.
@@ -1701,16 +1684,15 @@ impl<'a> CodeEnv<'a> {
         self.unverified.set(false);
         let result = self.get_member(obj.name(), &mem, is_parameter, kind, obj.is_ins());
         if self.unverified.replace(false) {
-            self.add_soft_diagnostic(bindings::Diagnostic {
-                message: format!(
-                    "Cannot confirm '{mem}' exists on {} — its class hierarchy includes a class {}",
-                    obj.name(),
-                    self.unverified_reason()
-                ),
+            let has_iris = self.workspace.iris.is_some();
+            let err = TypeError::unconfirmed_member(
+                obj.name().to_string(),
+                mem.clone(),
+                false,
+                has_iris,
                 range,
-                related_information: vec![],
-                severity: bindings::DiagnosticSeverity::Hint,
-            });
+            );
+            self.add_soft_diagnostic(err.into());
         }
         if let Some(mem_desc) = result {
             if mem_desc.is_instance_only && !obj.is_ins() {
@@ -1765,16 +1747,15 @@ impl<'a> CodeEnv<'a> {
         self.unverified.set(false);
         let result = self.get_super_member(this.name(), &mem, this.is_ins());
         if self.unverified.replace(false) {
-            self.add_soft_diagnostic(bindings::Diagnostic {
-                message: format!(
-                    "Cannot confirm '{mem}' exists on a superclass of {} — its class hierarchy includes a class {}",
-                    this.name(),
-                    self.unverified_reason()
-                ),
+            let has_iris = self.workspace.iris.is_some();
+            let err = TypeError::unconfirmed_member(
+                this.name().to_string(),
+                mem.clone(),
+                true,
+                has_iris,
                 range,
-                related_information: vec![],
-                severity: bindings::DiagnosticSeverity::Hint,
-            });
+            );
+            self.add_soft_diagnostic(err.into());
         }
         match result {
             Some(mem_desc) if mem_desc.is_instance_only && !this.is_ins() => Err(
