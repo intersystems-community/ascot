@@ -4363,6 +4363,34 @@ mod tests {
     }
 
     #[test]
+    fn set_targets_follow_the_configured_function_style() {
+        let style = style::parse(r#"{"function": {"form": "Long", "case": "Pascal"}}"#).unwrap();
+        let workspace = Workspace::new(None, Some(style));
+        let uri = "S.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE S\nf(x,y)\n s $p(x,\",\",2)=1\n set $E(x,1,2)=\"ab\",$li(y,1)=3\n s ($P(x,1),$extract(y))=0\n s $bit(x,1)=1,$ZTRAP=\"err\",$x=0\n s:x $WE(y,1)=$wextract(x)\n q\n".to_string(),
+        );
+        let found: Vec<_> = style_messages(&workspace, &uri)
+            .into_iter()
+            .filter(|m| m.contains("Function"))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                "2:4 Function `$p` should be written `$Piece`",
+                "3:21 Function `$li` should be written `$List`",
+                "3:6 Function `$E` should be written `$Extract`",
+                "4:13 Function `$extract` should be written `$Extract`",
+                "4:5 Function `$P` should be written `$Piece`",
+                "5:4 Function `$bit` should be written `$Bit`",
+                "6:15 Function `$wextract` should be written `$WExtract`",
+                "6:6 Function `$WE` should be written `$WExtract`",
+            ]
+        );
+    }
+
+    #[test]
     fn expression_methods_follow_the_configured_function_style() {
         let style = style::parse(r#"{"function": {"case": "Upper"}}"#).unwrap();
         let workspace = Workspace::new(None, Some(style));
