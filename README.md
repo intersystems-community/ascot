@@ -112,6 +112,15 @@ Starts the MCP server (stdio), exposing workspace analysis as tools an AI agent
 calls on demand. Any MCP client that can launch a stdio server works: the
 command is `ascot` (or its full path) and the single argument is `mcp`.
 
+The tools and their parameters are documented on
+[docs.rs](https://docs.rs/ascot/latest/ascot/mcp/struct.AnalyzerMcpServer.html).
+To try them by hand, the [MCP Inspector](https://github.com/modelcontextprotocol/inspector)
+lists them and calls them from a browser:
+
+```sh
+npx @modelcontextprotocol/inspector ascot mcp
+```
+
 Claude Code:
 
 ```sh
