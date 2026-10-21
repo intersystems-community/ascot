@@ -8,8 +8,10 @@
 
 use ascot::Workspace;
 use ascot::bindings::GuestWorkspace;
+use ascot::bindings::Style;
 use ascot::cos;
 use ascot::cos::Routine;
+use ascot::style;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{IsTerminal, Write};
@@ -44,6 +46,8 @@ enum Command {
     Analyze {
         #[command(flatten)]
         iris: IrisArgs,
+        #[command(flatten)]
+        style: StyleArgs,
         /// Files or directories to check
         #[arg(required = true)]
         paths: Vec<PathBuf>,
@@ -56,6 +60,8 @@ enum Command {
     AnalyzeWorkspace {
         #[command(flatten)]
         iris: IrisArgs,
+        #[command(flatten)]
+        style: StyleArgs,
         /// The directory whose files are all loaded
         root: PathBuf,
         /// Files or directories under the root to check
@@ -96,7 +102,18 @@ enum Command {
     Lsp {
         #[command(flatten)]
         iris: IrisArgs,
+        #[command(flatten)]
+        style: StyleArgs,
     },
+}
+
+#[derive(Args)]
+struct StyleArgs {
+    /// A JSON file of style rules, such as how command keywords are spelled
+    ///
+    /// Its shape is the `style` record in src/wit/analyzer.wit. Without it, no style is checked.
+    #[arg(long, value_name = "FILE")]
+    style: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -116,12 +133,22 @@ struct IrisArgs {
 
 fn main() {
     match Cli::parse().command {
-        Command::Analyze { iris, paths } => {
-            analyze(paths.iter().map(PathBuf::as_path), iris.open())
-        }
-        Command::AnalyzeWorkspace { iris, root, paths } => {
-            analyze_workspace(&root, paths.iter().map(PathBuf::as_path), iris.open())
-        }
+        Command::Analyze { iris, style, paths } => analyze(
+            paths.iter().map(PathBuf::as_path),
+            iris.open(),
+            style.load(),
+        ),
+        Command::AnalyzeWorkspace {
+            iris,
+            style,
+            root,
+            paths,
+        } => analyze_workspace(
+            &root,
+            paths.iter().map(PathBuf::as_path),
+            iris.open(),
+            style.load(),
+        ),
         Command::Parse { file } => scan_file(&file),
         Command::Declare {
             iris,
@@ -132,8 +159,8 @@ fn main() {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
             rt.block_on(run_mcp_server());
         }
-        Command::Lsp { iris } => {
-            if let Err(err) = ascot::lsp::run(iris.open()) {
+        Command::Lsp { iris, style } => {
+            if let Err(err) = ascot::lsp::run(iris.open(), style.load()) {
                 eprintln!("LSP server error: {err}");
                 exit(1);
             }
@@ -151,6 +178,20 @@ impl IrisArgs {
                 exit(1);
             }
         }
+    }
+}
+
+impl StyleArgs {
+    /// Reads and parses `--style`, if given. Like `--iris`, a file that can't be read or parsed is
+    /// an error up front, not a silent fallback to no style.
+    fn load(self) -> Option<Style> {
+        let path = self.style?;
+        let fail = |err: String| -> ! {
+            eprintln!("--style: {}: {err}", path.display());
+            exit(1)
+        };
+        let text = fs::read_to_string(&path).unwrap_or_else(|err| fail(err.to_string()));
+        Some(style::parse(&text).unwrap_or_else(|err| fail(err)))
     }
 }
 
@@ -233,7 +274,11 @@ fn scan_file(file_path: &Path) {
 /// Add every `.cls`/`.mac`/`.int`/`.inc` file under each of `roots` to a workspace and report
 /// all diagnostics. A root that doesn't exist is an error, not an empty result: a typo'd path in
 /// a CI step must not pass forever.
-fn analyze<'a>(roots: impl Iterator<Item = &'a Path>, iris: Option<Box<dyn IrisClient>>) {
+fn analyze<'a>(
+    roots: impl Iterator<Item = &'a Path>,
+    iris: Option<Box<dyn IrisClient>>,
+    style: Option<Style>,
+) {
     let mut files = Vec::new();
     for root in roots {
         if !root.exists() {
@@ -244,7 +289,7 @@ fn analyze<'a>(roots: impl Iterator<Item = &'a Path>, iris: Option<Box<dyn IrisC
     }
     files.sort();
 
-    let workspace = Workspace::new_with_iris(iris);
+    let workspace = Workspace::new_with_iris(iris, style);
     insert_files(&workspace, &files);
 
     let count = report_diagnostics(&workspace, &files);
@@ -260,6 +305,7 @@ fn analyze_workspace<'a>(
     root: &Path,
     paths: impl Iterator<Item = &'a Path>,
     iris: Option<Box<dyn IrisClient>>,
+    style: Option<Style>,
 ) {
     let root = match fs::canonicalize(root) {
         Ok(root) => root,
@@ -286,7 +332,7 @@ fn analyze_workspace<'a>(
     diagnose_files.sort();
     diagnose_files.dedup();
 
-    let workspace = Workspace::new_with_iris(iris);
+    let workspace = Workspace::new_with_iris(iris, style);
     insert_files(&workspace, &all_files);
 
     let all_files_set: HashSet<&PathBuf> = all_files.iter().collect();

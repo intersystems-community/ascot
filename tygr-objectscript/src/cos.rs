@@ -862,263 +862,224 @@ pub struct SetArgument {
     pub value: Range<Expr>,
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwDo {
-    Full(StringEqCI!("Do")),
-    Abbr(StringEqCI!("D")),
+// A command or function name: its documented spelling and abbreviation.
+pub trait Keyword: Grammar {
+    const KIND: KeywordKind;
+    const FULL: &'static str;
+    const ABBR: Option<&'static str>;
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwIf {
-    Full(StringEqCI!("If")),
-    Abbr(StringEqCI!("I")),
+macro_rules! keywords {
+    ($kind:ident, $names:ident [$($extra:literal),*]; $($name:ident: $full:literal $(/ $abbr:literal)?;)*) => {
+        $(
+            #[derive(Grammar)]
+            #[grammar(inline)]
+            pub enum $name {
+                Full(StringEqCI!($full)),
+                $(Abbr(StringEqCI!($abbr)),)?
+            }
+
+            impl Keyword for $name {
+                const KIND: KeywordKind = KeywordKind::$kind;
+                const FULL: &'static str = $full;
+                const ABBR: Option<&'static str> = keywords!(@abbr $($abbr)?);
+            }
+        )*
+
+        // Each name with its abbreviation.
+        pub const $names: &[(&str, Option<&str>)] =
+            &[$(($full, keywords!(@abbr $($abbr)?)),)* $(($extra, None)),*];
+    };
+    (@abbr) => { None };
+    (@abbr $abbr:literal) => { Some($abbr) };
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwElse {
-    Full(StringEqCI!("Else")),
-    Abbr(StringEqCI!("E")),
+// `COMMAND_NAMES` is every command's full name, for `UnknownCommand`'s error message. `#Dim` is
+// included even though it itself never reaches `UnknownCommand` (it starts with `#`, not a
+// letter): a user who drops the `#` and just writes `Dim` produces a plain alphabetic word that
+// *does* land here, and `#Dim` is the useful suggestion for that typo. The
+// `&sql(`/`##sql`/`&html<`/`&js<` markers are left out for now.
+keywords! {
+    Command, COMMAND_NAMES ["H", "#Dim"];
+    KwDo: "Do" / "D";
+    KwIf: "If" / "I";
+    KwElseIf: "ElseIf";
+    KwElse: "Else" / "E";
+    KwWhile: "While";
+    KwFor: "For" / "F";
+    KwGoto: "GoTo" / "G";
+    KwBreak: "Break" / "B";
+    KwQuit: "Quit" / "Q";
+    KwZQuit: "ZQuit" / "Zq";
+    KwReturn: "Return" / "Ret";
+    KwContinue: "Continue";
+    KwSet: "Set" / "S";
+    KwKill: "Kill" / "K";
+    KwNew: "New" / "N";
+    KwMerge: "Merge" / "M";
+    KwTry: "Try";
+    KwCatch: "Catch";
+    KwThrow: "Throw";
+    KwZTrap: "ZTrap" / "Zt";
+    KwZZDump: "ZZDump";
+    KwWrite: "Write" / "W";
+    KwRead: "Read" / "R";
+    KwOpen: "Open" / "O";
+    KwClose: "Close" / "C";
+    KwUse: "Use" / "U";
+    KwLock: "Lock" / "L";
+    KwHalt: "Halt";
+    KwHang: "Hang";
+    KwJob: "Job" / "J";
+    KwTStart: "TStart" / "Ts";
+    KwTCommit: "TCommit" / "Tc";
+    KwTRollback: "TRollback" / "Tro";
+    KwZWrite: "ZWrite" / "Zw";
+    KwZKill: "ZKill" / "Zk";
+    KwZNspace: "ZNspace" / "Zn";
+    KwXecute: "Xecute" / "X";
+    KwView: "View" / "V";
+    KwZPrint: "ZPrint" / "Zp";
+    KwPrint: "Print" / "P";
+    KwZBreak: "ZBreak" / "Zb";
+    KwMVPrint: "MVPrint" / "MVP";
+    KwMVCrt: "MVCrt" / "MVC";
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwWhile {
-    Full(StringEqCI!("While")),
+// Every hand-written function's name (those in `SIMPLE_FUNCTIONS` are spelled there).
+keywords! {
+    Function, FUNCTION_KEYWORDS [];
+    FnBit: "Bit";
+    FnBitCount: "BitCount";
+    FnBitFind: "BitFind";
+    FnBitLogic: "BitLogic";
+    FnCase: "Case";
+    FnChange: "Change";
+    FnChar: "Char" / "C";
+    FnClassMethod: "ClassMethod";
+    FnClassName: "ClassName";
+    FnCompile: "Compile";
+    FnData: "Data" / "D";
+    FnDecimal: "Decimal";
+    FnDouble: "Double";
+    FnExtract: "Extract" / "E";
+    FnFNumber: "FNumber" / "FN";
+    FnGet: "Get" / "G";
+    FnIncrement: "Increment" / "I";
+    FnIsObject: "IsObject" / "ISO";
+    FnLength: "Length" / "L";
+    FnList: "List" / "LI";
+    FnListBuild: "ListBuild" / "LB";
+    FnListData: "ListData" / "LD";
+    FnListGet: "ListGet" / "LG";
+    FnListNext: "ListNext";
+    FnListUpdate: "ListUpdate" / "LU";
+    FnLocate: "Locate";
+    FnMethod: "Method";
+    FnMV: "MV";
+    FnName: "Name" / "NA";
+    FnNext: "Next" / "N";
+    FnOrder: "Order" / "O";
+    FnParameter: "Parameter";
+    FnPiece: "Piece" / "P";
+    FnPrefetchOff: "PrefetchOff";
+    FnPrefetchOn: "PrefetchOn";
+    FnProperty: "Property";
+    FnQuery: "Query" / "Q";
+    FnSelect: "Select" / "S";
+    FnSequence: "Sequence" / "SEQ";
+    FnSortBegin: "SortBegin";
+    FnSortEnd: "SortEnd";
+    FnText: "Text" / "T";
+    FnVector: "Vector" / "VE";
+    FnVectorDefined: "VectorDefined" / "VD";
+    FnVectorOp: "VectorOp" / "VOP";
+    FnWChar: "WChar" / "WC";
+    FnWExtract: "WExtract" / "WE";
+    FnXecute: "Xecute";
+    FnZDate: "ZDate" / "ZD";
+    FnZDateH: "ZDateH" / "ZDH";
+    FnZDateTime: "ZDateTime" / "ZDT";
+    FnZDateTimeH: "ZDateTimeH" / "ZDTH";
+    FnZF: "ZF";
+    FnZIncrement: "ZIncrement" / "ZINCR";
+    FnZObjClass: "ZObjClass";
+    FnZObjClassMethod: "ZObjClassMethod";
+    FnZObjMethod: "ZObjMethod";
+    FnZObjProperty: "ZObjProperty";
+    FnZObjRef: "ZObjRef";
+    FnZOrder: "ZOrder" / "ZO";
+    FnZPrevious: "ZPrevious" / "ZP";
+    FnZStrip: "ZStrip";
+    FnZTime: "ZTime" / "ZT";
+    FnZTimeH: "ZTimeH" / "ZTH";
+    FnZUtil: "ZUtil" / "ZU";
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwFor {
-    Full(StringEqCI!("For")),
-    Abbr(StringEqCI!("F")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwBreak {
-    Full(StringEqCI!("Break")),
-    Abbr(StringEqCI!("B")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwQuit {
-    Full(StringEqCI!("Quit")),
-    Abbr(StringEqCI!("Q")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZQuit {
-    Full(StringEqCI!("ZQuit")),
-    Abbr(StringEqCI!("Zq")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwReturn {
-    Full(StringEqCI!("Return")),
-    Abbr(StringEqCI!("Ret")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwContinue {
-    Full(StringEqCI!("Continue")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwSet {
-    Full(StringEqCI!("Set")),
-    Abbr(StringEqCI!("S")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwKill {
-    Full(StringEqCI!("Kill")),
-    Abbr(StringEqCI!("K")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwNew {
-    Full(StringEqCI!("New")),
-    Abbr(StringEqCI!("N")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwMerge {
-    Full(StringEqCI!("Merge")),
-    Abbr(StringEqCI!("M")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwTry {
-    Full(StringEqCI!("Try")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwCatch {
-    Full(StringEqCI!("Catch")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwThrow {
-    Full(StringEqCI!("Throw")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZTrap {
-    Full(StringEqCI!("ZTrap")),
-    Abbr(StringEqCI!("Zt")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwWrite {
-    Full(StringEqCI!("Write")),
-    Abbr(StringEqCI!("W")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwRead {
-    Full(StringEqCI!("Read")),
-    Abbr(StringEqCI!("R")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwOpen {
-    Full(StringEqCI!("Open")),
-    Abbr(StringEqCI!("O")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwClose {
-    Full(StringEqCI!("Close")),
-    Abbr(StringEqCI!("C")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwUse {
-    Full(StringEqCI!("Use")),
-    Abbr(StringEqCI!("U")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwLock {
-    Full(StringEqCI!("Lock")),
-    Abbr(StringEqCI!("L")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwHalt {
-    Full(StringEqCI!("Halt")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwHang {
-    Full(StringEqCI!("Hang")),
-}
-
-// Either Halt or Hang, depending on if it receives an arg
+// `H` alone halts; with an argument it hangs -- so only `HCommand` knows its full name.
 #[derive(Grammar)]
 #[grammar(inline)]
 pub enum KwH {
     Abbr(StringEqCI!("H")),
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwJob {
-    Full(StringEqCI!("Job")),
-    Abbr(StringEqCI!("J")),
+// One command keyword as written in the source.
+pub struct KeywordUse {
+    pub kind: KeywordKind,
+    pub start: usize,
+    pub text: String,
+    pub full: &'static str,
+    pub abbr: Option<&'static str>,
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwTStart {
-    Full(StringEqCI!("TStart")),
-    Abbr(StringEqCI!("Ts")),
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeywordKind {
+    Command,
+    // An intrinsic function's name, without its `$`.
+    Function,
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwTCommit {
-    Full(StringEqCI!("TCommit")),
-    Abbr(StringEqCI!("Tc")),
+impl KeywordUse {
+    fn of<K: Keyword>(kw: &K, start: usize) -> Self {
+        KeywordUse {
+            kind: K::KIND,
+            start,
+            text: kw.print(),
+            full: K::FULL,
+            abbr: K::ABBR,
+        }
+    }
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwTRollback {
-    Full(StringEqCI!("TRollback")),
-    Abbr(StringEqCI!("Tro")),
+// A keyword as written, with where it starts.
+pub trait Spelled {
+    fn spelled(&self) -> KeywordUse;
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZWrite {
-    Full(StringEqCI!("ZWrite")),
-    Abbr(StringEqCI!("Zw")),
+impl<K: Keyword> Spelled for Range<K> {
+    fn spelled(&self) -> KeywordUse {
+        KeywordUse::of(&**self, self.start)
+    }
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZPrint {
-    Full(StringEqCI!("ZPrint")),
-    Abbr(StringEqCI!("Zp")),
+impl<A: Spelled, B: Spelled> Spelled for Either<A, B> {
+    fn spelled(&self) -> KeywordUse {
+        match self {
+            Either::Left(a) => a.spelled(),
+            Either::Right(b) => b.spelled(),
+        }
+    }
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZKill {
-    Full(StringEqCI!("ZKill")),
-    Abbr(StringEqCI!("Zk")),
-}
+// What every kind of command exposes, so a check over commands as such (keyword style,
+// postconditionals, ...) needs no knowledge of the individual kinds.
+pub trait CommandLike {
+    // The keywords this command spells out, given where the command itself starts.
+    fn keywords(&self, start: usize) -> Vec<KeywordUse>;
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwZNspace {
-    Full(StringEqCI!("ZNspace")),
-    Abbr(StringEqCI!("Zn")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwXecute {
-    Full(StringEqCI!("Xecute")),
-    Abbr(StringEqCI!("X")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwView {
-    Full(StringEqCI!("View")),
-    Abbr(StringEqCI!("V")),
-}
-
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum KwGoto {
-    Full(StringEqCI!("GoTo")),
-    Abbr(StringEqCI!("G")),
+    fn postcondition(&self) -> Option<&PostCondition> {
+        None
+    }
 }
 
 #[derive(Grammar)]
@@ -1160,7 +1121,7 @@ pub struct GoToArg {
 #[derive(Grammar)]
 pub enum AllowCase<T> {
     Plain(T),
-    Case(Prefix<StringEqCI!("$CASE"), FunArgList>),
+    Case(StringEq!("$"), Range<FnCase>, FunArgList),
 }
 
 #[derive(Grammar)]
@@ -1553,17 +1514,19 @@ char_class!(pub IsNotSpaceChar, "not_space", |ch| ch != ' ');
 
 #[derive(Grammar)]
 pub struct ElseIfBranch {
+    pub kw: Range<KwElseIf>,
     // `ElseIf  (x)` with extra spaces: every space but the last is the keyword's, the last
     // belongs to the condition (as after `If`). Unlike `If`, `ElseIf` is never argumentless.
-    kw_elseif: Raw<(
-        StringEqCI!("ElseIf"),
-        Vec<(StringEq!(" "), NotFollowedBy<CharOf<IsNotSpaceChar>>)>,
-    )>,
+    kw_spaces: Raw<Vec<(StringEq!(" "), NotFollowedBy<CharOf<IsNotSpaceChar>>)>>,
     pub cnds: IfConditions,
     pub thn: Range<Block>,
 }
 
-pub type ElseBranch = Prefix<KwElse, Option<Range<Block>>>;
+#[derive(Grammar)]
+pub struct ElseBranch {
+    pub kw: Range<KwElse>,
+    pub body: Option<Range<Block>>,
+}
 
 #[derive(Grammar)]
 pub enum SpecialVariable {
@@ -3058,251 +3021,385 @@ pub struct WhileConditions {
 }
 
 #[derive(Grammar)]
+pub struct DoWhileCommand {
+    pub kw: KwDo,
+    // Can't use block because iter must start with '{'
+    pub iter: Range<MGapXMGap<Box<Brace<ProcedureBody>>>>,
+    pub kw_while: Range<KwWhile>,
+    pub cnds: Option<WhileConditions>,
+}
+
+#[derive(Grammar)]
+pub struct DoCommand {
+    pub kw: KwDo,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<VecSep<DoArgument, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct IfCommand {
+    pub kw: KwIf,
+    pub cnds: Option<IfConditions>,
+    pub branches: Option<IfBranches>,
+}
+
+#[derive(Grammar)]
+pub struct WhileCommand {
+    pub kw: KwWhile,
+    pub cnds: Option<WhileConditions>,
+    pub bdy: CurryBlock,
+}
+
+#[derive(Grammar)]
+pub struct ForCommand {
+    pub kw: KwFor,
+    pub iter: Option<SGap1X<ForIterator>>,
+    // Some older code does not have an assoicated block
+    pub bdy: Option<Range<Block>>,
+}
+
+#[derive(Grammar)]
+pub struct GotoCommand {
+    pub kw: KwGoto,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<VecSep<GoToArg, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct BreakCommand {
+    pub kw: KwBreak,
+    pub pc: Option<PostCondition>,
+    pub exp: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct QuitCommand {
+    pub kw: KwQuit,
+    pub pc: Option<PostCondition>,
+    pub exp: Range<Option<CommandArgument<Expr>>>,
+}
+
+#[derive(Grammar)]
+pub struct ZQuitCommand {
+    pub kw: KwZQuit,
+    pub pc: Option<PostCondition>,
+    pub exp: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct ReturnCommand {
+    pub kw: KwReturn,
+    pub pc: Option<PostCondition>,
+    pub exp: Range<Option<CommandArgument<Expr>>>,
+}
+
+#[derive(Grammar)]
+pub struct ContinueCommand {
+    pub kw: KwContinue,
+    pub pc: Option<PostCondition>,
+}
+
+#[derive(Grammar)]
+pub struct DimCommand {
+    pub kw: StringEqCI!("#dim"),
+    pub g: SGap1,
+    pub name: VecSep<LocalVariableName, SGapXSGap<StringEq!(",")>>,
+    // The reference makes `As <Type>` mandatory; it is accepted as optional here.
+    pub as_type: Range<Option<As<DimType>>>,
+    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
+}
+
+#[derive(Grammar)]
+pub struct SetCommand {
+    pub kw: KwSet,
+    pub pc: Option<PostCondition>,
+    pub assignments:
+        CommandArgument<VecSep<Range<AllowIndirection<SetArgument>>, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct KillCommand {
+    pub kw: KwKill,
+    pub pc: Option<PostCondition>,
+    pub targets:
+        Option<CommandArgument<VecSep<Range<AllowMacro<KillArgument>>, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct NewCommand {
+    pub kw: KwNew,
+    pub pc: Option<PostCondition>,
+    pub targets: Option<CommandArgument<VecSep<Range<NewArgument>, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct MergeCommand {
+    pub kw: KwMerge,
+    pub pc: Option<PostCondition>,
+    pub merge_arguments: CommandArgument<VecSep<Range<MergeArgument>, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct TryCommand {
+    pub kw_try: KwTry,
+    pub b1: XMGap<Range<Block>>,
+    pub kw_catch: Range<KwCatch>,
+    pub g3: SGap,
+    pub catch_target: Option<CatchTarget>,
+    pub b2: Range<Block>,
+}
+
+#[derive(Grammar)]
+pub struct ThrowCommand {
+    pub kw: KwThrow,
+    pub pc: Option<PostCondition>,
+    pub e: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct ZTrapCommand {
+    pub kw: KwZTrap,
+    pub pc: Option<PostCondition>,
+    pub exp: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct ZZDumpCommand {
+    pub kw: KwZZDump,
+    pub pc: Option<PostCondition>,
+    pub exp: CommandArgument<VecSep<Expr, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct WriteCommand {
+    pub kw: KwWrite,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct ReadCommand {
+    pub kw: KwRead,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<ReadArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct OpenCommand {
+    pub kw: KwOpen,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<OpenArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct CloseCommand {
+    pub kw: KwClose,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<CloseArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct UseCommand {
+    pub kw: KwUse,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<UseArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct LockCommand {
+    pub kw: KwLock,
+    pub pc: Option<PostCondition>,
+    pub args: Option<
+        CommandArgument<
+            VecSep<
+                AllowMacro<(AllowMacro<LockArg>, Option<ReadTimeout>)>,
+                LGapXLGap<StringEq!(",")>,
+            >,
+        >,
+    >,
+}
+
+#[derive(Grammar)]
+pub struct HaltCommand {
+    pub kw: KwHalt,
+    pub pc: Option<PostCondition>,
+}
+
+#[derive(Grammar)]
+pub struct HangCommand {
+    pub kw: KwHang,
+    pub pc: Option<PostCondition>,
+    pub e: CommandArgument<Expr>,
+}
+
+#[derive(Grammar)]
+pub struct HCommand {
+    pub kw: KwH,
+    pub pc: Option<PostCondition>,
+    pub e: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct JobCommand {
+    pub kw: KwJob,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<JobArgument, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct TStartCommand {
+    pub kw: KwTStart,
+    pub pc: Option<PostCondition>,
+}
+
+#[derive(Grammar)]
+pub struct TCommitCommand {
+    pub kw: KwTCommit,
+    pub pc: Option<PostCondition>,
+}
+
+#[derive(Grammar)]
+pub struct TRollbackCommand {
+    pub kw: KwTRollback,
+    pub pc: Option<PostCondition>,
+    pub one: Option<CommandArgument<StringEq!("1")>>,
+}
+
+#[derive(Grammar)]
+pub struct ZWriteCommand {
+    pub kw: KwZWrite,
+    pub pc: Option<PostCondition>,
+    pub exp: Option<CommandArgument<Expr>>,
+}
+
+#[derive(Grammar)]
+pub struct ZKillCommand {
+    pub kw: KwZKill,
+    pub pc: Option<PostCondition>,
+    pub targets: CommandArgument<VecSep<Range<ZKillTarget>, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct ZNspaceCommand {
+    pub kw: KwZNspace,
+    pub pc: Option<PostCondition>,
+    pub e: CommandArgument<Expr>,
+}
+
+#[derive(Grammar)]
+pub struct XecuteCommand {
+    pub kw: KwXecute,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<XecuteArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct ViewCommand {
+    pub kw: KwView,
+    pub pc: Option<PostCondition>,
+    pub exp: Option<CommandArgument<VecSep<ViewArgument, LGapXLGap<StringEq!(",")>>>>,
+}
+
+#[derive(Grammar)]
+pub struct ZPrintCommand {
+    pub kw: KwZPrint,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<PrintArgs>>,
+}
+
+#[derive(Grammar)]
+pub struct PrintCommand {
+    pub kw: KwPrint,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<PrintArgs>>,
+}
+
+#[derive(Grammar)]
+pub struct ZBreakCommand {
+    pub kw: KwZBreak,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<VecSep<ZBreakArg, LGapXLGap<StringEq!(",")>>>>,
+}
+
+// MVP and MVC are undocumented commands
+#[derive(Grammar)]
+pub struct MVPCommand {
+    pub kw: KwMVPrint,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct MVCCommand {
+    pub kw: KwMVCrt,
+    pub pc: Option<PostCondition>,
+    pub args: CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>,
+}
+
+#[derive(Grammar)]
+pub struct JSCommand {
+    pub before: JsMarker,
+    pub content: EmbeddedJS,
+    pub after: StringEq!(">"),
+}
+
+#[derive(Grammar)]
 pub enum Command {
     Unknown(UnknownCommand),
-    DoWhile {
-        kw: KwDo,
-        // Can't use block because iter must start with '{'
-        iter: Range<MGapXMGap<Box<Brace<ProcedureBody>>>>,
-        kw_while: KwWhile,
-        cnds: Option<WhileConditions>,
-    },
-    Do {
-        kw: KwDo,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<VecSep<DoArgument, LGapXLGap<StringEq!(",")>>>>,
-    },
-    If {
-        kw: KwIf,
-        cnds: Option<IfConditions>,
-        branches: Option<IfBranches>,
-    },
+    DoWhile(DoWhileCommand),
+    Do(DoCommand),
+    If(IfCommand),
     // Stand-alone ElseIf and Else are needed to process dotted do block, modern tooling should ignore them.
     ElseIf(ElseIfBranch),
     Else(ElseBranch),
-    While {
-        kw: KwWhile,
-        cnds: Option<WhileConditions>,
-        bdy: CurryBlock,
-    },
-    For {
-        kw: KwFor,
-        iter: Option<SGap1X<ForIterator>>,
-        // Some older code does not have an assoicated block
-        bdy: Option<Range<Block>>,
-    },
-    Goto {
-        kw: KwGoto,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<VecSep<GoToArg, LGapXLGap<StringEq!(",")>>>>,
-    },
-    Break {
-        kw: KwBreak,
-        pc: Option<PostCondition>,
-        exp: Option<CommandArgument<Expr>>,
-    },
-    Quit {
-        kw: KwQuit,
-        pc: Option<PostCondition>,
-        exp: Range<Option<CommandArgument<Expr>>>,
-    },
-    ZQuit {
-        kw: KwZQuit,
-        pc: Option<PostCondition>,
-        exp: Option<CommandArgument<Expr>>,
-    },
-    Return {
-        kw: KwReturn,
-        pc: Option<PostCondition>,
-        exp: Range<Option<CommandArgument<Expr>>>,
-    },
-    Continue {
-        kw: KwContinue,
-        pc: Option<PostCondition>,
-    },
+    While(WhileCommand),
+    For(ForCommand),
+    Goto(GotoCommand),
+    Break(BreakCommand),
+    Quit(QuitCommand),
+    ZQuit(ZQuitCommand),
+    Return(ReturnCommand),
+    Continue(ContinueCommand),
 
-    Dim {
-        kw: StringEqCI!("#dim"),
-        g: SGap1,
-        name: VecSep<LocalVariableName, SGapXSGap<StringEq!(",")>>,
-        // The reference makes `As <Type>` mandatory; it is accepted as optional here.
-        as_type: Range<Option<As<DimType>>>,
-        default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
-    },
-    Set {
-        kw: KwSet,
-        pc: Option<PostCondition>,
-        assignments: CommandArgument<
-            VecSep<Range<AllowIndirection<SetArgument>>, LGapXLGap<StringEq!(",")>>,
-        >,
-    },
-    Kill {
-        kw: KwKill,
-        pc: Option<PostCondition>,
-        targets: Option<
-            CommandArgument<VecSep<Range<AllowMacro<KillArgument>>, LGapXLGap<StringEq!(",")>>>,
-        >,
-    },
-    New {
-        kw: KwNew,
-        pc: Option<PostCondition>,
-        targets: Option<CommandArgument<VecSep<Range<NewArgument>, LGapXLGap<StringEq!(",")>>>>,
-    },
-    Merge {
-        kw: KwMerge,
-        pc: Option<PostCondition>,
-        merge_arguments: CommandArgument<VecSep<Range<MergeArgument>, LGapXLGap<StringEq!(",")>>>,
-    },
+    Dim(DimCommand),
+    Set(SetCommand),
+    Kill(KillCommand),
+    New(NewCommand),
+    Merge(MergeCommand),
 
-    Try {
-        kw_try: KwTry,
-        b1: XMGap<Range<Block>>,
-        kw_catch: KwCatch,
-        g3: SGap,
-        catch_target: Option<CatchTarget>,
-        b2: Range<Block>,
-    },
-    Throw {
-        kw: KwThrow,
-        pc: Option<PostCondition>,
-        e: Option<CommandArgument<Expr>>,
-    },
-    ZTrap {
-        kw: KwZTrap,
-        pc: Option<PostCondition>,
-        exp: Option<CommandArgument<Expr>>,
-    },
-    ZZDump {
-        kw: StringEqCI!("ZZDUMP"),
-        pc: Option<PostCondition>,
-        exp: CommandArgument<VecSep<Expr, LGapXLGap<StringEq!(",")>>>,
-    },
-    Write {
-        kw: KwWrite,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>>,
-    },
-    Read {
-        kw: KwRead,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<ReadArg, LGapXLGap<StringEq!(",")>>>,
-    },
-    Open {
-        kw: KwOpen,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<OpenArg, LGapXLGap<StringEq!(",")>>>,
-    },
-    Close {
-        kw: KwClose,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<CloseArg, LGapXLGap<StringEq!(",")>>>,
-    },
-    Use {
-        kw: KwUse,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<UseArg, LGapXLGap<StringEq!(",")>>>,
-    },
+    Try(TryCommand),
+    Throw(ThrowCommand),
+    ZTrap(ZTrapCommand),
+    ZZDump(ZZDumpCommand),
+    Write(WriteCommand),
+    Read(ReadCommand),
+    Open(OpenCommand),
+    Close(CloseCommand),
+    Use(UseCommand),
 
-    Lock {
-        kw: KwLock,
-        pc: Option<PostCondition>,
-        args: Option<
-            CommandArgument<
-                VecSep<
-                    AllowMacro<(AllowMacro<LockArg>, Option<ReadTimeout>)>,
-                    LGapXLGap<StringEq!(",")>,
-                >,
-            >,
-        >,
-    },
-    Halt {
-        kw: KwHalt,
-        pc: Option<PostCondition>,
-    },
-    Hang {
-        kw: KwHang,
-        pc: Option<PostCondition>,
-        e: CommandArgument<Expr>,
-    },
-    H {
-        kw: KwH,
-        pc: Option<PostCondition>,
-        e: Option<CommandArgument<Expr>>,
-    },
-    Job {
-        kw: KwJob,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<JobArgument, LGapXLGap<StringEq!(",")>>>,
-    },
+    Lock(LockCommand),
+    Halt(HaltCommand),
+    Hang(HangCommand),
+    H(HCommand),
+    Job(JobCommand),
 
-    TStart {
-        kw: KwTStart,
-        pc: Option<PostCondition>,
-    },
-    TCommit {
-        kw: KwTCommit,
-        pc: Option<PostCondition>,
-    },
-    TRollback {
-        kw: KwTRollback,
-        pc: Option<PostCondition>,
-        one: Option<CommandArgument<StringEq!("1")>>,
-    },
+    TStart(TStartCommand),
+    TCommit(TCommitCommand),
+    TRollback(TRollbackCommand),
 
-    ZWrite {
-        kw: KwZWrite,
-        pc: Option<PostCondition>,
-        exp: Option<CommandArgument<Expr>>,
-    },
-    ZKill {
-        kw: KwZKill,
-        pc: Option<PostCondition>,
-        targets: CommandArgument<VecSep<Range<ZKillTarget>, LGapXLGap<StringEq!(",")>>>,
-    },
-    ZNspace {
-        kw: KwZNspace,
-        pc: Option<PostCondition>,
-        e: CommandArgument<Expr>,
-    },
-    Xecute {
-        kw: KwXecute,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<XecuteArg, LGapXLGap<StringEq!(",")>>>,
-    },
-    View {
-        kw: KwView,
-        pc: Option<PostCondition>,
-        exp: Option<CommandArgument<VecSep<ViewArgument, LGapXLGap<StringEq!(",")>>>>,
-    },
+    ZWrite(ZWriteCommand),
+    ZKill(ZKillCommand),
+    ZNspace(ZNspaceCommand),
+    Xecute(XecuteCommand),
+    View(ViewCommand),
 
-    ZPrint {
-        kw: KwZPrint,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<PrintArgs>>,
-    },
-    Print {
-        kw: Either<StringEqCI!("PRINT"), StringEqCI!("P")>,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<PrintArgs>>,
-    },
+    ZPrint(ZPrintCommand),
+    Print(PrintCommand),
 
-    ZBreak {
-        kw: Either<StringEqCI!("ZBREAK"), StringEqCI!("ZB")>,
-        pc: Option<PostCondition>,
-        args: Option<CommandArgument<VecSep<ZBreakArg, LGapXLGap<StringEq!(",")>>>>,
-    },
+    ZBreak(ZBreakCommand),
 
-    // MVP and MVC are undocumented commands
-    MVP {
-        kw: Either<StringEqCI!("MVPRINT"), StringEqCI!("MVP")>,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>,
-    },
-    MVC {
-        kw: Either<StringEqCI!("MVCRT"), StringEqCI!("MVC")>,
-        pc: Option<PostCondition>,
-        args: CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>,
-    },
+    MVP(MVPCommand),
+    MVC(MVCCommand),
 
     CallMacro(MacroCall),
 
@@ -3312,11 +3409,208 @@ pub enum Command {
         StringEq!(")"),
     ),
     HTML(StringEqCI!("&html<"), HTML, StringEq!(">")),
-    JS {
-        before: JsMarker,
-        content: EmbeddedJS,
-        after: StringEq!(">"),
-    },
+    JS(JSCommand),
+}
+
+macro_rules! keyword_command {
+    ($($name:ident),* $(,)?) => { $(
+        impl CommandLike for $name {
+            fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+                vec![KeywordUse::of(&self.kw, start)]
+            }
+
+            fn postcondition(&self) -> Option<&PostCondition> {
+                self.pc.as_ref()
+            }
+        }
+    )* };
+}
+
+keyword_command! {
+    DoCommand,
+    GotoCommand,
+    BreakCommand,
+    QuitCommand,
+    ZQuitCommand,
+    ReturnCommand,
+    ContinueCommand,
+    SetCommand,
+    KillCommand,
+    NewCommand,
+    MergeCommand,
+    ThrowCommand,
+    ZTrapCommand,
+    ZZDumpCommand,
+    WriteCommand,
+    ReadCommand,
+    OpenCommand,
+    CloseCommand,
+    UseCommand,
+    LockCommand,
+    HaltCommand,
+    HangCommand,
+    JobCommand,
+    TStartCommand,
+    TCommitCommand,
+    TRollbackCommand,
+    ZWriteCommand,
+    ZKillCommand,
+    ZNspaceCommand,
+    XecuteCommand,
+    ViewCommand,
+    ZPrintCommand,
+    PrintCommand,
+    ZBreakCommand,
+    MVPCommand,
+    MVCCommand,
+}
+
+impl CommandLike for WhileCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        vec![KeywordUse::of(&self.kw, start)]
+    }
+}
+
+impl CommandLike for ForCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        vec![KeywordUse::of(&self.kw, start)]
+    }
+}
+
+impl CommandLike for DoWhileCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        vec![
+            KeywordUse::of(&self.kw, start),
+            KeywordUse::of(&*self.kw_while, self.kw_while.start),
+        ]
+    }
+}
+
+impl CommandLike for IfCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        let mut keywords = vec![KeywordUse::of(&self.kw, start)];
+        if let Some(branches) = &self.branches {
+            for eif in &branches.eifs {
+                keywords.extend(eif.prefixed.keywords(eif.prefixed.kw.start));
+            }
+            if let Some(els) = &branches.els {
+                keywords.extend(els.prefixed.keywords(els.prefixed.kw.start));
+            }
+        }
+        keywords
+    }
+}
+
+impl CommandLike for ElseIfBranch {
+    fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
+        vec![KeywordUse::of(&*self.kw, self.kw.start)]
+    }
+}
+
+impl CommandLike for ElseBranch {
+    fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
+        vec![KeywordUse::of(&*self.kw, self.kw.start)]
+    }
+}
+
+impl CommandLike for TryCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        vec![
+            KeywordUse::of(&self.kw_try, start),
+            KeywordUse::of(&*self.kw_catch, self.kw_catch.start),
+        ]
+    }
+}
+
+impl CommandLike for HCommand {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        vec![KeywordUse {
+            kind: KeywordKind::Command,
+            start,
+            text: self.kw.print(),
+            full: if self.e.is_some() { "Hang" } else { "Halt" },
+            abbr: Some("H"),
+        }]
+    }
+
+    fn postcondition(&self) -> Option<&PostCondition> {
+        self.pc.as_ref()
+    }
+}
+
+// `#Dim` is a preprocessor directive, not a command keyword.
+impl CommandLike for DimCommand {
+    fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
+        vec![]
+    }
+}
+
+impl Command {
+    // `None` for what isn't a keyword command: a macro call or embedded SQL/HTML/JS.
+    pub fn as_command_like(&self) -> Option<&dyn CommandLike> {
+        Some(match self {
+            Command::Unknown(unknown) => match unknown.0 {},
+            Command::DoWhile(command) => command,
+            Command::Do(command) => command,
+            Command::If(command) => command,
+            Command::While(command) => command,
+            Command::For(command) => command,
+            Command::Goto(command) => command,
+            Command::Break(command) => command,
+            Command::Quit(command) => command,
+            Command::ZQuit(command) => command,
+            Command::Return(command) => command,
+            Command::Continue(command) => command,
+            Command::Dim(command) => command,
+            Command::Set(command) => command,
+            Command::Kill(command) => command,
+            Command::New(command) => command,
+            Command::Merge(command) => command,
+            Command::Try(command) => command,
+            Command::Throw(command) => command,
+            Command::ZTrap(command) => command,
+            Command::ZZDump(command) => command,
+            Command::Write(command) => command,
+            Command::Read(command) => command,
+            Command::Open(command) => command,
+            Command::Close(command) => command,
+            Command::Use(command) => command,
+            Command::Lock(command) => command,
+            Command::Halt(command) => command,
+            Command::Hang(command) => command,
+            Command::H(command) => command,
+            Command::Job(command) => command,
+            Command::TStart(command) => command,
+            Command::TCommit(command) => command,
+            Command::TRollback(command) => command,
+            Command::ZWrite(command) => command,
+            Command::ZKill(command) => command,
+            Command::ZNspace(command) => command,
+            Command::Xecute(command) => command,
+            Command::View(command) => command,
+            Command::ZPrint(command) => command,
+            Command::Print(command) => command,
+            Command::ZBreak(command) => command,
+            Command::MVP(command) => command,
+            Command::MVC(command) => command,
+            Command::ElseIf(branch) => branch,
+            Command::Else(branch) => branch,
+            Command::CallMacro(_) | Command::ESQL(..) | Command::HTML(..) | Command::JS(_) => {
+                return None;
+            }
+        })
+    }
+}
+
+impl CommandLike for Command {
+    fn keywords(&self, start: usize) -> Vec<KeywordUse> {
+        self.as_command_like()
+            .map_or_else(Vec::new, |command| command.keywords(start))
+    }
+
+    fn postcondition(&self) -> Option<&PostCondition> {
+        self.as_command_like()?.postcondition()
+    }
 }
 
 #[derive(GrammarFromStr)]
@@ -3336,63 +3630,14 @@ impl FromStr for UnknownCommand {
     fn from_str(s: &str) -> Result<Self, String> {
         Err(format!(
             "'{s}' is not a recognized command; available: {}",
-            COMMAND_NAMES.join(", ")
+            COMMAND_NAMES
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>()
+                .join(", ")
         ))
     }
 }
-
-// Every command's full name that's a plain alphabetic word -- kept in sync by hand, for
-// `UnknownCommand`'s error message. `#Dim` is included even though it itself never reaches
-// `UnknownCommand` (it starts with `#`, not a letter): a user who drops the `#` and just writes
-// `Dim` produces a plain alphabetic word that *does* land here, and `#Dim` is the useful
-// suggestion for that typo. The `&sql(`/`##sql`/`&html<`/`&js<` markers are left out for now.
-pub(crate) const COMMAND_NAMES: &[&str] = &[
-    "Do",
-    "If",
-    "ElseIf",
-    "Else",
-    "While",
-    "For",
-    "GoTo",
-    "Break",
-    "Quit",
-    "ZQuit",
-    "Return",
-    "Continue",
-    "Set",
-    "Kill",
-    "New",
-    "Merge",
-    "Try",
-    "Catch",
-    "Throw",
-    "ZTrap",
-    "ZZDump",
-    "Write",
-    "Read",
-    "Open",
-    "Close",
-    "Use",
-    "Lock",
-    "Halt",
-    "Hang",
-    "H",
-    "Job",
-    "TStart",
-    "TCommit",
-    "TRollback",
-    "ZWrite",
-    "ZKill",
-    "ZNspace",
-    "Xecute",
-    "View",
-    "ZPrint",
-    "Print",
-    "ZBreak",
-    "MVPrint",
-    "MVCrt",
-    "#Dim",
-];
 
 #[derive(Grammar)]
 pub struct XecuteArg {
@@ -3525,10 +3770,8 @@ pub enum ParenedExpr<BeforeFirst = ()> {
 
 #[derive(Grammar)]
 pub struct DText {
-    fun: (
-        Either<StringEqCI!("TEXT"), StringEqCI!("T")>,
-        StringEq!("("),
-    ),
+    pub kw: Range<FnText>,
+    lp: StringEq!("("),
     pub arg: DTextArg,
     end: StringEq!(")"),
 }
@@ -4030,7 +4273,7 @@ fun_args!("$LIST" ListRangeCallArgs {
 /// `$LIST(list, start1:end1, ...)` -- read-only, not a valid SET target.
 #[derive(Grammar)]
 pub struct ListRangeCall {
-    pub kw: Either<StringEqCI!("LIST"), StringEqCI!("LI")>,
+    pub kw: Range<FnList>,
     pub lp: StringEq!("("),
     pub args: ListRangeCallArgs,
     pub rp: StringEq!(")"),
@@ -4052,7 +4295,7 @@ fun_args!("$LIST" ListPlainCallArgs {
 /// `$LIST(list, position, end)` -- the plain form, settable via `SET`.
 #[derive(Grammar)]
 pub struct ListPlainCall {
-    pub kw: Either<StringEqCI!("LIST"), StringEqCI!("LI")>,
+    pub kw: Range<FnList>,
     pub lp: StringEq!("("),
     pub args: ListPlainCallArgs,
     pub rp: StringEq!(")"),
@@ -4076,7 +4319,7 @@ fun_args!("$PIECE" PieceCallArgs {
 /// and [`SetTargetFun`] can hold them.
 #[derive(Grammar)]
 pub struct PieceCall {
-    pub kw: Either<StringEqCI!("PIECE"), StringEqCI!("P")>,
+    pub kw: Range<FnPiece>,
     pub lp: StringEq!("("),
     pub args: PieceCallArgs,
     pub rp: StringEq!(")"),
@@ -4100,7 +4343,7 @@ fun_args!("$MV" MVCallArgs {
 
 #[derive(Grammar)]
 pub struct MVCall {
-    pub kw: StringEqCI!("MV"),
+    pub kw: Range<FnMV>,
     pub lp: StringEq!("("),
     pub args: MVCallArgs,
     pub rp: StringEq!(")"),
@@ -4130,7 +4373,7 @@ fun_args!("$EXTRACT" ExtractCallArgs {
 
 #[derive(Grammar)]
 pub struct ExtractCall {
-    pub kw: Either<StringEqCI!("EXTRACT"), StringEqCI!("E")>,
+    pub kw: Range<FnExtract>,
     pub lp: StringEq!("("),
     pub args: ExtractCallArgs,
     pub rp: StringEq!(")"),
@@ -4151,7 +4394,7 @@ fun_args!("$LISTGET" ListGetCallArgs {
 
 #[derive(Grammar)]
 pub struct ListGetCall {
-    pub kw: Either<StringEqCI!("LISTGET"), StringEqCI!("LG")>,
+    pub kw: Range<FnListGet>,
     pub lp: StringEq!("("),
     pub args: ListGetCallArgs,
     pub rp: StringEq!(")"),
@@ -4171,7 +4414,7 @@ fun_args!("$BIT" BitCallArgs {
 
 #[derive(Grammar)]
 pub struct BitCall {
-    pub kw: StringEqCI!("BIT"),
+    pub kw: Range<FnBit>,
     pub lp: StringEq!("("),
     pub args: BitCallArgs,
     pub rp: StringEq!(")"),
@@ -4192,7 +4435,7 @@ fun_args!("$VECTOR" VectorCallArgs {
 
 #[derive(Grammar)]
 pub struct VectorCall {
-    pub kw: Either<StringEqCI!("VECTOR"), StringEqCI!("VE")>,
+    pub kw: Range<FnVector>,
     pub lp: StringEq!("("),
     pub args: VectorCallArgs,
     pub rp: StringEq!(")"),
@@ -4213,7 +4456,7 @@ fun_args!("$WEXTRACT" WExtractCallArgs {
 
 #[derive(Grammar)]
 pub struct WExtractCall {
-    pub kw: Either<StringEqCI!("WEXTRACT"), StringEqCI!("WE")>,
+    pub kw: Range<FnWExtract>,
     pub lp: StringEq!("("),
     pub args: WExtractCallArgs,
     pub rp: StringEq!(")"),
@@ -4234,7 +4477,7 @@ fun_args!("$PROPERTY" PropertyCallArgs {
 
 #[derive(Grammar)]
 pub struct PropertyCall {
-    pub kw: (Option<StringEqCI!("ZOBJ")>, StringEqCI!("PROPERTY")),
+    pub kw: Either<Range<FnProperty>, Range<FnZObjProperty>>,
     pub lp: StringEq!("("),
     pub args: PropertyCallArgs,
     pub rp: StringEq!(")"),
@@ -4253,7 +4496,7 @@ fun_args!("$SEQUENCE" SequenceCallArgs {
 
 #[derive(Grammar)]
 pub struct SequenceCall {
-    pub kw: Either<StringEqCI!("SEQUENCE"), StringEqCI!("SEQ")>,
+    pub kw: Range<FnSequence>,
     pub lp: StringEq!("("),
     pub args: SequenceCallArgs,
     pub rp: StringEq!(")"),
@@ -4273,7 +4516,7 @@ fun_args!("$LISTBUILD" ListBuildArgs {
 
 #[derive(Grammar)]
 pub struct ListBuild {
-    pub kw: Either<StringEqCI!("LISTBUILD"), StringEqCI!("LB")>,
+    pub kw: Range<FnListBuild>,
     pub lp: StringEq!("("),
     pub args: ListBuildArgs,
     pub rp: StringEq!(")"),
@@ -4288,7 +4531,7 @@ impl Deref for ListBuild {
 
 #[derive(Grammar)]
 pub struct ListBuildForSet {
-    pub kw: Either<StringEqCI!("LISTBUILD"), StringEqCI!("LB")>,
+    pub kw: Range<FnListBuild>,
     pub lp: StringEq!("("),
     pub first: ArgOf<Option<Variable>>,
     pub rest: Vec<More<ArgOf<Option<Variable>>>>,
@@ -4299,7 +4542,7 @@ pub struct ListBuildForSet {
 // skip -- see `SetTargetSource`.
 #[derive(Grammar)]
 pub struct ListGetForSet {
-    pub kw: Either<StringEqCI!("LISTGET"), StringEqCI!("LG")>,
+    pub kw: Range<FnListGet>,
     pub lp: StringEq!("("),
     pub first: ArgOf<Option<Variable>>,
     pub rest: Vec<More<ArgOf<Option<Variable>>>>,
@@ -4538,104 +4781,101 @@ fun_args!("$ZTIME/$ZTIMEH" ZTimeArgs {
 pub enum FunctionCall {
     DText(DText),
     Length {
-        kw: Either<StringEqCI!("LENGTH"), StringEqCI!("L")>,
+        kw: Range<FnLength>,
         lp: StringEq!("("),
         args: LengthArgs,
         rp: StringEq!(")"),
     },
     Data {
-        kw: Either<StringEqCI!("DATA"), StringEqCI!("D")>,
+        kw: Range<FnData>,
         lp: StringEq!("("),
         args: DataArgs,
         rp: StringEq!(")"),
     },
     Order {
-        kw: Either<StringEqCI!("ORDER"), StringEqCI!("O")>,
+        kw: Range<FnOrder>,
         lp: StringEq!("("),
         args: OrderArgs,
         rp: StringEq!(")"),
     },
     Get {
-        kw: Either<StringEqCI!("GET"), StringEqCI!("G")>,
+        kw: Range<FnGet>,
         lp: StringEq!("("),
         args: GetArgs,
         rp: StringEq!(")"),
     },
     Case {
-        kw: StringEqCI!("CASE"),
+        kw: Range<FnCase>,
         lp: StringEq!("("),
         args: CaseArgs,
         rp: StringEq!(")"),
     },
     Bit(BitCall),
     BitCount {
-        kw: StringEqCI!("BITCOUNT"),
+        kw: Range<FnBitCount>,
         lp: StringEq!("("),
         args: BitCountArgs,
         rp: StringEq!(")"),
     },
     BitFind {
-        kw: StringEqCI!("BITFIND"),
+        kw: Range<FnBitFind>,
         lp: StringEq!("("),
         args: BitFindArgs,
         rp: StringEq!(")"),
     },
     BitLogic {
-        kw: StringEqCI!("BITLOGIC"),
+        kw: Range<FnBitLogic>,
         lp: StringEq!("("),
         expr: ArgOf<BitLogicExpr>,
         length: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
     Change {
-        kw: StringEqCI!("CHANGE"),
+        kw: Range<FnChange>,
         lp: StringEq!("("),
         args: ChangeArgs,
         rp: StringEq!(")"),
     },
     Char {
-        kw: Either<StringEqCI!("CHAR"), StringEqCI!("C")>,
+        kw: Range<FnChar>,
         lp: StringEq!("("),
         args: CharArgs,
         rp: StringEq!(")"),
     },
     ClassName {
-        kw: Either<StringEqCI!("CLASSNAME"), StringEqCI!("ZOBJCLASS")>,
+        kw: Either<Range<FnClassName>, Range<FnZObjClass>>,
         lp: StringEq!("("),
         args: ClassNameArgs,
         rp: StringEq!(")"),
     },
     Decimal {
-        kw: StringEqCI!("DECIMAL"),
+        kw: Range<FnDecimal>,
         lp: StringEq!("("),
         args: DecimalArgs,
         rp: StringEq!(")"),
     },
     Double {
-        kw: StringEqCI!("DOUBLE"),
+        kw: Range<FnDouble>,
         lp: StringEq!("("),
         args: DoubleArgs,
         rp: StringEq!(")"),
     },
     Extract(ExtractCall),
     FNumber {
-        kw: Either<StringEqCI!("FNUMBER"), StringEqCI!("FN")>,
+        kw: Range<FnFNumber>,
         lp: StringEq!("("),
         args: FNumberArgs,
         rp: StringEq!(")"),
     },
     IsObject {
-        kw: Either<StringEqCI!("ISOBJECT"), StringEqCI!("ISO")>,
+        kw: Range<FnIsObject>,
         lp: StringEq!("("),
         args: IsObjectArgs,
         rp: StringEq!(")"),
     },
     // The "I" case is dangerous
     Increment {
-        kw: Either<
-            Either<StringEqCI!("INCREMENT"), StringEqCI!("I")>,
-            Either<StringEqCI!("ZINCREMENT"), StringEqCI!("ZINCR")>,
-        >,
+        kw: Either<Range<FnIncrement>, Range<FnZIncrement>>,
         lp: StringEq!("("),
         args: IncrementArgs,
         rp: StringEq!(")"),
@@ -4644,122 +4884,122 @@ pub enum FunctionCall {
     ListRange(ListRangeCall),
     ListBuild(ListBuild),
     ListData {
-        kw: Either<StringEqCI!("LISTDATA"), StringEqCI!("LD")>,
+        kw: Range<FnListData>,
         lp: StringEq!("("),
         args: ListDataArgs,
         rp: StringEq!(")"),
     },
     ListGet(ListGetCall),
     ListNext {
-        kw: StringEqCI!("LISTNEXT"),
+        kw: Range<FnListNext>,
         lp: StringEq!("("),
         args: ListNextArgs,
         rp: StringEq!(")"),
     },
     ListUpdate {
-        kw: Either<StringEqCI!("LISTUPDATE"), StringEqCI!("LU")>,
+        kw: Range<FnListUpdate>,
         lp: StringEq!("("),
         args: ListUpdateArgs,
         rp: StringEq!(")"),
     },
     Locate {
-        kw: StringEqCI!("LOCATE"),
+        kw: Range<FnLocate>,
         lp: StringEq!("("),
         args: LocateArgs,
         rp: StringEq!(")"),
     },
     MV(MVCall),
     Method {
-        kw: (Option<StringEqCI!("ZOBJ")>, StringEqCI!("METHOD")),
+        kw: Either<Range<FnMethod>, Range<FnZObjMethod>>,
         lp: StringEq!("("),
         args: MethodArgs,
         rp: StringEq!(")"),
     },
     Name {
-        kw: Either<StringEqCI!("NAME"), StringEqCI!("NA")>,
+        kw: Range<FnName>,
         lp: StringEq!("("),
         args: NameArgs,
         rp: StringEq!(")"),
     },
     Parameter {
-        kw: StringEqCI!("PARAMETER"),
+        kw: Range<FnParameter>,
         lp: StringEq!("("),
         args: ParameterArgs,
         rp: StringEq!(")"),
     },
     Piece(PieceCall),
     PrefetchOff {
-        kw: StringEqCI!("PREFETCHOFF"),
+        kw: Range<FnPrefetchOff>,
         lp: StringEq!("("),
         args: PrefetchOffArgs,
         rp: StringEq!(")"),
     },
     PrefetchOn {
-        kw: StringEqCI!("PREFETCHON"),
+        kw: Range<FnPrefetchOn>,
         lp: StringEq!("("),
         args: PrefetchOnArgs,
         rp: StringEq!(")"),
     },
     Property(PropertyCall),
     Query {
-        kw: Either<StringEqCI!("QUERY"), StringEqCI!("Q")>,
+        kw: Range<FnQuery>,
         lp: StringEq!("("),
         args: QueryArgs,
         rp: StringEq!(")"),
     },
     Select {
-        kw: Either<StringEqCI!("SELECT"), StringEqCI!("S")>,
+        kw: Range<FnSelect>,
         lp: StringEq!("("),
         args: SelectArgs,
         rp: StringEq!(")"),
     },
     Sequence(SequenceCall),
     SortBegin {
-        kw: StringEqCI!("SORTBEGIN"),
+        kw: Range<FnSortBegin>,
         lp: StringEq!("("),
         args: SortBeginArgs,
         rp: StringEq!(")"),
     },
     SortEnd {
-        kw: StringEqCI!("SORTEND"),
+        kw: Range<FnSortEnd>,
         lp: StringEq!("("),
         args: SortEndArgs,
         rp: StringEq!(")"),
     },
     Vector(VectorCall),
     VectorDefined {
-        kw: Either<StringEqCI!("VECTORDEFINED"), StringEqCI!("VD")>,
+        kw: Range<FnVectorDefined>,
         lp: StringEq!("("),
         args: VectorDefinedArgs,
         rp: StringEq!(")"),
     },
     VectorOp {
-        kw: Either<StringEqCI!("VECTOROP"), StringEqCI!("VOP")>,
+        kw: Range<FnVectorOp>,
         lp: StringEq!("("),
         args: VectorOpArgs,
         rp: StringEq!(")"),
     },
     WChar {
-        kw: Either<StringEqCI!("WCHAR"), StringEqCI!("WC")>,
+        kw: Range<FnWChar>,
         lp: StringEq!("("),
         args: WCharArgs,
         rp: StringEq!(")"),
     },
     WExtract(WExtractCall),
     Xecute {
-        kw: StringEqCI!("XECUTE"),
+        kw: Range<FnXecute>,
         lp: StringEq!("("),
         args: XecuteArgs,
         rp: StringEq!(")"),
     },
     ClassMethod {
-        kw: (Option<StringEqCI!("ZOBJ")>, StringEqCI!("CLASSMETHOD")),
+        kw: Either<Range<FnClassMethod>, Range<FnZObjClassMethod>>,
         lp: StringEq!("("),
         args: ClassMethodArgs,
         rp: StringEq!(")"),
     },
     Compile {
-        kw: StringEqCI!("COMPILE"),
+        kw: Range<FnCompile>,
         lp: StringEq!("("),
         args: CompileArgs,
         rp: StringEq!(")"),
@@ -4770,7 +5010,7 @@ pub enum FunctionCall {
     // Legacy `$ZPREVIOUS(glvn)`/`$ZP`: the last subscript at that level, a one-argument reverse
     // `$ORDER`. Modeled on its own rather than folded into `Order`.
     ZP {
-        kw: Either<StringEqCI!("ZPREVIOUS"), StringEqCI!("ZP")>,
+        kw: Range<FnZPrevious>,
         lp: StringEq!("("),
         args: ZPArgs,
         rp: StringEq!(")"),
@@ -4781,56 +5021,45 @@ pub enum FunctionCall {
     // `$LOCK(lockname[, info_type])`: information about a held lock.
     // Legacy `$ZORDER(glvn)`/`$ZO` and `$NEXT(glvn)`/`$N`: the next node/subscript, like `$ORDER`.
     ZOrder {
-        kw: Either<StringEqCI!("ZORDER"), StringEqCI!("ZO")>,
+        kw: Range<FnZOrder>,
         lp: StringEq!("("),
         args: ZOrderArgs,
         rp: StringEq!(")"),
     },
     Next {
-        kw: Either<StringEqCI!("NEXT"), StringEqCI!("N")>,
+        kw: Range<FnNext>,
         lp: StringEq!("("),
         args: NextArgs,
         rp: StringEq!(")"),
     },
     // Internal: the object's underlying storage handle, used by system collection classes.
     ZObjRef {
-        kw: StringEqCI!("ZOBJREF"),
+        kw: Range<FnZObjRef>,
         lp: StringEq!("("),
         args: ZObjRefArgs,
         rp: StringEq!(")"),
     },
     ZStrip {
-        kw: StringEqCI!("ZSTRIP"),
+        kw: Range<FnZStrip>,
         lp: StringEq!("("),
         args: ZStripArgs,
         rp: StringEq!(")"),
     },
     ZDateTime {
-        kw: Either<
-            Either<
-                Either<StringEqCI!("ZDATETIMEH"), StringEqCI!("ZDATETIME")>,
-                StringEqCI!("ZDTH"),
-            >,
-            StringEqCI!("ZDT"),
-        >,
+        // The `H` forms first: `ZDATETIME` and `ZDT` are prefixes of them.
+        kw: Either<Range<FnZDateTimeH>, Range<FnZDateTime>>,
         lp: StringEq!("("),
         args: ZDateTimeArgs,
         rp: StringEq!(")"),
     },
     ZDate {
-        kw: Either<
-            Either<Either<StringEqCI!("ZDATEH"), StringEqCI!("ZDATE")>, StringEqCI!("ZDH")>,
-            StringEqCI!("ZD"),
-        >,
+        kw: Either<Range<FnZDateH>, Range<FnZDate>>,
         lp: StringEq!("("),
         args: ZDateArgs,
         rp: StringEq!(")"),
     },
     ZTime {
-        kw: Either<
-            Either<Either<StringEqCI!("ZTIMEH"), StringEqCI!("ZTIME")>, StringEqCI!("ZTH")>,
-            StringEqCI!("ZT"),
-        >,
+        kw: Either<Range<FnZTimeH>, Range<FnZTime>>,
         lp: StringEq!("("),
         args: ZTimeArgs,
         rp: StringEq!(")"),
@@ -4838,7 +5067,7 @@ pub enum FunctionCall {
     // `$ZF(-n, …)` callouts, per selector. `-100` precedes `-1` because
     // `StringEq` matches without a word boundary, so `-1` prefixes `-100`.
     ZFm100 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-100"), SGap>,
         flags: More<ArgOf<Expr>>,
@@ -4847,21 +5076,21 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm1 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-1"), SGap>,
         program: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
     ZFm2 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-2"), SGap>,
         program: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
     ZFm3 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-3"), SGap>,
         dll: More<ArgOf<Expr>>,
@@ -4869,7 +5098,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm4 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-4"), SGap>,
         n: More<ArgOf<Expr>>,
@@ -4878,7 +5107,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm5 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-5"), SGap>,
         dll_id: More<ArgOf<Expr>>,
@@ -4887,7 +5116,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm6 {
-        kw: StringEqCI!("ZF"),
+        kw: Range<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-6"), SGap>,
         dll_index: More<ArgOf<Expr>>,
@@ -4895,7 +5124,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZU {
-        kw: Either<StringEqCI!("ZUTIL"), StringEqCI!("ZU")>,
+        kw: Range<FnZUtil>,
         args: FunArgList,
     },
     // Every function whose arguments are all plain expressions, parsed with any number of them
@@ -4906,6 +5135,98 @@ pub enum FunctionCall {
     Generic(GenericFunctionCall),
     // Anything else spelled like a function: accepted here, reported by the checker.
     Unknown(UnknownFunctionCall),
+}
+
+impl FunctionCall {
+    // The function's name as written; `None` for a call that names no known function.
+    pub fn name(&self) -> Option<KeywordUse> {
+        Some(match self {
+            FunctionCall::DText(call) => call.kw.spelled(),
+            FunctionCall::Length { kw, .. } => kw.spelled(),
+            FunctionCall::Data { kw, .. } => kw.spelled(),
+            FunctionCall::Order { kw, .. } => kw.spelled(),
+            FunctionCall::Get { kw, .. } => kw.spelled(),
+            FunctionCall::Case { kw, .. } => kw.spelled(),
+            FunctionCall::Bit(call) => call.kw.spelled(),
+            FunctionCall::BitCount { kw, .. } => kw.spelled(),
+            FunctionCall::BitFind { kw, .. } => kw.spelled(),
+            FunctionCall::BitLogic { kw, .. } => kw.spelled(),
+            FunctionCall::Change { kw, .. } => kw.spelled(),
+            FunctionCall::Char { kw, .. } => kw.spelled(),
+            FunctionCall::ClassName { kw, .. } => kw.spelled(),
+            FunctionCall::Decimal { kw, .. } => kw.spelled(),
+            FunctionCall::Double { kw, .. } => kw.spelled(),
+            FunctionCall::Extract(call) => call.kw.spelled(),
+            FunctionCall::FNumber { kw, .. } => kw.spelled(),
+            FunctionCall::IsObject { kw, .. } => kw.spelled(),
+            FunctionCall::Increment { kw, .. } => kw.spelled(),
+            FunctionCall::ListPlain(call) => call.kw.spelled(),
+            FunctionCall::ListRange(call) => call.kw.spelled(),
+            FunctionCall::ListBuild(call) => call.kw.spelled(),
+            FunctionCall::ListData { kw, .. } => kw.spelled(),
+            FunctionCall::ListGet(call) => call.kw.spelled(),
+            FunctionCall::ListNext { kw, .. } => kw.spelled(),
+            FunctionCall::ListUpdate { kw, .. } => kw.spelled(),
+            FunctionCall::Locate { kw, .. } => kw.spelled(),
+            FunctionCall::MV(call) => call.kw.spelled(),
+            FunctionCall::Method { kw, .. } => kw.spelled(),
+            FunctionCall::Name { kw, .. } => kw.spelled(),
+            FunctionCall::Parameter { kw, .. } => kw.spelled(),
+            FunctionCall::Piece(call) => call.kw.spelled(),
+            FunctionCall::PrefetchOff { kw, .. } => kw.spelled(),
+            FunctionCall::PrefetchOn { kw, .. } => kw.spelled(),
+            FunctionCall::Property(call) => call.kw.spelled(),
+            FunctionCall::Query { kw, .. } => kw.spelled(),
+            FunctionCall::Select { kw, .. } => kw.spelled(),
+            FunctionCall::Sequence(call) => call.kw.spelled(),
+            FunctionCall::SortBegin { kw, .. } => kw.spelled(),
+            FunctionCall::SortEnd { kw, .. } => kw.spelled(),
+            FunctionCall::Vector(call) => call.kw.spelled(),
+            FunctionCall::VectorDefined { kw, .. } => kw.spelled(),
+            FunctionCall::VectorOp { kw, .. } => kw.spelled(),
+            FunctionCall::WChar { kw, .. } => kw.spelled(),
+            FunctionCall::WExtract(call) => call.kw.spelled(),
+            FunctionCall::Xecute { kw, .. } => kw.spelled(),
+            FunctionCall::ClassMethod { kw, .. } => kw.spelled(),
+            FunctionCall::Compile { kw, .. } => kw.spelled(),
+            FunctionCall::ZP { kw, .. } => kw.spelled(),
+            FunctionCall::ZOrder { kw, .. } => kw.spelled(),
+            FunctionCall::Next { kw, .. } => kw.spelled(),
+            FunctionCall::ZObjRef { kw, .. } => kw.spelled(),
+            FunctionCall::ZStrip { kw, .. } => kw.spelled(),
+            FunctionCall::ZDateTime { kw, .. } => kw.spelled(),
+            FunctionCall::ZDate { kw, .. } => kw.spelled(),
+            FunctionCall::ZTime { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm100 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm1 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm2 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm3 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm4 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm5 { kw, .. } => kw.spelled(),
+            FunctionCall::ZFm6 { kw, .. } => kw.spelled(),
+            FunctionCall::ZU { kw, .. } => kw.spelled(),
+            FunctionCall::Simple(call) => call.spelled(),
+            FunctionCall::Generic(_) | FunctionCall::Unknown(_) => return None,
+        })
+    }
+}
+
+impl SetTargetFun {
+    pub fn name(&self) -> KeywordUse {
+        match self {
+            SetTargetFun::Piece(call) => call.kw.spelled(),
+            SetTargetFun::Extract(call) => call.kw.spelled(),
+            SetTargetFun::List(call) => call.kw.spelled(),
+            SetTargetFun::ListGet(call) => call.kw.spelled(),
+            SetTargetFun::ListBuild(call) => call.kw.spelled(),
+            SetTargetFun::Bit(call) => call.kw.spelled(),
+            SetTargetFun::Vector(call) => call.kw.spelled(),
+            SetTargetFun::WExtract(call) => call.kw.spelled(),
+            SetTargetFun::Property(call) => call.kw.spelled(),
+            SetTargetFun::Sequence(call) => call.kw.spelled(),
+            SetTargetFun::MV(call) => call.kw.spelled(),
+        }
+    }
 }
 
 pub struct SimpleFunction {
@@ -4919,259 +5240,259 @@ pub struct SimpleFunction {
 // arguments they take, and what they return.
 pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
     SimpleFunction {
-        names: &["ZARCCOS"],
+        names: &["ZArcCos"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZARCSIN"],
+        names: &["ZArcSin"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZARCTAN"],
+        names: &["ZArcTan"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZCOS"],
+        names: &["ZCos"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZCOT"],
+        names: &["ZCot"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZCSC"],
+        names: &["ZCsc"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZSEC"],
+        names: &["ZSec"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZSIN"],
+        names: &["ZSin"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZTAN"],
+        names: &["ZTan"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZABS"],
+        names: &["ZAbs"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZEXP"],
+        names: &["ZExp"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZLN"],
+        names: &["ZLn"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZLOG"],
+        names: &["ZLog"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZSQR"],
+        names: &["ZSqr"],
         min: 1,
         max: 1,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZDASCII", "ZDA"],
+        names: &["ZDAscii", "ZDA"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZLASCII", "ZLA"],
+        names: &["ZLAscii", "ZLA"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZQASCII", "ZQA"],
+        names: &["ZQAscii", "ZQA"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZWASCII", "ZWA"],
+        names: &["ZWAscii", "ZWA"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZHEX", "ZH"],
+        names: &["ZHex", "ZH"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZDCHAR", "ZDC"],
+        names: &["ZDChar", "ZDC"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZLCHAR", "ZLC"],
+        names: &["ZLChar", "ZLC"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZQCHAR", "ZQC"],
+        names: &["ZQChar", "ZQC"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWCHAR", "ZWC"],
+        names: &["ZWChar", "ZWC"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWBPACK"],
+        names: &["ZWBPack"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWPACK"],
+        names: &["ZWPack"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWBUNPACK"],
+        names: &["ZWBUnpack"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWUNPACK"],
+        names: &["ZWUnpack"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ASCII", "A"],
+        names: &["Ascii", "A"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["FACTOR"],
+        names: &["Factor"],
         min: 1,
         max: 2,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["FIND", "F"],
+        names: &["Find", "F"],
         min: 2,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["INUMBER", "IN"],
+        names: &["INumber", "IN"],
         min: 2,
         max: 3,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ISVALIDDOUBLE"],
+        names: &["IsValidDouble"],
         min: 1,
         max: 4,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["ISVALIDNUM"],
+        names: &["IsValidNum"],
         min: 1,
         max: 4,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["ISVECTOR"],
+        names: &["IsVector"],
         min: 1,
         max: 1,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["JUSTIFY", "J"],
+        names: &["Justify", "J"],
         min: 2,
         max: 3,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["LISTFIND", "LF"],
+        names: &["ListFind", "LF"],
         min: 2,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["LISTFROMSTRING", "LFS"],
+        names: &["ListFromString", "LFS"],
         min: 1,
         max: 3,
         ret: "%List",
     },
     SimpleFunction {
-        names: &["LISTLENGTH", "LL"],
+        names: &["ListLength", "LL"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["LISTSAME", "LS"],
+        names: &["ListSame", "LS"],
         min: 2,
         max: 2,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["LISTTOSTRING", "LTS"],
+        names: &["ListToString", "LTS"],
         min: 1,
         max: 3,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["LISTVALID", "LV"],
+        names: &["ListValid", "LV"],
         min: 1,
         max: 1,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["LOCK"],
+        names: &["Lock"],
         min: 1,
         max: 2,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["MATCH"],
+        names: &["Match"],
         min: 2,
         max: 2,
         ret: "%Boolean",
@@ -5183,247 +5504,247 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
         ret: "%String",
     },
     SimpleFunction {
-        names: &["NCONVERT", "NC"],
+        names: &["NConvert", "NC"],
         min: 2,
         max: 3,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["NORMALIZE"],
+        names: &["Normalize"],
         min: 2,
         max: 2,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["NOW"],
+        names: &["Now"],
         min: 0,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["NUMBER", "NUM"],
+        names: &["Number", "NUM"],
         min: 1,
         max: 4,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["QLENGTH", "QL"],
+        names: &["QLength", "QL"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["QSUBSCRIPT", "QS"],
+        names: &["QSubscript", "QS"],
         min: 2,
         max: 2,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["RANDOM", "R"],
+        names: &["Random", "R"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["REPLACE"],
+        names: &["Replace"],
         min: 3,
         max: 6,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["REVERSE", "RE"],
+        names: &["Reverse", "RE"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["SCONVERT", "SC"],
+        names: &["SConvert", "SC"],
         min: 2,
         max: 4,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["STACK", "ST"],
+        names: &["Stack", "ST"],
         min: 1,
         max: 2,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["TRANSLATE", "TR"],
+        names: &["Translate", "TR"],
         min: 2,
         max: 3,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["VIEW", "V"],
+        names: &["View", "V"],
         min: 1,
         max: 3,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["WASCII", "WA"],
+        names: &["WAscii", "WA"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["WFIND", "WF"],
+        names: &["WFind", "WF"],
         min: 2,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["WISWIDE"],
+        names: &["WIsWide"],
         min: 1,
         max: 1,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["WLENGTH", "WL"],
+        names: &["WLength", "WL"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["WREVERSE", "WRE"],
+        names: &["WReverse", "WRE"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZBITAND"],
+        names: &["ZBitAnd"],
         min: 2,
         max: 2,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBITCOUNT"],
+        names: &["ZBitCount"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZBITFIND"],
+        names: &["ZBitFind"],
         min: 2,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZBITGET"],
+        names: &["ZBitGet"],
         min: 2,
         max: 2,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["ZBITLEN"],
+        names: &["ZBitLen"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZBITNOT"],
+        names: &["ZBitNot"],
         min: 1,
         max: 1,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBITOR"],
+        names: &["ZBitOr"],
         min: 2,
         max: 2,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBITSET"],
+        names: &["ZBitSet"],
         min: 3,
         max: 3,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBITSTR"],
+        names: &["ZBitStr"],
         min: 1,
         max: 2,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBITXOR"],
+        names: &["ZBitXor"],
         min: 2,
         max: 2,
         ret: "%Binary",
     },
     SimpleFunction {
-        names: &["ZBOOLEAN", "ZB"],
+        names: &["ZBoolean", "ZB"],
         min: 3,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZCONVERT", "ZCVT"],
+        names: &["ZConvert", "ZCVT"],
         min: 2,
         max: 4,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZCRC"],
+        names: &["ZCrc"],
         min: 2,
         max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZCYC"],
+        names: &["ZCyc"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZISWIDE"],
+        names: &["ZIsWide"],
         min: 1,
         max: 1,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["ZNAME"],
+        names: &["ZName"],
         min: 1,
         max: 3,
         ret: "%Boolean",
     },
     SimpleFunction {
-        names: &["ZPOSITION"],
+        names: &["ZPosition"],
         min: 2,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZPOWER"],
+        names: &["ZPower"],
         min: 2,
         max: 2,
         ret: "%Numeric",
     },
     SimpleFunction {
-        names: &["ZSEARCH", "ZSE"],
+        names: &["ZSearch", "ZSE"],
         min: 1,
         max: 2,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZSEEK"],
+        names: &["ZSeek"],
         min: 1,
         max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZVERSION"],
+        names: &["ZVersion"],
         min: 1,
         max: 1,
         ret: "%String",
     },
     SimpleFunction {
-        names: &["ZWIDTH"],
+        names: &["ZWidth"],
         min: 1,
         max: 1,
         ret: "%Integer",
     },
     SimpleFunction {
-        names: &["ZZENKAKU"],
+        names: &["ZZenkaku"],
         min: 2,
         max: 3,
         ret: "%String",
@@ -5451,15 +5772,28 @@ pub type ExprArgList = ParenList<Range<Option<Expr>>, StringEq!(",")>;
 
 #[derive(Grammar)]
 pub struct SimpleFunctionCallSource {
-    name: SimpleFunctionName,
+    name: Range<SimpleFunctionName>,
     args: ExprArgList,
 }
 
 #[derive(GrammarTryFromOther)]
 #[grammar(name = "simple function call")]
 pub struct SimpleFunctionCall {
-    pub name: SimpleFunctionName,
+    pub name: Range<SimpleFunctionName>,
     pub args: ExprArgList,
+}
+
+impl Spelled for SimpleFunctionCall {
+    fn spelled(&self) -> KeywordUse {
+        let function = simple_function(&self.name.print()).expect("validated on parse");
+        KeywordUse {
+            kind: KeywordKind::Function,
+            start: self.name.start,
+            text: self.name.print(),
+            full: function.names[0],
+            abbr: function.names.get(1).copied(),
+        }
+    }
 }
 
 impl GrammarFrom for SimpleFunctionCall {
@@ -6262,6 +6596,35 @@ mod regression_tests {
         let keywords = methods(&cls)[0].header.keywords.as_ref().expect("keywords");
         assert!(keywords.get("CodeMode").is_some());
         assert!(keywords.get("Language").is_none());
+    }
+
+    #[test]
+    fn command_keywords_carry_their_offsets_and_documented_spellings() {
+        let command =
+            Range::<Command>::parse("if x { Quit } elseif y { Quit } E { Quit }").expect("Ok");
+        let keywords = command.keywords(command.start);
+        let keywords: Vec<_> = keywords
+            .iter()
+            .map(|kw| (kw.start, kw.text.as_str(), kw.full, kw.abbr))
+            .collect();
+        assert_eq!(
+            keywords,
+            [
+                (0, "if", "If", Some("I")),
+                (14, "elseif", "ElseIf", None),
+                (32, "E", "Else", Some("E")),
+            ]
+        );
+        let halt = Command::parse("h").expect("Ok");
+        assert_eq!(halt.keywords(0)[0].full, "Halt");
+        let hang = Command::parse("h 1").expect("Ok");
+        assert_eq!(hang.keywords(0)[0].full, "Hang");
+        assert!(
+            Command::parse("$$$M(1)")
+                .expect("Ok")
+                .keywords(0)
+                .is_empty()
+        );
     }
 
     #[test]

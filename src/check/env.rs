@@ -1571,6 +1571,21 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
+    pub(crate) fn keyword_styles(&self) -> Option<&crate::style::KeywordStyles> {
+        self.base.base.workspace.style.as_ref()
+    }
+
+    pub(crate) fn span(&self, start: usize, end: usize) -> bindings::Range {
+        bindings::Range {
+            start: self.position(start),
+            end: self.position(end),
+        }
+    }
+
+    pub(crate) fn soft_diagnostic(&self, err: TypeError) {
+        self.base.base.add_soft_diagnostic(err.into())
+    }
+
     pub(crate) fn has_iris(&self) -> bool {
         self.base.base.has_iris()
     }
