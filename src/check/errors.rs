@@ -27,11 +27,17 @@ impl QuasiTypeError {
     }
 
     pub fn unimplemented(msg: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::Unimplemented(msg), vec![])
+        Self::WithoutRange(TypeErrorKind::Unimplemented { what: msg }, vec![])
     }
 
     pub fn undefined_macro(name: String, suggestions: Vec<String>) -> Self {
-        Self::WithoutRange(TypeErrorKind::UndefinedMacro { name, suggestions }, vec![])
+        Self::WithoutRange(
+            TypeErrorKind::UndefinedMacro {
+                name,
+                suggestions: Suggestions(suggestions),
+            },
+            vec![],
+        )
     }
 
     pub fn unreachable() -> Self {
@@ -39,7 +45,7 @@ impl QuasiTypeError {
     }
 
     pub(crate) fn condition_always(value: bool) -> Self {
-        Self::WithoutRange(TypeErrorKind::ConditionAlways(value), vec![])
+        Self::WithoutRange(TypeErrorKind::ConditionAlways { value }, vec![])
     }
 
     pub(crate) fn return_nothing_for_x(wanted: Ty, declared_at: Location) -> Self {
@@ -73,11 +79,17 @@ impl QuasiTypeError {
     }
 
     pub fn undefined() -> Self {
-        Self::WithoutRange(TypeErrorKind::Undefined { expr: None }, vec![])
+        Self::WithoutRange(TypeErrorKind::Undefined { expr: Detail(None) }, vec![])
     }
 
     pub fn maybe_undefined(ty: Ty) -> Self {
-        Self::WithoutRange(TypeErrorKind::MaybeUndefined { ty, expr: None }, vec![])
+        Self::WithoutRange(
+            TypeErrorKind::MaybeUndefined {
+                ty,
+                expr: Detail(None),
+            },
+            vec![],
+        )
     }
 
     // Fills in `Undefined`/`MaybeUndefined`'s expression text — the only two kinds that benefit
@@ -86,19 +98,25 @@ impl QuasiTypeError {
     // `check::mod`), so the text always matches whatever the diagnostic's range highlights.
     pub(crate) fn with_expr_text(self, text: impl FnOnce() -> String) -> Self {
         match self {
-            Self::WithoutRange(TypeErrorKind::Undefined { expr: None }, related_information) => {
-                Self::WithoutRange(
-                    TypeErrorKind::Undefined { expr: Some(text()) },
-                    related_information,
-                )
-            }
             Self::WithoutRange(
-                TypeErrorKind::MaybeUndefined { ty, expr: None },
+                TypeErrorKind::Undefined { expr: Detail(None) },
+                related_information,
+            ) => Self::WithoutRange(
+                TypeErrorKind::Undefined {
+                    expr: Detail(Some(text())),
+                },
+                related_information,
+            ),
+            Self::WithoutRange(
+                TypeErrorKind::MaybeUndefined {
+                    ty,
+                    expr: Detail(None),
+                },
                 related_information,
             ) => Self::WithoutRange(
                 TypeErrorKind::MaybeUndefined {
                     ty,
-                    expr: Some(text()),
+                    expr: Detail(Some(text())),
                 },
                 related_information,
             ),
@@ -129,7 +147,7 @@ impl QuasiTypeError {
     }
 
     pub fn not_procedure(ty: Ty) -> Self {
-        Self::WithoutRange(TypeErrorKind::NotProcedure(ty), vec![])
+        Self::WithoutRange(TypeErrorKind::NotProcedure { ty }, vec![])
     }
 
     pub fn procedure_not_called() -> Self {
@@ -145,7 +163,7 @@ impl QuasiTypeError {
     }
 
     pub fn require_private_variable(name: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::RequirePrivateVariable(name), vec![])
+        Self::WithoutRange(TypeErrorKind::RequirePrivateVariable { name }, vec![])
     }
 
     pub fn too_few_arguments(next_arg: String, declared_at: Option<Location>) -> Self {
@@ -173,18 +191,30 @@ impl QuasiTypeError {
     }
 
     pub fn unknown_function(name: String, suggestions: Vec<String>) -> Self {
-        Self::WithoutRange(TypeErrorKind::UnknownFunction { name, suggestions }, vec![])
+        Self::WithoutRange(
+            TypeErrorKind::UnknownFunction {
+                name,
+                suggestions: Suggestions(suggestions),
+            },
+            vec![],
+        )
     }
 
     pub fn unknown_special_variable(name: String, suggestions: Vec<String>) -> Self {
         Self::WithoutRange(
-            TypeErrorKind::UnknownSpecialVariable { name, suggestions },
+            TypeErrorKind::UnknownSpecialVariable {
+                name,
+                suggestions: Suggestions(suggestions),
+            },
             vec![],
         )
     }
 
     pub fn invalid_macro_argument(msg: impl Into<String>) -> Self {
-        Self::WithoutRange(TypeErrorKind::InvalidMacroArgument(msg.into()), vec![])
+        Self::WithoutRange(
+            TypeErrorKind::InvalidMacroArgument { reason: msg.into() },
+            vec![],
+        )
     }
 
     pub fn invalid_zstrip_action(action: String, reason: &'static str) -> Self {
@@ -196,13 +226,13 @@ impl QuasiTypeError {
 
     pub fn number_implicitly_converted_to_string(value: String) -> Self {
         Self::WithoutRange(
-            TypeErrorKind::NumberImplicitlyConvertedToString(value),
+            TypeErrorKind::NumberImplicitlyConvertedToString { value },
             vec![],
         )
     }
 
     pub fn discarded_return_value(class: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::DiscardedReturnValue(class), vec![])
+        Self::WithoutRange(TypeErrorKind::DiscardedReturnValue { class }, vec![])
     }
 
     pub fn invalid_fnumber_format(format: String, reason: String) -> Self {
@@ -220,10 +250,10 @@ impl QuasiTypeError {
     ) -> Self {
         Self::WithoutRange(
             TypeErrorKind::CannotFindMember {
+                dynamic: DynamicGet(has_get.then(|| mem.clone())),
                 cls,
                 mem,
-                suggestions,
-                has_get,
+                suggestions: Suggestions(suggestions),
             },
             vec![],
         )
@@ -234,15 +264,21 @@ impl QuasiTypeError {
     }
 
     pub fn cannot_find_label(label: String, routine: Option<String>) -> Self {
-        Self::WithoutRange(TypeErrorKind::CannotFindLabel { label, routine }, vec![])
+        Self::WithoutRange(
+            TypeErrorKind::CannotFindLabel {
+                label,
+                routine: InRoutine(routine),
+            },
+            vec![],
+        )
     }
 
     pub fn goto_out_of_block(label: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::GotoOutOfBlock(label), vec![])
+        Self::WithoutRange(TypeErrorKind::GotoOutOfBlock { label }, vec![])
     }
 
     pub fn cannot_find_routine(routine: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::CannotFindRoutine(routine), vec![])
+        Self::WithoutRange(TypeErrorKind::CannotFindRoutine { routine }, vec![])
     }
 
     pub fn continue_not_in_loop() -> Self {
@@ -255,7 +291,11 @@ impl QuasiTypeError {
         ty2: Option<Ty>,
     ) -> QuasiTypeError {
         Self::WithoutRange(
-            TypeErrorKind::InconsistentDeclaration { name, ty1, ty2 },
+            TypeErrorKind::InconsistentDeclaration {
+                name,
+                ty1: Declared(ty1),
+                ty2: Declared(ty2),
+            },
             vec![],
         )
     }
@@ -283,12 +323,14 @@ impl<T> IntoTypeError<T> for Result<T, QuasiTypeError> {
 
 // Declares `TypeErrorKind` with each variant's diagnostic code next to it, so the code, the
 // variant's docs.rs anchor and the code shown in its docs all come from one place.
+// Each variant's first doc line is its message, with its fields in `{braces}`; any later doc
+// lines explain it.
 macro_rules! type_error_kinds {
     ($(
+        #[doc = $message:literal]
         $(#[doc = $doc:literal])*
         #[code = $code:literal]
         $variant:ident
-        $(( $($tuple:ty),* ))?
         $({ $( $(#[doc = $fdoc:literal])* $field:ident: $fty:ty ),* $(,)? })?,
     )*) => {
         /// Every kind of diagnostic ascot reports.
@@ -296,14 +338,30 @@ macro_rules! type_error_kinds {
         /// Each has a code, e.g. `A1234`, that clients can filter or key quick fixes on. A code is
         /// fixed once assigned and never reused, whatever later happens to the variant's name or
         /// message; it is random, so it says nothing about the kind.
+        ///
+        /// Each kind's first line is its message, with its fields in `{braces}`.
         #[derive(Debug)]
         pub enum TypeErrorKind {
             $(
+                #[doc = $message]
                 $(#[doc = $doc])*
+                #[doc = ""]
                 #[doc = concat!("Code: `", $code, "`")]
                 #[doc(alias = $code)]
-                $variant $(( $($tuple),* ))? $({ $( $(#[doc = $fdoc])* $field: $fty ),* })?,
+                $variant $({ $( $(#[doc = $fdoc])* $field: $fty ),* })?,
             )*
+        }
+
+        impl std::fmt::Display for TypeErrorKind {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let message = match self {
+                    $(Self::$variant $({ $($field),* })? => {
+                        format!($message $($(, $field = $field)*)?)
+                    })*
+                };
+                // A `/// ` line keeps the space after the slashes.
+                f.write_str(message.trim_start())
+            }
         }
 
         impl TypeErrorKind {
@@ -332,127 +390,152 @@ macro_rules! type_error_kinds {
 }
 
 type_error_kinds! {
+    /// Cannot find class '{cls}' in the workspace or on the IRIS instance
     #[code = "A8061"]
-    CannotFindClass {
-        cls: String,
-    },
+    CannotFindClass { cls: String },
+    /// Cannot {lookup}
+    ///
+    /// A class that isn't open in the workspace. With an IRIS connection, the instance doesn't
+    /// have it either; without one, there's nothing to check it against.
     #[code = "A1054"]
-    UnconfirmedClass {
-        cls: String,
-        has_iris: bool,
-    },
+    UnconfirmedClass { lookup: ClassLookup },
+    /// Cannot find member '{mem}' in {cls}{suggestions}{dynamic}
     #[code = "A3139"]
     CannotFindMember {
         cls: String,
         mem: String,
-        suggestions: Vec<String>,
-        has_get: bool,
+        suggestions: Suggestions,
+        dynamic: DynamicGet,
     },
+    /// Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes a class {reason}
     #[code = "A9360"]
     UnconfirmedMember {
         cls: String,
         mem: String,
-        superclass: bool,
-        has_iris: bool,
+        on: SuperclassOf,
+        reason: UnconfirmedReason,
     },
+    /// Cannot find label '{label}' in {routine}
     #[code = "A6851"]
-    CannotFindLabel {
-        label: String,
-        routine: Option<String>,
-    },
+    CannotFindLabel { label: String, routine: InRoutine },
+    /// Cannot GOTO label '{label}' from inside a procedure block: it is outside the block
     #[code = "A1073"]
-    GotoOutOfBlock(String),
+    GotoOutOfBlock { label: String },
+    /// Routine '{routine}' is not defined in the current workspace
     #[code = "A3303"]
-    CannotFindRoutine(String),
+    CannotFindRoutine { routine: String },
+    /// Include file '{name}' is not defined in the current workspace
     #[code = "A7831"]
-    CannotFindInclude(String),
+    CannotFindInclude { name: String },
+    /// The macro '{name}' expands recursively without end
     #[code = "A5090"]
-    MacroExpansionTooDeep(String),
+    MacroExpansionTooDeep { name: String },
+    /// Cannot reference instance-only member '{name}' in a class method
     #[code = "A8914"]
-    AccessInstanceOnlyMemberFromClassContext {
-        name: String,
-    },
+    AccessInstanceOnlyMemberFromClassContext { name: String },
+    /// Variable '{name}' is already declared
     #[code = "A4983"]
-    RedeclareVariable(String),
+    RedeclareVariable { name: String },
+    /// Variable '{name}' is already NEW'd; this NEW resets it to undefined, discarding its current value — `Kill {name}` says that explicitly
     #[code = "A1817"]
-    RedundantNew(String),
+    RedundantNew { name: String },
+    /// '{name}' is already NEW'd here — every local variable is implicitly NEW'd on entry to a procedure block
     #[code = "A6866"]
-    NewInProcedureBlock(String),
+    NewInProcedureBlock { name: String },
+    /// Class keyword '{keyword}' has no value
     #[code = "A5573"]
-    ClassKeywordWithoutValue(String),
+    ClassKeywordWithoutValue { keyword: String },
+    /// '{keyword}' is not a recognized property keyword; available: {available}
     #[code = "A9322"]
-    UnrecognizedPropertyKeyword(String),
+    UnrecognizedPropertyKeyword { keyword: String, available: Available },
+    /// '{name}' is not a parameter of {class}{hint}
     #[code = "A2357"]
     UnrecognizedTypeParam {
         name: String,
         class: String,
-        is_property_keyword: bool,
-        suggestions: Vec<String>,
+        hint: TypeParamHint,
     },
+    /// '{keyword}' is not a recognized parameter keyword; available: {available}
     #[code = "A2174"]
-    UnrecognizedParameterKeyword(String),
+    UnrecognizedParameterKeyword { keyword: String, available: Available },
+    /// '{meta_type}' is not a recognized parameter type; available: {available}
     #[code = "A8317"]
-    UnrecognizedParameterType(String),
+    UnrecognizedParameterType { meta_type: String, available: Available },
+    /// ObjectScript has no operator precedence and evaluates strictly left-to-right; this may not compute what you expect
     #[code = "A7155"]
     MixedPrecedence,
+    /// Variable '{name}' is assigned but never read
     #[code = "A5718"]
-    UnreadAssignment(String),
+    UnreadAssignment { name: String },
+    /// Output parameter '{name}' is never assigned; its caller will get an undefined value
     #[code = "A4476"]
-    OutputNeverAssigned(String),
+    OutputNeverAssigned { name: String },
+    /// Variable '{name}' is {ty1} in one branch but {ty2} in another
     #[code = "A8892"]
     InconsistentDeclaration {
         name: String,
-        ty1: Option<Ty>,
-        ty2: Option<Ty>,
+        ty1: Declared,
+        ty2: Declared,
     },
+    /// {source} is incompatible with {target}
     #[code = "A5967"]
-    TypeIncompatible {
-        source: Ty,
-        target: Ty,
-    },
+    TypeIncompatible { source: Ty, target: Ty },
+    /// Cannot assign {source} to '{name}' declared as {target}
     #[code = "A9180"]
     AssignIncompatible {
         name: String,
         source: Ty,
         target: Ty,
     },
+    /// Unreachable code
     #[code = "A1203"]
     Unreachable,
+    /// This condition is always {value}
     #[code = "A8456"]
-    ConditionAlways(bool),
+    ConditionAlways { value: bool },
+    /// Expression is not a procedure; its type is {ty}
     #[code = "A8496"]
-    NotProcedure(Ty),
+    NotProcedure { ty: Ty },
+    /// ObjectScript has no first-class methods; call it with ()
     #[code = "A3671"]
     ProcedureNotCalled,
+    /// Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional.
     #[code = "A6705"]
-    TooFewArguments {
-        next_arg: String,
-    },
+    TooFewArguments { next_arg: String },
+    /// Too many arguments
     #[code = "A5523"]
     TooManyArguments,
+    /// $CASE's `:default` must be its last argument
     #[code = "A7139"]
     CaseDefaultNotLast,
+    /// ${name} is not a recognized function{suggestions}
     #[code = "A3850"]
     UnknownFunction {
         name: String,
-        suggestions: Vec<String>,
+        suggestions: Suggestions,
     },
+    /// ${name} is not a recognized special variable{suggestions}
     #[code = "A9399"]
     UnknownSpecialVariable {
         name: String,
-        suggestions: Vec<String>,
+        suggestions: Suggestions,
     },
+    /// Invalid macro argument: {reason}
     #[code = "A6587"]
-    InvalidMacroArgument(String),
+    InvalidMacroArgument { reason: String },
+    /// '{action}' is not a valid $ZSTRIP action: {reason}
     #[code = "A3286"]
     InvalidZStripAction {
         action: String,
         reason: &'static str,
     },
+    /// {value} is a number here, implicitly converted to the string "{value}"
     #[code = "A9421"]
-    NumberImplicitlyConvertedToString(String),
+    NumberImplicitlyConvertedToString { value: String },
+    /// This call returns {class}, which Do discards -- consider Set to capture it, or checking it directly
     #[code = "A4556"]
-    DiscardedReturnValue(String),
+    DiscardedReturnValue { class: String },
+    /// {what} `{found}` should be written `{expected}`
     #[code = "A2839"]
     KeywordStyle {
         // "Command keyword" or "Function".
@@ -460,70 +543,69 @@ type_error_kinds! {
         found: String,
         expected: String,
     },
+    /// '{format}' is not a valid $FNUMBER format: {reason}
     #[code = "A7895"]
-    InvalidFNumberFormat {
-        format: String,
-        reason: String,
-    },
+    InvalidFNumberFormat { format: String, reason: String },
+    /// Expected return value of type '{wanted}' but got nothing
     #[code = "A6781"]
-    ReturnNothingForX {
-        wanted: Ty,
-    },
+    ReturnNothingForX { wanted: Ty },
+    /// Unexpected return value of type '{actual}'
     #[code = "A8997"]
-    ReturnXForNothing {
-        actual: Ty,
-    },
+    ReturnXForNothing { actual: Ty },
+    /// Quit with {actual} inside control structure
     #[code = "A4963"]
-    QuitXInControl {
-        actual: Ty,
-    },
+    QuitXInControl { actual: Ty },
+    /// The parameter '{name}' is declared as {wanted} parameter but got {actual} argument
     #[code = "A5579"]
     MismatchArgumentAndArgumentMode {
         name: String,
         wanted: ArgMode,
         actual: ArgMode,
     },
+    /// This '{ty}' value may be undefined{expr}
     #[code = "A6826"]
-    MaybeUndefined {
-        ty: Ty,
-        expr: Option<String>,
-    },
+    MaybeUndefined { ty: Ty, expr: Detail },
+    /// This value is undefined{expr}
     #[code = "A7095"]
-    Undefined {
-        expr: Option<String>,
-    },
+    Undefined { expr: Detail },
+    /// Not in a class context
     #[code = "A1368"]
     NotInClass,
+    /// Procedure call returns nothing
     #[code = "A7244"]
     ProcedureCallReturnsNothing,
+    /// The procedure call requires the private variable '{name}' to be public
     #[code = "A4025"]
-    RequirePrivateVariable(String),
+    RequirePrivateVariable { name: String },
+    /// Type checking not implemented for '{what}'
     #[code = "A4043"]
-    Unimplemented(String),
+    Unimplemented { what: String },
+    /// The macro '{name}' is undefined{suggestions}
     #[code = "A2797"]
     UndefinedMacro {
         name: String,
-        suggestions: Vec<String>,
+        suggestions: Suggestions,
     },
+    /// CONTINUE is not within a loop
     #[code = "A5789"]
     ContinueNotInLoop,
+    /// The member name {name} is defined twice
     #[code = "A3119"]
-    DuplicatedMemberName {
-        name: String,
-    },
+    DuplicatedMemberName { name: String },
+    /// Class '{name}' is also declared in {other_uri}
     #[code = "A3717"]
-    DuplicateClassName {
-        name: String,
-        other_uri: String,
-    },
+    DuplicateClassName { name: String, other_uri: String },
+    /// {err}
+    ///
+    /// Code that doesn't parse. Where the grammar knows what went wrong, such as an unknown
+    /// command or a function given the wrong arguments, the message says so; otherwise it lists
+    /// what the parser was looking for.
     #[code = "A8073"]
-    InvalidSyntax {
-        err: tygr::Error,
-    },
+    InvalidSyntax { err: SyntaxErrorText },
+    #[doc = "Syntax error, looking for:\n{err}"]
     #[code = "A1727"]
-    DocumentSyntaxError {
-        err: tygr::Error,
-    },
+    DocumentSyntaxError { err: tygr::Error },
+    /// Missing an explicit QUIT or RETURN; execution falls through to whatever follows
     #[code = "A7548"]
     MissingQuit,
 }
@@ -533,10 +615,10 @@ impl TypeErrorKind {
         match self {
             TypeErrorKind::ReturnXForNothing { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::Unreachable => DiagnosticSeverity::Warning,
-            TypeErrorKind::ConditionAlways(_) => DiagnosticSeverity::Warning,
+            TypeErrorKind::ConditionAlways { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::MaybeUndefined { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::Undefined { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::Unimplemented(_) => DiagnosticSeverity::Information,
+            TypeErrorKind::Unimplemented { .. } => DiagnosticSeverity::Information,
             TypeErrorKind::UndefinedMacro { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::InvalidSyntax { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::MismatchArgumentAndArgumentMode { .. } => DiagnosticSeverity::Warning,
@@ -544,421 +626,231 @@ impl TypeErrorKind {
             TypeErrorKind::CannotFindClass { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::CannotFindMember { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::CannotFindLabel { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::GotoOutOfBlock(_) => DiagnosticSeverity::Error,
-            TypeErrorKind::CannotFindRoutine(_) => DiagnosticSeverity::Error,
-            TypeErrorKind::CannotFindInclude(_) => DiagnosticSeverity::Error,
-            TypeErrorKind::MacroExpansionTooDeep(_) => DiagnosticSeverity::Error,
+            TypeErrorKind::GotoOutOfBlock { .. } => DiagnosticSeverity::Error,
+            TypeErrorKind::CannotFindRoutine { .. } => DiagnosticSeverity::Error,
+            TypeErrorKind::CannotFindInclude { .. } => DiagnosticSeverity::Error,
+            TypeErrorKind::MacroExpansionTooDeep { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { .. } => {
                 DiagnosticSeverity::Error
             }
-            TypeErrorKind::RedeclareVariable(_) => DiagnosticSeverity::Warning,
-            TypeErrorKind::RedundantNew(_) => DiagnosticSeverity::Warning,
-            TypeErrorKind::NewInProcedureBlock(_) => DiagnosticSeverity::Warning,
-            TypeErrorKind::UnrecognizedPropertyKeyword(_) => DiagnosticSeverity::Error,
+            TypeErrorKind::RedeclareVariable { .. } => DiagnosticSeverity::Warning,
+            TypeErrorKind::RedundantNew { .. } => DiagnosticSeverity::Warning,
+            TypeErrorKind::NewInProcedureBlock { .. } => DiagnosticSeverity::Warning,
+            TypeErrorKind::UnrecognizedPropertyKeyword { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::UnrecognizedTypeParam { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::UnrecognizedParameterKeyword(_) => DiagnosticSeverity::Error,
-            TypeErrorKind::UnrecognizedParameterType(_) => DiagnosticSeverity::Error,
+            TypeErrorKind::UnrecognizedParameterKeyword { .. } => DiagnosticSeverity::Error,
+            TypeErrorKind::UnrecognizedParameterType { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::InconsistentDeclaration { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::TypeIncompatible { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::AssignIncompatible { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::NotProcedure(_) => DiagnosticSeverity::Error,
+            TypeErrorKind::NotProcedure { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::ProcedureNotCalled => DiagnosticSeverity::Error,
             TypeErrorKind::TooManyArguments => DiagnosticSeverity::Error,
             TypeErrorKind::UnknownFunction { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::UnknownSpecialVariable { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::InvalidMacroArgument(_) => DiagnosticSeverity::Error,
+            TypeErrorKind::InvalidMacroArgument { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::CaseDefaultNotLast => DiagnosticSeverity::Error,
             TypeErrorKind::InvalidZStripAction { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::NumberImplicitlyConvertedToString(_) => DiagnosticSeverity::Warning,
-            TypeErrorKind::DiscardedReturnValue(_) => DiagnosticSeverity::Warning,
+            TypeErrorKind::NumberImplicitlyConvertedToString { .. } => DiagnosticSeverity::Warning,
+            TypeErrorKind::DiscardedReturnValue { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::KeywordStyle { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::InvalidFNumberFormat { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::ReturnNothingForX { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::QuitXInControl { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::NotInClass => DiagnosticSeverity::Error,
             TypeErrorKind::ProcedureCallReturnsNothing => DiagnosticSeverity::Error,
-            TypeErrorKind::RequirePrivateVariable(_) => DiagnosticSeverity::Error,
+            TypeErrorKind::RequirePrivateVariable { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::ContinueNotInLoop => DiagnosticSeverity::Error,
             TypeErrorKind::DuplicatedMemberName { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::MixedPrecedence => DiagnosticSeverity::Warning,
-            TypeErrorKind::UnreadAssignment(_) => DiagnosticSeverity::Warning,
-            TypeErrorKind::OutputNeverAssigned(_) => DiagnosticSeverity::Warning,
+            TypeErrorKind::UnreadAssignment { .. } => DiagnosticSeverity::Warning,
+            TypeErrorKind::OutputNeverAssigned { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::MissingQuit => DiagnosticSeverity::Warning,
             TypeErrorKind::UnconfirmedClass { .. } => DiagnosticSeverity::Hint,
             TypeErrorKind::UnconfirmedMember { .. } => DiagnosticSeverity::Hint,
-            TypeErrorKind::ClassKeywordWithoutValue(_) => DiagnosticSeverity::Warning,
+            TypeErrorKind::ClassKeywordWithoutValue { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::DuplicateClassName { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::DocumentSyntaxError { .. } => DiagnosticSeverity::Warning,
         }
     }
 }
 
-fn write_suggestions(f: &mut std::fmt::Formatter<'_>, suggestions: &[String]) -> std::fmt::Result {
-    if suggestions.is_empty() {
-        Ok(())
-    } else {
-        write!(f, "; did you mean: {}?", suggestions.join(", "))
+// The conditional parts of messages, each rendering nothing or a fragment of its kind's message.
+
+/// "; did you mean: …?", or nothing without suggestions.
+#[derive(Debug)]
+pub struct Suggestions(pub Vec<String>);
+
+impl std::fmt::Display for Suggestions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            Ok(())
+        } else {
+            write!(f, "; did you mean: {}?", self.0.join(", "))
+        }
     }
 }
 
-impl std::fmt::Display for TypeErrorKind {
+/// The names a keyword could have been, comma-separated.
+#[derive(Debug)]
+pub struct Available(pub &'static [&'static str]);
+
+impl std::fmt::Display for Available {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.join(", "))
+    }
+}
+
+/// What an unconfirmed class lookup couldn't do, depending on whether IRIS was asked.
+#[derive(Debug)]
+pub struct ClassLookup {
+    pub cls: String,
+    pub has_iris: bool,
+}
+
+impl std::fmt::Display for ClassLookup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cls = &self.cls;
+        if self.has_iris {
+            write!(
+                f,
+                "find class '{cls}' in the workspace or on the IRIS instance"
+            )
+        } else {
+            write!(
+                f,
+                "confirm class '{cls}' exists — it isn't open in this workspace, with no IRIS connection to check it against"
+            )
+        }
+    }
+}
+
+/// `%Get`'s suggestion for a member, if the class has dynamic properties.
+#[derive(Debug)]
+pub struct DynamicGet(pub Option<String>);
+
+impl std::fmt::Display for DynamicGet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(mem) => write!(f, " (or, if it's a dynamic property, %Get(\"{mem}\"))"),
+            None => Ok(()),
+        }
+    }
+}
+
+/// "a superclass of ", for a member found missing on a superclass.
+#[derive(Debug)]
+pub struct SuperclassOf(pub bool);
+
+impl std::fmt::Display for SuperclassOf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0 { "a superclass of " } else { "" })
+    }
+}
+
+/// Why a class in a hierarchy can't be checked, depending on whether IRIS was asked.
+#[derive(Debug)]
+pub struct UnconfirmedReason {
+    pub has_iris: bool,
+}
+
+impl std::fmt::Display for UnconfirmedReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.has_iris {
+            "that isn't on the IRIS instance"
+        } else {
+            "outside this workspace, with no IRIS connection to check it against"
+        })
+    }
+}
+
+/// "routine '…'", or "this routine" for a label looked up locally.
+#[derive(Debug)]
+pub struct InRoutine(pub Option<String>);
+
+impl std::fmt::Display for InRoutine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(routine) => write!(f, "routine '{routine}'"),
+            None => f.write_str("this routine"),
+        }
+    }
+}
+
+/// What to say after an unrecognized type parameter.
+#[derive(Debug)]
+pub enum TypeParamHint {
+    // The name is a property keyword, misplaced in the type's parameters.
+    PropertyKeyword(String),
+    Suggestions(Suggestions),
+}
+
+impl std::fmt::Display for TypeParamHint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TypeErrorKind::CannotFindClass { cls } => {
-                write!(
-                    f,
-                    "Cannot find class '{cls}' in the workspace or on the IRIS instance"
-                )
-            }
-            TypeErrorKind::CannotFindMember {
-                cls,
-                mem,
-                suggestions,
-                has_get,
-            } => {
-                write!(f, "Cannot find member '{mem}' in {cls}")?;
-                write_suggestions(f, suggestions)?;
-                if *has_get {
-                    write!(f, " (or, if it's a dynamic property, %Get(\"{mem}\"))")?;
-                }
-                Ok(())
-            }
-            TypeErrorKind::UnconfirmedClass {
-                cls,
-                has_iris: true,
-            } => {
-                write!(
-                    f,
-                    "Cannot find class '{cls}' in the workspace or on the IRIS instance"
-                )
-            }
-            TypeErrorKind::UnconfirmedClass {
-                cls,
-                has_iris: false,
-            } => write!(
+            TypeParamHint::PropertyKeyword(name) => write!(
                 f,
-                "Cannot confirm class '{cls}' exists — it isn't open in this workspace, with no IRIS connection to check it against"
+                " -- '{name}' is a property keyword, so it belongs in the `[ ... ]` list, not the type's own `( ... )` parameters"
             ),
-            TypeErrorKind::UnconfirmedMember {
-                cls,
-                mem,
-                superclass,
-                has_iris,
-            } => {
-                let on = if *superclass { "a superclass of " } else { "" };
-                let reason = if *has_iris {
-                    "that isn't on the IRIS instance"
-                } else {
-                    "outside this workspace, with no IRIS connection to check it against"
-                };
-                write!(
-                    f,
-                    "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes a class {reason}"
-                )
-            }
-            TypeErrorKind::ClassKeywordWithoutValue(keyword) => {
-                write!(f, "Class keyword '{keyword}' has no value")
-            }
-            TypeErrorKind::DuplicateClassName { name, other_uri } => {
-                write!(f, "Class '{name}' is also declared in {other_uri}")
-            }
-            TypeErrorKind::DocumentSyntaxError { err } => {
-                write!(f, "Syntax error, looking for:\n{err}")
-            }
-            TypeErrorKind::CannotFindLabel { label, routine } => match routine {
-                Some(routine) => write!(f, "Cannot find label '{label}' in routine '{routine}'"),
-                None => write!(f, "Cannot find label '{label}' in this routine"),
-            },
-            TypeErrorKind::GotoOutOfBlock(label) => write!(
-                f,
-                "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"
-            ),
-            TypeErrorKind::CannotFindRoutine(routine) => {
-                write!(
-                    f,
-                    "Routine '{routine}' is not defined in the current workspace"
-                )
-            }
-            TypeErrorKind::CannotFindInclude(name) => {
-                write!(
-                    f,
-                    "Include file '{name}' is not defined in the current workspace"
-                )
-            }
-            TypeErrorKind::MacroExpansionTooDeep(name) => {
-                write!(f, "The macro '{name}' expands recursively without end")
-            }
-            TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name } => {
-                write!(
-                    f,
-                    "Cannot reference instance-only member '{name}' in a class method"
-                )
-            }
-            TypeErrorKind::RedeclareVariable(name) => {
-                write!(f, "Variable '{}' is already declared", name)
-            }
-            TypeErrorKind::RedundantNew(name) => {
-                write!(
-                    f,
-                    "Variable '{}' is already NEW'd; this NEW resets it to undefined, discarding its current value — `Kill {0}` says that explicitly",
-                    name
-                )
-            }
-            TypeErrorKind::NewInProcedureBlock(name) => {
-                write!(
-                    f,
-                    "'{}' is already NEW'd here — every local variable is implicitly NEW'd on entry to a procedure block",
-                    name
-                )
-            }
-            TypeErrorKind::UnrecognizedPropertyKeyword(keyword) => {
-                write!(
-                    f,
-                    "'{keyword}' is not a recognized property keyword; available: {}",
-                    PROPERTY_KEYWORDS.join(", ")
-                )
-            }
-            TypeErrorKind::UnrecognizedTypeParam {
-                name,
-                class,
-                is_property_keyword,
-                suggestions,
-            } => {
-                write!(f, "'{name}' is not a parameter of {class}")?;
-                if *is_property_keyword {
-                    write!(
-                        f,
-                        " -- '{name}' is a property keyword, so it belongs in the `[ ... ]` list, not the type's own `( ... )` parameters"
-                    )?;
-                } else {
-                    write_suggestions(f, suggestions)?;
+            TypeParamHint::Suggestions(suggestions) => suggestions.fmt(f),
+        }
+    }
+}
+
+/// "declared as '…'", or "undeclared".
+#[derive(Debug)]
+pub struct Declared(pub Option<Ty>);
+
+impl std::fmt::Display for Declared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(ty) => write!(f, "declared as '{ty}'"),
+            None => f.write_str("undeclared"),
+        }
+    }
+}
+
+/// ": …", the source text an undefined value came from, if known.
+#[derive(Debug)]
+pub struct Detail(pub Option<String>);
+
+impl std::fmt::Display for Detail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(text) => write!(f, ": {text}"),
+            None => Ok(()),
+        }
+    }
+}
+
+/// A syntax error, in the grammar's own words where it has some.
+#[derive(Debug)]
+pub struct SyntaxErrorText(pub tygr::Error);
+
+impl std::fmt::Display for SyntaxErrorText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let error = &self.0;
+        // Prefer a catch-all-first `Unknown*` variant's own friendly failure (see
+        // `cos::Command`/`SpecialVariable`) over the generic "expected one of: ..." dump.
+        // A function's arguments (`cos::fun_args!`) are named after it; when several of
+        // its forms fail at the same spot, the first form's message stands for all.
+        let mut named = std::collections::HashSet::new();
+        let mut friendly: Vec<String> = error
+            .traces()
+            .iter()
+            .filter_map(|trace| match &trace.expectation {
+                tygr::Expectation::GrammarFrom { into, fail, .. } if into.starts_with('$') => {
+                    named.insert(into).then(|| format!("{into} {fail}"))
                 }
-                Ok(())
-            }
-            TypeErrorKind::UnrecognizedParameterKeyword(keyword) => {
-                write!(
-                    f,
-                    "'{keyword}' is not a recognized parameter keyword; available: {}",
-                    PARAMETER_KEYWORDS.join(", ")
-                )
-            }
-            TypeErrorKind::UnrecognizedParameterType(meta_type) => {
-                write!(
-                    f,
-                    "'{meta_type}' is not a recognized parameter type; available: {}",
-                    PARAMETER_TYPE_KEYWORDS.join(", ")
-                )
-            }
-            TypeErrorKind::InconsistentDeclaration { name, ty1, ty2 } => {
-                write!(f, "Variable '{}' is ", name)?;
-                match ty1 {
-                    Some(ty1) => write!(f, "declared as '{}'", ty1),
-                    None => write!(f, "undeclared"),
-                }?;
-                write!(f, " in one branch but ")?;
-                match ty2 {
-                    Some(ty2) => write!(f, "declared as '{}'", ty2),
-                    None => write!(f, "undeclared"),
-                }?;
-                write!(f, " in another")?;
-                Ok(())
-            }
-            TypeErrorKind::TypeIncompatible { source, target } => {
-                write!(f, "{} is incompatible with {}", source, target)
-            }
-            TypeErrorKind::AssignIncompatible {
-                name,
-                source,
-                target,
-            } => {
-                write!(
-                    f,
-                    "Cannot assign {} to '{}' declared as {}",
-                    source, name, target
-                )
-            }
-            TypeErrorKind::Unreachable => {
-                write!(f, "Unreachable code")
-            }
-            TypeErrorKind::ConditionAlways(true) => {
-                write!(f, "This condition is always true")
-            }
-            TypeErrorKind::ConditionAlways(false) => {
-                write!(f, "This condition is always false")
-            }
-            TypeErrorKind::NotProcedure(ty) => {
-                write!(f, "Expression is not a procedure; its type is {ty}")
-            }
-            TypeErrorKind::ProcedureNotCalled => {
-                write!(
-                    f,
-                    "ObjectScript has no first-class methods; call it with ()"
-                )
-            }
-            TypeErrorKind::TooManyArguments => {
-                write!(f, "Too many arguments")
-            }
-            TypeErrorKind::CaseDefaultNotLast => {
-                write!(f, "$CASE's `:default` must be its last argument")
-            }
-            TypeErrorKind::UnknownFunction { name, suggestions }
-            | TypeErrorKind::UnknownSpecialVariable { name, suggestions } => {
-                let what = if matches!(self, TypeErrorKind::UnknownFunction { .. }) {
-                    "function"
-                } else {
-                    "special variable"
-                };
-                write!(f, "${name} is not a recognized {what}")?;
-                if !suggestions.is_empty() {
-                    write!(f, "; did you mean: {}?", suggestions.join(", "))?;
-                }
-                Ok(())
-            }
-            TypeErrorKind::TooFewArguments { next_arg } => {
-                write!(
-                    f,
-                    "Too few arguments: '{}' is required. Only arguments with default values and `Output` arguments are considered optional.",
-                    next_arg
-                )
-            }
-            TypeErrorKind::InvalidMacroArgument(msg) => {
-                write!(f, "Invalid macro argument: {}", msg)
-            }
-            TypeErrorKind::ReturnNothingForX { wanted } => {
-                write!(
-                    f,
-                    "Expected return value of type '{}' but got nothing",
-                    wanted
-                )
-            }
-            TypeErrorKind::ReturnXForNothing { actual } => {
-                write!(f, "Unexpected return value of type '{}'", actual)
-            }
-            TypeErrorKind::QuitXInControl { actual } => {
-                write!(f, "Quit with {} inside control structure", actual)
-            }
-            TypeErrorKind::MismatchArgumentAndArgumentMode {
-                name,
-                wanted,
-                actual,
-            } => {
-                write!(
-                    f,
-                    "The parameter '{}' is declared as {} parameter but got {} argument",
-                    name, wanted, actual
-                )
-            }
-            TypeErrorKind::MaybeUndefined { ty, expr } => {
-                write!(f, "This '{}' value may be undefined", ty)?;
-                if let Some(expr) = expr {
-                    write!(f, ": {}", expr)?;
-                }
-                Ok(())
-            }
-            TypeErrorKind::Undefined { expr } => {
-                write!(f, "This value is undefined")?;
-                if let Some(expr) = expr {
-                    write!(f, ": {}", expr)?;
-                }
-                Ok(())
-            }
-            TypeErrorKind::NotInClass => write!(f, "Not in a class context"),
-            TypeErrorKind::ProcedureCallReturnsNothing => {
-                write!(f, "Procedure call returns nothing")
-            }
-            TypeErrorKind::RequirePrivateVariable(name) => {
-                write!(
-                    f,
-                    "The procedure call requires the private variable '{}' to be public",
-                    name
-                )
-            }
-            TypeErrorKind::Unimplemented(msg) => {
-                write!(f, "Type checking not implemented for '{}'", msg)
-            }
-            TypeErrorKind::UndefinedMacro { name, suggestions } => {
-                write!(f, "The macro '{name}' is undefined")?;
-                write_suggestions(f, suggestions)
-            }
-            TypeErrorKind::ContinueNotInLoop => {
-                write!(f, "CONTINUE is not within a loop")
-            }
-            TypeErrorKind::DuplicatedMemberName { name } => {
-                write!(f, "The member name {name} is defined twice")
-            }
-            TypeErrorKind::InvalidZStripAction { action, reason } => {
-                write!(f, "'{action}' is not a valid $ZSTRIP action: {reason}")
-            }
-            TypeErrorKind::NumberImplicitlyConvertedToString(value) => {
-                write!(
-                    f,
-                    "{value} is a number here, implicitly converted to the string \"{value}\""
-                )
-            }
-            TypeErrorKind::KeywordStyle {
-                what,
-                found,
-                expected,
-            } => {
-                write!(f, "{what} `{found}` should be written `{expected}`")
-            }
-            TypeErrorKind::DiscardedReturnValue(class) => {
-                write!(
-                    f,
-                    "This call returns {class}, which Do discards -- consider Set to capture it, or checking it directly"
-                )
-            }
-            TypeErrorKind::InvalidFNumberFormat { format, reason } => {
-                write!(f, "'{format}' is not a valid $FNUMBER format: {reason}")
-            }
-            TypeErrorKind::InvalidSyntax { err: error } => {
-                // Prefer a catch-all-first `Unknown*` variant's own friendly failure (see
-                // `cos::Command`/`SpecialVariable`) over the generic "expected one of: ..." dump.
-                // A function's arguments (`cos::fun_args!`) are named after it; when several of
-                // its forms fail at the same spot, the first form's message stands for all.
-                let mut named = std::collections::HashSet::new();
-                let mut friendly: Vec<String> = error
-                    .traces()
-                    .iter()
-                    .filter_map(|trace| match &trace.expectation {
-                        tygr::Expectation::GrammarFrom { into, fail, .. }
-                            if into.starts_with('$') =>
-                        {
-                            named.insert(into).then(|| format!("{into} {fail}"))
-                        }
-                        tygr::Expectation::GrammarFrom { fail, .. } => Some(fail.clone()),
-                        _ => None,
-                    })
-                    .collect();
-                friendly.dedup();
-                if friendly.is_empty() {
-                    write!(f, "Syntax error, looking for:\n{error}")
-                } else {
-                    write!(f, "{}", friendly.join("\n"))
-                }
-            }
-            TypeErrorKind::MixedPrecedence => {
-                write!(
-                    f,
-                    "ObjectScript has no operator precedence and evaluates strictly left-to-right; this may not compute what you expect"
-                )
-            }
-            TypeErrorKind::UnreadAssignment(name) => {
-                write!(f, "Variable '{}' is assigned but never read", name)
-            }
-            TypeErrorKind::OutputNeverAssigned(name) => {
-                write!(
-                    f,
-                    "Output parameter '{}' is never assigned; its caller will get an undefined value",
-                    name
-                )
-            }
-            TypeErrorKind::MissingQuit => {
-                write!(
-                    f,
-                    "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"
-                )
-            }
+                tygr::Expectation::GrammarFrom { fail, .. } => Some(fail.clone()),
+                _ => None,
+            })
+            .collect();
+        friendly.dedup();
+        if friendly.is_empty() {
+            write!(f, "Syntax error, looking for:\n{error}")
+        } else {
+            write!(f, "{}", friendly.join("\n"))
         }
     }
 }
@@ -991,7 +883,9 @@ impl TypeError {
     // yet to attach one lazily this early (during macro expansion).
     pub(crate) fn unconfirmed_class(cls: String, has_iris: bool, range: Range) -> Self {
         Self::new(
-            TypeErrorKind::UnconfirmedClass { cls, has_iris },
+            TypeErrorKind::UnconfirmedClass {
+                lookup: ClassLookup { cls, has_iris },
+            },
             range,
             vec![],
         )
@@ -1007,15 +901,15 @@ impl TypeError {
         let kind = TypeErrorKind::UnconfirmedMember {
             cls,
             mem,
-            superclass,
-            has_iris,
+            on: SuperclassOf(superclass),
+            reason: UnconfirmedReason { has_iris },
         };
         Self::new(kind, range, vec![])
     }
 
     pub(crate) fn class_keyword_without_value(keyword: String, range: Range) -> Self {
         Self::new(
-            TypeErrorKind::ClassKeywordWithoutValue(keyword),
+            TypeErrorKind::ClassKeywordWithoutValue { keyword },
             range,
             vec![],
         )
@@ -1038,11 +932,11 @@ impl TypeError {
     }
 
     pub fn cannot_find_include(name: String, range: Range) -> Self {
-        Self::new(TypeErrorKind::CannotFindInclude(name), range, vec![])
+        Self::new(TypeErrorKind::CannotFindInclude { name }, range, vec![])
     }
 
     pub fn macro_expansion_too_deep(name: String, range: Range) -> Self {
-        Self::new(TypeErrorKind::MacroExpansionTooDeep(name), range, vec![])
+        Self::new(TypeErrorKind::MacroExpansionTooDeep { name }, range, vec![])
     }
 
     pub fn mismatch_argument_mode(
@@ -1076,11 +970,17 @@ impl TypeError {
     }
 
     pub fn unimplemented(msg: String, range: Range) -> Self {
-        Self::new(TypeErrorKind::Unimplemented(msg), range, vec![])
+        Self::new(TypeErrorKind::Unimplemented { what: msg }, range, vec![])
     }
 
     pub fn invalid_syntax(range: Range, err: tygr::Error) -> Self {
-        Self::new(TypeErrorKind::InvalidSyntax { err }, range, vec![])
+        Self::new(
+            TypeErrorKind::InvalidSyntax {
+                err: SyntaxErrorText(err),
+            },
+            range,
+            vec![],
+        )
     }
 
     pub fn continue_not_in_loop(range: Range) -> TypeError {
@@ -1088,11 +988,11 @@ impl TypeError {
     }
 
     pub fn unread_assignment(name: String, range: Range) -> TypeError {
-        Self::new(TypeErrorKind::UnreadAssignment(name), range, vec![])
+        Self::new(TypeErrorKind::UnreadAssignment { name }, range, vec![])
     }
 
     pub fn output_never_assigned(name: String, range: Range) -> TypeError {
-        Self::new(TypeErrorKind::OutputNeverAssigned(name), range, vec![])
+        Self::new(TypeErrorKind::OutputNeverAssigned { name }, range, vec![])
     }
 
     pub fn duplicated_member_name(range: Range, name: String, previous: Location) -> Self {
@@ -1112,7 +1012,7 @@ impl TypeError {
 
     pub fn redeclare_variable(name: String, range: Range, previous: Location) -> Self {
         Self::new(
-            TypeErrorKind::RedeclareVariable(name),
+            TypeErrorKind::RedeclareVariable { name },
             range,
             vec![DiagnosticRelatedInformation {
                 location: previous,
@@ -1140,7 +1040,7 @@ impl TypeError {
 
     pub fn redundant_new(name: String, range: Range, previous: Location) -> Self {
         Self::new(
-            TypeErrorKind::RedundantNew(name),
+            TypeErrorKind::RedundantNew { name },
             range,
             vec![DiagnosticRelatedInformation {
                 location: previous,
@@ -1150,12 +1050,15 @@ impl TypeError {
     }
 
     pub fn new_in_procedure_block(name: String, range: Range) -> Self {
-        Self::new(TypeErrorKind::NewInProcedureBlock(name), range, vec![])
+        Self::new(TypeErrorKind::NewInProcedureBlock { name }, range, vec![])
     }
 
     pub fn unrecognized_property_keyword(keyword: String, range: Range) -> Self {
         Self::new(
-            TypeErrorKind::UnrecognizedPropertyKeyword(keyword),
+            TypeErrorKind::UnrecognizedPropertyKeyword {
+                keyword,
+                available: Available(PROPERTY_KEYWORDS),
+            },
             range,
             vec![],
         )
@@ -1170,10 +1073,13 @@ impl TypeError {
     ) -> Self {
         Self::new(
             TypeErrorKind::UnrecognizedTypeParam {
+                hint: if is_property_keyword {
+                    TypeParamHint::PropertyKeyword(name.clone())
+                } else {
+                    TypeParamHint::Suggestions(Suggestions(suggestions))
+                },
                 name,
                 class,
-                is_property_keyword,
-                suggestions,
             },
             range,
             vec![],
@@ -1182,7 +1088,10 @@ impl TypeError {
 
     pub fn unrecognized_parameter_keyword(keyword: String, range: Range) -> Self {
         Self::new(
-            TypeErrorKind::UnrecognizedParameterKeyword(keyword),
+            TypeErrorKind::UnrecognizedParameterKeyword {
+                keyword,
+                available: Available(PARAMETER_KEYWORDS),
+            },
             range,
             vec![],
         )
@@ -1190,7 +1099,10 @@ impl TypeError {
 
     pub fn unrecognized_parameter_type(meta_type: String, range: Range) -> Self {
         Self::new(
-            TypeErrorKind::UnrecognizedParameterType(meta_type),
+            TypeErrorKind::UnrecognizedParameterType {
+                meta_type,
+                available: Available(PARAMETER_TYPE_KEYWORDS),
+            },
             range,
             vec![],
         )

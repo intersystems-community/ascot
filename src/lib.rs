@@ -4460,15 +4460,17 @@ mod tests {
                 find("NoSuchMacro"),
                 check::TypeErrorKind::UndefinedMacro {
                     name: String::new(),
-                    suggestions: vec![],
+                    suggestions: check::Suggestions(vec![]),
                 },
                 "UndefinedMacro",
             ),
             (
                 find("Cannot confirm class"),
                 check::TypeErrorKind::UnconfirmedClass {
-                    cls: String::new(),
-                    has_iris: false,
+                    lookup: check::ClassLookup {
+                        cls: String::new(),
+                        has_iris: false,
+                    },
                 },
                 "UnconfirmedClass",
             ),

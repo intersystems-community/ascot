@@ -30,7 +30,11 @@ use tygr_objectscript::cos::{CommandLike, KeywordKind, KeywordUse, Spelled};
 use types::*;
 
 pub use env::{DocumentEnv, Labels, WorkspaceEnv};
-pub use errors::{IntoTypeError, QuasiTypeError, TypeError, TypeErrorKind};
+pub use errors::{
+    Available, ClassLookup, Declared, Detail, DynamicGet, InRoutine, IntoTypeError, QuasiTypeError,
+    Suggestions, SuperclassOf, SyntaxErrorText, TypeError, TypeErrorKind, TypeParamHint,
+    UnconfirmedReason,
+};
 
 trait CheckExprInner {
     fn to_power_ty<'a>(
