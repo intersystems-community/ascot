@@ -950,15 +950,24 @@ pub enum KwH {
 
 // One command keyword as written in the source.
 pub struct KeywordUse {
+    pub kind: KeywordKind,
     pub start: usize,
     pub text: String,
     pub full: &'static str,
     pub abbr: Option<&'static str>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeywordKind {
+    Command,
+    // An intrinsic function's name, without its `$`.
+    Function,
+}
+
 impl KeywordUse {
     fn of<K: Keyword>(kw: &K, start: usize) -> Self {
         KeywordUse {
+            kind: KeywordKind::Command,
             start,
             text: kw.print(),
             full: K::FULL,
@@ -3554,6 +3563,7 @@ impl CommandLike for TryCommand {
 impl CommandLike for HCommand {
     fn keywords(&self, start: usize) -> Vec<KeywordUse> {
         vec![KeywordUse {
+            kind: KeywordKind::Command,
             start,
             text: self.kw.print(),
             full: if self.e.is_some() { "Hang" } else { "Halt" },
@@ -5876,6 +5886,221 @@ pub struct UnknownFunctionCall {
 
 // Every full function name (including nested Bit/Extract/DText/Z*Kw calls) -- kept in sync by
 // hand, for `UnknownSpecialVariable::from_str`'s error message.
+// Every intrinsic function: its documented spelling and abbreviation, for style checks. Tests
+// keep it in step with `FUNCTION_NAMES` and `SIMPLE_FUNCTIONS`.
+pub const FUNCTIONS: &[(&str, Option<&str>)] = &[
+    ("Ascii", Some("A")),
+    ("Bit", None),
+    ("BitCount", None),
+    ("BitFind", None),
+    ("BitLogic", None),
+    ("Case", None),
+    ("Change", None),
+    ("Char", Some("C")),
+    ("ClassMethod", None),
+    ("ClassName", None),
+    ("Compile", None),
+    ("Data", Some("D")),
+    ("Decimal", None),
+    ("Double", None),
+    ("Extract", Some("E")),
+    ("Factor", None),
+    ("Find", Some("F")),
+    ("FNumber", Some("FN")),
+    ("Get", Some("G")),
+    ("Increment", Some("I")),
+    ("INumber", Some("IN")),
+    ("IsObject", Some("ISO")),
+    ("IsValidDouble", None),
+    ("IsValidNum", None),
+    ("IsVector", None),
+    ("Justify", Some("J")),
+    ("Length", Some("L")),
+    ("List", Some("LI")),
+    ("ListBuild", Some("LB")),
+    ("ListData", Some("LD")),
+    ("ListFind", Some("LF")),
+    ("ListFromString", Some("LFS")),
+    ("ListGet", Some("LG")),
+    ("ListLength", Some("LL")),
+    ("ListNext", None),
+    ("ListSame", Some("LS")),
+    ("ListToString", Some("LTS")),
+    ("ListUpdate", Some("LU")),
+    ("ListValid", Some("LV")),
+    ("Locate", None),
+    ("Lock", None),
+    ("Match", None),
+    ("Method", None),
+    ("MV", None),
+    ("MVV", None),
+    ("Name", Some("NA")),
+    ("NConvert", Some("NC")),
+    ("Next", Some("N")),
+    ("Normalize", None),
+    ("Now", None),
+    ("Number", Some("NUM")),
+    ("Order", Some("O")),
+    ("Parameter", None),
+    ("Piece", Some("P")),
+    ("PrefetchOff", None),
+    ("PrefetchOn", None),
+    ("Property", None),
+    ("QLength", Some("QL")),
+    ("QSubscript", Some("QS")),
+    ("Query", Some("Q")),
+    ("Random", Some("R")),
+    ("Replace", None),
+    ("Reverse", Some("RE")),
+    ("SConvert", Some("SC")),
+    ("Select", Some("S")),
+    ("Sequence", Some("SEQ")),
+    ("SortBegin", None),
+    ("SortEnd", None),
+    ("Stack", Some("ST")),
+    ("Text", Some("T")),
+    ("Translate", Some("TR")),
+    ("Vector", Some("VE")),
+    ("VectorDefined", Some("VD")),
+    ("VectorOp", Some("VOP")),
+    ("View", Some("V")),
+    ("WAscii", Some("WA")),
+    ("WChar", Some("WC")),
+    ("WExtract", Some("WE")),
+    ("WFind", Some("WF")),
+    ("WIsWide", None),
+    ("WLength", Some("WL")),
+    ("WReverse", Some("WRE")),
+    ("Xecute", None),
+    ("ZAbs", None),
+    ("ZArcCos", None),
+    ("ZArcSin", None),
+    ("ZArcTan", None),
+    ("ZBitAnd", None),
+    ("ZBitCount", None),
+    ("ZBitFind", None),
+    ("ZBitGet", None),
+    ("ZBitLen", None),
+    ("ZBitNot", None),
+    ("ZBitOr", None),
+    ("ZBitSet", None),
+    ("ZBitStr", None),
+    ("ZBitXor", None),
+    ("ZBoolean", Some("ZB")),
+    ("ZConvert", Some("ZCVT")),
+    ("ZCos", None),
+    ("ZCot", None),
+    ("ZCrc", None),
+    ("ZCsc", None),
+    ("ZCyc", None),
+    ("ZDAscii", Some("ZDA")),
+    ("ZDate", Some("ZD")),
+    ("ZDateH", Some("ZDH")),
+    ("ZDateTime", Some("ZDT")),
+    ("ZDateTimeH", Some("ZDTH")),
+    ("ZDChar", Some("ZDC")),
+    ("ZExp", None),
+    ("ZF", None),
+    ("ZHex", Some("ZH")),
+    ("ZIncrement", Some("ZINCR")),
+    ("ZIsWide", None),
+    ("ZLAscii", Some("ZLA")),
+    ("ZLChar", Some("ZLC")),
+    ("ZLn", None),
+    ("ZLog", None),
+    ("ZName", None),
+    ("ZObjClass", None),
+    ("ZObjClassMethod", None),
+    ("ZObjMethod", None),
+    ("ZObjProperty", None),
+    ("ZObjRef", None),
+    ("ZOrder", Some("ZO")),
+    ("ZPosition", None),
+    ("ZPower", None),
+    ("ZPrevious", Some("ZP")),
+    ("ZQAscii", Some("ZQA")),
+    ("ZQChar", Some("ZQC")),
+    ("ZSearch", Some("ZSE")),
+    ("ZSec", None),
+    ("ZSeek", None),
+    ("ZSin", None),
+    ("ZSqr", None),
+    ("ZStrip", None),
+    ("ZTan", None),
+    ("ZTime", Some("ZT")),
+    ("ZTimeH", Some("ZTH")),
+    ("ZUtil", Some("ZU")),
+    ("ZVersion", None),
+    ("ZWAscii", Some("ZWA")),
+    ("ZWBPack", None),
+    ("ZWBUnpack", None),
+    ("ZWChar", Some("ZWC")),
+    ("ZWidth", None),
+    ("ZWPack", None),
+    ("ZWUnpack", None),
+    ("ZZenkaku", None),
+];
+
+char_class!(pub IsFunctionScanPlain, "plain", |ch| !matches!(
+    ch,
+    '"' | '/' | '$' | '&' | '#' | ';'
+));
+char_class!(pub IsExtrinsicNameChar, "extrinsic_name", |ch| ch.is_alphanumeric()
+    || matches!(ch, '$' | '%'));
+
+// What in a piece of ObjectScript calls an intrinsic function, skipping strings, comments,
+// embedded HTML/JS/SQL and `$$label`/`$$$macro` calls.
+#[derive(Grammar)]
+struct FunctionScan(Vec<FunctionScanUnit>);
+
+#[derive(Grammar)]
+enum FunctionScanUnit {
+    Extrinsic(StringEq!("$$"), StringOf<IsExtrinsicNameChar>),
+    Call(
+        StringEq!("$"),
+        Range<StringOf1<IsAlphabetic>>,
+        StringEq!("("),
+    ),
+    Str(OSString),
+    Rc(RangeComment),
+    Lc(LineComment),
+    Emb(EmbeddedBlock),
+    Sql(
+        Either<StringEqCI!("&sql("), StringEqCI!("##sql(")>,
+        Box<sql::SQL>,
+        StringEq!(")"),
+    ),
+    Plain(StringOf1<IsFunctionScanPlain>),
+    Other(CharOf<AnyChar>),
+}
+
+// The intrinsic function names in `text`, which starts at `offset`.
+pub fn function_uses(text: &str, offset: usize) -> Vec<KeywordUse> {
+    let Ok(scan) = FunctionScan::parse(text) else {
+        return vec![];
+    };
+    scan.0
+        .iter()
+        .filter_map(|unit| {
+            let FunctionScanUnit::Call(_, name, _) = unit else {
+                return None;
+            };
+            let text = name.print();
+            let (full, abbr) = FUNCTIONS.iter().find(|(full, abbr)| {
+                full.eq_ignore_ascii_case(&text)
+                    || abbr.is_some_and(|a| a.eq_ignore_ascii_case(&text))
+            })?;
+            Some(KeywordUse {
+                kind: KeywordKind::Function,
+                start: offset + name.start,
+                text,
+                full,
+                abbr: *abbr,
+            })
+        })
+        .collect()
+}
+
 pub const FUNCTION_NAMES: &[&str] = &[
     "TEXT",
     "LENGTH",
@@ -6537,6 +6762,40 @@ mod regression_tests {
         let keywords = methods(&cls)[0].header.keywords.as_ref().expect("keywords");
         assert!(keywords.get("CodeMode").is_some());
         assert!(keywords.get("Language").is_none());
+    }
+
+    #[test]
+    fn function_uses_skip_what_is_not_an_intrinsic_call() {
+        let names = |text: &str| -> Vec<(usize, String, &str)> {
+            function_uses(text, 10)
+                .into_iter()
+                .map(|kw| (kw.start, kw.text, kw.full))
+                .collect()
+        };
+        assert_eq!(
+            names("s x=$p(a,\",\",2)_$L(b)"),
+            [(15, "p".into(), "Piece"), (27, "L".into(), "Length")]
+        );
+        assert_eq!(
+            names("w $Select($Get(x):1,1:$zdth(y,3)),$Unknown(1)"),
+            [
+                (13, "Select".into(), "Select"),
+                (21, "Get".into(), "Get"),
+                (33, "zdth".into(), "ZDateTimeH")
+            ]
+        );
+        for skipped in [
+            "w \"$P(x)\"",
+            "d $$label(1),$$lbl^rtn(1),$$$Macro(1)",
+            "w /* $P(x) */ 1",
+            "w 1 ; $P(x)",
+            "w 1 // $E(x)",
+            "w $H,$ZTRAP,$system.Status.IsOK(sc)",
+            "&html<<b>$P(x)</b>>",
+            "&sql(SELECT $PIECE(a,',',1) INTO :x FROM t)",
+        ] {
+            assert_eq!(names(skipped), [], "{skipped}");
+        }
     }
 
     #[test]

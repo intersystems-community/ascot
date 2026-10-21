@@ -216,11 +216,16 @@ instance's code changes.
 Style rules (the `style` record in [analyzer.wit](src/wit/analyzer.wit)) are a
 JSON file passed with `--style <file>` to `analyze`, `analyze-workspace` and
 `lsp`; the MCP `create_workspace` call and the JavaScript `createWorkspace` take
-the same record directly. Every key is optional; each command keyword written
-differently is reported as a warning.
+the same record directly. Every key is optional; each command keyword or
+intrinsic function name written differently is reported as a warning.
 
 ```json
-{ "command": { "form": "Long", "case": "Pascal" }, "command_do": { "form": "Short" } }
+{
+  "command": { "form": "Long", "case": "Pascal" },
+  "command_do": { "form": "Short" },
+  "function": { "form": "Long", "case": "Pascal" },
+  "function_listbuild": { "form": "Short" }
+}
 ```
 
 ## Contributing

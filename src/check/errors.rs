@@ -356,7 +356,9 @@ pub enum TypeErrorKind {
     },
     NumberImplicitlyConvertedToString(String),
     DiscardedReturnValue(String),
-    CommandKeywordStyle {
+    KeywordStyle {
+        // "Command keyword" or "Function".
+        what: &'static str,
         found: String,
         expected: String,
     },
@@ -446,7 +448,7 @@ impl TypeErrorKind {
             TypeErrorKind::InvalidZStripAction { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::NumberImplicitlyConvertedToString(_) => DiagnosticSeverity::Warning,
             TypeErrorKind::DiscardedReturnValue(_) => DiagnosticSeverity::Warning,
-            TypeErrorKind::CommandKeywordStyle { .. } => DiagnosticSeverity::Warning,
+            TypeErrorKind::KeywordStyle { .. } => DiagnosticSeverity::Warning,
             TypeErrorKind::InvalidFNumberFormat { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::ReturnNothingForX { .. } => DiagnosticSeverity::Error,
             TypeErrorKind::QuitXInControl { .. } => DiagnosticSeverity::Error,
@@ -723,11 +725,12 @@ impl std::fmt::Display for TypeErrorKind {
                     "{value} is a number here, implicitly converted to the string \"{value}\""
                 )
             }
-            TypeErrorKind::CommandKeywordStyle { found, expected } => {
-                write!(
-                    f,
-                    "Command keyword `{found}` should be written `{expected}`"
-                )
+            TypeErrorKind::KeywordStyle {
+                what,
+                found,
+                expected,
+            } => {
+                write!(f, "{what} `{found}` should be written `{expected}`")
             }
             TypeErrorKind::DiscardedReturnValue(class) => {
                 write!(
@@ -900,9 +903,18 @@ impl TypeError {
         )
     }
 
-    pub fn command_keyword_style(found: String, expected: String, range: Range) -> Self {
+    pub fn keyword_style(
+        what: &'static str,
+        found: String,
+        expected: String,
+        range: Range,
+    ) -> Self {
         Self::new(
-            TypeErrorKind::CommandKeywordStyle { found, expected },
+            TypeErrorKind::KeywordStyle {
+                what,
+                found,
+                expected,
+            },
             range,
             vec![],
         )

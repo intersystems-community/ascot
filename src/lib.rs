@@ -187,7 +187,7 @@ pub struct WorkspaceStruct {
     // it, every `$$Label^Routine` call into a 15k-line system routine re-expanded and re-parsed
     // it, and a single file took half a minute.
     pub(crate) iris_rtn_labels: RefCell<HashMap<String, (String, Option<check::Labels>)>>,
-    pub(crate) style: Option<style::CommandStyles>,
+    pub(crate) style: Option<style::KeywordStyles>,
 }
 
 // `bindings::IrisConnection` is a WIT *imported* resource, producible only by a wasm host --
@@ -654,7 +654,12 @@ impl WorkspaceStruct {
             DocDetails::Rtn(rtn, None) => {
                 let env = self.workspace_env();
                 let doc_env = check::DocumentEnv::new(&env, &rtn.map.expanded_olc, uri);
-                let mut diagnostics = check::check_rtn(&doc_env, &rtn.routine, &rtn.definitions);
+                let mut diagnostics = check::check_rtn(
+                    &doc_env,
+                    rtn.map.expanded_text(),
+                    &rtn.routine,
+                    &rtn.definitions,
+                );
                 diagnostics.extend(env.soft_diagnostics());
                 let mut diagnostics = rtn.map.relocate_diagnostics(diagnostics, uri);
                 diagnostics.extend(rtn.map.unresolved.iter().cloned());
@@ -732,7 +737,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         rtn_index: RefCell::new(HashMap::new()),
         iris,
         iris_rtn_labels: RefCell::new(HashMap::new()),
-        style: style.as_ref().map(style::CommandStyles::new),
+        style: style.as_ref().map(style::KeywordStyles::new),
     }
 }
 
@@ -4333,6 +4338,42 @@ mod tests {
                 "8:13 Command keyword `s` should be written `Set`",
                 "9:1 Command keyword `q` should be written `Quit`",
             ]
+        );
+    }
+
+    #[test]
+    fn functions_follow_the_configured_style() {
+        let style = style::parse(
+            r#"{"function": {"form": "Long", "case": "Pascal"}, "function_listbuild": {"form": "Short"}}"#,
+        )
+        .unwrap();
+        let workspace = Workspace::new(None, Some(style));
+        let uri = "F.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE F\nf(x)\n s y=$p(x,\",\")_$Length(x)\n if x { w $LISTBUILD(1),\"$e(x)\" }\n q\n".to_string(),
+        );
+        assert_eq!(
+            style_messages(&workspace, &uri),
+            [
+                "2:6 Function `$p` should be written `$Piece`",
+                "3:11 Function `$LISTBUILD` should be written `$LB`",
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_methods_follow_the_configured_function_style() {
+        let style = style::parse(r#"{"function": {"case": "Upper"}}"#).unwrap();
+        let workspace = Workspace::new(None, Some(style));
+        let uri = "T.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.T Extends %RegisteredObject {\nClassMethod M(x) As %String [ CodeMode = expression ] {\n$Piece(x,\",\")\n}\n}\n".to_string(),
+        );
+        assert_eq!(
+            style_messages(&workspace, &uri),
+            ["2:1 Function `$Piece` should be written `$PIECE`"]
         );
     }
 

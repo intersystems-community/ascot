@@ -2,76 +2,99 @@
 //! session: `--style <file>` on the CLI, the `style` of an MCP `create_workspace`, or the
 //! second argument of a JS `createWorkspace`.
 
-use crate::bindings::{CommandStyle, KeywordCase, KeywordForm, Style};
+use crate::bindings::{KeywordCase, KeywordForm, KeywordStyle, Style};
 use serde_json::Value;
 use std::collections::HashMap;
-use tygr_objectscript::cos::KeywordUse;
+use tygr_objectscript::cos::{KeywordKind, KeywordUse};
 
-// A `Style`'s command rules, resolved once per workspace: `command` merged into each
-// `command-<name>`, keyed by the lowercased name.
-pub struct CommandStyles {
-    default: CommandStyle,
-    by_command: HashMap<String, CommandStyle>,
+const UNSET: KeywordStyle = KeywordStyle {
+    form: None,
+    case: None,
+};
+
+// A `Style`'s rules, resolved once per workspace: each `<kind>-<name>` field merged with its
+// `<kind>` default, keyed by the field's name as serde spells it (`command_do`).
+pub struct KeywordStyles {
+    defaults: HashMap<String, KeywordStyle>,
+    by_name: HashMap<String, KeywordStyle>,
 }
 
-impl CommandStyles {
+impl KeywordStyles {
     pub fn new(style: &Style) -> Self {
-        let default = style.command.unwrap_or(CommandStyle {
-            form: None,
-            case: None,
-        });
         let Ok(Value::Object(fields)) = serde_json::to_value(style) else {
             unreachable!("a record serializes to an object")
         };
-        let by_command = fields
+        let (defaults, named): (Vec<_>, Vec<_>) = fields
             .into_iter()
-            .filter_map(|(key, value)| {
-                let name = key.strip_prefix("command_")?.to_string();
-                let style: CommandStyle = serde_json::from_value(value).ok()?;
-                Some((
-                    name,
-                    CommandStyle {
-                        form: style.form.or(default.form),
-                        case: style.case.or(default.case),
-                    },
-                ))
+            .filter_map(|(key, value)| Some((key, serde_json::from_value(value).ok()?)))
+            .partition(|(key, _): &(String, KeywordStyle)| !key.contains('_'));
+        let defaults: HashMap<_, _> = defaults.into_iter().collect();
+        let by_name = named
+            .into_iter()
+            .map(|(key, style)| {
+                let default = key
+                    .split_once('_')
+                    .and_then(|(kind, _)| defaults.get(kind))
+                    .unwrap_or(&UNSET);
+                let merged = KeywordStyle {
+                    form: style.form.or(default.form),
+                    case: style.case.or(default.case),
+                };
+                (key, merged)
             })
             .collect();
-        CommandStyles {
-            default,
-            by_command,
-        }
+        KeywordStyles { defaults, by_name }
     }
 
-    pub fn of(&self, kw: &KeywordUse) -> &CommandStyle {
-        self.by_command
-            .get(&kw.full.to_ascii_lowercase())
-            .unwrap_or(&self.default)
+    pub fn of(&self, kw: &KeywordUse) -> &KeywordStyle {
+        let kind = kind_field(kw.kind);
+        self.by_name
+            .get(&format!("{kind}_{}", kw.full.to_ascii_lowercase()))
+            .or_else(|| self.defaults.get(kind))
+            .unwrap_or(&UNSET)
     }
 }
 
-impl CommandStyle {
+fn kind_field(kind: KeywordKind) -> &'static str {
+    match kind {
+        KeywordKind::Command => "command",
+        KeywordKind::Function => "function",
+    }
+}
+
+// An abbreviation as `pascal` spells it: the full name's own casing where it's a prefix of it
+// (`Li` for `List`), capitals otherwise (`LB` for `ListBuild`).
+fn spell_abbr(full: &str, abbr: &str) -> String {
+    match full.get(..abbr.len()) {
+        Some(prefix) if prefix.eq_ignore_ascii_case(abbr) => prefix.to_string(),
+        _ => abbr.to_ascii_uppercase(),
+    }
+}
+
+impl KeywordStyle {
     // How `kw` should have been written under this style, or `None` if it already conforms.
     pub fn expected(&self, kw: &KeywordUse) -> Option<String> {
+        let full = kw.full.to_string();
+        let abbr = kw.abbr.map(|abbr| spell_abbr(kw.full, abbr));
         let base = match self.form {
-            Some(KeywordForm::Long) => kw.full,
-            Some(KeywordForm::Short) => kw.abbr.unwrap_or(kw.full),
-            None if kw.text.eq_ignore_ascii_case(kw.full) => kw.full,
-            None => kw.abbr.unwrap_or(kw.full),
+            Some(KeywordForm::Long) => full,
+            Some(KeywordForm::Short) => abbr.unwrap_or(full),
+            None if kw.text.eq_ignore_ascii_case(kw.full) => full,
+            None => abbr.unwrap_or(full),
         };
         let expected = match self.case {
             Some(KeywordCase::Lower) => base.to_ascii_lowercase(),
             Some(KeywordCase::Upper) => base.to_ascii_uppercase(),
-            Some(KeywordCase::Pascal) => base.to_string(),
-            None if kw.text.eq_ignore_ascii_case(base) => return None,
-            None => base.to_string(),
+            Some(KeywordCase::Pascal) => base,
+            None if kw.text.eq_ignore_ascii_case(&base) => return None,
+            None => base,
         };
         (kw.text != expected).then_some(expected)
     }
 }
 
-// `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` -- variant names as the WIT-generated
-// types spell them.
+// `{"command": {"form": "Long"}, "function_piece": {"form": "Short"}}` -- variant names as the
+// WIT-generated types spell them.
 pub fn parse(json: &str) -> Result<Style, String> {
     from_value(serde_json::from_str(json).map_err(|err| err.to_string())?)
 }
@@ -110,6 +133,7 @@ mod tests {
 
     fn kw(text: &str, full: &'static str, abbr: Option<&'static str>) -> KeywordUse {
         KeywordUse {
+            kind: KeywordKind::Command,
             start: 0,
             text: text.to_string(),
             full,
@@ -117,8 +141,15 @@ mod tests {
         }
     }
 
-    fn style(form: Option<KeywordForm>, case: Option<KeywordCase>) -> CommandStyle {
-        CommandStyle { form, case }
+    fn style(form: Option<KeywordForm>, case: Option<KeywordCase>) -> KeywordStyle {
+        KeywordStyle { form, case }
+    }
+
+    fn function(text: &str, full: &'static str, abbr: Option<&'static str>) -> KeywordUse {
+        KeywordUse {
+            kind: KeywordKind::Function,
+            ..kw(text, full, abbr)
+        }
     }
 
     #[test]
@@ -153,9 +184,25 @@ mod tests {
             Some("TStart")
         );
         assert_eq!(
-            pascal.expected(&kw("TS", "TStart", Some("Ts"))).as_deref(),
-            Some("Ts")
+            pascal.expected(&kw("ts", "TStart", Some("Ts"))).as_deref(),
+            Some("TS")
         );
+    }
+
+    #[test]
+    fn pascal_spells_an_abbreviation_from_its_full_name() {
+        let short = style(Some(KeywordForm::Short), Some(KeywordCase::Pascal));
+        let expected = |text, full, abbr| short.expected(&function(text, full, Some(abbr)));
+        assert_eq!(expected("list", "List", "LI").as_deref(), Some("Li"));
+        assert_eq!(
+            expected("ListBuild", "ListBuild", "LB").as_deref(),
+            Some("LB")
+        );
+        assert_eq!(
+            expected("zdth", "ZDateTimeH", "ZDTH").as_deref(),
+            Some("ZDTH")
+        );
+        assert_eq!(expected("ZIncr", "ZIncrement", "ZINCR"), None);
     }
 
     #[test]
@@ -168,7 +215,7 @@ mod tests {
 
     #[test]
     fn a_command_overrides_the_default_field_by_field() {
-        let styles = CommandStyles::new(
+        let styles = KeywordStyles::new(
             &parse(r#"{"command": {"form": "Long", "case": "Pascal"}, "command_do": {"form": "Short"}}"#)
                 .unwrap(),
         );
@@ -203,12 +250,84 @@ mod tests {
         let Value::Object(fields) = serde_json::to_value(parse("{}").unwrap()).unwrap() else {
             unreachable!()
         };
-        for key in fields.keys().filter(|key| *key != "command") {
-            let name = key
-                .strip_prefix("command_")
-                .expect("only command fields so far");
+        for key in fields.keys().filter(|key| key.starts_with("command_")) {
+            let name = &key["command_".len()..];
             assert!(names.iter().any(|n| n == name), "{key} names no command");
         }
+    }
+
+    // `FUNCTIONS` names exactly the functions the grammar knows (`FUNCTION_NAMES` and
+    // `SIMPLE_FUNCTIONS`, which also list abbreviations), and the WIT has one field for each.
+    #[test]
+    fn every_function_has_a_style_field_and_every_field_a_function() {
+        use tygr_objectscript::cos::{FUNCTION_NAMES, FUNCTIONS, SIMPLE_FUNCTIONS};
+        let spellings: Vec<String> = FUNCTIONS
+            .iter()
+            .flat_map(|(full, abbr)| std::iter::once(*full).chain(*abbr))
+            .map(str::to_ascii_uppercase)
+            .collect();
+        let known: Vec<&str> = FUNCTION_NAMES
+            .iter()
+            .copied()
+            .chain(
+                SIMPLE_FUNCTIONS
+                    .iter()
+                    .flat_map(|f| f.names.iter().copied()),
+            )
+            .collect();
+        for name in &known {
+            assert!(
+                spellings.iter().any(|s| s == name),
+                "FUNCTIONS lacks {name}"
+            );
+        }
+        for (full, abbr) in FUNCTIONS {
+            assert!(
+                known.iter().any(|n| n.eq_ignore_ascii_case(full)),
+                "{full} is no function the grammar knows"
+            );
+            if let Some(simple) = SIMPLE_FUNCTIONS
+                .iter()
+                .find(|f| f.names[0].eq_ignore_ascii_case(full))
+            {
+                assert_eq!(simple.names.get(1).copied(), *abbr, "{full}'s abbreviation");
+            }
+        }
+        let names: Vec<String> = FUNCTIONS
+            .iter()
+            .map(|(f, _)| f.to_ascii_lowercase())
+            .collect();
+        let json: serde_json::Map<String, Value> = names
+            .iter()
+            .map(|name| (format!("function_{name}"), serde_json::json!({})))
+            .collect();
+        parse(&Value::Object(json).to_string()).expect("every function has a field");
+        let Value::Object(fields) = serde_json::to_value(parse("{}").unwrap()).unwrap() else {
+            unreachable!()
+        };
+        for key in fields.keys().filter(|key| key.starts_with("function_")) {
+            let name = &key["function_".len()..];
+            assert!(names.iter().any(|n| n == name), "{key} names no function");
+        }
+    }
+
+    #[test]
+    fn commands_and_functions_have_their_own_defaults() {
+        let styles = KeywordStyles::new(
+            &parse(
+                r#"{"command": {"form": "Short"}, "function": {"form": "Long"}, "function_piece": {"form": "Short"}}"#,
+            )
+            .unwrap(),
+        );
+        let set = kw("Set", "Set", Some("S"));
+        assert_eq!(styles.of(&set).expected(&set).as_deref(), Some("S"));
+        let length = function("L", "Length", Some("L"));
+        assert_eq!(
+            styles.of(&length).expected(&length).as_deref(),
+            Some("Length")
+        );
+        let piece = function("Piece", "Piece", Some("P"));
+        assert_eq!(styles.of(&piece).expected(&piece).as_deref(), Some("P"));
     }
 
     #[test]

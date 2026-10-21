@@ -26,7 +26,7 @@ use env::*;
 use flow::*;
 use std::{collections::HashMap, iter::once, ops::Deref};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
-use tygr_objectscript::cos::{CommandLike, Commands};
+use tygr_objectscript::cos::{CommandLike, Commands, KeywordKind, KeywordUse};
 use types::*;
 
 pub use env::{DocumentEnv, Labels, WorkspaceEnv};
@@ -521,6 +521,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 Option::None | Option::Some(cos::CodeMode::Code(..)),
                 body,
             ) => {
+                let text = body.it.as_str();
                 let body = <cos::ProcedureBody>::parse(body).map_err(|err| {
                     TypeError::invalid_syntax(
                         bindings::Range {
@@ -530,7 +531,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                         err,
                     )
                 })?;
-                check_style(env, &body);
+                check_style(env, text, &body);
                 check_block_body(&body, env, flow, true)
             }
             (
@@ -549,6 +550,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                         )
                     })?
                     .into_inner();
+                report_style(env, cos::function_uses(body.it, 0));
                 let body_type = body_expr.to_power_ty(env, flow)?;
                 body_type
                     .to_ty(env)
@@ -886,19 +888,48 @@ impl CheckCommandInner for cos::Block {
     }
 }
 
-// How every command in `code` is written, independent of how far type checking gets.
-fn check_style(env: &CodeEnv, code: &impl Commands) {
-    let Some(styles) = env.command_styles() else {
+// How every command and function in `code` is written, independent of how far type checking
+// gets. `text` is what `code` was parsed from.
+fn check_style(env: &CodeEnv, text: &str, code: &impl Commands) {
+    if env.keyword_styles().is_none() {
         return;
-    };
+    }
+    let mut keywords = vec![];
+    // Functions are found in each outermost command's text, which covers the commands nested
+    // in it too.
+    let mut scanned = 0;
     code.for_each_command(&mut |command| {
-        for kw in command.keywords(command.start) {
-            if let Some(expected) = styles.of(&kw).expected(&kw) {
-                let range = env.span(kw.start, kw.start + kw.text.len());
-                env.soft_diagnostic(TypeError::command_keyword_style(kw.text, expected, range));
-            }
+        keywords.extend(command.keywords(command.start));
+        if command.start >= scanned {
+            keywords.extend(cos::function_uses(
+                &text[command.start..command.end],
+                command.start,
+            ));
+            scanned = command.end;
         }
     });
+    report_style(env, keywords);
+}
+
+fn report_style(env: &CodeEnv, keywords: Vec<KeywordUse>) {
+    let Some(styles) = env.keyword_styles() else {
+        return;
+    };
+    for kw in keywords {
+        if let Some(expected) = styles.of(&kw).expected(&kw) {
+            let range = env.span(kw.start, kw.start + kw.text.len());
+            let (what, sigil) = match kw.kind {
+                KeywordKind::Command => ("Command keyword", ""),
+                KeywordKind::Function => ("Function", "$"),
+            };
+            env.soft_diagnostic(TypeError::keyword_style(
+                what,
+                format!("{sigil}{}", kw.text),
+                format!("{sigil}{expected}"),
+                range,
+            ));
+        }
+    }
 }
 
 impl CheckCommandInner for cos::Command {
@@ -3385,6 +3416,7 @@ impl CheckCommand for Subroutine {
 
 pub fn check_rtn(
     env: &DocumentEnv,
+    text: &str,
     rtn: &Routine,
     definitions: &crate::MacroDefinitions,
 ) -> Vec<bindings::Diagnostic> {
@@ -3403,7 +3435,7 @@ pub fn check_rtn(
         })
         .collect();
     let env = env.for_routine(env::scoped_labels(env.uri(), &labels, None), definitions);
-    check_style(&env, rtn);
+    check_style(&env, text, rtn);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a
     // tags-only routine — there's no meaningful position to blame it falling through on, so

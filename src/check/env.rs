@@ -1571,7 +1571,7 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
-    pub(crate) fn command_styles(&self) -> Option<&crate::style::CommandStyles> {
+    pub(crate) fn keyword_styles(&self) -> Option<&crate::style::KeywordStyles> {
         self.base.base.workspace.style.as_ref()
     }
 

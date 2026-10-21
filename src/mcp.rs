@@ -44,7 +44,8 @@ struct CreateWorkspaceRequest {
     /// for a URL; for a declaration file it must match the namespace it declares.
     iris_namespace: Option<String>,
     /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
-    /// have every command keyword but `Do`'s written in full. Applies to every document.
+    /// have every command keyword but `Do`'s written in full; `function` and `function_<name>` do
+    /// the same for intrinsic functions. Applies to every document.
     // Taken raw so `style::from_value` can reject unknown keys, which `Style` itself ignores.
     #[schemars(with = "Option<crate::bindings::Style>")]
     style: Option<serde_json::Value>,

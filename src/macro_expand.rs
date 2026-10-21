@@ -131,6 +131,10 @@ pub struct SourceMap {
 }
 
 impl SourceMap {
+    pub(crate) fn expanded_text(&self) -> &str {
+        &self.expanded_text
+    }
+
     pub(crate) fn include_directives(&self) -> impl Iterator<Item = (bindings::Range, &str)> {
         self.include_directives.iter().map(|(span, name)| {
             (
