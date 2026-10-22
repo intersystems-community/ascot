@@ -63,3 +63,17 @@ fn members_of_a_system_class_are_checked() {
         "{diagnostic:?}"
     );
 }
+
+#[test]
+fn optional_arguments_of_dynamic_objects_are_optional() {
+    let Some(iris) = iris() else { return };
+    let workspace = Workspace::new_with_iris(Some(iris), None);
+    let uri = "Live.Dynamic.cls".to_string();
+    workspace.open(
+        uri.clone(),
+        "Class Live.Dynamic\n{\nClassMethod Run()\n{\n Set s = ##class(%Library.DynamicObject).%New()\n Set a = ##class(%Library.DynamicArray).%New()\n Do s.%Set(\"a\", 1), a.%Push(1)\n Write s.%Get(\"a\"), a.%Get(0), s.%ToJSON()\n}\n}\n"
+            .to_string(),
+    );
+    let diagnostics = workspace.diagnostics(uri);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
