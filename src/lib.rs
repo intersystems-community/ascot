@@ -1490,7 +1490,7 @@ mod tests {
         fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
             None
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
             None
         }
         fn get_inc(&self, name: &str) -> Option<bindings::RoutineSource> {
@@ -1707,7 +1707,7 @@ mod tests {
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
                 None
             }
         }
@@ -2025,7 +2025,7 @@ mod tests {
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
                 None
             }
         }
@@ -2159,7 +2159,7 @@ mod tests {
         fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
             None
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
             None
         }
     }
@@ -2450,7 +2450,7 @@ mod tests {
         fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
             None
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
             None
         }
     }
@@ -3442,7 +3442,7 @@ mod tests {
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
                 None
             }
         }
@@ -3563,22 +3563,47 @@ mod tests {
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
             }
-            fn get_int_or_mac(&self, name: &str) -> Option<bindings::RoutineSource> {
-                (name == "External").then(|| bindings::RoutineSource {
-                    text: "ROUTINE External\n\n\tQuit\n\nFoo()\n\tQuit\n".to_string(),
-                    uri: None,
-                })
+            fn get_int_or_mac(&self, name: &str) -> Option<Option<bindings::RoutineSource>> {
+                match name {
+                    "External" => Some(Some(bindings::RoutineSource {
+                        text: "ROUTINE External\n\n\tQuit\n\nFoo()\n\tQuit\n".to_string(),
+                        uri: None,
+                    })),
+                    "Compiled" => Some(None),
+                    _ => None,
+                }
             }
         }
         let workspace = Workspace::new_with_iris(Some(Box::new(ExternalRoutineIris)), None);
         let uri = "Main.mac".to_string();
+        // The hard error last, since it stops checking the rest of the body.
         workspace.open(
             uri.clone(),
-            "ROUTINE Main\n\n\tDo Foo^External(1)\n\tQuit\n".to_string(),
+            "ROUTINE Main\n\n\tDo Foo^Compiled(1)\n\tDo Foo^Typo()\n\tDo Foo^External(1)\n\tQuit\n"
+                .to_string(),
         );
-        let diagnostics = workspace.diagnostics(uri);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(diagnostics[0].message.contains("Too many arguments"));
+        let mut diagnostics: Vec<_> = workspace
+            .diagnostics(uri)
+            .into_iter()
+            .map(|d| (d.severity, d.message))
+            .collect();
+        diagnostics.sort_by(|a, b| a.1.cmp(&b.1));
+        use bindings::DiagnosticSeverity::*;
+        assert_eq!(
+            diagnostics,
+            [
+                (
+                    Error,
+                    "Cannot find routine 'Typo' in the workspace or on the IRIS instance".to_string()
+                ),
+                (
+                    Hint,
+                    "The source of routine 'Compiled' isn't available, so calls into it can't be checked precisely"
+                        .to_string()
+                ),
+                (Error, "Too many arguments".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -5571,6 +5596,59 @@ mod tests {
             .find(|info| info.message.contains("Expands to"))
             .unwrap_or_else(|| panic!("{diagnostics:?}"));
         assert_eq!(expands_to.location.uri, uri, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn diagnostic_in_a_class_method_expansion_shows_the_expansion() {
+        let diagnostics = diagnostics_for(&[(
+            "Demo.cls",
+            "Class MyLib.Demo\n{\nClassMethod Run() As %String\n{\n#define CALL(%x) $$Fn^Missing(%x)\n    Quit $$$CALL(1)\n}\n}\n",
+        )]);
+        let expands_to = diagnostics
+            .iter()
+            .flat_map(|d| &d.related_information)
+            .find(|info| info.message.contains("Expands to"))
+            .unwrap_or_else(|| panic!("{diagnostics:?}"));
+        assert_eq!(expands_to.message, "↳ Expands to: Quit $$Fn^Missing(1)");
+        let range = expands_to.location.range;
+        assert_eq!(
+            (
+                range.start.line,
+                range.start.character,
+                range.end.line,
+                range.end.character
+            ),
+            (5, 4, 5, 19),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn expansion_in_an_included_file_is_located_there() {
+        let diagnostics = diagnostics_for(&[
+            ("Demo.mac", "ROUTINE Demo [Type=MAC]\nRun()\n#include Lib\n"),
+            (
+                "Lib.inc",
+                "ROUTINE Lib [Type=INC]\n#define CALL(%x) $$Fn^Missing(%x)\n    Quit $$$CALL(1)\n",
+            ),
+        ]);
+        let expands_to = diagnostics
+            .iter()
+            .flat_map(|d| &d.related_information)
+            .find(|info| info.message.contains("Expands to"))
+            .unwrap_or_else(|| panic!("{diagnostics:?}"));
+        let range = expands_to.location.range;
+        assert_eq!(expands_to.location.uri, "Lib.inc", "{diagnostics:?}");
+        assert_eq!(
+            (
+                range.start.line,
+                range.start.character,
+                range.end.line,
+                range.end.character
+            ),
+            (2, 4, 2, 19),
+            "{diagnostics:?}"
+        );
     }
 
     // IRIS answering nothing for a class says nothing about its parameters: no "'MAXLEN' is not

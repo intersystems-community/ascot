@@ -217,32 +217,40 @@ fn try_relocate_position(
     Some(shifter.position(source_map.relocate_position(position)?))
 }
 
-// Left untouched if `source_map` doesn't recognize `range` as part of this method's own
-// expansion -- e.g. `related_information` pointing at a different member's declaration, which
-// happens to share this document's uri without being part of this expansion at all.
-fn relocate_if_local(
-    range: bindings::Range,
-    source_map: &SourceMap,
-    shifter: &Shifter,
-) -> bindings::Range {
-    try_relocate_range(range, source_map, shifter).unwrap_or(range)
-}
-
 // Shared by a method's own diagnostics and the one hard `TypeError` (if any) `with_procedure`
 // returns -- both carry a `range` plus `related_information` in the same shape.
+// Each relocated range is followed by what its macro expanded to, as `relocate_diagnostics` does
+// for a routine. A range is left untouched if `source_map` doesn't recognize it as part of this
+// method's own expansion -- e.g. `related_information` pointing at a different member's
+// declaration, which happens to share this document's uri without being part of this expansion.
 fn relocate_local(
     range: &mut bindings::Range,
-    related_information: &mut [DiagnosticRelatedInformation],
+    related_information: &mut Vec<DiagnosticRelatedInformation>,
     source_map: &SourceMap,
     uri: &str,
     shifter: &Shifter,
 ) {
-    *range = relocate_if_local(*range, source_map, shifter);
-    for info in related_information {
-        if info.location.uri == uri {
-            info.location.range = relocate_if_local(info.location.range, source_map, shifter);
+    let expand = |range: &mut bindings::Range| {
+        let mut info = source_map.expansion_info(range.start, uri);
+        *range = try_relocate_range(*range, source_map, shifter)?;
+        if let Some(info) = &mut info
+            && info.location.uri == uri
+        {
+            info.location.range = shifter.range(info.location.range);
         }
+        info
+    };
+    let mut relocated: Vec<_> = expand(range).into_iter().collect();
+    for mut info in std::mem::take(related_information) {
+        let hop = if info.location.uri == uri {
+            expand(&mut info.location.range)
+        } else {
+            None
+        };
+        relocated.push(info);
+        relocated.extend(hop);
     }
+    *related_information = relocated;
 }
 
 fn relocate_method_diagnostics(
@@ -3112,9 +3120,16 @@ fn call_label<'a>(
     args: &Option<MthArgList>,
     range: bindings::Range,
 ) -> Result<Option<Ty>, QuasiTypeError> {
-    // A routine with no source in reach may still exist: say so, and check the call as untyped.
+    // A routine whose labels are out of reach: say why, and check the call as untyped.
     let proc = match env.resolve_label(label, offset, routine) {
-        Err(err @ QuasiTypeError::WithoutRange(TypeErrorKind::CannotFindRoutine { .. }, _)) => {
+        Err(
+            err @ QuasiTypeError::WithoutRange(
+                TypeErrorKind::CannotFindRoutine { .. }
+                | TypeErrorKind::RoutineNotOnIris { .. }
+                | TypeErrorKind::RoutineWithoutSource { .. },
+                _,
+            ),
+        ) => {
             env.add_soft_diagnostic(err.into_error(|| range).into());
             TyProcedureOrAny::Any
         }
