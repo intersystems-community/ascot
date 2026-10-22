@@ -23,27 +23,34 @@ export type Workspace = {
 		: RawWorkspace[K];
 };
 
-/** The shape your `imported.iris-connection` implementation must satisfy. */
-export interface Imported {
-	getCls(cls: string): Promise<ClassInfo | undefined>;
-	getInc(name: string): Promise<RoutineSource | undefined>;
-	getIntOrMac(name: string): Promise<RoutineSource | undefined>;
+/** What ascot asks for when a name isn't defined in the workspace, typically answered from an
+ * IRIS instance. Extend it and override what you can answer; the defaults know nothing. */
+export class Imported {
+	/** A class's own members and metadata. */
+	async getCls(_cls: string): Promise<ClassInfo | undefined> {
+		return undefined;
+	}
+	/** The text of `name.inc`. */
+	async getInc(_name: string): Promise<RoutineSource | undefined> {
+		return undefined;
+	}
+	/** The text of routine `name`. */
+	async getIntOrMac(_name: string): Promise<RoutineSource | undefined> {
+		return undefined;
+	}
 }
 
-// jco needs the actual `IrisConnection` class (not just an instance) up front, to bind
-// resource-identity checks (`instanceof`) at instantiation time -- so the wasm module is
-// loaded lazily on the first `createWorkspace` call, using that call's own argument's
-// class. Every later call must be constructed from that same class; in practice callers
-// only ever have one `Imported` implementation, so this holds.
+// jco binds the class implementing `iris-connection` at instantiation, and checks every
+// connection handed to ascot is an instance of it; its methods are called on that instance.
 let wasm: Promise<Root> | undefined;
 
-async function loadWasm(IrisConnection: abstract new (...args: never[]) => Imported): Promise<Root> {
+function loadWasm(): Promise<Root> {
 	return (wasm ??= import("../generated/ascot.js").then(({ instantiate }) =>
 		instantiate(
 			(name: string) => new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
 			{
 				"iris:ascot/common": {},
-				"iris:ascot/imported": { IrisConnection },
+				"iris:ascot/imported": { IrisConnection: Imported },
 			} as never,
 		),
 	));
@@ -76,12 +83,12 @@ function serialize(instance: RawWorkspace): Workspace {
 }
 
 /**
- * A `Workspace` backed by `imported`, with every method pre-serialized so overlapping
- * calls (e.g. from two documents' diagnostics resolving concurrently) can't trip ascot's
- * internal `RefCell` borrows or jco's single-in-flight-call constraint.
+ * A `Workspace` backed by `imported`, or by nothing outside the workspace, with every method
+ * pre-serialized so overlapping calls (e.g. from two documents' diagnostics resolving
+ * concurrently) can't trip ascot's internal `RefCell` borrows or jco's single-in-flight-call
+ * constraint.
  */
-export async function createWorkspace(imported: Imported, style?: Style): Promise<Workspace> {
-	const IrisConnection = Object.getPrototypeOf(imported).constructor;
-	const root = await loadWasm(IrisConnection);
+export async function createWorkspace(imported?: Imported, style?: Style): Promise<Workspace> {
+	const root = await loadWasm();
 	return serialize(new root.exported.Workspace(imported, style));
 }
