@@ -231,15 +231,14 @@ fn relocate_local(
     shifter: &Shifter,
 ) {
     let expand = |range: &mut bindings::Range| {
-        let expansion = source_map.expansion_at(range.start);
-        let relocated = try_relocate_range(*range, source_map, shifter)?;
-        *range = relocated;
-        let (line, text) = expansion?;
-        let line = try_relocate_range(line, source_map, shifter).unwrap_or(relocated);
-        Some(DiagnosticRelatedInformation {
-            location: Location::new(uri.to_string(), line),
-            message: format!("↳ Expands to: {text}"),
-        })
+        let mut info = source_map.expansion_info(range.start, uri);
+        *range = try_relocate_range(*range, source_map, shifter)?;
+        if let Some(info) = &mut info
+            && info.location.uri == uri
+        {
+            info.location.range = shifter.range(info.location.range);
+        }
+        info
     };
     let mut relocated: Vec<_> = expand(range).into_iter().collect();
     for mut info in std::mem::take(related_information) {

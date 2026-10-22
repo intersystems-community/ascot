@@ -362,9 +362,14 @@ impl SourceMap {
         Some((span, format!("{}…", &text[..cut])))
     }
 
-    // The expanded line at `position` and its range in the expanded text, if `position` only
-    // exists because of a macro substitution.
-    pub(crate) fn expansion_at(&self, position: Position) -> Option<(bindings::Range, String)> {
+    // What the line at `position` expanded to, located at the source of that line in the file it
+    // came from, if `position` only exists because of a macro substitution. `uri` is the
+    // top-level file's.
+    pub(crate) fn expansion_info(
+        &self,
+        position: Position,
+        uri: &str,
+    ) -> Option<bindings::DiagnosticRelatedInformation> {
         if !self.is_in_expanded_bounds(position) {
             return None;
         }
@@ -376,11 +381,12 @@ impl SourceMap {
             return None;
         }
         let (span, text) = self.expanded_line_text(offset)?;
-        let range = bindings::Range {
-            start: Position::from(self.expanded_olc.offset_to_line_character(span.start)),
-            end: Position::from(self.expanded_olc.offset_to_line_character(span.end)),
-        };
-        Some((range, text))
+        let (line_uri, line) = self.relocation_chain(span).pop()?;
+        let range = self.range_in(&line_uri, &line)?;
+        Some(bindings::DiagnosticRelatedInformation {
+            location: Location::new(line_uri.unwrap_or_else(|| uri.to_string()), range),
+            message: format!("↳ Expands to: {text}"),
+        })
     }
 
     // The primary (top-level-file) range, plus one `related_information` entry per further
@@ -419,13 +425,7 @@ impl SourceMap {
                 })
             })
             .collect();
-        if let Some((line, text)) = self.expansion_at(range.start) {
-            let line = self.relocate_source_range(line).unwrap_or(primary);
-            hops.push(bindings::DiagnosticRelatedInformation {
-                location: Location::new(uri.to_string(), line),
-                message: format!("↳ Expands to: {text}"),
-            });
-        }
+        hops.extend(self.expansion_info(range.start, uri));
         (primary, hops)
     }
 

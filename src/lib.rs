@@ -5415,6 +5415,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn expansion_in_an_included_file_is_located_there() {
+        let diagnostics = diagnostics_for(&[
+            ("Demo.mac", "ROUTINE Demo [Type=MAC]\nRun()\n#include Lib\n"),
+            (
+                "Lib.inc",
+                "ROUTINE Lib [Type=INC]\n#define CALL(%x) $$Fn^Missing(%x)\n    Quit $$$CALL(1)\n",
+            ),
+        ]);
+        let expands_to = diagnostics
+            .iter()
+            .flat_map(|d| &d.related_information)
+            .find(|info| info.message.contains("Expands to"))
+            .unwrap_or_else(|| panic!("{diagnostics:?}"));
+        let range = expands_to.location.range;
+        assert_eq!(expands_to.location.uri, "Lib.inc", "{diagnostics:?}");
+        assert_eq!(
+            (
+                range.start.line,
+                range.start.character,
+                range.end.line,
+                range.end.character
+            ),
+            (2, 4, 2, 19),
+            "{diagnostics:?}"
+        );
+    }
+
     // IRIS answering nothing for a class says nothing about its parameters: no "'MAXLEN' is not
     // a parameter of %Library.String".
     #[test]
