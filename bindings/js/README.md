@@ -13,18 +13,9 @@ npm install @intersystems-community/ascot
 ## Usage
 
 ````ts
-import { createWorkspace, type Imported } from "@intersystems-community/ascot";
+import { createWorkspace } from "@intersystems-community/ascot";
 
-// What the engine asks you for when a name isn't defined in the workspace, typically
-// answered from an IRIS instance over its REST API. Return `undefined` for "not found",
-// or for everything if you have no instance: the workspace is then checked on its own.
-class NoIris implements Imported {
-  async getCls(cls: string) { return undefined; }      // a class's members and metadata
-  async getInc(name: string) { return undefined; }     // the text of `name.inc`
-  async getIntOrMac(name: string) { return undefined; } // the text of routine `name`
-}
-
-const ws = await createWorkspace(new NoIris());
+const ws = await createWorkspace();
 
 // `open` is both open and edit: it stores the raw text (the kind comes from the uri's
 // extension: .cls, .mac, .int, .inc) and returns the uris whose cached analysis is now
@@ -49,10 +40,25 @@ await ws.hover("file:///T.cls", { line: 5, character: 7 }); // the `x` being wri
 // "```objectscript\n%DataType = 1\n```"
 ````
 
+To provide declarations for documents that aren't in the workspace, extend `IrisConnection`,
+override the lookups you can answer, and pass an instance:
+
+```ts
+import { IrisConnection, type ClassInfo } from "@intersystems-community/ascot";
+
+class MyIris extends IrisConnection {
+  override async getCls(cls: string): Promise<ClassInfo | undefined> {
+    return undefined; // look `cls` up, e.g. over IRIS's REST API
+  }
+}
+
+const connected = await createWorkspace(new MyIris());
+```
+
 `createWorkspace` takes an optional second argument, a `Style` applied to every document:
 
 ```ts
-const strict = await createWorkspace(new NoIris(), { command: { form: "long" }, function: { case: "pascal" }, commandDo: { form: "short" } });
+const strict = await createWorkspace(undefined, { command: { form: "long" }, function: { case: "pascal" }, commandDo: { form: "short" } });
 ```
 
 Load every file of a project into one `Workspace` so cross-file references resolve, and
@@ -61,7 +67,7 @@ usually not a removal, so keep the on-disk text open instead.
 
 ## API
 
-`createWorkspace(imported, style?)` returns a `Workspace` whose methods mirror the engine's
+`createWorkspace(iris?, style?)` returns a `Workspace` whose methods mirror the engine's
 exports, all returning promises. Positions and ranges are zero-based line/character pairs,
 as in the Language Server Protocol.
 
@@ -82,9 +88,8 @@ as in the Language Server Protocol.
 All result types (`Diagnostic`, `Location`, `ClassInfo`, `MemberInfo`, ...) are exported
 from the package.
 
-Calls are serialized: one runs at a time, and the rest queue behind it. Every `Workspace`
-created by this package shares one wasm instance and one `Imported` class, so construct
-them all from the same implementation.
+Calls are serialized: one runs at a time, and the rest queue behind it, across every
+`Workspace` created by this package, since they share one wasm instance.
 
 ## Bundling
 
