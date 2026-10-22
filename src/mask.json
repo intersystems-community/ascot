@@ -1,93 +1,71 @@
 {
- "classes": {
-  "%Library.GlobalEdit": {
+ "%Library.GlobalEdit": [
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
    "deprecated": false,
    "doc": "",
-   "extends": [],
-   "includes": [],
-   "is_datatype": null,
-   "members": [
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "ClassMethod": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "Name",
-         "t": "%String"
-        },
-        {
-         "declared_at": null,
-         "default": "{$zu(12,\"\")}",
-         "mode": "Default",
-         "name": "Directory",
-         "t": "%String"
-        },
-        {
-         "declared_at": null,
-         "default": "\"\"",
-         "mode": "Default",
-         "name": "System",
-         "t": "%String"
-        },
-        {
-         "declared_at": null,
-         "default": "-1",
-         "mode": "Default",
-         "name": "concurrency",
-         "t": "%Integer"
-        },
-        {
-         "declared_at": null,
-         "default": "$$$OK",
-         "mode": "ByRef",
-         "name": "sc",
-         "t": "%Status"
-        }
-       ],
-       "procedure_block": null,
-       "t": "Self",
-       "variadic": null
+   "kind": {
+    "ClassMethod": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
       }
      },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "Name",
+       "t": "%String"
       },
-      "before": {
-       "character": 0,
-       "line": 0
+      {
+       "declared_at": null,
+       "default": "{$zu(12,\"\")}",
+       "mode": "Default",
+       "name": "Directory",
+       "t": "%String"
       },
-      "content": "Open"
-     },
-     "origin": "%Library.GlobalEdit",
-     "uri": null
+      {
+       "declared_at": null,
+       "default": "\"\"",
+       "mode": "Default",
+       "name": "System",
+       "t": "%String"
+      },
+      {
+       "declared_at": null,
+       "default": "-1",
+       "mode": "Default",
+       "name": "concurrency",
+       "t": "%Integer"
+      },
+      {
+       "declared_at": null,
+       "default": "$$$OK",
+       "mode": "ByRef",
+       "name": "sc",
+       "t": "%Status"
+      }
+     ],
+     "procedure_block": null,
+     "t": "Self",
+     "variadic": null
     }
-   ],
+   },
    "name": {
     "after": {
      "character": 0,
@@ -97,875 +75,783 @@
      "character": 0,
      "line": 0
     },
-    "content": "%Library.GlobalEdit"
+    "content": "Open"
    },
-   "property_class_names": [],
-   "uri": null
-  },
-  "%Library.Persistent": {
-   "deprecated": false,
-   "doc": "",
-   "extends": [],
-   "includes": [],
-   "is_datatype": null,
-   "members": [
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "ClassMethod": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "oid",
-         "t": "%ObjectIdentity"
-        },
-        {
-         "declared_at": null,
-         "default": "-1",
-         "mode": "Default",
-         "name": "concurrency",
-         "t": "%Integer"
-        },
-        {
-         "declared_at": null,
-         "default": "$$$OK",
-         "mode": "ByRef",
-         "name": "sc",
-         "t": "%Status"
-        }
-       ],
-       "procedure_block": null,
-       "t": "Self",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "%Open"
-     },
-     "origin": "%Library.Persistent",
-     "uri": null
-    },
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "ClassMethod": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": "\"\"",
-         "mode": "Default",
-         "name": "id",
-         "t": "%String"
-        },
-        {
-         "declared_at": null,
-         "default": "-1",
-         "mode": "Default",
-         "name": "concurrency",
-         "t": "%Integer"
-        },
-        {
-         "declared_at": null,
-         "default": "$$$OK",
-         "mode": "ByRef",
-         "name": "sc",
-         "t": "%Status"
-        }
-       ],
-       "procedure_block": null,
-       "t": "Self",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "%OpenId"
-     },
-     "origin": "%Library.Persistent",
-     "uri": null
-    }
-   ],
-   "name": {
-    "after": {
-     "character": 0,
-     "line": 0
-    },
-    "before": {
-     "character": 0,
-     "line": 0
-    },
-    "content": "%Library.Persistent"
-   },
-   "property_class_names": [],
-   "uri": null
-  },
-  "%Library.RelationshipObject": {
-   "deprecated": false,
-   "doc": "",
-   "extends": [],
-   "includes": [],
-   "is_datatype": null,
-   "members": [
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "Method": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "key",
-         "t": "%String"
-        }
-       ],
-       "procedure_block": null,
-       "t": "..#ELEMENTTYPE",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "GetAt"
-     },
-     "origin": "%Library.RelationshipObject",
-     "uri": null
-    },
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "Method": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "ByRef",
-         "name": "key",
-         "t": "%String"
-        }
-       ],
-       "procedure_block": null,
-       "t": "..#ELEMENTTYPE",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "GetNext"
-     },
-     "origin": "%Library.RelationshipObject",
-     "uri": null
-    },
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "Method": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "key",
-         "t": "%String"
-        },
-        {
-         "declared_at": null,
-         "default": "0",
-         "mode": "Default",
-         "name": "force",
-         "t": "%Integer"
-        }
-       ],
-       "procedure_block": null,
-       "t": "..#ELEMENTTYPE",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "GetOrefAt"
-     },
-     "origin": "%Library.RelationshipObject",
-     "uri": null
-    },
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "Method": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "ByRef",
-         "name": "key",
-         "t": "%String"
-        }
-       ],
-       "procedure_block": null,
-       "t": "..#ELEMENTTYPE",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "GetPrevious"
-     },
-     "origin": "%Library.RelationshipObject",
-     "uri": null
-    }
-   ],
-   "name": {
-    "after": {
-     "character": 0,
-     "line": 0
-    },
-    "before": {
-     "character": 0,
-     "line": 0
-    },
-    "content": "%Library.RelationshipObject"
-   },
-   "property_class_names": [],
-   "uri": null
-  },
-  "%Library.ScrollableResultSet": {
-   "deprecated": false,
-   "doc": "",
-   "extends": [],
-   "includes": [],
-   "is_datatype": null,
-   "members": [
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "ClassMethod": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "id",
-         "t": "%String"
-        },
-        {
-         "declared_at": null,
-         "default": "-1",
-         "mode": "Default",
-         "name": "concurrency",
-         "t": "%Integer"
-        },
-        {
-         "declared_at": null,
-         "default": "$$$OK",
-         "mode": "ByRef",
-         "name": "sc",
-         "t": "%Status"
-        }
-       ],
-       "procedure_block": null,
-       "t": "Self",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "%OpenId"
-     },
-     "origin": "%Library.ScrollableResultSet",
-     "uri": null
-    }
-   ],
-   "name": {
-    "after": {
-     "character": 0,
-     "line": 0
-    },
-    "before": {
-     "character": 0,
-     "line": 0
-    },
-    "content": "%Library.ScrollableResultSet"
-   },
-   "property_class_names": [],
-   "uri": null
-  },
-  "%Library.SerialObject": {
-   "deprecated": false,
-   "doc": "",
-   "extends": [],
-   "includes": [],
-   "is_datatype": null,
-   "members": [
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "ClassMethod": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "initvalue",
-         "t": "%ObjectIdentity"
-        },
-        {
-         "declared_at": null,
-         "default": "-1",
-         "mode": "Default",
-         "name": "concurrency",
-         "t": "%Integer"
-        },
-        {
-         "declared_at": null,
-         "default": "$$$OK",
-         "mode": "ByRef",
-         "name": "sc",
-         "t": "%Status"
-        }
-       ],
-       "procedure_block": null,
-       "t": "Self",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "%Open"
-     },
-     "origin": "%Library.SerialObject",
-     "uri": null
-    },
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "ClassMethod": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "initvalue",
-         "t": "%String"
-        },
-        {
-         "declared_at": null,
-         "default": "-1",
-         "mode": "Default",
-         "name": "concurrency",
-         "t": "%Integer"
-        },
-        {
-         "declared_at": null,
-         "default": "$$$OK",
-         "mode": "ByRef",
-         "name": "sc",
-         "t": "%Status"
-        }
-       ],
-       "procedure_block": null,
-       "t": "Self",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "%OpenId"
-     },
-     "origin": "%Library.SerialObject",
-     "uri": null
-    }
-   ],
-   "name": {
-    "after": {
-     "character": 0,
-     "line": 0
-    },
-    "before": {
-     "character": 0,
-     "line": 0
-    },
-    "content": "%Library.SerialObject"
-   },
-   "property_class_names": [],
-   "uri": null
-  },
-  "%Library.SystemBase": {
-   "deprecated": false,
-   "doc": "",
-   "extends": [],
-   "includes": [],
-   "is_datatype": null,
-   "members": [
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "ClassMethod": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "initvalue",
-         "t": "%RawString"
-        }
-       ],
-       "procedure_block": null,
-       "t": "Self",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "%New"
-     },
-     "origin": "%Library.SystemBase",
-     "uri": null
-    }
-   ],
-   "name": {
-    "after": {
-     "character": 0,
-     "line": 0
-    },
-    "before": {
-     "character": 0,
-     "line": 0
-    },
-    "content": "%Library.SystemBase"
-   },
-   "property_class_names": [],
-   "uri": null
-  },
-  "%Stream.Object": {
-   "deprecated": false,
-   "doc": "",
-   "extends": [],
-   "includes": [],
-   "is_datatype": null,
-   "members": [
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "ClassMethod": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "soid",
-         "t": "%ObjectIdentity"
-        },
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "concurrency",
-         "t": "%Integer"
-        },
-        {
-         "declared_at": null,
-         "default": "$$$OK",
-         "mode": "ByRef",
-         "name": "sc",
-         "t": "%Status"
-        }
-       ],
-       "procedure_block": null,
-       "t": "Self",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "%Open"
-     },
-     "origin": "%Stream.Object",
-     "uri": null
-    },
-    {
-     "after": {
-      "character": 0,
-      "line": 0
-     },
-     "aliases": [],
-     "before": {
-      "character": 0,
-      "line": 0
-     },
-     "deprecated": false,
-     "doc": "",
-     "kind": {
-      "ClassMethod": {
-       "body": {
-        "end": {
-         "character": 0,
-         "line": 0
-        },
-        "start": {
-         "character": 0,
-         "line": 0
-        }
-       },
-       "normal": [
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "id",
-         "t": "%String"
-        },
-        {
-         "declared_at": null,
-         "default": null,
-         "mode": "Default",
-         "name": "concurrency",
-         "t": "%Integer"
-        },
-        {
-         "declared_at": null,
-         "default": "$$$OK",
-         "mode": "ByRef",
-         "name": "sc",
-         "t": "%Status"
-        }
-       ],
-       "procedure_block": null,
-       "t": "Self",
-       "variadic": null
-      }
-     },
-     "name": {
-      "after": {
-       "character": 0,
-       "line": 0
-      },
-      "before": {
-       "character": 0,
-       "line": 0
-      },
-      "content": "%OpenId"
-     },
-     "origin": "%Stream.Object",
-     "uri": null
-    }
-   ],
-   "name": {
-    "after": {
-     "character": 0,
-     "line": 0
-    },
-    "before": {
-     "character": 0,
-     "line": 0
-    },
-    "content": "%Stream.Object"
-   },
-   "property_class_names": [],
+   "origin": "%Library.GlobalEdit",
    "uri": null
   }
- },
- "includes": {},
- "namespace": "%SYS",
- "routines": {},
- "version": 2
+ ],
+ "%Library.Persistent": [
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "ClassMethod": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "oid",
+       "t": "%ObjectIdentity"
+      },
+      {
+       "declared_at": null,
+       "default": "-1",
+       "mode": "Default",
+       "name": "concurrency",
+       "t": "%Integer"
+      },
+      {
+       "declared_at": null,
+       "default": "$$$OK",
+       "mode": "ByRef",
+       "name": "sc",
+       "t": "%Status"
+      }
+     ],
+     "procedure_block": null,
+     "t": "Self",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "%Open"
+   },
+   "origin": "%Library.Persistent",
+   "uri": null
+  },
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "ClassMethod": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": "\"\"",
+       "mode": "Default",
+       "name": "id",
+       "t": "%String"
+      },
+      {
+       "declared_at": null,
+       "default": "-1",
+       "mode": "Default",
+       "name": "concurrency",
+       "t": "%Integer"
+      },
+      {
+       "declared_at": null,
+       "default": "$$$OK",
+       "mode": "ByRef",
+       "name": "sc",
+       "t": "%Status"
+      }
+     ],
+     "procedure_block": null,
+     "t": "Self",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "%OpenId"
+   },
+   "origin": "%Library.Persistent",
+   "uri": null
+  }
+ ],
+ "%Library.RelationshipObject": [
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "Parameter": {
+     "t": "Generic",
+     "v": "%Library.ObjectHandle"
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "ELEMENTTYPE"
+   },
+   "origin": "%Library.RelationshipObject",
+   "uri": null
+  },
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "Method": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "key",
+       "t": "%String"
+      }
+     ],
+     "procedure_block": null,
+     "t": "..#ELEMENTTYPE",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "GetAt"
+   },
+   "origin": "%Library.RelationshipObject",
+   "uri": null
+  },
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "Method": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "ByRef",
+       "name": "key",
+       "t": "%String"
+      }
+     ],
+     "procedure_block": null,
+     "t": "..#ELEMENTTYPE",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "GetNext"
+   },
+   "origin": "%Library.RelationshipObject",
+   "uri": null
+  },
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "Method": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "key",
+       "t": "%String"
+      },
+      {
+       "declared_at": null,
+       "default": "0",
+       "mode": "Default",
+       "name": "force",
+       "t": "%Integer"
+      }
+     ],
+     "procedure_block": null,
+     "t": "..#ELEMENTTYPE",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "GetOrefAt"
+   },
+   "origin": "%Library.RelationshipObject",
+   "uri": null
+  },
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "Method": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "ByRef",
+       "name": "key",
+       "t": "%String"
+      }
+     ],
+     "procedure_block": null,
+     "t": "..#ELEMENTTYPE",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "GetPrevious"
+   },
+   "origin": "%Library.RelationshipObject",
+   "uri": null
+  }
+ ],
+ "%Library.ScrollableResultSet": [
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "ClassMethod": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "id",
+       "t": "%String"
+      },
+      {
+       "declared_at": null,
+       "default": "-1",
+       "mode": "Default",
+       "name": "concurrency",
+       "t": "%Integer"
+      },
+      {
+       "declared_at": null,
+       "default": "$$$OK",
+       "mode": "ByRef",
+       "name": "sc",
+       "t": "%Status"
+      }
+     ],
+     "procedure_block": null,
+     "t": "Self",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "%OpenId"
+   },
+   "origin": "%Library.ScrollableResultSet",
+   "uri": null
+  }
+ ],
+ "%Library.SerialObject": [
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "ClassMethod": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "initvalue",
+       "t": "%ObjectIdentity"
+      },
+      {
+       "declared_at": null,
+       "default": "-1",
+       "mode": "Default",
+       "name": "concurrency",
+       "t": "%Integer"
+      },
+      {
+       "declared_at": null,
+       "default": "$$$OK",
+       "mode": "ByRef",
+       "name": "sc",
+       "t": "%Status"
+      }
+     ],
+     "procedure_block": null,
+     "t": "Self",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "%Open"
+   },
+   "origin": "%Library.SerialObject",
+   "uri": null
+  },
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "ClassMethod": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "initvalue",
+       "t": "%String"
+      },
+      {
+       "declared_at": null,
+       "default": "-1",
+       "mode": "Default",
+       "name": "concurrency",
+       "t": "%Integer"
+      },
+      {
+       "declared_at": null,
+       "default": "$$$OK",
+       "mode": "ByRef",
+       "name": "sc",
+       "t": "%Status"
+      }
+     ],
+     "procedure_block": null,
+     "t": "Self",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "%OpenId"
+   },
+   "origin": "%Library.SerialObject",
+   "uri": null
+  }
+ ],
+ "%Library.SystemBase": [
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "ClassMethod": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "initvalue",
+       "t": "%RawString"
+      }
+     ],
+     "procedure_block": null,
+     "t": "Self",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "%New"
+   },
+   "origin": "%Library.SystemBase",
+   "uri": null
+  }
+ ],
+ "%Stream.Object": [
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "ClassMethod": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "soid",
+       "t": "%ObjectIdentity"
+      },
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "concurrency",
+       "t": "%Integer"
+      },
+      {
+       "declared_at": null,
+       "default": "$$$OK",
+       "mode": "ByRef",
+       "name": "sc",
+       "t": "%Status"
+      }
+     ],
+     "procedure_block": null,
+     "t": "Self",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "%Open"
+   },
+   "origin": "%Stream.Object",
+   "uri": null
+  },
+  {
+   "after": {
+    "character": 0,
+    "line": 0
+   },
+   "aliases": [],
+   "before": {
+    "character": 0,
+    "line": 0
+   },
+   "deprecated": false,
+   "doc": "",
+   "kind": {
+    "ClassMethod": {
+     "body": {
+      "end": {
+       "character": 0,
+       "line": 0
+      },
+      "start": {
+       "character": 0,
+       "line": 0
+      }
+     },
+     "normal": [
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "id",
+       "t": "%String"
+      },
+      {
+       "declared_at": null,
+       "default": null,
+       "mode": "Default",
+       "name": "concurrency",
+       "t": "%Integer"
+      },
+      {
+       "declared_at": null,
+       "default": "$$$OK",
+       "mode": "ByRef",
+       "name": "sc",
+       "t": "%Status"
+      }
+     ],
+     "procedure_block": null,
+     "t": "Self",
+     "variadic": null
+    }
+   },
+   "name": {
+    "after": {
+     "character": 0,
+     "line": 0
+    },
+    "before": {
+     "character": 0,
+     "line": 0
+    },
+    "content": "%OpenId"
+   },
+   "origin": "%Stream.Object",
+   "uri": null
+  }
+ ]
 }

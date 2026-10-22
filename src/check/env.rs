@@ -905,10 +905,8 @@ impl<'a> WorkspaceEnv<'a> {
         let qualify = |t: &mut Ty| {
             if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = t {
                 c.name = self.qualify_class_name(&c.name, Some(context));
-                for (name, value) in &mut c.params {
-                    if name.eq_ignore_ascii_case("ELEMENTTYPE") {
-                        *value = self.qualify_class_name(value, Some(context));
-                    }
+                for (_, arg) in &mut c.generics {
+                    *arg = self.qualify_class_name(arg, Some(context));
                 }
             }
         };
@@ -1689,7 +1687,8 @@ impl<'a> CodeEnv<'a> {
             );
             self.add_soft_diagnostic(err.into());
         }
-        if let Some(mem_desc) = result.map(|mem| instantiate(mem, obj.class())) {
+        let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
+        if let Some(mem_desc) = result.map(|mem| instantiate(mem, receiver)) {
             if mem_desc.is_instance_only && !obj.is_ins() {
                 Err(
                     QuasiTypeError::access_instance_only_member_from_class_context(mem)
@@ -1924,10 +1923,14 @@ mod tests {
             uri: None,
             origin: None,
         };
-        let HOTy::Value(Ty::OREF(cls)) = MemberTy::try_from(children).unwrap().ty else {
-            panic!("not a class")
+        let HOTy::Value(Ty::OREF(ClsOrIns::Ins(cls))) = MemberTy::try_from(children).unwrap().ty
+        else {
+            panic!("not an instance")
         };
-        assert_eq!(cls.name(), "%Library.RelationshipObject");
-        assert_eq!(cls.class().param("ELEMENTTYPE"), Some("Ext.Child"));
+        assert_eq!(cls.name, "%Library.RelationshipObject");
+        assert_eq!(
+            cls.generics,
+            [("ELEMENTTYPE".to_string(), "Ext.Child".to_string())]
+        );
     }
 }

@@ -2,7 +2,7 @@
 //! text. Used by `Workspace::hover` in `lib.rs`; the LSP and MCP front ends pass the result
 //! through unchanged.
 
-use crate::bindings::{ArgMode, Cardinality, CollectionKind, MemberInfo, MemberKind, MethodInfo};
+use crate::bindings::{ArgMode, CollectionKind, MemberInfo, MemberKind, MethodInfo};
 
 pub(crate) fn format_member_hover(member: &MemberInfo) -> String {
     let name = &member.name.content;
@@ -24,17 +24,7 @@ pub(crate) fn format_member_hover(member: &MemberInfo) -> String {
             format!("Property {name}{}", format_as(t.as_deref()))
         }
         MemberKind::Relationship(info) => {
-            let cardinality = match info.cardinality {
-                Some(Cardinality::One) => " [ Cardinality = one ]",
-                Some(Cardinality::Many) => " [ Cardinality = many ]",
-                Some(Cardinality::Parent) => " [ Cardinality = parent ]",
-                Some(Cardinality::Children) => " [ Cardinality = children ]",
-                None => "",
-            };
-            format!(
-                "Relationship {name}{}{cardinality}",
-                format_as(info.t.as_deref())
-            )
+            format!("Relationship {name}{}", format_as(info.t.as_deref()))
         }
         MemberKind::Parameter(info) => {
             let default = info

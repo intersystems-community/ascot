@@ -543,9 +543,8 @@ pub struct ClassTy {
     // type's identity (a `##class(X)` literal and one merged from elsewhere both denote the
     // same class regardless of which happened to resolve this), so excluded from equality.
     pub location: Option<bindings::Location>,
-    // Class parameters bound for this use, e.g. a relationship's `ELEMENTTYPE`. Read only by
-    // signatures written against them (`..#ELEMENTTYPE`), so excluded from equality too.
-    pub params: Vec<(String, String)>,
+    // Generic arguments by parameter name (see `crate::mask`), excluded from equality too.
+    pub generics: Vec<(String, String)>,
 }
 
 impl PartialEq for ClassTy {
@@ -568,17 +567,8 @@ impl From<String> for ClassTy {
         ClassTy {
             name,
             location: None,
-            params: vec![],
+            generics: vec![],
         }
-    }
-}
-
-impl ClassTy {
-    pub fn param(&self, name: &str) -> Option<&str> {
-        self.params
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -588,13 +578,13 @@ impl std::fmt::Display for ClassTy {
             Some(this) => write!(f, "%{}", this)?,
             None => write!(f, "{}", self.name)?,
         }
-        if !self.params.is_empty() {
-            let params: Vec<_> = self
-                .params
+        if !self.generics.is_empty() {
+            let args: Vec<_> = self
+                .generics
                 .iter()
-                .map(|(n, v)| format!("{n} = \"{v}\""))
+                .map(|(name, arg)| format!("{name} = \"{arg}\""))
                 .collect();
-            write!(f, "({})", params.join(", "))?;
+            write!(f, "({})", args.join(", "))?;
         }
         Ok(())
     }
@@ -608,12 +598,9 @@ pub enum ClsOrIns {
 
 impl ClsOrIns {
     pub fn name(&self) -> &str {
-        &self.class().name
-    }
-
-    pub fn class(&self) -> &ClassTy {
         match self {
-            ClsOrIns::Ins(cls) | ClsOrIns::Cls(cls) => cls,
+            ClsOrIns::Ins(name) => &name.name,
+            ClsOrIns::Cls(name) => &name.name,
         }
     }
 
@@ -987,12 +974,14 @@ pub(crate) fn ty_from_declared(t: Option<String>) -> Option<Ty> {
     t.filter(|t| !t.is_empty()).map(Ty::from)
 }
 
-// A `many`/`children` relationship to `t`: a `%RelationshipObject` of `t`s.
+// A `many`/`children` relationship to `t`: a `%RelationshipObject` of `t`s, `t` bound to the
+// generic parameter the mask gives it.
 pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     let mut cls = ClassTy::from("%Library.RelationshipObject".to_string());
-    cls.params = t
+    cls.generics = t
         .filter(|t| !t.is_empty())
-        .map(|t| ("ELEMENTTYPE".to_string(), t))
+        .zip(crate::mask::generic_params(&cls.name).next())
+        .map(|(t, param)| (param.name.content.clone(), t))
         .into_iter()
         .collect();
     Ty::OREF(ClsOrIns::Ins(cls))
@@ -1003,7 +992,7 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
 const SELF: &str = "?Self";
 
 // An IRIS-reported signature's type, where the mask (see `crate::mask`) may have written `Self`
-// or a parameter reference like `..#ELEMENTTYPE`; resolved against the receiver by
+// or a generic parameter as `..#NAME`; resolved against the receiver by
 // `TyProcedure::instantiate`.
 fn ty_from_iris(t: Option<String>) -> Option<Ty> {
     match t.as_deref() {
@@ -1013,8 +1002,8 @@ fn ty_from_iris(t: Option<String>) -> Option<Ty> {
 }
 
 impl TyProcedure {
-    // This signature as seen from `receiver`: `Self` is the receiver's class, and a
-    // `..#PARAM` its bound parameter -- `Any` when unbound.
+    // This signature as seen from `receiver`: `Self` is the receiver's class, and `..#NAME`
+    // the receiver's generic argument for that parameter.
     pub(crate) fn instantiate(&self, receiver: &ClassTy) -> Option<TyProcedure> {
         let resolve = |ty: &Option<Ty>| -> Option<Option<Ty>> {
             let Some(Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c))) = ty else {
@@ -1024,12 +1013,8 @@ impl TyProcedure {
                 Some(Some(Ty::from(receiver.name.clone())))
             } else {
                 let param = c.name.strip_prefix("..#")?;
-                Some(Some(
-                    receiver
-                        .param(param)
-                        .map(|v| Ty::from(v.to_string()))
-                        .unwrap_or(Ty::Any),
-                ))
+                let arg = crate::mask::generic_arg(&receiver.name, &receiver.generics, param)?;
+                Some(Some(Ty::from(arg)))
             }
         };
         let mut proc = self.clone();

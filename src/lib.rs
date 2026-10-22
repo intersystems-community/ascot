@@ -4136,14 +4136,20 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn an_unbound_element_type_is_any() {
+    fn an_unbound_element_type_is_the_mask_default() {
         let workspace = masked_iris("GetNext", "%Library.RelationshipObject", by_ref_key());
         let diagnostics = errors_in(
             &workspace,
             "T.cls",
             "Class Test.T Extends %RegisteredObject {\nMethod M(r As %RelationshipObject) As %String {\n Set key = \"\"\n Set x = r.GetNext(.key)\n Quit x.Anything\n}\n}\n",
         );
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Anything' in %ObjectHandle"),
+            "{diagnostics:?}"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
