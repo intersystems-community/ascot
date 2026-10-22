@@ -286,7 +286,7 @@ fn analyze<'a>(
     }
     files.sort();
 
-    let workspace = Workspace::new_with_iris(iris, style);
+    let workspace = Workspace::native(iris, style);
     insert_files(&workspace, &files);
 
     let count = report_diagnostics(&workspace, &files);
@@ -329,7 +329,7 @@ fn analyze_workspace<'a>(
     diagnose_files.sort();
     diagnose_files.dedup();
 
-    let workspace = Workspace::new_with_iris(iris, style);
+    let workspace = Workspace::native(iris, style);
     insert_files(&workspace, &all_files);
 
     let all_files_set: HashSet<&PathBuf> = all_files.iter().collect();

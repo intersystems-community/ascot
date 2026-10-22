@@ -206,7 +206,7 @@ impl Server {
             .map_err(|err| format!("iris: {err}"))?;
         workspaces.insert(
             workspace.clone(),
-            Arc::new(Mutex::new(Workspace::new_with_iris(iris, style))),
+            Arc::new(Mutex::new(Workspace::native(iris, style))),
         );
         Ok(format!("created workspace {workspace:?}"))
     }

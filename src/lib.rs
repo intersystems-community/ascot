@@ -191,7 +191,7 @@ pub struct WorkspaceStruct {
 
 // `bindings::IrisConnection` is a WIT *imported* resource, producible only by a wasm host --
 // every method on it is `unreachable!()` on a native build. Native builds get a real connection
-// through `iris::IrisClient` instead (`Workspace::new_with_iris`); both share the same method
+// through `iris::IrisClient` instead (`Workspace::native`); both share the same method
 // names/signatures, so no call site under `check::env`/`macro_expand` needs to know which.
 #[cfg(target_arch = "wasm32")]
 type IrisHandle = IrisConnection;
@@ -730,10 +730,8 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Workspace {
-    /// The native equivalent of [`GuestWorkspace::new`](bindings::GuestWorkspace::new) (see
-    /// `IrisHandle`) -- how a native consumer (CLI, LSP, MCP, or a direct library user) backs a
-    /// `Workspace` with a real IRIS connection.
-    pub fn new_with_iris(iris: Option<Box<dyn iris::IrisClient>>, style: Option<Style>) -> Self {
+    /// [`GuestWorkspace::new`](bindings::GuestWorkspace::new), with a native IRIS client.
+    pub fn native(iris: Option<Box<dyn iris::IrisClient>>, style: Option<Style>) -> Self {
         Workspace(RefCell::new(build_workspace_struct(iris, style)))
     }
 }
@@ -745,7 +743,7 @@ impl bindings::GuestWorkspace for Workspace {
         let iris: Option<IrisHandle> = iris;
         #[cfg(not(target_arch = "wasm32"))]
         let iris: Option<IrisHandle> = {
-            // Never carries a real connection natively -- use `new_with_iris` for that.
+            // Never carries a real connection natively -- use `native` for that.
             let _ = iris;
             None
         };
@@ -1489,7 +1487,7 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn class_gets_occ_errors_macros_via_iris_without_an_explicit_include() {
-        let workspace = Workspace::new_with_iris(Some(Box::new(OccErrorsIris)), None);
+        let workspace = Workspace::native(Some(Box::new(OccErrorsIris)), None);
         let uri = "NoIncludeButOcc.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -1503,7 +1501,7 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn macro_nested_inside_an_unresolved_call_still_expands() {
-        let workspace = Workspace::new_with_iris(Some(Box::new(OccErrorsIris)), None);
+        let workspace = Workspace::native(Some(Box::new(OccErrorsIris)), None);
         let uri = "NestedInUnresolvedCall.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -1696,7 +1694,7 @@ mod tests {
                 None
             }
         }
-        let workspace = Workspace::new_with_iris(Some(Box::new(GetterIris)), None);
+        let workspace = Workspace::native(Some(Box::new(GetterIris)), None);
         let uri = "GetterLoop.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -2014,7 +2012,7 @@ mod tests {
                 None
             }
         }
-        let workspace = Workspace::new_with_iris(Some(Box::new(NoSuchParamIris)), None);
+        let workspace = Workspace::native(Some(Box::new(NoSuchParamIris)), None);
         let uri = "Owner.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -2152,7 +2150,7 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn property_declared_type_confirmed_by_iris_gets_no_hint() {
-        let workspace = Workspace::new_with_iris(
+        let workspace = Workspace::native(
             Some(Box::new(MockIrisClient {
                 is_datatype: Some(true),
                 mem: None,
@@ -2200,7 +2198,7 @@ mod tests {
             uri: None,
             origin: None,
         };
-        let workspace = Workspace::new_with_iris(
+        let workspace = Workspace::native(
             Some(Box::new(MockIrisClient {
                 is_datatype: None,
                 mem: Some(mem),
@@ -2244,7 +2242,7 @@ mod tests {
             uri: None,
             origin: None,
         };
-        let workspace = Workspace::new_with_iris(
+        let workspace = Workspace::native(
             Some(Box::new(MockIrisClient {
                 is_datatype: None,
                 mem: Some(mem),
@@ -2443,7 +2441,7 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn dispatch_class_method_inherited_unchanged_from_system_base_does_not_count() {
-        let workspace = Workspace::new_with_iris(
+        let workspace = Workspace::native(
             Some(Box::new(DispatchOriginIris {
                 origin: Some("%Library.SystemBase".to_string()),
             })),
@@ -2466,7 +2464,7 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn dispatch_class_method_overridden_on_an_iris_ancestor_is_resolved() {
-        let workspace = Workspace::new_with_iris(
+        let workspace = Workspace::native(
             Some(Box::new(DispatchOriginIris {
                 origin: Some("%Library.Fake".to_string()),
             })),
@@ -3431,7 +3429,7 @@ mod tests {
                 None
             }
         }
-        let workspace = Workspace::new_with_iris(Some(Box::new(ExternalClassIris)), None);
+        let workspace = Workspace::native(Some(Box::new(ExternalClassIris)), None);
         let uri = "Sub.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -3559,7 +3557,7 @@ mod tests {
                 }
             }
         }
-        let workspace = Workspace::new_with_iris(Some(Box::new(ExternalRoutineIris)), None);
+        let workspace = Workspace::native(Some(Box::new(ExternalRoutineIris)), None);
         let uri = "Main.mac".to_string();
         // The hard error last, since it stops checking the rest of the body.
         workspace.open(
@@ -4067,7 +4065,7 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn object_handle_parameter_is_just_an_object_handle() {
-        let workspace = Workspace::new_with_iris(
+        let workspace = Workspace::native(
             Some(Box::new(MockIrisClient {
                 is_datatype: None,
                 mem: None,
@@ -4099,7 +4097,7 @@ mod tests {
         {
             mem.kind = bindings::MemberKind::ClassMethod(m);
         }
-        Workspace::new_with_iris(
+        Workspace::native(
             Some(Box::new(MockIrisClient {
                 is_datatype: None,
                 mem: Some(mem),
@@ -4189,7 +4187,7 @@ mod tests {
     fn only_the_mask_says_this() {
         let mut mem = external_method("getNextResultSet", vec![], Some("This"));
         mem.origin = Some("%Library.SQLGatewayConnection".to_string());
-        let workspace = Workspace::new_with_iris(
+        let workspace = Workspace::native(
             Some(Box::new(MockIrisClient {
                 is_datatype: None,
                 mem: Some(mem),
@@ -4415,7 +4413,7 @@ mod tests {
         mem: bindings::MemberInfo,
         body: &str,
     ) -> Vec<bindings::Diagnostic> {
-        let workspace = Workspace::new_with_iris(
+        let workspace = Workspace::native(
             Some(Box::new(MockIrisClient {
                 is_datatype: None,
                 mem: Some(mem),
@@ -4607,7 +4605,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn a_collection_property_resolves_to_its_collection_class() {
         let mem = external_method("Count", vec![], Some("%Integer"));
-        let workspace = Workspace::new_with_iris(
+        let workspace = Workspace::native(
             Some(Box::new(MockIrisClient {
                 is_datatype: None,
                 mem: Some(mem),
@@ -4893,7 +4891,7 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn missing_class_is_reported_at_the_class_expression() {
-        let workspace = Workspace::new_with_iris(Some(Box::new(OccErrorsIris)), None);
+        let workspace = Workspace::native(Some(Box::new(OccErrorsIris)), None);
         let uri = "M.cls".to_string();
         let line = " quit ##class(No.Such.Class).Method()";
         workspace.open(
@@ -5658,7 +5656,7 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn type_parameter_of_an_unresolvable_class_is_not_reported() {
-        let workspace = Workspace::new_with_iris(Some(Box::new(OccErrorsIris)), None);
+        let workspace = Workspace::native(Some(Box::new(OccErrorsIris)), None);
         let uri = "P.cls".to_string();
         workspace.open(
             uri.clone(),
