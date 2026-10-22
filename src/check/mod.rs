@@ -2761,7 +2761,14 @@ impl CheckExprInner for MacroCallStruct {
         let name = self.name.print();
         if env.is_defined_macro(&name) {
             self.check_args(env, flow)?;
-            Ok(Ty::Any.into())
+            let out = match name.as_str() {
+                "ERROR" => Some("%Status"),
+                "GETERRORMESSAGE" | "Text" | "TextHTML" | "TextJS" => Some("%String"),
+                _ => None,
+            };
+            Ok(ty_from_declared(out.map(Into::into))
+                .unwrap_or(Ty::Any)
+                .into())
         } else {
             Err(QuasiTypeError::undefined_macro(
                 name.clone(),
