@@ -1,8 +1,5 @@
-//! Corrections to member types IRIS 2026.2's `%Library` declares as `%ObjectHandle`, and to
-//! arguments it declares without a default that are optional in practice. Any other
-//! `%ObjectHandle` is left alone, so a missing correction shows up as an error naming it.
-
-use crate::check::types::{HOTy, ty_from_mask};
+use crate::bindings::ArgMode;
+use crate::check::types::{HOTy, NormalArg, Ty, TyProcedure, VariadicArg, ty_from_mask};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
@@ -26,11 +23,23 @@ struct ArgCorrection {
     optional: bool,
 }
 
-static MASK: LazyLock<BTreeMap<String, BTreeMap<String, Correction>>> =
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Entry {
+    Class(BTreeMap<String, Correction>),
+    Routine(BTreeMap<String, LabelSignature>),
+}
+
+static MASK: LazyLock<BTreeMap<String, Entry>> =
     LazyLock::new(|| serde_json::from_str(include_str!("mask.json")).expect("a valid mask.json"));
 
 fn members(cls: &str) -> impl Iterator<Item = (&'static String, &'static Correction)> {
-    MASK.get(cls).into_iter().flatten()
+    match MASK.get(&format!("{cls}.cls")) {
+        Some(Entry::Class(members)) => Some(members),
+        _ => None,
+    }
+    .into_iter()
+    .flatten()
 }
 
 pub(crate) fn correction(cls: &str, member: &str) -> Option<&'static Correction> {
@@ -71,4 +80,50 @@ pub(crate) fn generic_arg(
     let (name, declared) =
         members(cls).find(|(name, c)| c.parameter.is_some() && name.eq_ignore_ascii_case(param))?;
     args.get(name).cloned().or_else(|| declared.default.clone())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LabelSignature {
+    args: Vec<String>,
+    publics: Option<Vec<String>>,
+    returns: Option<String>,
+}
+
+/// Each arg is `name`, `name=` (optional), `&name` (by reference) or a final `name...`.
+pub(crate) fn label(routine: &str, label: &str) -> Option<Arc<TyProcedure>> {
+    let sig =
+        [".int", ".mac"]
+            .iter()
+            .find_map(|ext| match MASK.get(&format!("{routine}{ext}")) {
+                Some(Entry::Routine(labels)) => labels.get(label),
+                _ => None,
+            })?;
+    let mode = |name: &str| match name.strip_prefix('&') {
+        Some(name) => (ArgMode::ByRef, name.to_string()),
+        None => (ArgMode::Default, name.to_string()),
+    };
+    let mut normal_args = vec![];
+    let mut variadic_arg = None;
+    for arg in &sig.args {
+        if let Some(name) = arg.strip_suffix("...") {
+            let (mode, name) = mode(name);
+            variadic_arg = Some(VariadicArg::new(mode, name, None));
+        } else {
+            let (name, default) = match arg.strip_suffix('=') {
+                Some(name) => (name, Some(String::new())),
+                None => (arg.as_str(), None),
+            };
+            let (mode, name) = mode(name);
+            normal_args.push(NormalArg::new(mode, name, None, default));
+        }
+    }
+    Some(Arc::new(TyProcedure {
+        normal_args,
+        variadic_arg,
+        out: ty_from_mask(sig.returns.clone()).or(Some(Ty::Any)),
+        procedure_block: sig.publics.clone(),
+        uri: None,
+        declared_at: None,
+    }))
 }

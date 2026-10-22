@@ -77,3 +77,30 @@ fn optional_arguments_of_dynamic_objects_are_optional() {
     let diagnostics = workspace.diagnostics(uri);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
+
+#[test]
+fn system_macros_are_checked() {
+    let Some(iris) = iris() else { return };
+    let workspace = Workspace::native(Some(iris), None);
+    let uri = "Live.Macros.cls".to_string();
+    let mut text = "Include %occInclude\n\nClass Live.Macros\n{\nClassMethod Run() As %Status\n{\n Set sc = $$$ERROR($$$GeneralError, \"a\"), sc = $$$ADDSC(sc, $$$OK), sc = $$$EMBEDSC(sc, $$$OK)\n Write $$$ISERR(sc), $$$ISOK(sc), $$$GETERRORCODE(sc), $$$GETERRORMESSAGE(sc, 1)\n Write $$$FormatMessage(\"en\", \"d\", \"id\", \"x %1\", 1), $$$FormatText(\"x %1\", 1), $$$FormatTextHTML(\"x\"), $$$FormatTextJS(\"x\")\n Write $$$Text(\"x\"), $$$TextHTML(\"x\"), $$$TextJS(\"x\"), $$$UPPER(\"x\"), $$$LOWER(\"x\")\n Quit sc\n}\n".to_string();
+    let wrong = [
+        "$$$EMBEDSC(1, 1)",
+        "$$$FormatText(\"x\")",
+        "$$$FormatMessage(\"en\", \"d\", \"id\", \"x\")",
+        "$$$TextHTML(\"x\")",
+    ];
+    for (i, value) in wrong.iter().enumerate() {
+        text += &format!(
+            "ClassMethod Wrong{i}()\n{{\n #Dim o As %DynamicObject\n Set o = {value}\n}}\n"
+        );
+    }
+    workspace.open(uri.clone(), text + "}\n");
+    let diagnostics = workspace.diagnostics(uri);
+    let lines: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == DiagnosticSeverity::Error)
+        .map(|d| d.range.start.line)
+        .collect();
+    assert_eq!(lines, [15, 20, 25, 30], "{diagnostics:?}");
+}
