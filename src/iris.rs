@@ -216,7 +216,9 @@ mod tests {
         assert_eq!(check(" Do Proc^Lib(1,2,3)"), vec!["Too many arguments"]);
         assert_eq!(
             check(" Do Plain^NoSuchRoutine"),
-            vec!["Routine 'NoSuchRoutine' is not defined in the current workspace"]
+            vec![
+                "Cannot find routine 'NoSuchRoutine' in this workspace, and IRIS has no source for it: it is missing, or IRIS has it compiled only"
+            ]
         );
     }
 

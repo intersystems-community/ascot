@@ -277,8 +277,9 @@ impl QuasiTypeError {
         Self::WithoutRange(TypeErrorKind::GotoOutOfBlock { label }, vec![])
     }
 
-    pub fn cannot_find_routine(routine: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::CannotFindRoutine { routine }, vec![])
+    pub fn cannot_find_routine(routine: String, has_iris: bool) -> Self {
+        let source = MissingSource { has_iris };
+        Self::WithoutRange(TypeErrorKind::CannotFindRoutine { routine, source }, vec![])
     }
 
     pub fn continue_not_in_loop() -> Self {
@@ -432,10 +433,16 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
+    /// A `label^routine` call into a routine that isn't in the workspace and whose source IRIS
+    /// can't supply. IRIS doesn't tell a missing routine from one shipped compiled only, so this is
+    /// a warning, and the call is checked as untyped.
     #[code = "A3303"]
-    #[severity = Error]
-    #[message = "Routine '{routine}' is not defined in the current workspace"]
-    CannotFindRoutine { routine: String },
+    #[severity = Warning]
+    #[message = "Cannot find routine '{routine}' in this workspace, {source}"]
+    CannotFindRoutine {
+        routine: String,
+        source: MissingSource,
+    },
     #[code = "A7831"]
     #[severity = Error]
     #[message = "Include file '{name}' is not defined in the current workspace"]
@@ -717,6 +724,22 @@ impl std::fmt::Display for ClassLookup {
                 "confirm class '{cls}' exists — it isn't open in this workspace, with no IRIS connection to check it against"
             )
         }
+    }
+}
+
+/// Why a routine's source is out of reach, depending on whether IRIS was asked.
+#[derive(Debug)]
+pub struct MissingSource {
+    pub has_iris: bool,
+}
+
+impl std::fmt::Display for MissingSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.has_iris {
+            "and IRIS has no source for it: it is missing, or IRIS has it compiled only"
+        } else {
+            "with no IRIS connection to check it against"
+        })
     }
 }
 

@@ -3525,18 +3525,29 @@ mod tests {
                 .contains("Cannot find label 'Nope' in routine 'Callee'")
         );
 
-        // No such routine open in the workspace, and no IRIS connection to fall back to.
+        // No such routine open in the workspace, and no IRIS connection to fall back to: it may
+        // still exist, so a warning, and the code after the call is still checked.
         let uri = "NoSuchRoutine.mac".to_string();
         workspace.open(
             uri.clone(),
-            "ROUTINE NoSuchRoutine\n\n\tDo Foo^Missing()\n\tQuit\n".to_string(),
+            "ROUTINE NoSuchRoutine\n\n\tDo Foo^Missing()\n\tDo ..Foo()\n\tQuit\n".to_string(),
         );
         let diagnostics = workspace.diagnostics(uri);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        let missing = diagnostics
+            .iter()
+            .find(|d| d.message.contains("'Missing'"))
+            .unwrap_or_else(|| panic!("{diagnostics:?}"));
+        assert_eq!(
+            missing.message,
+            "Cannot find routine 'Missing' in this workspace, with no IRIS connection to check it against"
+        );
+        assert_eq!(missing.severity, bindings::DiagnosticSeverity::Warning);
         assert!(
-            diagnostics[0]
-                .message
-                .contains("Routine 'Missing' is not defined in the current workspace")
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("Not in a class context")),
+            "{diagnostics:?}"
         );
     }
 

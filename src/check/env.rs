@@ -1781,7 +1781,7 @@ impl<'a> CodeEnv<'a> {
     ) -> Result<TyProcedureOrAny, QuasiTypeError> {
         match routine {
             // `label^routine`: resolved against that routine's own labels -- in the workspace,
-            // or via IRIS (see `resolve_rtn_labels`); an unresolvable one errors either way.
+            // or via IRIS (see `resolve_rtn_labels`).
             Some(routine) => match (label, offset) {
                 (Some(label), None) => match self.resolve_rtn_labels(&routine) {
                     Some(Some(labels)) => match labels.get(&label) {
@@ -1789,11 +1789,17 @@ impl<'a> CodeEnv<'a> {
                         None => Err(QuasiTypeError::cannot_find_label(label, Some(routine))),
                     },
                     Some(None) => Ok(TyProcedureOrAny::Any),
-                    None => Err(QuasiTypeError::cannot_find_routine(routine)),
+                    None => Err(QuasiTypeError::cannot_find_routine(
+                        routine,
+                        self.has_iris(),
+                    )),
                 },
                 (_, _) => match self.resolve_rtn_labels(&routine) {
                     Some(_) => Ok(TyProcedureOrAny::Any),
-                    None => Err(QuasiTypeError::cannot_find_routine(routine)),
+                    None => Err(QuasiTypeError::cannot_find_routine(
+                        routine,
+                        self.has_iris(),
+                    )),
                 },
             },
             // No explicit routine: the current one.
