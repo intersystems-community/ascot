@@ -24,6 +24,7 @@ the language server depends on them.
 cd bindings/js
 npm install   # first time only
 npm run build
+npm run format
 ```
 
 To test against another checkout without publishing, `npm run build && npm link`

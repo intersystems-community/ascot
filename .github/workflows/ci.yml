@@ -60,6 +60,10 @@ jobs:
         working-directory: bindings/js
         run: npm ci
 
+      - name: Format
+        working-directory: bindings/js
+        run: npm run format:check
+
       - name: Build (wasm -> jco -> tsc)
         working-directory: bindings/js
         run: bash scripts/build.sh
