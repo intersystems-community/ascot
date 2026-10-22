@@ -985,7 +985,6 @@ pub(crate) fn ty_from_declared(t: Option<String>) -> Option<Ty> {
 pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     let mut cls = ClassTy::from("%Library.RelationshipObject".to_string());
     cls.generics = t
-        .filter(|t| !t.is_empty())
         .map(|t| ("ELEMENTTYPE".to_string(), t))
         .into_iter()
         .collect();
