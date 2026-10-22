@@ -324,11 +324,12 @@ impl<T> IntoTypeError<T> for Result<T, QuasiTypeError> {
 // Declares `TypeErrorKind` with each variant's diagnostic code next to it, so the code, the
 // variant's docs.rs anchor and the code shown in its docs all come from one place.
 // Each variant's `#[message]` is its message, with its fields in `{braces}`; its doc comment, if
-// any, explains it.
+// any, explains it. `#[severity]` names a `DiagnosticSeverity` variant.
 macro_rules! type_error_kinds {
     ($(
         $(#[doc = $doc:literal])*
         #[code = $code:literal]
+        #[severity = $severity:ident]
         #[message = $message:literal]
         $variant:ident
         $({ $( $(#[doc = $fdoc:literal])* $field:ident: $fty:ty ),* $(,)? })?,
@@ -347,7 +348,7 @@ macro_rules! type_error_kinds {
                 #[doc = ""]
                 $(#[doc = $doc])*
                 #[doc = ""]
-                #[doc = concat!("Code: `", $code, "`")]
+                #[doc = concat!("Code: `", $code, "`, severity: ", stringify!($severity))]
                 #[doc(alias = $code)]
                 $variant $({ $( $(#[doc = $fdoc])* $field: $fty ),* })?,
             )*
@@ -371,6 +372,12 @@ macro_rules! type_error_kinds {
                 }
             }
 
+            pub fn severity(&self) -> DiagnosticSeverity {
+                match self {
+                    $(Self::$variant { .. } => DiagnosticSeverity::$severity,)*
+                }
+            }
+
             /// This kind's documentation on docs.rs, for the running version.
             pub fn code_description(&self) -> String {
                 let variant = match self {
@@ -390,14 +397,17 @@ macro_rules! type_error_kinds {
 
 type_error_kinds! {
     #[code = "A8061"]
+    #[severity = Error]
     #[message = "Cannot find class '{cls}' in the workspace or on the IRIS instance"]
     CannotFindClass { cls: String },
     /// A class that isn't open in the workspace. With an IRIS connection, the instance doesn't
     /// have it either; without one, there's nothing to check it against.
     #[code = "A1054"]
+    #[severity = Hint]
     #[message = "Cannot {lookup}"]
     UnconfirmedClass { lookup: ClassLookup },
     #[code = "A3139"]
+    #[severity = Error]
     #[message = "Cannot find member '{mem}' in {cls}{suggestions}{dynamic}"]
     CannotFindMember {
         cls: String,
@@ -406,6 +416,7 @@ type_error_kinds! {
         dynamic: DynamicGet,
     },
     #[code = "A9360"]
+    #[severity = Hint]
     #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes a class {reason}"]
     UnconfirmedMember {
         cls: String,
@@ -414,39 +425,51 @@ type_error_kinds! {
         reason: UnconfirmedReason,
     },
     #[code = "A6851"]
+    #[severity = Error]
     #[message = "Cannot find label '{label}' in {routine}"]
     CannotFindLabel { label: String, routine: InRoutine },
     #[code = "A1073"]
+    #[severity = Error]
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
     #[code = "A3303"]
+    #[severity = Error]
     #[message = "Routine '{routine}' is not defined in the current workspace"]
     CannotFindRoutine { routine: String },
     #[code = "A7831"]
+    #[severity = Error]
     #[message = "Include file '{name}' is not defined in the current workspace"]
     CannotFindInclude { name: String },
     #[code = "A5090"]
+    #[severity = Error]
     #[message = "The macro '{name}' expands recursively without end"]
     MacroExpansionTooDeep { name: String },
     #[code = "A8914"]
+    #[severity = Error]
     #[message = "Cannot reference instance-only member '{name}' in a class method"]
     AccessInstanceOnlyMemberFromClassContext { name: String },
     #[code = "A4983"]
+    #[severity = Warning]
     #[message = "Variable '{name}' is already declared"]
     RedeclareVariable { name: String },
     #[code = "A1817"]
+    #[severity = Warning]
     #[message = "Variable '{name}' is already NEW'd; this NEW resets it to undefined, discarding its current value — `Kill {name}` says that explicitly"]
     RedundantNew { name: String },
     #[code = "A6866"]
+    #[severity = Warning]
     #[message = "'{name}' is already NEW'd here — every local variable is implicitly NEW'd on entry to a procedure block"]
     NewInProcedureBlock { name: String },
     #[code = "A5573"]
+    #[severity = Warning]
     #[message = "Class keyword '{keyword}' has no value"]
     ClassKeywordWithoutValue { keyword: String },
     #[code = "A9322"]
+    #[severity = Error]
     #[message = "'{keyword}' is not a recognized property keyword; available: {available}"]
     UnrecognizedPropertyKeyword { keyword: String, available: Available },
     #[code = "A2357"]
+    #[severity = Error]
     #[message = "'{name}' is not a parameter of {class}{hint}"]
     UnrecognizedTypeParam {
         name: String,
@@ -454,21 +477,27 @@ type_error_kinds! {
         hint: TypeParamHint,
     },
     #[code = "A2174"]
+    #[severity = Error]
     #[message = "'{keyword}' is not a recognized parameter keyword; available: {available}"]
     UnrecognizedParameterKeyword { keyword: String, available: Available },
     #[code = "A8317"]
+    #[severity = Error]
     #[message = "'{meta_type}' is not a recognized parameter type; available: {available}"]
     UnrecognizedParameterType { meta_type: String, available: Available },
     #[code = "A7155"]
+    #[severity = Warning]
     #[message = "ObjectScript has no operator precedence and evaluates strictly left-to-right; this may not compute what you expect"]
     MixedPrecedence,
     #[code = "A5718"]
+    #[severity = Warning]
     #[message = "Variable '{name}' is assigned but never read"]
     UnreadAssignment { name: String },
     #[code = "A4476"]
+    #[severity = Warning]
     #[message = "Output parameter '{name}' is never assigned; its caller will get an undefined value"]
     OutputNeverAssigned { name: String },
     #[code = "A8892"]
+    #[severity = Error]
     #[message = "Variable '{name}' is {ty1} in one branch but {ty2} in another"]
     InconsistentDeclaration {
         name: String,
@@ -476,9 +505,11 @@ type_error_kinds! {
         ty2: Declared,
     },
     #[code = "A5967"]
+    #[severity = Error]
     #[message = "{source} is incompatible with {target}"]
     TypeIncompatible { source: Ty, target: Ty },
     #[code = "A9180"]
+    #[severity = Error]
     #[message = "Cannot assign {source} to '{name}' declared as {target}"]
     AssignIncompatible {
         name: String,
@@ -486,54 +517,68 @@ type_error_kinds! {
         target: Ty,
     },
     #[code = "A1203"]
+    #[severity = Warning]
     #[message = "Unreachable code"]
     Unreachable,
     #[code = "A8456"]
+    #[severity = Warning]
     #[message = "This condition is always {value}"]
     ConditionAlways { value: bool },
     #[code = "A8496"]
+    #[severity = Error]
     #[message = "Expression is not a procedure; its type is {ty}"]
     NotProcedure { ty: Ty },
     #[code = "A3671"]
+    #[severity = Error]
     #[message = "ObjectScript has no first-class methods; call it with ()"]
     ProcedureNotCalled,
     #[code = "A6705"]
+    #[severity = Warning]
     #[message = "Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional."]
     TooFewArguments { next_arg: String },
     #[code = "A5523"]
+    #[severity = Error]
     #[message = "Too many arguments"]
     TooManyArguments,
     #[code = "A7139"]
+    #[severity = Error]
     #[message = "$CASE's `:default` must be its last argument"]
     CaseDefaultNotLast,
     #[code = "A3850"]
+    #[severity = Error]
     #[message = "${name} is not a recognized function{suggestions}"]
     UnknownFunction {
         name: String,
         suggestions: Suggestions,
     },
     #[code = "A9399"]
+    #[severity = Error]
     #[message = "${name} is not a recognized special variable{suggestions}"]
     UnknownSpecialVariable {
         name: String,
         suggestions: Suggestions,
     },
     #[code = "A6587"]
+    #[severity = Error]
     #[message = "Invalid macro argument: {reason}"]
     InvalidMacroArgument { reason: String },
     #[code = "A3286"]
+    #[severity = Error]
     #[message = "'{action}' is not a valid $ZSTRIP action: {reason}"]
     InvalidZStripAction {
         action: String,
         reason: &'static str,
     },
     #[code = "A9421"]
+    #[severity = Warning]
     #[message = "{value} is a number here, implicitly converted to the string \"{value}\""]
     NumberImplicitlyConvertedToString { value: String },
     #[code = "A4556"]
+    #[severity = Warning]
     #[message = "This call returns {class}, which Do discards -- consider Set to capture it, or checking it directly"]
     DiscardedReturnValue { class: String },
     #[code = "A2839"]
+    #[severity = Warning]
     #[message = "{what} `{found}` should be written `{expected}`"]
     KeywordStyle {
         // "Command keyword" or "Function".
@@ -542,18 +587,23 @@ type_error_kinds! {
         expected: String,
     },
     #[code = "A7895"]
+    #[severity = Error]
     #[message = "'{format}' is not a valid $FNUMBER format: {reason}"]
     InvalidFNumberFormat { format: String, reason: String },
     #[code = "A6781"]
+    #[severity = Error]
     #[message = "Expected return value of type '{wanted}' but got nothing"]
     ReturnNothingForX { wanted: Ty },
     #[code = "A8997"]
+    #[severity = Warning]
     #[message = "Unexpected return value of type '{actual}'"]
     ReturnXForNothing { actual: Ty },
     #[code = "A4963"]
+    #[severity = Error]
     #[message = "Quit with {actual} inside control structure"]
     QuitXInControl { actual: Ty },
     #[code = "A5579"]
+    #[severity = Warning]
     #[message = "The parameter '{name}' is declared as {wanted} parameter but got {actual} argument"]
     MismatchArgumentAndArgumentMode {
         name: String,
@@ -561,115 +611,63 @@ type_error_kinds! {
         actual: ArgMode,
     },
     #[code = "A6826"]
+    #[severity = Warning]
     #[message = "This '{ty}' value may be undefined{expr}"]
     MaybeUndefined { ty: Ty, expr: Detail },
     #[code = "A7095"]
+    #[severity = Error]
     #[message = "This value is undefined{expr}"]
     Undefined { expr: Detail },
     #[code = "A1368"]
+    #[severity = Error]
     #[message = "Not in a class context"]
     NotInClass,
     #[code = "A7244"]
+    #[severity = Error]
     #[message = "Procedure call returns nothing"]
     ProcedureCallReturnsNothing,
     #[code = "A4025"]
+    #[severity = Error]
     #[message = "The procedure call requires the private variable '{name}' to be public"]
     RequirePrivateVariable { name: String },
     #[code = "A4043"]
+    #[severity = Information]
     #[message = "Type checking not implemented for '{what}'"]
     Unimplemented { what: String },
     #[code = "A2797"]
+    #[severity = Error]
     #[message = "The macro '{name}' is undefined{suggestions}"]
     UndefinedMacro {
         name: String,
         suggestions: Suggestions,
     },
     #[code = "A5789"]
+    #[severity = Error]
     #[message = "CONTINUE is not within a loop"]
     ContinueNotInLoop,
     #[code = "A3119"]
+    #[severity = Error]
     #[message = "The member name {name} is defined twice"]
     DuplicatedMemberName { name: String },
     #[code = "A3717"]
+    #[severity = Error]
     #[message = "Class '{name}' is also declared in {other_uri}"]
     DuplicateClassName { name: String, other_uri: String },
     /// Code that doesn't parse. Where the grammar knows what went wrong, such as an unknown
     /// command or a function given the wrong arguments, the message says so; otherwise it lists
     /// what the parser was looking for.
     #[code = "A8073"]
+    #[severity = Error]
     #[message = "{err}"]
     InvalidSyntax { err: SyntaxErrorText },
     #[code = "A1727"]
+    #[severity = Warning]
     #[message = "Syntax error, looking for:\n{err}"]
     DocumentSyntaxError { err: tygr::Error },
     #[code = "A7548"]
+    #[severity = Warning]
     #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
     MissingQuit,
-}
-
-impl TypeErrorKind {
-    pub fn severity(&self) -> DiagnosticSeverity {
-        match self {
-            TypeErrorKind::ReturnXForNothing { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::Unreachable => DiagnosticSeverity::Warning,
-            TypeErrorKind::ConditionAlways { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::MaybeUndefined { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::Undefined { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::Unimplemented { .. } => DiagnosticSeverity::Information,
-            TypeErrorKind::UndefinedMacro { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::InvalidSyntax { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::MismatchArgumentAndArgumentMode { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::TooFewArguments { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::CannotFindClass { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::CannotFindMember { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::CannotFindLabel { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::GotoOutOfBlock { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::CannotFindRoutine { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::CannotFindInclude { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::MacroExpansionTooDeep { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { .. } => {
-                DiagnosticSeverity::Error
-            }
-            TypeErrorKind::RedeclareVariable { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::RedundantNew { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::NewInProcedureBlock { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::UnrecognizedPropertyKeyword { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::UnrecognizedTypeParam { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::UnrecognizedParameterKeyword { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::UnrecognizedParameterType { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::InconsistentDeclaration { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::TypeIncompatible { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::AssignIncompatible { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::NotProcedure { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::ProcedureNotCalled => DiagnosticSeverity::Error,
-            TypeErrorKind::TooManyArguments => DiagnosticSeverity::Error,
-            TypeErrorKind::UnknownFunction { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::UnknownSpecialVariable { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::InvalidMacroArgument { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::CaseDefaultNotLast => DiagnosticSeverity::Error,
-            TypeErrorKind::InvalidZStripAction { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::NumberImplicitlyConvertedToString { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::DiscardedReturnValue { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::KeywordStyle { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::InvalidFNumberFormat { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::ReturnNothingForX { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::QuitXInControl { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::NotInClass => DiagnosticSeverity::Error,
-            TypeErrorKind::ProcedureCallReturnsNothing => DiagnosticSeverity::Error,
-            TypeErrorKind::RequirePrivateVariable { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::ContinueNotInLoop => DiagnosticSeverity::Error,
-            TypeErrorKind::DuplicatedMemberName { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::MixedPrecedence => DiagnosticSeverity::Warning,
-            TypeErrorKind::UnreadAssignment { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::OutputNeverAssigned { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::MissingQuit => DiagnosticSeverity::Warning,
-            TypeErrorKind::UnconfirmedClass { .. } => DiagnosticSeverity::Hint,
-            TypeErrorKind::UnconfirmedMember { .. } => DiagnosticSeverity::Hint,
-            TypeErrorKind::ClassKeywordWithoutValue { .. } => DiagnosticSeverity::Warning,
-            TypeErrorKind::DuplicateClassName { .. } => DiagnosticSeverity::Error,
-            TypeErrorKind::DocumentSyntaxError { .. } => DiagnosticSeverity::Warning,
-        }
-    }
 }
 
 // The conditional parts of messages, each rendering nothing or a fragment of its kind's message.
