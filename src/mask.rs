@@ -1,9 +1,3 @@
-//! Corrections to member types IRIS 2026.2's `%Library` declares as `%ObjectHandle`, and to
-//! arguments it declares without a default that are optional in practice. Any other
-//! `%ObjectHandle` is left alone, so a missing correction shows up as an error naming it.
-//! Also the signatures of system routine labels that macros call, for routines IRIS has no
-//! source for.
-
 use crate::bindings::ArgMode;
 use crate::check::types::{HOTy, NormalArg, Ty, TyProcedure, VariadicArg, ty_from_mask};
 use serde::Deserialize;
