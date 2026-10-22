@@ -132,6 +132,16 @@ impl TryFrom<&MemberKindSpecificDetails> for MemberTy {
     }
 }
 
+// `mem` as seen from `receiver` -- see `TyProcedure::instantiate`.
+fn instantiate(mut mem: MemberTy, receiver: &ClassTy) -> MemberTy {
+    if let HOTy::Procedure(proc) = &mem.ty
+        && let Some(proc) = proc.instantiate(receiver)
+    {
+        mem.ty = HOTy::Procedure(Arc::new(proc));
+    }
+    mem
+}
+
 impl TryFrom<bindings::MemberInfo> for MemberTy {
     type Error = ();
 
@@ -179,9 +189,14 @@ impl TryFrom<bindings::MemberInfo> for MemberTy {
                 },
                 location,
             }),
-            MemberKind::Relationship(t) => Ok(MemberTy {
+            MemberKind::Relationship(info) => Ok(MemberTy {
                 is_instance_only: true,
-                ty: HOTy::Value(ty_from_declared(t).unwrap_or_default()),
+                ty: HOTy::Value(match info.cardinality {
+                    Some(bindings::Cardinality::Many | bindings::Cardinality::Children) => {
+                        relationship_object(info.t)
+                    }
+                    _ => ty_from_declared(info.t).unwrap_or_default(),
+                }),
                 location,
                 multidimensional: false,
             }),
@@ -306,7 +321,7 @@ impl<'a> WorkspaceEnv<'a> {
                 ..MemberTy::default()
             })
         } else if let Some(mem) = self.get_member_internal(obj, mem, lookup_order(kind)) {
-            Some(self.resolve_object_handle(obj, mem))
+            Some(mem)
         } else {
             self.dispatch_member(obj, kind, is_instance)
                 .or_else(|| self.generated_member(obj, mem))
@@ -664,31 +679,6 @@ impl<'a> WorkspaceEnv<'a> {
         None
     }
 
-    // `%ObjectHandle` in a method signature stands for an instance of the class the
-    // method is called on (e.g. `%New`/`%Open` return it). Substitute the receiver
-    // class into the method's arg and return types.
-    fn resolve_object_handle(&self, obj: &str, mut mem: MemberTy) -> MemberTy {
-        if let HOTy::Procedure(proc) = &mem.ty {
-            let mut proc = proc.as_ref().clone();
-            let sub = |ty: &mut Option<Ty>| {
-                if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = ty
-                    && cty.name == "%Library.ObjectHandle"
-                {
-                    *ty = Some(Ty::from(obj.to_string()));
-                }
-            };
-            for arg in &mut proc.normal_args {
-                sub(&mut arg.ty);
-            }
-            if let Some(arg) = &mut proc.variadic_arg {
-                sub(&mut arg.ty);
-            }
-            sub(&mut proc.out);
-            mem.ty = HOTy::Procedure(Arc::new(proc));
-        }
-        mem
-    }
-
     // Whether `name` is a declared `Parameter` on `cls` -- e.g. %Integer's `MINVAL`, referenced
     // from a property's `(...)` list. `None` if it can't be determined at all.
     pub(crate) fn parameter_exists(&self, cls: &str, name: &str) -> Option<bool> {
@@ -790,7 +780,7 @@ impl<'a> WorkspaceEnv<'a> {
                     .or_else(|| self.dispatch_member(sup, AccessKind::Call, is_instance))
             })
             .or_else(|| self.unverified_any())
-            .map(|mem| self.resolve_object_handle(cls, mem))
+            .map(|mem| instantiate(mem, &ClassTy::from(cls.to_string())))
     }
 
     // `cls`'s direct superclasses, normalized. `None` when `cls` itself can't be resolved.
@@ -915,6 +905,11 @@ impl<'a> WorkspaceEnv<'a> {
         let qualify = |t: &mut Ty| {
             if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = t {
                 c.name = self.qualify_class_name(&c.name, Some(context));
+                for (name, value) in &mut c.params {
+                    if name.eq_ignore_ascii_case("ELEMENTTYPE") {
+                        *value = self.qualify_class_name(value, Some(context));
+                    }
+                }
             }
         };
         match &mut ty.ty {
@@ -940,7 +935,7 @@ impl<'a> WorkspaceEnv<'a> {
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem)))
             })
         })?;
-        MemberTy::try_from(found.clone()).ok()
+        MemberTy::try_from(crate::mask::apply(cls, found.clone())).ok()
     }
 
     pub fn resolve_class(&self, name: &str) -> ClassTy {
@@ -1694,7 +1689,7 @@ impl<'a> CodeEnv<'a> {
             );
             self.add_soft_diagnostic(err.into());
         }
-        if let Some(mem_desc) = result {
+        if let Some(mem_desc) = result.map(|mem| instantiate(mem, obj.class())) {
             if mem_desc.is_instance_only && !obj.is_ins() {
                 Err(
                     QuasiTypeError::access_instance_only_member_from_class_context(mem)
@@ -1897,5 +1892,42 @@ impl<'a> Locator for CodeEnv<'a> {
 
     fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize {
         self.base.line_character_to_offset(line_character) - self.offset
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A `many` relationship IRIS reports is a `%RelationshipObject` of its related class.
+    #[test]
+    fn a_many_relationship_from_iris_binds_its_element_type() {
+        let zero = bindings::Position {
+            line: 0,
+            character: 0,
+        };
+        let children = bindings::MemberInfo {
+            doc: String::new(),
+            before: zero,
+            name: bindings::NameInfo {
+                before: zero,
+                content: "Children".to_string(),
+                after: zero,
+            },
+            aliases: vec![],
+            deprecated: false,
+            kind: MemberKind::Relationship(bindings::RelationshipInfo {
+                t: Some("Ext.Child".to_string()),
+                cardinality: Some(bindings::Cardinality::Many),
+            }),
+            after: zero,
+            uri: None,
+            origin: None,
+        };
+        let HOTy::Value(Ty::OREF(cls)) = MemberTy::try_from(children).unwrap().ty else {
+            panic!("not a class")
+        };
+        assert_eq!(cls.name(), "%Library.RelationshipObject");
+        assert_eq!(cls.class().param("ELEMENTTYPE"), Some("Ext.Child"));
     }
 }

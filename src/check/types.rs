@@ -543,6 +543,9 @@ pub struct ClassTy {
     // type's identity (a `##class(X)` literal and one merged from elsewhere both denote the
     // same class regardless of which happened to resolve this), so excluded from equality.
     pub location: Option<bindings::Location>,
+    // Class parameters bound for this use, e.g. a relationship's `ELEMENTTYPE`. Read only by
+    // signatures written against them (`..#ELEMENTTYPE`), so excluded from equality too.
+    pub params: Vec<(String, String)>,
 }
 
 impl PartialEq for ClassTy {
@@ -565,16 +568,35 @@ impl From<String> for ClassTy {
         ClassTy {
             name,
             location: None,
+            params: vec![],
         }
+    }
+}
+
+impl ClassTy {
+    pub fn param(&self, name: &str) -> Option<&str> {
+        self.params
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
     }
 }
 
 impl std::fmt::Display for ClassTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.name.strip_prefix("%Library.") {
-            Some(this) => write!(f, "%{}", this),
-            None => write!(f, "{}", self.name),
+            Some(this) => write!(f, "%{}", this)?,
+            None => write!(f, "{}", self.name)?,
         }
+        if !self.params.is_empty() {
+            let params: Vec<_> = self
+                .params
+                .iter()
+                .map(|(n, v)| format!("{n} = \"{v}\""))
+                .collect();
+            write!(f, "({})", params.join(", "))?;
+        }
+        Ok(())
     }
 }
 
@@ -586,9 +608,12 @@ pub enum ClsOrIns {
 
 impl ClsOrIns {
     pub fn name(&self) -> &str {
+        &self.class().name
+    }
+
+    pub fn class(&self) -> &ClassTy {
         match self {
-            ClsOrIns::Ins(name) => &name.name,
-            ClsOrIns::Cls(name) => &name.name,
+            ClsOrIns::Ins(cls) | ClsOrIns::Cls(cls) => cls,
         }
     }
 
@@ -962,6 +987,69 @@ pub(crate) fn ty_from_declared(t: Option<String>) -> Option<Ty> {
     t.filter(|t| !t.is_empty()).map(Ty::from)
 }
 
+// A `many`/`children` relationship to `t`: a `%RelationshipObject` of `t`s.
+pub(crate) fn relationship_object(t: Option<String>) -> Ty {
+    let mut cls = ClassTy::from("%Library.RelationshipObject".to_string());
+    cls.params = t
+        .filter(|t| !t.is_empty())
+        .map(|t| ("ELEMENTTYPE".to_string(), t))
+        .into_iter()
+        .collect();
+    Ty::OREF(ClsOrIns::Ins(cls))
+}
+
+// What `Self` in an IRIS-reported signature becomes: a name no class can have, since only those
+// signatures may use `Self` (a workspace class may be named `Self` relative to its package).
+const SELF: &str = "?Self";
+
+// An IRIS-reported signature's type, where the mask (see `crate::mask`) may have written `Self`
+// or a parameter reference like `..#ELEMENTTYPE`; resolved against the receiver by
+// `TyProcedure::instantiate`.
+fn ty_from_iris(t: Option<String>) -> Option<Ty> {
+    match t.as_deref() {
+        Some("Self") => Some(Ty::from(SELF)),
+        _ => ty_from_declared(t),
+    }
+}
+
+impl TyProcedure {
+    // This signature as seen from `receiver`: `Self` is the receiver's class, and a
+    // `..#PARAM` its bound parameter -- `Any` when unbound.
+    pub(crate) fn instantiate(&self, receiver: &ClassTy) -> Option<TyProcedure> {
+        let resolve = |ty: &Option<Ty>| -> Option<Option<Ty>> {
+            let Some(Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c))) = ty else {
+                return None;
+            };
+            if c.name == SELF {
+                Some(Some(Ty::from(receiver.name.clone())))
+            } else {
+                let param = c.name.strip_prefix("..#")?;
+                Some(Some(
+                    receiver
+                        .param(param)
+                        .map(|v| Ty::from(v.to_string()))
+                        .unwrap_or(Ty::Any),
+                ))
+            }
+        };
+        let mut proc = self.clone();
+        let mut changed = false;
+        for ty in proc
+            .normal_args
+            .iter_mut()
+            .map(|arg| &mut arg.ty)
+            .chain(proc.variadic_arg.iter_mut().map(|arg| &mut arg.ty))
+            .chain(std::iter::once(&mut proc.out))
+        {
+            if let Some(resolved) = resolve(ty) {
+                *ty = resolved;
+                changed = true;
+            }
+        }
+        changed.then_some(proc)
+    }
+}
+
 impl From<bindings::MethodInfo> for TyProcedure {
     fn from(
         bindings::MethodInfo {
@@ -977,7 +1065,7 @@ impl From<bindings::MethodInfo> for TyProcedure {
                 .into_iter()
                 .map(|arg: bindings::NormalArg| {
                     let normal =
-                        NormalArg::new(arg.mode, arg.name, ty_from_declared(arg.t), arg.default);
+                        NormalArg::new(arg.mode, arg.name, ty_from_iris(arg.t), arg.default);
                     match arg.declared_at {
                         Some(declared_at) => normal.with_declared_at(declared_at),
                         None => normal,
@@ -985,13 +1073,13 @@ impl From<bindings::MethodInfo> for TyProcedure {
                 })
                 .collect(),
             variadic_arg: variadic.map(|v| {
-                let variadic = VariadicArg::new(v.mode, v.name, ty_from_declared(v.t));
+                let variadic = VariadicArg::new(v.mode, v.name, ty_from_iris(v.t));
                 match v.declared_at {
                     Some(declared_at) => variadic.with_declared_at(declared_at),
                     None => variadic,
                 }
             }),
-            out: ty_from_declared(t),
+            out: ty_from_iris(t),
             procedure_block,
             uri: None,
             declared_at: None,
