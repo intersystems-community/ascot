@@ -29,12 +29,12 @@ use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
 use tygr_objectscript::cos::{CommandLike, KeywordKind, KeywordUse, Spelled};
 use types::*;
 
-pub use env::{DocumentEnv, Labels, WorkspaceEnv};
+pub(crate) use env::{DocumentEnv, Labels, WorkspaceEnv};
 pub use errors::{
-    Available, ClassLookup, Declared, Detail, DynamicGet, InRoutine, IntoTypeError, QuasiTypeError,
-    Suggestions, SuperclassOf, SyntaxErrorText, TypeError, TypeErrorKind, TypeParamHint,
-    UnconfirmedReason,
+    Available, ClassLookup, Declared, Detail, DynamicGet, InRoutine, Suggestions, SuperclassOf,
+    SyntaxErrorText, TypeErrorKind, TypeParamHint, UnconfirmedReason,
 };
+pub(crate) use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
 trait CheckExprInner {
     fn to_power_ty<'a>(
@@ -142,7 +142,7 @@ use crate::{
     details::{self, MemberDetails, MemberKindSpecificDetails, MethodDetails, WithRange},
 };
 
-pub trait CheckMember {
+pub(crate) trait CheckMember {
     fn check(&self, env: &DocumentEnv, cls: &ClassDocument) -> Result<(), TypeError>;
 }
 
@@ -3422,7 +3422,7 @@ impl CheckCommand for Subroutine {
     }
 }
 
-pub fn check_rtn(
+pub(crate) fn check_rtn(
     env: &DocumentEnv,
     rtn: &Routine,
     definitions: &crate::MacroDefinitions,
@@ -3531,7 +3531,6 @@ pub(crate) fn check_cls(
         cls.language.as_ref(),
         cls.mode.as_ref(),
         macro_definitions,
-        has_unresolved_include,
     );
     for member in &cls.members {
         let name = &member.name.it;

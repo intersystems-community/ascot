@@ -1375,10 +1375,6 @@ pub struct ClassDocument<'a> {
     pub language: Option<&'a MethodLanguage>,
     pub mode: Option<&'a CodeMode>,
     pub macro_definitions: MacroDefinitions,
-    // Set when this class has its own `Include`(s) that failed to resolve -- already reported
-    // once at the class header (see `check_cls`), so a method body that fails to expand/parse as
-    // a result shouldn't also raise its own, likely-confusing generic syntax error.
-    pub has_unresolved_include: bool,
 }
 
 impl<'a> ClassDocument<'a> {
@@ -1387,14 +1383,12 @@ impl<'a> ClassDocument<'a> {
         language: Option<&'a MethodLanguage>,
         mode: Option<&'a CodeMode>,
         macro_definitions: MacroDefinitions,
-        has_unresolved_include: bool,
     ) -> Self {
         Self {
             class,
             language,
             mode,
             macro_definitions,
-            has_unresolved_include,
         }
     }
 }

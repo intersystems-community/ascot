@@ -1,4 +1,4 @@
-//! The crate's shared data model, generated from `wit/analyzer.wit` by `wit-bindgen`.
+//! The crate's shared data model, generated from `wit/ascot.wit` by `wit-bindgen`.
 //!
 //! Every `Position`, `Range`, `Diagnostic`, `InlayHint`, `ClassInfo`, `MemberInfo`, ... used by
 //! `lib.rs`, `check/`, `lsp.rs` and `mcp.rs` is defined once in the WIT file and re-exported here,
@@ -8,12 +8,12 @@
 //! import that `atelier.rs` stands in for on native builds. The rest of this file converts
 //! `details.rs`/`check/types.rs` values into those WIT records.
 
-pub struct Analyzer;
+pub(crate) struct Component;
 
 mod wit_bind {
 
     wit_bindgen::generate!({
-        path: "src/wit/analyzer.wit",
+        path: "src/wit/ascot.wit",
         additional_derives: [serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq, Hash],
     });
 
@@ -22,9 +22,9 @@ mod wit_bind {
     pub use iris::ascot::imported::IrisConnection;
 
     #[cfg(target_arch = "wasm32")]
-    use super::Analyzer;
+    use super::Component;
     #[cfg(target_arch = "wasm32")]
-    export!(Analyzer);
+    export!(Component);
 }
 
 impl bindings::Location {

@@ -45,7 +45,7 @@ fn missing_routine_is_none() {
 #[test]
 fn members_of_a_system_class_are_checked() {
     let Some(iris) = iris() else { return };
-    let workspace = Workspace::new_with_iris(Some(iris), None);
+    let workspace = Workspace::native(Some(iris), None);
     let uri = "Live.Probe.cls".to_string();
     workspace.open(
         uri.clone(),
@@ -67,7 +67,7 @@ fn members_of_a_system_class_are_checked() {
 #[test]
 fn optional_arguments_of_dynamic_objects_are_optional() {
     let Some(iris) = iris() else { return };
-    let workspace = Workspace::new_with_iris(Some(iris), None);
+    let workspace = Workspace::native(Some(iris), None);
     let uri = "Live.Dynamic.cls".to_string();
     workspace.open(
         uri.clone(),

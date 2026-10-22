@@ -186,7 +186,7 @@ mod tests {
 
         use crate::bindings::{DiagnosticSeverity, GuestWorkspace};
         let check = |body: &str| {
-            let workspace = crate::Workspace::new_with_iris(Some(Box::new(loaded.clone())), None);
+            let workspace = crate::Workspace::native(Some(Box::new(loaded.clone())), None);
             let uri = "Test.mac".to_string();
             workspace.open(
                 uri.clone(),
