@@ -1,36 +1,61 @@
-//! Corrections to the member signatures IRIS reports, where a declared `%ObjectHandle` says less
-//! than the member returns: an instance of the class it's called on (`This`), or an instance of
-//! a generic parameter (`..#NAME`). A generic parameter is a `CLASSNAME` parameter the mask
-//! declares, its value the default, bound like an ObjectScript parameter. `mask.json` maps a
-//! class to just its corrected members, from IRIS 2026.2's `%Library`; every other
-//! `%ObjectHandle` stays one, so a missing correction shows up as an error naming it.
+//! Corrections to the member types IRIS reports, where a declared `%ObjectHandle` says less than
+//! the member returns: an instance of the class it's called on (`This`), or of a generic
+//! parameter (`..#NAME`) -- a `CLASSNAME` parameter declared here, bound like an ObjectScript
+//! parameter and otherwise its default. `mask.json`, from IRIS 2026.2's `%Library`, maps a class
+//! to its corrected members; every other `%ObjectHandle` stays one, so a missing correction
+//! shows up as an error naming it.
 
-use crate::bindings::{MemberInfo, MemberKind};
+use crate::check::types::{HOTy, ty_from_mask};
+use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-static MASK: LazyLock<BTreeMap<String, Vec<MemberInfo>>> =
-    LazyLock::new(|| serde_json::from_str(include_str!("mask.json")).expect("a valid mask.json"));
-
-pub(crate) fn generic_params(cls: &str) -> impl Iterator<Item = &'static MemberInfo> {
-    MASK.get(cls).into_iter().flatten().filter(
-        |m| matches!(&m.kind, MemberKind::Parameter(p) if p.t.as_deref() == Some("CLASSNAME")),
-    )
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Correction {
+    returns: Option<String>,
+    #[serde(default)]
+    args: BTreeMap<String, String>,
+    parameter: Option<String>,
+    default: Option<String>,
 }
 
-/// `member`, as IRIS reports it on `cls`, with its signature corrected -- if the mask has a
-/// correction for it, in the class declaring it.
-pub(crate) fn correction(cls: &str, member: &MemberInfo) -> Option<MemberInfo> {
-    let origin = member.origin.as_deref().unwrap_or(cls);
-    let generics: Vec<_> = generic_params(origin).collect();
-    let masked = MASK.get(origin).into_iter().flatten().find(|m| {
-        m.name.content.eq_ignore_ascii_case(&member.name.content)
-            && !generics.iter().any(|g| std::ptr::eq(*g, *m))
-    })?;
-    Some(MemberInfo {
-        kind: masked.kind.clone(),
-        ..member.clone()
-    })
+static MASK: LazyLock<BTreeMap<String, BTreeMap<String, Correction>>> =
+    LazyLock::new(|| serde_json::from_str(include_str!("mask.json")).expect("a valid mask.json"));
+
+fn members(cls: &str) -> impl Iterator<Item = (&'static String, &'static Correction)> {
+    MASK.get(cls).into_iter().flatten()
+}
+
+/// The correction for `member`, as declared in `cls`, if the mask has one.
+pub(crate) fn correction(cls: &str, member: &str) -> Option<&'static Correction> {
+    members(cls)
+        .find(|(name, c)| name.eq_ignore_ascii_case(member) && c.parameter.is_none())
+        .map(|(_, c)| c)
+}
+
+impl Correction {
+    pub(crate) fn apply(&self, ty: &mut HOTy) {
+        let HOTy::Procedure(proc) = ty else {
+            return;
+        };
+        let proc = Arc::make_mut(proc);
+        if let Some(returns) = &self.returns {
+            proc.out = ty_from_mask(Some(returns.clone()));
+        }
+        for arg in &mut proc.normal_args {
+            if let Some(t) = self.args.get(&arg.name) {
+                arg.ty = ty_from_mask(Some(t.clone()));
+            }
+        }
+    }
+}
+
+/// `cls`'s generic parameters, by name.
+pub(crate) fn generic_params(cls: &str) -> impl Iterator<Item = &'static str> {
+    members(cls)
+        .filter(|(_, c)| c.parameter.as_deref() == Some("CLASSNAME"))
+        .map(|(name, _)| name.as_str())
 }
 
 /// What generic parameter `param` of `cls` is, given `cls`'s generic arguments: the one bound to
@@ -40,11 +65,7 @@ pub(crate) fn generic_arg(
     args: &BTreeMap<String, String>,
     param: &str,
 ) -> Option<String> {
-    let declared = generic_params(cls).find(|g| g.name.content.eq_ignore_ascii_case(param))?;
-    let MemberKind::Parameter(default) = &declared.kind else {
-        unreachable!("a generic parameter is a Parameter")
-    };
-    args.get(&declared.name.content)
-        .cloned()
-        .or_else(|| default.v.clone())
+    let (name, declared) =
+        members(cls).find(|(name, c)| c.parameter.is_some() && name.eq_ignore_ascii_case(param))?;
+    args.get(name).cloned().or_else(|| declared.default.clone())
 }

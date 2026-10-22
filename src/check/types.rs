@@ -988,7 +988,7 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     cls.generics = t
         .filter(|t| !t.is_empty())
         .zip(crate::mask::generic_params(&cls.name).next())
-        .map(|(t, param)| (param.name.content.clone(), t))
+        .map(|(t, param)| (param.to_string(), t))
         .into_iter()
         .collect();
     Ty::OREF(ClsOrIns::Ins(cls))
@@ -1054,14 +1054,7 @@ impl Instantiate for HOTy {
 }
 
 impl From<bindings::MethodInfo> for TyProcedure {
-    fn from(m: bindings::MethodInfo) -> Self {
-        Self::from_method(m, ty_from_declared)
-    }
-}
-
-impl TyProcedure {
-    // `ty` reads each declared type: `ty_from_declared`, or `ty_from_mask` for a mask's member.
-    pub(crate) fn from_method(
+    fn from(
         bindings::MethodInfo {
             normal,
             variadic,
@@ -1069,13 +1062,13 @@ impl TyProcedure {
             procedure_block,
             body: _,
         }: bindings::MethodInfo,
-        ty: fn(Option<String>) -> Option<Ty>,
     ) -> Self {
         Self {
             normal_args: normal
                 .into_iter()
                 .map(|arg: bindings::NormalArg| {
-                    let normal = NormalArg::new(arg.mode, arg.name, ty(arg.t), arg.default);
+                    let normal =
+                        NormalArg::new(arg.mode, arg.name, ty_from_declared(arg.t), arg.default);
                     match arg.declared_at {
                         Some(declared_at) => normal.with_declared_at(declared_at),
                         None => normal,
@@ -1083,13 +1076,13 @@ impl TyProcedure {
                 })
                 .collect(),
             variadic_arg: variadic.map(|v| {
-                let variadic = VariadicArg::new(v.mode, v.name, ty(v.t));
+                let variadic = VariadicArg::new(v.mode, v.name, ty_from_declared(v.t));
                 match v.declared_at {
                     Some(declared_at) => variadic.with_declared_at(declared_at),
                     None => variadic,
                 }
             }),
-            out: ty(t),
+            out: ty_from_declared(t),
             procedure_block,
             uri: None,
             declared_at: None,

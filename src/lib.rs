@@ -4087,6 +4087,12 @@ mod tests {
     fn masked_iris(name: &str, origin: &str, args: Vec<bindings::NormalArg>) -> Workspace {
         let mut mem = external_method(name, args, Some("%Library.ObjectHandle"));
         mem.origin = Some(origin.to_string());
+        // As IRIS reports them: `%New`/`%Open`/`%OpenId` are class methods.
+        if name.starts_with('%')
+            && let bindings::MemberKind::Method(m) = mem.kind
+        {
+            mem.kind = bindings::MemberKind::ClassMethod(m);
+        }
         Workspace::new_with_iris(
             Some(Box::new(MockIrisClient {
                 is_datatype: None,
