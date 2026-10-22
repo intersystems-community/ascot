@@ -44,6 +44,25 @@ jobs:
       - name: WASM build
         run: cargo build --target=wasm32-unknown-unknown --release --lib
 
+  iris:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The image's default passwords come expired: every request is a 401 until they're not.
+      - name: Start IRIS
+        run: |
+          docker run -d --name iris -p 52773:52773 containers.intersystems.com/intersystems/iris-community:2026.1
+          timeout 300 bash -c 'until curl -s -o /dev/null http://localhost:52773/api/atelier/; do sleep 2; done'
+          docker exec iris iris session IRIS -U %SYS '##class(Security.Users).UnExpireUserPasswords("*")'
+
+      - name: Test
+        run: cargo test --test iris
+        env:
+          ASCOT_TEST_IRIS: http://_SYSTEM:SYS@localhost:52773
+
   npm-bindings:
     runs-on: ubuntu-latest
     steps:

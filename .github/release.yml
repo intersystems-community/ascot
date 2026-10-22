@@ -3,6 +3,8 @@ changelog:
     labels:
       # Version-bump PRs: the release itself, not something it ships.
       - release
+      # CI, tests and tooling: nothing a user sees.
+      - internal
     authors:
       - dependabot
       - dependabot[bot]

@@ -3,6 +3,9 @@
 Open an issue before starting a pull request; PRs without one will be asked to
 open it. Submit PRs from a fork.
 
+Maintainers may open a PR from a branch without an issue for internal changes
+(CI, tests, tooling); label it `internal` to leave it out of the release notes.
+
 ## Development
 
 ```sh
@@ -13,6 +16,17 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 `ascot lsp` runs the stdio LSP server natively.
+
+### Against IRIS
+
+`tests/iris.rs` runs against the instance in `ASCOT_TEST_IRIS`, and does nothing
+without it. To run one in Docker (its default passwords come expired):
+
+```sh
+docker run -d --name iris -p 52773:52773 containers.intersystems.com/intersystems/iris-community:2026.1
+docker exec iris iris session IRIS -U %SYS '##class(Security.Users).UnExpireUserPasswords("*")'
+ASCOT_TEST_IRIS=http://_SYSTEM:SYS@localhost:52773 cargo test --test iris
+```
 
 ### npm package
 
