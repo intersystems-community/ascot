@@ -15,7 +15,6 @@ npm install @intersystems-community/ascot
 ```ts
 import { createWorkspace } from "@intersystems-community/ascot";
 
-// No IRIS instance: the workspace is checked on its own.
 const ws = await createWorkspace();
 
 // `open` is both open and edit: it stores the raw text (the kind comes from the uri's
@@ -41,9 +40,8 @@ await ws.hover("file:///T.cls", { line: 5, character: 7 }); // the `x` being wri
 // "```objectscript\n%DataType = 1\n```"
 ```
 
-To resolve what isn't in the workspace from an IRIS instance, extend `IrisConnection`,
-override the lookups you can answer (each returns `undefined` for "not found"), and pass an
-instance:
+To provide declarations for documents that aren't in the workspace, extend `IrisConnection`,
+override the lookups you can answer, and pass an instance:
 
 ```ts
 import { IrisConnection, type ClassInfo } from "@intersystems-community/ascot";
