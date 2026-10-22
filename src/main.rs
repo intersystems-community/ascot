@@ -111,7 +111,7 @@ enum Command {
 struct StyleArgs {
     /// A JSON file of style rules, such as how command keywords are spelled
     ///
-    /// Its shape is the `style` record in src/wit/analyzer.wit. Without it, no style is checked.
+    /// Its shape is the `style` record in src/wit/ascot.wit. Without it, no style is checked.
     #[arg(long, value_name = "FILE")]
     style: Option<PathBuf>,
 }
@@ -233,13 +233,10 @@ fn declare(url: &str, namespace: Option<&str>, out: &Path) {
 }
 
 async fn run_mcp_server() {
-    use ascot::mcp::AnalyzerMcpServer;
+    use ascot::mcp::Server;
     use rmcp::ServiceExt;
 
-    let server = match AnalyzerMcpServer::new()
-        .serve(rmcp::transport::stdio())
-        .await
-    {
+    let server = match Server::new().serve(rmcp::transport::stdio()).await {
         Ok(server) => server,
         Err(err) => {
             eprintln!("failed to start MCP server: {err:?}");
@@ -289,7 +286,7 @@ fn analyze<'a>(
     }
     files.sort();
 
-    let workspace = Workspace::new_with_iris(iris, style);
+    let workspace = Workspace::native(iris, style);
     insert_files(&workspace, &files);
 
     let count = report_diagnostics(&workspace, &files);
@@ -332,7 +329,7 @@ fn analyze_workspace<'a>(
     diagnose_files.sort();
     diagnose_files.dedup();
 
-    let workspace = Workspace::new_with_iris(iris, style);
+    let workspace = Workspace::native(iris, style);
     insert_files(&workspace, &all_files);
 
     let all_files_set: HashSet<&PathBuf> = all_files.iter().collect();
