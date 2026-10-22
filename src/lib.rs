@@ -44,7 +44,7 @@
 mod atelier;
 pub mod bindings;
 pub mod check;
-pub mod details;
+mod details;
 #[cfg(not(target_arch = "wasm32"))]
 mod iris;
 #[cfg(not(target_arch = "wasm32"))]
@@ -60,18 +60,17 @@ pub use atelier::AtelierConnection;
 #[cfg(not(target_arch = "wasm32"))]
 pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, IrisClient, open as open_iris};
 pub(crate) use macro_expand::MacroDefinitions;
-pub use macro_expand::SourceMap;
+pub(crate) use macro_expand::SourceMap;
 use tygr_objectscript::cos::ClassDefinitionHeader;
 pub use tygr_objectscript::{cos, sql};
 
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    ops::Deref,
     sync::Arc,
 };
 
-use tygr::{Grammar, OLC, Range};
+use tygr::{Grammar, OLC};
 
 use crate::{
     bindings::{
@@ -1131,7 +1130,7 @@ pub(crate) fn tygr_error_to_diagnostics(e: cos::Error, src: &str) -> Diagnostic 
     check::TypeError::document_syntax_error(bindings::Range { start, end }, e).into()
 }
 
-impl bindings::Guest for bindings::Analyzer {
+impl bindings::Guest for bindings::Component {
     type Workspace = Workspace;
 }
 
@@ -1163,20 +1162,6 @@ impl Default for bindings::Range {
         Self {
             start: Default::default(),
             end: Default::default(),
-        }
-    }
-}
-
-pub trait ToNameInfo {
-    fn to_name_info(&self, olc: &OLC) -> NameInfo;
-}
-
-impl<T: Grammar> ToNameInfo for Range<T> {
-    fn to_name_info(&self, olc: &OLC) -> NameInfo {
-        NameInfo {
-            before: Position::from(olc.offset_to_line_character(self.start)),
-            content: self.deref().print(),
-            after: Position::from(olc.offset_to_line_character(self.end)),
         }
     }
 }

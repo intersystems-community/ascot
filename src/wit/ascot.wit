@@ -493,7 +493,7 @@ interface exported {
     }
 }
 
-world analyzer {
+world ascot {
     import imported;
     export exported;
 }

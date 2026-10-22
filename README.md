@@ -113,7 +113,7 @@ calls on demand. Any MCP client that can launch a stdio server works: the
 command is `ascot` (or its full path) and the single argument is `mcp`.
 
 The tools and their parameters are documented on
-[docs.rs](https://docs.rs/ascot/latest/ascot/mcp/struct.AnalyzerMcpServer.html).
+[docs.rs](https://docs.rs/ascot/latest/ascot/mcp/struct.Server.html).
 To try them by hand, the [MCP Inspector](https://github.com/modelcontextprotocol/inspector)
 lists them and calls them from a browser:
 
@@ -226,7 +226,7 @@ code changes.
 
 ### Style
 
-Style rules (the `style` record in [analyzer.wit](src/wit/analyzer.wit)) are a
+Style rules (the `style` record in [ascot.wit](src/wit/ascot.wit)) are a
 JSON file passed with `--style <file>` to `analyze`, `analyze-workspace` and
 `lsp`; the MCP `create_workspace` call and the JavaScript `createWorkspace` take
 the same record directly. Every key is optional; each command keyword or

@@ -4,7 +4,7 @@
 //! Unlike the LSP server it holds many `Workspace`s, keyed by an id the agent chooses:
 //! `create_workspace` (optionally with IRIS connection details, see `iris.rs`) and
 //! `delete_workspace`; `insert`/`remove` documents; then `check`, `inlay_hint`, `hover`,
-//! `definition` and `references`. Each tool is a method of [`AnalyzerMcpServer`], whose doc
+//! `definition` and `references`. Each tool is a method of [`Server`], whose doc
 //! comment is also the description agents get from `tools/list`; parameter and result schemas
 //! derive from these types and the `bindings.rs` ones via `schemars`, field docs included. Built
 //! on the `rmcp` crate; native builds only.
@@ -148,18 +148,18 @@ pub struct ReferencesResult {
 }
 
 #[derive(Clone)]
-pub struct AnalyzerMcpServer {
+pub struct Server {
     workspaces: Arc<RwLock<HashMap<String, Arc<Mutex<Workspace>>>>>,
     tool_router: ToolRouter<Self>,
 }
 
-impl Default for AnalyzerMcpServer {
+impl Default for Server {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AnalyzerMcpServer {
+impl Server {
     pub fn new() -> Self {
         Self {
             workspaces: Arc::new(RwLock::new(HashMap::new())),
@@ -178,7 +178,7 @@ impl AnalyzerMcpServer {
 }
 
 #[tool_router(router = tool_router)]
-impl AnalyzerMcpServer {
+impl Server {
     /// Create a new empty workspace with the given id; fails if it already exists. Do this first,
     /// before inserting any ObjectScript source. Pass `iris` to also resolve out-of-workspace
     /// lookups against a real IRIS instance (or a declaration file `ascot declare` wrote).
@@ -363,7 +363,7 @@ impl AnalyzerMcpServer {
 }
 
 #[tool_handler(router = self.tool_router)]
-impl ServerHandler for AnalyzerMcpServer {
+impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "Real ObjectScript/COS parser and type-checker. Use this instead of guessing at \
