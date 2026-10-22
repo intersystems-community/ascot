@@ -540,7 +540,8 @@ fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<Stri
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 struct MemberRow {
-    #[serde(default)]
+    // IRIS names the column after its `parent` relationship; an `AS Parent` alias keeps the case.
+    #[serde(default, alias = "parent")]
     parent: String,
     #[serde(default)]
     name: String,
@@ -940,8 +941,8 @@ mod tests {
             serde_json::json!({"Name": "A.C", "Super": "", "ClassType": "datatype", "Deprecated": 1}),
         ];
         let member_rows: Vec<MemberRow> = [
-            serde_json::json!({"Parent": "A.C", "Name": "P", "MemberType": "property", "Description": "", "FormalSpec": "", "ReturnType": "%String", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
-            serde_json::json!({"Parent": "A.B", "Name": "M", "MemberType": "method", "Description": "", "FormalSpec": "x:%String", "ReturnType": "%Status", "Stub": "", "ClassMethod": 1, "Deprecated": 0}),
+            serde_json::json!({"parent": "A.C", "Name": "P", "MemberType": "property", "Description": "", "FormalSpec": "", "ReturnType": "%String", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
+            serde_json::json!({"parent": "A.B", "Name": "M", "MemberType": "method", "Description": "", "FormalSpec": "x:%String", "ReturnType": "%Status", "Stub": "", "ClassMethod": 1, "Deprecated": 0}),
             serde_json::json!({"Parent": "A.B", "Name": "", "MemberType": "method", "Description": "", "FormalSpec": "", "ReturnType": "", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
         ]
         .into_iter()
