@@ -22,8 +22,9 @@ use serde_json::Value;
 
 use crate::DocKind;
 use crate::bindings::{
-    ArgMode, ClassInfo, CollectionKind, MemberInfo, MemberKind, MethodInfo, NameInfo, NormalArg,
-    ParameterInfo, Position, PropertyInfo, Range, RoutineSource, VariadicArg,
+    ArgMode, Cardinality, ClassInfo, CollectionKind, MemberInfo, MemberKind, MethodInfo, NameInfo,
+    NormalArg, ParameterInfo, Position, PropertyInfo, Range, RelationshipInfo, RoutineSource,
+    VariadicArg,
 };
 use crate::iris::{DECLARATIONS_VERSION, Declarations, IrisClient};
 
@@ -783,18 +784,21 @@ fn property_type(
 
 fn row_to_member_kind(row: &MemberRow) -> MemberKind {
     match row.member_type.as_str() {
-        // A `many`/`children` relationship is the collection of the related objects.
-        "property" if is_truthy(&row.relationship) => MemberKind::Relationship(
-            match row
+        "property" if is_truthy(&row.relationship) => MemberKind::Relationship(RelationshipInfo {
+            t: row.return_type.clone(),
+            cardinality: match row
                 .cardinality
                 .as_deref()
                 .map(str::to_ascii_lowercase)
                 .as_deref()
             {
-                Some("many" | "children") => Some("%Library.RelationshipObject".to_string()),
-                _ => row.return_type.clone(),
+                Some("one") => Some(Cardinality::One),
+                Some("many") => Some(Cardinality::Many),
+                Some("parent") => Some(Cardinality::Parent),
+                Some("children") => Some(Cardinality::Children),
+                _ => None,
             },
-        ),
+        }),
         "property" => MemberKind::Property(property_type(
             row.collection.as_deref(),
             row.return_type.clone(),
