@@ -1789,12 +1789,22 @@ impl<'a> CodeEnv<'a> {
             // `label^routine`: resolved against that routine's own labels -- in the workspace,
             // or via IRIS (see `resolve_rtn_labels`).
             Some(routine) => match (label, offset) {
-                (Some(label), None) => match self.resolve_rtn_labels(&routine)? {
-                    Some(labels) => match labels.get(&label) {
-                        Some(proc) => Ok(TyProcedureOrAny::Procedure(proc.clone())),
-                        None => Err(QuasiTypeError::cannot_find_label(label, Some(routine))),
+                (Some(label), None) => match self.resolve_rtn_labels(&routine) {
+                    Err(
+                        err @ QuasiTypeError::WithoutRange(
+                            TypeErrorKind::RoutineWithoutSource { .. },
+                            _,
+                        ),
+                    ) => crate::mask::label(&routine, &label)
+                        .map(TyProcedureOrAny::Procedure)
+                        .ok_or(err),
+                    labels => match labels? {
+                        Some(labels) => match labels.get(&label) {
+                            Some(proc) => Ok(TyProcedureOrAny::Procedure(proc.clone())),
+                            None => Err(QuasiTypeError::cannot_find_label(label, Some(routine))),
+                        },
+                        None => Ok(TyProcedureOrAny::Any),
                     },
-                    None => Ok(TyProcedureOrAny::Any),
                 },
                 (_, _) => self
                     .resolve_rtn_labels(&routine)

@@ -1,44 +1,54 @@
 {
- "%Library.DynamicAbstractObject": {
+ "%Library.DynamicAbstractObject.cls": {
   "%ToJSON": { "args": { "outstrm": { "optional": true } } }
  },
- "%Library.DynamicArray": {
+ "%Library.DynamicArray.cls": {
   "%Get": { "args": { "default": { "optional": true }, "type": { "optional": true } } },
   "%OnNew": { "args": { "initvalue": { "optional": true } } },
   "%Push": { "args": { "type": { "optional": true } } },
   "%Set": { "args": { "type": { "optional": true } } }
  },
- "%Library.DynamicObject": {
+ "%Library.DynamicObject.cls": {
   "%Get": { "args": { "default": { "optional": true }, "type": { "optional": true } } },
   "%OnNew": { "args": { "initvalue": { "optional": true } } },
   "%Set": { "args": { "type": { "optional": true } } }
  },
- "%Library.GlobalEdit": {
+ "%Library.GlobalEdit.cls": {
   "Open": { "returns": "This" }
  },
- "%Library.Persistent": {
+ "%Library.Persistent.cls": {
   "%Open": { "returns": "This" },
   "%OpenId": { "returns": "This" }
  },
- "%Library.RelationshipObject": {
+ "%Library.RelationshipObject.cls": {
   "ELEMENTTYPE": { "parameter": "CLASSNAME", "default": "%Library.ObjectHandle" },
   "GetAt": { "returns": "..#ELEMENTTYPE" },
   "GetNext": { "returns": "..#ELEMENTTYPE" },
   "GetOrefAt": { "returns": "..#ELEMENTTYPE" },
   "GetPrevious": { "returns": "..#ELEMENTTYPE" }
  },
- "%Library.ScrollableResultSet": {
+ "%Library.ScrollableResultSet.cls": {
   "%OpenId": { "returns": "This" }
  },
- "%Library.SerialObject": {
+ "%Library.SerialObject.cls": {
   "%Open": { "returns": "This" },
   "%OpenId": { "returns": "This" }
  },
- "%Library.SystemBase": {
+ "%Library.SystemBase.cls": {
   "%New": { "returns": "This", "args": { "initvalue": { "optional": true } } }
  },
- "%Stream.Object": {
+ "%Stream.Object.cls": {
   "%Open": { "returns": "This" },
   "%OpenId": { "returns": "This" }
+ },
+ "%apiOBJ.int": {
+  "EmbedStatus": { "args": ["status", "embed", "all="], "publics": [], "returns": "%Status" }
+ },
+ "%occMessages.int": {
+  "FormatMessage": { "args": ["language", "domain", "id", "default", "args..."], "returns": "%String" },
+  "FormatText": { "args": ["msg", "args..."], "returns": "%String" }
+ },
+ "%occSystem.int": {
+  "AppendStatus": { "args": ["sc1", "sc2"], "publics": [], "returns": "%Status" }
  }
 }
