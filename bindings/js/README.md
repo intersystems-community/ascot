@@ -41,13 +41,14 @@ await ws.hover("file:///T.cls", { line: 5, character: 7 }); // the `x` being wri
 // "```objectscript\n%DataType = 1\n```"
 ```
 
-To resolve what isn't in the workspace from an IRIS instance, extend `Imported`, override the
-lookups you can answer (each returns `undefined` for "not found"), and pass an instance:
+To resolve what isn't in the workspace from an IRIS instance, extend `IrisConnection`,
+override the lookups you can answer (each returns `undefined` for "not found"), and pass an
+instance:
 
 ```ts
-import { Imported, type ClassInfo } from "@intersystems-community/ascot";
+import { IrisConnection, type ClassInfo } from "@intersystems-community/ascot";
 
-class MyIris extends Imported {
+class MyIris extends IrisConnection {
   override async getCls(cls: string): Promise<ClassInfo | undefined> {
     return undefined; // look `cls` up, e.g. over IRIS's REST API
   }
@@ -68,7 +69,7 @@ usually not a removal, so keep the on-disk text open instead.
 
 ## API
 
-`createWorkspace(imported?, style?)` returns a `Workspace` whose methods mirror the engine's
+`createWorkspace(iris?, style?)` returns a `Workspace` whose methods mirror the engine's
 exports, all returning promises. Positions and ranges are zero-based line/character pairs,
 as in the Language Server Protocol.
 

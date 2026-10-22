@@ -25,7 +25,7 @@ export type Workspace = {
 
 /** What ascot asks for when a name isn't defined in the workspace, typically answered from an
  * IRIS instance. Extend it and override what you can answer; the defaults know nothing. */
-export class Imported {
+export class IrisConnection {
 	/** A class's own members and metadata. */
 	async getCls(_cls: string): Promise<ClassInfo | undefined> {
 		return undefined;
@@ -50,7 +50,7 @@ function loadWasm(): Promise<Root> {
 			(name: string) => new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
 			{
 				"iris:ascot/common": {},
-				"iris:ascot/imported": { IrisConnection: Imported },
+				"iris:ascot/imported": { IrisConnection },
 			} as never,
 		),
 	));
@@ -83,12 +83,12 @@ function serialize(instance: RawWorkspace): Workspace {
 }
 
 /**
- * A `Workspace` backed by `imported`, or by nothing outside the workspace, with every method
+ * A `Workspace` backed by `iris`, or by nothing outside the workspace, with every method
  * pre-serialized so overlapping calls (e.g. from two documents' diagnostics resolving
  * concurrently) can't trip ascot's internal `RefCell` borrows or jco's single-in-flight-call
  * constraint.
  */
-export async function createWorkspace(imported?: Imported, style?: Style): Promise<Workspace> {
+export async function createWorkspace(iris?: IrisConnection, style?: Style): Promise<Workspace> {
 	const root = await loadWasm();
-	return serialize(new root.exported.Workspace(imported, style));
+	return serialize(new root.exported.Workspace(iris, style));
 }
