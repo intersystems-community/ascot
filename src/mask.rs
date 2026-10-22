@@ -18,18 +18,19 @@ pub(crate) fn generic_params(cls: &str) -> impl Iterator<Item = &'static MemberI
     )
 }
 
-/// `member`, as IRIS reports it on `cls`, with its signature corrected if the mask has one for
-/// the class declaring it.
-pub(crate) fn apply(cls: &str, mut member: MemberInfo) -> MemberInfo {
+/// `member`, as IRIS reports it on `cls`, with its signature corrected -- if the mask has a
+/// correction for it, in the class declaring it.
+pub(crate) fn correction(cls: &str, member: &MemberInfo) -> Option<MemberInfo> {
     let origin = member.origin.as_deref().unwrap_or(cls);
     let generics: Vec<_> = generic_params(origin).collect();
-    if let Some(masked) = MASK.get(origin).into_iter().flatten().find(|m| {
+    let masked = MASK.get(origin).into_iter().flatten().find(|m| {
         m.name.content.eq_ignore_ascii_case(&member.name.content)
             && !generics.iter().any(|g| std::ptr::eq(*g, *m))
-    }) {
-        member.kind = masked.kind.clone();
-    }
-    member
+    })?;
+    Some(MemberInfo {
+        kind: masked.kind.clone(),
+        ..member.clone()
+    })
 }
 
 /// What generic parameter `param` of `cls` is, given `cls`'s generic arguments: the one bound to

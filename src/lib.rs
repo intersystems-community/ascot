@@ -4174,6 +4174,33 @@ mod tests {
         );
     }
 
+    // Only the mask says `Self`: in a member IRIS reports, it's just a class name.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn only_the_mask_says_self() {
+        let mut mem = external_method("getNextResultSet", vec![], Some("Self"));
+        mem.origin = Some("%Library.SQLGatewayConnection".to_string());
+        let workspace = Workspace::new_with_iris(
+            Some(Box::new(MockIrisClient {
+                is_datatype: None,
+                mem: Some(mem),
+            })),
+            None,
+        );
+        let diagnostics = errors_in(
+            &workspace,
+            "T.cls",
+            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Quit c.getNextResultSet().Next()\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Next' in Self"),
+            "{diagnostics:?}"
+        );
+    }
+
     // A `%ObjectHandle` the mask doesn't correct stays one.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

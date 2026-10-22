@@ -462,6 +462,10 @@ pub enum Ty {
     #[default]
     Any,
     OREF(ClsOrIns),
+    // `Self` and `..#NAME` in a mask-corrected IRIS signature, until `Instantiate` resolves them
+    // against the receiver.
+    This,
+    Param(String),
 }
 
 // A member's resolved type, before it's known whether it's about to be called. ObjectScript has
@@ -646,6 +650,8 @@ impl std::fmt::Display for Ty {
         match self {
             Ty::Any => write!(f, "Any"),
             Ty::OREF(cls_or_ins) => cls_or_ins.fmt(f),
+            Ty::This => write!(f, "Self"),
+            Ty::Param(name) => write!(f, "..#{name}"),
         }
     }
 }
@@ -988,40 +994,32 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     Ty::OREF(ClsOrIns::Ins(cls))
 }
 
-// What `Self` in an IRIS-reported type becomes: a name no class can have, since only those
-// signatures may use `Self` (a workspace class may be named `Self` relative to its package).
-const SELF: &str = "?Self";
-
-// An IRIS-reported type, where the mask (see `crate::mask`) may have written `Self` or a generic
-// parameter as `..#NAME`; resolved against the receiver by `Instantiate`.
-pub(crate) fn ty_from_iris(t: Option<String>) -> Option<Ty> {
-    match t.as_deref() {
-        Some("Self") => Some(Ty::from(SELF)),
+// A type in a mask-corrected member (see `crate::mask`), which may be `Self` or a generic
+// parameter `..#NAME`; resolved against the receiver by `Instantiate`.
+pub(crate) fn ty_from_mask(t: Option<String>) -> Option<Ty> {
+    use tygr_objectscript::cos::SignatureType;
+    match t.as_deref().map(SignatureType::parse) {
+        Some(Ok(SignatureType::This(_))) => Some(Ty::This),
+        Some(Ok(SignatureType::Parameter(_, name))) => Some(Ty::Param(name.print())),
         _ => ty_from_declared(t),
     }
 }
 
 // A type as seen from `receiver`: `Self` is the receiver's class, and `..#NAME` the receiver's
-// generic argument for that parameter. Only mask-corrected IRIS members say either.
+// generic argument for that parameter. Only the mask introduces either.
 pub(crate) trait Instantiate {
     fn instantiate(&mut self, receiver: &ClassTy);
 }
 
 impl Instantiate for Ty {
     fn instantiate(&mut self, receiver: &ClassTy) {
-        let Ty::OREF(oref @ (ClsOrIns::Ins(_) | ClsOrIns::Cls(_))) = self else {
-            return;
-        };
-        let name = oref.name();
-        let resolved = if name == SELF {
-            Some(receiver.name.clone())
-        } else {
-            name.strip_prefix("..#").and_then(|param| {
-                crate::mask::generic_arg(&receiver.name, &receiver.generics, param)
-            })
+        let resolved = match self {
+            Ty::This => Some(receiver.name.clone()),
+            Ty::Param(param) => crate::mask::generic_arg(&receiver.name, &receiver.generics, param),
+            Ty::Any | Ty::OREF(_) => None,
         };
         if let Some(name) = resolved {
-            *oref = oref.replace(ClassTy::from(name));
+            *self = Ty::from(name);
         }
     }
 }
@@ -1056,7 +1054,14 @@ impl Instantiate for HOTy {
 }
 
 impl From<bindings::MethodInfo> for TyProcedure {
-    fn from(
+    fn from(m: bindings::MethodInfo) -> Self {
+        Self::from_method(m, ty_from_declared)
+    }
+}
+
+impl TyProcedure {
+    // `ty` reads each declared type: `ty_from_declared`, or `ty_from_mask` for a mask's member.
+    pub(crate) fn from_method(
         bindings::MethodInfo {
             normal,
             variadic,
@@ -1064,13 +1069,13 @@ impl From<bindings::MethodInfo> for TyProcedure {
             procedure_block,
             body: _,
         }: bindings::MethodInfo,
+        ty: fn(Option<String>) -> Option<Ty>,
     ) -> Self {
         Self {
             normal_args: normal
                 .into_iter()
                 .map(|arg: bindings::NormalArg| {
-                    let normal =
-                        NormalArg::new(arg.mode, arg.name, ty_from_iris(arg.t), arg.default);
+                    let normal = NormalArg::new(arg.mode, arg.name, ty(arg.t), arg.default);
                     match arg.declared_at {
                         Some(declared_at) => normal.with_declared_at(declared_at),
                         None => normal,
@@ -1078,13 +1083,13 @@ impl From<bindings::MethodInfo> for TyProcedure {
                 })
                 .collect(),
             variadic_arg: variadic.map(|v| {
-                let variadic = VariadicArg::new(v.mode, v.name, ty_from_iris(v.t));
+                let variadic = VariadicArg::new(v.mode, v.name, ty(v.t));
                 match v.declared_at {
                     Some(declared_at) => variadic.with_declared_at(declared_at),
                     None => variadic,
                 }
             }),
-            out: ty_from_iris(t),
+            out: ty(t),
             procedure_block,
             uri: None,
             declared_at: None,
@@ -1103,12 +1108,12 @@ mod tests {
         receiver
             .generics
             .insert("ELEMENTTYPE".to_string(), "Demo.Child".to_string());
-        let mut element = HOTy::Value(Ty::from("..#ELEMENTTYPE"));
+        let mut element = HOTy::Value(ty_from_mask(Some("..#ELEMENTTYPE".to_string())).unwrap());
         element.instantiate(&receiver);
         assert!(
             matches!(element, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "Demo.Child")
         );
-        let mut this = HOTy::Value(ty_from_iris(Some("Self".to_string())).unwrap());
+        let mut this = HOTy::Value(ty_from_mask(Some("Self".to_string())).unwrap());
         this.instantiate(&receiver);
         assert!(
             matches!(this, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "%Library.RelationshipObject")

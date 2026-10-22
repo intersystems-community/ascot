@@ -136,6 +136,16 @@ impl TryFrom<bindings::MemberInfo> for MemberTy {
     type Error = ();
 
     fn try_from(member: bindings::MemberInfo) -> Result<Self, Self::Error> {
+        Self::from_member(member, ty_from_declared)
+    }
+}
+
+impl MemberTy {
+    // `ty` reads each declared type: `ty_from_declared`, or `ty_from_mask` for a mask's member.
+    fn from_member(
+        member: bindings::MemberInfo,
+        ty: fn(Option<String>) -> Option<Ty>,
+    ) -> Result<Self, ()> {
         let uri = member.uri.clone();
         let declared_at = bindings::Range {
             start: member.before,
@@ -154,13 +164,13 @@ impl TryFrom<bindings::MemberInfo> for MemberTy {
         match member.kind {
             MemberKind::Method(m) => Ok(MemberTy {
                 is_instance_only: true,
-                ty: HOTy::Procedure(Arc::new(locate(TyProcedure::from(m)))),
+                ty: HOTy::Procedure(Arc::new(locate(TyProcedure::from_method(m, ty)))),
                 location,
                 multidimensional: false,
             }),
             MemberKind::ClassMethod(m) => Ok(MemberTy {
                 is_instance_only: false,
-                ty: HOTy::Procedure(Arc::new(locate(TyProcedure::from(m)))),
+                ty: HOTy::Procedure(Arc::new(locate(TyProcedure::from_method(m, ty)))),
                 location,
                 multidimensional: false,
             }),
@@ -173,9 +183,9 @@ impl TryFrom<bindings::MemberInfo> for MemberTy {
                             bindings::CollectionKind::List => CollectionClass::List,
                             bindings::CollectionKind::Array => CollectionClass::Array,
                         },
-                        element: ty_from_iris(info.t).unwrap_or_default(),
+                        element: ty(info.t).unwrap_or_default(),
                     },
-                    None => HOTy::Value(ty_from_iris(info.t).unwrap_or_default()),
+                    None => HOTy::Value(ty(info.t).unwrap_or_default()),
                 },
                 location,
             }),
@@ -926,7 +936,10 @@ impl<'a> WorkspaceEnv<'a> {
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem)))
             })
         })?;
-        MemberTy::try_from(crate::mask::apply(cls, found.clone())).ok()
+        match crate::mask::correction(cls, found) {
+            Some(corrected) => MemberTy::from_member(corrected, ty_from_mask).ok(),
+            None => MemberTy::try_from(found.clone()).ok(),
+        }
     }
 
     pub fn resolve_class(&self, name: &str) -> ClassTy {
@@ -1650,7 +1663,8 @@ impl<'a> CodeEnv<'a> {
         let is_parameter = mem.is_parameter();
         let mem = mem.id();
         match ty {
-            Ty::Any => Ok(MemberTy {
+            // An unresolved `Self`/`..#NAME` is a mask bug; say nothing about it.
+            Ty::Any | Ty::This | Ty::Param(_) => Ok(MemberTy {
                 is_instance_only: false,
                 ty: HOTy::Value(Ty::Any),
                 ..MemberTy::default()
