@@ -18,9 +18,10 @@ pub trait IrisClient: Send + Sync {
     // The raw source of the include file `name.inc` (an `#include`d name), for one that isn't
     // already open in the workspace.
     fn get_inc(&self, name: &str) -> Option<RoutineSource>;
-    // The raw source of the routine `name` (`.mac` if it exists, else `.int`), for a `Label^name`
-    // call into a routine that isn't open in the workspace.
-    fn get_int_or_mac(&self, name: &str) -> Option<RoutineSource>;
+    // The raw source of the routine `name` (`.int` if it exists, else `.mac`), for a `Label^name`
+    // call into a routine that isn't open in the workspace: `None` if there is no such routine,
+    // `Some(None)` if there is but its source isn't available.
+    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>>;
 }
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
@@ -45,7 +46,7 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, 
     Ok(Box::new(declarations))
 }
 
-pub(crate) const DECLARATIONS_VERSION: u32 = 1;
+pub(crate) const DECLARATIONS_VERSION: u32 = 2;
 
 /// One namespace as `ascot declare` writes it: each `IrisClient` lookup as a map from its
 /// argument to its answer.
@@ -56,8 +57,9 @@ pub struct Declarations {
     pub classes: BTreeMap<String, ClassInfo>,
     /// `.inc` files by name without the extension.
     pub includes: BTreeMap<String, RoutineSource>,
-    /// Routines by name without the extension: the `.int` where there is one, else the `.mac`.
-    pub routines: BTreeMap<String, RoutineSource>,
+    /// Routines by name without the extension: the `.int` where there is one, else the `.mac`;
+    /// `None` for one whose source isn't available (e.g. only its OBJ).
+    pub routines: BTreeMap<String, Option<RoutineSource>>,
 }
 
 impl Declarations {
@@ -74,9 +76,8 @@ impl Declarations {
             .map_err(|e| format!("{} is not an ascot declaration file: {e}", path.display()))?;
         if declarations.version != DECLARATIONS_VERSION {
             return Err(format!(
-                "{} is a version {} declaration file; this ascot reads version {DECLARATIONS_VERSION}",
-                path.display(),
-                declarations.version
+                "{} was written by an incompatible ascot; regenerate it with `ascot declare`",
+                path.display()
             ));
         }
         Ok(declarations)
@@ -97,7 +98,7 @@ impl IrisClient for Declarations {
         self.includes.get(name).cloned()
     }
 
-    fn get_int_or_mac(&self, name: &str) -> Option<RoutineSource> {
+    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
         self.routines.get(name).cloned()
     }
 }
@@ -156,16 +157,17 @@ mod tests {
             routines: [
                 (
                     "Lib".to_string(),
-                    source(
+                    Some(source(
                         "ROUTINE Lib [Type=INT]\n Quit\nPlain\n Quit\nWithArgs(a,&b,c...)\n \
                          Quit\nProc(a,b) [x,y] {\n Quit\n}\n",
-                    ),
+                    )),
                 ),
                 // Doesn't parse, so its labels are unknown and any call into it is taken on trust.
                 (
                     "Unparsed".to_string(),
-                    source("ROUTINE Unparsed [Type=INT]\n{\n"),
+                    Some(source("ROUTINE Unparsed [Type=INT]\n{\n")),
                 ),
+                ("Compiled".to_string(), None),
             ]
             .into(),
         };
@@ -216,10 +218,10 @@ mod tests {
         assert_eq!(check(" Do Proc^Lib(1,2,3)"), vec!["Too many arguments"]);
         assert_eq!(
             check(" Do Plain^NoSuchRoutine"),
-            vec![
-                "Cannot find routine 'NoSuchRoutine' in this workspace, and IRIS has no source for it: it is missing, or IRIS has only its OBJ"
-            ]
+            vec!["Cannot find routine 'NoSuchRoutine' in the workspace or on the IRIS instance"]
         );
+        // Only a hint, which `check` leaves out.
+        assert_eq!(check(" Do Plain^Compiled(1)"), Vec::<String>::new());
     }
 
     #[test]
@@ -248,11 +250,14 @@ mod tests {
         let path = std::env::temp_dir().join(format!("ascot-version-{}.json", std::process::id()));
         std::fs::write(
             &path,
-            r#"{"version":2,"namespace":"USER","classes":{},"includes":{},"routines":{}}"#,
+            r#"{"version":1,"namespace":"USER","classes":{},"includes":{},"routines":{}}"#,
         )
         .unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
-        assert!(err.contains("is a version 2 declaration file"), "{err}");
+        assert!(
+            err.contains("was written by an incompatible ascot"),
+            "{err}"
+        );
         std::fs::write(&path, "Class A.B {}").unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
         let _ = std::fs::remove_file(&path);

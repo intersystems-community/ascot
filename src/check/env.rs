@@ -1114,19 +1114,25 @@ impl<'a> WorkspaceEnv<'a> {
     // A workspace-wide routine's label -> signature map, for a cross-routine label call
     // (`Do Foo^OtherRoutine()`) -- same "resolve by name" shape as `resolve_cls_uri` for a
     // cross-class method call. Falls back to `IrisConnection::get_int_or_mac` when `name` isn't
-    // open in the workspace; `None` only when neither finds it (or there's no IRIS connection).
-    // `None` when there is no such routine; `Some(None)` when there is one but it can't be
-    // parsed (a grammar gap), so its labels are simply unknown.
-    pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Option<Option<Labels>> {
+    // open in the workspace. `Ok(None)` when the routine can't be parsed (a grammar gap), so its
+    // labels are simply unknown; `Err` says why its labels are out of reach.
+    pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Result<Option<Labels>, QuasiTypeError> {
         if let Some(uri) = self.resolve_rtn_uri(name) {
             let rtn = self.workspace.rtn_details(&uri).ok();
-            return Some(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
+            return Ok(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
         }
-        let source = self.workspace.iris.as_ref()?.get_int_or_mac(name)?;
+        let Some(iris) = self.workspace.iris.as_ref() else {
+            return Err(QuasiTypeError::cannot_find_routine(name.into()));
+        };
+        let source = match iris.get_int_or_mac(name) {
+            Some(Some(source)) => source,
+            Some(None) => return Err(QuasiTypeError::routine_without_source(name.into())),
+            None => return Err(QuasiTypeError::routine_not_on_iris(name.into())),
+        };
         if let Some((text, labels)) = self.workspace.iris_rtn_labels.borrow().get(name)
             && *text == source.text
         {
-            return Some(labels.clone());
+            return Ok(labels.clone());
         }
         let expanded = self
             .workspace
@@ -1138,7 +1144,7 @@ impl<'a> WorkspaceEnv<'a> {
             .iris_rtn_labels
             .borrow_mut()
             .insert(name.to_string(), (source.text, labels.clone()));
-        Some(labels)
+        Ok(labels)
     }
 
     // `""` is also the null OREF (`$$$NULLOREF`), so it goes wherever an object is expected:
@@ -1783,24 +1789,16 @@ impl<'a> CodeEnv<'a> {
             // `label^routine`: resolved against that routine's own labels -- in the workspace,
             // or via IRIS (see `resolve_rtn_labels`).
             Some(routine) => match (label, offset) {
-                (Some(label), None) => match self.resolve_rtn_labels(&routine) {
-                    Some(Some(labels)) => match labels.get(&label) {
+                (Some(label), None) => match self.resolve_rtn_labels(&routine)? {
+                    Some(labels) => match labels.get(&label) {
                         Some(proc) => Ok(TyProcedureOrAny::Procedure(proc.clone())),
                         None => Err(QuasiTypeError::cannot_find_label(label, Some(routine))),
                     },
-                    Some(None) => Ok(TyProcedureOrAny::Any),
-                    None => Err(QuasiTypeError::cannot_find_routine(
-                        routine,
-                        self.has_iris(),
-                    )),
+                    None => Ok(TyProcedureOrAny::Any),
                 },
-                (_, _) => match self.resolve_rtn_labels(&routine) {
-                    Some(_) => Ok(TyProcedureOrAny::Any),
-                    None => Err(QuasiTypeError::cannot_find_routine(
-                        routine,
-                        self.has_iris(),
-                    )),
-                },
+                (_, _) => self
+                    .resolve_rtn_labels(&routine)
+                    .map(|_| TyProcedureOrAny::Any),
             },
             // No explicit routine: the current one.
             None => match (label, offset) {

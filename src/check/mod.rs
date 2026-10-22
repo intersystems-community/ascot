@@ -3132,9 +3132,16 @@ fn call_label<'a>(
     args: &Option<MthArgList>,
     range: bindings::Range,
 ) -> Result<Option<Ty>, QuasiTypeError> {
-    // A routine with no source in reach may still exist: say so, and check the call as untyped.
+    // A routine whose labels are out of reach: say why, and check the call as untyped.
     let proc = match env.resolve_label(label, offset, routine) {
-        Err(err @ QuasiTypeError::WithoutRange(TypeErrorKind::CannotFindRoutine { .. }, _)) => {
+        Err(
+            err @ QuasiTypeError::WithoutRange(
+                TypeErrorKind::CannotFindRoutine { .. }
+                | TypeErrorKind::RoutineNotOnIris { .. }
+                | TypeErrorKind::RoutineWithoutSource { .. },
+                _,
+            ),
+        ) => {
             env.add_soft_diagnostic(err.into_error(|| range).into());
             TyProcedureOrAny::Any
         }

@@ -10,7 +10,7 @@
 //! implementation of the same WIT `imported.iris-connection` interface, which can't be
 //! implemented by native Rust guest code at all (see `src/lib.rs`'s `IrisHandle`).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -64,6 +64,7 @@ pub struct AtelierConnection {
     broken: AtomicBool,
     cls_cache: Cache<Option<ClassInfo>>,
     routine_cache: Cache<Option<RoutineSource>>,
+    obj_cache: Cache<bool>,
 }
 
 impl AtelierConnection {
@@ -107,6 +108,7 @@ impl AtelierConnection {
             broken: AtomicBool::new(false),
             cls_cache: Cache::new(),
             routine_cache: Cache::new(),
+            obj_cache: Cache::new(),
         })
     }
 
@@ -171,6 +173,8 @@ impl AtelierConnection {
             .collect();
         class_names.sort();
         let inc_names = self.docnames("INC").ok_or_else(failed)?;
+        // Every routine, system ones included, so one without source is still declared.
+        let all_rtn_names = self.routine_names("*.mac,*.int,*.obj").ok_or_else(failed)?;
         // Hand-written routines only (`generated=0` skips a class's `.int`s), read as the `.int`
         // where there is one (compiled, macro-expanded; what `get_int_or_mac` prefers), else the `.mac`.
         let mut rtn_names: Vec<String> = [
@@ -196,7 +200,7 @@ impl AtelierConnection {
         let next = AtomicUsize::new(0);
         let classes = Mutex::new(BTreeMap::new());
         let includes = Mutex::new(BTreeMap::new());
-        let routines = Mutex::new(BTreeMap::new());
+        let routines = Mutex::new(all_rtn_names.into_iter().map(|name| (name, None)).collect());
         let (tx, rx) = mpsc::channel();
         let mut done = [0; 3];
         std::thread::scope(|scope| {
@@ -255,7 +259,7 @@ impl AtelierConnection {
     fn fetch_routines(
         &self,
         batch: &[String],
-        out: &Mutex<BTreeMap<String, RoutineSource>>,
+        out: &Mutex<BTreeMap<String, Option<RoutineSource>>>,
     ) -> bool {
         let ints: Vec<String> = batch.iter().map(|name| format!("{name}.int")).collect();
         let Some(mut found) = self.docs(&ints) else {
@@ -272,7 +276,9 @@ impl AtelierConnection {
             };
             found.extend(more);
         }
-        out.lock().unwrap().extend(by_basename(found));
+        out.lock()
+            .unwrap()
+            .extend(by_basename(found).map(|(name, source)| (name, Some(source))));
         true
     }
 
@@ -432,12 +438,34 @@ impl IrisClient for AtelierConnection {
 
     // The `.int` first: it is the instance's own macro expansion of the `.mac`, so no expansion
     // (or include resolution) is needed on our side.
-    fn get_int_or_mac(&self, name: &str) -> Option<RoutineSource> {
-        self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")])
+    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
+        if let Some(source) = self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")]) {
+            return Some(Some(source));
+        }
+        // Without source, its OBJ says whether it exists; when that can't be asked, it might.
+        let exists = self.obj_cache.get(name).or_else(|| {
+            let exists = self.routine_names(&format!("{name}.obj"))?.contains(name);
+            self.obj_cache.set(name.to_string(), exists);
+            Some(exists)
+        });
+        exists.unwrap_or(true).then_some(None)
     }
 }
 
 impl AtelierConnection {
+    // The routines matching `spec` (e.g. `*.mac,*.int,*.obj`), system ones included and
+    // class-generated ones (`Name.1.obj`) left out.
+    fn routine_names(&self, spec: &str) -> Option<BTreeSet<String>> {
+        let sql = "SELECT Name FROM %Library.RoutineMgr_StudioOpenDialog(?,1,1,1,1,1,0,\
+                   'NOT (Name %PATTERN ''.E1\".\"0.1\"G\"1N1\".obj\"'' AND $LENGTH(Name,''.'') > 3)')";
+        let rows = self.query(sql, &[spec])?;
+        Some(
+            rows.iter()
+                .filter_map(|row| Some(doc_basename(row.get("Name")?.as_str()?)))
+                .collect(),
+        )
+    }
+
     // The first of `docs` that exists, cached under the whole candidate list.
     fn fetch_routine(&self, docs: &[String]) -> Option<RoutineSource> {
         let key = docs.join("|");

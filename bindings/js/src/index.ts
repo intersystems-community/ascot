@@ -36,9 +36,12 @@ export class IrisConnection {
 	async getInc(_name: string): Promise<RoutineSource | undefined> {
 		return undefined;
 	}
-	/** The text of `name.int` or `name.mac`. */
-	async getIntOrMac(_name: string): Promise<RoutineSource | undefined> {
-		return undefined;
+	/** The text of `name.int` or `name.mac`: `{ tag: "none" }` if there is no such routine,
+	 * `val: undefined` if its source isn't available. */
+	async getIntOrMac(
+		_name: string,
+	): Promise<{ tag: "none" } | { tag: "some"; val: RoutineSource | undefined }> {
+		return { tag: "some", val: undefined };
 	}
 }
 

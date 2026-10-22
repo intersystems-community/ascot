@@ -438,9 +438,10 @@ interface imported {
         get-inc: func(name: string) -> option<routine-source>;
         // The raw source of the routine `name` -- its `.int` if it has one (the instance's own
         // macro expansion, so nothing to expand here), else its `.mac` -- for a `Label^name`
-        // call into a routine that isn't open in the workspace. Kept apart from `get-inc`
-        // because a `.inc` and a `.mac` may share a name (`%occMessages`).
-        get-int-or-mac: func(name: string) -> option<routine-source>;
+        // call into a routine that isn't open in the workspace: `none` if there is no such
+        // routine, `some(none)` if there may be but its source isn't available. Kept apart from
+        // `get-inc` because a `.inc` and a `.mac` may share a name (`%occMessages`).
+        get-int-or-mac: func(name: string) -> option<option<routine-source>>;
     }
 }
 
