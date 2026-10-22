@@ -1655,7 +1655,7 @@ impl<'a> CodeEnv<'a> {
         let is_parameter = mem.is_parameter();
         let mem = mem.id();
         match ty {
-            // An unresolved `This`/`..#NAME` is a mask bug; say nothing about it.
+            // An unresolved `This`/`..#NAME` is a mask bug.
             Ty::Any | Ty::This | Ty::Param(_) => Ok(MemberTy {
                 is_instance_only: false,
                 ty: HOTy::Value(Ty::Any),
@@ -1900,7 +1900,6 @@ impl<'a> Locator for CodeEnv<'a> {
 mod tests {
     use super::*;
 
-    // A `many` relationship IRIS reports is a `%RelationshipObject` of its related class.
     #[test]
     fn a_many_relationship_from_iris_binds_its_element_type() {
         let zero = bindings::Position {

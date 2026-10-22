@@ -4054,8 +4054,6 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
-    // `%ObjectHandle` is taken at its word, even on the class's own method: a member access on
-    // one is reported, naming it, rather than guessed to be the class itself.
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn object_handle_parameter_is_just_an_object_handle() {
@@ -4081,13 +4079,11 @@ mod tests {
         );
     }
 
-    // IRIS reports `%ObjectHandle` for these; the mask (src/mask.json) corrects them. The mock
-    // gives every class the one member, declared by `origin`.
+    // The mock gives every class this one member, declared by `origin`.
     #[cfg(not(target_arch = "wasm32"))]
     fn masked_iris(name: &str, origin: &str, args: Vec<bindings::NormalArg>) -> Workspace {
         let mut mem = external_method(name, args, Some("%Library.ObjectHandle"));
         mem.origin = Some(origin.to_string());
-        // As IRIS reports them: `%New`/`%Open`/`%OpenId` are class methods.
         if name.starts_with('%')
             && let bindings::MemberKind::Method(m) = mem.kind
         {
@@ -4116,8 +4112,6 @@ mod tests {
         without_hints(workspace.diagnostics(uri.to_string()))
     }
 
-    // #72: a `many` relationship is a `%RelationshipObject` of the related class, and the mask
-    // has `GetNext` return its `..#ELEMENTTYPE`.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_many_relationship_s_get_next_returns_the_related_class() {
@@ -4180,7 +4174,6 @@ mod tests {
         );
     }
 
-    // Only the mask says `This`: in a member IRIS reports, it's just a class name.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn only_the_mask_says_this() {
@@ -4207,7 +4200,6 @@ mod tests {
         );
     }
 
-    // A `%ObjectHandle` the mask doesn't correct stays one.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn an_unmasked_object_handle_stays_one() {

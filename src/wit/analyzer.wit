@@ -74,7 +74,7 @@ interface common {
 
     enum cardinality { one, many, parent, children }
 
-    // `t` is the related class. A `many` or `children` relationship holds a collection of them.
+    // `t` is the related class.
     record relationship-info {
         t: option<string>,
         cardinality: option<cardinality>,

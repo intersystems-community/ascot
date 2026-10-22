@@ -1,9 +1,5 @@
-//! Corrections to the member types IRIS reports, where a declared `%ObjectHandle` says less than
-//! the member returns: an instance of the class it's called on (`This`), or of a generic
-//! parameter (`..#NAME`) -- a `CLASSNAME` parameter declared here, bound like an ObjectScript
-//! parameter and otherwise its default. `mask.json`, from IRIS 2026.2's `%Library`, maps a class
-//! to its corrected members; every other `%ObjectHandle` stays one, so a missing correction
-//! shows up as an error naming it.
+//! Corrections to member types IRIS 2026.2's `%Library` declares as `%ObjectHandle`. Any other
+//! `%ObjectHandle` is left alone, so a missing correction shows up as an error naming it.
 
 use crate::check::types::{HOTy, ty_from_mask};
 use serde::Deserialize;
@@ -27,7 +23,6 @@ fn members(cls: &str) -> impl Iterator<Item = (&'static String, &'static Correct
     MASK.get(cls).into_iter().flatten()
 }
 
-/// The correction for `member`, as declared in `cls`, if the mask has one.
 pub(crate) fn correction(cls: &str, member: &str) -> Option<&'static Correction> {
     members(cls)
         .find(|(name, c)| name.eq_ignore_ascii_case(member) && c.parameter.is_none())
@@ -51,8 +46,7 @@ impl Correction {
     }
 }
 
-/// What generic parameter `param` of `cls` is, given `cls`'s generic arguments: the one bound to
-/// it, or else its default. `None` if `cls` has no such parameter.
+/// The argument bound to `cls`'s generic parameter `param`, or else its default.
 pub(crate) fn generic_arg(
     cls: &str,
     args: &BTreeMap<String, String>,

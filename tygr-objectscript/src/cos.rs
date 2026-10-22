@@ -693,8 +693,7 @@ impl MemberRef {
 
 pub type Field = Prefix<StringEq!("."), Range<MemberRef>>;
 
-// A type in an IRIS-reported signature, where ascot's mask may write `This` (the class the
-// member is used on) or a class parameter (`..#ELEMENTTYPE`) instead of a class name.
+// A type in ascot's mask: `This` (the receiver's class), a class parameter, or a class name.
 #[derive(Grammar)]
 pub enum SignatureType {
     This(StringEq!("This")),

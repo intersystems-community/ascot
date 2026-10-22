@@ -462,8 +462,7 @@ pub enum Ty {
     #[default]
     Any,
     OREF(ClsOrIns),
-    // `This` and `..#NAME` in a mask-corrected IRIS signature, until `Instantiate` resolves them
-    // against the receiver.
+    // Only from the mask, and resolved by `Instantiate`.
     This,
     Param(String),
 }
@@ -548,7 +547,7 @@ pub struct ClassTy {
     // type's identity (a `##class(X)` literal and one merged from elsewhere both denote the
     // same class regardless of which happened to resolve this), so excluded from equality.
     pub location: Option<bindings::Location>,
-    // Generic arguments by parameter name (see `crate::mask`), excluded from equality too.
+    // By parameter name; excluded from equality, like `location`.
     pub generics: BTreeMap<String, String>,
 }
 
@@ -981,7 +980,6 @@ pub(crate) fn ty_from_declared(t: Option<String>) -> Option<Ty> {
     t.filter(|t| !t.is_empty()).map(Ty::from)
 }
 
-// A `many`/`children` relationship to `t`: a `%RelationshipObject` of `t`s.
 pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     let mut cls = ClassTy::from("%Library.RelationshipObject".to_string());
     cls.generics = t
@@ -991,8 +989,6 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     Ty::OREF(ClsOrIns::Ins(cls))
 }
 
-// A type in a mask-corrected member (see `crate::mask`), which may be `This` or a generic
-// parameter `..#NAME`; resolved against the receiver by `Instantiate`.
 pub(crate) fn ty_from_mask(t: Option<String>) -> Option<Ty> {
     use tygr_objectscript::cos::SignatureType;
     match t.as_deref().map(SignatureType::parse) {
@@ -1002,8 +998,7 @@ pub(crate) fn ty_from_mask(t: Option<String>) -> Option<Ty> {
     }
 }
 
-// A type as seen from `receiver`: `This` is the receiver's class, and `..#NAME` the receiver's
-// generic argument for that parameter. Only the mask introduces either.
+// `This` is the receiver's class; `..#NAME` its generic argument for that parameter.
 pub(crate) trait Instantiate {
     fn instantiate(&mut self, receiver: &ClassTy);
 }
@@ -1091,7 +1086,6 @@ impl From<bindings::MethodInfo> for TyProcedure {
 mod tests {
     use super::*;
 
-    // Not only signatures: any member type, here a property's, is resolved against the receiver.
     #[test]
     fn a_value_type_is_instantiated_too() {
         let mut receiver = ClassTy::from("%Library.RelationshipObject".to_string());
