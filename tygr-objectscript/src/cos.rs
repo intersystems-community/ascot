@@ -693,6 +693,14 @@ impl MemberRef {
 
 pub type Field = Prefix<StringEq!("."), Range<MemberRef>>;
 
+// A type in ascot's mask: `This` (the receiver's class), a class parameter, or a class name.
+#[derive(Grammar)]
+pub enum SignatureType {
+    This(StringEq!("This")),
+    Parameter(StringEq!("..#"), ClassMemberName),
+    Class(ClassName),
+}
+
 #[derive(Grammar)]
 #[grammar(inline)]
 pub struct SufOp {
@@ -6596,6 +6604,22 @@ mod regression_tests {
         let keywords = methods(&cls)[0].header.keywords.as_ref().expect("keywords");
         assert!(keywords.get("CodeMode").is_some());
         assert!(keywords.get("Language").is_none());
+    }
+
+    #[test]
+    fn signature_types() {
+        assert!(matches!(
+            SignatureType::parse("This"),
+            Ok(SignatureType::This(_))
+        ));
+        assert!(matches!(
+            SignatureType::parse("..#ELEMENTTYPE"),
+            Ok(SignatureType::Parameter(_, name)) if name.print() == "ELEMENTTYPE"
+        ));
+        assert!(matches!(
+            SignatureType::parse("%Library.ObjectHandle"),
+            Ok(SignatureType::Class(_))
+        ));
     }
 
     #[test]

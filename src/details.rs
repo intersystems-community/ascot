@@ -702,7 +702,9 @@ fn process_member(
                     ty: if keyword_value(&keywords, "Cardinality").is_some_and(|c| {
                         c.eq_ignore_ascii_case("many") || c.eq_ignore_ascii_case("children")
                     }) {
-                        Some(Ty::from("%Library.RelationshipObject"))
+                        Some(crate::check::types::relationship_object(
+                            as_type.as_deref().map(|t| t.class_name.print()),
+                        ))
                     } else {
                         as_type.as_deref().map(Ty::from)
                     },

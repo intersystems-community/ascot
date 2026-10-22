@@ -72,10 +72,18 @@ interface common {
         multidimensional: bool,
     }
 
+    enum cardinality { one, many, parent, children }
+
+    // `t` is the related class.
+    record relationship-info {
+        t: option<string>,
+        cardinality: option<cardinality>,
+    }
+
     variant member-kind {
         parameter(parameter-info),
         property(property-info),
-        relationship(option<string>),
+        relationship(relationship-info),
         foreign-key,
         index,
         projection,

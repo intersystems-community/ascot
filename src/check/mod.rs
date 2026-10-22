@@ -416,22 +416,10 @@ impl MethodDetails {
         };
         let diagnostics_mark = env.base.soft_diagnostics_mark();
         let references_mark = env.base.references_mark();
-        // An `%ObjectHandle` parameter of this class's own method is an instance of this class --
-        // IRIS's `Self` stand-in (`Config.*`'s `Load(Obj As %ObjectHandle)`), read the same way
-        // `resolve_object_handle` reads one in a member's signature.
-        let this_ty = Ty::OREF(ClsOrIns::Ins(cls.class.clone()));
-        let is_object_handle =
-            |ty: &Ty| matches!(ty, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "%Library.ObjectHandle");
         let local_args = self
             .args()
             .into_iter()
-            .map(|arg| {
-                let mut arg = WithRange::new(arg.it, shifter.unrange(arg.range));
-                if arg.it.ty.as_ref().is_some_and(is_object_handle) {
-                    arg.it.ty = Some(this_ty.clone());
-                }
-                arg
-            })
+            .map(|arg| WithRange::new(arg.it, shifter.unrange(arg.range)))
             .collect();
         let local_out = self.out.clone().map(Some);
         let local_out = WithRange::new(local_out.it, shifter.unrange(local_out.range));

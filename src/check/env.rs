@@ -179,9 +179,14 @@ impl TryFrom<bindings::MemberInfo> for MemberTy {
                 },
                 location,
             }),
-            MemberKind::Relationship(t) => Ok(MemberTy {
+            MemberKind::Relationship(info) => Ok(MemberTy {
                 is_instance_only: true,
-                ty: HOTy::Value(ty_from_declared(t).unwrap_or_default()),
+                ty: HOTy::Value(match info.cardinality {
+                    Some(bindings::Cardinality::Many | bindings::Cardinality::Children) => {
+                        relationship_object(info.t)
+                    }
+                    _ => ty_from_declared(info.t).unwrap_or_default(),
+                }),
                 location,
                 multidimensional: false,
             }),
@@ -261,12 +266,13 @@ impl<'a> WorkspaceEnv<'a> {
                 .or_else(|| self.unverified_any());
         }
         if mem == "%New" {
-            // Every object class has `%New`; `%OnNew` only decides its arguments, so failing to
-            // resolve it (a superclass outside the workspace, no IRIS connection) leaves the
-            // arguments unchecked rather than making `%New` itself unverified.
+            // Every object class has `%New`. It takes the arguments of a class's own `%OnNew`,
+            // else its own; failing to resolve either (a superclass outside the workspace, no
+            // IRIS connection) leaves them unchecked rather than making `%New` unverified.
             let was_unverified = self.unverified.get();
             let proc: TyProcedureOrAny = self
-                .get_member_internal(obj, "%OnNew", &[MemberNs::HigherOrder])
+                .find_override(obj, "%OnNew", "%Library.RegisteredObject")
+                .or_else(|| self.get_member_internal(obj, "%New", &[MemberNs::HigherOrder]))
                 .and_then(|mem| mem.ty.as_procedure().ok())
                 .unwrap_or_default();
             self.unverified.set(was_unverified);
@@ -306,7 +312,7 @@ impl<'a> WorkspaceEnv<'a> {
                 ..MemberTy::default()
             })
         } else if let Some(mem) = self.get_member_internal(obj, mem, lookup_order(kind)) {
-            Some(self.resolve_object_handle(obj, mem))
+            Some(mem)
         } else {
             self.dispatch_member(obj, kind, is_instance)
                 .or_else(|| self.generated_member(obj, mem))
@@ -368,16 +374,22 @@ impl<'a> WorkspaceEnv<'a> {
     // `%RegisteredObject`/`%SerialObject` inherits a meaningless default implementation of them
     // from `%Library.SystemBase`, so a match only counts if its declaring class differs.
     fn find_dispatch_hook(&self, cls: &str, mem: &str) -> Option<MemberTy> {
-        self.find_dispatch_hook_in(cls, mem, &mut HashSet::new())
+        self.find_override(cls, mem, "%Library.SystemBase")
     }
 
-    fn find_dispatch_hook_in(
+    // `mem` as `cls` or an ancestor declares it, other than the default every class inherits
+    // from `default_origin`.
+    fn find_override(&self, cls: &str, mem: &str, default_origin: &str) -> Option<MemberTy> {
+        self.find_override_in(cls, mem, default_origin, &mut HashSet::new())
+    }
+
+    fn find_override_in(
         &self,
         cls: &str,
         mem: &str,
+        default_origin: &str,
         seen: &mut HashSet<String>,
     ) -> Option<MemberTy> {
-        const DISPATCH_DEFAULT_ORIGIN: &str = "%Library.SystemBase";
         if !seen.insert(cls.to_string()) {
             return None;
         }
@@ -390,11 +402,11 @@ impl<'a> WorkspaceEnv<'a> {
             }
             self.qualified_extends(cls, &details)
                 .into_iter()
-                .find_map(|sup| self.find_dispatch_hook_in(&sup, mem, seen))
+                .find_map(|sup| self.find_override_in(&sup, mem, default_origin, seen))
         } else if let Some(iris) = self.workspace.iris.as_ref() {
             let found = iris.get_cls(cls)?.members.into_iter().find(|m| {
                 m.name.content.eq_ignore_ascii_case(mem)
-                    && m.origin.as_deref() != Some(DISPATCH_DEFAULT_ORIGIN)
+                    && m.origin.as_deref() != Some(default_origin)
             })?;
             MemberTy::try_from(found).ok()
         } else {
@@ -664,31 +676,6 @@ impl<'a> WorkspaceEnv<'a> {
         None
     }
 
-    // `%ObjectHandle` in a method signature stands for an instance of the class the
-    // method is called on (e.g. `%New`/`%Open` return it). Substitute the receiver
-    // class into the method's arg and return types.
-    fn resolve_object_handle(&self, obj: &str, mut mem: MemberTy) -> MemberTy {
-        if let HOTy::Procedure(proc) = &mem.ty {
-            let mut proc = proc.as_ref().clone();
-            let sub = |ty: &mut Option<Ty>| {
-                if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = ty
-                    && cty.name == "%Library.ObjectHandle"
-                {
-                    *ty = Some(Ty::from(obj.to_string()));
-                }
-            };
-            for arg in &mut proc.normal_args {
-                sub(&mut arg.ty);
-            }
-            if let Some(arg) = &mut proc.variadic_arg {
-                sub(&mut arg.ty);
-            }
-            sub(&mut proc.out);
-            mem.ty = HOTy::Procedure(Arc::new(proc));
-        }
-        mem
-    }
-
     // Whether `name` is a declared `Parameter` on `cls` -- e.g. %Integer's `MINVAL`, referenced
     // from a property's `(...)` list. `None` if it can't be determined at all.
     pub(crate) fn parameter_exists(&self, cls: &str, name: &str) -> Option<bool> {
@@ -790,7 +777,10 @@ impl<'a> WorkspaceEnv<'a> {
                     .or_else(|| self.dispatch_member(sup, AccessKind::Call, is_instance))
             })
             .or_else(|| self.unverified_any())
-            .map(|mem| self.resolve_object_handle(cls, mem))
+            .map(|mut mem| {
+                mem.ty.instantiate(&ClassTy::from(cls.to_string()));
+                mem
+            })
     }
 
     // `cls`'s direct superclasses, normalized. `None` when `cls` itself can't be resolved.
@@ -915,6 +905,9 @@ impl<'a> WorkspaceEnv<'a> {
         let qualify = |t: &mut Ty| {
             if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = t {
                 c.name = self.qualify_class_name(&c.name, Some(context));
+                for arg in c.generics.values_mut() {
+                    *arg = self.qualify_class_name(arg, Some(context));
+                }
             }
         };
         match &mut ty.ty {
@@ -940,7 +933,12 @@ impl<'a> WorkspaceEnv<'a> {
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem)))
             })
         })?;
-        MemberTy::try_from(found.clone()).ok()
+        let mut ty = MemberTy::try_from(found.clone()).ok()?;
+        let origin = found.origin.as_deref().unwrap_or(cls);
+        if let Some(correction) = crate::mask::correction(origin, &found.name.content) {
+            correction.apply(&mut ty.ty);
+        }
+        Some(ty)
     }
 
     pub fn resolve_class(&self, name: &str) -> ClassTy {
@@ -1670,7 +1668,8 @@ impl<'a> CodeEnv<'a> {
         let is_parameter = mem.is_parameter();
         let mem = mem.id();
         match ty {
-            Ty::Any => Ok(MemberTy {
+            // An unresolved `This`/`..#NAME` is a mask bug.
+            Ty::Any | Ty::This | Ty::Param(_) => Ok(MemberTy {
                 is_instance_only: false,
                 ty: HOTy::Value(Ty::Any),
                 ..MemberTy::default()
@@ -1700,7 +1699,11 @@ impl<'a> CodeEnv<'a> {
             );
             self.add_soft_diagnostic(err.into());
         }
-        if let Some(mem_desc) = result {
+        let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
+        if let Some(mem_desc) = result.map(|mut mem| {
+            mem.ty.instantiate(receiver);
+            mem
+        }) {
             if mem_desc.is_instance_only && !obj.is_ins() {
                 Err(
                     QuasiTypeError::access_instance_only_member_from_class_context(mem)
@@ -1895,5 +1898,45 @@ impl<'a> Locator for CodeEnv<'a> {
 
     fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize {
         self.base.line_character_to_offset(line_character) - self.offset
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_many_relationship_from_iris_binds_its_element_type() {
+        let zero = bindings::Position {
+            line: 0,
+            character: 0,
+        };
+        let children = bindings::MemberInfo {
+            doc: String::new(),
+            before: zero,
+            name: bindings::NameInfo {
+                before: zero,
+                content: "Children".to_string(),
+                after: zero,
+            },
+            aliases: vec![],
+            deprecated: false,
+            kind: MemberKind::Relationship(bindings::RelationshipInfo {
+                t: Some("Ext.Child".to_string()),
+                cardinality: Some(bindings::Cardinality::Many),
+            }),
+            after: zero,
+            uri: None,
+            origin: None,
+        };
+        let HOTy::Value(Ty::OREF(ClsOrIns::Ins(cls))) = MemberTy::try_from(children).unwrap().ty
+        else {
+            panic!("not an instance")
+        };
+        assert_eq!(cls.name, "%Library.RelationshipObject");
+        assert_eq!(
+            cls.generics,
+            [("ELEMENTTYPE".to_string(), "Ext.Child".to_string())].into()
+        );
     }
 }

@@ -50,6 +50,7 @@ mod iris;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lsp;
 mod macro_expand;
+mod mask;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
 mod render;
@@ -4080,8 +4081,7 @@ mod tests {
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
-    fn object_handle_parameter_stands_for_the_class_itself() {
-        // The mock resolves %RegisteredObject (with no members), so a miss is a hard error.
+    fn object_handle_parameter_is_just_an_object_handle() {
         let workspace = Workspace::new_with_iris(
             Some(Box::new(MockIrisClient {
                 is_datatype: None,
@@ -4092,14 +4092,186 @@ mod tests {
         let uri = "T.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.T Extends %RegisteredObject {\nProperty P As %String;\nClassMethod M(obj As %ObjectHandle) {\n set obj.P = 1\n write obj.Q\n quit\n}\n}\n".to_string(),
+            "Class Test.T Extends %RegisteredObject {\nProperty P As %String;\nClassMethod M(obj As %ObjectHandle) {\n set obj.P = 1\n quit\n}\n}\n".to_string(),
         );
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
             diagnostics[0]
                 .message
-                .contains("Cannot find member 'Q' in Test.T"),
+                .contains("Cannot find member 'P' in %ObjectHandle"),
+            "{diagnostics:?}"
+        );
+    }
+
+    // The mock gives every class this one member, declared by `origin`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn masked_iris(name: &str, origin: &str, args: Vec<bindings::NormalArg>) -> Workspace {
+        let mut mem = external_method(name, args, Some("%Library.ObjectHandle"));
+        mem.origin = Some(origin.to_string());
+        if name.starts_with('%')
+            && let bindings::MemberKind::Method(m) = mem.kind
+        {
+            mem.kind = bindings::MemberKind::ClassMethod(m);
+        }
+        Workspace::new_with_iris(
+            Some(Box::new(MockIrisClient {
+                is_datatype: None,
+                mem: Some(mem),
+            })),
+            None,
+        )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn by_ref_key() -> Vec<bindings::NormalArg> {
+        vec![bindings::NormalArg {
+            mode: bindings::ArgMode::ByRef,
+            ..external_arg("key", None)
+        }]
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn errors_in(workspace: &Workspace, uri: &str, text: &str) -> Vec<bindings::Diagnostic> {
+        workspace.open(uri.to_string(), text.to_string());
+        without_hints(workspace.diagnostics(uri.to_string()))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_many_relationship_s_get_next_returns_the_related_class() {
+        let workspace = masked_iris("GetNext", "%Library.RelationshipObject", by_ref_key());
+        workspace.open(
+            "Child.cls".to_string(),
+            "Class Demo.Child Extends %Persistent {\nProperty Name As %String;\nRelationship Owner As Demo.Parent [ Cardinality = one, Inverse = Children ];\n}\n".to_string(),
+        );
+        let diagnostics = errors_in(
+            &workspace,
+            "Parent.cls",
+            "Class Demo.Parent Extends %Persistent {\nRelationship Children As Child [ Cardinality = many, Inverse = Owner ];\nMethod Names() As %String {\n Set key = \"\", names = \"\"\n For {\n  Set child = ..Children.GetNext(.key)\n  Quit:key=\"\"\n  Set names = names_child.Name_child.Missing\n }\n Quit names\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Missing' in Demo.Child"),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn an_unbound_element_type_is_the_mask_default() {
+        let workspace = masked_iris("GetNext", "%Library.RelationshipObject", by_ref_key());
+        let diagnostics = errors_in(
+            &workspace,
+            "T.cls",
+            "Class Test.T Extends %RegisteredObject {\nMethod M(r As %RelationshipObject) As %String {\n Set key = \"\"\n Set x = r.GetNext(.key)\n Quit x.Anything\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Anything' in %ObjectHandle"),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_masked_open_method_returns_the_class_it_is_called_on() {
+        let workspace = masked_iris(
+            "%OpenId",
+            "%Library.Persistent",
+            vec![external_arg("id", None)],
+        );
+        let diagnostics = errors_in(
+            &workspace,
+            "P.cls",
+            "Class Test.P Extends %Persistent {\nProperty Name As %String;\nClassMethod M() As %String {\n Set p = ##class(Test.P).%OpenId(1)\n Quit p.Name_p.Missing\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Missing' in Test.P"),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn only_the_mask_says_this() {
+        let mut mem = external_method("getNextResultSet", vec![], Some("This"));
+        mem.origin = Some("%Library.SQLGatewayConnection".to_string());
+        let workspace = Workspace::new_with_iris(
+            Some(Box::new(MockIrisClient {
+                is_datatype: None,
+                mem: Some(mem),
+            })),
+            None,
+        );
+        let diagnostics = errors_in(
+            &workspace,
+            "T.cls",
+            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Quit c.getNextResultSet().Next()\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Next' in This"),
+            "{diagnostics:?}"
+        );
+    }
+
+    // Without its own `%OnNew`, `%New` takes its own arguments: an optional `initvalue`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn new_takes_its_own_arguments_unless_on_new_is_overridden() {
+        let workspace = masked_iris(
+            "%New",
+            "%Library.SystemBase",
+            vec![external_arg("initvalue", None)],
+        );
+        let diagnostics = errors_in(
+            &workspace,
+            "N.cls",
+            "Class Test.N Extends %RegisteredObject {\nProperty Name As %String;\nClassMethod M() As %String {\n Set a = ##class(Test.N).%New()\n Set b = ##class(Test.N).%New(\"init\")\n Quit a.Name_b.Missing\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Missing' in Test.N"),
+            "{diagnostics:?}"
+        );
+        let diagnostics = errors_in(
+            &workspace,
+            "O.cls",
+            "Class Test.O Extends %RegisteredObject {\nMethod %OnNew(name As %String) As %Status {\n Write name\n Quit 1\n}\nClassMethod M() {\n Set o = ##class(Test.O).%New(\"x\", \"extra\")\n Write o\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("Too many arguments"),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn an_unmasked_object_handle_stays_one() {
+        let workspace = masked_iris("getNextResultSet", "%Library.SQLGatewayConnection", vec![]);
+        let diagnostics = errors_in(
+            &workspace,
+            "T.cls",
+            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Set rs = c.getNextResultSet()\n Quit rs.Next()\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Next' in %ObjectHandle"),
             "{diagnostics:?}"
         );
     }

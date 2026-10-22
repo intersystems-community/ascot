@@ -7,6 +7,7 @@
 //! and rendered for inlay hints and hover text. Mostly plain data; the few class lookups needed
 //! to normalize a type go through `WorkspaceEnv`.
 
+use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -461,6 +462,9 @@ pub enum Ty {
     #[default]
     Any,
     OREF(ClsOrIns),
+    // Only from the mask, and resolved by `Instantiate`.
+    This,
+    Param(String),
 }
 
 // A member's resolved type, before it's known whether it's about to be called. ObjectScript has
@@ -543,6 +547,8 @@ pub struct ClassTy {
     // type's identity (a `##class(X)` literal and one merged from elsewhere both denote the
     // same class regardless of which happened to resolve this), so excluded from equality.
     pub location: Option<bindings::Location>,
+    // By parameter name; excluded from equality, like `location`.
+    pub generics: BTreeMap<String, String>,
 }
 
 impl PartialEq for ClassTy {
@@ -565,6 +571,7 @@ impl From<String> for ClassTy {
         ClassTy {
             name,
             location: None,
+            generics: BTreeMap::new(),
         }
     }
 }
@@ -572,9 +579,18 @@ impl From<String> for ClassTy {
 impl std::fmt::Display for ClassTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.name.strip_prefix("%Library.") {
-            Some(this) => write!(f, "%{}", this),
-            None => write!(f, "{}", self.name),
+            Some(this) => write!(f, "%{}", this)?,
+            None => write!(f, "{}", self.name)?,
         }
+        if !self.generics.is_empty() {
+            let args: Vec<_> = self
+                .generics
+                .iter()
+                .map(|(name, arg)| format!("{name} = \"{arg}\""))
+                .collect();
+            write!(f, "({})", args.join(", "))?;
+        }
+        Ok(())
     }
 }
 
@@ -633,6 +649,8 @@ impl std::fmt::Display for Ty {
         match self {
             Ty::Any => write!(f, "Any"),
             Ty::OREF(cls_or_ins) => cls_or_ins.fmt(f),
+            Ty::This => write!(f, "This"),
+            Ty::Param(name) => write!(f, "..#{name}"),
         }
     }
 }
@@ -962,6 +980,74 @@ pub(crate) fn ty_from_declared(t: Option<String>) -> Option<Ty> {
     t.filter(|t| !t.is_empty()).map(Ty::from)
 }
 
+pub(crate) fn relationship_object(t: Option<String>) -> Ty {
+    let mut cls = ClassTy::from("%Library.RelationshipObject".to_string());
+    cls.generics = t
+        .map(|t| ("ELEMENTTYPE".to_string(), t))
+        .into_iter()
+        .collect();
+    Ty::OREF(ClsOrIns::Ins(cls))
+}
+
+pub(crate) fn ty_from_mask(t: Option<String>) -> Option<Ty> {
+    use tygr_objectscript::cos::SignatureType;
+    match t.as_deref().map(SignatureType::parse) {
+        Some(Ok(SignatureType::This(_))) => Some(Ty::This),
+        Some(Ok(SignatureType::Parameter(_, name))) => Some(Ty::Param(name.print())),
+        _ => ty_from_declared(t),
+    }
+}
+
+// `This` is the receiver's class; `..#NAME` its generic argument for that parameter.
+pub(crate) trait Instantiate {
+    fn instantiate(&mut self, receiver: &ClassTy);
+}
+
+impl Instantiate for Ty {
+    fn instantiate(&mut self, receiver: &ClassTy) {
+        match self {
+            Ty::This => *self = Ty::ins(receiver.clone()),
+            Ty::Param(param) => {
+                if let Some(arg) =
+                    crate::mask::generic_arg(&receiver.name, &receiver.generics, param)
+                {
+                    *self = Ty::from(arg);
+                }
+            }
+            Ty::Any | Ty::OREF(_) => {}
+        }
+    }
+}
+
+impl<T: Instantiate> Instantiate for Option<T> {
+    fn instantiate(&mut self, receiver: &ClassTy) {
+        if let Some(t) = self {
+            t.instantiate(receiver);
+        }
+    }
+}
+
+impl Instantiate for TyProcedure {
+    fn instantiate(&mut self, receiver: &ClassTy) {
+        for arg in &mut self.normal_args {
+            arg.ty.instantiate(receiver);
+        }
+        if let Some(arg) = &mut self.variadic_arg {
+            arg.ty.instantiate(receiver);
+        }
+        self.out.instantiate(receiver);
+    }
+}
+
+impl Instantiate for HOTy {
+    fn instantiate(&mut self, receiver: &ClassTy) {
+        match self {
+            HOTy::Value(ty) | HOTy::Collection { element: ty, .. } => ty.instantiate(receiver),
+            HOTy::Procedure(proc) => Arc::make_mut(proc).instantiate(receiver),
+        }
+    }
+}
+
 impl From<bindings::MethodInfo> for TyProcedure {
     fn from(
         bindings::MethodInfo {
@@ -996,5 +1082,28 @@ impl From<bindings::MethodInfo> for TyProcedure {
             uri: None,
             declared_at: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_value_type_is_instantiated_too() {
+        let mut receiver = ClassTy::from("%Library.RelationshipObject".to_string());
+        receiver
+            .generics
+            .insert("ELEMENTTYPE".to_string(), "Demo.Child".to_string());
+        let mut element = HOTy::Value(ty_from_mask(Some("..#ELEMENTTYPE".to_string())).unwrap());
+        element.instantiate(&receiver);
+        assert!(
+            matches!(element, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "Demo.Child")
+        );
+        let mut this = HOTy::Value(ty_from_mask(Some("This".to_string())).unwrap());
+        this.instantiate(&receiver);
+        assert!(
+            matches!(this, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "%Library.RelationshipObject")
+        );
     }
 }

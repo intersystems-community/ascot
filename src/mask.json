@@ -1,0 +1,30 @@
+{
+ "%Library.GlobalEdit": {
+  "Open": { "returns": "This" }
+ },
+ "%Library.Persistent": {
+  "%Open": { "returns": "This" },
+  "%OpenId": { "returns": "This" }
+ },
+ "%Library.RelationshipObject": {
+  "ELEMENTTYPE": { "parameter": "CLASSNAME", "default": "%Library.ObjectHandle" },
+  "GetAt": { "returns": "..#ELEMENTTYPE" },
+  "GetNext": { "returns": "..#ELEMENTTYPE" },
+  "GetOrefAt": { "returns": "..#ELEMENTTYPE" },
+  "GetPrevious": { "returns": "..#ELEMENTTYPE" }
+ },
+ "%Library.ScrollableResultSet": {
+  "%OpenId": { "returns": "This" }
+ },
+ "%Library.SerialObject": {
+  "%Open": { "returns": "This" },
+  "%OpenId": { "returns": "This" }
+ },
+ "%Library.SystemBase": {
+  "%New": { "returns": "This", "args": { "initvalue": { "optional": true } } }
+ },
+ "%Stream.Object": {
+  "%Open": { "returns": "This" },
+  "%OpenId": { "returns": "This" }
+ }
+}

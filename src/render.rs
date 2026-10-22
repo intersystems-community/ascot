@@ -23,8 +23,8 @@ pub(crate) fn format_member_hover(member: &MemberInfo) -> String {
             let t = info.t.as_deref().map(|t| format!("{of}{t}"));
             format!("Property {name}{}", format_as(t.as_deref()))
         }
-        MemberKind::Relationship(ty) => {
-            format!("Relationship {name}{}", format_as(ty.as_deref()))
+        MemberKind::Relationship(info) => {
+            format!("Relationship {name}{}", format_as(info.t.as_deref()))
         }
         MemberKind::Parameter(info) => {
             let default = info
