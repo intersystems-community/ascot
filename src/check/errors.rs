@@ -440,8 +440,6 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
-    /// A `label^routine` call into a routine that isn't in the workspace, with no IRIS connection
-    /// to say whether it exists. The call is checked as untyped.
     #[code = "A3303"]
     #[severity = Warning]
     #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
@@ -450,8 +448,6 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot find routine '{routine}' in the workspace or on the IRIS instance"]
     RoutineNotOnIris { routine: String },
-    /// A `label^routine` call into a routine whose source isn't available, e.g. one IRIS has only
-    /// as OBJ, so its labels are unknown and the call is checked as untyped.
     #[code = "A3794"]
     #[severity = Hint]
     #[message = "The source of routine '{routine}' isn't available, so calls into it can't be checked precisely"]

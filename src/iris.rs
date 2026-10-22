@@ -167,7 +167,6 @@ mod tests {
                     "Unparsed".to_string(),
                     Some(source("ROUTINE Unparsed [Type=INT]\n{\n")),
                 ),
-                // Only its OBJ, say.
                 ("Compiled".to_string(), None),
             ]
             .into(),
