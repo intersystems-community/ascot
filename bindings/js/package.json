@@ -28,11 +28,14 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "bash scripts/build.sh"
+    "build": "bash scripts/build.sh",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.37.0",
     "@types/node": "^26.6.5",
+    "prettier": "3.9.10",
     "typescript": "^7.0.2"
   }
 }
