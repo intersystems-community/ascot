@@ -12,7 +12,7 @@ npm install @intersystems-community/ascot
 
 ## Usage
 
-```ts
+````ts
 import { createWorkspace, type Imported } from "@intersystems-community/ascot";
 
 // What the engine asks you for when a name isn't defined in the workspace, typically
@@ -47,7 +47,7 @@ await ws.diagnostics("file:///T.cls");
 
 await ws.hover("file:///T.cls", { line: 5, character: 7 }); // the `x` being written
 // "```objectscript\n%DataType = 1\n```"
-```
+````
 
 `createWorkspace` takes an optional second argument, a `Style` applied to every document:
 
@@ -65,19 +65,19 @@ usually not a removal, so keep the on-disk text open instead.
 exports, all returning promises. Positions and ranges are zero-based line/character pairs,
 as in the Language Server Protocol.
 
-| Method | Returns |
-| --- | --- |
-| `open(uri, text)` | uris whose analysis is now stale |
-| `close(uri)` | uris whose analysis is now stale |
-| `diagnostics(uri)` | `Diagnostic[]` |
-| `inlayHint(uri, range)` | `InlayHint[]` |
-| `definition(uri, position)` | `Location \| undefined` |
-| `references(uri, position, includeDeclaration)` | `Location[]` |
-| `hover(uri, position)` | markdown `string \| undefined` |
-| `documentSymbol(uri)` | the class or routine and its members or labels |
-| `workspaceSymbol(query)` | classes and members across the workspace by prefix |
-| `queryCls(query)` | `[uri, ClassInfo][]` for classes by prefix |
-| `queryMem(cls, query)` | `[uri, MemberInfo][]` for a class's members by prefix |
+| Method                                          | Returns                                               |
+| ----------------------------------------------- | ----------------------------------------------------- |
+| `open(uri, text)`                               | uris whose analysis is now stale                      |
+| `close(uri)`                                    | uris whose analysis is now stale                      |
+| `diagnostics(uri)`                              | `Diagnostic[]`                                        |
+| `inlayHint(uri, range)`                         | `InlayHint[]`                                         |
+| `definition(uri, position)`                     | `Location \| undefined`                               |
+| `references(uri, position, includeDeclaration)` | `Location[]`                                          |
+| `hover(uri, position)`                          | markdown `string \| undefined`                        |
+| `documentSymbol(uri)`                           | the class or routine and its members or labels        |
+| `workspaceSymbol(query)`                        | classes and members across the workspace by prefix    |
+| `queryCls(query)`                               | `[uri, ClassInfo][]` for classes by prefix            |
+| `queryMem(cls, query)`                          | `[uri, MemberInfo][]` for a class's members by prefix |
 
 All result types (`Diagnostic`, `Location`, `ClassInfo`, `MemberInfo`, ...) are exported
 from the package.

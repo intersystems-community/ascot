@@ -7,7 +7,11 @@ import * as path from "node:path";
 // bundlers commonly substitute it with a literal path resolved at *build* time, which
 // breaks the moment the built package runs on a different machine.
 import type { Root } from "../generated/ascot.js" with { "resolution-mode": "import" };
-import type { ClassInfo, RoutineSource, Style } from "../generated/interfaces/iris-ascot-common.js" with {
+import type {
+	ClassInfo,
+	RoutineSource,
+	Style,
+} from "../generated/interfaces/iris-ascot-common.js" with {
 	"resolution-mode": "import",
 };
 
@@ -37,10 +41,13 @@ export interface Imported {
 // only ever have one `Imported` implementation, so this holds.
 let wasm: Promise<Root> | undefined;
 
-async function loadWasm(IrisConnection: abstract new (...args: never[]) => Imported): Promise<Root> {
+async function loadWasm(
+	IrisConnection: abstract new (...args: never[]) => Imported,
+): Promise<Root> {
 	return (wasm ??= import("../generated/ascot.js").then(({ instantiate }) =>
 		instantiate(
-			(name: string) => new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
+			(name: string) =>
+				new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
 			{
 				"iris:ascot/common": {},
 				"iris:ascot/imported": { IrisConnection },
