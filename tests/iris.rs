@@ -81,7 +81,7 @@ fn optional_arguments_of_dynamic_objects_are_optional() {
 #[test]
 fn system_macros_are_checked() {
     let Some(iris) = iris() else { return };
-    let workspace = Workspace::new_with_iris(Some(iris), None);
+    let workspace = Workspace::native(Some(iris), None);
     let uri = "Live.Macros.cls".to_string();
     let mut text = "Include %occInclude\n\nClass Live.Macros\n{\nClassMethod Run() As %Status\n{\n Set sc = $$$ERROR($$$GeneralError, \"a\"), sc = $$$ADDSC(sc, $$$OK), sc = $$$EMBEDSC(sc, $$$OK)\n Write $$$ISERR(sc), $$$ISOK(sc), $$$GETERRORCODE(sc), $$$GETERRORMESSAGE(sc, 1)\n Write $$$FormatMessage(\"en\", \"d\", \"id\", \"x %1\", 1), $$$FormatText(\"x %1\", 1), $$$FormatTextHTML(\"x\"), $$$FormatTextJS(\"x\")\n Write $$$Text(\"x\"), $$$TextHTML(\"x\"), $$$TextJS(\"x\"), $$$UPPER(\"x\"), $$$LOWER(\"x\")\n Quit sc\n}\n".to_string();
     let wrong = [
