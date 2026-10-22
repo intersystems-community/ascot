@@ -334,8 +334,9 @@ impl SourceMap {
     // origin of the sub-span a diagnostic happens to point at, since a macro's own expansion
     // can splice further macros (each with their own origin) and unbraced control commands
     // (`if`, `for`, ...) that swallow the rest of the line into their scope. Showing the whole
-    // line is what actually explains the diagnostic in those cases.
-    fn expanded_line_text(&self, offset: usize) -> Option<String> {
+    // line is what actually explains the diagnostic in those cases. Also returns the span of
+    // expanded text it shows.
+    fn expanded_line_text(&self, offset: usize) -> Option<(std::ops::Range<usize>, String)> {
         let start = self.expanded_text[..offset]
             .rfind('\n')
             .map_or(0, |i| i + 1);
@@ -343,23 +344,27 @@ impl SourceMap {
             .find('\n')
             .map_or(self.expanded_text.len(), |i| offset + i);
         const MAX_LEN: usize = 200;
-        let text = self.expanded_text[start..end].trim();
+        let line = &self.expanded_text[start..end];
+        let text = line.trim();
         if text.is_empty() {
             return None;
         }
+        let start = start + (line.len() - line.trim_start().len());
+        let span = start..start + text.len();
         if text.len() <= MAX_LEN {
-            return Some(text.to_string());
+            return Some((span, text.to_string()));
         }
         let mut cut = MAX_LEN;
         while !text.is_char_boundary(cut) {
             cut -= 1;
         }
         // Marked as cut, so a long expansion isn't mistaken for the whole of it.
-        Some(format!("{}…", &text[..cut]))
+        Some((span, format!("{}…", &text[..cut])))
     }
 
-    // The expanded line at `position`, if it only exists because of a macro substitution.
-    pub(crate) fn expansion_at(&self, position: Position) -> Option<String> {
+    // The expanded line at `position` and its range in the expanded text, if `position` only
+    // exists because of a macro substitution.
+    pub(crate) fn expansion_at(&self, position: Position) -> Option<(bindings::Range, String)> {
         if !self.is_in_expanded_bounds(position) {
             return None;
         }
@@ -370,7 +375,12 @@ impl SourceMap {
         if self.vec[idx].2 {
             return None;
         }
-        self.expanded_line_text(offset)
+        let (span, text) = self.expanded_line_text(offset)?;
+        let range = bindings::Range {
+            start: Position::from(self.expanded_olc.offset_to_line_character(span.start)),
+            end: Position::from(self.expanded_olc.offset_to_line_character(span.end)),
+        };
+        Some((range, text))
     }
 
     // The primary (top-level-file) range, plus one `related_information` entry per further
@@ -409,9 +419,10 @@ impl SourceMap {
                 })
             })
             .collect();
-        if let Some(text) = self.expansion_at(range.start) {
+        if let Some((line, text)) = self.expansion_at(range.start) {
+            let line = self.relocate_source_range(line).unwrap_or(primary);
             hops.push(bindings::DiagnosticRelatedInformation {
-                location: Location::new(uri.to_string(), primary),
+                location: Location::new(uri.to_string(), line),
                 message: format!("↳ Expands to: {text}"),
             });
         }

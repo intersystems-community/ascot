@@ -231,12 +231,14 @@ fn relocate_local(
     shifter: &Shifter,
 ) {
     let expand = |range: &mut bindings::Range| {
-        let text = source_map.expansion_at(range.start);
+        let expansion = source_map.expansion_at(range.start);
         let relocated = try_relocate_range(*range, source_map, shifter)?;
         *range = relocated;
+        let (line, text) = expansion?;
+        let line = try_relocate_range(line, source_map, shifter).unwrap_or(relocated);
         Some(DiagnosticRelatedInformation {
-            location: Location::new(uri.to_string(), relocated),
-            message: format!("↳ Expands to: {}", text?),
+            location: Location::new(uri.to_string(), line),
+            message: format!("↳ Expands to: {text}"),
         })
     };
     let mut relocated: Vec<_> = expand(range).into_iter().collect();

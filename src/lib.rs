@@ -5402,7 +5402,17 @@ mod tests {
             .find(|info| info.message.contains("Expands to"))
             .unwrap_or_else(|| panic!("{diagnostics:?}"));
         assert_eq!(expands_to.message, "↳ Expands to: Quit $$Fn^Missing(1)");
-        assert_eq!(expands_to.location.range.start.line, 5, "{diagnostics:?}");
+        let range = expands_to.location.range;
+        assert_eq!(
+            (
+                range.start.line,
+                range.start.character,
+                range.end.line,
+                range.end.character
+            ),
+            (5, 4, 5, 19),
+            "{diagnostics:?}"
+        );
     }
 
     // IRIS answering nothing for a class says nothing about its parameters: no "'MAXLEN' is not
