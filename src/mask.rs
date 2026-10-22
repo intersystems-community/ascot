@@ -1,7 +1,7 @@
 //! Corrections to the member signatures IRIS reports, where a declared `%ObjectHandle` says less
 //! than the member returns: an instance of the class it's called on (`Self`), or an instance of
-//! a generic parameter (`..#NAME`). A generic parameter is a `Parameter` member typed `Generic`,
-//! its value the default, bound like an ObjectScript parameter. `mask.json` maps a
+//! a generic parameter (`..#NAME`). A generic parameter is a `CLASSNAME` parameter the mask
+//! declares, its value the default, bound like an ObjectScript parameter. `mask.json` maps a
 //! class to just its corrected members, from IRIS 2026.2's `%Library`; every other
 //! `%ObjectHandle` stays one, so a missing correction shows up as an error naming it.
 
@@ -14,7 +14,7 @@ static MASK: LazyLock<BTreeMap<String, Vec<MemberInfo>>> =
 
 pub(crate) fn generic_params(cls: &str) -> impl Iterator<Item = &'static MemberInfo> {
     MASK.get(cls).into_iter().flatten().filter(
-        |m| matches!(&m.kind, MemberKind::Parameter(p) if p.t.as_deref() == Some("Generic")),
+        |m| matches!(&m.kind, MemberKind::Parameter(p) if p.t.as_deref() == Some("CLASSNAME")),
     )
 }
 

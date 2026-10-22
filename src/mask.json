@@ -230,7 +230,7 @@
    "doc": "",
    "kind": {
     "Parameter": {
-     "t": "Generic",
+     "t": "CLASSNAME",
      "v": "%Library.ObjectHandle"
     }
    },
