@@ -5401,6 +5401,59 @@ mod tests {
         assert_eq!(expands_to.location.uri, uri, "{diagnostics:?}");
     }
 
+    #[test]
+    fn diagnostic_in_a_class_method_expansion_shows_the_expansion() {
+        let diagnostics = diagnostics_for(&[(
+            "Demo.cls",
+            "Class MyLib.Demo\n{\nClassMethod Run() As %String\n{\n#define CALL(%x) $$Fn^Missing(%x)\n    Quit $$$CALL(1)\n}\n}\n",
+        )]);
+        let expands_to = diagnostics
+            .iter()
+            .flat_map(|d| &d.related_information)
+            .find(|info| info.message.contains("Expands to"))
+            .unwrap_or_else(|| panic!("{diagnostics:?}"));
+        assert_eq!(expands_to.message, "↳ Expands to: Quit $$Fn^Missing(1)");
+        let range = expands_to.location.range;
+        assert_eq!(
+            (
+                range.start.line,
+                range.start.character,
+                range.end.line,
+                range.end.character
+            ),
+            (5, 4, 5, 19),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn expansion_in_an_included_file_is_located_there() {
+        let diagnostics = diagnostics_for(&[
+            ("Demo.mac", "ROUTINE Demo [Type=MAC]\nRun()\n#include Lib\n"),
+            (
+                "Lib.inc",
+                "ROUTINE Lib [Type=INC]\n#define CALL(%x) $$Fn^Missing(%x)\n    Quit $$$CALL(1)\n",
+            ),
+        ]);
+        let expands_to = diagnostics
+            .iter()
+            .flat_map(|d| &d.related_information)
+            .find(|info| info.message.contains("Expands to"))
+            .unwrap_or_else(|| panic!("{diagnostics:?}"));
+        let range = expands_to.location.range;
+        assert_eq!(expands_to.location.uri, "Lib.inc", "{diagnostics:?}");
+        assert_eq!(
+            (
+                range.start.line,
+                range.start.character,
+                range.end.line,
+                range.end.character
+            ),
+            (2, 4, 2, 19),
+            "{diagnostics:?}"
+        );
+    }
+
     // IRIS answering nothing for a class says nothing about its parameters: no "'MAXLEN' is not
     // a parameter of %Library.String".
     #[test]
