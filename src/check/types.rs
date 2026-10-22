@@ -1005,13 +1005,16 @@ pub(crate) trait Instantiate {
 
 impl Instantiate for Ty {
     fn instantiate(&mut self, receiver: &ClassTy) {
-        let resolved = match self {
-            Ty::This => Some(receiver.name.clone()),
-            Ty::Param(param) => crate::mask::generic_arg(&receiver.name, &receiver.generics, param),
-            Ty::Any | Ty::OREF(_) => None,
-        };
-        if let Some(name) = resolved {
-            *self = Ty::from(name);
+        match self {
+            Ty::This => *self = Ty::ins(receiver.clone()),
+            Ty::Param(param) => {
+                if let Some(arg) =
+                    crate::mask::generic_arg(&receiver.name, &receiver.generics, param)
+                {
+                    *self = Ty::from(arg);
+                }
+            }
+            Ty::Any | Ty::OREF(_) => {}
         }
     }
 }
