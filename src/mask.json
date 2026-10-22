@@ -1,4 +1,18 @@
 {
+ "%Library.DynamicAbstractObject": {
+  "%ToJSON": { "args": { "outstrm": { "optional": true } } }
+ },
+ "%Library.DynamicArray": {
+  "%Get": { "args": { "default": { "optional": true }, "type": { "optional": true } } },
+  "%OnNew": { "args": { "initvalue": { "optional": true } } },
+  "%Push": { "args": { "type": { "optional": true } } },
+  "%Set": { "args": { "type": { "optional": true } } }
+ },
+ "%Library.DynamicObject": {
+  "%Get": { "args": { "default": { "optional": true }, "type": { "optional": true } } },
+  "%OnNew": { "args": { "initvalue": { "optional": true } } },
+  "%Set": { "args": { "type": { "optional": true } } }
+ },
  "%Library.GlobalEdit": {
   "Open": { "returns": "This" }
  },

@@ -403,14 +403,8 @@ impl<'a> WorkspaceEnv<'a> {
             self.qualified_extends(cls, &details)
                 .into_iter()
                 .find_map(|sup| self.find_override_in(&sup, mem, default_origin, seen))
-        } else if let Some(iris) = self.workspace.iris.as_ref() {
-            let found = iris.get_cls(cls)?.members.into_iter().find(|m| {
-                m.name.content.eq_ignore_ascii_case(mem)
-                    && m.origin.as_deref() != Some(default_origin)
-            })?;
-            MemberTy::try_from(found).ok()
         } else {
-            None
+            self.iris_member(cls, mem, &[MemberNs::HigherOrder], Some(default_origin))
         }
     }
 
@@ -759,7 +753,7 @@ impl<'a> WorkspaceEnv<'a> {
                         .find_map(|sup| self.get_member_in(&sup, mem, order, seen))
                 })
         } else if self.workspace.iris.is_some() {
-            self.iris_member(cls, mem, order)
+            self.iris_member(cls, mem, order, None)
         } else {
             self.unverified.set(true);
             None
@@ -923,7 +917,15 @@ impl<'a> WorkspaceEnv<'a> {
         ty
     }
 
-    fn iris_member(&self, cls: &str, mem: &str, order: &[MemberNs]) -> Option<MemberTy> {
+    // Every member type IRIS provides comes through here, so the mask is applied in one place.
+    // `skip_origin`: ignore a member declared by that class.
+    fn iris_member(
+        &self,
+        cls: &str,
+        mem: &str,
+        order: &[MemberNs],
+        skip_origin: Option<&str>,
+    ) -> Option<MemberTy> {
         let iris = self.workspace.iris.as_ref()?;
         let members = iris.get_cls(cls)?.members;
         let found = order.iter().find_map(|&ns| {
@@ -931,6 +933,7 @@ impl<'a> WorkspaceEnv<'a> {
                 MemberNs::of_info(&m.kind).contains(&ns)
                     && (m.name.content.eq_ignore_ascii_case(mem)
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem)))
+                    && (skip_origin.is_none() || m.origin.as_deref() != skip_origin)
             })
         })?;
         let mut ty = MemberTy::try_from(found.clone()).ok()?;

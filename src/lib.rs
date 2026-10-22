@@ -4225,6 +4225,23 @@ mod tests {
         );
     }
 
+    // The mask also corrects the `%OnNew` that `%New` takes its arguments from.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn new_takes_a_masked_on_new_s_arguments() {
+        let workspace = masked_iris(
+            "%OnNew",
+            "%Library.DynamicObject",
+            vec![external_arg("initvalue", None)],
+        );
+        let diagnostics = errors_in(
+            &workspace,
+            "N.cls",
+            "Class Test.N {\nClassMethod M() {\n Set o = ##class(%Library.DynamicObject).%New()\n Write o\n}\n}\n",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
     // Without its own `%OnNew`, `%New` takes its own arguments: an optional `initvalue`.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
