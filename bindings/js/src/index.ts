@@ -23,8 +23,6 @@ export type Workspace = {
 		: RawWorkspace[K];
 };
 
-/** What ascot asks for when a name isn't defined in the workspace, typically answered from an
- * IRIS instance. Extend it and override what you can answer; the defaults know nothing. */
 export class IrisConnection {
 	/** A class's own members and metadata. */
 	async getCls(_cls: string): Promise<ClassInfo | undefined> {
@@ -34,27 +32,22 @@ export class IrisConnection {
 	async getInc(_name: string): Promise<RoutineSource | undefined> {
 		return undefined;
 	}
-	/** The text of routine `name`. */
+	/** The text of `name.int` or `name.mac`. */
 	async getIntOrMac(_name: string): Promise<RoutineSource | undefined> {
 		return undefined;
 	}
 }
 
-// jco binds the class implementing `iris-connection` at instantiation, and checks every
-// connection handed to ascot is an instance of it; its methods are called on that instance.
-let wasm: Promise<Root> | undefined;
-
-function loadWasm(): Promise<Root> {
-	return (wasm ??= import("../generated/ascot.js").then(({ instantiate }) =>
-		instantiate(
-			(name: string) => new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
-			{
-				"iris:ascot/common": {},
-				"iris:ascot/imported": { IrisConnection },
-			} as never,
-		),
-	));
-}
+const wasm: Promise<Root> = (import("../generated/ascot.js").then(({ instantiate }) =>
+	instantiate(
+		(name: string) => new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
+		{
+			"iris:ascot/common": {},
+			"iris:ascot/imported": { IrisConnection },
+		} as never,
+	),
+));
+wasm.catch(() => {}); // reported by createWorkspace instead
 
 // jco's jspi glue allows only one in-flight suspended call per component instance --
 // overlapping calls (e.g. diagnostics() and hover() both awaiting a REST round trip)
@@ -82,13 +75,8 @@ function serialize(instance: RawWorkspace): Workspace {
 	}) as unknown as Workspace;
 }
 
-/**
- * A `Workspace` backed by `iris`, or by nothing outside the workspace, with every method
- * pre-serialized so overlapping calls (e.g. from two documents' diagnostics resolving
- * concurrently) can't trip ascot's internal `RefCell` borrows or jco's single-in-flight-call
- * constraint.
- */
+/** A workspace whose calls run one at a time, resolving what it doesn't contain through `iris`. */
 export async function createWorkspace(iris?: IrisConnection, style?: Style): Promise<Workspace> {
-	const root = await loadWasm();
+	const root = await wasm;
 	return serialize(new root.exported.Workspace(iris, style));
 }
