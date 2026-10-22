@@ -242,6 +242,17 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
 
 // `..X(...)` is a method (or a multidimensional property) before it is a plain property `X`;
 // bare `..X` the other way round -- IRIS keeps the two apart by syntax.
+// An IRIS member of `cls`, with its `mask` correction, if any.
+fn masked(found: bindings::MemberInfo, cls: &str) -> Option<MemberTy> {
+    let correction =
+        crate::mask::correction(found.origin.as_deref().unwrap_or(cls), &found.name.content);
+    let mut ty = MemberTy::try_from(found).ok()?;
+    if let Some(correction) = correction {
+        correction.apply(&mut ty.ty);
+    }
+    Some(ty)
+}
+
 fn lookup_order(kind: AccessKind) -> &'static [MemberNs] {
     match kind {
         AccessKind::Call => &[MemberNs::HigherOrder, MemberNs::Property],
@@ -408,7 +419,7 @@ impl<'a> WorkspaceEnv<'a> {
                 m.name.content.eq_ignore_ascii_case(mem)
                     && m.origin.as_deref() != Some(default_origin)
             })?;
-            MemberTy::try_from(found).ok()
+            masked(found, cls)
         } else {
             None
         }
@@ -933,12 +944,7 @@ impl<'a> WorkspaceEnv<'a> {
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem)))
             })
         })?;
-        let mut ty = MemberTy::try_from(found.clone()).ok()?;
-        let origin = found.origin.as_deref().unwrap_or(cls);
-        if let Some(correction) = crate::mask::correction(origin, &found.name.content) {
-            correction.apply(&mut ty.ty);
-        }
-        Some(ty)
+        masked(found.clone(), cls)
     }
 
     pub fn resolve_class(&self, name: &str) -> ClassTy {

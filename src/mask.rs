@@ -1,4 +1,5 @@
-//! Corrections to member types IRIS 2026.2's `%Library` declares as `%ObjectHandle`. Any other
+//! Corrections to member types IRIS 2026.2's `%Library` declares as `%ObjectHandle`, and to
+//! arguments it declares without a default that are optional in practice. Any other
 //! `%ObjectHandle` is left alone, so a missing correction shows up as an error naming it.
 
 use crate::check::types::{HOTy, ty_from_mask};
