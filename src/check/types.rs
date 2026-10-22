@@ -981,14 +981,12 @@ pub(crate) fn ty_from_declared(t: Option<String>) -> Option<Ty> {
     t.filter(|t| !t.is_empty()).map(Ty::from)
 }
 
-// A `many`/`children` relationship to `t`: a `%RelationshipObject` of `t`s, `t` bound to the
-// generic parameter the mask gives it.
+// A `many`/`children` relationship to `t`: a `%RelationshipObject` of `t`s.
 pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     let mut cls = ClassTy::from("%Library.RelationshipObject".to_string());
     cls.generics = t
         .filter(|t| !t.is_empty())
-        .zip(crate::mask::generic_params(&cls.name).next())
-        .map(|(t, param)| (param.to_string(), t))
+        .map(|t| ("ELEMENTTYPE".to_string(), t))
         .into_iter()
         .collect();
     Ty::OREF(ClsOrIns::Ins(cls))

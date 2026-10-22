@@ -51,13 +51,6 @@ impl Correction {
     }
 }
 
-/// `cls`'s generic parameters, by name.
-pub(crate) fn generic_params(cls: &str) -> impl Iterator<Item = &'static str> {
-    members(cls)
-        .filter(|(_, c)| c.parameter.as_deref() == Some("CLASSNAME"))
-        .map(|(name, _)| name.as_str())
-}
-
 /// What generic parameter `param` of `cls` is, given `cls`'s generic arguments: the one bound to
 /// it, or else its default. `None` if `cls` has no such parameter.
 pub(crate) fn generic_arg(
