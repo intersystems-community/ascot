@@ -1,0 +1,7 @@
+{
+  "printWidth": 100,
+  "overrides": [
+    { "files": "*.ts", "options": { "useTabs": true } },
+    { "files": "*.md", "options": { "embeddedLanguageFormatting": "off" } }
+  ]
+}
