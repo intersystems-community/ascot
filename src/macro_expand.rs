@@ -358,6 +358,21 @@ impl SourceMap {
         Some(format!("{}…", &text[..cut]))
     }
 
+    // The expanded line at `position`, if it only exists because of a macro substitution.
+    pub(crate) fn expansion_at(&self, position: Position) -> Option<String> {
+        if !self.is_in_expanded_bounds(position) {
+            return None;
+        }
+        let offset = self
+            .expanded_olc
+            .line_character_to_offset((position.line as usize, position.character as usize));
+        let idx = self.locate_idx(offset)?;
+        if self.vec[idx].2 {
+            return None;
+        }
+        self.expanded_line_text(offset)
+    }
+
     // The primary (top-level-file) range, plus one `related_information` entry per further
     // `#include` hop in the chain, outer-to-inner, plus (if the primary range only exists
     // because of a macro substitution) what that macro actually expanded to.
@@ -394,10 +409,7 @@ impl SourceMap {
                 })
             })
             .collect();
-        if let Some(idx) = self.locate_idx(start)
-            && !self.vec[idx].2
-            && let Some(text) = self.expanded_line_text(start)
-        {
+        if let Some(text) = self.expansion_at(range.start) {
             hops.push(bindings::DiagnosticRelatedInformation {
                 location: Location::new(uri.to_string(), primary),
                 message: format!("↳ Expands to: {text}"),
