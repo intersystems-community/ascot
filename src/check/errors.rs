@@ -434,7 +434,7 @@ type_error_kinds! {
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
     /// A `label^routine` call into a routine that isn't in the workspace and whose source IRIS
-    /// can't supply. IRIS doesn't tell a missing routine from one shipped compiled only, so this is
+    /// can't supply. IRIS doesn't tell a missing routine from one that has only its OBJ, so this is
     /// a warning, and the call is checked as untyped.
     #[code = "A3303"]
     #[severity = Warning]
@@ -736,7 +736,7 @@ pub struct MissingSource {
 impl std::fmt::Display for MissingSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(if self.has_iris {
-            "and IRIS has no source for it: it is missing, or IRIS has it compiled only"
+            "and IRIS has no source for it: it is missing, or IRIS has only its OBJ"
         } else {
             "with no IRIS connection to check it against"
         })

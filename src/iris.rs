@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(
             check(" Do Plain^NoSuchRoutine"),
             vec![
-                "Cannot find routine 'NoSuchRoutine' in this workspace, and IRIS has no source for it: it is missing, or IRIS has it compiled only"
+                "Cannot find routine 'NoSuchRoutine' in this workspace, and IRIS has no source for it: it is missing, or IRIS has only its OBJ"
             ]
         );
     }
