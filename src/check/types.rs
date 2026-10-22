@@ -462,7 +462,7 @@ pub enum Ty {
     #[default]
     Any,
     OREF(ClsOrIns),
-    // `Self` and `..#NAME` in a mask-corrected IRIS signature, until `Instantiate` resolves them
+    // `This` and `..#NAME` in a mask-corrected IRIS signature, until `Instantiate` resolves them
     // against the receiver.
     This,
     Param(String),
@@ -650,7 +650,7 @@ impl std::fmt::Display for Ty {
         match self {
             Ty::Any => write!(f, "Any"),
             Ty::OREF(cls_or_ins) => cls_or_ins.fmt(f),
-            Ty::This => write!(f, "Self"),
+            Ty::This => write!(f, "This"),
             Ty::Param(name) => write!(f, "..#{name}"),
         }
     }
@@ -994,7 +994,7 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     Ty::OREF(ClsOrIns::Ins(cls))
 }
 
-// A type in a mask-corrected member (see `crate::mask`), which may be `Self` or a generic
+// A type in a mask-corrected member (see `crate::mask`), which may be `This` or a generic
 // parameter `..#NAME`; resolved against the receiver by `Instantiate`.
 pub(crate) fn ty_from_mask(t: Option<String>) -> Option<Ty> {
     use tygr_objectscript::cos::SignatureType;
@@ -1005,7 +1005,7 @@ pub(crate) fn ty_from_mask(t: Option<String>) -> Option<Ty> {
     }
 }
 
-// A type as seen from `receiver`: `Self` is the receiver's class, and `..#NAME` the receiver's
+// A type as seen from `receiver`: `This` is the receiver's class, and `..#NAME` the receiver's
 // generic argument for that parameter. Only the mask introduces either.
 pub(crate) trait Instantiate {
     fn instantiate(&mut self, receiver: &ClassTy);
@@ -1113,7 +1113,7 @@ mod tests {
         assert!(
             matches!(element, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "Demo.Child")
         );
-        let mut this = HOTy::Value(ty_from_mask(Some("Self".to_string())).unwrap());
+        let mut this = HOTy::Value(ty_from_mask(Some("This".to_string())).unwrap());
         this.instantiate(&receiver);
         assert!(
             matches!(this, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "%Library.RelationshipObject")

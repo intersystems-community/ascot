@@ -4174,11 +4174,11 @@ mod tests {
         );
     }
 
-    // Only the mask says `Self`: in a member IRIS reports, it's just a class name.
+    // Only the mask says `This`: in a member IRIS reports, it's just a class name.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn only_the_mask_says_self() {
-        let mut mem = external_method("getNextResultSet", vec![], Some("Self"));
+    fn only_the_mask_says_this() {
+        let mut mem = external_method("getNextResultSet", vec![], Some("This"));
         mem.origin = Some("%Library.SQLGatewayConnection".to_string());
         let workspace = Workspace::new_with_iris(
             Some(Box::new(MockIrisClient {
@@ -4196,7 +4196,7 @@ mod tests {
         assert!(
             diagnostics[0]
                 .message
-                .contains("Cannot find member 'Next' in Self"),
+                .contains("Cannot find member 'Next' in This"),
             "{diagnostics:?}"
         );
     }

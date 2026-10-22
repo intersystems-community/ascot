@@ -1,5 +1,5 @@
 //! Corrections to the member signatures IRIS reports, where a declared `%ObjectHandle` says less
-//! than the member returns: an instance of the class it's called on (`Self`), or an instance of
+//! than the member returns: an instance of the class it's called on (`This`), or an instance of
 //! a generic parameter (`..#NAME`). A generic parameter is a `CLASSNAME` parameter the mask
 //! declares, its value the default, bound like an ObjectScript parameter. `mask.json` maps a
 //! class to just its corrected members, from IRIS 2026.2's `%Library`; every other

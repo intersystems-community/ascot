@@ -1663,7 +1663,7 @@ impl<'a> CodeEnv<'a> {
         let is_parameter = mem.is_parameter();
         let mem = mem.id();
         match ty {
-            // An unresolved `Self`/`..#NAME` is a mask bug; say nothing about it.
+            // An unresolved `This`/`..#NAME` is a mask bug; say nothing about it.
             Ty::Any | Ty::This | Ty::Param(_) => Ok(MemberTy {
                 is_instance_only: false,
                 ty: HOTy::Value(Ty::Any),

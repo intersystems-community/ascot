@@ -693,11 +693,11 @@ impl MemberRef {
 
 pub type Field = Prefix<StringEq!("."), Range<MemberRef>>;
 
-// A type in an IRIS-reported signature, where ascot's mask may write `Self` (the class the
+// A type in an IRIS-reported signature, where ascot's mask may write `This` (the class the
 // member is used on) or a class parameter (`..#ELEMENTTYPE`) instead of a class name.
 #[derive(Grammar)]
 pub enum SignatureType {
-    This(StringEq!("Self")),
+    This(StringEq!("This")),
     Parameter(StringEq!("..#"), ClassMemberName),
     Class(ClassName),
 }
@@ -6610,7 +6610,7 @@ mod regression_tests {
     #[test]
     fn signature_types() {
         assert!(matches!(
-            SignatureType::parse("Self"),
+            SignatureType::parse("This"),
             Ok(SignatureType::This(_))
         ));
         assert!(matches!(
