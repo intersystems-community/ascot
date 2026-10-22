@@ -95,7 +95,7 @@ impl AtelierConnection {
         );
         let api_root = format!("{scheme}://{host}:{port}{path_prefix}/api/atelier");
         Ok(Self {
-            base_url: format!("{api_root}/v1/{}", percent_encode(namespace)),
+            base_url: format!("{api_root}/v8/{}", percent_encode(namespace)),
             api_root,
             namespace: namespace.to_string(),
             username: username.into_owned(),
@@ -1020,7 +1020,7 @@ mod tests {
     #[test]
     fn connect_percent_encodes_the_namespace() {
         let conn = AtelierConnection::connect("http://user:pass@localhost:8080", "%SYS").unwrap();
-        assert_eq!(conn.base_url, "http://localhost:8080/api/atelier/v1/%25SYS");
+        assert_eq!(conn.base_url, "http://localhost:8080/api/atelier/v8/%25SYS");
     }
 
     #[test]
@@ -1029,7 +1029,7 @@ mod tests {
             AtelierConnection::connect("http://user:pass@localhost:8080/iris", "%SYS").unwrap();
         assert_eq!(
             conn.base_url,
-            "http://localhost:8080/iris/api/atelier/v1/%25SYS"
+            "http://localhost:8080/iris/api/atelier/v8/%25SYS"
         );
     }
 
@@ -1116,7 +1116,7 @@ mod tests {
             AtelierConnection::connect("http://user:pass@localhost:8080/iris/", "%SYS").unwrap();
         assert_eq!(
             conn.base_url,
-            "http://localhost:8080/iris/api/atelier/v1/%25SYS"
+            "http://localhost:8080/iris/api/atelier/v8/%25SYS"
         );
     }
 
