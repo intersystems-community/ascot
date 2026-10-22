@@ -23,31 +23,31 @@ export type Workspace = {
 		: RawWorkspace[K];
 };
 
-/** The shape your `imported.iris-connection` implementation must satisfy. */
-export interface Imported {
-	getCls(cls: string): Promise<ClassInfo | undefined>;
-	getInc(name: string): Promise<RoutineSource | undefined>;
-	getIntOrMac(name: string): Promise<RoutineSource | undefined>;
+export class IrisConnection {
+	/** A class's own members and metadata. */
+	async getCls(_cls: string): Promise<ClassInfo | undefined> {
+		return undefined;
+	}
+	/** The text of `name.inc`. */
+	async getInc(_name: string): Promise<RoutineSource | undefined> {
+		return undefined;
+	}
+	/** The text of `name.int` or `name.mac`. */
+	async getIntOrMac(_name: string): Promise<RoutineSource | undefined> {
+		return undefined;
+	}
 }
 
-// jco needs the actual `IrisConnection` class (not just an instance) up front, to bind
-// resource-identity checks (`instanceof`) at instantiation time -- so the wasm module is
-// loaded lazily on the first `createWorkspace` call, using that call's own argument's
-// class. Every later call must be constructed from that same class; in practice callers
-// only ever have one `Imported` implementation, so this holds.
-let wasm: Promise<Root> | undefined;
-
-async function loadWasm(IrisConnection: abstract new (...args: never[]) => Imported): Promise<Root> {
-	return (wasm ??= import("../generated/ascot.js").then(({ instantiate }) =>
-		instantiate(
-			(name: string) => new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
-			{
-				"iris:ascot/common": {},
-				"iris:ascot/imported": { IrisConnection },
-			} as never,
-		),
-	));
-}
+const wasm: Promise<Root> = (import("../generated/ascot.js").then(({ instantiate }) =>
+	instantiate(
+		(name: string) => new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
+		{
+			"iris:ascot/common": {},
+			"iris:ascot/imported": { IrisConnection },
+		} as never,
+	),
+));
+wasm.catch(() => {}); // reported by createWorkspace instead
 
 // jco's jspi glue allows only one in-flight suspended call per component instance --
 // overlapping calls (e.g. diagnostics() and hover() both awaiting a REST round trip)
@@ -75,13 +75,8 @@ function serialize(instance: RawWorkspace): Workspace {
 	}) as unknown as Workspace;
 }
 
-/**
- * A `Workspace` backed by `imported`, with every method pre-serialized so overlapping
- * calls (e.g. from two documents' diagnostics resolving concurrently) can't trip ascot's
- * internal `RefCell` borrows or jco's single-in-flight-call constraint.
- */
-export async function createWorkspace(imported: Imported, style?: Style): Promise<Workspace> {
-	const IrisConnection = Object.getPrototypeOf(imported).constructor;
-	const root = await loadWasm(IrisConnection);
-	return serialize(new root.exported.Workspace(imported, style));
+/** A workspace whose calls run one at a time, resolving what it doesn't contain through `iris`. */
+export async function createWorkspace(iris?: IrisConnection, style?: Style): Promise<Workspace> {
+	const root = await wasm;
+	return serialize(new root.exported.Workspace(iris, style));
 }
