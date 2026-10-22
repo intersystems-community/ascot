@@ -76,9 +76,8 @@ impl Declarations {
             .map_err(|e| format!("{} is not an ascot declaration file: {e}", path.display()))?;
         if declarations.version != DECLARATIONS_VERSION {
             return Err(format!(
-                "{} is a version {} declaration file; this ascot reads version {DECLARATIONS_VERSION}",
-                path.display(),
-                declarations.version
+                "{} was written by an incompatible ascot; regenerate it with `ascot declare`",
+                path.display()
             ));
         }
         Ok(declarations)
@@ -256,7 +255,10 @@ mod tests {
         )
         .unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
-        assert!(err.contains("is a version 1 declaration file"), "{err}");
+        assert!(
+            err.contains("was written by an incompatible ascot"),
+            "{err}"
+        );
         std::fs::write(&path, "Class A.B {}").unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
         let _ = std::fs::remove_file(&path);
