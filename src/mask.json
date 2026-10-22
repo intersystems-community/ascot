@@ -21,7 +21,7 @@
   "%OpenId": { "returns": "This" }
  },
  "%Library.SystemBase": {
-  "%New": { "returns": "This" }
+  "%New": { "returns": "This", "args": { "initvalue": { "optional": true } } }
  },
  "%Stream.Object": {
   "%Open": { "returns": "This" },

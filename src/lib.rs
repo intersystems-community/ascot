@@ -4200,6 +4200,39 @@ mod tests {
         );
     }
 
+    // Without its own `%OnNew`, `%New` takes its own arguments: an optional `initvalue`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn new_takes_its_own_arguments_unless_on_new_is_overridden() {
+        let workspace = masked_iris(
+            "%New",
+            "%Library.SystemBase",
+            vec![external_arg("initvalue", None)],
+        );
+        let diagnostics = errors_in(
+            &workspace,
+            "N.cls",
+            "Class Test.N Extends %RegisteredObject {\nProperty Name As %String;\nClassMethod M() As %String {\n Set a = ##class(Test.N).%New()\n Set b = ##class(Test.N).%New(\"init\")\n Quit a.Name_b.Missing\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Missing' in Test.N"),
+            "{diagnostics:?}"
+        );
+        let diagnostics = errors_in(
+            &workspace,
+            "O.cls",
+            "Class Test.O Extends %RegisteredObject {\nMethod %OnNew(name As %String) As %Status {\n Write name\n Quit 1\n}\nClassMethod M() {\n Set o = ##class(Test.O).%New(\"x\", \"extra\")\n Write o\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("Too many arguments"),
+            "{diagnostics:?}"
+        );
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn an_unmasked_object_handle_stays_one() {

@@ -266,12 +266,13 @@ impl<'a> WorkspaceEnv<'a> {
                 .or_else(|| self.unverified_any());
         }
         if mem == "%New" {
-            // Every object class has `%New`; `%OnNew` only decides its arguments, so failing to
-            // resolve it (a superclass outside the workspace, no IRIS connection) leaves the
-            // arguments unchecked rather than making `%New` itself unverified.
+            // Every object class has `%New`. It takes the arguments of a class's own `%OnNew`,
+            // else its own; failing to resolve either (a superclass outside the workspace, no
+            // IRIS connection) leaves them unchecked rather than making `%New` unverified.
             let was_unverified = self.unverified.get();
             let proc: TyProcedureOrAny = self
-                .get_member_internal(obj, "%OnNew", &[MemberNs::HigherOrder])
+                .find_override(obj, "%OnNew", "%Library.RegisteredObject")
+                .or_else(|| self.get_member_internal(obj, "%New", &[MemberNs::HigherOrder]))
                 .and_then(|mem| mem.ty.as_procedure().ok())
                 .unwrap_or_default();
             self.unverified.set(was_unverified);
@@ -373,16 +374,22 @@ impl<'a> WorkspaceEnv<'a> {
     // `%RegisteredObject`/`%SerialObject` inherits a meaningless default implementation of them
     // from `%Library.SystemBase`, so a match only counts if its declaring class differs.
     fn find_dispatch_hook(&self, cls: &str, mem: &str) -> Option<MemberTy> {
-        self.find_dispatch_hook_in(cls, mem, &mut HashSet::new())
+        self.find_override(cls, mem, "%Library.SystemBase")
     }
 
-    fn find_dispatch_hook_in(
+    // `mem` as `cls` or an ancestor declares it, other than the default every class inherits
+    // from `default_origin`.
+    fn find_override(&self, cls: &str, mem: &str, default_origin: &str) -> Option<MemberTy> {
+        self.find_override_in(cls, mem, default_origin, &mut HashSet::new())
+    }
+
+    fn find_override_in(
         &self,
         cls: &str,
         mem: &str,
+        default_origin: &str,
         seen: &mut HashSet<String>,
     ) -> Option<MemberTy> {
-        const DISPATCH_DEFAULT_ORIGIN: &str = "%Library.SystemBase";
         if !seen.insert(cls.to_string()) {
             return None;
         }
@@ -395,11 +402,11 @@ impl<'a> WorkspaceEnv<'a> {
             }
             self.qualified_extends(cls, &details)
                 .into_iter()
-                .find_map(|sup| self.find_dispatch_hook_in(&sup, mem, seen))
+                .find_map(|sup| self.find_override_in(&sup, mem, default_origin, seen))
         } else if let Some(iris) = self.workspace.iris.as_ref() {
             let found = iris.get_cls(cls)?.members.into_iter().find(|m| {
                 m.name.content.eq_ignore_ascii_case(mem)
-                    && m.origin.as_deref() != Some(DISPATCH_DEFAULT_ORIGIN)
+                    && m.origin.as_deref() != Some(default_origin)
             })?;
             MemberTy::try_from(found).ok()
         } else {
