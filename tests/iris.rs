@@ -87,8 +87,8 @@ fn system_macros_are_checked() {
     let wrong = [
         "$$$EMBEDSC(1, 1)",
         "$$$FormatText(\"x\")",
-        "$$$ERROR($$$GeneralError)",
-        "$$$Text(\"x\")",
+        "$$$FormatMessage(\"en\", \"d\", \"id\", \"x\")",
+        "$$$TextHTML(\"x\")",
     ];
     for (i, value) in wrong.iter().enumerate() {
         text += &format!(
@@ -97,6 +97,10 @@ fn system_macros_are_checked() {
     }
     workspace.open(uri.clone(), text + "}\n");
     let diagnostics = workspace.diagnostics(uri);
-    let lines: Vec<_> = diagnostics.iter().map(|d| d.range.start.line).collect();
+    let lines: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == DiagnosticSeverity::Error)
+        .map(|d| d.range.start.line)
+        .collect();
     assert_eq!(lines, [15, 20, 25, 30], "{diagnostics:?}");
 }

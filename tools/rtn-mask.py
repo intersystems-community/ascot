@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerates src/rtn_mask.json: the signatures of the %SYS routine labels that system include
+"""Regenerates the routine entries of src/mask.json: the signatures of the %SYS routine labels that system include
 macros call, for instances that ship those routines without source. Only label headers are kept,
 never code or default values. Hand-written `returns` survive regeneration.
 
@@ -93,24 +93,30 @@ for inc in names("*.inc"):
                 refs.setdefault(rtn, set()).add(label)
         macro = macro and line.rstrip().lower().endswith("##continue")
 
-path = pathlib.Path(__file__).parent.parent / "src/rtn_mask.json"
-old = json.loads(path.read_text()) if path.exists() else {}
-mask = {}
+def fmt(v):
+    if isinstance(v, dict):
+        return "{ " + ", ".join(f"{json.dumps(k)}: {fmt(x)}" for k, x in v.items()) + " }"
+    return json.dumps(v)
+
+
+path = pathlib.Path(__file__).parent.parent / "src/mask.json"
+mask = json.loads(path.read_text())
+old = {k: mask.pop(k) for k in list(mask) if not k.endswith(".cls")}
 for rtn in sorted(refs):
-    labels = dict(filter(None, map(header, doc(rtn + ".int") or doc(rtn + ".mac"))))
+    name = next((rtn + ext for ext in (".int", ".mac") if doc(rtn + ext)), None)
+    labels = dict(filter(None, map(header, doc(name) if name else [])))
     for label in sorted(refs[rtn] & labels.keys()):
         sig = labels[label]
-        if returns := old.get(rtn, {}).get(label, {}).get("returns"):
+        if returns := old.get(name, {}).get(label, {}).get("returns"):
             sig["returns"] = returns
-        mask.setdefault(rtn, {})[label] = sig
+        mask.setdefault(name, {})[label] = sig
 path.write_text(
     "{\n"
     + ",\n".join(
-        f"  {json.dumps(rtn)}: {{\n"
-        + ",\n".join(f"    {json.dumps(label)}: {json.dumps(sig)}" for label, sig in labels.items())
-        + "\n  }"
-        for rtn, labels in mask.items()
+        f" {json.dumps(key)}: {{\n" + ",\n".join(f"  {json.dumps(k)}: {fmt(v)}" for k, v in members.items()) + "\n }"
+        for key, members in mask.items()
     )
     + "\n}\n"
 )
-print(len(mask), "routines,", sum(map(len, mask.values())), "labels")
+routines = [v for k, v in mask.items() if not k.endswith(".cls")]
+print(len(routines), "routines,", sum(map(len, routines)), "labels")

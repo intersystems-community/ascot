@@ -29,11 +29,23 @@ struct ArgCorrection {
     optional: bool,
 }
 
-static MASK: LazyLock<BTreeMap<String, BTreeMap<String, Correction>>> =
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Entry {
+    Class(BTreeMap<String, Correction>),
+    Routine(BTreeMap<String, LabelSignature>),
+}
+
+static MASK: LazyLock<BTreeMap<String, Entry>> =
     LazyLock::new(|| serde_json::from_str(include_str!("mask.json")).expect("a valid mask.json"));
 
 fn members(cls: &str) -> impl Iterator<Item = (&'static String, &'static Correction)> {
-    MASK.get(cls).into_iter().flatten()
+    match MASK.get(&format!("{cls}.cls")) {
+        Some(Entry::Class(members)) => Some(members),
+        _ => None,
+    }
+    .into_iter()
+    .flatten()
 }
 
 pub(crate) fn correction(cls: &str, member: &str) -> Option<&'static Correction> {
@@ -84,14 +96,15 @@ struct LabelSignature {
     returns: Option<String>,
 }
 
-static RTN_MASK: LazyLock<BTreeMap<String, BTreeMap<String, LabelSignature>>> =
-    LazyLock::new(|| {
-        serde_json::from_str(include_str!("rtn_mask.json")).expect("a valid rtn_mask.json")
-    });
-
 /// Each arg is `name`, `name=` (optional), `&name` (by reference) or a final `name...`.
 pub(crate) fn label(routine: &str, label: &str) -> Option<Arc<TyProcedure>> {
-    let sig = RTN_MASK.get(routine)?.get(label)?;
+    let sig =
+        [".int", ".mac"]
+            .iter()
+            .find_map(|ext| match MASK.get(&format!("{routine}{ext}")) {
+                Some(Entry::Routine(labels)) => labels.get(label),
+                _ => None,
+            })?;
     let mode = |name: &str| match name.strip_prefix('&') {
         Some(name) => (ArgMode::ByRef, name.to_string()),
         None => (ArgMode::Default, name.to_string()),
