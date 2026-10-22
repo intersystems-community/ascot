@@ -694,23 +694,26 @@ fn process_member(
                 as_type,
                 keywords,
                 ..
-            } => (
-                with_range(name.0.as_ref().map(|_| name.name()), olc),
-                deprecated || is_deprecated(&keywords),
-                MemberKindSpecificDetails::Property {
-                    // A `many`/`children` relationship is the collection of the related objects.
-                    ty: if keyword_value(&keywords, "Cardinality").is_some_and(|c| {
-                        c.eq_ignore_ascii_case("many") || c.eq_ignore_ascii_case("children")
-                    }) {
-                        Some(Ty::from("%Library.RelationshipObject"))
-                    } else {
-                        as_type.as_deref().map(Ty::from)
+            } => {
+                // A `many`/`children` relationship is the collection of the related objects.
+                let is_many = keyword_value(&keywords, "Cardinality").is_some_and(|c| {
+                    c.eq_ignore_ascii_case("many") || c.eq_ignore_ascii_case("children")
+                });
+                (
+                    with_range(name.0.as_ref().map(|_| name.name()), olc),
+                    deprecated || is_deprecated(&keywords),
+                    MemberKindSpecificDetails::Property {
+                        ty: if is_many {
+                            Some(Ty::from("%Library.RelationshipObject"))
+                        } else {
+                            as_type.as_deref().map(Ty::from)
+                        },
+                        element_ty: is_many.then(|| as_type.as_deref().map(Ty::from)).flatten(),
+                        keywords: keyword_names(&keywords),
+                        type_param_names: vec![],
                     },
-                    element_ty: None,
-                    keywords: keyword_names(&keywords),
-                    type_param_names: vec![],
-                },
-            ),
+                )
+            }
         },
         cos::Member::Query(query) => (
             with_range_name(&query.name, olc),

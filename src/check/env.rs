@@ -104,7 +104,9 @@ impl TryFrom<&MemberKindSpecificDetails> for MemberTy {
                     .any(|k| k.eq_ignore_ascii_case("MultiDimensional")),
                 ty: match (ty, element_ty) {
                     (Some(Ty::OREF(cls)), Some(element)) => HOTy::Collection {
-                        kind: if cls.name().ends_with("List") {
+                        kind: if cls.name() == "%Library.RelationshipObject" {
+                            CollectionClass::Relationship
+                        } else if cls.name().ends_with("List") {
                             CollectionClass::List
                         } else {
                             CollectionClass::Array
@@ -179,9 +181,17 @@ impl TryFrom<bindings::MemberInfo> for MemberTy {
                 },
                 location,
             }),
-            MemberKind::Relationship(t) => Ok(MemberTy {
+            MemberKind::Relationship(info) => Ok(MemberTy {
                 is_instance_only: true,
-                ty: HOTy::Value(ty_from_declared(t).unwrap_or_default()),
+                ty: match info.cardinality {
+                    Some(bindings::Cardinality::Many | bindings::Cardinality::Children) => {
+                        HOTy::Collection {
+                            kind: CollectionClass::Relationship,
+                            element: ty_from_declared(info.t).unwrap_or_default(),
+                        }
+                    }
+                    _ => HOTy::Value(ty_from_declared(info.t).unwrap_or_default()),
+                },
                 location,
                 multidimensional: false,
             }),

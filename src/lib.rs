@@ -4770,6 +4770,55 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
+    // A `many` relationship is a collection of the related class: `GetNext` returns one of them,
+    // not whatever `%RelationshipObject` itself declares.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_many_relationship_is_typed_by_the_related_class() {
+        let get_next = external_method(
+            "GetNext",
+            vec![bindings::NormalArg {
+                mode: bindings::ArgMode::ByRef,
+                ..external_arg("key", None)
+            }],
+            Some("%Library.RegisteredObject"),
+        );
+        let workspace = Workspace::new_with_iris(
+            Some(Box::new(MockIrisClient {
+                is_datatype: None,
+                mem: Some(get_next),
+            })),
+            None,
+        );
+        workspace.open(
+            "Parent.cls".to_string(),
+            "Class Demo.Parent Extends %Persistent {\nRelationship Children As Demo.Child [ Cardinality = many, Inverse = Owner ];\nMethod Names() As %String {\n Set key = \"\", names = \"\"\n For {\n  Set child = ..Children.GetNext(.key)\n  Quit:key=\"\"\n  Set names = names_child.Name\n }\n Quit names\n}\n}\n".to_string(),
+        );
+        workspace.open(
+            "Child.cls".to_string(),
+            "Class Demo.Child Extends %Persistent {\nProperty Name As %String;\nRelationship Owner As Demo.Parent [ Cardinality = one, Inverse = Children ];\n}\n".to_string(),
+        );
+        let diagnostics = without_hints(workspace.diagnostics("Parent.cls".to_string()));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    // The same for a relationship IRIS reports. The mock gives every class just `Children`, so
+    // `GetNext` exists only because the relationship is typed as a collection of `Ext.Child`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_many_relationship_from_iris_is_typed_by_the_related_class() {
+        let mut children = external_method("Children", vec![], None);
+        children.kind = bindings::MemberKind::Relationship(bindings::RelationshipInfo {
+            t: Some("Ext.Child".to_string()),
+            cardinality: Some(bindings::Cardinality::Many),
+        });
+        let diagnostics = without_hints(diagnostics_with_external_member(
+            children,
+            " #dim parent As Ext.Parent = ##class(Ext.Parent).%New()\n Set key = \"\"\n Set child = parent.Children.GetNext(.key)\n Write child.Children.Count()",
+        ));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
     #[test]
     fn piece_set_targets_define_the_string() {
         let diagnostics = class_diagnostics(

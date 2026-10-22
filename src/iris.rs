@@ -45,7 +45,7 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, 
     Ok(Box::new(declarations))
 }
 
-pub(crate) const DECLARATIONS_VERSION: u32 = 1;
+pub(crate) const DECLARATIONS_VERSION: u32 = 2;
 
 /// One namespace as `ascot declare` writes it: each `IrisClient` lookup as a map from its
 /// argument to its answer.
@@ -246,11 +246,11 @@ mod tests {
         let path = std::env::temp_dir().join(format!("ascot-version-{}.json", std::process::id()));
         std::fs::write(
             &path,
-            r#"{"version":2,"namespace":"USER","classes":{},"includes":{},"routines":{}}"#,
+            r#"{"version":1,"namespace":"USER","classes":{},"includes":{},"routines":{}}"#,
         )
         .unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
-        assert!(err.contains("is a version 2 declaration file"), "{err}");
+        assert!(err.contains("is a version 1 declaration file"), "{err}");
         std::fs::write(&path, "Class A.B {}").unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
         let _ = std::fs::remove_file(&path);

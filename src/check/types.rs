@@ -471,8 +471,9 @@ pub enum Ty {
 pub enum HOTy {
     Value(Ty),
     Procedure(Arc<TyProcedure>),
-    // A `list Of X` / `array Of X` property. Collections don't nest, so this lives here rather
-    // than in `Ty`; forced into a `Ty` it is the collection class.
+    // A `list Of X` / `array Of X` property, or a `many`/`children` relationship to X.
+    // Collections don't nest, so this lives here rather than in `Ty`; forced into a `Ty` it is
+    // the collection class.
     Collection { kind: CollectionClass, element: Ty },
 }
 
@@ -480,6 +481,7 @@ pub enum HOTy {
 pub enum CollectionClass {
     List,
     Array,
+    Relationship,
 }
 
 impl CollectionClass {
@@ -487,13 +489,14 @@ impl CollectionClass {
         Ty::from(match self {
             CollectionClass::List => "%Collection.AbstractList",
             CollectionClass::Array => "%Collection.AbstractArray",
+            CollectionClass::Relationship => "%Library.RelationshipObject",
         })
     }
 
     pub fn key_ty(self) -> Ty {
         Ty::from(match self {
             CollectionClass::List => "%Integer",
-            CollectionClass::Array => "%String",
+            CollectionClass::Array | CollectionClass::Relationship => "%String",
         })
     }
 }
@@ -531,6 +534,7 @@ impl std::fmt::Display for HOTy {
             HOTy::Collection { kind, element } => match kind {
                 CollectionClass::List => write!(f, "list Of {element}"),
                 CollectionClass::Array => write!(f, "array Of {element}"),
+                CollectionClass::Relationship => write!(f, "%RelationshipObject Of {element}"),
             },
         }
     }

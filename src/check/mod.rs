@@ -2451,14 +2451,14 @@ fn collection_method(
     let (normal_args, out) = match name {
         "GetAt" | "RemoveAt" => (vec![arg("key", key, ArgMode::Default)], element),
         "GetNext" | "GetPrevious" => (vec![arg("key", key, ArgMode::ByRef)], element),
-        "SetAt" => (
+        "SetAt" if kind != CollectionClass::Relationship => (
             vec![
                 arg("element", element, ArgMode::Default),
                 arg("key", key, ArgMode::Default),
             ],
             Ty::from("%Status"),
         ),
-        "Insert" if kind == CollectionClass::List => (
+        "Insert" if kind != CollectionClass::Array => (
             vec![arg("element", element, ArgMode::Default)],
             Ty::from("%Status"),
         ),
