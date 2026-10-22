@@ -1489,7 +1489,7 @@ mod tests {
         fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
             None
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
             None
         }
         fn get_inc(&self, name: &str) -> Option<bindings::RoutineSource> {
@@ -1706,7 +1706,7 @@ mod tests {
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
                 None
             }
         }
@@ -2024,7 +2024,7 @@ mod tests {
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
                 None
             }
         }
@@ -2158,7 +2158,7 @@ mod tests {
         fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
             None
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
             None
         }
     }
@@ -2449,7 +2449,7 @@ mod tests {
         fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
             None
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
             None
         }
     }
@@ -3441,7 +3441,7 @@ mod tests {
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<bindings::RoutineSource> {
+            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
                 None
             }
         }
@@ -3562,22 +3562,47 @@ mod tests {
             fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
                 None
             }
-            fn get_int_or_mac(&self, name: &str) -> Option<bindings::RoutineSource> {
-                (name == "External").then(|| bindings::RoutineSource {
-                    text: "ROUTINE External\n\n\tQuit\n\nFoo()\n\tQuit\n".to_string(),
-                    uri: None,
-                })
+            fn get_int_or_mac(&self, name: &str) -> Option<Option<bindings::RoutineSource>> {
+                match name {
+                    "External" => Some(Some(bindings::RoutineSource {
+                        text: "ROUTINE External\n\n\tQuit\n\nFoo()\n\tQuit\n".to_string(),
+                        uri: None,
+                    })),
+                    "Compiled" => Some(None),
+                    _ => None,
+                }
             }
         }
         let workspace = Workspace::new_with_iris(Some(Box::new(ExternalRoutineIris)), None);
         let uri = "Main.mac".to_string();
+        // The hard error last, since it stops checking the rest of the body.
         workspace.open(
             uri.clone(),
-            "ROUTINE Main\n\n\tDo Foo^External(1)\n\tQuit\n".to_string(),
+            "ROUTINE Main\n\n\tDo Foo^Compiled(1)\n\tDo Foo^Typo()\n\tDo Foo^External(1)\n\tQuit\n"
+                .to_string(),
         );
-        let diagnostics = workspace.diagnostics(uri);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(diagnostics[0].message.contains("Too many arguments"));
+        let mut diagnostics: Vec<_> = workspace
+            .diagnostics(uri)
+            .into_iter()
+            .map(|d| (d.severity, d.message))
+            .collect();
+        diagnostics.sort_by(|a, b| a.1.cmp(&b.1));
+        use bindings::DiagnosticSeverity::*;
+        assert_eq!(
+            diagnostics,
+            [
+                (
+                    Error,
+                    "Cannot find routine 'Typo' in the workspace or on the IRIS instance".to_string()
+                ),
+                (
+                    Hint,
+                    "The source of routine 'Compiled' isn't available, so calls into it can't be checked precisely"
+                        .to_string()
+                ),
+                (Error, "Too many arguments".to_string()),
+            ]
+        );
     }
 
     #[test]

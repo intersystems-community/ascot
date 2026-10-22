@@ -27,7 +27,8 @@ export type Workspace = {
 export interface Imported {
 	getCls(cls: string): Promise<ClassInfo | undefined>;
 	getInc(name: string): Promise<RoutineSource | undefined>;
-	getIntOrMac(name: string): Promise<RoutineSource | undefined>;
+	// `{ tag: "none" }` if there is no such routine; `val: undefined` if its source isn't available.
+	getIntOrMac(name: string): Promise<{ tag: "none" } | { tag: "some"; val: RoutineSource | undefined }>;
 }
 
 // jco needs the actual `IrisConnection` class (not just an instance) up front, to bind

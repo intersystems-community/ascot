@@ -277,9 +277,16 @@ impl QuasiTypeError {
         Self::WithoutRange(TypeErrorKind::GotoOutOfBlock { label }, vec![])
     }
 
-    pub fn cannot_find_routine(routine: String, has_iris: bool) -> Self {
-        let source = MissingSource { has_iris };
-        Self::WithoutRange(TypeErrorKind::CannotFindRoutine { routine, source }, vec![])
+    pub fn cannot_find_routine(routine: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::CannotFindRoutine { routine }, vec![])
+    }
+
+    pub fn routine_not_on_iris(routine: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::RoutineNotOnIris { routine }, vec![])
+    }
+
+    pub fn routine_without_source(routine: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::RoutineWithoutSource { routine }, vec![])
     }
 
     pub fn continue_not_in_loop() -> Self {
@@ -433,16 +440,22 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
-    /// A `label^routine` call into a routine that isn't in the workspace and whose source IRIS
-    /// can't supply. IRIS doesn't tell a missing routine from one that has only its OBJ, so this is
-    /// a warning, and the call is checked as untyped.
+    /// A `label^routine` call into a routine that isn't in the workspace, with no IRIS connection
+    /// to say whether it exists. The call is checked as untyped.
     #[code = "A3303"]
     #[severity = Warning]
-    #[message = "Cannot find routine '{routine}' in this workspace, {source}"]
-    CannotFindRoutine {
-        routine: String,
-        source: MissingSource,
-    },
+    #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
+    CannotFindRoutine { routine: String },
+    #[code = "A4439"]
+    #[severity = Error]
+    #[message = "Cannot find routine '{routine}' in the workspace or on the IRIS instance"]
+    RoutineNotOnIris { routine: String },
+    /// A `label^routine` call into a routine whose source isn't available, e.g. one IRIS has only
+    /// as OBJ, so its labels are unknown and the call is checked as untyped.
+    #[code = "A3794"]
+    #[severity = Hint]
+    #[message = "The source of routine '{routine}' isn't available, so calls into it can't be checked precisely"]
+    RoutineWithoutSource { routine: String },
     #[code = "A7831"]
     #[severity = Error]
     #[message = "Include file '{name}' is not defined in the current workspace"]
@@ -724,22 +737,6 @@ impl std::fmt::Display for ClassLookup {
                 "confirm class '{cls}' exists — it isn't open in this workspace, with no IRIS connection to check it against"
             )
         }
-    }
-}
-
-/// Why a routine's source is out of reach, depending on whether IRIS was asked.
-#[derive(Debug)]
-pub struct MissingSource {
-    pub has_iris: bool,
-}
-
-impl std::fmt::Display for MissingSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.has_iris {
-            "and IRIS has no source for it: it is missing, or IRIS has only its OBJ"
-        } else {
-            "with no IRIS connection to check it against"
-        })
     }
 }
 

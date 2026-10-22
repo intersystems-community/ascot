@@ -21,7 +21,7 @@ import { createWorkspace, type Imported } from "@intersystems-community/ascot";
 class NoIris implements Imported {
   async getCls(cls: string) { return undefined; }      // a class's members and metadata
   async getInc(name: string) { return undefined; }     // the text of `name.inc`
-  async getIntOrMac(name: string) { return undefined; } // the text of routine `name`
+  async getIntOrMac(name: string) { return { tag: "some", val: undefined } as const; } // routine `name`: may exist
 }
 
 const ws = await createWorkspace(new NoIris());
