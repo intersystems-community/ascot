@@ -421,7 +421,7 @@ impl SourceMap {
                 let range = self.range_in(&Some(uri.clone()), range)?;
                 Some(bindings::DiagnosticRelatedInformation {
                     location: Location::new(uri, range),
-                    message: "↳ Included from here.".into(),
+                    message: "↳ In the included file.".into(),
                 })
             })
             .collect();
