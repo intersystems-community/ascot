@@ -132,16 +132,6 @@ impl TryFrom<&MemberKindSpecificDetails> for MemberTy {
     }
 }
 
-// `mem` as seen from `receiver` -- see `TyProcedure::instantiate`.
-fn instantiate(mut mem: MemberTy, receiver: &ClassTy) -> MemberTy {
-    if let HOTy::Procedure(proc) = &mem.ty
-        && let Some(proc) = proc.instantiate(receiver)
-    {
-        mem.ty = HOTy::Procedure(Arc::new(proc));
-    }
-    mem
-}
-
 impl TryFrom<bindings::MemberInfo> for MemberTy {
     type Error = ();
 
@@ -183,9 +173,9 @@ impl TryFrom<bindings::MemberInfo> for MemberTy {
                             bindings::CollectionKind::List => CollectionClass::List,
                             bindings::CollectionKind::Array => CollectionClass::Array,
                         },
-                        element: ty_from_declared(info.t).unwrap_or_default(),
+                        element: ty_from_iris(info.t).unwrap_or_default(),
                     },
-                    None => HOTy::Value(ty_from_declared(info.t).unwrap_or_default()),
+                    None => HOTy::Value(ty_from_iris(info.t).unwrap_or_default()),
                 },
                 location,
             }),
@@ -780,7 +770,10 @@ impl<'a> WorkspaceEnv<'a> {
                     .or_else(|| self.dispatch_member(sup, AccessKind::Call, is_instance))
             })
             .or_else(|| self.unverified_any())
-            .map(|mem| instantiate(mem, &ClassTy::from(cls.to_string())))
+            .map(|mut mem| {
+                mem.ty.instantiate(&ClassTy::from(cls.to_string()));
+                mem
+            })
     }
 
     // `cls`'s direct superclasses, normalized. `None` when `cls` itself can't be resolved.
@@ -905,7 +898,7 @@ impl<'a> WorkspaceEnv<'a> {
         let qualify = |t: &mut Ty| {
             if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = t {
                 c.name = self.qualify_class_name(&c.name, Some(context));
-                for (_, arg) in &mut c.generics {
+                for arg in c.generics.values_mut() {
                     *arg = self.qualify_class_name(arg, Some(context));
                 }
             }
@@ -1688,7 +1681,10 @@ impl<'a> CodeEnv<'a> {
             self.add_soft_diagnostic(err.into());
         }
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
-        if let Some(mem_desc) = result.map(|mem| instantiate(mem, receiver)) {
+        if let Some(mem_desc) = result.map(|mut mem| {
+            mem.ty.instantiate(receiver);
+            mem
+        }) {
             if mem_desc.is_instance_only && !obj.is_ins() {
                 Err(
                     QuasiTypeError::access_instance_only_member_from_class_context(mem)
@@ -1930,7 +1926,7 @@ mod tests {
         assert_eq!(cls.name, "%Library.RelationshipObject");
         assert_eq!(
             cls.generics,
-            [("ELEMENTTYPE".to_string(), "Ext.Child".to_string())]
+            [("ELEMENTTYPE".to_string(), "Ext.Child".to_string())].into()
         );
     }
 }

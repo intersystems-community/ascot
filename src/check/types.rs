@@ -7,6 +7,7 @@
 //! and rendered for inlay hints and hover text. Mostly plain data; the few class lookups needed
 //! to normalize a type go through `WorkspaceEnv`.
 
+use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -544,7 +545,7 @@ pub struct ClassTy {
     // same class regardless of which happened to resolve this), so excluded from equality.
     pub location: Option<bindings::Location>,
     // Generic arguments by parameter name (see `crate::mask`), excluded from equality too.
-    pub generics: Vec<(String, String)>,
+    pub generics: BTreeMap<String, String>,
 }
 
 impl PartialEq for ClassTy {
@@ -567,7 +568,7 @@ impl From<String> for ClassTy {
         ClassTy {
             name,
             location: None,
-            generics: vec![],
+            generics: BTreeMap::new(),
         }
     }
 }
@@ -987,51 +988,70 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     Ty::OREF(ClsOrIns::Ins(cls))
 }
 
-// What `Self` in an IRIS-reported signature becomes: a name no class can have, since only those
+// What `Self` in an IRIS-reported type becomes: a name no class can have, since only those
 // signatures may use `Self` (a workspace class may be named `Self` relative to its package).
 const SELF: &str = "?Self";
 
-// An IRIS-reported signature's type, where the mask (see `crate::mask`) may have written `Self`
-// or a generic parameter as `..#NAME`; resolved against the receiver by
-// `TyProcedure::instantiate`.
-fn ty_from_iris(t: Option<String>) -> Option<Ty> {
+// An IRIS-reported type, where the mask (see `crate::mask`) may have written `Self` or a generic
+// parameter as `..#NAME`; resolved against the receiver by `Instantiate`.
+pub(crate) fn ty_from_iris(t: Option<String>) -> Option<Ty> {
     match t.as_deref() {
         Some("Self") => Some(Ty::from(SELF)),
         _ => ty_from_declared(t),
     }
 }
 
-impl TyProcedure {
-    // This signature as seen from `receiver`: `Self` is the receiver's class, and `..#NAME`
-    // the receiver's generic argument for that parameter.
-    pub(crate) fn instantiate(&self, receiver: &ClassTy) -> Option<TyProcedure> {
-        let resolve = |ty: &Option<Ty>| -> Option<Option<Ty>> {
-            let Some(Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c))) = ty else {
-                return None;
-            };
-            if c.name == SELF {
-                Some(Some(Ty::from(receiver.name.clone())))
-            } else {
-                let param = c.name.strip_prefix("..#")?;
-                let arg = crate::mask::generic_arg(&receiver.name, &receiver.generics, param)?;
-                Some(Some(Ty::from(arg)))
-            }
+// A type as seen from `receiver`: `Self` is the receiver's class, and `..#NAME` the receiver's
+// generic argument for that parameter. Only mask-corrected IRIS members say either.
+pub(crate) trait Instantiate {
+    fn instantiate(&mut self, receiver: &ClassTy);
+}
+
+impl Instantiate for Ty {
+    fn instantiate(&mut self, receiver: &ClassTy) {
+        let Ty::OREF(oref @ (ClsOrIns::Ins(_) | ClsOrIns::Cls(_))) = self else {
+            return;
         };
-        let mut proc = self.clone();
-        let mut changed = false;
-        for ty in proc
-            .normal_args
-            .iter_mut()
-            .map(|arg| &mut arg.ty)
-            .chain(proc.variadic_arg.iter_mut().map(|arg| &mut arg.ty))
-            .chain(std::iter::once(&mut proc.out))
-        {
-            if let Some(resolved) = resolve(ty) {
-                *ty = resolved;
-                changed = true;
-            }
+        let name = oref.name();
+        let resolved = if name == SELF {
+            Some(receiver.name.clone())
+        } else {
+            name.strip_prefix("..#").and_then(|param| {
+                crate::mask::generic_arg(&receiver.name, &receiver.generics, param)
+            })
+        };
+        if let Some(name) = resolved {
+            *oref = oref.replace(ClassTy::from(name));
         }
-        changed.then_some(proc)
+    }
+}
+
+impl<T: Instantiate> Instantiate for Option<T> {
+    fn instantiate(&mut self, receiver: &ClassTy) {
+        if let Some(t) = self {
+            t.instantiate(receiver);
+        }
+    }
+}
+
+impl Instantiate for TyProcedure {
+    fn instantiate(&mut self, receiver: &ClassTy) {
+        for arg in &mut self.normal_args {
+            arg.ty.instantiate(receiver);
+        }
+        if let Some(arg) = &mut self.variadic_arg {
+            arg.ty.instantiate(receiver);
+        }
+        self.out.instantiate(receiver);
+    }
+}
+
+impl Instantiate for HOTy {
+    fn instantiate(&mut self, receiver: &ClassTy) {
+        match self {
+            HOTy::Value(ty) | HOTy::Collection { element: ty, .. } => ty.instantiate(receiver),
+            HOTy::Procedure(proc) => Arc::make_mut(proc).instantiate(receiver),
+        }
     }
 }
 
@@ -1069,5 +1089,29 @@ impl From<bindings::MethodInfo> for TyProcedure {
             uri: None,
             declared_at: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Not only signatures: any member type, here a property's, is resolved against the receiver.
+    #[test]
+    fn a_value_type_is_instantiated_too() {
+        let mut receiver = ClassTy::from("%Library.RelationshipObject".to_string());
+        receiver
+            .generics
+            .insert("ELEMENTTYPE".to_string(), "Demo.Child".to_string());
+        let mut element = HOTy::Value(Ty::from("..#ELEMENTTYPE"));
+        element.instantiate(&receiver);
+        assert!(
+            matches!(element, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "Demo.Child")
+        );
+        let mut this = HOTy::Value(ty_from_iris(Some("Self".to_string())).unwrap());
+        this.instantiate(&receiver);
+        assert!(
+            matches!(this, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "%Library.RelationshipObject")
+        );
     }
 }

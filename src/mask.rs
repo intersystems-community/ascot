@@ -34,13 +34,16 @@ pub(crate) fn apply(cls: &str, mut member: MemberInfo) -> MemberInfo {
 
 /// What generic parameter `param` of `cls` is, given `cls`'s generic arguments: the one bound to
 /// it, or else its default. `None` if `cls` has no such parameter.
-pub(crate) fn generic_arg(cls: &str, args: &[(String, String)], param: &str) -> Option<String> {
+pub(crate) fn generic_arg(
+    cls: &str,
+    args: &BTreeMap<String, String>,
+    param: &str,
+) -> Option<String> {
     let declared = generic_params(cls).find(|g| g.name.content.eq_ignore_ascii_case(param))?;
     let MemberKind::Parameter(default) = &declared.kind else {
         unreachable!("a generic parameter is a Parameter")
     };
-    args.iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case(param))
-        .map(|(_, arg)| arg.clone())
+    args.get(&declared.name.content)
+        .cloned()
         .or_else(|| default.v.clone())
 }
