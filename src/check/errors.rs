@@ -323,13 +323,13 @@ impl<T> IntoTypeError<T> for Result<T, QuasiTypeError> {
 
 // Declares `TypeErrorKind` with each variant's diagnostic code next to it, so the code, the
 // variant's docs.rs anchor and the code shown in its docs all come from one place.
-// Each variant's first doc line is its message, with its fields in `{braces}`; any later doc
-// lines explain it.
+// Each variant's `#[message]` is its message, with its fields in `{braces}`; its doc comment, if
+// any, explains it.
 macro_rules! type_error_kinds {
     ($(
-        #[doc = $message:literal]
         $(#[doc = $doc:literal])*
         #[code = $code:literal]
+        #[message = $message:literal]
         $variant:ident
         $({ $( $(#[doc = $fdoc:literal])* $field:ident: $fty:ty ),* $(,)? })?,
     )*) => {
@@ -344,6 +344,7 @@ macro_rules! type_error_kinds {
         pub enum TypeErrorKind {
             $(
                 #[doc = $message]
+                #[doc = ""]
                 $(#[doc = $doc])*
                 #[doc = ""]
                 #[doc = concat!("Code: `", $code, "`")]
@@ -354,13 +355,11 @@ macro_rules! type_error_kinds {
 
         impl std::fmt::Display for TypeErrorKind {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                let message = match self {
+                match self {
                     $(Self::$variant $({ $($field),* })? => {
-                        format!($message $($(, $field = $field)*)?)
+                        write!(f, $message $($(, $field = $field)*)?)
                     })*
-                };
-                // A `/// ` line keeps the space after the slashes.
-                f.write_str(message.trim_start())
+                }
             }
         }
 
@@ -390,223 +389,221 @@ macro_rules! type_error_kinds {
 }
 
 type_error_kinds! {
-    /// Cannot find class '{cls}' in the workspace or on the IRIS instance
     #[code = "A8061"]
+    #[message = "Cannot find class '{cls}' in the workspace or on the IRIS instance"]
     CannotFindClass { cls: String },
-    /// Cannot {lookup}
-    ///
     /// A class that isn't open in the workspace. With an IRIS connection, the instance doesn't
     /// have it either; without one, there's nothing to check it against.
     #[code = "A1054"]
+    #[message = "Cannot {lookup}"]
     UnconfirmedClass { lookup: ClassLookup },
-    /// Cannot find member '{mem}' in {cls}{suggestions}{dynamic}
     #[code = "A3139"]
+    #[message = "Cannot find member '{mem}' in {cls}{suggestions}{dynamic}"]
     CannotFindMember {
         cls: String,
         mem: String,
         suggestions: Suggestions,
         dynamic: DynamicGet,
     },
-    /// Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes a class {reason}
     #[code = "A9360"]
+    #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes a class {reason}"]
     UnconfirmedMember {
         cls: String,
         mem: String,
         on: SuperclassOf,
         reason: UnconfirmedReason,
     },
-    /// Cannot find label '{label}' in {routine}
     #[code = "A6851"]
+    #[message = "Cannot find label '{label}' in {routine}"]
     CannotFindLabel { label: String, routine: InRoutine },
-    /// Cannot GOTO label '{label}' from inside a procedure block: it is outside the block
     #[code = "A1073"]
+    #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
-    /// Routine '{routine}' is not defined in the current workspace
     #[code = "A3303"]
+    #[message = "Routine '{routine}' is not defined in the current workspace"]
     CannotFindRoutine { routine: String },
-    /// Include file '{name}' is not defined in the current workspace
     #[code = "A7831"]
+    #[message = "Include file '{name}' is not defined in the current workspace"]
     CannotFindInclude { name: String },
-    /// The macro '{name}' expands recursively without end
     #[code = "A5090"]
+    #[message = "The macro '{name}' expands recursively without end"]
     MacroExpansionTooDeep { name: String },
-    /// Cannot reference instance-only member '{name}' in a class method
     #[code = "A8914"]
+    #[message = "Cannot reference instance-only member '{name}' in a class method"]
     AccessInstanceOnlyMemberFromClassContext { name: String },
-    /// Variable '{name}' is already declared
     #[code = "A4983"]
+    #[message = "Variable '{name}' is already declared"]
     RedeclareVariable { name: String },
-    /// Variable '{name}' is already NEW'd; this NEW resets it to undefined, discarding its current value — `Kill {name}` says that explicitly
     #[code = "A1817"]
+    #[message = "Variable '{name}' is already NEW'd; this NEW resets it to undefined, discarding its current value — `Kill {name}` says that explicitly"]
     RedundantNew { name: String },
-    /// '{name}' is already NEW'd here — every local variable is implicitly NEW'd on entry to a procedure block
     #[code = "A6866"]
+    #[message = "'{name}' is already NEW'd here — every local variable is implicitly NEW'd on entry to a procedure block"]
     NewInProcedureBlock { name: String },
-    /// Class keyword '{keyword}' has no value
     #[code = "A5573"]
+    #[message = "Class keyword '{keyword}' has no value"]
     ClassKeywordWithoutValue { keyword: String },
-    /// '{keyword}' is not a recognized property keyword; available: {available}
     #[code = "A9322"]
+    #[message = "'{keyword}' is not a recognized property keyword; available: {available}"]
     UnrecognizedPropertyKeyword { keyword: String, available: Available },
-    /// '{name}' is not a parameter of {class}{hint}
     #[code = "A2357"]
+    #[message = "'{name}' is not a parameter of {class}{hint}"]
     UnrecognizedTypeParam {
         name: String,
         class: String,
         hint: TypeParamHint,
     },
-    /// '{keyword}' is not a recognized parameter keyword; available: {available}
     #[code = "A2174"]
+    #[message = "'{keyword}' is not a recognized parameter keyword; available: {available}"]
     UnrecognizedParameterKeyword { keyword: String, available: Available },
-    /// '{meta_type}' is not a recognized parameter type; available: {available}
     #[code = "A8317"]
+    #[message = "'{meta_type}' is not a recognized parameter type; available: {available}"]
     UnrecognizedParameterType { meta_type: String, available: Available },
-    /// ObjectScript has no operator precedence and evaluates strictly left-to-right; this may not compute what you expect
     #[code = "A7155"]
+    #[message = "ObjectScript has no operator precedence and evaluates strictly left-to-right; this may not compute what you expect"]
     MixedPrecedence,
-    /// Variable '{name}' is assigned but never read
     #[code = "A5718"]
+    #[message = "Variable '{name}' is assigned but never read"]
     UnreadAssignment { name: String },
-    /// Output parameter '{name}' is never assigned; its caller will get an undefined value
     #[code = "A4476"]
+    #[message = "Output parameter '{name}' is never assigned; its caller will get an undefined value"]
     OutputNeverAssigned { name: String },
-    /// Variable '{name}' is {ty1} in one branch but {ty2} in another
     #[code = "A8892"]
+    #[message = "Variable '{name}' is {ty1} in one branch but {ty2} in another"]
     InconsistentDeclaration {
         name: String,
         ty1: Declared,
         ty2: Declared,
     },
-    /// {source} is incompatible with {target}
     #[code = "A5967"]
+    #[message = "{source} is incompatible with {target}"]
     TypeIncompatible { source: Ty, target: Ty },
-    /// Cannot assign {source} to '{name}' declared as {target}
     #[code = "A9180"]
+    #[message = "Cannot assign {source} to '{name}' declared as {target}"]
     AssignIncompatible {
         name: String,
         source: Ty,
         target: Ty,
     },
-    /// Unreachable code
     #[code = "A1203"]
+    #[message = "Unreachable code"]
     Unreachable,
-    /// This condition is always {value}
     #[code = "A8456"]
+    #[message = "This condition is always {value}"]
     ConditionAlways { value: bool },
-    /// Expression is not a procedure; its type is {ty}
     #[code = "A8496"]
+    #[message = "Expression is not a procedure; its type is {ty}"]
     NotProcedure { ty: Ty },
-    /// ObjectScript has no first-class methods; call it with ()
     #[code = "A3671"]
+    #[message = "ObjectScript has no first-class methods; call it with ()"]
     ProcedureNotCalled,
-    /// Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional.
     #[code = "A6705"]
+    #[message = "Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional."]
     TooFewArguments { next_arg: String },
-    /// Too many arguments
     #[code = "A5523"]
+    #[message = "Too many arguments"]
     TooManyArguments,
-    /// $CASE's `:default` must be its last argument
     #[code = "A7139"]
+    #[message = "$CASE's `:default` must be its last argument"]
     CaseDefaultNotLast,
-    /// ${name} is not a recognized function{suggestions}
     #[code = "A3850"]
+    #[message = "${name} is not a recognized function{suggestions}"]
     UnknownFunction {
         name: String,
         suggestions: Suggestions,
     },
-    /// ${name} is not a recognized special variable{suggestions}
     #[code = "A9399"]
+    #[message = "${name} is not a recognized special variable{suggestions}"]
     UnknownSpecialVariable {
         name: String,
         suggestions: Suggestions,
     },
-    /// Invalid macro argument: {reason}
     #[code = "A6587"]
+    #[message = "Invalid macro argument: {reason}"]
     InvalidMacroArgument { reason: String },
-    /// '{action}' is not a valid $ZSTRIP action: {reason}
     #[code = "A3286"]
+    #[message = "'{action}' is not a valid $ZSTRIP action: {reason}"]
     InvalidZStripAction {
         action: String,
         reason: &'static str,
     },
-    /// {value} is a number here, implicitly converted to the string "{value}"
     #[code = "A9421"]
+    #[message = "{value} is a number here, implicitly converted to the string \"{value}\""]
     NumberImplicitlyConvertedToString { value: String },
-    /// This call returns {class}, which Do discards -- consider Set to capture it, or checking it directly
     #[code = "A4556"]
+    #[message = "This call returns {class}, which Do discards -- consider Set to capture it, or checking it directly"]
     DiscardedReturnValue { class: String },
-    /// {what} `{found}` should be written `{expected}`
     #[code = "A2839"]
+    #[message = "{what} `{found}` should be written `{expected}`"]
     KeywordStyle {
         // "Command keyword" or "Function".
         what: &'static str,
         found: String,
         expected: String,
     },
-    /// '{format}' is not a valid $FNUMBER format: {reason}
     #[code = "A7895"]
+    #[message = "'{format}' is not a valid $FNUMBER format: {reason}"]
     InvalidFNumberFormat { format: String, reason: String },
-    /// Expected return value of type '{wanted}' but got nothing
     #[code = "A6781"]
+    #[message = "Expected return value of type '{wanted}' but got nothing"]
     ReturnNothingForX { wanted: Ty },
-    /// Unexpected return value of type '{actual}'
     #[code = "A8997"]
+    #[message = "Unexpected return value of type '{actual}'"]
     ReturnXForNothing { actual: Ty },
-    /// Quit with {actual} inside control structure
     #[code = "A4963"]
+    #[message = "Quit with {actual} inside control structure"]
     QuitXInControl { actual: Ty },
-    /// The parameter '{name}' is declared as {wanted} parameter but got {actual} argument
     #[code = "A5579"]
+    #[message = "The parameter '{name}' is declared as {wanted} parameter but got {actual} argument"]
     MismatchArgumentAndArgumentMode {
         name: String,
         wanted: ArgMode,
         actual: ArgMode,
     },
-    /// This '{ty}' value may be undefined{expr}
     #[code = "A6826"]
+    #[message = "This '{ty}' value may be undefined{expr}"]
     MaybeUndefined { ty: Ty, expr: Detail },
-    /// This value is undefined{expr}
     #[code = "A7095"]
+    #[message = "This value is undefined{expr}"]
     Undefined { expr: Detail },
-    /// Not in a class context
     #[code = "A1368"]
+    #[message = "Not in a class context"]
     NotInClass,
-    /// Procedure call returns nothing
     #[code = "A7244"]
+    #[message = "Procedure call returns nothing"]
     ProcedureCallReturnsNothing,
-    /// The procedure call requires the private variable '{name}' to be public
     #[code = "A4025"]
+    #[message = "The procedure call requires the private variable '{name}' to be public"]
     RequirePrivateVariable { name: String },
-    /// Type checking not implemented for '{what}'
     #[code = "A4043"]
+    #[message = "Type checking not implemented for '{what}'"]
     Unimplemented { what: String },
-    /// The macro '{name}' is undefined{suggestions}
     #[code = "A2797"]
+    #[message = "The macro '{name}' is undefined{suggestions}"]
     UndefinedMacro {
         name: String,
         suggestions: Suggestions,
     },
-    /// CONTINUE is not within a loop
     #[code = "A5789"]
+    #[message = "CONTINUE is not within a loop"]
     ContinueNotInLoop,
-    /// The member name {name} is defined twice
     #[code = "A3119"]
+    #[message = "The member name {name} is defined twice"]
     DuplicatedMemberName { name: String },
-    /// Class '{name}' is also declared in {other_uri}
     #[code = "A3717"]
+    #[message = "Class '{name}' is also declared in {other_uri}"]
     DuplicateClassName { name: String, other_uri: String },
-    /// {err}
-    ///
     /// Code that doesn't parse. Where the grammar knows what went wrong, such as an unknown
     /// command or a function given the wrong arguments, the message says so; otherwise it lists
     /// what the parser was looking for.
     #[code = "A8073"]
+    #[message = "{err}"]
     InvalidSyntax { err: SyntaxErrorText },
-    #[doc = "Syntax error, looking for:\n{err}"]
     #[code = "A1727"]
+    #[message = "Syntax error, looking for:\n{err}"]
     DocumentSyntaxError { err: tygr::Error },
-    /// Missing an explicit QUIT or RETURN; execution falls through to whatever follows
     #[code = "A7548"]
+    #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
     MissingQuit,
 }
 
