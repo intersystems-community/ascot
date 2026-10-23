@@ -3,7 +3,7 @@
 //!
 //! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
 //! library code above all, so the checker can confirm them instead of leaving a hint. Results
-//! are cached per client. `iris_client` builds an `iris::IrisClient` from any `Atelier`, the
+//! are cached per client. `Client` is the `iris::IrisClient` built from any `Atelier`, the
 //! two requests the lookups need; `AtelierConnection` answers them over HTTP.
 //!
 //! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
@@ -420,7 +420,7 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
-/// The two Atelier REST API requests `iris_client`'s lookups are made of, so a host that already
+/// The two Atelier REST API requests `Client`'s lookups are made of, so a host that already
 /// has its own connection to IRIS (credentials, TLS, sessions) can answer them itself.
 pub trait Atelier: Send + Sync {
     /// The rows of `/action/query` for `sql`, `params` bound to its `?`s, each a JSON object
@@ -431,22 +431,24 @@ pub trait Atelier: Send + Sync {
     fn get_doc(&self, name: &str) -> Option<Vec<String>>;
 }
 
-/// The `IrisClient` that looks up classes, includes and routines through `atelier`, caching
+/// The `IrisClient` that looks up classes, includes and routines through an `Atelier`, caching
 /// what it finds.
-pub fn iris_client(atelier: impl Atelier + 'static) -> Box<dyn IrisClient> {
-    Box::new(Client {
-        atelier,
-        cls_cache: Cache::new(),
-        routine_cache: Cache::new(),
-        obj_cache: Cache::new(),
-    })
-}
-
-struct Client<A> {
+pub struct Client<A> {
     atelier: A,
     cls_cache: Cache<Option<ClassInfo>>,
     routine_cache: Cache<Option<RoutineSource>>,
     obj_cache: Cache<bool>,
+}
+
+impl<A: Atelier> From<A> for Client<A> {
+    fn from(atelier: A) -> Self {
+        Self {
+            atelier,
+            cls_cache: Cache::new(),
+            routine_cache: Cache::new(),
+            obj_cache: Cache::new(),
+        }
+    }
 }
 
 impl<A: Atelier> IrisClient for Client<A> {
@@ -1029,7 +1031,7 @@ mod tests {
                 (name == "Util.mac").then(|| vec!["Util".into(), " quit".into()])
             }
         }
-        let iris = iris_client(Docs);
+        let iris = Client::from(Docs);
         let util = iris.get_int_or_mac("Util").unwrap().unwrap();
         assert_eq!(util.text, "Util\n quit");
         assert!(iris.get_inc("Util").is_none());

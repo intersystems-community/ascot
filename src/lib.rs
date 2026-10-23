@@ -56,7 +56,7 @@ pub mod mcp;
 mod render;
 pub mod style;
 #[cfg(not(target_arch = "wasm32"))]
-pub use atelier::{Atelier, AtelierConnection, iris_client};
+pub use atelier::{Atelier, AtelierConnection, Client};
 #[cfg(not(target_arch = "wasm32"))]
 pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, IrisClient, open as open_iris};
 pub(crate) use macro_expand::MacroDefinitions;
