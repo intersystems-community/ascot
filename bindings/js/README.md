@@ -55,6 +55,22 @@ class MyIris extends IrisConnection {
 const connected = await createWorkspace(new MyIris());
 ```
 
+Or extend `Atelier` with the two Atelier REST API requests, `query` (the rows of
+`/action/query`, each a JSON string) and `getDoc` (the lines of `/doc/{name}`), and let ascot
+make the lookups itself:
+
+```ts
+import { Atelier } from "@intersystems-community/ascot";
+
+class MyAtelier extends Atelier {
+  override async getDoc(name: string): Promise<string[] | undefined> {
+    return undefined; // GET /doc/{name}, e.g. with your own credentials and session
+  }
+}
+
+const connected = await createWorkspace(new MyAtelier());
+```
+
 `createWorkspace` takes an optional second argument, a `Style` applied to every document:
 
 ```ts

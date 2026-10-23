@@ -15,11 +15,12 @@ mod wit_bind {
     wit_bindgen::generate!({
         path: "src/wit/ascot.wit",
         additional_derives: [serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq, Hash],
+        additional_derives_ignore: ["env"],
     });
 
     pub use exports::iris::ascot::exported::{Guest, GuestWorkspace, Workspace};
     pub use iris::ascot::common::*;
-    pub use iris::ascot::imported::IrisConnection;
+    pub use iris::ascot::imported::{Atelier, Env, IrisConnection};
 
     #[cfg(target_arch = "wasm32")]
     use super::Component;

@@ -37,12 +37,21 @@ export class IrisConnection {
 	async getInc(_name: string): Promise<Source | undefined> {
 		return undefined;
 	}
-	/** The labels of routine `name`: `{ tag: "none" }` if there is no such routine,
-	 * `val: undefined` if its labels aren't known. */
-	async getRtn(
-		_name: string,
-	): Promise<{ tag: "none" } | { tag: "some"; val: RoutineInfo | undefined }> {
-		return { tag: "some", val: undefined };
+	/** The labels of routine `name`, `undefined` if there is no such routine. */
+	async getRtn(_name: string): Promise<RoutineInfo | undefined> {
+		return { labels: undefined, uri: undefined };
+	}
+}
+
+/** The two Atelier REST API requests, for ascot to make `IrisConnection`'s lookups with. */
+export class Atelier {
+	/** The rows of `/action/query`, each a JSON object keyed by column name. */
+	async query(_sql: string, _params: string[]): Promise<string[] | undefined> {
+		return undefined;
+	}
+	/** The lines of `/doc/{name}`. */
+	async getDoc(_name: string): Promise<string[] | undefined> {
+		return undefined;
 	}
 }
 
@@ -52,7 +61,7 @@ const wasm: Promise<Root> = import("../generated/ascot.js").then(({ instantiate 
 			new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
 		{
 			"iris:ascot/common": {},
-			"iris:ascot/imported": { IrisConnection },
+			"iris:ascot/imported": { IrisConnection, Atelier },
 		} as never,
 	),
 );
@@ -85,7 +94,14 @@ function serialize(instance: RawWorkspace): Workspace {
 }
 
 /** A workspace whose calls run one at a time, resolving what it doesn't contain through `iris`. */
-export async function createWorkspace(iris?: IrisConnection, style?: Style): Promise<Workspace> {
+export async function createWorkspace(
+	iris?: IrisConnection | Atelier,
+	style?: Style,
+): Promise<Workspace> {
 	const root = await wasm;
-	return serialize(new root.exported.Workspace(iris, style));
+	const env =
+		iris instanceof Atelier
+			? { tag: "atelier" as const, val: iris }
+			: iris && { tag: "connection" as const, val: iris };
+	return serialize(new root.exported.Workspace(env, style));
 }

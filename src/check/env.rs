@@ -1125,12 +1125,13 @@ impl<'a> WorkspaceEnv<'a> {
         let Some(iris) = self.workspace.iris.as_ref() else {
             return Err(QuasiTypeError::cannot_find_routine(name.into()));
         };
-        let info = match iris.get_rtn(name) {
-            Some(Some(info)) => info,
-            Some(None) => return Err(QuasiTypeError::routine_without_source(name.into())),
-            None => return Err(QuasiTypeError::routine_not_on_iris(name.into())),
-        };
-        let labels = info.labels.into_iter().map(|label| {
+        let info = iris
+            .get_rtn(name)
+            .ok_or_else(|| QuasiTypeError::routine_not_on_iris(name.into()))?;
+        let labels = info
+            .labels
+            .ok_or_else(|| QuasiTypeError::routine_without_source(name.into()))?;
+        let labels = labels.into_iter().map(|label| {
             let name = label.name.clone();
             (
                 name,

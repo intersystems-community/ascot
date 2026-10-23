@@ -1,5 +1,4 @@
-//! `IrisClient`, the lookups `lib.rs` makes for code outside the workspace, and `open`, which
-//! answers an `--iris` argument with a live `atelier::AtelierConnection` (a URL) or a
+//! `open`, which answers an `--iris` argument with a live `http::AtelierConnection` (a URL) or a
 //! `Declarations` file `ascot declare` wrote (a path), which never connects to anything.
 
 use std::collections::BTreeMap;
@@ -7,17 +6,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::atelier::AtelierConnection;
+use crate::IrisClient;
 use crate::bindings::{ClassInfo, RoutineInfo, Source};
-
-pub trait IrisClient: Send + Sync {
-    // `cls`'s own (not inherited) members, superclasses and class-level metadata.
-    fn get_cls(&self, cls: &str) -> Option<ClassInfo>;
-    // The full text of `name.inc`, code included.
-    fn get_inc(&self, name: &str) -> Option<Source>;
-    // `None` if there's no such routine, `Some(None)` if its labels aren't known (no source).
-    fn get_rtn(&self, name: &str) -> Option<Option<RoutineInfo>>;
-}
+use crate::http::AtelierConnection;
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
@@ -51,9 +42,8 @@ pub struct Declarations {
     pub classes: BTreeMap<String, ClassInfo>,
     /// `.inc` files by name without the extension.
     pub includes: BTreeMap<String, Source>,
-    /// Routines' labels by name without the extension; `None` for one whose labels aren't known
-    /// (e.g. only its OBJ).
-    pub routines: BTreeMap<String, Option<RoutineInfo>>,
+    /// Routines by name without the extension.
+    pub routines: BTreeMap<String, RoutineInfo>,
 }
 
 impl Declarations {
@@ -92,7 +82,7 @@ impl IrisClient for Declarations {
         self.includes.get(name).cloned()
     }
 
-    fn get_rtn(&self, name: &str) -> Option<Option<RoutineInfo>> {
+    fn get_rtn(&self, name: &str) -> Option<RoutineInfo> {
         self.routines.get(name).cloned()
     }
 }
@@ -162,7 +152,13 @@ mod tests {
                     "Unparsed".to_string(),
                     crate::routine_info("ROUTINE Unparsed [Type=INT]\n{\n", None),
                 ),
-                ("Compiled".to_string(), None),
+                (
+                    "Compiled".to_string(),
+                    RoutineInfo {
+                        labels: None,
+                        uri: None,
+                    },
+                ),
             ]
             .into(),
         };

@@ -136,9 +136,9 @@ interface common {
         declared-at: option<range>,
     }
 
-    // A routine's labels, keyed by name.
     record routine-info {
-        labels: list<label-info>,
+        // Keyed by name; `none` if they aren't known (e.g. no source).
+        labels: option<list<label-info>>,
         // Same meaning as `class-info.uri`.
         uri: option<string>,
     }
@@ -438,9 +438,21 @@ interface imported {
         get-cls: func(name: string) -> option<class-info>;
         // The full text of `name.inc`, code included.
         get-inc: func(name: string) -> option<source>;
-        // `none` if there's no such routine, `some(none)` if its labels aren't known (no source).
         // Apart from `get-inc`, since a `.inc` and a `.mac` can share a name.
-        get-rtn: func(name: string) -> option<option<routine-info>>;
+        get-rtn: func(name: string) -> option<routine-info>;
+    }
+
+    // The two Atelier REST API requests, for ascot to make `iris-connection`'s lookups with.
+    resource atelier {
+        // The rows of `/action/query`, each a JSON object keyed by column name.
+        query: func(sql: string, params: list<string>) -> option<list<string>>;
+        // The lines of `/doc/{name}`.
+        get-doc: func(name: string) -> option<list<string>>;
+    }
+
+    variant env {
+        connection(iris-connection),
+        atelier(atelier),
     }
 }
 
@@ -450,10 +462,10 @@ interface exported {
         diagnostic, inlay-hint, range, location,
         document-symbol, workspace-symbol, style,
     };
-    use imported.{iris-connection};
+    use imported.{env};
 
     resource workspace {
-        constructor(env: option<iris-connection>, style: option<style>);
+        constructor(env: option<env>, style: option<style>);
         // Open or edit (kind from `uri`'s extension); returns the uris now stale.
         open: func(uri: string, text: string) -> list<string>;
         // Returns the uris now stale.
