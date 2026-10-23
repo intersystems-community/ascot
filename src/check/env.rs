@@ -1114,7 +1114,7 @@ impl<'a> WorkspaceEnv<'a> {
 
     // A workspace-wide routine's label -> signature map, for a cross-routine label call
     // (`Do Foo^OtherRoutine()`) -- same "resolve by name" shape as `resolve_cls_uri` for a
-    // cross-class method call. Falls back to `IrisConnection::get_int_or_mac` when `name` isn't
+    // cross-class method call. Falls back to `IrisConnection::get_rtn` when `name` isn't
     // open in the workspace. `Ok(None)` when the routine can't be parsed (a grammar gap), so its
     // labels are simply unknown; `Err` says why its labels are out of reach.
     pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Result<Option<Labels>, QuasiTypeError> {
@@ -1125,27 +1125,19 @@ impl<'a> WorkspaceEnv<'a> {
         let Some(iris) = self.workspace.iris.as_ref() else {
             return Err(QuasiTypeError::cannot_find_routine(name.into()));
         };
-        let source = match iris.get_int_or_mac(name) {
-            Some(Some(source)) => source,
+        let info = match iris.get_rtn(name) {
+            Some(Some(info)) => info,
             Some(None) => return Err(QuasiTypeError::routine_without_source(name.into())),
             None => return Err(QuasiTypeError::routine_not_on_iris(name.into())),
         };
-        if let Some((text, labels)) = self.workspace.iris_rtn_labels.borrow().get(name)
-            && *text == source.text
-        {
-            return Ok(labels.clone());
-        }
-        let expanded = self
-            .workspace
-            .expand_rtn(source.uri.as_deref().unwrap_or(name), &source.text)
-            .ok();
-        let labels = expanded
-            .map(|(routine, map, _)| labels_of(&map.expanded_olc, &routine, source.uri.as_deref()));
-        self.workspace
-            .iris_rtn_labels
-            .borrow_mut()
-            .insert(name.to_string(), (source.text, labels.clone()));
-        Ok(labels)
+        let labels = info.labels.into_iter().map(|label| {
+            let name = label.name.clone();
+            (
+                name,
+                Arc::new(TyProcedure::from_label(label, info.uri.clone())),
+            )
+        });
+        Ok(Some(labels.collect()))
     }
 
     // `""` is also the null OREF (`$$$NULLOREF`), so it goes wherever an object is expected:

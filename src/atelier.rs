@@ -24,7 +24,7 @@ use serde_json::Value;
 use crate::DocKind;
 use crate::bindings::{
     ArgMode, Cardinality, ClassInfo, CollectionKind, MemberInfo, MemberKind, MethodInfo, NameInfo,
-    NormalArg, ParameterInfo, Position, PropertyInfo, Range, RelationshipInfo, RoutineSource,
+    NormalArg, ParameterInfo, Position, PropertyInfo, Range, RelationshipInfo, RoutineInfo, Source,
     VariadicArg,
 };
 use crate::iris::{DECLARATIONS_VERSION, Declarations, IrisClient};
@@ -79,12 +79,12 @@ impl IrisClient for AtelierConnection {
         self.0.get_cls(cls)
     }
 
-    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+    fn get_inc(&self, name: &str) -> Option<Source> {
         self.0.get_inc(name)
     }
 
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
-        self.0.get_int_or_mac(name)
+    fn get_rtn(&self, name: &str) -> Option<Option<RoutineInfo>> {
+        self.0.get_rtn(name)
     }
 }
 
@@ -262,8 +262,9 @@ impl Http {
                             }
                             DocKind::Rtn => {
                                 let found = self.sources(batch, &["int", "mac"]);
-                                let found =
-                                    found.into_iter().map(|(name, source)| (name, Some(source)));
+                                let found = found.into_iter().map(|(name, source)| {
+                                    (name, crate::routine_info(&source.text, None))
+                                });
                                 routines.lock().unwrap().extend(found);
                             }
                         }
@@ -290,7 +291,7 @@ impl Http {
     }
 
     // Each of `names` that has source, read from the first of `exts` it is non-empty as.
-    fn sources(&self, names: &[String], exts: &[&str]) -> Vec<(String, RoutineSource)> {
+    fn sources(&self, names: &[String], exts: &[&str]) -> Vec<(String, Source)> {
         names
             .iter()
             .filter_map(|name| {
@@ -298,7 +299,7 @@ impl Http {
                     self.get_doc(&format!("{name}.{ext}"))
                         .filter(|lines| !lines.is_empty())
                 })?;
-                let source = RoutineSource {
+                let source = Source {
                     text: lines.join("\n"),
                     // The Atelier REST API has no uri scheme of its own to offer here.
                     uri: None,
@@ -417,20 +418,20 @@ impl IrisClient for AtelierBasedClient {
         self.0.get_cls(cls)
     }
 
-    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+    fn get_inc(&self, name: &str) -> Option<Source> {
         self.0.get_inc(name)
     }
 
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
-        self.0.get_int_or_mac(name)
+    fn get_rtn(&self, name: &str) -> Option<Option<RoutineInfo>> {
+        self.0.get_rtn(name)
     }
 }
 
 struct Cached<A> {
     atelier: A,
     cls_cache: Cache<Option<ClassInfo>>,
-    routine_cache: Cache<Option<RoutineSource>>,
-    obj_cache: Cache<bool>,
+    routine_cache: Cache<Option<Source>>,
+    rtn_cache: Cache<Option<Option<RoutineInfo>>>,
 }
 
 impl<A: AtelierLike> Cached<A> {
@@ -439,7 +440,7 @@ impl<A: AtelierLike> Cached<A> {
             atelier,
             cls_cache: Cache::new(),
             routine_cache: Cache::new(),
-            obj_cache: Cache::new(),
+            rtn_cache: Cache::new(),
         }
     }
 }
@@ -456,23 +457,25 @@ impl<A: AtelierLike> IrisClient for Cached<A> {
         result
     }
 
-    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+    fn get_inc(&self, name: &str) -> Option<Source> {
         self.fetch_routine(&[format!("{name}.inc")])
     }
 
     // The `.int` first: it is the instance's own macro expansion of the `.mac`, so no expansion
     // (or include resolution) is needed on our side.
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
-        if let Some(source) = self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")]) {
-            return Some(Some(source));
+    fn get_rtn(&self, name: &str) -> Option<Option<RoutineInfo>> {
+        if let Some(cached) = self.rtn_cache.get(name) {
+            return cached;
         }
-        // Without source, its OBJ says whether it exists; when that can't be asked, it might.
-        let exists = self.obj_cache.get(name).or_else(|| {
-            let exists = routine_names(&self.atelier, &format!("{name}.obj"))?.contains(name);
-            self.obj_cache.set(name.to_string(), exists);
-            Some(exists)
-        });
-        exists.unwrap_or(true).then_some(None)
+        let result = match self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")]) {
+            Some(source) => Some(crate::routine_info(&source.text, source.uri)),
+            // Without source, its OBJ says whether it exists; when that can't be asked, it might.
+            None => routine_names(&self.atelier, &format!("{name}.obj"))
+                .is_none_or(|names| names.contains(name))
+                .then_some(None),
+        };
+        self.rtn_cache.set(name.to_string(), result.clone());
+        result
     }
 }
 
@@ -491,7 +494,7 @@ fn routine_names(conn: &dyn AtelierLike, spec: &str) -> Option<BTreeSet<String>>
 
 impl<A: AtelierLike> Cached<A> {
     // The first of `docs` that exists, cached under the whole candidate list.
-    fn fetch_routine(&self, docs: &[String]) -> Option<RoutineSource> {
+    fn fetch_routine(&self, docs: &[String]) -> Option<Source> {
         let key = docs.join("|");
         if let Some(cached) = self.routine_cache.get(&key) {
             return cached;
@@ -499,7 +502,7 @@ impl<A: AtelierLike> Cached<A> {
         let result = docs
             .iter()
             .find_map(|doc| self.atelier.get_doc(doc))
-            .map(|lines| RoutineSource {
+            .map(|lines| Source {
                 text: lines.join("\n"),
                 // The Atelier REST API has no uri scheme of its own to offer here.
                 uri: None,
@@ -1025,14 +1028,20 @@ mod tests {
                 Some(vec![])
             }
             fn get_doc(&self, name: &str) -> Option<Vec<String>> {
-                (name == "Util.mac").then(|| vec!["Util".into(), " quit".into()])
+                (name == "Util.mac")
+                    .then(|| vec!["ROUTINE Util".into(), "Foo(a)".into(), " Quit".into()])
             }
         }
         let iris = AtelierBasedClient::from(Docs);
-        let util = iris.get_int_or_mac("Util").unwrap().unwrap();
-        assert_eq!(util.text, "Util\n quit");
+        let util = iris.get_rtn("Util").unwrap().unwrap();
+        let labels: Vec<_> = util
+            .labels
+            .iter()
+            .map(|label| label.name.as_str())
+            .collect();
+        assert_eq!(labels, ["Foo"]);
         assert!(iris.get_inc("Util").is_none());
-        assert!(iris.get_int_or_mac("NoSuchRoutine").is_none());
+        assert!(iris.get_rtn("NoSuchRoutine").is_none());
         assert!(iris.get_cls("No.Such.Class").is_none());
     }
 

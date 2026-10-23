@@ -180,12 +180,6 @@ pub struct WorkspaceStruct {
     // Same idea as `class_index`, but for `ROUTINE` header names — see `resolve_rtn_uri`.
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
-    // Labels of routines fetched from IRIS (not open in the workspace), by routine name, with
-    // the text they were parsed from: reused only while the connection hands back that same
-    // text, so this follows the connection's own cache policy rather than adding one. Without
-    // it, every `$$Label^Routine` call into a 15k-line system routine re-expanded and re-parsed
-    // it, and a single file took half a minute.
-    pub(crate) iris_rtn_labels: RefCell<HashMap<String, (String, Option<check::Labels>)>>,
     pub(crate) style: Option<style::KeywordStyles>,
 }
 
@@ -714,6 +708,20 @@ impl std::ops::Deref for Workspace {
     }
 }
 
+/// A routine's labels read from its source, for `IrisClient::get_rtn`; `None` if it doesn't parse.
+/// Its `#include`s aren't resolved, so this suits an `.int`, whose macros are already expanded.
+pub fn routine_info(text: &str, uri: Option<String>) -> Option<bindings::RoutineInfo> {
+    let (routine, map, _) = build_workspace_struct(None, None)
+        .expand_rtn(uri.as_deref().unwrap_or_default(), text)
+        .ok()?;
+    let mut labels: Vec<_> = check::labels_of(&map.expanded_olc, &routine, uri.as_deref())
+        .iter()
+        .map(|(name, label)| label.to_label(name.clone()))
+        .collect();
+    labels.sort_by(|a, b| a.name.cmp(&b.name));
+    Some(bindings::RoutineInfo { labels, uri })
+}
+
 fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> WorkspaceStruct {
     WorkspaceStruct {
         doc_cache: HashMap::new(),
@@ -723,7 +731,6 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         inc_index: RefCell::new(HashMap::new()),
         rtn_index: RefCell::new(HashMap::new()),
         iris,
-        iris_rtn_labels: RefCell::new(HashMap::new()),
         style: style.as_ref().map(style::KeywordStyles::new),
     }
 }
@@ -1473,11 +1480,11 @@ mod tests {
         fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
             None
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
+        fn get_rtn(&self, _name: &str) -> Option<Option<bindings::RoutineInfo>> {
             None
         }
-        fn get_inc(&self, name: &str) -> Option<bindings::RoutineSource> {
-            (name == "%occErrors").then(|| bindings::RoutineSource {
+        fn get_inc(&self, name: &str) -> Option<bindings::Source> {
+            (name == "%occErrors").then(|| bindings::Source {
                 text: "ROUTINE Errors [Type=INC]\n#define GeneralError 5001\n".to_string(),
                 uri: None,
             })
@@ -1687,10 +1694,10 @@ mod tests {
                     uri: None,
                 })
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
+            fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
                 None
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
+            fn get_rtn(&self, _name: &str) -> Option<Option<bindings::RoutineInfo>> {
                 None
             }
         }
@@ -2005,10 +2012,10 @@ mod tests {
                     uri: None,
                 })
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
+            fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
                 None
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
+            fn get_rtn(&self, _name: &str) -> Option<Option<bindings::RoutineInfo>> {
                 None
             }
         }
@@ -2139,10 +2146,10 @@ mod tests {
                 uri: None,
             })
         }
-        fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
+        fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
             None
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
+        fn get_rtn(&self, _name: &str) -> Option<Option<bindings::RoutineInfo>> {
             None
         }
     }
@@ -2430,10 +2437,10 @@ mod tests {
                 uri: None,
             })
         }
-        fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
+        fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
             None
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
+        fn get_rtn(&self, _name: &str) -> Option<Option<bindings::RoutineInfo>> {
             None
         }
     }
@@ -3422,10 +3429,10 @@ mod tests {
                     uri: Some("mock:///External.cls".to_string()),
                 })
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
+            fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
                 None
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
+            fn get_rtn(&self, _name: &str) -> Option<Option<bindings::RoutineInfo>> {
                 None
             }
         }
@@ -3543,15 +3550,15 @@ mod tests {
             fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
                 None
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
+            fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
                 None
             }
-            fn get_int_or_mac(&self, name: &str) -> Option<Option<bindings::RoutineSource>> {
+            fn get_rtn(&self, name: &str) -> Option<Option<bindings::RoutineInfo>> {
                 match name {
-                    "External" => Some(Some(bindings::RoutineSource {
-                        text: "ROUTINE External\n\n\tQuit\n\nFoo()\n\tQuit\n".to_string(),
-                        uri: None,
-                    })),
+                    "External" => Some(crate::routine_info(
+                        "ROUTINE External\n\n\tQuit\n\nFoo()\n\tQuit\n",
+                        None,
+                    )),
                     "Compiled" => Some(None),
                     _ => None,
                 }
@@ -3581,7 +3588,7 @@ mod tests {
                 ),
                 (
                     Hint,
-                    "The source of routine 'Compiled' isn't available, so calls into it can't be checked precisely"
+                    "The labels of routine 'Compiled' aren't known, so calls into it can't be checked precisely"
                         .to_string()
                 ),
                 (Error, "Too many arguments".to_string()),

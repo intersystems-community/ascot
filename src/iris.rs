@@ -8,20 +8,15 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::atelier::AtelierConnection;
-use crate::bindings::{ClassInfo, RoutineSource};
+use crate::bindings::{ClassInfo, RoutineInfo, Source};
 
 pub trait IrisClient: Send + Sync {
-    // `cls`'s own (not inherited) members, superclasses, and other class-level metadata --
-    // everything ascot needs to resolve a member, "did you mean" a name, or check a type
-    // parameter, in one round trip. `None` if `cls` doesn't exist (or can't be reached).
+    // `cls`'s own (not inherited) members, superclasses and class-level metadata.
     fn get_cls(&self, cls: &str) -> Option<ClassInfo>;
-    // The raw source of the include file `name.inc` (an `#include`d name), for one that isn't
-    // already open in the workspace.
-    fn get_inc(&self, name: &str) -> Option<RoutineSource>;
-    // The raw source of the routine `name` (`.int` if it exists, else `.mac`), for a `Label^name`
-    // call into a routine that isn't open in the workspace: `None` if there is no such routine,
-    // `Some(None)` if there is but its source isn't available.
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>>;
+    // The full text of `name.inc`, code included.
+    fn get_inc(&self, name: &str) -> Option<Source>;
+    // `None` if there's no such routine, `Some(None)` if its labels aren't known (no source).
+    fn get_rtn(&self, name: &str) -> Option<Option<RoutineInfo>>;
 }
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
@@ -45,7 +40,7 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, 
     Ok(Box::new(declarations))
 }
 
-pub(crate) const DECLARATIONS_VERSION: u32 = 2;
+pub(crate) const DECLARATIONS_VERSION: u32 = 3;
 
 /// One namespace as `ascot declare` writes it: each `IrisClient` lookup as a map from its
 /// argument to its answer.
@@ -55,10 +50,10 @@ pub struct Declarations {
     pub namespace: String,
     pub classes: BTreeMap<String, ClassInfo>,
     /// `.inc` files by name without the extension.
-    pub includes: BTreeMap<String, RoutineSource>,
-    /// Routines by name without the extension: the `.int` where there is one, else the `.mac`;
-    /// `None` for one whose source isn't available (e.g. only its OBJ).
-    pub routines: BTreeMap<String, Option<RoutineSource>>,
+    pub includes: BTreeMap<String, Source>,
+    /// Routines' labels by name without the extension; `None` for one whose labels aren't known
+    /// (e.g. only its OBJ).
+    pub routines: BTreeMap<String, Option<RoutineInfo>>,
 }
 
 impl Declarations {
@@ -93,11 +88,11 @@ impl IrisClient for Declarations {
         self.classes.get(cls).cloned()
     }
 
-    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+    fn get_inc(&self, name: &str) -> Option<Source> {
         self.includes.get(name).cloned()
     }
 
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
+    fn get_rtn(&self, name: &str) -> Option<Option<RoutineInfo>> {
         self.routines.get(name).cloned()
     }
 }
@@ -135,8 +130,8 @@ mod tests {
         path
     }
 
-    fn source(text: &str) -> RoutineSource {
-        RoutineSource {
+    fn source(text: &str) -> Source {
+        Source {
             text: text.to_string(),
             uri: None,
         }
@@ -156,15 +151,16 @@ mod tests {
             routines: [
                 (
                     "Lib".to_string(),
-                    Some(source(
+                    crate::routine_info(
                         "ROUTINE Lib [Type=INT]\n Quit\nPlain\n Quit\nWithArgs(a,&b,c...)\n \
                          Quit\nProc(a,b) [x,y] {\n Quit\n}\n",
-                    )),
+                        None,
+                    ),
                 ),
                 // Doesn't parse, so its labels are unknown and any call into it is taken on trust.
                 (
                     "Unparsed".to_string(),
-                    Some(source("ROUTINE Unparsed [Type=INT]\n{\n")),
+                    crate::routine_info("ROUTINE Unparsed [Type=INT]\n{\n", None),
                 ),
                 ("Compiled".to_string(), None),
             ]
@@ -181,7 +177,7 @@ mod tests {
             Some(declarations.includes["MyInc"].clone())
         );
         assert_eq!(loaded.get_inc("%occErrors"), None);
-        assert_eq!(loaded.get_int_or_mac("Nope"), None);
+        assert_eq!(loaded.get_rtn("Nope"), None);
 
         use crate::bindings::{DiagnosticSeverity, GuestWorkspace};
         let check = |body: &str| {

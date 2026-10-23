@@ -29,7 +29,7 @@ use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
 use tygr_objectscript::cos::{CommandLike, KeywordKind, KeywordUse, Spelled};
 use types::*;
 
-pub(crate) use env::{DocumentEnv, Labels, WorkspaceEnv};
+pub(crate) use env::{DocumentEnv, WorkspaceEnv, labels_of};
 pub use errors::{
     Available, ClassLookup, Declared, Detail, DynamicGet, InRoutine, Suggestions, SuperclassOf,
     SyntaxErrorText, TypeErrorKind, TypeParamHint, UnconfirmedReason,

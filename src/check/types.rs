@@ -1058,6 +1058,17 @@ impl From<bindings::MethodInfo> for TyProcedure {
             body: _,
         }: bindings::MethodInfo,
     ) -> Self {
+        Self::declared(normal, variadic, t, procedure_block)
+    }
+}
+
+impl TyProcedure {
+    fn declared(
+        normal: Vec<bindings::NormalArg>,
+        variadic: Option<bindings::VariadicArg>,
+        t: Option<String>,
+        procedure_block: Option<Vec<String>>,
+    ) -> Self {
         Self {
             normal_args: normal
                 .into_iter()
@@ -1081,6 +1092,51 @@ impl From<bindings::MethodInfo> for TyProcedure {
             procedure_block,
             uri: None,
             declared_at: None,
+        }
+    }
+
+    // A label as `IrisClient::get_rtn` reports it, in the routine at `uri`.
+    pub(crate) fn from_label(label: bindings::LabelInfo, uri: Option<String>) -> Self {
+        let bindings::LabelInfo {
+            name: _,
+            normal,
+            variadic,
+            t,
+            procedure_block,
+            declared_at,
+        } = label;
+        Self {
+            out: ty_from_declared(t.clone()).or(Some(Ty::Any)),
+            uri,
+            declared_at,
+            ..Self::declared(normal, variadic, t, procedure_block)
+        }
+    }
+
+    // The label `name` as `IrisClient::get_rtn` reports it. Read from source, so untyped.
+    pub(crate) fn to_label(&self, name: String) -> bindings::LabelInfo {
+        bindings::LabelInfo {
+            name,
+            normal: self
+                .normal_args
+                .iter()
+                .map(|arg| bindings::NormalArg {
+                    mode: arg.mode,
+                    name: arg.name.clone(),
+                    t: None,
+                    default: arg.default.clone(),
+                    declared_at: arg.declared_at,
+                })
+                .collect(),
+            variadic: self.variadic_arg.as_ref().map(|arg| bindings::VariadicArg {
+                mode: arg.mode,
+                name: arg.name.clone(),
+                t: None,
+                declared_at: arg.declared_at,
+            }),
+            t: None,
+            procedure_block: self.procedure_block.clone(),
+            declared_at: self.declared_at,
         }
     }
 }

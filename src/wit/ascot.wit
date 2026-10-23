@@ -39,7 +39,6 @@ interface common {
         name: string,
         t: option<string>,
         default: option<string>,
-        // Where this parameter is declared, within its enclosing `member-info`'s `uri`.
         declared-at: option<range>,
     }
 
@@ -100,19 +99,13 @@ interface common {
         doc: string,
         before: position,
         name: name-info,
-        // Alternate names it can also be referenced by (a property's `[ Aliases = (...) ]`);
-        // empty for every other member kind.
         aliases: list<string>,
         deprecated: bool,
         kind: member-kind,
         after: position,
-        // The class this member is declared in, when known (e.g. resolved against a workspace
-        // file). `None` for members synthesized without a backing location (`%New`, IRIS system
-        // classes the host can't map to a uri, ...).
         uri: option<string>,
-        // The class that actually declares this compiled/inherited member -- distinguishes a
-        // real override of a default IRIS hook (`%DispatchMethod`, ...) from every class's own
-        // meaningless inherited stub. `None` on the workspace side, where this isn't tracked.
+        // The class declaring it, to tell an override of an IRIS hook from an inherited stub;
+        // `none` in the workspace.
         origin: option<string>,
     }
 
@@ -121,27 +114,37 @@ interface common {
         name: name-info,
         extends: list<string>,
         deprecated: bool,
-        // Never includes a method's own body/implementation -- only the same lightweight
-        // metadata a single-member lookup would return.
         members: list<member-info>,
-        // This class's own (not inherited) `[PropertyClass = ...]` value, split into class
-        // names -- see `check::env::WorkspaceEnv::property_class_names`.
+        // Its own (not inherited) `[PropertyClass = ...]` classes.
         property-class-names: list<string>,
-        // This class's own (not inherited) `Include` files -- an `Include` is inherited, so
-        // ascot unions these up the `extends` chain itself (`inherited_include_names`).
+        // Its own (not inherited) `Include` files; ascot unions them up `extends`.
         includes: list<string>,
-        // `None` when unknown. IRIS's compiled `ClassType` already resolves both the
-        // `[ClassType = datatype]` keyword and inheritance from %Library.DataType.
+        // `none` when unknown.
         is-datatype: option<bool>,
-        // A uri the host itself understands for this class (e.g. an `isfs://` one some editor
-        // extensions mount) -- ascot never interprets it, just hands it back for "go to
-        // definition"/hover. `None` if the host has nothing to offer, or doesn't try.
+        // A uri the host understands (e.g. `isfs://`), handed back for go-to-definition and hover.
         uri: option<string>,
     }
 
-    record routine-source {
-        text: string,
+    record label-info {
+        name: string,
+        normal: list<normal-arg>,
+        variadic: option<variadic-arg>,
+        // The type of what it `Quit`s with, when known.
+        t: option<string>,
+        // A procedure's public list; `none` for a subroutine.
+        procedure-block: option<list<string>>,
+        declared-at: option<range>,
+    }
+
+    // A routine's labels, keyed by name.
+    record routine-info {
+        labels: list<label-info>,
         // Same meaning as `class-info.uri`.
+        uri: option<string>,
+    }
+
+    record source {
+        text: string,
         uri: option<string>,
     }
 
@@ -157,16 +160,14 @@ interface common {
         pascal,
     }
 
-    // How a keyword (a command or function name) is to be written; a field left out means
-    // "either way".
+    // How a command or function name is written; a field left out allows either.
     record keyword-style {
         form: option<keyword-form>,
         case: option<keyword-case>,
     }
 
-    // Workspace-wide style rules, checked on every document. `command` applies to every command;
-    // `command-<name>` (the command's full name, lowercased) to that one, overriding `command`
-    // field by field. `function` and `function-<name>` do the same for intrinsic functions.
+    // `command` applies to every command, and `command-<name>` overrides it field by field for one;
+    // `function` and `function-<name>` do the same for intrinsic functions.
     record style {
         command: option<keyword-style>,
         command-do: option<keyword-style>,
@@ -377,7 +378,7 @@ interface common {
         range: range,
         related-information: list<diagnostic-related-information>,
         severity: diagnostic-severity,
-        // A fixed id for the kind of finding, e.g. `A1234`, to filter on or key a quick fix to.
+        // A fixed id for the kind of finding, e.g. `A1234`.
         code: string,
         // The kind's documentation: a docs.rs url for the running version.
         code-description: string,
@@ -390,10 +391,9 @@ interface common {
         padding-right: bool,
     }
 
-    // A subset of LSP's `SymbolKind` -- only the kinds ascot actually emits.
     enum symbol-kind {
         class,
-        // A routine, in a `.mac`/`.int` document-symbol outline (there's no enclosing class).
+        // A routine, which has no enclosing class.
         module,
         method,
         property,
@@ -415,11 +415,8 @@ interface common {
         selection-range: range,
     }
 
-    // A `textDocument/documentSymbol` outline: `root` is the class or routine declared in the
-    // document, `members` are its members or labels. Flat rather than nested (WIT records can't
-    // be self-referential) -- members never nest further in this domain, so the consumer's own
-    // one-level `DocumentSymbol { children: [...] }` wrapping is all the nesting either ever
-    // needs.
+    // A `textDocument/documentSymbol` outline: the document's class or routine, and its members or
+    // labels. Flat, since a WIT record can't contain itself.
     record document-symbol {
         root: symbol-info,
         members: list<symbol-info>,
@@ -434,22 +431,16 @@ interface common {
 }
 
 interface imported {
-    use common.{class-info, routine-source};
+    use common.{class-info, routine-info, source};
 
     resource iris-connection {
-        // `cls`'s own (not inherited) members, superclasses, and other class-level metadata --
-        // everything ascot needs to resolve a member, "did you mean" a name, or check a type
-        // parameter, in one round trip.
-        get-cls: func(cls: string) -> option<class-info>;
-        // The raw source of the include file `name.inc`, for an `#include`/`Include` that isn't
-        // already open in the workspace -- e.g. a system or shared include.
-        get-inc: func(name: string) -> option<routine-source>;
-        // The raw source of the routine `name` -- its `.int` if it has one (the instance's own
-        // macro expansion, so nothing to expand here), else its `.mac` -- for a `Label^name`
-        // call into a routine that isn't open in the workspace: `none` if there is no such
-        // routine, `some(none)` if there may be but its source isn't available. Kept apart from
-        // `get-inc` because a `.inc` and a `.mac` may share a name (`%occMessages`).
-        get-int-or-mac: func(name: string) -> option<option<routine-source>>;
+        // `name`'s own (not inherited) members, superclasses and class-level metadata.
+        get-cls: func(name: string) -> option<class-info>;
+        // The full text of `name.inc`, code included.
+        get-inc: func(name: string) -> option<source>;
+        // `none` if there's no such routine, `some(none)` if its labels aren't known (no source).
+        // Apart from `get-inc`, since a `.inc` and a `.mac` can share a name.
+        get-rtn: func(name: string) -> option<option<routine-info>>;
     }
 }
 
@@ -463,32 +454,18 @@ interface exported {
 
     resource workspace {
         constructor(env: option<iris-connection>, style: option<style>);
-        // Stores the raw source; no parsing happens here (kind is inferred from `uri`'s
-        // extension). Doubles as both open and edit. Returns the uris (including this one)
-        // whose cached analysis is now stale and should be rechecked.
+        // Open or edit (kind from `uri`'s extension); returns the uris now stale.
         open: func(uri: string, text: string) -> list<string>;
-        // Returns the uris (including this one) whose cached analysis is now stale.
+        // Returns the uris now stale.
         close: func(uri: string) -> list<string>;
         diagnostics: func(uri: string) -> list<diagnostic>;
         inlay-hint: func(uri: string, range: range) -> list<inlay-hint>;
         definition: func(uri: string, position: position) -> option<location>;
-        // Every location across the workspace that refers to whatever's declared or referenced
-        // at `position` — the reverse of `definition`. `include-declaration` controls whether
-        // the declaration site itself is included in the result.
         references: func(uri: string, position: position, include-declaration: bool) -> list<location>;
-        // The class member declared at `position`, if any. Otherwise, the inferred type of the
-        // local variable read there and/or what the macro invocation there expanded to — both
-        // together when both apply. Rendered as markdown and ready for `textDocument/hover`.
         hover: func(uri: string, position: position) -> option<string>;
-        // Classes in the workspace whose name starts with `query`.
         query-cls: func(query: string) -> list<tuple<string, class-info>>;
-        // Members of `cls` (as named in `query-cls`'s result) whose name starts with `query`.
         query-mem: func(cls: string, query: string) -> list<tuple<string, member-info>>;
-        // The class declared in `uri` and its members, or (in a `.mac`/`.int` routine) its
-        // labels, as a `textDocument/documentSymbol` outline.
         document-symbol: func(uri: string) -> option<document-symbol>;
-        // Classes and members across the workspace whose name starts with `query`, as a
-        // `workspace/symbol` result.
         workspace-symbol: func(query: string) -> list<workspace-symbol>;
     }
 }

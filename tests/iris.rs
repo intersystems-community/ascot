@@ -39,7 +39,7 @@ fn system_include_has_its_source() {
 #[test]
 fn missing_routine_is_none() {
     let Some(iris) = iris() else { return };
-    assert!(iris.get_int_or_mac("NoSuchRoutine").is_none());
+    assert!(iris.get_rtn("NoSuchRoutine").is_none());
 }
 
 #[test]

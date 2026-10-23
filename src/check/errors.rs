@@ -450,7 +450,7 @@ type_error_kinds! {
     RoutineNotOnIris { routine: String },
     #[code = "A3794"]
     #[severity = Hint]
-    #[message = "The source of routine '{routine}' isn't available, so calls into it can't be checked precisely"]
+    #[message = "The labels of routine '{routine}' aren't known, so calls into it can't be checked precisely"]
     RoutineWithoutSource { routine: String },
     #[code = "A7831"]
     #[severity = Error]

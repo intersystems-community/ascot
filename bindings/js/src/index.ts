@@ -9,7 +9,8 @@ import * as path from "node:path";
 import type { Root } from "../generated/ascot.js" with { "resolution-mode": "import" };
 import type {
 	ClassInfo,
-	RoutineSource,
+	RoutineInfo,
+	Source,
 	Style,
 } from "../generated/interfaces/iris-ascot-common.js" with {
 	"resolution-mode": "import",
@@ -33,14 +34,14 @@ export class IrisConnection {
 		return undefined;
 	}
 	/** The text of `name.inc`. */
-	async getInc(_name: string): Promise<RoutineSource | undefined> {
+	async getInc(_name: string): Promise<Source | undefined> {
 		return undefined;
 	}
-	/** The text of `name.int` or `name.mac`: `{ tag: "none" }` if there is no such routine,
-	 * `val: undefined` if its source isn't available. */
-	async getIntOrMac(
+	/** The labels of routine `name`: `{ tag: "none" }` if there is no such routine,
+	 * `val: undefined` if its labels aren't known. */
+	async getRtn(
 		_name: string,
-	): Promise<{ tag: "none" } | { tag: "some"; val: RoutineSource | undefined }> {
+	): Promise<{ tag: "none" } | { tag: "some"; val: RoutineInfo | undefined }> {
 		return { tag: "some", val: undefined };
 	}
 }
