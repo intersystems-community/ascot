@@ -31,7 +31,6 @@ pub const DEFAULT_NAMESPACE: &str = "%SYS";
 pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, String> {
     if iris.contains("://") {
         let conn = AtelierConnection::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
-        conn.check()?;
         return Ok(Box::new(conn));
     }
     let declarations = Declarations::load(Path::new(iris))?;

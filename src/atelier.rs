@@ -57,15 +57,11 @@ pub struct AtelierConnection(Cached<Http>);
 impl AtelierConnection {
     /// `url` is `scheme://user:pass@host:port`, optionally with a path prefix (e.g. `/iris`,
     /// when the web server routes IRIS instances by path). `namespace` is a plain name (e.g.
-    /// `%SYS`) -- not URL-encoded, since it arrives as a separate CLI/tool argument.
+    /// `%SYS`) -- not URL-encoded, since it arrives as a separate CLI/tool argument. Makes one
+    /// request up front, so a wrong URL, password or namespace is a clear error at startup rather
+    /// than a one-line warning followed by every system macro reported undefined.
     pub fn connect(url: &str, namespace: &str) -> Result<Self, String> {
         Ok(Self(Cached::new(Http::connect(url, namespace)?)))
-    }
-
-    /// One request up front, so a wrong URL, password or namespace is a clear error at startup
-    /// rather than a one-line warning followed by every system macro reported undefined.
-    pub fn check(&self) -> Result<(), String> {
-        self.0.atelier.check()
     }
 
     /// Every class, include file and routine in the namespace, for `ascot declare`;
@@ -108,6 +104,12 @@ struct Http {
 
 impl Http {
     fn connect(url: &str, namespace: &str) -> Result<Self, String> {
+        let http = Self::new(url, namespace)?;
+        http.check()?;
+        Ok(http)
+    }
+
+    fn new(url: &str, namespace: &str) -> Result<Self, String> {
         let parsed = url::Url::parse(url).map_err(|e| format!("invalid --iris URL: {e}"))?;
         let scheme = parsed.scheme();
         if scheme != "http" && scheme != "https" {
@@ -1120,20 +1122,20 @@ mod tests {
 
     #[test]
     fn connect_decodes_percent_encoded_credentials() {
-        let conn = Http::connect("http://us%40er:p%40ss%25word@localhost:8080", "USER").unwrap();
+        let conn = Http::new("http://us%40er:p%40ss%25word@localhost:8080", "USER").unwrap();
         let expected = base64::engine::general_purpose::STANDARD.encode("us@er:p@ss%word");
         assert_eq!(conn.auth_header, format!("Basic {expected}"));
     }
 
     #[test]
     fn connect_percent_encodes_the_namespace() {
-        let conn = Http::connect("http://user:pass@localhost:8080", "%SYS").unwrap();
+        let conn = Http::new("http://user:pass@localhost:8080", "%SYS").unwrap();
         assert_eq!(conn.base_url, "http://localhost:8080/api/atelier/v8/%25SYS");
     }
 
     #[test]
     fn connect_keeps_a_path_prefix_before_api_atelier() {
-        let conn = Http::connect("http://user:pass@localhost:8080/iris", "%SYS").unwrap();
+        let conn = Http::new("http://user:pass@localhost:8080/iris", "%SYS").unwrap();
         assert_eq!(
             conn.base_url,
             "http://localhost:8080/iris/api/atelier/v8/%25SYS"
@@ -1177,7 +1179,7 @@ mod tests {
             ),
             ("", "404 Not Found", ""),
         ]);
-        let err = Http::connect(&url, "NOPE").unwrap().check().unwrap_err();
+        let err = Http::new(&url, "NOPE").unwrap().check().unwrap_err();
         assert!(err.contains("namespace 'NOPE' does not exist"), "{err}");
         assert!(err.contains("%SYS, USER"), "{err}");
     }
@@ -1185,14 +1187,14 @@ mod tests {
     #[test]
     fn check_blames_the_path_prefix_when_there_is_no_atelier_api_at_all() {
         let url = stub_server(&[("", "404 Not Found", "")]);
-        let err = Http::connect(&url, "USER").unwrap().check().unwrap_err();
+        let err = Http::new(&url, "USER").unwrap().check().unwrap_err();
         assert!(err.contains("no Atelier API at"), "{err}");
     }
 
     #[test]
     fn check_reports_a_bad_password() {
         let url = stub_server(&[("", "401 Unauthorized", "")]);
-        let err = Http::connect(&url, "USER").unwrap().check().unwrap_err();
+        let err = Http::new(&url, "USER").unwrap().check().unwrap_err();
         assert!(
             err.contains("authentication failed for user 'user'"),
             "{err}"
@@ -1202,12 +1204,12 @@ mod tests {
     #[test]
     fn check_passes_on_a_reachable_namespace() {
         let url = stub_server(&[("", "200 OK", r#"{"result":{"content":{"name":"USER"}}}"#)]);
-        Http::connect(&url, "USER").unwrap().check().unwrap();
+        Http::new(&url, "USER").unwrap().check().unwrap();
     }
 
     #[test]
     fn connect_strips_a_trailing_slash_from_the_path_prefix() {
-        let conn = Http::connect("http://user:pass@localhost:8080/iris/", "%SYS").unwrap();
+        let conn = Http::new("http://user:pass@localhost:8080/iris/", "%SYS").unwrap();
         assert_eq!(
             conn.base_url,
             "http://localhost:8080/iris/api/atelier/v8/%25SYS"
