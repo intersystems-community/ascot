@@ -40,13 +40,13 @@ await ws.hover("file:///T.cls", { line: 5, character: 7 }); // the `x` being wri
 // "```objectscript\n%DataType = 1\n```"
 ````
 
-To provide declarations for documents that aren't in the workspace, extend `IrisConnection`,
+To provide declarations for documents that aren't in the workspace, extend `IrisContext`,
 override the lookups you can answer, and pass an instance:
 
 ```ts
-import { IrisConnection, type ClassInfo } from "@intersystems-community/ascot";
+import { IrisContext, type ClassInfo } from "@intersystems-community/ascot";
 
-class MyIris extends IrisConnection {
+class MyIris extends IrisContext {
   override async getCls(cls: string): Promise<ClassInfo | undefined> {
     return undefined; // look `cls` up, e.g. over IRIS's REST API
   }
@@ -56,14 +56,14 @@ const connected = await createWorkspace(new MyIris());
 ```
 
 Or extend `Atelier` with the two Atelier REST API requests, `query` (the rows of
-`/action/query`, each a JSON string) and `getDoc` (the lines of `/doc/{name}`), and let ascot
-make the lookups itself:
+`/action/query` as a JSON array) and `getDoc` (the text of `/doc/{name}`), and let ascot make
+the lookups itself:
 
 ```ts
 import { Atelier } from "@intersystems-community/ascot";
 
 class MyAtelier extends Atelier {
-  override async getDoc(name: string): Promise<string[] | undefined> {
+  override async getDoc(name: string): Promise<string | undefined> {
     return undefined; // GET /doc/{name}, e.g. with your own credentials and session
   }
 }

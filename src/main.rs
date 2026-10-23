@@ -21,7 +21,7 @@ use std::process::exit;
 use std::time::Instant;
 use tygr::Grammar;
 
-use ascot::{DocKind, IrisClient, RawAtelier};
+use ascot::{DocKind, IrisContext, RawAtelier};
 use clap::{Args, Parser, Subcommand};
 
 /// A type checker and code intelligence engine for InterSystems ObjectScript.
@@ -170,7 +170,7 @@ fn main() {
 
 impl IrisArgs {
     /// Opens the connection or declaration file, if `--iris` was given.
-    fn open(self) -> Option<Box<dyn IrisClient>> {
+    fn open(self) -> Option<Box<dyn IrisContext>> {
         match ascot::open_iris(&self.iris?, self.iris_namespace.as_deref()) {
             Ok(iris) => Some(iris),
             Err(err) => {
@@ -270,7 +270,7 @@ fn scan_file(file_path: &Path) {
 /// a CI step must not pass forever.
 fn analyze<'a>(
     roots: impl Iterator<Item = &'a Path>,
-    iris: Option<Box<dyn IrisClient>>,
+    iris: Option<Box<dyn IrisContext>>,
     style: Option<Style>,
 ) {
     let mut files = Vec::new();
@@ -298,7 +298,7 @@ fn analyze<'a>(
 fn analyze_workspace<'a>(
     root: &Path,
     paths: impl Iterator<Item = &'a Path>,
-    iris: Option<Box<dyn IrisClient>>,
+    iris: Option<Box<dyn IrisContext>>,
     style: Option<Style>,
 ) {
     let root = match fs::canonicalize(root) {

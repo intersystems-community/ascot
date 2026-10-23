@@ -6,18 +6,18 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::IrisClient;
-use crate::atelier::{AtelierBasedClient, RawAtelier};
+use crate::IrisContext;
+use crate::atelier::{AtelierContext, RawAtelier};
 use crate::bindings::{ClassInfo, RoutineInfo, Source};
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
 /// A URL is a live connection (checked up front), anything else a declaration file's path.
 /// `namespace` defaults to `%SYS` for a URL; for a file it must match the one declared.
-pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, String> {
+pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisContext>, String> {
     if iris.contains("://") {
         let raw = RawAtelier::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
-        return Ok(Box::new(AtelierBasedClient::from(raw)));
+        return Ok(Box::new(AtelierContext::from(raw)));
     }
     let declarations = Declarations::load(Path::new(iris))?;
     if let Some(namespace) = namespace
@@ -33,7 +33,7 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, 
 
 pub(crate) const DECLARATIONS_VERSION: u32 = 3;
 
-/// One namespace as `ascot declare` writes it: each `IrisClient` lookup as a map from its
+/// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
 /// argument to its answer.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Declarations {
@@ -73,7 +73,7 @@ impl Declarations {
     }
 }
 
-impl IrisClient for Declarations {
+impl IrisContext for Declarations {
     fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
         self.classes.get(cls).cloned()
     }

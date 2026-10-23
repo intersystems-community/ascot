@@ -37,9 +37,9 @@
 //! - `bindings.rs`: the WIT-generated types shared by every front end, and the wasm export.
 //! - `render.rs`: Markdown formatting for hover text.
 //! - `lsp.rs`, `mcp.rs`, `main.rs`: front ends (editor protocol, AI-agent protocol, CLI).
-//! - `atelier.rs`: the `IrisClient` ascot makes out of the two Atelier REST API requests, a
+//! - `atelier.rs`: the `IrisContext` ascot makes out of the two Atelier REST API requests, a
 //!   host's or its own connection's (native only).
-//! - `iris.rs`: declaration files, answering `IrisClient` offline (native only).
+//! - `iris.rs`: declaration files, answering `IrisContext` offline (native only).
 
 mod atelier;
 pub mod bindings;
@@ -57,7 +57,7 @@ mod render;
 pub mod style;
 #[cfg(not(target_arch = "wasm32"))]
 pub use atelier::RawAtelier;
-pub use atelier::{AtelierBasedClient, AtelierLike};
+pub use atelier::{Atelier, AtelierContext};
 #[cfg(not(target_arch = "wasm32"))]
 pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, open as open_iris};
 pub(crate) use macro_expand::MacroDefinitions;
@@ -183,7 +183,7 @@ pub struct WorkspaceStruct {
 }
 
 /// What the checker asks about code outside the workspace.
-pub trait IrisClient: Send + Sync {
+pub trait IrisContext: Send + Sync {
     // `cls`'s own (not inherited) members, superclasses and class-level metadata.
     fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo>;
     // The full text of `name.inc`, code included.
@@ -192,20 +192,20 @@ pub trait IrisClient: Send + Sync {
     fn get_rtn(&self, name: &str) -> Option<bindings::RoutineInfo>;
 }
 
-type IrisHandle = Box<dyn IrisClient>;
+type IrisHandle = Box<dyn IrisContext>;
 
 #[cfg(target_arch = "wasm32")]
-impl IrisClient for bindings::IrisConnection {
+impl IrisContext for bindings::IrisContext {
     fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
-        bindings::IrisConnection::get_cls(self, cls)
+        bindings::IrisContext::get_cls(self, cls)
     }
 
     fn get_inc(&self, name: &str) -> Option<bindings::Source> {
-        bindings::IrisConnection::get_inc(self, name)
+        bindings::IrisContext::get_inc(self, name)
     }
 
     fn get_rtn(&self, name: &str) -> Option<bindings::RoutineInfo> {
-        bindings::IrisConnection::get_rtn(self, name)
+        bindings::IrisContext::get_rtn(self, name)
     }
 }
 
@@ -757,7 +757,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
 #[cfg(not(target_arch = "wasm32"))]
 impl Workspace {
     /// [`GuestWorkspace::new`](bindings::GuestWorkspace::new), with a native IRIS client.
-    pub fn native(iris: Option<Box<dyn IrisClient>>, style: Option<Style>) -> Self {
+    pub fn native(iris: Option<Box<dyn IrisContext>>, style: Option<Style>) -> Self {
         Workspace(RefCell::new(build_workspace_struct(iris, style)))
     }
 }
@@ -768,8 +768,8 @@ impl bindings::GuestWorkspace for Workspace {
         #[cfg(target_arch = "wasm32")]
         let iris = env.map(|env| -> IrisHandle {
             match env {
-                bindings::Env::Connection(connection) => Box::new(connection),
-                bindings::Env::Atelier(atelier) => Box::new(AtelierBasedClient::from(atelier)),
+                bindings::Env::Context(context) => Box::new(context),
+                bindings::Env::Atelier(atelier) => Box::new(AtelierContext::from(atelier)),
             }
         });
         #[cfg(not(target_arch = "wasm32"))]
@@ -1500,7 +1500,7 @@ mod tests {
     struct OccErrorsIris;
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl crate::IrisClient for OccErrorsIris {
+    impl crate::IrisContext for OccErrorsIris {
         fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
             None
         }
@@ -1672,7 +1672,7 @@ mod tests {
         // property a caller mistakenly wrote instead (`AtEnd`) -- so this must not depend on
         // `top_similar`'s ranking to surface it.
         struct GetterIris;
-        impl crate::IrisClient for GetterIris {
+        impl crate::IrisContext for GetterIris {
             fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
                 let zero = bindings::Position {
                     line: 0,
@@ -2014,7 +2014,7 @@ mod tests {
     fn type_param_not_on_the_real_type_is_reported_via_iris() {
         // IRIS knows the class, and it has no parameters at all.
         struct NoSuchParamIris;
-        impl crate::IrisClient for NoSuchParamIris {
+        impl crate::IrisContext for NoSuchParamIris {
             fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
                 let zero = bindings::Position {
                     line: 0,
@@ -2148,7 +2148,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl crate::IrisClient for MockIrisClient {
+    impl crate::IrisContext for MockIrisClient {
         fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
             let zero = bindings::Position {
                 line: 0,
@@ -2416,7 +2416,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl crate::IrisClient for DispatchOriginIris {
+    impl crate::IrisContext for DispatchOriginIris {
         fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
             let zero = bindings::Position {
                 line: 0,
@@ -3431,7 +3431,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn definition_resolves_a_class_reference_via_the_iris_hosts_own_uri() {
         struct ExternalClassIris;
-        impl crate::IrisClient for ExternalClassIris {
+        impl crate::IrisContext for ExternalClassIris {
             fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
                 let zero = bindings::Position {
                     line: 0,
@@ -3570,7 +3570,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn cross_routine_label_call_resolves_via_iris_when_not_in_the_workspace() {
         struct ExternalRoutineIris;
-        impl crate::IrisClient for ExternalRoutineIris {
+        impl crate::IrisContext for ExternalRoutineIris {
             fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
                 None
             }

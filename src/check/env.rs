@@ -1114,7 +1114,7 @@ impl<'a> WorkspaceEnv<'a> {
 
     // A workspace-wide routine's label -> signature map, for a cross-routine label call
     // (`Do Foo^OtherRoutine()`) -- same "resolve by name" shape as `resolve_cls_uri` for a
-    // cross-class method call. Falls back to `IrisConnection::get_rtn` when `name` isn't
+    // cross-class method call. Falls back to `IrisContext::get_rtn` when `name` isn't
     // open in the workspace. `Ok(None)` when the routine can't be parsed (a grammar gap), so its
     // labels are simply unknown; `Err` says why its labels are out of reach.
     pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Result<Option<Labels>, QuasiTypeError> {

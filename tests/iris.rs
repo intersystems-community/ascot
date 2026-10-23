@@ -3,9 +3,9 @@
 //! CONTRIBUTING.md shows how to run one in Docker.
 
 use ascot::bindings::{DiagnosticSeverity, GuestWorkspace};
-use ascot::{IrisClient, Workspace};
+use ascot::{IrisContext, Workspace};
 
-fn iris() -> Option<Box<dyn IrisClient>> {
+fn iris() -> Option<Box<dyn IrisContext>> {
     let Ok(url) = std::env::var("ASCOT_TEST_IRIS") else {
         eprintln!("ASCOT_TEST_IRIS is unset; skipped");
         return None;

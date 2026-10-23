@@ -28,7 +28,7 @@ export type Workspace = {
 		: RawWorkspace[K];
 };
 
-export class IrisConnection {
+export class IrisContext {
 	/** A class's own members and metadata. */
 	async getCls(_cls: string): Promise<ClassInfo | undefined> {
 		return undefined;
@@ -43,15 +43,16 @@ export class IrisConnection {
 	}
 }
 
-/** The two Atelier REST API requests, for ascot to make `IrisConnection`'s lookups with. */
+/** The two Atelier REST API requests, for ascot to make `IrisContext`'s lookups with. A failed
+ * request throws; ascot leaves what it was for unconfirmed. */
 export class Atelier {
-	/** The rows of `/action/query`, each a JSON object keyed by column name. */
-	async query(_sql: string, _params: string[]): Promise<string[] | undefined> {
-		return undefined;
+	/** The rows of `/action/query` as a JSON array, each an object keyed by column name. */
+	async query(_sql: string, _params: string[]): Promise<string> {
+		throw new Error("no IRIS connection");
 	}
-	/** The lines of `/doc/{name}`. */
-	async getDoc(_name: string): Promise<string[] | undefined> {
-		return undefined;
+	/** The text of `/doc/{name}`, `undefined` if there is no such document. */
+	async getDoc(_name: string): Promise<string | undefined> {
+		throw new Error("no IRIS connection");
 	}
 }
 
@@ -61,7 +62,7 @@ const wasm: Promise<Root> = import("../generated/ascot.js").then(({ instantiate 
 			new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
 		{
 			"iris:ascot/common": {},
-			"iris:ascot/imported": { IrisConnection, Atelier },
+			"iris:ascot/imported": { IrisContext, Atelier },
 		} as never,
 	),
 );
@@ -95,13 +96,35 @@ function serialize(instance: RawWorkspace): Workspace {
 
 /** A workspace whose calls run one at a time, resolving what it doesn't contain through `iris`. */
 export async function createWorkspace(
-	iris?: IrisConnection | Atelier,
+	iris?: IrisContext | Atelier,
 	style?: Style,
 ): Promise<Workspace> {
 	const root = await wasm;
 	const env =
 		iris instanceof Atelier
-			? { tag: "atelier" as const, val: iris }
-			: iris && { tag: "connection" as const, val: iris };
+			? { tag: "atelier" as const, val: new Failing(iris) }
+			: iris && { tag: "context" as const, val: iris };
 	return serialize(new root.exported.Workspace(env, style));
+}
+
+// jco rethrows a thrown `Error` to the caller, and hands ascot only a thrown `{ payload }` as a
+// request's failure; so what `atelier` throws becomes one.
+class Failing extends Atelier {
+	constructor(private readonly inner: Atelier) {
+		super();
+	}
+	override query(sql: string, params: string[]): Promise<string> {
+		return payload(() => this.inner.query(sql, params));
+	}
+	override getDoc(name: string): Promise<string | undefined> {
+		return payload(() => this.inner.getDoc(name));
+	}
+}
+
+async function payload<T>(request: () => Promise<T>): Promise<T> {
+	try {
+		return await request();
+	} catch (e) {
+		throw { payload: e instanceof Error ? e.message : String(e) };
+	}
 }

@@ -1095,7 +1095,7 @@ impl TyProcedure {
         }
     }
 
-    // A label as `IrisClient::get_rtn` reports it, in the routine at `uri`.
+    // A label as `IrisContext::get_rtn` reports it, in the routine at `uri`.
     pub(crate) fn from_label(label: bindings::LabelInfo, uri: Option<String>) -> Self {
         let bindings::LabelInfo {
             name: _,
@@ -1113,7 +1113,7 @@ impl TyProcedure {
         }
     }
 
-    // The label `name` as `IrisClient::get_rtn` reports it. Read from source, so untyped.
+    // The label `name` as `IrisContext::get_rtn` reports it. Read from source, so untyped.
     pub(crate) fn to_label(&self, name: String) -> bindings::LabelInfo {
         bindings::LabelInfo {
             name,

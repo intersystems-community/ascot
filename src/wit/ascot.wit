@@ -433,25 +433,22 @@ interface common {
 interface imported {
     use common.{class-info, routine-info, source};
 
-    resource iris-connection {
-        // `name`'s own (not inherited) members, superclasses and class-level metadata.
+    resource iris-context {
         get-cls: func(name: string) -> option<class-info>;
-        // The full text of `name.inc`, code included.
-        get-inc: func(name: string) -> option<source>;
-        // Apart from `get-inc`, since a `.inc` and a `.mac` can share a name.
         get-rtn: func(name: string) -> option<routine-info>;
+        get-inc: func(name: string) -> option<source>;
     }
 
-    // The two Atelier REST API requests, for ascot to make `iris-connection`'s lookups with.
+    // The two Atelier REST API requests, for ascot to make `iris-context`'s lookups with.
     resource atelier {
-        // The rows of `/action/query`, each a JSON object keyed by column name.
-        query: func(sql: string, params: list<string>) -> option<list<string>>;
-        // The lines of `/doc/{name}`.
-        get-doc: func(name: string) -> option<list<string>>;
+        // The rows of `/action/query` as a JSON array, each an object keyed by column name.
+        query: func(sql: string, params: list<string>) -> result<string, string>;
+        // The text of `/doc/{name}`; `none` if there's no such document.
+        get-doc: func(name: string) -> result<option<string>, string>;
     }
 
     variant env {
-        connection(iris-connection),
+        context(iris-context),
         atelier(atelier),
     }
 }
