@@ -3038,7 +3038,7 @@ impl CheckExprInner for AtomicExpr {
             // is then accessed on it; only an IRIS connection can say so for sure.
             AtomicExpr::Class { cls, .. } => {
                 let name = env.qualify_class_name(&cls.deref().print());
-                if env.has_iris() && !env.class_exists(&name) {
+                if env.class_absent(&name) {
                     return Err(QuasiTypeError::cannot_find_class(name));
                 }
                 Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(
@@ -3126,7 +3126,8 @@ fn call_label<'a>(
             err @ QuasiTypeError::WithoutRange(
                 TypeErrorKind::CannotFindRoutine { .. }
                 | TypeErrorKind::RoutineNotOnIris { .. }
-                | TypeErrorKind::RoutineWithoutSource { .. },
+                | TypeErrorKind::RoutineWithoutSource { .. }
+                | TypeErrorKind::IrisLookupFailed { .. },
                 _,
             ),
         ) => {
@@ -3516,8 +3517,14 @@ pub(crate) fn check_cls(
     // `include_range` is only `None` when there's no `Include` at all, in which case
     // `failed_includes` is empty too and this range is never actually used.
     let include_range = cls.include_range.unwrap_or(cls.name.range);
-    for name in failed_includes {
-        diagnostics.push(TypeError::cannot_find_include(name, include_range).into());
+    for (name, failure) in failed_includes {
+        let err = match failure {
+            Some(reason) => {
+                TypeError::iris_lookup_failed(crate::DocKind::Inc, name, reason, include_range)
+            }
+            None => TypeError::cannot_find_include(name, include_range),
+        };
+        diagnostics.push(err.into());
     }
     let doc = ClassDocument::new(
         cls.name.it.to_string().into(),

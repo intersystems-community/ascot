@@ -28,6 +28,8 @@ export type Workspace = {
 		: RawWorkspace[K];
 };
 
+/** What ascot asks about code outside the workspace. A failed lookup throws; ascot then takes
+ * what it looked for on trust and says why. */
 export class IrisContext {
 	/** A class's own members and metadata. */
 	async getCls(_cls: string): Promise<ClassInfo | undefined> {
@@ -44,7 +46,7 @@ export class IrisContext {
 }
 
 /** The two Atelier REST API requests, for ascot to make `IrisContext`'s lookups with. A failed
- * request throws; ascot leaves what it was for unconfirmed. */
+ * request throws, like a failed lookup. */
 export class Atelier {
 	/** The rows of `/action/query` as a JSON array, each an object keyed by column name. */
 	async query(_sql: string, _params: string[]): Promise<string> {
@@ -102,14 +104,29 @@ export async function createWorkspace(
 	const root = await wasm;
 	const env =
 		iris instanceof Atelier
-			? { tag: "atelier" as const, val: new Failing(iris) }
-			: iris && { tag: "context" as const, val: iris };
+			? { tag: "atelier" as const, val: new FailingAtelier(iris) }
+			: iris && { tag: "context" as const, val: new FailingContext(iris) };
 	return serialize(new root.exported.Workspace(env, style));
 }
 
-// jco rethrows a thrown `Error` to the caller, and hands ascot only a thrown `{ payload }` as a
-// request's failure; so what `atelier` throws becomes one.
-class Failing extends Atelier {
+// jco rethrows a thrown `Error` to the caller, and hands ascot only a thrown `{ payload }` as the
+// failure; so what the host throws becomes one.
+class FailingContext extends IrisContext {
+	constructor(private readonly inner: IrisContext) {
+		super();
+	}
+	override getCls(cls: string): Promise<ClassInfo | undefined> {
+		return payload(() => this.inner.getCls(cls));
+	}
+	override getInc(name: string): Promise<Source | undefined> {
+		return payload(() => this.inner.getInc(name));
+	}
+	override getRtn(name: string): Promise<RoutineInfo | undefined> {
+		return payload(() => this.inner.getRtn(name));
+	}
+}
+
+class FailingAtelier extends Atelier {
 	constructor(private readonly inner: Atelier) {
 		super();
 	}

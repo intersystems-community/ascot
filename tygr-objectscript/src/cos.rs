@@ -2771,51 +2771,6 @@ impl<T: Grammar> Deref for As<T> {
 
 type DefaultValue = Prefix<Raw<(Space, StringEq!("="), Space)>, Range<OSExpr>>;
 
-// A method's `FormalSpec` as `%Dictionary.CompiledMethod` reports it: minified, e.g.
-// `*out:%String,&ref:%Integer,x:%String="a",args...`.
-#[derive(Grammar)]
-pub struct CompiledFormalSpec(
-    pub Option<VecSep<CompiledFormal, Raw<(Space, StringEq!(","), Space)>>>,
-);
-
-#[derive(Grammar)]
-pub struct CompiledFormal {
-    pub call_type: Option<CompiledCallType>,
-    pub name: LocalVariableName,
-    pub variadic: Option<StringEq!("...")>,
-    pub as_type: Option<Prefix<StringEq!(":"), Type>>,
-    pub default: Option<Prefix<StringEq!("="), CompiledDefault>>,
-}
-
-#[derive(Grammar)]
-pub enum CompiledCallType {
-    Output(StringEq!("*")),
-    ByRef(StringEq!("&")),
-}
-
-// A default value, up to the next top-level comma: strings, parentheses and braces balanced,
-// anything else (a macro, `..#PARAM`) taken as it comes.
-#[derive(Grammar)]
-pub struct CompiledDefault(Raw<Vec<CompiledDefaultUnit>>);
-
-#[derive(Grammar)]
-pub enum CompiledDefaultUnit {
-    String(OSString),
-    Paren(StringEq!("("), Raw<Vec<CompiledNestedUnit>>, StringEq!(")")),
-    Brace(StringEq!("{"), Raw<Vec<CompiledNestedUnit>>, StringEq!("}")),
-    Text(StringOf1<IsCompiledDefaultText>),
-}
-
-#[derive(Grammar)]
-pub enum CompiledNestedUnit {
-    Unit(CompiledDefaultUnit),
-    Comma(StringEq!(",")),
-}
-
-char_class!(pub IsCompiledDefaultText, "default_char", |ch| {
-    !matches!(ch, ',' | '"' | '(' | ')' | '{' | '}')
-});
-
 #[derive(Grammar)]
 pub struct Parameter {
     keyword: Raw<(StringEqCI!("Parameter"), Space1)>,

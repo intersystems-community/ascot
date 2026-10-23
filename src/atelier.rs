@@ -5,12 +5,11 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::Value;
-use tygr::Grammar;
+use tygr::{Grammar, GrammarRule, Prefix, Raw, StringEq, StringOf1, VecSep};
 
 #[cfg(not(target_arch = "wasm32"))]
 use {
@@ -19,7 +18,7 @@ use {
     base64::Engine,
     percent_encoding::percent_decode_str,
     std::collections::BTreeMap,
-    std::sync::atomic::AtomicUsize,
+    std::sync::atomic::{AtomicUsize, Ordering},
     std::sync::mpsc,
 };
 
@@ -29,7 +28,7 @@ use crate::bindings::{
     NormalArg, ParameterInfo, Position, PropertyInfo, Range, RelationshipInfo, RoutineInfo, Source,
     VariadicArg,
 };
-use crate::cos::{CompiledCallType, CompiledFormalSpec};
+use crate::cos::{LocalVariableName, OSString, Space, Type};
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 #[cfg(not(target_arch = "wasm32"))]
@@ -72,26 +71,6 @@ pub trait Atelier: Send + Sync {
     fn get_doc(&self, name: &str) -> Result<Option<String>, String>;
 }
 
-impl<T: Atelier + ?Sized> Atelier for Box<T> {
-    fn query(&self, sql: &str, params: &[&str]) -> Result<String, String> {
-        (**self).query(sql, params)
-    }
-
-    fn get_doc(&self, name: &str) -> Result<Option<String>, String> {
-        (**self).get_doc(name)
-    }
-}
-
-impl<T: Atelier + ?Sized> Atelier for &T {
-    fn query(&self, sql: &str, params: &[&str]) -> Result<String, String> {
-        (**self).query(sql, params)
-    }
-
-    fn get_doc(&self, name: &str) -> Result<Option<String>, String> {
-        (**self).get_doc(name)
-    }
-}
-
 #[cfg(target_arch = "wasm32")]
 impl Atelier for crate::bindings::Atelier {
     fn query(&self, sql: &str, params: &[&str]) -> Result<String, String> {
@@ -105,138 +84,96 @@ impl Atelier for crate::bindings::Atelier {
 }
 
 /// The `IrisContext` that looks code up through an `Atelier`, caching what it finds.
-pub struct AtelierContext(Cached<Box<dyn Atelier>>);
+pub struct AtelierContext {
+    atelier: Box<dyn Atelier>,
+    cls_cache: Cache<Option<ClassInfo>>,
+    routine_cache: Cache<Option<Source>>,
+    rtn_cache: Cache<Option<RoutineInfo>>,
+}
 
 impl<A: Atelier + 'static> From<A> for AtelierContext {
     fn from(atelier: A) -> Self {
-        Self(Cached::new(Box::new(atelier)))
+        Self {
+            atelier: Box::new(atelier),
+            cls_cache: Cache::new(),
+            routine_cache: Cache::new(),
+            rtn_cache: Cache::new(),
+        }
     }
 }
 
 impl IrisContext for AtelierContext {
-    fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
-        self.0.get_cls(cls)
-    }
-
-    fn get_inc(&self, name: &str) -> Option<Source> {
-        self.0.get_inc(name)
-    }
-
-    fn get_rtn(&self, name: &str) -> Option<RoutineInfo> {
-        self.0.get_rtn(name)
-    }
-}
-
-struct Cached<A> {
-    atelier: A,
-    cls_cache: Cache<Option<ClassInfo>>,
-    routine_cache: Cache<Option<Source>>,
-    rtn_cache: Cache<Option<RoutineInfo>>,
-    // Whether a request has failed, which is warned about once.
-    failed: AtomicBool,
-}
-
-impl<A: Atelier> Cached<A> {
-    fn new(atelier: A) -> Self {
-        Self {
-            atelier,
-            cls_cache: Cache::new(),
-            routine_cache: Cache::new(),
-            rtn_cache: Cache::new(),
-            failed: AtomicBool::new(false),
-        }
-    }
-
-    // The rows of `sql`, parsed; `None` if the request failed or its answer isn't rows.
-    fn rows(&self, sql: &str, params: &[&str]) -> Option<Vec<Value>> {
-        let rows = self.answered(self.atelier.query(sql, params))?;
-        serde_json::from_str(&rows).ok()
-    }
-
-    // The text of document `name`; `None` if there is none or the request failed.
-    fn doc(&self, name: &str) -> Option<String> {
-        self.answered(self.atelier.get_doc(name))?
-    }
-
-    fn answered<T>(&self, answer: Result<T, String>) -> Option<T> {
-        match answer {
-            Ok(answer) => Some(answer),
-            Err(err) => {
-                if !self.failed.swap(true, Ordering::Relaxed) {
-                    eprintln!(
-                        "warning: IRIS lookup failed ({err}); what it and any later failure \
-                         looked for is treated as not found"
-                    );
-                }
-                None
-            }
-        }
-    }
-}
-
-impl<A: Atelier> IrisContext for Cached<A> {
-    fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
+    fn get_cls(&self, cls: &str) -> Result<Option<ClassInfo>, String> {
         if let Some(cached) = self.cls_cache.get(cls) {
-            return cached;
+            return Ok(cached);
         }
-        let result = class_infos(self, "= ?", &[cls]).and_then(|found| found.into_values().next());
+        let result = class_infos(self, "= ?", &[cls])?.into_values().next();
         self.cls_cache.set(cls.to_string(), result.clone());
-        result
+        Ok(result)
     }
 
-    fn get_inc(&self, name: &str) -> Option<Source> {
+    fn get_inc(&self, name: &str) -> Result<Option<Source>, String> {
         self.fetch_routine(&[format!("{name}.inc")])
     }
 
     // The `.int` first: it is the instance's own macro expansion of the `.mac`, so no expansion
     // (or include resolution) is needed on our side.
-    fn get_rtn(&self, name: &str) -> Option<RoutineInfo> {
+    fn get_rtn(&self, name: &str) -> Result<Option<RoutineInfo>, String> {
         if let Some(cached) = self.rtn_cache.get(name) {
-            return cached;
+            return Ok(cached);
         }
-        let result = match self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")]) {
+        let result = match self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")])? {
             Some(source) => Some(crate::routine_info(&source.text, source.uri)),
-            // Without source, its OBJ says whether it exists; when that can't be asked, it might.
-            None => routine_names(self, &format!("{name}.obj"))
-                .is_none_or(|names| names.contains(name))
+            // Without source, its OBJ says whether it exists.
+            None => routine_names(self, &format!("{name}.obj"))?
+                .contains(name)
                 .then_some(RoutineInfo {
                     labels: None,
                     uri: None,
                 }),
         };
         self.rtn_cache.set(name.to_string(), result.clone());
-        result
+        Ok(result)
+    }
+}
+
+impl AtelierContext {
+    // The rows of `sql`, parsed.
+    fn rows(&self, sql: &str, params: &[&str]) -> Result<Vec<Value>, String> {
+        let rows = self.atelier.query(sql, params)?;
+        serde_json::from_str(&rows)
+            .map_err(|err| format!("query answered with other than rows: {err}"))
+    }
+
+    // The first of `docs` that exists, cached under the whole candidate list.
+    fn fetch_routine(&self, docs: &[String]) -> Result<Option<Source>, String> {
+        let key = docs.join("|");
+        if let Some(cached) = self.routine_cache.get(&key) {
+            return Ok(cached);
+        }
+        let mut result = None;
+        for doc in docs {
+            if let Some(text) = self.atelier.get_doc(doc)? {
+                // The Atelier REST API has no uri scheme of its own to offer here.
+                result = Some(Source { text, uri: None });
+                break;
+            }
+        }
+        self.routine_cache.set(key, result.clone());
+        Ok(result)
     }
 }
 
 // The routines matching `spec` (e.g. `*.mac,*.int,*.obj`), system ones included and
 // class-generated ones (`Name.1.obj`) left out.
-fn routine_names<A: Atelier>(conn: &Cached<A>, spec: &str) -> Option<BTreeSet<String>> {
+fn routine_names(ctx: &AtelierContext, spec: &str) -> Result<BTreeSet<String>, String> {
     let sql = "SELECT Name FROM %Library.RoutineMgr_StudioOpenDialog(?,1,1,1,1,1,0,\
                'NOT (Name %PATTERN ''.E1\".\"0.1\"G\"1N1\".obj\"'' AND $LENGTH(Name,''.'') > 3)')";
-    let rows = conn.rows(sql, &[spec])?;
-    Some(
-        rows.iter()
-            .filter_map(|row| Some(doc_basename(row.get("Name")?.as_str()?)))
-            .collect(),
-    )
-}
-
-impl<A: Atelier> Cached<A> {
-    // The first of `docs` that exists, cached under the whole candidate list.
-    fn fetch_routine(&self, docs: &[String]) -> Option<Source> {
-        let key = docs.join("|");
-        if let Some(cached) = self.routine_cache.get(&key) {
-            return cached;
-        }
-        let result = docs
-            .iter()
-            .find_map(|doc| self.doc(doc))
-            // The Atelier REST API has no uri scheme of its own to offer here.
-            .map(|text| Source { text, uri: None });
-        self.routine_cache.set(key, result.clone());
-        result
-    }
+    let rows = ctx.rows(sql, &[spec])?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| Some(doc_basename(row.get("Name")?.as_str()?)))
+        .collect())
 }
 
 fn split_classes(s: &str) -> Vec<String> {
@@ -249,11 +186,11 @@ fn split_classes(s: &str) -> Vec<String> {
 
 // Every class satisfying `Name {filter}` (`= ?`, `IN (?,?)`; `params` bind the `?`s) with its
 // own members, keyed by name: one round trip per dictionary table for the whole set.
-fn class_infos<A: Atelier>(
-    conn: &Cached<A>,
+fn class_infos(
+    conn: &AtelierContext,
     filter: &str,
     params: &[&str],
-) -> Option<HashMap<String, ClassInfo>> {
+) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = |description: &str| {
         format!(
             "SELECT Name, {description}, Super, PropertyClass, IncludeCode, ClassType, Deprecated \
@@ -263,12 +200,12 @@ fn class_infos<A: Atelier>(
     // Same `{`-leading-text failure mode `all_mem_rows` guards against.
     let rows = conn
         .rows(&sql("Description"), params)
-        .or_else(|| conn.rows(&sql("'' AS Description"), params))?;
+        .or_else(|_| conn.rows(&sql("'' AS Description"), params))?;
     if rows.is_empty() {
-        return Some(HashMap::new());
+        return Ok(HashMap::new());
     }
-    let members = resolve_stubs(conn, filter, params, all_mem_rows(conn, filter, params));
-    Some(assemble(rows, members))
+    let members = resolve_stubs(conn, filter, params, all_mem_rows(conn, filter, params)?)?;
+    Ok(assemble(rows, members))
 }
 
 fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<String, ClassInfo> {
@@ -367,7 +304,11 @@ fn is_truthy(v: &Value) -> bool {
 // Every member declared directly on the classes matching `Parent {filter}`, across all three
 // tables -- one query per batch instead of one per member, since `get_cls` always wants the
 // whole list at once.
-fn all_mem_rows<A: Atelier>(conn: &Cached<A>, filter: &str, params: &[&str]) -> Vec<MemberRow> {
+fn all_mem_rows(
+    conn: &AtelierContext,
+    filter: &str,
+    params: &[&str],
+) -> Result<Vec<MemberRow>, String> {
     let sql = |description: &str| {
         format!(
             "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, {description}, \
@@ -388,13 +329,12 @@ fn all_mem_rows<A: Atelier>(conn: &Cached<A>, filter: &str, params: &[&str]) -> 
     // The Atelier query API fails the whole query over a text value that merely starts with `{`
     // (e.g. a `/// {$$$CPFSave+...}` parameter comment); retry without descriptions.
     conn.rows(&sql("Description"), &params)
-        .or_else(|| conn.rows(&sql("'' AS Description"), &params))
+        .or_else(|_| conn.rows(&sql("'' AS Description"), &params))
         .map(|rows| {
             rows.into_iter()
                 .filter_map(|row| serde_json::from_value(row).ok())
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 // A method row with a `Stub` is a compiler-generated accessor (index/query/property/
@@ -419,12 +359,12 @@ fn stub_parts(row: &MemberRow) -> Option<(&str, &str, &'static str)> {
 
 // Replaces each stub row with its real metadata -- one query per stub table the classes use,
 // not one per stub (a property-heavy class has dozens of generated accessors).
-fn resolve_stubs<A: Atelier>(
-    conn: &Cached<A>,
+fn resolve_stubs(
+    conn: &AtelierContext,
     filter: &str,
     params: &[&str],
     rows: Vec<MemberRow>,
-) -> Vec<MemberRow> {
+) -> Result<Vec<MemberRow>, String> {
     let tables: HashSet<&str> = rows
         .iter()
         .filter_map(stub_parts)
@@ -442,8 +382,7 @@ fn resolve_stubs<A: Atelier>(
         // Same `{`-leading-text failure mode `all_mem_rows` guards against.
         let found = conn
             .rows(&sql("Description"), params)
-            .or_else(|| conn.rows(&sql("'' AS Description"), params))
-            .unwrap_or_default();
+            .or_else(|_| conn.rows(&sql("'' AS Description"), params))?;
         for value in found {
             let origin = value
                 .get("StubOrigin")
@@ -463,7 +402,8 @@ fn resolve_stubs<A: Atelier>(
             );
         }
     }
-    rows.into_iter()
+    Ok(rows
+        .into_iter()
         .map(|row| match stub_parts(&row) {
             Some((origin, subname, table)) => resolved
                 .remove(&(
@@ -475,7 +415,7 @@ fn resolve_stubs<A: Atelier>(
                 .unwrap_or(row),
             None => row,
         })
-        .collect()
+        .collect())
 }
 
 // A property's alias list is a comma-separated %Translate'd string.
@@ -584,6 +524,51 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
         }
     }
 }
+
+// A method's `FormalSpec` as `%Dictionary.CompiledMethod` reports it: minified, e.g.
+// `*out:%String,&ref:%Integer,x:%String="a",args...`.
+#[derive(Grammar)]
+struct CompiledFormalSpec(Option<VecSep<CompiledFormal, Comma>>);
+
+type Comma = Raw<(Space, StringEq!(","), Space)>;
+
+#[derive(Grammar)]
+struct CompiledFormal {
+    call_type: Option<CompiledCallType>,
+    name: LocalVariableName,
+    variadic: Option<StringEq!("...")>,
+    as_type: Option<Prefix<StringEq!(":"), Type>>,
+    default: Option<Prefix<StringEq!("="), CompiledDefault>>,
+}
+
+#[derive(Grammar)]
+enum CompiledCallType {
+    Output(StringEq!("*")),
+    ByRef(StringEq!("&")),
+}
+
+// A default value, up to the next top-level comma: strings, parentheses and braces balanced,
+// anything else (a macro, `..#PARAM`) taken as it comes.
+#[derive(Grammar)]
+struct CompiledDefault(Raw<Vec<CompiledDefaultUnit>>);
+
+#[derive(Grammar)]
+enum CompiledDefaultUnit {
+    String(OSString),
+    Paren(StringEq!("("), Raw<Vec<CompiledNestedUnit>>, StringEq!(")")),
+    Brace(StringEq!("{"), Raw<Vec<CompiledNestedUnit>>, StringEq!("}")),
+    Text(StringOf1<IsCompiledDefaultText>),
+}
+
+#[derive(Grammar)]
+enum CompiledNestedUnit {
+    Unit(CompiledDefaultUnit),
+    Comma(StringEq!(",")),
+}
+
+tygr::char_class!(IsCompiledDefaultText, "default_char", |ch| {
+    !matches!(ch, ',' | '"' | '(' | ')' | '{' | '}')
+});
 
 // IRIS's minified `FormalSpec` (`*out:%String,&ref:%Integer,x...`) as arguments; none if it
 // doesn't parse.
@@ -727,33 +712,26 @@ impl RawAtelier {
     /// Every class, include file and routine in the namespace, for `ascot declare`;
     /// `progress(kind, done, total)` once each total is known and after each batch.
     pub fn declarations(
-        &self,
+        self,
         mut progress: impl FnMut(DocKind, usize, usize),
     ) -> Result<Declarations, String> {
-        let failed = || format!("IRIS connection at {} failed", self.base_url);
-        let client = Cached::new(self);
+        let namespace = self.namespace.clone();
+        let ctx = AtelierContext::from(self);
         // `%sqlcq.*` are SQL cached queries; `declare`'s own queries create some, so without this
         // each run would add classes to the next run's file.
-        let mut class_names: Vec<String> = client
-            .rows("SELECT Name FROM %Dictionary.CompiledClass", &[])
-            .ok_or_else(failed)?
+        let mut class_names: Vec<String> = ctx
+            .rows("SELECT Name FROM %Dictionary.CompiledClass", &[])?
             .into_iter()
             .filter_map(|row| Some(row.get("Name")?.as_str()?.to_string()))
             .filter(|name| !name.starts_with("%sqlcq."))
             .collect();
         class_names.sort();
-        let inc_names: Vec<String> = routine_names(&client, "*.inc")
-            .ok_or_else(failed)?
-            .into_iter()
-            .collect();
+        let inc_names: Vec<String> = routine_names(&ctx, "*.inc")?.into_iter().collect();
         // Every routine, system ones included, so one without source is still declared.
-        let all_rtn_names = routine_names(&client, "*.mac,*.int,*.obj").ok_or_else(failed)?;
+        let all_rtn_names = routine_names(&ctx, "*.mac,*.int,*.obj")?;
         // Hand-written routines only (a class's `.int`s are generated), read as the `.int`
-        // where there is one (compiled, macro-expanded; what `get_int_or_mac` prefers), else the `.mac`.
-        let rtn_names: Vec<String> = routine_names(&client, "*.mac,*.int")
-            .ok_or_else(failed)?
-            .into_iter()
-            .collect();
+        // where there is one (compiled, macro-expanded; what `get_rtn` prefers), else the `.mac`.
+        let rtn_names: Vec<String> = routine_names(&ctx, "*.mac,*.int")?.into_iter().collect();
 
         let totals = [class_names.len(), inc_names.len(), rtn_names.len()];
         for kind in [DocKind::Cls, DocKind::Inc, DocKind::Rtn] {
@@ -779,41 +757,40 @@ impl RawAtelier {
                 })
                 .collect::<BTreeMap<_, _>>(),
         );
+        // The first request to fail, which stops every worker.
+        let failed = Mutex::new(None);
         let (tx, rx) = mpsc::channel();
         let mut done = [0; 3];
         std::thread::scope(|scope| {
-            let (jobs, next, client) = (&jobs, &next, &client);
+            let (jobs, next, ctx, failed) = (&jobs, &next, &ctx, &failed);
             let (classes, includes, routines) = (&classes, &includes, &routines);
             for _ in 0..WORKERS.min(jobs.len()) {
                 let tx = tx.clone();
                 scope.spawn(move || {
-                    while self.agent.lock().unwrap().is_ok() {
+                    while failed.lock().unwrap().is_none() {
                         let Some(&(kind, batch)) = jobs.get(next.fetch_add(1, Ordering::Relaxed))
                         else {
                             break;
                         };
-                        match kind {
+                        let fetched = match kind {
                             DocKind::Cls => {
                                 let params: Vec<&str> = batch.iter().map(String::as_str).collect();
                                 let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
-                                let Some(found) = class_infos(client, &filter, &params) else {
-                                    break;
-                                };
-                                classes.lock().unwrap().extend(found);
+                                class_infos(ctx, &filter, &params)
+                                    .map(|found| classes.lock().unwrap().extend(found))
                             }
-                            DocKind::Inc => {
-                                includes
-                                    .lock()
-                                    .unwrap()
-                                    .extend(sources(client, batch, &["inc"]));
-                            }
-                            DocKind::Rtn => {
-                                let found = sources(client, batch, &["int", "mac"]);
+                            DocKind::Inc => sources(ctx, batch, &["inc"])
+                                .map(|found| includes.lock().unwrap().extend(found)),
+                            DocKind::Rtn => sources(ctx, batch, &["int", "mac"]).map(|found| {
                                 let found = found.into_iter().map(|(name, source)| {
                                     (name, crate::routine_info(&source.text, None))
                                 });
-                                routines.lock().unwrap().extend(found);
-                            }
+                                routines.lock().unwrap().extend(found)
+                            }),
+                        };
+                        if let Err(err) = fetched {
+                            failed.lock().unwrap().get_or_insert(err);
+                            break;
                         }
                         let _ = tx.send((kind, batch.len()));
                     }
@@ -825,15 +802,12 @@ impl RawAtelier {
                 progress(kind, done[kind as usize], totals[kind as usize]);
             }
         });
-        if let Err(err) = &*self.agent.lock().unwrap() {
-            return Err(format!("{}: {err}", failed()));
-        }
-        if done != totals {
-            return Err(failed());
+        if let Some(err) = failed.into_inner().unwrap() {
+            return Err(err);
         }
         Ok(Declarations {
             version: DECLARATIONS_VERSION,
-            namespace: self.namespace.clone(),
+            namespace,
             classes: classes.into_inner().unwrap(),
             includes: includes.into_inner().unwrap(),
             routines: routines.into_inner().unwrap(),
@@ -857,20 +831,21 @@ impl RawAtelier {
 
 // Each of `names` that has source, read from the first of `exts` it exists as.
 #[cfg(not(target_arch = "wasm32"))]
-fn sources<A: Atelier>(
-    client: &Cached<A>,
+fn sources(
+    ctx: &AtelierContext,
     names: &[String],
     exts: &[&str],
-) -> Vec<(String, Source)> {
-    names
-        .iter()
-        .filter_map(|name| {
-            let text = exts
-                .iter()
-                .find_map(|ext| client.doc(&format!("{name}.{ext}")))?;
-            Some((name.clone(), Source { text, uri: None }))
-        })
-        .collect()
+) -> Result<Vec<(String, Source)>, String> {
+    let mut found = vec![];
+    for name in names {
+        for ext in exts {
+            if let Some(text) = ctx.atelier.get_doc(&format!("{name}.{ext}"))? {
+                found.push((name.clone(), Source { text, uri: None }));
+                break;
+            }
+        }
+    }
+    Ok(found)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -995,12 +970,12 @@ mod tests {
             }
         }
         let iris = AtelierContext::from(Docs);
-        let util = iris.get_rtn("Util").unwrap().labels.unwrap();
+        let util = iris.get_rtn("Util").unwrap().unwrap().labels.unwrap();
         let labels: Vec<_> = util.iter().map(|label| label.name.as_str()).collect();
         assert_eq!(labels, ["Foo"]);
-        assert!(iris.get_inc("Util").is_none());
-        assert!(iris.get_rtn("NoSuchRoutine").is_none());
-        assert!(iris.get_cls("No.Such.Class").is_none());
+        assert!(iris.get_inc("Util").unwrap().is_none());
+        assert!(iris.get_rtn("NoSuchRoutine").unwrap().is_none());
+        assert!(iris.get_cls("No.Such.Class").unwrap().is_none());
     }
 
     #[test]

@@ -74,16 +74,16 @@ impl Declarations {
 }
 
 impl IrisContext for Declarations {
-    fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
-        self.classes.get(cls).cloned()
+    fn get_cls(&self, cls: &str) -> Result<Option<ClassInfo>, String> {
+        Ok(self.classes.get(cls).cloned())
     }
 
-    fn get_inc(&self, name: &str) -> Option<Source> {
-        self.includes.get(name).cloned()
+    fn get_inc(&self, name: &str) -> Result<Option<Source>, String> {
+        Ok(self.includes.get(name).cloned())
     }
 
-    fn get_rtn(&self, name: &str) -> Option<RoutineInfo> {
-        self.routines.get(name).cloned()
+    fn get_rtn(&self, name: &str) -> Result<Option<RoutineInfo>, String> {
+        Ok(self.routines.get(name).cloned())
     }
 }
 
@@ -166,14 +166,14 @@ mod tests {
         let loaded = Declarations::load(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(loaded.namespace, "USER");
-        assert_eq!(loaded.get_cls("A.B"), Some(class_info("A.B")));
-        assert_eq!(loaded.get_cls("A.C"), None);
+        assert_eq!(loaded.get_cls("A.B"), Ok(Some(class_info("A.B"))));
+        assert_eq!(loaded.get_cls("A.C"), Ok(None));
         assert_eq!(
             loaded.get_inc("MyInc"),
-            Some(declarations.includes["MyInc"].clone())
+            Ok(Some(declarations.includes["MyInc"].clone()))
         );
-        assert_eq!(loaded.get_inc("%occErrors"), None);
-        assert_eq!(loaded.get_rtn("Nope"), None);
+        assert_eq!(loaded.get_inc("%occErrors"), Ok(None));
+        assert_eq!(loaded.get_rtn("Nope"), Ok(None));
 
         use crate::bindings::{DiagnosticSeverity, GuestWorkspace};
         let check = |body: &str| {

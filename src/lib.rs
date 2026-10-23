@@ -83,7 +83,7 @@ use crate::{
 // The only thing that decides how a document is analyzed: `.cls` files are checked as classes;
 // `.inc` files are never checked standalone, only pulled in via another file's `#include`; `.mac`
 // and `.int` routines are otherwise identical for our purposes, so share one variant.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DocKind {
     Cls,
     Inc,
@@ -182,29 +182,29 @@ pub struct WorkspaceStruct {
     pub(crate) style: Option<style::KeywordStyles>,
 }
 
-/// What the checker asks about code outside the workspace.
+/// What the checker asks about code outside the workspace. An `Err` says why a lookup couldn't be
+/// made; `Ok(None)`, that IRIS has no such document.
 pub trait IrisContext: Send + Sync {
     // `cls`'s own (not inherited) members, superclasses and class-level metadata.
-    fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo>;
+    fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String>;
     // The full text of `name.inc`, code included.
-    fn get_inc(&self, name: &str) -> Option<bindings::Source>;
-    // `None` if there's no such routine.
-    fn get_rtn(&self, name: &str) -> Option<bindings::RoutineInfo>;
+    fn get_inc(&self, name: &str) -> Result<Option<bindings::Source>, String>;
+    fn get_rtn(&self, name: &str) -> Result<Option<bindings::RoutineInfo>, String>;
 }
 
 type IrisHandle = Box<dyn IrisContext>;
 
 #[cfg(target_arch = "wasm32")]
 impl IrisContext for bindings::IrisContext {
-    fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
+    fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
         bindings::IrisContext::get_cls(self, cls)
     }
 
-    fn get_inc(&self, name: &str) -> Option<bindings::Source> {
+    fn get_inc(&self, name: &str) -> Result<Option<bindings::Source>, String> {
         bindings::IrisContext::get_inc(self, name)
     }
 
-    fn get_rtn(&self, name: &str) -> Option<bindings::RoutineInfo> {
+    fn get_rtn(&self, name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
         bindings::IrisContext::get_rtn(self, name)
     }
 }
@@ -1501,17 +1501,17 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     impl crate::IrisContext for OccErrorsIris {
-        fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
-            None
+        fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
+            Ok(None)
         }
-        fn get_rtn(&self, _name: &str) -> Option<bindings::RoutineInfo> {
-            None
+        fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+            Ok(None)
         }
-        fn get_inc(&self, name: &str) -> Option<bindings::Source> {
-            (name == "%occErrors").then(|| bindings::Source {
+        fn get_inc(&self, name: &str) -> Result<Option<bindings::Source>, String> {
+            Ok((name == "%occErrors").then(|| bindings::Source {
                 text: "ROUTINE Errors [Type=INC]\n#define GeneralError 5001\n".to_string(),
                 uri: None,
-            })
+            }))
         }
     }
 
@@ -1673,7 +1673,7 @@ mod tests {
         // `top_similar`'s ranking to surface it.
         struct GetterIris;
         impl crate::IrisContext for GetterIris {
-            fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
+            fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
                 let zero = bindings::Position {
                     line: 0,
                     character: 0,
@@ -1702,7 +1702,7 @@ mod tests {
                     uri: None,
                     origin: None,
                 };
-                (cls == "%Fake.Getter").then(|| bindings::ClassInfo {
+                Ok((cls == "%Fake.Getter").then(|| bindings::ClassInfo {
                     doc: String::new(),
                     name: bindings::NameInfo {
                         before: zero,
@@ -1716,13 +1716,13 @@ mod tests {
                     includes: vec![],
                     is_datatype: Some(false),
                     uri: None,
-                })
+                }))
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
-                None
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Ok(None)
             }
-            fn get_rtn(&self, _name: &str) -> Option<bindings::RoutineInfo> {
-                None
+            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Ok(None)
             }
         }
         let workspace = Workspace::native(Some(Box::new(GetterIris)), None);
@@ -2015,12 +2015,12 @@ mod tests {
         // IRIS knows the class, and it has no parameters at all.
         struct NoSuchParamIris;
         impl crate::IrisContext for NoSuchParamIris {
-            fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
+            fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
                 let zero = bindings::Position {
                     line: 0,
                     character: 0,
                 };
-                Some(bindings::ClassInfo {
+                Ok(Some(bindings::ClassInfo {
                     doc: String::new(),
                     name: bindings::NameInfo {
                         before: zero,
@@ -2034,13 +2034,13 @@ mod tests {
                     includes: vec![],
                     is_datatype: Some(true),
                     uri: None,
-                })
+                }))
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
-                None
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Ok(None)
             }
-            fn get_rtn(&self, _name: &str) -> Option<bindings::RoutineInfo> {
-                None
+            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Ok(None)
             }
         }
         let workspace = Workspace::native(Some(Box::new(NoSuchParamIris)), None);
@@ -2149,12 +2149,12 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     impl crate::IrisContext for MockIrisClient {
-        fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
+        fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
             let zero = bindings::Position {
                 line: 0,
                 character: 0,
             };
-            Some(bindings::ClassInfo {
+            Ok(Some(bindings::ClassInfo {
                 doc: String::new(),
                 name: bindings::NameInfo {
                     before: zero,
@@ -2168,13 +2168,13 @@ mod tests {
                 includes: vec![],
                 is_datatype: self.is_datatype,
                 uri: None,
-            })
+            }))
         }
-        fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
-            None
+        fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+            Ok(None)
         }
-        fn get_rtn(&self, _name: &str) -> Option<bindings::RoutineInfo> {
-            None
+        fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+            Ok(None)
         }
     }
 
@@ -2417,12 +2417,12 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     impl crate::IrisContext for DispatchOriginIris {
-        fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
+        fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
             let zero = bindings::Position {
                 line: 0,
                 character: 0,
             };
-            Some(bindings::ClassInfo {
+            Ok(Some(bindings::ClassInfo {
                 doc: String::new(),
                 name: bindings::NameInfo {
                     before: zero,
@@ -2459,13 +2459,13 @@ mod tests {
                 includes: vec![],
                 is_datatype: Some(false),
                 uri: None,
-            })
+            }))
         }
-        fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
-            None
+        fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+            Ok(None)
         }
-        fn get_rtn(&self, _name: &str) -> Option<bindings::RoutineInfo> {
-            None
+        fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+            Ok(None)
         }
     }
 
@@ -3432,12 +3432,12 @@ mod tests {
     fn definition_resolves_a_class_reference_via_the_iris_hosts_own_uri() {
         struct ExternalClassIris;
         impl crate::IrisContext for ExternalClassIris {
-            fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
+            fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
                 let zero = bindings::Position {
                     line: 0,
                     character: 0,
                 };
-                (cls == "Test.External").then(|| bindings::ClassInfo {
+                Ok((cls == "Test.External").then(|| bindings::ClassInfo {
                     doc: String::new(),
                     name: bindings::NameInfo {
                         before: zero,
@@ -3451,13 +3451,13 @@ mod tests {
                     includes: vec![],
                     is_datatype: Some(false),
                     uri: Some("mock:///External.cls".to_string()),
-                })
+                }))
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
-                None
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Ok(None)
             }
-            fn get_rtn(&self, _name: &str) -> Option<bindings::RoutineInfo> {
-                None
+            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Ok(None)
             }
         }
         let workspace = Workspace::native(Some(Box::new(ExternalClassIris)), None);
@@ -3571,14 +3571,14 @@ mod tests {
     fn cross_routine_label_call_resolves_via_iris_when_not_in_the_workspace() {
         struct ExternalRoutineIris;
         impl crate::IrisContext for ExternalRoutineIris {
-            fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
-                None
+            fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
+                Ok(None)
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::Source> {
-                None
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Ok(None)
             }
-            fn get_rtn(&self, name: &str) -> Option<bindings::RoutineInfo> {
-                match name {
+            fn get_rtn(&self, name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Ok(match name {
                     "External" => Some(crate::routine_info(
                         "ROUTINE External\n\n\tQuit\n\nFoo()\n\tQuit\n",
                         None,
@@ -3588,7 +3588,7 @@ mod tests {
                         uri: None,
                     }),
                     _ => None,
-                }
+                })
             }
         }
         let workspace = Workspace::native(Some(Box::new(ExternalRoutineIris)), None);
@@ -3619,6 +3619,52 @@ mod tests {
                         .to_string()
                 ),
                 (Error, "Too many arguments".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_iris_lookup_is_a_hint_about_why() {
+        struct DeadIris;
+        impl crate::IrisContext for DeadIris {
+            fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
+                Err("connection refused".into())
+            }
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Err("connection refused".into())
+            }
+            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Err("connection refused".into())
+            }
+        }
+        let workspace = Workspace::native(Some(Box::new(DeadIris)), None);
+        let uri = "Main.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE Main\n#include NoSuchInc\n\tDo Foo^External(1)\n\tWrite ##class(Some.Class).Foo()\n\tQuit\n"
+                .to_string(),
+        );
+        let mut diagnostics: Vec<_> = workspace
+            .diagnostics(uri)
+            .into_iter()
+            .map(|d| (d.severity, d.code, d.message))
+            .collect();
+        diagnostics.sort_by(|a, b| a.2.cmp(&b.2));
+        let expected = |what: &str| {
+            (
+                bindings::DiagnosticSeverity::Hint,
+                "A4471".to_string(),
+                format!(
+                    "Cannot look up {what} on the IRIS instance (connection refused), so it is taken on trust"
+                ),
+            )
+        };
+        assert_eq!(
+            diagnostics,
+            [
+                expected("class 'Some.Class'"),
+                expected("include file 'NoSuchInc'"),
+                expected("routine 'External'"),
             ]
         );
     }

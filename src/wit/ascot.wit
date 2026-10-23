@@ -434,9 +434,9 @@ interface imported {
     use common.{class-info, routine-info, source};
 
     resource iris-context {
-        get-cls: func(name: string) -> option<class-info>;
-        get-rtn: func(name: string) -> option<routine-info>;
-        get-inc: func(name: string) -> option<source>;
+        get-cls: func(name: string) -> result<option<class-info>, string>;
+        get-rtn: func(name: string) -> result<option<routine-info>, string>;
+        get-inc: func(name: string) -> result<option<source>, string>;
     }
 
     // The two Atelier REST API requests, for ascot to make `iris-context`'s lookups with.
