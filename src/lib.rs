@@ -37,16 +37,14 @@
 //! - `bindings.rs`: the WIT-generated types shared by every front end, and the wasm export.
 //! - `render.rs`: Markdown formatting for hover text.
 //! - `lsp.rs`, `mcp.rs`, `main.rs`: front ends (editor protocol, AI-agent protocol, CLI).
-//! - `atelier.rs`: the `IrisClient` ascot makes out of a host's two Atelier REST API requests.
-//! - `http.rs`: ascot's own connection to IRIS (native only).
+//! - `atelier.rs`: the `IrisClient` ascot makes out of the two Atelier REST API requests, a
+//!   host's or its own connection's (native only).
 //! - `iris.rs`: declaration files, answering `IrisClient` offline (native only).
 
 mod atelier;
 pub mod bindings;
 pub mod check;
 mod details;
-#[cfg(not(target_arch = "wasm32"))]
-mod http;
 #[cfg(not(target_arch = "wasm32"))]
 mod iris;
 #[cfg(not(target_arch = "wasm32"))]
@@ -57,9 +55,9 @@ mod mask;
 pub mod mcp;
 mod render;
 pub mod style;
-pub use atelier::{AtelierBasedClient, AtelierLike};
 #[cfg(not(target_arch = "wasm32"))]
-pub use http::AtelierConnection;
+pub use atelier::RawAtelier;
+pub use atelier::{AtelierBasedClient, AtelierLike};
 #[cfg(not(target_arch = "wasm32"))]
 pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, open as open_iris};
 pub(crate) use macro_expand::MacroDefinitions;

@@ -21,7 +21,7 @@ use std::process::exit;
 use std::time::Instant;
 use tygr::Grammar;
 
-use ascot::{AtelierConnection, DocKind, IrisClient};
+use ascot::{DocKind, IrisClient, RawAtelier};
 use clap::{Args, Parser, Subcommand};
 
 /// A type checker and code intelligence engine for InterSystems ObjectScript.
@@ -198,7 +198,7 @@ impl StyleArgs {
 /// Writes the declarations of the namespace at `url` to `out`, for a later `--iris <out>`.
 fn declare(url: &str, namespace: Option<&str>, out: &Path) {
     let namespace = namespace.unwrap_or(ascot::DEFAULT_IRIS_NAMESPACE);
-    let conn = match AtelierConnection::connect(url, namespace) {
+    let conn = match RawAtelier::connect(url, namespace) {
         Ok(conn) => conn,
         Err(err) => {
             eprintln!("--iris: {err}");

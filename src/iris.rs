@@ -1,4 +1,4 @@
-//! `open`, which answers an `--iris` argument with a live `http::AtelierConnection` (a URL) or a
+//! `open`, which answers an `--iris` argument with a live `RawAtelier` (a URL) or a
 //! `Declarations` file `ascot declare` wrote (a path), which never connects to anything.
 
 use std::collections::BTreeMap;
@@ -7,8 +7,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::IrisClient;
+use crate::atelier::{AtelierBasedClient, RawAtelier};
 use crate::bindings::{ClassInfo, RoutineInfo, Source};
-use crate::http::AtelierConnection;
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
@@ -16,8 +16,8 @@ pub const DEFAULT_NAMESPACE: &str = "%SYS";
 /// `namespace` defaults to `%SYS` for a URL; for a file it must match the one declared.
 pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, String> {
     if iris.contains("://") {
-        let conn = AtelierConnection::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
-        return Ok(Box::new(conn));
+        let raw = RawAtelier::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
+        return Ok(Box::new(AtelierBasedClient::from(raw)));
     }
     let declarations = Declarations::load(Path::new(iris))?;
     if let Some(namespace) = namespace
