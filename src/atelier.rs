@@ -3,8 +3,8 @@
 //!
 //! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
 //! library code above all, so the checker can confirm them instead of leaving a hint. Results
-//! are cached per client. `AtelierBasedClient` is the `iris::IrisClient` built from any
-//! `AtelierLike`, the two requests the lookups need; `AtelierConnection` is one over HTTP.
+//! are cached per client. `AtelierBasedClient` is the `iris::IrisClient` over any `AtelierLike`;
+//! `AtelierConnection` is the HTTP one.
 //!
 //! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
 //! `language-server`'s `server/src/ascot/index.ts` `IrisConnection` class -- the JS host-side
@@ -52,8 +52,6 @@ impl<V: Clone> Cache<V> {
     }
 }
 
-/// A connection to IRIS over the Atelier REST API, and the `IrisClient` that looks code up
-/// through it.
 pub struct AtelierConnection(Cached<Http>);
 
 impl AtelierConnection {
@@ -455,14 +453,11 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
-/// The two Atelier REST API requests `AtelierBasedClient`'s lookups are made of, so a host that
-/// already has its own connection to IRIS (credentials, TLS, sessions) can answer them itself.
+/// The two Atelier REST API requests the lookups are made of, for a host with its own connection.
 pub trait AtelierLike: Send + Sync {
-    /// The rows of `/action/query` for `sql`, `params` bound to its `?`s, each a JSON object
-    /// keyed by column name; `None` if the query failed.
+    /// The rows of `/action/query`, each keyed by column name; `None` if the query failed.
     fn query(&self, sql: &str, params: &[&str]) -> Option<Vec<Value>>;
-    /// The lines of document `name` (e.g. `Foo.inc`) from `/doc/`; `None` if there is no such
-    /// document or it can't be fetched.
+    /// The lines of `/doc/{name}`; `None` if it doesn't exist or can't be fetched.
     fn get_doc(&self, name: &str) -> Option<Vec<String>>;
 }
 
@@ -476,8 +471,7 @@ impl<T: AtelierLike + ?Sized> AtelierLike for Box<T> {
     }
 }
 
-/// The `IrisClient` that looks up classes, includes and routines through an `AtelierLike`,
-/// caching what it finds.
+/// The `IrisClient` that looks code up through an `AtelierLike`, caching what it finds.
 pub struct AtelierBasedClient(Cached<Box<dyn AtelierLike>>);
 
 impl<A: AtelierLike + 'static> From<A> for AtelierBasedClient {
@@ -500,7 +494,6 @@ impl IrisClient for AtelierBasedClient {
     }
 }
 
-// The lookups made through `atelier`, and their caches.
 struct Cached<A> {
     atelier: A,
     cls_cache: Cache<Option<ClassInfo>>,
@@ -551,6 +544,19 @@ impl<A: AtelierLike> IrisClient for Cached<A> {
     }
 }
 
+// The routines matching `spec` (e.g. `*.mac,*.int,*.obj`), system ones included and
+// class-generated ones (`Name.1.obj`) left out.
+fn routine_names(conn: &dyn AtelierLike, spec: &str) -> Option<BTreeSet<String>> {
+    let sql = "SELECT Name FROM %Library.RoutineMgr_StudioOpenDialog(?,1,1,1,1,1,0,\
+               'NOT (Name %PATTERN ''.E1\".\"0.1\"G\"1N1\".obj\"'' AND $LENGTH(Name,''.'') > 3)')";
+    let rows = conn.query(sql, &[spec])?;
+    Some(
+        rows.iter()
+            .filter_map(|row| Some(doc_basename(row.get("Name")?.as_str()?)))
+            .collect(),
+    )
+}
+
 impl<A: AtelierLike> Cached<A> {
     // The first of `docs` that exists, cached under the whole candidate list.
     fn fetch_routine(&self, docs: &[String]) -> Option<RoutineSource> {
@@ -569,19 +575,6 @@ impl<A: AtelierLike> Cached<A> {
         self.routine_cache.set(key, result.clone());
         result
     }
-}
-
-// The routines matching `spec` (e.g. `*.mac,*.int,*.obj`), system ones included and
-// class-generated ones (`Name.1.obj`) left out.
-fn routine_names(conn: &dyn AtelierLike, spec: &str) -> Option<BTreeSet<String>> {
-    let sql = "SELECT Name FROM %Library.RoutineMgr_StudioOpenDialog(?,1,1,1,1,1,0,\
-               'NOT (Name %PATTERN ''.E1\".\"0.1\"G\"1N1\".obj\"'' AND $LENGTH(Name,''.'') > 3)')";
-    let rows = conn.query(sql, &[spec])?;
-    Some(
-        rows.iter()
-            .filter_map(|row| Some(doc_basename(row.get("Name")?.as_str()?)))
-            .collect(),
-    )
 }
 
 fn split_classes(s: &str) -> Vec<String> {
