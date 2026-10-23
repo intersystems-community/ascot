@@ -81,6 +81,7 @@ jobs:
           generate_release_notes: true
 
       - name: Open a Homebrew tap PR
+        if: ${{ !contains(github.ref_name, '-') }}
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           TAP: ${{ vars.HOMEBREW_TAP }}
