@@ -433,17 +433,17 @@ pub trait Atelier: Send + Sync {
 
 /// The `IrisClient` that looks up classes, includes and routines through an `Atelier`, caching
 /// what it finds.
-pub struct Client<A> {
-    atelier: A,
+pub struct Client {
+    atelier: Box<dyn Atelier>,
     cls_cache: Cache<Option<ClassInfo>>,
     routine_cache: Cache<Option<RoutineSource>>,
     obj_cache: Cache<bool>,
 }
 
-impl<A: Atelier> From<A> for Client<A> {
+impl<A: Atelier + 'static> From<A> for Client {
     fn from(atelier: A) -> Self {
         Self {
-            atelier,
+            atelier: Box::new(atelier),
             cls_cache: Cache::new(),
             routine_cache: Cache::new(),
             obj_cache: Cache::new(),
@@ -451,12 +451,12 @@ impl<A: Atelier> From<A> for Client<A> {
     }
 }
 
-impl<A: Atelier> IrisClient for Client<A> {
+impl IrisClient for Client {
     fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
         if let Some(cached) = self.cls_cache.get(cls) {
             return cached;
         }
-        let result = class_infos(&self.atelier, "= ?", &[cls])
+        let result = class_infos(&*self.atelier, "= ?", &[cls])
             .into_values()
             .next();
         self.cls_cache.set(cls.to_string(), result.clone());
@@ -475,7 +475,7 @@ impl<A: Atelier> IrisClient for Client<A> {
         }
         // Without source, its OBJ says whether it exists; when that can't be asked, it might.
         let exists = self.obj_cache.get(name).or_else(|| {
-            let exists = routine_names(&self.atelier, &format!("{name}.obj"))?.contains(name);
+            let exists = routine_names(&*self.atelier, &format!("{name}.obj"))?.contains(name);
             self.obj_cache.set(name.to_string(), exists);
             Some(exists)
         });
@@ -483,7 +483,7 @@ impl<A: Atelier> IrisClient for Client<A> {
     }
 }
 
-impl<A: Atelier> Client<A> {
+impl Client {
     // The first of `docs` that exists, cached under the whole candidate list.
     fn fetch_routine(&self, docs: &[String]) -> Option<RoutineSource> {
         let key = docs.join("|");
@@ -505,7 +505,7 @@ impl<A: Atelier> Client<A> {
 
 // The routines matching `spec` (e.g. `*.mac,*.int,*.obj`), system ones included and
 // class-generated ones (`Name.1.obj`) left out.
-fn routine_names(conn: &impl Atelier, spec: &str) -> Option<BTreeSet<String>> {
+fn routine_names(conn: &dyn Atelier, spec: &str) -> Option<BTreeSet<String>> {
     let sql = "SELECT Name FROM %Library.RoutineMgr_StudioOpenDialog(?,1,1,1,1,1,0,\
                'NOT (Name %PATTERN ''.E1\".\"0.1\"G\"1N1\".obj\"'' AND $LENGTH(Name,''.'') > 3)')";
     let rows = conn.query(sql, &[spec])?;
@@ -526,7 +526,7 @@ fn split_classes(s: &str) -> Vec<String> {
 
 // Every class satisfying `Name {filter}` (`= ?`, `IN (?,?)`; `params` bind the `?`s) with its
 // own members, keyed by name: one round trip per dictionary table for the whole set.
-fn class_infos(conn: &impl Atelier, filter: &str, params: &[&str]) -> HashMap<String, ClassInfo> {
+fn class_infos(conn: &dyn Atelier, filter: &str, params: &[&str]) -> HashMap<String, ClassInfo> {
     let sql = |description: &str| {
         format!(
             "SELECT Name, {description}, Super, PropertyClass, IncludeCode, ClassType, Deprecated \
@@ -641,7 +641,7 @@ fn is_truthy(v: &Value) -> bool {
 // Every member declared directly on the classes matching `Parent {filter}`, across all three
 // tables -- one query per batch instead of one per member, since `get_cls` always wants the
 // whole list at once.
-fn all_mem_rows(conn: &impl Atelier, filter: &str, params: &[&str]) -> Vec<MemberRow> {
+fn all_mem_rows(conn: &dyn Atelier, filter: &str, params: &[&str]) -> Vec<MemberRow> {
     let sql = |description: &str| {
         format!(
             "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, {description}, \
@@ -694,7 +694,7 @@ fn stub_parts(row: &MemberRow) -> Option<(&str, &str, &'static str)> {
 // Replaces each stub row with its real metadata -- one query per stub table the classes use,
 // not one per stub (a property-heavy class has dozens of generated accessors).
 fn resolve_stubs(
-    conn: &impl Atelier,
+    conn: &dyn Atelier,
     filter: &str,
     params: &[&str],
     rows: Vec<MemberRow>,
