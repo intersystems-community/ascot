@@ -203,21 +203,18 @@ impl Http {
             .filter(|name| !name.starts_with("%sqlcq."))
             .collect();
         class_names.sort();
-        let inc_names = self.docnames("INC").ok_or_else(failed)?;
+        let inc_names: Vec<String> = routine_names(self, "*.inc")
+            .ok_or_else(failed)?
+            .into_iter()
+            .collect();
         // Every routine, system ones included, so one without source is still declared.
         let all_rtn_names = routine_names(self, "*.mac,*.int,*.obj").ok_or_else(failed)?;
-        // Hand-written routines only (`generated=0` skips a class's `.int`s), read as the `.int`
+        // Hand-written routines only (a class's `.int`s are generated), read as the `.int`
         // where there is one (compiled, macro-expanded; what `get_int_or_mac` prefers), else the `.mac`.
-        let mut rtn_names: Vec<String> = [
-            self.docnames("MAC").ok_or_else(failed)?,
-            self.docnames("INT").ok_or_else(failed)?,
-        ]
-        .concat()
-        .iter()
-        .map(|doc| doc_basename(doc))
-        .collect();
-        rtn_names.sort();
-        rtn_names.dedup();
+        let rtn_names: Vec<String> = routine_names(self, "*.mac,*.int")
+            .ok_or_else(failed)?
+            .into_iter()
+            .collect();
 
         let totals = [class_names.len(), inc_names.len(), rtn_names.len()];
         for kind in [DocKind::Cls, DocKind::Inc, DocKind::Rtn] {
@@ -231,7 +228,12 @@ impl Http {
         let next = AtomicUsize::new(0);
         let classes = Mutex::new(BTreeMap::new());
         let includes = Mutex::new(BTreeMap::new());
-        let routines = Mutex::new(all_rtn_names.into_iter().map(|name| (name, None)).collect());
+        let routines = Mutex::new(
+            all_rtn_names
+                .into_iter()
+                .map(|name| (name, None))
+                .collect::<BTreeMap<_, _>>(),
+        );
         let (tx, rx) = mpsc::channel();
         let mut done = [0; 3];
         std::thread::scope(|scope| {
@@ -245,25 +247,25 @@ impl Http {
                         else {
                             break;
                         };
-                        let ok = match kind {
+                        match kind {
                             DocKind::Cls => {
                                 let params: Vec<&str> = batch.iter().map(String::as_str).collect();
                                 let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
                                 let found = class_infos(self, &filter, &params);
                                 classes.lock().unwrap().extend(found);
-                                true
                             }
-                            DocKind::Inc => match self.docs(batch) {
-                                Some(found) => {
-                                    includes.lock().unwrap().extend(by_basename(found));
-                                    true
-                                }
-                                None => false,
-                            },
-                            DocKind::Rtn => self.fetch_routines(batch, routines),
-                        };
-                        if !ok {
-                            break;
+                            DocKind::Inc => {
+                                includes
+                                    .lock()
+                                    .unwrap()
+                                    .extend(self.sources(batch, &["inc"]));
+                            }
+                            DocKind::Rtn => {
+                                let found = self.sources(batch, &["int", "mac"]);
+                                let found =
+                                    found.into_iter().map(|(name, source)| (name, Some(source)));
+                                routines.lock().unwrap().extend(found);
+                            }
                         }
                         let _ = tx.send((kind, batch.len()));
                     }
@@ -287,88 +289,23 @@ impl Http {
         })
     }
 
-    fn fetch_routines(
-        &self,
-        batch: &[String],
-        out: &Mutex<BTreeMap<String, Option<RoutineSource>>>,
-    ) -> bool {
-        let ints: Vec<String> = batch.iter().map(|name| format!("{name}.int")).collect();
-        let Some(mut found) = self.docs(&ints) else {
-            return false;
-        };
-        let macs: Vec<String> = batch
+    // Each of `names` that has source, read from the first of `exts` it is non-empty as.
+    fn sources(&self, names: &[String], exts: &[&str]) -> Vec<(String, RoutineSource)> {
+        names
             .iter()
-            .filter(|name| !found.contains_key(&format!("{name}.int")))
-            .map(|name| format!("{name}.mac"))
-            .collect();
-        if !macs.is_empty() {
-            let Some(more) = self.docs(&macs) else {
-                return false;
-            };
-            found.extend(more);
-        }
-        out.lock()
-            .unwrap()
-            .extend(by_basename(found).map(|(name, source)| (name, Some(source))));
-        true
-    }
-
-    // Non-generated documents of routine type `kind` (`INC`, `MAC`, `INT`), with extension.
-    fn docnames(&self, kind: &str) -> Option<Vec<String>> {
-        if self.broken.load(Ordering::Relaxed) {
-            return None;
-        }
-        let resp = self
-            .agent
-            .get(&format!(
-                "{}/docnames/RTN/{kind}?generated=0",
-                self.base_url
-            ))
-            .header("Authorization", &self.auth_header)
-            .call()
-            .map_err(|err| self.fail("docnames", err))
-            .ok()?;
-        let body: Value = resp.into_body().read_json().ok()?;
-        let docs = body.get("result")?.get("content")?.as_array()?;
-        Some(
-            docs.iter()
-                .filter_map(|doc| Some(doc.get("name")?.as_str()?.to_string()))
-                .collect(),
-        )
-    }
-
-    // A document that doesn't exist comes back with an error `status` and no content.
-    fn docs(&self, names: &[String]) -> Option<HashMap<String, RoutineSource>> {
-        if self.broken.load(Ordering::Relaxed) {
-            return None;
-        }
-        let resp = self
-            .agent
-            .post(&format!("{}/docs", self.base_url))
-            .header("Authorization", &self.auth_header)
-            .header("Content-Type", "application/json")
-            .send_json(names)
-            .map_err(|err| self.fail("docs", err))
-            .ok()?;
-        let body: Value = resp.into_body().read_json().ok()?;
-        let docs = body.get("result")?.get("content")?.as_array()?;
-        Some(
-            docs.iter()
-                .filter_map(|doc| {
-                    let lines = doc.get("content")?.as_array()?;
-                    if lines.is_empty() {
-                        return None;
-                    }
-                    let text: Vec<&str> = lines.iter().filter_map(Value::as_str).collect();
-                    let source = RoutineSource {
-                        text: text.join("\n"),
-                        // The Atelier REST API has no uri scheme of its own to offer here.
-                        uri: None,
-                    };
-                    Some((doc.get("name")?.as_str()?.to_string(), source))
-                })
-                .collect(),
-        )
+            .filter_map(|name| {
+                let lines = exts.iter().find_map(|ext| {
+                    self.get_doc(&format!("{name}.{ext}"))
+                        .filter(|lines| !lines.is_empty())
+                })?;
+                let source = RoutineSource {
+                    text: lines.join("\n"),
+                    // The Atelier REST API has no uri scheme of its own to offer here.
+                    uri: None,
+                };
+                Some((name.clone(), source))
+            })
+            .collect()
     }
 
     fn fail(&self, context: &str, err: ureq::Error) {
@@ -427,13 +364,6 @@ impl AtelierLike for Http {
                 .collect(),
         )
     }
-}
-
-fn by_basename(
-    docs: HashMap<String, RoutineSource>,
-) -> impl Iterator<Item = (String, RoutineSource)> {
-    docs.into_iter()
-        .map(|(doc, source)| (doc_basename(&doc), source))
 }
 
 fn doc_basename(doc: &str) -> String {
