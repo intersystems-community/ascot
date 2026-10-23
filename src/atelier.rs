@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -54,27 +54,20 @@ impl<V: Clone> Cache<V> {
 
 /// A connection to IRIS over the Atelier REST API, and the `IrisClient` that looks code up
 /// through it.
-pub struct AtelierConnection {
-    http: Arc<Http>,
-    client: AtelierBasedClient,
-}
+pub struct AtelierConnection(Cached<Http>);
 
 impl AtelierConnection {
     /// `url` is `scheme://user:pass@host:port`, optionally with a path prefix (e.g. `/iris`,
     /// when the web server routes IRIS instances by path). `namespace` is a plain name (e.g.
     /// `%SYS`) -- not URL-encoded, since it arrives as a separate CLI/tool argument.
     pub fn connect(url: &str, namespace: &str) -> Result<Self, String> {
-        let http = Arc::new(Http::connect(url, namespace)?);
-        Ok(Self {
-            client: AtelierBasedClient::from(http.clone()),
-            http,
-        })
+        Ok(Self(Cached::new(Http::connect(url, namespace)?)))
     }
 
     /// One request up front, so a wrong URL, password or namespace is a clear error at startup
     /// rather than a one-line warning followed by every system macro reported undefined.
     pub fn check(&self) -> Result<(), String> {
-        self.http.check()
+        self.0.atelier.check()
     }
 
     /// Every class, include file and routine in the namespace, for `ascot declare`;
@@ -83,21 +76,21 @@ impl AtelierConnection {
         &self,
         progress: impl FnMut(DocKind, usize, usize),
     ) -> Result<Declarations, String> {
-        self.http.declarations(progress)
+        self.0.atelier.declarations(progress)
     }
 }
 
 impl IrisClient for AtelierConnection {
     fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
-        self.client.get_cls(cls)
+        self.0.get_cls(cls)
     }
 
     fn get_inc(&self, name: &str) -> Option<RoutineSource> {
-        self.client.get_inc(name)
+        self.0.get_inc(name)
     }
 
     fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
-        self.client.get_int_or_mac(name)
+        self.0.get_int_or_mac(name)
     }
 }
 
@@ -473,7 +466,7 @@ pub trait AtelierLike: Send + Sync {
     fn get_doc(&self, name: &str) -> Option<Vec<String>>;
 }
 
-impl AtelierLike for Arc<Http> {
+impl<T: AtelierLike + ?Sized> AtelierLike for Box<T> {
     fn query(&self, sql: &str, params: &[&str]) -> Option<Vec<Value>> {
         (**self).query(sql, params)
     }
@@ -485,17 +478,40 @@ impl AtelierLike for Arc<Http> {
 
 /// The `IrisClient` that looks up classes, includes and routines through an `AtelierLike`,
 /// caching what it finds.
-pub struct AtelierBasedClient {
-    atelier: Box<dyn AtelierLike>,
+pub struct AtelierBasedClient(Cached<Box<dyn AtelierLike>>);
+
+impl<A: AtelierLike + 'static> From<A> for AtelierBasedClient {
+    fn from(atelier: A) -> Self {
+        Self(Cached::new(Box::new(atelier)))
+    }
+}
+
+impl IrisClient for AtelierBasedClient {
+    fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
+        self.0.get_cls(cls)
+    }
+
+    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+        self.0.get_inc(name)
+    }
+
+    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
+        self.0.get_int_or_mac(name)
+    }
+}
+
+// The lookups made through `atelier`, and their caches.
+struct Cached<A> {
+    atelier: A,
     cls_cache: Cache<Option<ClassInfo>>,
     routine_cache: Cache<Option<RoutineSource>>,
     obj_cache: Cache<bool>,
 }
 
-impl<A: AtelierLike + 'static> From<A> for AtelierBasedClient {
-    fn from(atelier: A) -> Self {
+impl<A: AtelierLike> Cached<A> {
+    fn new(atelier: A) -> Self {
         Self {
-            atelier: Box::new(atelier),
+            atelier,
             cls_cache: Cache::new(),
             routine_cache: Cache::new(),
             obj_cache: Cache::new(),
@@ -503,12 +519,12 @@ impl<A: AtelierLike + 'static> From<A> for AtelierBasedClient {
     }
 }
 
-impl IrisClient for AtelierBasedClient {
+impl<A: AtelierLike> IrisClient for Cached<A> {
     fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
         if let Some(cached) = self.cls_cache.get(cls) {
             return cached;
         }
-        let result = class_infos(&*self.atelier, "= ?", &[cls])
+        let result = class_infos(&self.atelier, "= ?", &[cls])
             .into_values()
             .next();
         self.cls_cache.set(cls.to_string(), result.clone());
@@ -527,7 +543,7 @@ impl IrisClient for AtelierBasedClient {
         }
         // Without source, its OBJ says whether it exists; when that can't be asked, it might.
         let exists = self.obj_cache.get(name).or_else(|| {
-            let exists = routine_names(&*self.atelier, &format!("{name}.obj"))?.contains(name);
+            let exists = routine_names(&self.atelier, &format!("{name}.obj"))?.contains(name);
             self.obj_cache.set(name.to_string(), exists);
             Some(exists)
         });
@@ -535,7 +551,7 @@ impl IrisClient for AtelierBasedClient {
     }
 }
 
-impl AtelierBasedClient {
+impl<A: AtelierLike> Cached<A> {
     // The first of `docs` that exists, cached under the whole candidate list.
     fn fetch_routine(&self, docs: &[String]) -> Option<RoutineSource> {
         let key = docs.join("|");
