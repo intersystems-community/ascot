@@ -4,7 +4,8 @@
 //! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
 //! library code above all, so the checker can confirm them instead of leaving a hint. Results
 //! are cached per client. `AtelierBasedClient` is the `iris::IrisClient` built from any
-//! `AtelierLike`, the two requests the lookups need; `AtelierConnection` answers them over HTTP.
+//! `AtelierLike`, the two requests the lookups need; `AtelierConnection` answers them over HTTP,
+//! and is an `iris::IrisClient` itself.
 //!
 //! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
 //! `language-server`'s `server/src/ascot/index.ts` `IrisConnection` class -- the JS host-side
@@ -64,6 +65,7 @@ pub struct AtelierConnection {
     // every later call instead of re-attempting and re-timing-out on a connection already known
     // to be broken.
     broken: AtomicBool,
+    lookups: Lookups,
 }
 
 impl AtelierConnection {
@@ -105,6 +107,7 @@ impl AtelierConnection {
                     .build(),
             ),
             broken: AtomicBool::new(false),
+            lookups: Lookups::new(),
         })
     }
 
@@ -435,64 +438,104 @@ pub trait AtelierLike: Send + Sync {
 /// caching what it finds.
 pub struct AtelierBasedClient {
     atelier: Box<dyn AtelierLike>,
-    cls_cache: Cache<Option<ClassInfo>>,
-    routine_cache: Cache<Option<RoutineSource>>,
-    obj_cache: Cache<bool>,
+    lookups: Lookups,
 }
 
 impl<A: AtelierLike + 'static> From<A> for AtelierBasedClient {
     fn from(atelier: A) -> Self {
         Self {
             atelier: Box::new(atelier),
-            cls_cache: Cache::new(),
-            routine_cache: Cache::new(),
-            obj_cache: Cache::new(),
+            lookups: Lookups::new(),
         }
     }
 }
 
 impl IrisClient for AtelierBasedClient {
     fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
+        self.lookups.get_cls(&*self.atelier, cls)
+    }
+
+    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+        self.lookups.get_inc(&*self.atelier, name)
+    }
+
+    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
+        self.lookups.get_int_or_mac(&*self.atelier, name)
+    }
+}
+
+impl IrisClient for AtelierConnection {
+    fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
+        self.lookups.get_cls(self, cls)
+    }
+
+    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+        self.lookups.get_inc(self, name)
+    }
+
+    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
+        self.lookups.get_int_or_mac(self, name)
+    }
+}
+
+// `IrisClient`'s lookups made through an `AtelierLike`, and their caches.
+struct Lookups {
+    cls_cache: Cache<Option<ClassInfo>>,
+    routine_cache: Cache<Option<RoutineSource>>,
+    obj_cache: Cache<bool>,
+}
+
+impl Lookups {
+    fn new() -> Self {
+        Self {
+            cls_cache: Cache::new(),
+            routine_cache: Cache::new(),
+            obj_cache: Cache::new(),
+        }
+    }
+
+    fn get_cls(&self, atelier: &dyn AtelierLike, cls: &str) -> Option<ClassInfo> {
         if let Some(cached) = self.cls_cache.get(cls) {
             return cached;
         }
-        let result = class_infos(&*self.atelier, "= ?", &[cls])
-            .into_values()
-            .next();
+        let result = class_infos(atelier, "= ?", &[cls]).into_values().next();
         self.cls_cache.set(cls.to_string(), result.clone());
         result
     }
 
-    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
-        self.fetch_routine(&[format!("{name}.inc")])
+    fn get_inc(&self, atelier: &dyn AtelierLike, name: &str) -> Option<RoutineSource> {
+        self.fetch_routine(atelier, &[format!("{name}.inc")])
     }
 
     // The `.int` first: it is the instance's own macro expansion of the `.mac`, so no expansion
     // (or include resolution) is needed on our side.
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
-        if let Some(source) = self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")]) {
+    fn get_int_or_mac(
+        &self,
+        atelier: &dyn AtelierLike,
+        name: &str,
+    ) -> Option<Option<RoutineSource>> {
+        let docs = [format!("{name}.int"), format!("{name}.mac")];
+        if let Some(source) = self.fetch_routine(atelier, &docs) {
             return Some(Some(source));
         }
         // Without source, its OBJ says whether it exists; when that can't be asked, it might.
         let exists = self.obj_cache.get(name).or_else(|| {
-            let exists = routine_names(&*self.atelier, &format!("{name}.obj"))?.contains(name);
+            let exists = routine_names(atelier, &format!("{name}.obj"))?.contains(name);
             self.obj_cache.set(name.to_string(), exists);
             Some(exists)
         });
         exists.unwrap_or(true).then_some(None)
     }
-}
 
-impl AtelierBasedClient {
     // The first of `docs` that exists, cached under the whole candidate list.
-    fn fetch_routine(&self, docs: &[String]) -> Option<RoutineSource> {
+    fn fetch_routine(&self, atelier: &dyn AtelierLike, docs: &[String]) -> Option<RoutineSource> {
         let key = docs.join("|");
         if let Some(cached) = self.routine_cache.get(&key) {
             return cached;
         }
         let result = docs
             .iter()
-            .find_map(|doc| self.atelier.get_doc(doc))
+            .find_map(|doc| atelier.get_doc(doc))
             .map(|lines| RoutineSource {
                 text: lines.join("\n"),
                 // The Atelier REST API has no uri scheme of its own to offer here.

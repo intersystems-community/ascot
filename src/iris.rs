@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::atelier::{AtelierBasedClient, AtelierConnection};
+use crate::atelier::AtelierConnection;
 use crate::bindings::{ClassInfo, RoutineSource};
 
 pub trait IrisClient: Send + Sync {
@@ -32,7 +32,7 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, 
     if iris.contains("://") {
         let conn = AtelierConnection::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
         conn.check()?;
-        return Ok(Box::new(AtelierBasedClient::from(conn)));
+        return Ok(Box::new(conn));
     }
     let declarations = Declarations::load(Path::new(iris))?;
     if let Some(namespace) = namespace
