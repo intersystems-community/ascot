@@ -4,8 +4,7 @@
 //! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
 //! library code above all, so the checker can confirm them instead of leaving a hint. Results
 //! are cached per client. `AtelierBasedClient` is the `iris::IrisClient` built from any
-//! `AtelierLike`, the two requests the lookups need; `AtelierConnection` answers them over HTTP,
-//! and is an `iris::IrisClient` itself.
+//! `AtelierLike`, the two requests the lookups need; `AtelierConnection` is one over HTTP.
 //!
 //! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
 //! `language-server`'s `server/src/ascot/index.ts` `IrisConnection` class -- the JS host-side
@@ -14,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -53,7 +52,56 @@ impl<V: Clone> Cache<V> {
     }
 }
 
+/// A connection to IRIS over the Atelier REST API, and the `IrisClient` that looks code up
+/// through it.
 pub struct AtelierConnection {
+    http: Arc<Http>,
+    client: AtelierBasedClient,
+}
+
+impl AtelierConnection {
+    /// `url` is `scheme://user:pass@host:port`, optionally with a path prefix (e.g. `/iris`,
+    /// when the web server routes IRIS instances by path). `namespace` is a plain name (e.g.
+    /// `%SYS`) -- not URL-encoded, since it arrives as a separate CLI/tool argument.
+    pub fn connect(url: &str, namespace: &str) -> Result<Self, String> {
+        let http = Arc::new(Http::connect(url, namespace)?);
+        Ok(Self {
+            client: AtelierBasedClient::from(http.clone()),
+            http,
+        })
+    }
+
+    /// One request up front, so a wrong URL, password or namespace is a clear error at startup
+    /// rather than a one-line warning followed by every system macro reported undefined.
+    pub fn check(&self) -> Result<(), String> {
+        self.http.check()
+    }
+
+    /// Every class, include file and routine in the namespace, for `ascot declare`;
+    /// `progress(kind, done, total)` once each total is known and after each batch.
+    pub fn declarations(
+        &self,
+        progress: impl FnMut(DocKind, usize, usize),
+    ) -> Result<Declarations, String> {
+        self.http.declarations(progress)
+    }
+}
+
+impl IrisClient for AtelierConnection {
+    fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
+        self.client.get_cls(cls)
+    }
+
+    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+        self.client.get_inc(name)
+    }
+
+    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
+        self.client.get_int_or_mac(name)
+    }
+}
+
+struct Http {
     base_url: String,
     // `scheme://host:port/prefix/api/atelier`, for the namespace listing in `check`'s message.
     api_root: String,
@@ -65,14 +113,10 @@ pub struct AtelierConnection {
     // every later call instead of re-attempting and re-timing-out on a connection already known
     // to be broken.
     broken: AtomicBool,
-    lookups: Lookups,
 }
 
-impl AtelierConnection {
-    /// `url` is `scheme://user:pass@host:port`, optionally with a path prefix (e.g. `/iris`,
-    /// when the web server routes IRIS instances by path). `namespace` is a plain name (e.g.
-    /// `%SYS`) -- not URL-encoded, since it arrives as a separate CLI/tool argument.
-    pub fn connect(url: &str, namespace: &str) -> Result<Self, String> {
+impl Http {
+    fn connect(url: &str, namespace: &str) -> Result<Self, String> {
         let parsed = url::Url::parse(url).map_err(|e| format!("invalid --iris URL: {e}"))?;
         let scheme = parsed.scheme();
         if scheme != "http" && scheme != "https" {
@@ -107,13 +151,10 @@ impl AtelierConnection {
                     .build(),
             ),
             broken: AtomicBool::new(false),
-            lookups: Lookups::new(),
         })
     }
 
-    /// One request up front, so a wrong URL, password or namespace is a clear error at startup
-    /// rather than a one-line warning followed by every system macro reported undefined.
-    pub fn check(&self) -> Result<(), String> {
+    fn check(&self) -> Result<(), String> {
         let get = |url: &str| {
             self.agent
                 .get(url)
@@ -154,9 +195,7 @@ impl AtelierConnection {
         }
     }
 
-    /// Every class, include file and routine in the namespace, for `ascot declare`;
-    /// `progress(kind, done, total)` once each total is known and after each batch.
-    pub fn declarations(
+    fn declarations(
         &self,
         mut progress: impl FnMut(DocKind, usize, usize),
     ) -> Result<Declarations, String> {
@@ -350,7 +389,7 @@ impl AtelierConnection {
     }
 }
 
-impl AtelierLike for AtelierConnection {
+impl AtelierLike for Http {
     fn query(&self, sql: &str, params: &[&str]) -> Option<Vec<Value>> {
         if self.broken.load(Ordering::Relaxed) {
             return None;
@@ -434,108 +473,78 @@ pub trait AtelierLike: Send + Sync {
     fn get_doc(&self, name: &str) -> Option<Vec<String>>;
 }
 
+impl AtelierLike for Arc<Http> {
+    fn query(&self, sql: &str, params: &[&str]) -> Option<Vec<Value>> {
+        (**self).query(sql, params)
+    }
+
+    fn get_doc(&self, name: &str) -> Option<Vec<String>> {
+        (**self).get_doc(name)
+    }
+}
+
 /// The `IrisClient` that looks up classes, includes and routines through an `AtelierLike`,
 /// caching what it finds.
 pub struct AtelierBasedClient {
     atelier: Box<dyn AtelierLike>,
-    lookups: Lookups,
+    cls_cache: Cache<Option<ClassInfo>>,
+    routine_cache: Cache<Option<RoutineSource>>,
+    obj_cache: Cache<bool>,
 }
 
 impl<A: AtelierLike + 'static> From<A> for AtelierBasedClient {
     fn from(atelier: A) -> Self {
         Self {
             atelier: Box::new(atelier),
-            lookups: Lookups::new(),
+            cls_cache: Cache::new(),
+            routine_cache: Cache::new(),
+            obj_cache: Cache::new(),
         }
     }
 }
 
 impl IrisClient for AtelierBasedClient {
     fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
-        self.lookups.get_cls(&*self.atelier, cls)
-    }
-
-    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
-        self.lookups.get_inc(&*self.atelier, name)
-    }
-
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
-        self.lookups.get_int_or_mac(&*self.atelier, name)
-    }
-}
-
-impl IrisClient for AtelierConnection {
-    fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
-        self.lookups.get_cls(self, cls)
-    }
-
-    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
-        self.lookups.get_inc(self, name)
-    }
-
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
-        self.lookups.get_int_or_mac(self, name)
-    }
-}
-
-// `IrisClient`'s lookups made through an `AtelierLike`, and their caches.
-struct Lookups {
-    cls_cache: Cache<Option<ClassInfo>>,
-    routine_cache: Cache<Option<RoutineSource>>,
-    obj_cache: Cache<bool>,
-}
-
-impl Lookups {
-    fn new() -> Self {
-        Self {
-            cls_cache: Cache::new(),
-            routine_cache: Cache::new(),
-            obj_cache: Cache::new(),
-        }
-    }
-
-    fn get_cls(&self, atelier: &dyn AtelierLike, cls: &str) -> Option<ClassInfo> {
         if let Some(cached) = self.cls_cache.get(cls) {
             return cached;
         }
-        let result = class_infos(atelier, "= ?", &[cls]).into_values().next();
+        let result = class_infos(&*self.atelier, "= ?", &[cls])
+            .into_values()
+            .next();
         self.cls_cache.set(cls.to_string(), result.clone());
         result
     }
 
-    fn get_inc(&self, atelier: &dyn AtelierLike, name: &str) -> Option<RoutineSource> {
-        self.fetch_routine(atelier, &[format!("{name}.inc")])
+    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+        self.fetch_routine(&[format!("{name}.inc")])
     }
 
     // The `.int` first: it is the instance's own macro expansion of the `.mac`, so no expansion
     // (or include resolution) is needed on our side.
-    fn get_int_or_mac(
-        &self,
-        atelier: &dyn AtelierLike,
-        name: &str,
-    ) -> Option<Option<RoutineSource>> {
-        let docs = [format!("{name}.int"), format!("{name}.mac")];
-        if let Some(source) = self.fetch_routine(atelier, &docs) {
+    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
+        if let Some(source) = self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")]) {
             return Some(Some(source));
         }
         // Without source, its OBJ says whether it exists; when that can't be asked, it might.
         let exists = self.obj_cache.get(name).or_else(|| {
-            let exists = routine_names(atelier, &format!("{name}.obj"))?.contains(name);
+            let exists = routine_names(&*self.atelier, &format!("{name}.obj"))?.contains(name);
             self.obj_cache.set(name.to_string(), exists);
             Some(exists)
         });
         exists.unwrap_or(true).then_some(None)
     }
+}
 
+impl AtelierBasedClient {
     // The first of `docs` that exists, cached under the whole candidate list.
-    fn fetch_routine(&self, atelier: &dyn AtelierLike, docs: &[String]) -> Option<RoutineSource> {
+    fn fetch_routine(&self, docs: &[String]) -> Option<RoutineSource> {
         let key = docs.join("|");
         if let Some(cached) = self.routine_cache.get(&key) {
             return cached;
         }
         let result = docs
             .iter()
-            .find_map(|doc| atelier.get_doc(doc))
+            .find_map(|doc| self.atelier.get_doc(doc))
             .map(|lines| RoutineSource {
                 text: lines.join("\n"),
                 // The Atelier REST API has no uri scheme of its own to offer here.
@@ -1102,23 +1111,20 @@ mod tests {
 
     #[test]
     fn connect_decodes_percent_encoded_credentials() {
-        let conn =
-            AtelierConnection::connect("http://us%40er:p%40ss%25word@localhost:8080", "USER")
-                .unwrap();
+        let conn = Http::connect("http://us%40er:p%40ss%25word@localhost:8080", "USER").unwrap();
         let expected = base64::engine::general_purpose::STANDARD.encode("us@er:p@ss%word");
         assert_eq!(conn.auth_header, format!("Basic {expected}"));
     }
 
     #[test]
     fn connect_percent_encodes_the_namespace() {
-        let conn = AtelierConnection::connect("http://user:pass@localhost:8080", "%SYS").unwrap();
+        let conn = Http::connect("http://user:pass@localhost:8080", "%SYS").unwrap();
         assert_eq!(conn.base_url, "http://localhost:8080/api/atelier/v8/%25SYS");
     }
 
     #[test]
     fn connect_keeps_a_path_prefix_before_api_atelier() {
-        let conn =
-            AtelierConnection::connect("http://user:pass@localhost:8080/iris", "%SYS").unwrap();
+        let conn = Http::connect("http://user:pass@localhost:8080/iris", "%SYS").unwrap();
         assert_eq!(
             conn.base_url,
             "http://localhost:8080/iris/api/atelier/v8/%25SYS"
@@ -1162,10 +1168,7 @@ mod tests {
             ),
             ("", "404 Not Found", ""),
         ]);
-        let err = AtelierConnection::connect(&url, "NOPE")
-            .unwrap()
-            .check()
-            .unwrap_err();
+        let err = Http::connect(&url, "NOPE").unwrap().check().unwrap_err();
         assert!(err.contains("namespace 'NOPE' does not exist"), "{err}");
         assert!(err.contains("%SYS, USER"), "{err}");
     }
@@ -1173,20 +1176,14 @@ mod tests {
     #[test]
     fn check_blames_the_path_prefix_when_there_is_no_atelier_api_at_all() {
         let url = stub_server(&[("", "404 Not Found", "")]);
-        let err = AtelierConnection::connect(&url, "USER")
-            .unwrap()
-            .check()
-            .unwrap_err();
+        let err = Http::connect(&url, "USER").unwrap().check().unwrap_err();
         assert!(err.contains("no Atelier API at"), "{err}");
     }
 
     #[test]
     fn check_reports_a_bad_password() {
         let url = stub_server(&[("", "401 Unauthorized", "")]);
-        let err = AtelierConnection::connect(&url, "USER")
-            .unwrap()
-            .check()
-            .unwrap_err();
+        let err = Http::connect(&url, "USER").unwrap().check().unwrap_err();
         assert!(
             err.contains("authentication failed for user 'user'"),
             "{err}"
@@ -1196,16 +1193,12 @@ mod tests {
     #[test]
     fn check_passes_on_a_reachable_namespace() {
         let url = stub_server(&[("", "200 OK", r#"{"result":{"content":{"name":"USER"}}}"#)]);
-        AtelierConnection::connect(&url, "USER")
-            .unwrap()
-            .check()
-            .unwrap();
+        Http::connect(&url, "USER").unwrap().check().unwrap();
     }
 
     #[test]
     fn connect_strips_a_trailing_slash_from_the_path_prefix() {
-        let conn =
-            AtelierConnection::connect("http://user:pass@localhost:8080/iris/", "%SYS").unwrap();
+        let conn = Http::connect("http://user:pass@localhost:8080/iris/", "%SYS").unwrap();
         assert_eq!(
             conn.base_url,
             "http://localhost:8080/iris/api/atelier/v8/%25SYS"
