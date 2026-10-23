@@ -89,6 +89,11 @@ jobs:
           version=${GITHUB_REF_NAME#v}
           url=https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME
           git clone -q "https://x-access-token:$GH_TOKEN@github.com/$TAP" tap
+          current=$(grep -o 'download/v[^/]*' tap/Formula/$BIN.rb | cut -c11- || true)
+          if [ "$(printf '%s\n' "$current" "$version" | sort -V | tail -1)" != "$version" ] || [ "$current" = "$version" ]; then
+            echo "The tap already has $BIN $current; not replacing it with $version"
+            exit 0
+          fi
           cat > tap/Formula/$BIN.rb <<FORMULA
           class Ascot < Formula
             desc "Type checker and code intelligence engine for InterSystems ObjectScript"
