@@ -3,8 +3,8 @@
 //!
 //! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
 //! library code above all, so the checker can confirm them instead of leaving a hint. Results
-//! are cached per client. `Client` is the `iris::IrisClient` built from any `Atelier`, the
-//! two requests the lookups need; `AtelierConnection` answers them over HTTP.
+//! are cached per client. `AtelierBasedClient` is the `iris::IrisClient` built from any
+//! `AtelierLike`, the two requests the lookups need; `AtelierConnection` answers them over HTTP.
 //!
 //! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
 //! `language-server`'s `server/src/ascot/index.ts` `IrisConnection` class -- the JS host-side
@@ -347,7 +347,7 @@ impl AtelierConnection {
     }
 }
 
-impl Atelier for AtelierConnection {
+impl AtelierLike for AtelierConnection {
     fn query(&self, sql: &str, params: &[&str]) -> Option<Vec<Value>> {
         if self.broken.load(Ordering::Relaxed) {
             return None;
@@ -420,9 +420,9 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
-/// The two Atelier REST API requests `Client`'s lookups are made of, so a host that already
-/// has its own connection to IRIS (credentials, TLS, sessions) can answer them itself.
-pub trait Atelier: Send + Sync {
+/// The two Atelier REST API requests `AtelierBasedClient`'s lookups are made of, so a host that
+/// already has its own connection to IRIS (credentials, TLS, sessions) can answer them itself.
+pub trait AtelierLike: Send + Sync {
     /// The rows of `/action/query` for `sql`, `params` bound to its `?`s, each a JSON object
     /// keyed by column name; `None` if the query failed.
     fn query(&self, sql: &str, params: &[&str]) -> Option<Vec<Value>>;
@@ -431,16 +431,16 @@ pub trait Atelier: Send + Sync {
     fn get_doc(&self, name: &str) -> Option<Vec<String>>;
 }
 
-/// The `IrisClient` that looks up classes, includes and routines through an `Atelier`, caching
-/// what it finds.
-pub struct Client {
-    atelier: Box<dyn Atelier>,
+/// The `IrisClient` that looks up classes, includes and routines through an `AtelierLike`,
+/// caching what it finds.
+pub struct AtelierBasedClient {
+    atelier: Box<dyn AtelierLike>,
     cls_cache: Cache<Option<ClassInfo>>,
     routine_cache: Cache<Option<RoutineSource>>,
     obj_cache: Cache<bool>,
 }
 
-impl<A: Atelier + 'static> From<A> for Client {
+impl<A: AtelierLike + 'static> From<A> for AtelierBasedClient {
     fn from(atelier: A) -> Self {
         Self {
             atelier: Box::new(atelier),
@@ -451,7 +451,7 @@ impl<A: Atelier + 'static> From<A> for Client {
     }
 }
 
-impl IrisClient for Client {
+impl IrisClient for AtelierBasedClient {
     fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
         if let Some(cached) = self.cls_cache.get(cls) {
             return cached;
@@ -483,7 +483,7 @@ impl IrisClient for Client {
     }
 }
 
-impl Client {
+impl AtelierBasedClient {
     // The first of `docs` that exists, cached under the whole candidate list.
     fn fetch_routine(&self, docs: &[String]) -> Option<RoutineSource> {
         let key = docs.join("|");
@@ -505,7 +505,7 @@ impl Client {
 
 // The routines matching `spec` (e.g. `*.mac,*.int,*.obj`), system ones included and
 // class-generated ones (`Name.1.obj`) left out.
-fn routine_names(conn: &dyn Atelier, spec: &str) -> Option<BTreeSet<String>> {
+fn routine_names(conn: &dyn AtelierLike, spec: &str) -> Option<BTreeSet<String>> {
     let sql = "SELECT Name FROM %Library.RoutineMgr_StudioOpenDialog(?,1,1,1,1,1,0,\
                'NOT (Name %PATTERN ''.E1\".\"0.1\"G\"1N1\".obj\"'' AND $LENGTH(Name,''.'') > 3)')";
     let rows = conn.query(sql, &[spec])?;
@@ -526,7 +526,11 @@ fn split_classes(s: &str) -> Vec<String> {
 
 // Every class satisfying `Name {filter}` (`= ?`, `IN (?,?)`; `params` bind the `?`s) with its
 // own members, keyed by name: one round trip per dictionary table for the whole set.
-fn class_infos(conn: &dyn Atelier, filter: &str, params: &[&str]) -> HashMap<String, ClassInfo> {
+fn class_infos(
+    conn: &dyn AtelierLike,
+    filter: &str,
+    params: &[&str],
+) -> HashMap<String, ClassInfo> {
     let sql = |description: &str| {
         format!(
             "SELECT Name, {description}, Super, PropertyClass, IncludeCode, ClassType, Deprecated \
@@ -641,7 +645,7 @@ fn is_truthy(v: &Value) -> bool {
 // Every member declared directly on the classes matching `Parent {filter}`, across all three
 // tables -- one query per batch instead of one per member, since `get_cls` always wants the
 // whole list at once.
-fn all_mem_rows(conn: &dyn Atelier, filter: &str, params: &[&str]) -> Vec<MemberRow> {
+fn all_mem_rows(conn: &dyn AtelierLike, filter: &str, params: &[&str]) -> Vec<MemberRow> {
     let sql = |description: &str| {
         format!(
             "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, {description}, \
@@ -694,7 +698,7 @@ fn stub_parts(row: &MemberRow) -> Option<(&str, &str, &'static str)> {
 // Replaces each stub row with its real metadata -- one query per stub table the classes use,
 // not one per stub (a property-heavy class has dozens of generated accessors).
 fn resolve_stubs(
-    conn: &dyn Atelier,
+    conn: &dyn AtelierLike,
     filter: &str,
     params: &[&str],
     rows: Vec<MemberRow>,
@@ -1023,7 +1027,7 @@ mod tests {
     #[test]
     fn a_host_answers_the_lookups_through_its_own_atelier() {
         struct Docs;
-        impl Atelier for Docs {
+        impl AtelierLike for Docs {
             fn query(&self, _: &str, _: &[&str]) -> Option<Vec<Value>> {
                 Some(vec![])
             }
@@ -1031,7 +1035,7 @@ mod tests {
                 (name == "Util.mac").then(|| vec!["Util".into(), " quit".into()])
             }
         }
-        let iris = Client::from(Docs);
+        let iris = AtelierBasedClient::from(Docs);
         let util = iris.get_int_or_mac("Util").unwrap().unwrap();
         assert_eq!(util.text, "Util\n quit");
         assert!(iris.get_inc("Util").is_none());
