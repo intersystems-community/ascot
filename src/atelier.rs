@@ -649,10 +649,12 @@ impl RawAtelier {
             base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
         );
         let api_root = format!("{scheme}://{host}:{port}{path_prefix}/api/atelier");
+        // Bounded to connect and to start answering; a long answer (`declare` reads 100 classes'
+        // members at once) takes what it takes.
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
                 .timeout_connect(Some(Duration::from_secs(5)))
-                .timeout_global(Some(Duration::from_secs(20)))
+                .timeout_recv_response(Some(Duration::from_secs(60)))
                 .build(),
         );
         let raw = Self {
@@ -818,11 +820,15 @@ impl RawAtelier {
         self.agent.lock().unwrap().clone()
     }
 
-    // A failed request's message. One that says IRIS can't be reached, rather than that IRIS
-    // refused this request, is kept, failing every later request at once.
+    // A failed request's message. One that says IRIS can't be reached, rather than that this
+    // request went wrong, is kept, failing every later request at once.
     fn failed(&self, context: &str, err: ureq::Error) -> String {
         let message = format!("{context} at {} failed: {err}", self.base_url);
-        if !matches!(err, ureq::Error::StatusCode(_)) {
+        use ureq::Error::{ConnectionFailed, HostNotFound, Io, Timeout, Tls};
+        if matches!(
+            err,
+            Io(_) | Timeout(_) | HostNotFound | ConnectionFailed | Tls(_)
+        ) {
             *self.agent.lock().unwrap() = Err(message.clone());
         }
         message
