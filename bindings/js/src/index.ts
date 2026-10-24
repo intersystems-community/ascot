@@ -9,7 +9,8 @@ import * as path from "node:path";
 import type { Root } from "../generated/ascot.js" with { "resolution-mode": "import" };
 import type {
 	ClassInfo,
-	RoutineSource,
+	RoutineInfo,
+	Source,
 	Style,
 } from "../generated/interfaces/iris-ascot-common.js" with {
 	"resolution-mode": "import",
@@ -27,21 +28,33 @@ export type Workspace = {
 		: RawWorkspace[K];
 };
 
-export class IrisConnection {
+/** What ascot asks about code outside the workspace. A failed lookup throws; ascot then takes
+ * what it looked for on trust and says why. */
+export class IrisContext {
 	/** A class's own members and metadata. */
 	async getCls(_cls: string): Promise<ClassInfo | undefined> {
 		return undefined;
 	}
 	/** The text of `name.inc`. */
-	async getInc(_name: string): Promise<RoutineSource | undefined> {
+	async getInc(_name: string): Promise<Source | undefined> {
 		return undefined;
 	}
-	/** The text of `name.int` or `name.mac`: `{ tag: "none" }` if there is no such routine,
-	 * `val: undefined` if its source isn't available. */
-	async getIntOrMac(
-		_name: string,
-	): Promise<{ tag: "none" } | { tag: "some"; val: RoutineSource | undefined }> {
-		return { tag: "some", val: undefined };
+	/** The labels of routine `name`, `undefined` if there is no such routine. */
+	async getRtn(_name: string): Promise<RoutineInfo | undefined> {
+		return { labels: undefined, uri: undefined };
+	}
+}
+
+/** The two Atelier REST API requests, for ascot to make `IrisContext`'s lookups with. A failed
+ * request throws, like a failed lookup. */
+export class Atelier {
+	/** The rows of `/action/query` as a JSON array, each an object keyed by column name. */
+	async query(_sql: string, _params: string[]): Promise<string> {
+		throw new Error("no IRIS connection");
+	}
+	/** The text of `/doc/{name}`, `undefined` if there is no such document. */
+	async getDoc(_name: string): Promise<string | undefined> {
+		throw new Error("no IRIS connection");
 	}
 }
 
@@ -51,7 +64,7 @@ const wasm: Promise<Root> = import("../generated/ascot.js").then(({ instantiate 
 			new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
 		{
 			"iris:ascot/common": {},
-			"iris:ascot/imported": { IrisConnection },
+			"iris:ascot/imported": { IrisContext, Atelier },
 		} as never,
 	),
 );
@@ -84,7 +97,51 @@ function serialize(instance: RawWorkspace): Workspace {
 }
 
 /** A workspace whose calls run one at a time, resolving what it doesn't contain through `iris`. */
-export async function createWorkspace(iris?: IrisConnection, style?: Style): Promise<Workspace> {
+export async function createWorkspace(
+	iris?: IrisContext | Atelier,
+	style?: Style,
+): Promise<Workspace> {
 	const root = await wasm;
-	return serialize(new root.exported.Workspace(iris, style));
+	const env =
+		iris instanceof Atelier
+			? { tag: "atelier" as const, val: new FailingAtelier(iris) }
+			: iris && { tag: "context" as const, val: new FailingContext(iris) };
+	return serialize(new root.exported.Workspace(env, style));
+}
+
+// jco rethrows a thrown `Error` to the caller, and hands ascot only a thrown `{ payload }` as the
+// failure; so what the host throws becomes one.
+class FailingContext extends IrisContext {
+	constructor(private readonly inner: IrisContext) {
+		super();
+	}
+	override getCls(cls: string): Promise<ClassInfo | undefined> {
+		return payload(() => this.inner.getCls(cls));
+	}
+	override getInc(name: string): Promise<Source | undefined> {
+		return payload(() => this.inner.getInc(name));
+	}
+	override getRtn(name: string): Promise<RoutineInfo | undefined> {
+		return payload(() => this.inner.getRtn(name));
+	}
+}
+
+class FailingAtelier extends Atelier {
+	constructor(private readonly inner: Atelier) {
+		super();
+	}
+	override query(sql: string, params: string[]): Promise<string> {
+		return payload(() => this.inner.query(sql, params));
+	}
+	override getDoc(name: string): Promise<string | undefined> {
+		return payload(() => this.inner.getDoc(name));
+	}
+}
+
+async function payload<T>(request: () => Promise<T>): Promise<T> {
+	try {
+		return await request();
+	} catch (e) {
+		throw { payload: e instanceof Error ? e.message : String(e) };
+	}
 }

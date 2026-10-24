@@ -37,10 +37,10 @@
 //! - `bindings.rs`: the WIT-generated types shared by every front end, and the wasm export.
 //! - `render.rs`: Markdown formatting for hover text.
 //! - `lsp.rs`, `mcp.rs`, `main.rs`: front ends (editor protocol, AI-agent protocol, CLI).
-//! - `atelier.rs`: optional live-IRIS lookups for classes not in the workspace (native only).
-//! - `iris.rs`: the `IrisClient` trait behind those, and declaration files answering it offline.
+//! - `atelier.rs`: the `IrisContext` ascot makes out of the two Atelier REST API requests, a
+//!   host's or its own connection's (native only).
+//! - `iris.rs`: declaration files, answering `IrisContext` offline (native only).
 
-#[cfg(not(target_arch = "wasm32"))]
 mod atelier;
 pub mod bindings;
 pub mod check;
@@ -56,9 +56,10 @@ pub mod mcp;
 mod render;
 pub mod style;
 #[cfg(not(target_arch = "wasm32"))]
-pub use atelier::AtelierConnection;
+pub use atelier::RawAtelier;
+pub use atelier::{Atelier, AtelierContext};
 #[cfg(not(target_arch = "wasm32"))]
-pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, IrisClient, open as open_iris};
+pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, open as open_iris};
 pub(crate) use macro_expand::MacroDefinitions;
 pub(crate) use macro_expand::SourceMap;
 use tygr_objectscript::cos::ClassDefinitionHeader;
@@ -73,9 +74,7 @@ use std::{
 use tygr::{Grammar, OLC};
 
 use crate::{
-    bindings::{
-        Diagnostic, InlayHint, IrisConnection, Location, MemberInfo, NameInfo, Position, Style,
-    },
+    bindings::{Diagnostic, InlayHint, Location, MemberInfo, NameInfo, Position, Style},
     check::WorkspaceEnv,
     cos::Routine,
     details::{ClassDetails, MemberKindSpecificDetails, WithRange, with_range_name},
@@ -84,7 +83,7 @@ use crate::{
 // The only thing that decides how a document is analyzed: `.cls` files are checked as classes;
 // `.inc` files are never checked standalone, only pulled in via another file's `#include`; `.mac`
 // and `.int` routines are otherwise identical for our purposes, so share one variant.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DocKind {
     Cls,
     Inc,
@@ -180,23 +179,35 @@ pub struct WorkspaceStruct {
     // Same idea as `class_index`, but for `ROUTINE` header names — see `resolve_rtn_uri`.
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
-    // Labels of routines fetched from IRIS (not open in the workspace), by routine name, with
-    // the text they were parsed from: reused only while the connection hands back that same
-    // text, so this follows the connection's own cache policy rather than adding one. Without
-    // it, every `$$Label^Routine` call into a 15k-line system routine re-expanded and re-parsed
-    // it, and a single file took half a minute.
-    pub(crate) iris_rtn_labels: RefCell<HashMap<String, (String, Option<check::Labels>)>>,
     pub(crate) style: Option<style::KeywordStyles>,
 }
 
-// `bindings::IrisConnection` is a WIT *imported* resource, producible only by a wasm host --
-// every method on it is `unreachable!()` on a native build. Native builds get a real connection
-// through `iris::IrisClient` instead (`Workspace::native`); both share the same method
-// names/signatures, so no call site under `check::env`/`macro_expand` needs to know which.
+/// What the checker asks about code outside the workspace. An `Err` says why a lookup couldn't be
+/// made; `Ok(None)`, that IRIS has no such document.
+pub trait IrisContext: Send + Sync {
+    // `cls`'s own (not inherited) members, superclasses and class-level metadata.
+    fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String>;
+    // The full text of `name.inc`, code included.
+    fn get_inc(&self, name: &str) -> Result<Option<bindings::Source>, String>;
+    fn get_rtn(&self, name: &str) -> Result<Option<bindings::RoutineInfo>, String>;
+}
+
+type IrisHandle = Box<dyn IrisContext>;
+
 #[cfg(target_arch = "wasm32")]
-type IrisHandle = IrisConnection;
-#[cfg(not(target_arch = "wasm32"))]
-type IrisHandle = Box<dyn iris::IrisClient>;
+impl IrisContext for bindings::IrisContext {
+    fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
+        bindings::IrisContext::get_cls(self, cls)
+    }
+
+    fn get_inc(&self, name: &str) -> Result<Option<bindings::Source>, String> {
+        bindings::IrisContext::get_inc(self, name)
+    }
+
+    fn get_rtn(&self, name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+        bindings::IrisContext::get_rtn(self, name)
+    }
+}
 
 impl WorkspaceStruct {
     // Doubles as both open and edit; kind is inferred from `uri`'s extension. Returns the uris
@@ -714,6 +725,22 @@ impl std::ops::Deref for Workspace {
     }
 }
 
+// A routine's labels read from its source; unknown if it doesn't parse. Its `#include`s aren't
+// resolved, so this suits an `.int`, whose macros are already expanded.
+pub(crate) fn routine_info(text: &str, uri: Option<String>) -> bindings::RoutineInfo {
+    let workspace = build_workspace_struct(None, None);
+    let expanded = workspace.expand_rtn(uri.as_deref().unwrap_or_default(), text);
+    let labels = expanded.ok().map(|(routine, map, _)| {
+        let mut labels: Vec<_> = check::labels_of(&map.expanded_olc, &routine, uri.as_deref())
+            .iter()
+            .map(|(name, label)| label.to_label(name.clone()))
+            .collect();
+        labels.sort_by(|a, b| a.name.cmp(&b.name));
+        labels
+    });
+    bindings::RoutineInfo { labels, uri }
+}
+
 fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> WorkspaceStruct {
     WorkspaceStruct {
         doc_cache: HashMap::new(),
@@ -723,7 +750,6 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         inc_index: RefCell::new(HashMap::new()),
         rtn_index: RefCell::new(HashMap::new()),
         iris,
-        iris_rtn_labels: RefCell::new(HashMap::new()),
         style: style.as_ref().map(style::KeywordStyles::new),
     }
 }
@@ -731,20 +757,25 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
 #[cfg(not(target_arch = "wasm32"))]
 impl Workspace {
     /// [`GuestWorkspace::new`](bindings::GuestWorkspace::new), with a native IRIS client.
-    pub fn native(iris: Option<Box<dyn iris::IrisClient>>, style: Option<Style>) -> Self {
+    pub fn native(iris: Option<Box<dyn IrisContext>>, style: Option<Style>) -> Self {
         Workspace(RefCell::new(build_workspace_struct(iris, style)))
     }
 }
 
 impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
-    fn new(iris: Option<IrisConnection>, style: Option<Style>) -> Self {
+    fn new(env: Option<bindings::Env>, style: Option<Style>) -> Self {
         #[cfg(target_arch = "wasm32")]
-        let iris: Option<IrisHandle> = iris;
+        let iris = env.map(|env| -> IrisHandle {
+            match env {
+                bindings::Env::Context(context) => Box::new(context),
+                bindings::Env::Atelier(atelier) => Box::new(AtelierContext::from(atelier)),
+            }
+        });
         #[cfg(not(target_arch = "wasm32"))]
         let iris: Option<IrisHandle> = {
             // Never carries a real connection natively -- use `native` for that.
-            let _ = iris;
+            let _ = env;
             None
         };
         Workspace(RefCell::new(build_workspace_struct(iris, style)))
@@ -1469,18 +1500,18 @@ mod tests {
     struct OccErrorsIris;
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl crate::iris::IrisClient for OccErrorsIris {
-        fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
-            None
+    impl crate::IrisContext for OccErrorsIris {
+        fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
+            Ok(None)
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
-            None
+        fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+            Ok(None)
         }
-        fn get_inc(&self, name: &str) -> Option<bindings::RoutineSource> {
-            (name == "%occErrors").then(|| bindings::RoutineSource {
+        fn get_inc(&self, name: &str) -> Result<Option<bindings::Source>, String> {
+            Ok((name == "%occErrors").then(|| bindings::Source {
                 text: "ROUTINE Errors [Type=INC]\n#define GeneralError 5001\n".to_string(),
                 uri: None,
-            })
+            }))
         }
     }
 
@@ -1641,8 +1672,8 @@ mod tests {
         // property a caller mistakenly wrote instead (`AtEnd`) -- so this must not depend on
         // `top_similar`'s ranking to surface it.
         struct GetterIris;
-        impl crate::iris::IrisClient for GetterIris {
-            fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
+        impl crate::IrisContext for GetterIris {
+            fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
                 let zero = bindings::Position {
                     line: 0,
                     character: 0,
@@ -1671,7 +1702,7 @@ mod tests {
                     uri: None,
                     origin: None,
                 };
-                (cls == "%Fake.Getter").then(|| bindings::ClassInfo {
+                Ok((cls == "%Fake.Getter").then(|| bindings::ClassInfo {
                     doc: String::new(),
                     name: bindings::NameInfo {
                         before: zero,
@@ -1685,13 +1716,13 @@ mod tests {
                     includes: vec![],
                     is_datatype: Some(false),
                     uri: None,
-                })
+                }))
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
-                None
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Ok(None)
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
-                None
+            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Ok(None)
             }
         }
         let workspace = Workspace::native(Some(Box::new(GetterIris)), None);
@@ -1983,13 +2014,13 @@ mod tests {
     fn type_param_not_on_the_real_type_is_reported_via_iris() {
         // IRIS knows the class, and it has no parameters at all.
         struct NoSuchParamIris;
-        impl crate::iris::IrisClient for NoSuchParamIris {
-            fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
+        impl crate::IrisContext for NoSuchParamIris {
+            fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
                 let zero = bindings::Position {
                     line: 0,
                     character: 0,
                 };
-                Some(bindings::ClassInfo {
+                Ok(Some(bindings::ClassInfo {
                     doc: String::new(),
                     name: bindings::NameInfo {
                         before: zero,
@@ -2003,13 +2034,13 @@ mod tests {
                     includes: vec![],
                     is_datatype: Some(true),
                     uri: None,
-                })
+                }))
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
-                None
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Ok(None)
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
-                None
+            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Ok(None)
             }
         }
         let workspace = Workspace::native(Some(Box::new(NoSuchParamIris)), None);
@@ -2117,13 +2148,13 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl crate::iris::IrisClient for MockIrisClient {
-        fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
+    impl crate::IrisContext for MockIrisClient {
+        fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
             let zero = bindings::Position {
                 line: 0,
                 character: 0,
             };
-            Some(bindings::ClassInfo {
+            Ok(Some(bindings::ClassInfo {
                 doc: String::new(),
                 name: bindings::NameInfo {
                     before: zero,
@@ -2137,13 +2168,13 @@ mod tests {
                 includes: vec![],
                 is_datatype: self.is_datatype,
                 uri: None,
-            })
+            }))
         }
-        fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
-            None
+        fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+            Ok(None)
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
-            None
+        fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+            Ok(None)
         }
     }
 
@@ -2385,13 +2416,13 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl crate::iris::IrisClient for DispatchOriginIris {
-        fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
+    impl crate::IrisContext for DispatchOriginIris {
+        fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
             let zero = bindings::Position {
                 line: 0,
                 character: 0,
             };
-            Some(bindings::ClassInfo {
+            Ok(Some(bindings::ClassInfo {
                 doc: String::new(),
                 name: bindings::NameInfo {
                     before: zero,
@@ -2428,13 +2459,13 @@ mod tests {
                 includes: vec![],
                 is_datatype: Some(false),
                 uri: None,
-            })
+            }))
         }
-        fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
-            None
+        fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+            Ok(None)
         }
-        fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
-            None
+        fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+            Ok(None)
         }
     }
 
@@ -3400,13 +3431,13 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn definition_resolves_a_class_reference_via_the_iris_hosts_own_uri() {
         struct ExternalClassIris;
-        impl crate::iris::IrisClient for ExternalClassIris {
-            fn get_cls(&self, cls: &str) -> Option<bindings::ClassInfo> {
+        impl crate::IrisContext for ExternalClassIris {
+            fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
                 let zero = bindings::Position {
                     line: 0,
                     character: 0,
                 };
-                (cls == "Test.External").then(|| bindings::ClassInfo {
+                Ok((cls == "Test.External").then(|| bindings::ClassInfo {
                     doc: String::new(),
                     name: bindings::NameInfo {
                         before: zero,
@@ -3420,13 +3451,13 @@ mod tests {
                     includes: vec![],
                     is_datatype: Some(false),
                     uri: Some("mock:///External.cls".to_string()),
-                })
+                }))
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
-                None
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Ok(None)
             }
-            fn get_int_or_mac(&self, _name: &str) -> Option<Option<bindings::RoutineSource>> {
-                None
+            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Ok(None)
             }
         }
         let workspace = Workspace::native(Some(Box::new(ExternalClassIris)), None);
@@ -3539,22 +3570,25 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn cross_routine_label_call_resolves_via_iris_when_not_in_the_workspace() {
         struct ExternalRoutineIris;
-        impl crate::iris::IrisClient for ExternalRoutineIris {
-            fn get_cls(&self, _cls: &str) -> Option<bindings::ClassInfo> {
-                None
+        impl crate::IrisContext for ExternalRoutineIris {
+            fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
+                Ok(None)
             }
-            fn get_inc(&self, _name: &str) -> Option<bindings::RoutineSource> {
-                None
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Ok(None)
             }
-            fn get_int_or_mac(&self, name: &str) -> Option<Option<bindings::RoutineSource>> {
-                match name {
-                    "External" => Some(Some(bindings::RoutineSource {
-                        text: "ROUTINE External\n\n\tQuit\n\nFoo()\n\tQuit\n".to_string(),
+            fn get_rtn(&self, name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Ok(match name {
+                    "External" => Some(crate::routine_info(
+                        "ROUTINE External\n\n\tQuit\n\nFoo()\n\tQuit\n",
+                        None,
+                    )),
+                    "Compiled" => Some(bindings::RoutineInfo {
+                        labels: None,
                         uri: None,
-                    })),
-                    "Compiled" => Some(None),
+                    }),
                     _ => None,
-                }
+                })
             }
         }
         let workspace = Workspace::native(Some(Box::new(ExternalRoutineIris)), None);
@@ -3581,10 +3615,56 @@ mod tests {
                 ),
                 (
                     Hint,
-                    "The source of routine 'Compiled' isn't available, so calls into it can't be checked precisely"
+                    "The labels of routine 'Compiled' aren't known, so calls into it can't be checked precisely"
                         .to_string()
                 ),
                 (Error, "Too many arguments".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_iris_lookup_is_a_hint_about_why() {
+        struct DeadIris;
+        impl crate::IrisContext for DeadIris {
+            fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
+                Err("connection refused".into())
+            }
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Err("connection refused".into())
+            }
+            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Err("connection refused".into())
+            }
+        }
+        let workspace = Workspace::native(Some(Box::new(DeadIris)), None);
+        let uri = "Main.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE Main\n#include NoSuchInc\n\tDo Foo^External(1)\n\tWrite ##class(Some.Class).Foo()\n\tQuit\n"
+                .to_string(),
+        );
+        let mut diagnostics: Vec<_> = workspace
+            .diagnostics(uri)
+            .into_iter()
+            .map(|d| (d.severity, d.code, d.message))
+            .collect();
+        diagnostics.sort_by(|a, b| a.2.cmp(&b.2));
+        let expected = |what: &str| {
+            (
+                bindings::DiagnosticSeverity::Hint,
+                "A4471".to_string(),
+                format!(
+                    "Cannot look up {what} on the IRIS instance (connection refused), so it is taken on trust"
+                ),
+            )
+        };
+        assert_eq!(
+            diagnostics,
+            [
+                expected("class 'Some.Class'"),
+                expected("include file 'NoSuchInc'"),
+                expected("routine 'External'"),
             ]
         );
     }

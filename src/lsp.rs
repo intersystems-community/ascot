@@ -25,16 +25,15 @@ use lsp_types::{
 };
 
 use crate::{
-    Workspace,
+    IrisContext, Workspace,
     bindings::{
         Diagnostic, DiagnosticSeverity, GuestWorkspace, InlayHint, Position, Range, Style,
         SymbolInfo, SymbolKind,
     },
-    iris::IrisClient,
 };
 
 pub fn run(
-    iris: Option<Box<dyn IrisClient>>,
+    iris: Option<Box<dyn IrisContext>>,
     style: Option<Style>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let (connection, io_threads) = Connection::stdio();

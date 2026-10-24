@@ -220,9 +220,9 @@ ascot analyze --iris user.d.json <PATH>...
 `--iris-namespace` is then optional; if given, it must match the namespace the
 file declares. The file holds every class's superclasses, members and their
 signatures and types, as a live connection would report them (no method code),
-and the full source of every `.inc` file and routine, or, for a routine without
-source (e.g. only its OBJ), that it exists. Regenerate it after the instance's
-code changes.
+the full source of every `.inc` file, and the labels and their arguments of every
+routine, or, for a routine without source (e.g. only its OBJ), that it exists.
+Regenerate it after the instance's code changes.
 
 ### Style
 

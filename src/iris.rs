@@ -1,5 +1,4 @@
-//! `IrisClient`, the lookups `lib.rs` makes for code outside the workspace, and `open`, which
-//! answers an `--iris` argument with a live `atelier::AtelierConnection` (a URL) or a
+//! `open`, which answers an `--iris` argument with a live `RawAtelier` (a URL) or a
 //! `Declarations` file `ascot declare` wrote (a path), which never connects to anything.
 
 use std::collections::BTreeMap;
@@ -7,32 +6,18 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::atelier::AtelierConnection;
-use crate::bindings::{ClassInfo, RoutineSource};
-
-pub trait IrisClient: Send + Sync {
-    // `cls`'s own (not inherited) members, superclasses, and other class-level metadata --
-    // everything ascot needs to resolve a member, "did you mean" a name, or check a type
-    // parameter, in one round trip. `None` if `cls` doesn't exist (or can't be reached).
-    fn get_cls(&self, cls: &str) -> Option<ClassInfo>;
-    // The raw source of the include file `name.inc` (an `#include`d name), for one that isn't
-    // already open in the workspace.
-    fn get_inc(&self, name: &str) -> Option<RoutineSource>;
-    // The raw source of the routine `name` (`.int` if it exists, else `.mac`), for a `Label^name`
-    // call into a routine that isn't open in the workspace: `None` if there is no such routine,
-    // `Some(None)` if there is but its source isn't available.
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>>;
-}
+use crate::IrisContext;
+use crate::atelier::{AtelierContext, RawAtelier};
+use crate::bindings::{ClassInfo, RoutineInfo, Source};
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
 /// A URL is a live connection (checked up front), anything else a declaration file's path.
 /// `namespace` defaults to `%SYS` for a URL; for a file it must match the one declared.
-pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, String> {
+pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisContext>, String> {
     if iris.contains("://") {
-        let conn = AtelierConnection::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
-        conn.check()?;
-        return Ok(Box::new(conn));
+        let raw = RawAtelier::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
+        return Ok(Box::new(AtelierContext::from(raw)));
     }
     let declarations = Declarations::load(Path::new(iris))?;
     if let Some(namespace) = namespace
@@ -46,9 +31,9 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisClient>, 
     Ok(Box::new(declarations))
 }
 
-pub(crate) const DECLARATIONS_VERSION: u32 = 2;
+pub(crate) const DECLARATIONS_VERSION: u32 = 3;
 
-/// One namespace as `ascot declare` writes it: each `IrisClient` lookup as a map from its
+/// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
 /// argument to its answer.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Declarations {
@@ -56,10 +41,9 @@ pub struct Declarations {
     pub namespace: String,
     pub classes: BTreeMap<String, ClassInfo>,
     /// `.inc` files by name without the extension.
-    pub includes: BTreeMap<String, RoutineSource>,
-    /// Routines by name without the extension: the `.int` where there is one, else the `.mac`;
-    /// `None` for one whose source isn't available (e.g. only its OBJ).
-    pub routines: BTreeMap<String, Option<RoutineSource>>,
+    pub includes: BTreeMap<String, Source>,
+    /// Routines by name without the extension.
+    pub routines: BTreeMap<String, RoutineInfo>,
 }
 
 impl Declarations {
@@ -89,17 +73,17 @@ impl Declarations {
     }
 }
 
-impl IrisClient for Declarations {
-    fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
-        self.classes.get(cls).cloned()
+impl IrisContext for Declarations {
+    fn get_cls(&self, cls: &str) -> Result<Option<ClassInfo>, String> {
+        Ok(self.classes.get(cls).cloned())
     }
 
-    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
-        self.includes.get(name).cloned()
+    fn get_inc(&self, name: &str) -> Result<Option<Source>, String> {
+        Ok(self.includes.get(name).cloned())
     }
 
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
-        self.routines.get(name).cloned()
+    fn get_rtn(&self, name: &str) -> Result<Option<RoutineInfo>, String> {
+        Ok(self.routines.get(name).cloned())
     }
 }
 
@@ -136,8 +120,8 @@ mod tests {
         path
     }
 
-    fn source(text: &str) -> RoutineSource {
-        RoutineSource {
+    fn source(text: &str) -> Source {
+        Source {
             text: text.to_string(),
             uri: None,
         }
@@ -157,17 +141,24 @@ mod tests {
             routines: [
                 (
                     "Lib".to_string(),
-                    Some(source(
+                    crate::routine_info(
                         "ROUTINE Lib [Type=INT]\n Quit\nPlain\n Quit\nWithArgs(a,&b,c...)\n \
                          Quit\nProc(a,b) [x,y] {\n Quit\n}\n",
-                    )),
+                        None,
+                    ),
                 ),
                 // Doesn't parse, so its labels are unknown and any call into it is taken on trust.
                 (
                     "Unparsed".to_string(),
-                    Some(source("ROUTINE Unparsed [Type=INT]\n{\n")),
+                    crate::routine_info("ROUTINE Unparsed [Type=INT]\n{\n", None),
                 ),
-                ("Compiled".to_string(), None),
+                (
+                    "Compiled".to_string(),
+                    RoutineInfo {
+                        labels: None,
+                        uri: None,
+                    },
+                ),
             ]
             .into(),
         };
@@ -175,14 +166,14 @@ mod tests {
         let loaded = Declarations::load(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(loaded.namespace, "USER");
-        assert_eq!(loaded.get_cls("A.B"), Some(class_info("A.B")));
-        assert_eq!(loaded.get_cls("A.C"), None);
+        assert_eq!(loaded.get_cls("A.B"), Ok(Some(class_info("A.B"))));
+        assert_eq!(loaded.get_cls("A.C"), Ok(None));
         assert_eq!(
             loaded.get_inc("MyInc"),
-            Some(declarations.includes["MyInc"].clone())
+            Ok(Some(declarations.includes["MyInc"].clone()))
         );
-        assert_eq!(loaded.get_inc("%occErrors"), None);
-        assert_eq!(loaded.get_int_or_mac("Nope"), None);
+        assert_eq!(loaded.get_inc("%occErrors"), Ok(None));
+        assert_eq!(loaded.get_rtn("Nope"), Ok(None));
 
         use crate::bindings::{DiagnosticSeverity, GuestWorkspace};
         let check = |body: &str| {
