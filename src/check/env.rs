@@ -15,8 +15,8 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    ops::Deref,
+    collections::{HashMap, HashSet},
+    ops::{ControlFlow, Deref},
 };
 
 use tygr::{IntoInner, OLC, Range};
@@ -26,7 +26,7 @@ use crate::check::errors::*;
 use crate::check::types::*;
 use crate::cos::{CodeMode, MethodLanguage};
 use crate::details::{
-    MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
+    MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, Visible, WithRange,
 };
 use crate::{DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos};
 
@@ -41,12 +41,230 @@ pub struct MemberTy {
     pub location: Option<bindings::Location>,
 }
 
-enum GeneratableKind {
-    Property(Ty),
-    // The properties it's defined `On`, in declaration order — the value arguments its
-    // generated `Open`/`Exists`/`Delete` methods take, one per property.
-    Index(Vec<String>),
+// A member as declared, and the class declaring it, which its type parameters resolve against.
+struct Found {
+    ty: MemberTy,
+    origin: String,
 }
+
+// Why `lookup` has no member to give.
+enum LookupError {
+    Absent,
+    NoSuchClass(String),
+    // The chain reached a class nobody can see before any had the member, so it may be anything.
+    Unverified,
+    InstanceOnly,
+}
+
+fn generated_procedure(
+    normal_args: Vec<NormalArg>,
+    variadic: bool,
+    out: Option<Ty>,
+    is_instance_only: bool,
+) -> MemberTy {
+    MemberTy {
+        is_instance_only,
+        multidimensional: false,
+        ty: HOTy::Procedure(Arc::new(TyProcedure {
+            normal_args,
+            variadic_arg: variadic.then(|| VariadicArg::new(ArgMode::Default, "args".into(), None)),
+            out,
+            procedure_block: Some(vec![]),
+            uri: None,
+            declared_at: None,
+        })),
+        location: None,
+    }
+}
+
+// An IRIS-reported member of `cls`, typed and masked by its declaring class.
+fn found_in_iris(member: bindings::MemberInfo, cls: &str) -> Option<Found> {
+    let origin = member.origin.clone().unwrap_or_else(|| cls.to_string());
+    if crate::mask::dropped(&origin, &member.name.content) {
+        return None;
+    }
+    let correction = crate::mask::correction(&origin, &member.name.content);
+    let mut ty = MemberTy::try_from(member).ok()?;
+    if let Some(correction) = correction {
+        correction.apply(&mut ty.ty);
+    }
+    Some(Found { ty, origin })
+}
+
+// A class as a check run sees it; `Unknown`: no IRIS, or a lookup that failed (see `iris_cls`).
+enum Resolved {
+    Workspace(String, Arc<crate::ClassDetails>),
+    Iris(Option<bindings::ClassInfo>),
+    Unknown,
+}
+
+// `mem` among `info`'s flattened members; `%New` takes the class's `%OnNew`'s arguments.
+fn iris_member(info: &bindings::ClassInfo, cls: &str, mem: &str, ns: Visible) -> Option<Found> {
+    if mem.eq_ignore_ascii_case("%New")
+        && ns == Visible::Method
+        && let Some(on_new) = info.members.iter().find(|m| m.name.content == "%OnNew")
+        && let Some(on_new) = found_in_iris(on_new.clone(), cls)
+        && let Ok(TyProcedureOrAny::Procedure(proc)) = on_new.ty.ty.as_procedure()
+    {
+        return Some(Found {
+            ty: new_from_on_new(&proc),
+            origin: on_new.origin,
+        });
+    }
+    let named = |m: &&bindings::MemberInfo| {
+        m.name.content.eq_ignore_ascii_case(mem)
+            || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
+    };
+    let found = info
+        .members
+        .iter()
+        .find(|m| named(m) && MemberNs::of_info(&m.kind) == ns.into())
+        .or_else(|| {
+            // `..X(...)` also reaches a property, which IRIS then requires to be multidimensional.
+            (ns == Visible::Method)
+                .then(|| {
+                    info.members
+                        .iter()
+                        .find(|m| named(m) && MemberNs::of_info(&m.kind) == MemberNs::Property)
+                })
+                .flatten()
+        })?;
+    found_in_iris(found.clone(), cls)
+}
+
+// Past a class nobody can see, the members every object class gets from `%SystemBase`/
+// `%RegisteredObject` are taken as present and untyped -- unless `cls` is another hierarchy root.
+fn registered_object_member(cls: &str, mem: &str, methods: bool) -> Option<Found> {
+    if !methods
+        || !REGISTERED_OBJECT_MEMBERS.contains(&mem)
+        || ["%Library.DataType", "%Library.FunctionalIndex"].contains(&cls)
+    {
+        return None;
+    }
+    let ty = if mem == "%New" {
+        generated_procedure(vec![], true, Some(Ty::This), false)
+    } else {
+        MemberTy {
+            is_instance_only: false,
+            ty: HOTy::Value(Ty::Any),
+            ..MemberTy::default()
+        }
+    };
+    Some(Found {
+        ty,
+        origin: cls.to_string(),
+    })
+}
+
+fn new_from_on_new(on_new: &TyProcedure) -> MemberTy {
+    MemberTy {
+        is_instance_only: false,
+        multidimensional: false,
+        ty: HOTy::Procedure(Arc::new(TyProcedure {
+            normal_args: on_new.normal_args.clone(),
+            variadic_arg: on_new.variadic_arg.clone(),
+            out: Some(Ty::This),
+            procedure_block: Some(vec![]),
+            uri: on_new.uri.clone(),
+            declared_at: on_new.declared_at,
+        })),
+        location: None,
+    }
+}
+
+// `Query Q`'s `QFunc` (its result set) and `QExecute`/`QFetch`/... family; the query's own
+// arguments aren't tracked.
+fn query_methods() -> Vec<(String, MemberTy)> {
+    let method = |suffix: &str, out: &str| {
+        let ty = generated_procedure(vec![], true, Some(Ty::from(out)), false);
+        (suffix.to_string(), ty)
+    };
+    std::iter::once(method("Func", "%SQL.StatementResult"))
+        .chain(
+            [
+                "Execute",
+                "Fetch",
+                "FetchRows",
+                "Close",
+                "GetInfo",
+                "GetODBCInfo",
+                "Prepare",
+                "SendODBC",
+            ]
+            .into_iter()
+            .map(|suffix| method(suffix, "%Status")),
+        )
+        .collect()
+}
+
+// A generated property method: suffix, argument, result (`Prop`: the property's type), instance-only.
+struct Shape(&'static str, Arg, Out, bool);
+
+#[derive(Clone, Copy)]
+enum Arg {
+    None,
+    Value,
+    Id,
+    Concurrency,
+}
+
+#[derive(Clone, Copy)]
+enum Out {
+    Prop,
+    String,
+    Status,
+    Boolean,
+}
+
+impl Shape {
+    fn procedure(&self, prop: &Ty) -> MemberTy {
+        let Shape(_, arg, out, is_instance_only) = *self;
+        let one = |mode, name: &str, ty| vec![NormalArg::new(mode, name.into(), Some(ty), None)];
+        let args = match arg {
+            Arg::None => vec![],
+            Arg::Value => one(ArgMode::Default, "value", prop.clone()),
+            Arg::Id => one(ArgMode::Default, "id", Ty::from("%String")),
+            Arg::Concurrency => one(ArgMode::Output, "concurrency", Ty::from("%Integer")),
+        };
+        let out = match out {
+            Out::Prop => prop.clone(),
+            Out::String => Ty::from("%String"),
+            Out::Status => Ty::from("%Status"),
+            Out::Boolean => Ty::from("%Boolean"),
+        };
+        generated_procedure(args, false, Some(out), is_instance_only)
+    }
+}
+
+const ACCESSORS: &[Shape] = &[
+    Shape("Get", Arg::None, Out::Prop, true),
+    Shape("Set", Arg::Value, Out::Status, true),
+    Shape("Reset", Arg::None, Out::Status, true),
+    Shape("IsModified", Arg::None, Out::Boolean, true),
+    Shape("GetStored", Arg::Id, Out::Prop, false),
+];
+
+const OBJECT_ACCESSORS: &[Shape] = &[
+    Shape("GetObject", Arg::Concurrency, Out::Prop, true),
+    Shape("GetObjectId", Arg::None, Out::String, true),
+    Shape("SetObject", Arg::Value, Out::Status, true),
+    Shape("SetObjectId", Arg::Id, Out::Status, true),
+    Shape("NewObject", Arg::None, Out::Prop, true),
+    Shape("GetSwizzled", Arg::None, Out::Prop, true),
+];
+
+const CONVERSIONS: &[Shape] = &[
+    Shape("IsValid", Arg::Value, Out::Status, false),
+    Shape("LogicalToDisplay", Arg::Value, Out::String, false),
+    Shape("LogicalToOdbc", Arg::Value, Out::String, false),
+    Shape("LogicalToStorage", Arg::Value, Out::String, false),
+    Shape("LogicalToXSD", Arg::Value, Out::String, false),
+    Shape("Normalize", Arg::Value, Out::Prop, false),
+    Shape("DisplayToLogical", Arg::Value, Out::Prop, false),
+    Shape("OdbcToLogical", Arg::Value, Out::Prop, false),
+    Shape("StorageToLogical", Arg::Value, Out::Prop, false),
+    Shape("XSDToLogical", Arg::Value, Out::Prop, false),
+];
 
 impl Default for MemberTy {
     fn default() -> Self {
@@ -208,20 +426,17 @@ impl TryFrom<bindings::MemberInfo> for MemberTy {
     }
 }
 
-// Every non-`Dispatch*`, non-`%New` member `%Library.SystemBase` and `%Library.RegisteredObject`
-// contribute to every object class -- cross-checked against InterSystems' own class reference
+// Every member `%Library.SystemBase` and `%Library.RegisteredObject` contribute
+// to every object class, taken as present when that chain can't be resolved (see
+// `registered_object_member`) -- cross-checked against InterSystems' own class reference
 // (docs.intersystems.com, `%25CSP.Documatic.cls?LIBRARY=%25SYS&CLASSNAME=...`), not memory:
 // - https://docs.intersystems.com/irisforhealth20262/csp/documatic/%25CSP.Documatic.cls?LIBRARY=%25SYS&CLASSNAME=%25Library.SystemBase
 // - https://docs.intersystems.com/irisforhealth20262/csp/documatic/%25CSP.Documatic.cls?LIBRARY=%25SYS&CLASSNAME=%25Library.RegisteredObject
-// `%New` is excluded: it already gets its own, more precise handling above (bridging into
-// `%OnNew`'s return type). The `Dispatch*` hooks are excluded too: `%DispatchMethod`/
-// `%DispatchClassMethod`/`%DispatchGetProperty`/`%DispatchSetProperty` already get their own,
-// more precise handling in `dispatch_member`, and the remaining three
-// (`%DispatchGetModified`/`%DispatchSetModified`/`%DispatchSetMultidimProperty`) are abstract
-// override points, essentially never called directly, so aren't worth the same treatment.
+// Minus the `%Dispatch*` hooks and `%OnNew`, whose defaults mask.json drops.
 const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
     // %Library.SystemBase
     "%ClassIsLatestVersion",
+    "%New",
     "%ClassName",
     "%Extends",
     "%GetParameter",
@@ -240,242 +455,73 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
     "%ValidateObject",
 ];
 
-// `..X(...)` is a method (or a multidimensional property) before it is a plain property `X`;
-// bare `..X` the other way round -- IRIS keeps the two apart by syntax.
-fn lookup_order(kind: AccessKind) -> &'static [MemberNs] {
+// IRIS keeps the two apart by syntax: `..X(...)` is a method before a property, bare `..X` a
+// property only -- never a method, even one without arguments.
+fn lookup_ns(kind: AccessKind) -> Visible {
     match kind {
-        AccessKind::Call => &[MemberNs::HigherOrder, MemberNs::Property],
-        AccessKind::Get | AccessKind::Set => &[MemberNs::Property, MemberNs::HigherOrder],
+        AccessKind::Call => Visible::Method,
+        AccessKind::Get | AccessKind::Set => Visible::Property,
     }
 }
 
 impl<'a> WorkspaceEnv<'a> {
-    // A `Parameter` is a simple constant-like value, so none of the method-dispatch fallbacks
-    // below apply to it.
-    fn get_member(
-        &self,
-        obj: &str,
-        mem: &str,
-        is_parameter: bool,
-        kind: AccessKind,
-        is_instance: bool,
-    ) -> Option<MemberTy> {
-        if is_parameter {
-            return self
-                .get_member_internal(obj, mem, &[MemberNs::Parameter])
-                .or_else(|| self.unverified_any());
-        }
-        if mem == "%New" {
-            // Every object class has `%New`. It takes the arguments of a class's own `%OnNew`,
-            // else its own; failing to resolve either (a superclass outside the workspace, no
-            // IRIS connection) leaves them unchecked rather than making `%New` unverified.
-            let was_unverified = self.unverified.get();
-            let proc: TyProcedureOrAny = self
-                .find_override(obj, "%OnNew", "%Library.RegisteredObject")
-                .or_else(|| self.get_member_internal(obj, "%New", &[MemberNs::HigherOrder]))
-                .and_then(|mem| mem.ty.as_procedure().ok())
-                .unwrap_or_default();
-            self.unverified.set(was_unverified);
-            let mut proc = match proc {
-                TyProcedureOrAny::Procedure(p) => p.as_ref().clone(),
-                TyProcedureOrAny::Any => TyProcedure {
-                    normal_args: vec![],
-                    variadic_arg: Some(VariadicArg::new(ArgMode::Default, "args".into(), None)),
-                    out: None,
-                    procedure_block: None,
-                    uri: None,
-                    declared_at: None,
-                },
-            };
-            proc.out = Some(Ty::from(obj.to_string()));
-            Some(MemberTy {
-                is_instance_only: false,
-                ty: HOTy::Procedure(Arc::new(proc)),
-                ..MemberTy::default()
-            })
-        } else if REGISTERED_OBJECT_MEMBERS.contains(&mem)
-            && self.confirmed_outside_system_base(obj) != Some(true)
-        {
-            // Every *object* class ultimately inherits these from `%Library.SystemBase`/
-            // `%Library.RegisteredObject` (via `%RegisteredObject`/`%SerialObject`) -- see
-            // `REGISTERED_OBJECT_MEMBERS`. Hardcoded rather than relying on the `extends` chain
-            // actually reaching them, same reasoning as `%New` above: that chain is routinely
-            // unresolvable (a system class outside the workspace, no IRIS connection) even though
-            // the members are always there.
-            // Excluded when `confirmed_outside_system_base` rules it out -- a confirmed datatype
-            // (`%String`, `%RawString`, ...), a functional-index class, or a class with no real
-            // object ancestor at all (an SQL view class, or an isolated one like `%Library.Any`):
-            // see that function's own doc comment for the class-hierarchy roots this reflects.
-            Some(MemberTy {
-                is_instance_only: false,
-                ty: HOTy::Value(Ty::Any),
-                ..MemberTy::default()
-            })
-        } else if let Some(mem) = self.get_member_internal(obj, mem, lookup_order(kind)) {
-            Some(mem)
-        } else {
-            self.dispatch_member(obj, kind, is_instance)
-                .or_else(|| self.generated_member(obj, mem))
-                .or_else(|| self.unverified_any())
-        }
-    }
-
-    // IRIS's dynamic-dispatch methods -- see
-    // https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GOOP_dynamic_dispatch
-    // Only `%DispatchGetProperty`'s own return type feeds into the result; the others just
-    // signal "dynamically resolvable" and resolve to `Any`.
-    //
-    // A direct multidimensional property reference isn't distinguished from an ordinary call or
-    // set with the wrong arity, so `%DispatchSetMultidimProperty` isn't consulted.
-    fn dispatch_member(&self, obj: &str, kind: AccessKind, is_instance: bool) -> Option<MemberTy> {
-        match kind {
-            AccessKind::Get => {
-                let mem = self.find_dispatch_hook(obj, "%DispatchGetProperty")?;
-                let ty = match mem.ty.as_procedure().ok()? {
-                    TyProcedureOrAny::Procedure(ty_procedure) => {
-                        // No declared return type (the common case -- a dispatch method's
-                        // whole point is not knowing the resolved property's type ahead of
-                        // time) falls back to `Any`, rather than treating it as unresolved.
-                        HOTy::Value(ty_procedure.out.clone().unwrap_or_default())
-                    }
-                    TyProcedureOrAny::Any => HOTy::Value(Ty::Any),
-                };
-                Some(MemberTy {
-                    is_instance_only: true,
-                    ty,
-                    ..MemberTy::default()
-                })
-            }
-            AccessKind::Set => {
-                self.find_dispatch_hook(obj, "%DispatchSetProperty")?;
-                Some(MemberTy {
-                    is_instance_only: true,
-                    ty: HOTy::Value(Ty::Any),
-                    ..MemberTy::default()
-                })
-            }
-            AccessKind::Call => {
-                let dispatch = if is_instance {
-                    "%DispatchMethod"
-                } else {
-                    "%DispatchClassMethod"
-                };
-                self.find_dispatch_hook(obj, dispatch)?;
-                Some(MemberTy {
-                    is_instance_only: is_instance,
-                    ty: HOTy::Value(Ty::Any),
-                    ..MemberTy::default()
-                })
-            }
-        }
-    }
-
-    // Same lookup as `get_member_internal`, but only for the 4 dispatch hooks above: every
-    // `%RegisteredObject`/`%SerialObject` inherits a meaningless default implementation of them
-    // from `%Library.SystemBase`, so a match only counts if its declaring class differs.
-    fn find_dispatch_hook(&self, cls: &str, mem: &str) -> Option<MemberTy> {
-        self.find_override(cls, mem, "%Library.SystemBase")
-    }
-
-    // `mem` as `cls` or an ancestor declares it, other than the default every class inherits
-    // from `default_origin`.
-    fn find_override(&self, cls: &str, mem: &str, default_origin: &str) -> Option<MemberTy> {
-        self.find_override_in(cls, mem, default_origin, &mut HashSet::new())
-    }
-
-    fn find_override_in(
-        &self,
-        cls: &str,
-        mem: &str,
-        default_origin: &str,
-        seen: &mut HashSet<String>,
-    ) -> Option<MemberTy> {
-        if !seen.insert(cls.to_string()) {
-            return None;
-        }
-        if let Some(uri) = self.resolve_cls_uri(cls) {
-            let details = self.workspace.cls_details(&uri).ok()?;
-            if let Some(member) = details.member(MemberNs::HigherOrder, mem) {
-                let mut ty: MemberTy = member.deref().try_into().ok()?;
-                ty.location = Some(bindings::Location::new(uri.clone(), member.range));
-                return Some(ty);
-            }
-            self.qualified_extends(cls, &details)
-                .into_iter()
-                .find_map(|sup| self.find_override_in(&sup, mem, default_origin, seen))
-        } else {
-            self.iris_member(cls, mem, &[MemberNs::HigherOrder], Some(default_origin))
-        }
-    }
-
-    fn generatable_kind(&self, cls: &str, name: &str) -> Option<GeneratableKind> {
-        self.generatable_kind_in(cls, name, &mut HashSet::new())
-    }
-
-    fn generatable_kind_in(
-        &self,
-        cls: &str,
-        name: &str,
-        seen: &mut HashSet<String>,
-    ) -> Option<GeneratableKind> {
-        if !seen.insert(cls.to_string()) {
-            return None;
-        }
-        let uri = self.resolve_cls_uri(cls)?;
-        let details = self.workspace.cls_details(&uri).ok()?;
-        if let Some(member) = details
-            .member(MemberNs::Property, name)
-            .or_else(|| details.member(MemberNs::HigherOrder, name))
-            .or_else(|| details.member(MemberNs::Other, name))
-        {
-            return match &member.deref().kind {
-                MemberKindSpecificDetails::Property { ty, .. } => {
-                    Some(GeneratableKind::Property(ty.clone().unwrap_or_default()))
-                }
-                MemberKindSpecificDetails::Index { on_properties } => {
-                    Some(GeneratableKind::Index(on_properties.clone()))
-                }
-                _ => None,
-            };
-        }
-        self.qualified_extends(cls, &details)
-            .into_iter()
-            .find_map(|sup| self.generatable_kind_in(&sup, name, seen))
-    }
-
-    // Best-effort: a superclass outside the workspace (or an IRIS-only generated member) isn't
-    // represented.
+    // The properties, methods and parameters along `cls`'s chain -- all ObjectScript can name.
     pub(crate) fn member_names(&self, cls: &str) -> Vec<String> {
-        let mut seen_classes = HashSet::new();
         let mut names = Vec::new();
-        self.collect_member_names(cls, &mut seen_classes, &mut names);
+        self.walk::<()>(cls, true, &mut |cls, resolved| match resolved {
+            Resolved::Workspace(_, details) => {
+                let members = &details.members;
+                names.extend(
+                    (members.property.keys())
+                        .chain(members.higher_order.keys())
+                        .chain(members.parameter.keys())
+                        .cloned(),
+                );
+                names.extend(self.generated_members(details).keys().cloned());
+                ControlFlow::Continue(true)
+            }
+            Resolved::Iris(info) => {
+                names.extend(
+                    info.iter()
+                        .flat_map(|info| &info.members)
+                        .filter(|m| {
+                            matches!(
+                                MemberNs::of_info(&m.kind),
+                                MemberNs::Property | MemberNs::HigherOrder | MemberNs::Parameter
+                            ) && !crate::mask::dropped(
+                                m.origin.as_deref().unwrap_or(cls),
+                                &m.name.content,
+                            )
+                        })
+                        .map(|m| m.name.content.clone()),
+                );
+                ControlFlow::Continue(false)
+            }
+            Resolved::Unknown => ControlFlow::Continue(false),
+        });
         names
     }
 
-    fn collect_member_names(&self, cls: &str, seen: &mut HashSet<String>, names: &mut Vec<String>) {
-        if !seen.insert(cls.to_string()) {
-            return;
+    // "Did you mean" candidates for `mem`, and whether `cls` has `%Get` to suggest instead.
+    pub(crate) fn member_suggestions(&self, cls: &str, mem: &str) -> (Vec<String>, bool) {
+        let names = self.member_names(cls);
+        let mut suggestions = crate::check::top_similar(mem, names.iter().map(String::as_str), 5);
+        // Every `%Get`-style accessor regardless of score: a misspelled property is often one.
+        for name in &names {
+            if name.starts_with("%Get") && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(name))
+            {
+                suggestions.push(name.clone());
+            }
         }
-        let Some(uri) = self.resolve_cls_uri(cls) else {
-            // Not a workspace class (e.g. a datatype like %Integer) -- IRIS is the only other
-            // source, and doesn't expose superclass-walking the way `cls_details.extends` does,
-            // so this is a single, non-recursive lookup rather than a further `collect_*` call.
-            names.extend(
-                self.iris_cls(cls)
-                    .flatten()
-                    .into_iter()
-                    .flat_map(|ci| ci.members)
-                    .map(|m| m.name.content),
-            );
-            return;
-        };
-        let Ok(details) = self.workspace.cls_details(&uri) else {
-            return;
-        };
-        names.extend(details.members_by_name.keys().map(|(_, name)| name.clone()));
-        for sup in self.qualified_extends(cls, &details) {
-            self.collect_member_names(&sup, seen, names);
-        }
+        let has_get = self
+            .lookup(
+                &ClsOrIns::Ins(ClassTy::from(cls.to_string())),
+                "%Get",
+                Visible::Method,
+                true,
+            )
+            .is_ok();
+        (suggestions, has_get)
     }
 
     // Every class named in `cls`'s own or any ancestor's `[PropertyClass = ...]` -- each one's
@@ -483,221 +529,222 @@ impl<'a> WorkspaceEnv<'a> {
     // https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class_propertyclass,
     // "Effect on Subclasses").
     pub(crate) fn property_class_names(&self, cls: &str) -> Vec<String> {
-        let mut seen = HashSet::new();
         let mut classes = Vec::new();
-        self.collect_property_classes(cls, &mut seen, &mut classes);
+        self.walk::<()>(cls, true, &mut |_, resolved| {
+            match resolved {
+                Resolved::Workspace(_, details) => {
+                    classes.extend(details.property_class_names.iter().cloned());
+                }
+                Resolved::Iris(Some(info)) => {
+                    classes.extend(info.property_class_names.iter().cloned())
+                }
+                _ => {}
+            }
+            ControlFlow::Continue(true)
+        });
         classes
     }
 
-    fn collect_property_classes(
+    // The methods IRIS generates for `details`' own properties, indices and queries, built on the
+    // first miss among the declared ones. Over-approximates: what IRIS emits is generator-dependent.
+    fn generated_members(&self, details: &crate::ClassDetails) -> Rc<HashMap<String, MemberTy>> {
+        let cls = &details.name.it;
+        if let Some(built) = self.generated.borrow().get(cls) {
+            return built.clone();
+        }
+        let mut generated: HashMap<String, MemberTy> = HashMap::new();
+        let mut add = |name: &str, family: Vec<(String, MemberTy)>| {
+            for (suffix, method) in family {
+                generated.entry(format!("{name}{suffix}")).or_insert(method);
+            }
+        };
+        for (name, property) in &details.members.property {
+            if let MemberKindSpecificDetails::Property { ty, .. } = &property.kind {
+                add(name, self.property_methods(ty.clone().unwrap_or_default()));
+            }
+        }
+        for (name, index) in &details.members.index {
+            if let MemberKindSpecificDetails::Index { on_properties } = &index.kind {
+                add(name, self.index_methods(&details.name.it, on_properties));
+            }
+        }
+        for name in details.members.query.keys() {
+            add(name, query_methods());
+        }
+        // `%New` takes the class's own `%OnNew`'s arguments, which the dictionary doesn't record.
+        if details.members.higher_order.contains_key("%OnNew")
+            && let Some(uri) = self.resolve_cls_uri(cls)
+            && let Some(on_new) = self.declared_member(&uri, details, "%OnNew", Visible::Method)
+            && let Ok(TyProcedureOrAny::Procedure(on_new)) = on_new.ty.as_procedure()
+        {
+            add("", vec![("%New".to_string(), new_from_on_new(&on_new))]);
+        }
+        let generated = Rc::new(generated);
+        self.generated
+            .borrow_mut()
+            .insert(cls.clone(), generated.clone());
+        generated
+    }
+
+    // `Property X As <ty>`'s accessors, object accessors for a reference, and the type class's
+    // class methods projected under `X` (`%String`'s `LogicalToDisplay` becomes `XLogicalToDisplay`).
+    fn property_methods(&self, ty: Ty) -> Vec<(String, MemberTy)> {
+        let family = |shapes: &[Shape]| -> Vec<(String, MemberTy)> {
+            shapes
+                .iter()
+                .map(|shape| (shape.0.to_string(), shape.procedure(&ty)))
+                .collect()
+        };
+        let type_class = match &ty {
+            Ty::OREF(obj) => Some(obj.name().to_string()),
+            _ => None,
+        };
+        // Object accessors need a reference type; assume one when the type can't be resolved.
+        let is_datatype = type_class.as_deref().map(|cls| self.is_datatype(cls));
+        let mut methods = family(ACCESSORS);
+        if is_datatype.is_some_and(|is_datatype| is_datatype != Some(true)) {
+            methods.extend(family(OBJECT_ACCESSORS));
+        }
+        if is_datatype == Some(Some(false)) {
+            return methods;
+        }
+        let (projected, complete) = match type_class.as_deref() {
+            Some(cls) => self.class_methods(cls),
+            None => (HashMap::new(), false),
+        };
+        methods.extend(
+            projected
+                .into_iter()
+                .filter(|(name, _)| !matches!(name.as_str(), "LogicalToJSON" | "JSONToLogical")),
+        );
+        // An unresolvable or undeclared type gets `%String`'s conversion family.
+        if !complete {
+            methods.extend(family(CONVERSIONS));
+        }
+        methods
+    }
+
+    // `cls`'s class methods, own and inherited, nearest first; `false` past a class nobody can see.
+    fn class_methods(&self, cls: &str) -> (HashMap<String, MemberTy>, bool) {
+        let mut methods: HashMap<String, MemberTy> = HashMap::new();
+        let mut complete = true;
+        self.walk::<()>(cls, true, &mut |cls, resolved| match resolved {
+            Resolved::Workspace(uri, details) => {
+                for (name, member) in &details.members.higher_order {
+                    if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
+                        && method.is_class_method
+                        && let Some(ty) = self.declared_member(uri, details, name, Visible::Method)
+                    {
+                        methods.entry(name.clone()).or_insert(ty);
+                    }
+                }
+                ControlFlow::Continue(true)
+            }
+            Resolved::Iris(info) => {
+                for member in info.iter().flat_map(|info| &info.members) {
+                    if matches!(member.kind, MemberKind::ClassMethod(_))
+                        && let Some(found) = found_in_iris(member.clone(), cls)
+                    {
+                        methods
+                            .entry(member.name.content.clone())
+                            .or_insert(found.ty);
+                    }
+                }
+                ControlFlow::Continue(false)
+            }
+            Resolved::Unknown => {
+                complete = false;
+                ControlFlow::Continue(false)
+            }
+        });
+        (methods, complete)
+    }
+
+    // `Index AB On (A, B)` generates `ABOpen(aVal As <A>, bVal As <B>, concurrency, ByRef sc)`,
+    // `ABExists` and `ABDelete`; `Open` returns the class it is called on, not `cls`.
+    fn index_methods(
         &self,
         cls: &str,
-        seen: &mut HashSet<String>,
-        classes: &mut Vec<String>,
-    ) {
-        if !seen.insert(cls.to_string()) {
-            return;
-        }
-        let Some(uri) = self.resolve_cls_uri(cls) else {
-            if let Some(Some(ci)) = self.iris_cls(cls) {
-                classes.extend(ci.property_class_names);
-                for sup in ci.extends {
-                    self.collect_property_classes(&sup, seen, classes);
-                }
-            }
-            return;
-        };
-        let Ok(details) = self.workspace.cls_details(&uri) else {
-            return;
-        };
-        classes.extend(details.property_class_names.iter().cloned());
-        for sup in self.qualified_extends(cls, &details) {
-            self.collect_property_classes(&sup, seen, classes);
-        }
-    }
-
-    // IRIS generates several method families that are never written in source, so a plain
-    // name lookup never finds them: an `Index`'s `<Name>Open`/`<Name>Exists`/`<Name>Delete`,
-    // and a `Property`'s `<Name>Get`/`<Name>Set`/`<Name>Reset`/`<Name>IsValid`/`<Name>GetObject`
-    // (the last only when the property's own type is itself a class, not a plain data type).
-    fn generated_member(&self, cls: &str, mem: &str) -> Option<MemberTy> {
-        fn procedure(
-            normal_args: Vec<NormalArg>,
-            out: Option<Ty>,
-            is_instance_only: bool,
-        ) -> MemberTy {
-            MemberTy {
-                is_instance_only,
-                multidimensional: false,
-                ty: HOTy::Procedure(Arc::new(TyProcedure {
-                    normal_args,
-                    variadic_arg: None,
-                    out,
-                    procedure_block: Some(vec![]),
-                    uri: None,
-                    declared_at: None,
-                })),
-                location: None,
-            }
-        }
-        fn value_arg(ty: Ty) -> Vec<NormalArg> {
-            vec![NormalArg::new(
-                ArgMode::Default,
-                "value".into(),
-                Some(ty),
-                None,
-            )]
-        }
-
-        for suffix in ["Open", "Exists", "Delete"] {
-            if let Some(name) = mem.strip_suffix(suffix)
-                && !name.is_empty()
-                && let Some(GeneratableKind::Index(on_properties)) =
-                    self.generatable_kind(cls, name)
-            {
-                let out = match suffix {
-                    "Open" => Some(Ty::from(cls.to_string())),
-                    _ => Some(Ty::from("%Status")),
+        on_properties: &[Option<WithRange<String>>],
+    ) -> Vec<(String, MemberTy)> {
+        let cls = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
+        let keys: Vec<NormalArg> = on_properties
+            .iter()
+            .map(|property| {
+                let property = property
+                    .as_ref()
+                    .map(|p| self.lookup(&cls, &p.it, Visible::Property, true));
+                let ty = match property {
+                    Some(Ok(MemberTy {
+                        ty: HOTy::Value(ty),
+                        ..
+                    })) => ty,
+                    _ => Ty::Any,
                 };
-                // One value argument per indexed property, in order, typed like that property —
-                // e.g. `Index AB On (A, B)` generates `ABOpen(aVal As <A's type>, bVal As <B's
-                // type>)`. Falls back to `%Any` for a property we can't resolve the type of.
-                let args = on_properties
-                    .iter()
-                    .map(|property| {
-                        let ty = match self.generatable_kind(cls, property) {
-                            Some(GeneratableKind::Property(ty)) => ty,
-                            _ => Ty::Any,
-                        };
-                        NormalArg::new(ArgMode::Default, "value".into(), Some(ty), None)
-                    })
-                    .collect();
-                return Some(procedure(args, out, false));
-            }
-        }
-        // The property methods IRIS generates for `Property X` (Defining and Using Classes,
-        // "Property Methods"): accessors, validation/normalization, the Logical/Display/Odbc/
-        // Storage conversions, and -- for a reference property -- the object accessors.
-        const PROPERTY_METHOD_SUFFIXES: &[&str] = &[
-            "Get",
-            "Set",
-            "Reset",
-            "IsValid",
-            "IsModified",
-            "Normalize",
-            "LogicalToDisplay",
-            "DisplayToLogical",
-            "LogicalToOdbc",
-            "OdbcToLogical",
-            "LogicalToStorage",
-            "StorageToLogical",
-            "LogicalToXSD",
-            "XSDToLogical",
-            "GetStored",
-            "GetObject",
-            "GetObjectId",
-            "SetObject",
-            "SetObjectId",
-            "NewObject",
-            "GetSwizzled",
-        ];
-        for suffix in PROPERTY_METHOD_SUFFIXES {
-            let Some(name) = mem.strip_suffix(suffix) else {
-                continue;
-            };
-            let Some(GeneratableKind::Property(ty)) = self.generatable_kind(cls, name) else {
-                continue;
-            };
-            let string = || Some(Ty::from("%String"));
-            let status = || Some(Ty::from("%Status"));
-            // Only a reference-typed property (its own type is a class, not a plain data type
-            // like %String/%Integer) has an object behind it. When we can't tell (the property's
-            // own class is outside the workspace, no IRIS connection), assume it does — same
-            // permissive-but-flagged treatment as `get_member_internal`'s fallback, via the same
-            // `unverified` signal `resolve_obj_mstr` checks.
-            let is_reference = || match &ty {
-                Ty::OREF(obj) => match self.is_datatype(obj.name()) {
-                    Some(is_datatype) => !is_datatype,
-                    None => {
-                        self.unverified.set(true);
-                        true
-                    }
-                },
-                _ => false,
-            };
-            let id_arg = || {
-                vec![NormalArg::new(
-                    ArgMode::Default,
-                    "id".into(),
-                    string(),
-                    None,
-                )]
-            };
-            return match *suffix {
-                "Get" => Some(procedure(vec![], Some(ty), true)),
-                "Set" => Some(procedure(value_arg(ty), status(), true)),
-                "Reset" => Some(procedure(vec![], status(), true)),
-                "IsModified" => Some(procedure(vec![], Some(Ty::from("%Boolean")), true)),
-                "IsValid" => Some(procedure(value_arg(ty.clone()), status(), false)),
-                "Normalize" | "DisplayToLogical" | "OdbcToLogical" | "StorageToLogical"
-                | "XSDToLogical" => Some(procedure(value_arg(ty.clone()), Some(ty), false)),
-                "LogicalToDisplay" | "LogicalToOdbc" | "LogicalToStorage" | "LogicalToXSD" => {
-                    Some(procedure(value_arg(ty), string(), false))
-                }
-                "GetStored" => Some(procedure(id_arg(), Some(ty), false)),
-                "GetObject" if is_reference() => Some(procedure(
-                    vec![NormalArg::new(
-                        ArgMode::Output,
-                        "concurrency".into(),
-                        Some(Ty::from("%Integer")),
-                        None,
-                    )],
-                    Some(ty),
-                    true,
-                )),
-                "GetObjectId" if is_reference() => Some(procedure(vec![], string(), true)),
-                "SetObject" if is_reference() => Some(procedure(value_arg(ty), status(), true)),
-                "SetObjectId" if is_reference() => Some(procedure(id_arg(), status(), true)),
-                "NewObject" | "GetSwizzled" if is_reference() => {
-                    Some(procedure(vec![], Some(ty), true))
-                }
-                _ => None,
-            };
-        }
-        None
+                NormalArg::new(ArgMode::Default, "value".into(), Some(ty), None)
+            })
+            .collect();
+        let arg = |name: &str, mode, ty: &str, default: Option<&str>| {
+            NormalArg::new(
+                mode,
+                name.into(),
+                Some(Ty::from(ty)),
+                default.map(str::to_string),
+            )
+        };
+        [
+            (
+                "Open",
+                vec![
+                    arg("concurrency", ArgMode::Default, "%Integer", Some("-1")),
+                    arg("sc", ArgMode::ByRef, "%Status", Some("$$$OK")),
+                ],
+                Ty::This,
+            ),
+            (
+                "Exists",
+                vec![arg("id", ArgMode::Output, "%String", None)],
+                Ty::from("%Boolean"),
+            ),
+            (
+                "Delete",
+                vec![arg("concurrency", ArgMode::Default, "%Integer", Some("-1"))],
+                Ty::from("%Status"),
+            ),
+        ]
+        .into_iter()
+        .map(|(suffix, extra, out)| {
+            let args = keys.iter().cloned().chain(extra).collect();
+            (
+                suffix.to_string(),
+                generated_procedure(args, false, Some(out), false),
+            )
+        })
+        .collect()
     }
 
-    // Whether `name` is a declared `Parameter` on `cls` -- e.g. %Integer's `MINVAL`, referenced
-    // from a property's `(...)` list. `None` if it can't be determined at all.
-    pub(crate) fn parameter_exists(&self, cls: &str, name: &str) -> Option<bool> {
-        // A class that can't be found says nothing about its parameters; the class itself is
-        // what to report (see `check_declared_class_exists`).
-        if !self.class_exists(cls) {
-            return None;
-        }
-        self.unverified.set(false);
-        let found = self
-            .get_member_internal(cls, name, &[MemberNs::Parameter])
-            .is_some();
-        if self.unverified.replace(false) {
-            None
-        } else {
-            Some(found)
+    // Whether `cls` declares or inherits `name` in `ns`; `None` if it can't be determined.
+    pub(crate) fn member_exists(&self, cls: &str, name: &str, ns: Visible) -> Option<bool> {
+        match self.lookup(
+            &ClsOrIns::Ins(ClassTy::from(cls.to_string())),
+            name,
+            ns,
+            true,
+        ) {
+            Ok(_) => Some(true),
+            Err(LookupError::Absent) => Some(false),
+            // The missing class is what to report (`check_declared_class_exists`).
+            Err(_) => None,
         }
     }
 
-    // "Did you mean" candidates for `parameter_exists`'s negative case -- `cls`'s own other
+    // "Did you mean" candidates for `member_exists`'s negative case -- `cls`'s own other
     // `Parameter`s (workspace) or `Parameter`-tagged members (IRIS's `get_cls`).
     pub(crate) fn parameter_names(&self, cls: &str) -> Vec<String> {
         if let Some(uri) = self.resolve_cls_uri(cls)
             && let Ok(details) = self.workspace.cls_details(&uri)
         {
-            return details
-                .members_by_name
-                .keys()
-                .filter(|(ns, _)| *ns == MemberNs::Parameter)
-                .map(|(_, name)| name.clone())
-                .collect();
+            return details.members.parameter.keys().cloned().collect();
         }
         self.iris_cls(cls)
             .flatten()
@@ -711,91 +758,97 @@ impl<'a> WorkspaceEnv<'a> {
             .unwrap_or_default()
     }
 
-    // `order`: which kinds of member `mem` may be, most likely first (see `lookup_order`).
-    fn get_member_internal(&self, cls: &str, mem: &str, order: &[MemberNs]) -> Option<MemberTy> {
-        self.get_member_in(cls, mem, order, &mut HashSet::new())
-    }
-
-    fn get_member_in(
+    // Where IRIS finds `mem` on `obj`: own declared members, then generated ones, then each direct
+    // superclass in precedence order the same way -- IRIS's order, so the first match is the one
+    // it compiles in; no implicit root. `own = false` starts at the superclasses, for `##super`.
+    // The walk ends at an IRIS class (its entry is flattened) and at one nobody can see (whatever
+    // it declares would shadow the rest).
+    fn lookup(
         &self,
-        cls: &str,
+        obj: &ClsOrIns,
         mem: &str,
-        order: &[MemberNs],
-        seen: &mut HashSet<String>,
+        ns: Visible,
+        own: bool,
+    ) -> Result<MemberTy, LookupError> {
+        // Every generated member is a method, so only a method lookup consults them.
+        let methods = ns == Visible::Method;
+        let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
+        let cls = receiver.name.as_str();
+        // `##super` from a class nobody can see has no superclasses to walk.
+        if !own && matches!(self.resolve(cls), Resolved::Unknown) {
+            return Err(LookupError::Unverified);
+        }
+        let mut no_class = false;
+        let found = self.walk(cls, own, &mut |cls, resolved| {
+            let found = match resolved {
+                Resolved::Workspace(uri, details) => self
+                    .declared_member(uri, details, mem, ns)
+                    .or_else(|| {
+                        // Only once it's needed: building the table looks properties up itself.
+                        let generated = methods.then(|| self.generated_members(details))?;
+                        generated.get(mem).cloned()
+                    })
+                    .map(|ty| Found {
+                        ty,
+                        origin: cls.to_string(),
+                    }),
+                Resolved::Iris(info) => {
+                    no_class |= info.is_none() && cls == receiver.name;
+                    return match info
+                        .as_ref()
+                        .and_then(|info| iris_member(info, cls, mem, ns))
+                    {
+                        Some(found) => ControlFlow::Break(Ok(found)),
+                        None => ControlFlow::Continue(false),
+                    };
+                }
+                Resolved::Unknown => {
+                    return ControlFlow::Break(
+                        registered_object_member(cls, mem, methods).ok_or(LookupError::Unverified),
+                    );
+                }
+            };
+            match found {
+                Some(found) => ControlFlow::Break(Ok(found)),
+                None => ControlFlow::Continue(true),
+            }
+        });
+        match found {
+            Some(found) => found.and_then(|Found { mut ty, origin }| {
+                if ty.is_instance_only && !obj.is_ins() {
+                    return Err(LookupError::InstanceOnly);
+                }
+                ty.ty.instantiate(receiver, &origin);
+                Ok(ty)
+            }),
+            None if no_class => Err(LookupError::NoSuchClass(cls.to_string())),
+            None => Err(LookupError::Absent),
+        }
+    }
+
+    // `mem` as `cls` itself declares it.
+    fn declared_member(
+        &self,
+        uri: &str,
+        details: &crate::ClassDetails,
+        mem: &str,
+        ns: Visible,
     ) -> Option<MemberTy> {
-        if !seen.insert(cls.to_string()) {
-            return None;
+        let member = details.member(ns.into(), mem).or_else(|| {
+            // `..X(...)` also reaches a property, which IRIS then requires to be multidimensional.
+            (ns == Visible::Method)
+                .then(|| details.member(MemberNs::Property, mem))
+                .flatten()
+        })?;
+        let mut ty: MemberTy = member.deref().try_into().ok()?;
+        ty.location = Some(bindings::Location::new(uri.to_string(), member.range));
+        if let HOTy::Procedure(proc) = &ty.ty {
+            let mut proc = proc.as_ref().clone();
+            proc.uri = Some(uri.to_string());
+            proc.declared_at = Some(member.range);
+            ty.ty = HOTy::Procedure(Arc::new(proc));
         }
-        if let Some(uri) = self.resolve_cls_uri(cls) {
-            let details = self.workspace.cls_details(&uri).ok()?;
-            order
-                .iter()
-                .find_map(|&ns| details.member(ns, mem))
-                .and_then(|member| {
-                    let mut ty: MemberTy = member.deref().try_into().ok()?;
-                    ty.location = Some(bindings::Location::new(uri.clone(), member.range));
-                    if let HOTy::Procedure(proc) = &ty.ty {
-                        let mut proc = proc.as_ref().clone();
-                        proc.uri = Some(uri.clone());
-                        proc.declared_at = Some(member.range);
-                        ty.ty = HOTy::Procedure(Arc::new(proc));
-                    }
-                    Some(self.qualify_member_ty(ty, cls))
-                })
-                .or_else(|| {
-                    self.qualified_extends(cls, &details)
-                        .into_iter()
-                        .find_map(|sup| self.get_member_in(&sup, mem, order, seen))
-                })
-        } else if self.workspace.iris.is_some() {
-            self.iris_member(cls, mem, order, None)
-        } else {
-            self.unverified.set(true);
-            None
-        }
-    }
-
-    // `##super(...)`'s target: same lookup as `get_member_internal`, but skips `cls`'s own
-    // members and starts at its direct superclasses instead — otherwise it would just find the
-    // very override that's calling it.
-    fn get_super_member(&self, cls: &str, mem: &str, is_instance: bool) -> Option<MemberTy> {
-        self.direct_supers(cls)?
-            .iter()
-            .find_map(|sup| {
-                self.get_member_internal(sup, mem, &[MemberNs::HigherOrder])
-                    .or_else(|| self.dispatch_member(sup, AccessKind::Call, is_instance))
-            })
-            .or_else(|| self.unverified_any())
-            .map(|mut mem| {
-                mem.ty.instantiate(&ClassTy::from(cls.to_string()));
-                mem
-            })
-    }
-
-    // `cls`'s direct superclasses, normalized. `None` when `cls` itself can't be resolved.
-    fn direct_supers(&self, cls: &str) -> Option<Vec<String>> {
-        let mut supers: Vec<String> = if let Some(uri) = self.resolve_cls_uri(cls) {
-            let details = self.workspace.cls_details(&uri).ok()?;
-            return Some(self.qualified_extends(cls, &details));
-        } else if let Some(found) = self.iris_cls(cls) {
-            found.map(|ci| ci.extends).unwrap_or_default()
-        } else {
-            self.unverified.set(true);
-            return None;
-        };
-        supers.iter_mut().for_each(normalize_class_name);
-        Some(supers)
-    }
-
-    // Whether some superclass of `cls` declares `mem`, i.e. `cls`'s own `mem` overrides it.
-    pub(crate) fn is_inherited_member(&self, cls: &str, mem: &str) -> bool {
-        REGISTERED_OBJECT_MEMBERS.contains(&mem)
-            || self.direct_supers(cls).is_some_and(|supers| {
-                supers.iter().any(|sup| {
-                    self.get_member_internal(sup, mem, &[MemberNs::HigherOrder])
-                        .is_some()
-                })
-            })
+        Some(self.qualify_member_ty(ty, &details.name.it))
     }
 
     // Every `Include` declared by a superclass of `cls`, open in this workspace or reached
@@ -805,36 +858,17 @@ impl<'a> WorkspaceEnv<'a> {
         cls: &crate::details::ClassDetails,
     ) -> Vec<String> {
         let mut names = Vec::new();
-        let mut seen = HashSet::new();
-        let mut pending = cls.extends.clone();
-        while let Some(mut sup) = pending.pop() {
-            normalize_class_name(&mut sup);
-            if !seen.insert(sup.clone()) {
-                continue;
-            }
-            let Some(uri) = self.resolve_cls_uri(&sup) else {
-                if let Some(Some(info)) = self.iris_cls(&sup) {
-                    names.extend(info.includes);
-                    pending.extend(info.extends);
+        self.walk::<()>(&cls.name.it, false, &mut |_, resolved| {
+            match resolved {
+                Resolved::Workspace(_, details) => {
+                    names.extend(details.include_names.iter().map(|i| i.it.clone()));
                 }
-                continue;
-            };
-            let Ok(details) = self.workspace.cls_details(&uri) else {
-                continue;
-            };
-            names.extend(details.include_names.iter().map(|i| i.it.clone()));
-            pending.extend(self.qualified_extends(&sup, &details));
-        }
+                Resolved::Iris(Some(info)) => names.extend(info.includes.iter().cloned()),
+                _ => {}
+            }
+            ControlFlow::Continue(true)
+        });
         names
-    }
-
-    // Last resort, once every locally-derivable answer (a direct member, `generated_member`,
-    // `%DispatchGetProperty`) has already come up empty: if that emptiness is because some
-    // ancestor along the way couldn't be verified (no local definition, no IRIS), assume the
-    // member exists and is typed `%Any` rather than reporting a false "cannot find member" —
-    // same permissive treatment `generated_member`'s own `GetObject` case already documents.
-    fn unverified_any(&self) -> Option<MemberTy> {
-        self.unverified.get().then(MemberTy::default)
     }
 
     // IRIS resolves an unqualified class name (`Extends AbstractModel`, `##class(Date)`) against
@@ -909,6 +943,80 @@ impl<'a> WorkspaceEnv<'a> {
             .collect()
     }
 
+    // `cls`'s direct superclasses in precedence order: `Extends (A, B)` takes A's definition over
+    // B's, or B's over A's under `[ Inheritance = right ]`.
+    fn supers(&self, cls: &str, details: &crate::ClassDetails) -> Vec<String> {
+        let mut supers = self.qualified_extends(cls, details);
+        if details.inheritance_right {
+            supers.reverse();
+        }
+        supers
+    }
+
+    fn resolve(&self, cls: &str) -> Resolved {
+        if let Some(uri) = self.resolve_cls_uri(cls) {
+            return match self.workspace.cls_details(&uri) {
+                Ok(details) => Resolved::Workspace(uri, details),
+                Err(_) => Resolved::Unknown,
+            };
+        }
+        match self.iris_cls(cls) {
+            Some(info) => Resolved::Iris(info),
+            None => Resolved::Unknown,
+        }
+    }
+
+    // `cls`'s direct superclasses in precedence order, as far as `resolved` tells.
+    fn supers_of(&self, cls: &str, resolved: &Resolved) -> Vec<String> {
+        match resolved {
+            Resolved::Workspace(_, details) => self.supers(cls, details),
+            Resolved::Iris(Some(info)) => {
+                let mut supers = info.extends.clone();
+                supers.iter_mut().for_each(normalize_class_name);
+                supers
+            }
+            _ => vec![],
+        }
+    }
+
+    // Visits `cls` (unless `!own`) and its ancestors depth first in precedence order, each once,
+    // until `visit` breaks; `visit`'s `bool` says whether to go on into that class's superclasses.
+    fn walk<T>(
+        &self,
+        cls: &str,
+        own: bool,
+        visit: &mut impl FnMut(&str, &Resolved) -> ControlFlow<T, bool>,
+    ) -> Option<T> {
+        let mut seen = HashSet::new();
+        if own {
+            return self.walk_in(cls, visit, &mut seen);
+        }
+        seen.insert(cls.to_string());
+        self.supers_of(cls, &self.resolve(cls))
+            .iter()
+            .find_map(|sup| self.walk_in(sup, visit, &mut seen))
+    }
+
+    fn walk_in<T>(
+        &self,
+        cls: &str,
+        visit: &mut impl FnMut(&str, &Resolved) -> ControlFlow<T, bool>,
+        seen: &mut HashSet<String>,
+    ) -> Option<T> {
+        if !seen.insert(cls.to_string()) {
+            return None;
+        }
+        let resolved = self.resolve(cls);
+        match visit(cls, &resolved) {
+            ControlFlow::Break(found) => Some(found),
+            ControlFlow::Continue(false) => None,
+            ControlFlow::Continue(true) => self
+                .supers_of(cls, &resolved)
+                .iter()
+                .find_map(|sup| self.walk_in(sup, visit, seen)),
+        }
+    }
+
     // A member's declared type names are written relative to the declaring class.
     fn qualify_member_ty(&self, mut ty: MemberTy, context: &str) -> MemberTy {
         let qualify = |t: &mut Ty| {
@@ -932,54 +1040,19 @@ impl<'a> WorkspaceEnv<'a> {
         ty
     }
 
-    // Every member type IRIS provides comes through here, so the mask is applied in one place.
-    // `skip_origin`: ignore a member declared by that class.
-    fn iris_member(
-        &self,
-        cls: &str,
-        mem: &str,
-        order: &[MemberNs],
-        skip_origin: Option<&str>,
-    ) -> Option<MemberTy> {
-        let members = match self.iris_cls(cls) {
-            Some(found) => found?.members,
-            // Only reached with an IRIS context, so this is a lookup that failed: the member is
-            // taken on trust, like one outside the workspace with no IRIS at all.
-            None => {
-                self.unverified.set(true);
-                return None;
-            }
-        };
-        let found = order.iter().find_map(|&ns| {
-            members.iter().find(|m| {
-                MemberNs::of_info(&m.kind).contains(&ns)
-                    && (m.name.content.eq_ignore_ascii_case(mem)
-                        || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem)))
-                    && (skip_origin.is_none() || m.origin.as_deref() != skip_origin)
-            })
-        })?;
-        let mut ty = MemberTy::try_from(found.clone()).ok()?;
-        let origin = found.origin.as_deref().unwrap_or(cls);
-        if let Some(correction) = crate::mask::correction(origin, &found.name.content) {
-            correction.apply(&mut ty.ty);
-        }
-        Some(ty)
-    }
-
-    pub fn resolve_class(&self, name: &str) -> ClassTy {
-        let mut cty = ClassTy::from(name.to_string());
-        if let Some(uri) = self.resolve_cls_uri(&cty.name) {
-            if let Ok(details) = self.workspace.cls_details(&uri) {
-                cty.location = Some(bindings::Location::new(uri, details.name.range));
-            }
-        } else if let Some(uri) = self.iris_cls(&cty.name).flatten().and_then(|ci| ci.uri) {
+    // Where the class `name` is declared, for go-to-definition.
+    pub fn class_location(&self, name: &str) -> Option<bindings::Location> {
+        if let Some(uri) = self.resolve_cls_uri(name) {
+            let details = self.workspace.cls_details(&uri).ok()?;
+            Some(bindings::Location::new(uri, details.name.range))
+        } else {
+            let uri = self.iris_cls(name).flatten()?.uri?;
             let zero = bindings::Range::point(bindings::Position {
                 line: 0,
                 character: 0,
             });
-            cty.location = Some(bindings::Location::new(uri, zero));
+            Some(bindings::Location::new(uri, zero))
         }
-        cty
     }
 
     pub fn can_assign_to(&self, source: &Ty, target: &Ty) -> bool {
@@ -1001,80 +1074,28 @@ impl<'a> WorkspaceEnv<'a> {
 
     // `None` means we can't tell (class outside the workspace with no IRIS connection).
     pub(crate) fn is_datatype(&self, cls: &str) -> Option<bool> {
-        self.is_datatype_in(cls, &mut HashSet::new())
-    }
-
-    fn is_datatype_in(&self, cls: &str, seen: &mut HashSet<String>) -> Option<bool> {
-        // A class reached twice (an inheritance cycle) adds nothing to the answer.
-        if !seen.insert(cls.to_string()) {
-            return Some(false);
-        }
-        if cls == "%Library.DataType" {
-            return Some(true);
-        }
-        // The root of the object/reference hierarchy is never a datatype, even when it's
-        // outside the workspace and there's no IRIS connection to confirm it.
-        if cls == "%Library.RegisteredObject" {
-            return Some(false);
-        }
-        match self.resolve_cls_uri(cls) {
-            Some(uri) => {
-                let details = self.workspace.cls_details(&uri).ok()?;
-                if details.is_datatype {
-                    return Some(true);
-                }
-                let mut yes = false;
-                for sup in self.qualified_extends(cls, &details) {
-                    yes |= self.is_datatype_in(&sup, seen)?;
-                }
-                Some(yes)
-            }
+        let mut unknown = false;
+        let yes = self.walk(cls, true, &mut |cls, resolved| match resolved {
+            _ if cls == "%Library.DataType" => ControlFlow::Break(true),
+            // Never a datatype, even unresolved.
+            _ if cls == "%Library.RegisteredObject" => ControlFlow::Continue(false),
+            Resolved::Workspace(_, details) if details.is_datatype => ControlFlow::Break(true),
+            Resolved::Workspace(..) => ControlFlow::Continue(true),
             // Outside the workspace, IRIS's compiled ClassType resolves the whole chain.
-            None => self.iris_cls(cls)??.is_datatype,
-        }
-    }
-
-    // `None` means we can't tell (class outside the workspace with no IRIS connection). There are
-    // only four real class-hierarchy roots (no `Extends` at all): `%Library.SystemBase` (shared
-    // by every real object -- `%RegisteredObject`, `%SerialObject`, `%Persistent`, streams,
-    // dynamic objects, all reach it via `%Library.Base`/`%SwizzleObject`/`%Library.AbstractSet`),
-    // `%Library.DataType` (literal values), `%Library.FunctionalIndex` (SQL functional/bitmap
-    // index classes), and, informally, everything else with no ancestor at all -- an SQL view
-    // class (confirmed: no real `ClassType = view` class in a ~4900-class corpus has `Extends`),
-    // or an isolated one-off like `%Library.Any`. `Some(true)` means `cls` is confirmed to land
-    // outside `%Library.SystemBase` specifically -- i.e. one of the other three.
-    fn confirmed_outside_system_base(&self, cls: &str) -> Option<bool> {
-        self.confirmed_outside_system_base_in(cls, &mut HashSet::new())
-    }
-
-    fn confirmed_outside_system_base_in(
-        &self,
-        cls: &str,
-        seen: &mut HashSet<String>,
-    ) -> Option<bool> {
-        if !seen.insert(cls.to_string()) {
-            return Some(true);
-        }
-        if cls == "%Library.SystemBase" {
-            return Some(false);
-        }
-        if cls == "%Library.DataType" || cls == "%Library.FunctionalIndex" {
-            return Some(true);
-        }
-        let extends = match self.resolve_cls_uri(cls) {
-            Some(uri) => self.workspace.cls_details(&uri).ok()?.extends.clone(),
-            None => self.iris_cls(cls)??.extends,
-        };
-        if extends.is_empty() {
-            return Some(true);
-        }
-        let mut confirmed = true;
-        for sup in &extends {
-            let mut sup = sup.clone();
-            normalize_class_name(&mut sup);
-            confirmed &= self.confirmed_outside_system_base_in(&sup, seen)?;
-        }
-        Some(confirmed)
+            Resolved::Iris(Some(bindings::ClassInfo {
+                is_datatype: Some(true),
+                ..
+            })) => ControlFlow::Break(true),
+            Resolved::Iris(Some(bindings::ClassInfo {
+                is_datatype: Some(false),
+                ..
+            })) => ControlFlow::Continue(false),
+            _ => {
+                unknown = true;
+                ControlFlow::Continue(false)
+            }
+        });
+        yes.or((!unknown).then_some(false))
     }
 
     // `%`-prefixed system classes are assumed valid unconditionally, since they're essentially
@@ -1201,6 +1222,25 @@ impl<'a> WorkspaceEnv<'a> {
         if x == y {
             return x.into_owned();
         }
+        // Same class, different arguments: merge each argument both sides give.
+        if x.name == y.name {
+            let generics = x
+                .generics
+                .iter()
+                .filter_map(|(param, a)| {
+                    let b = y.generics.get(param)?;
+                    let merged = self.merge_class(
+                        Cow::Owned(ClassTy::from(a.clone())),
+                        Cow::Owned(ClassTy::from(b.clone())),
+                    );
+                    Some((param.clone(), merged.name))
+                })
+                .collect();
+            return ClassTy {
+                name: x.name.clone(),
+                generics,
+            };
+        }
         let y_ancestors: HashSet<String> = self.ancestors(&y.name).into_iter().collect();
         for a in self.ancestors(&x.name) {
             if y_ancestors.contains(&a) {
@@ -1214,29 +1254,10 @@ impl<'a> WorkspaceEnv<'a> {
     // shared ancestor is a sound upper bound for merging.
     fn ancestors(&self, cls: &str) -> Vec<String> {
         let mut order = Vec::new();
-        let mut seen = HashSet::new();
-        let mut queue = VecDeque::from([cls.to_string()]);
-        while let Some(c) = queue.pop_front() {
-            if !seen.insert(c.clone()) {
-                continue;
-            }
-            let supers = if let Some(uri) = self.resolve_cls_uri(&c) {
-                self.workspace
-                    .cls_details(&uri)
-                    .map(|details| self.qualified_extends(&c, &details))
-                    .unwrap_or_default()
-            } else {
-                self.iris_cls(&c)
-                    .flatten()
-                    .map(|ci| ci.extends)
-                    .unwrap_or_default()
-            };
-            queue.extend(supers.into_iter().map(|mut s| {
-                normalize_class_name(&mut s);
-                s
-            }));
-            order.push(c);
-        }
+        self.walk::<()>(cls, true, &mut |cls, resolved| {
+            order.push(cls.to_string());
+            ControlFlow::Continue(!matches!(resolved, Resolved::Unknown))
+        });
         order
     }
 
@@ -1246,8 +1267,8 @@ impl<'a> WorkspaceEnv<'a> {
             touched: RefCell::new(HashSet::new()),
             references: RefCell::new(Vec::new()),
             soft_diagnostics: RefCell::new(Vec::new()),
-            unverified: Cell::new(false),
             lookup_failures: RefCell::new(HashMap::new()),
+            generated: RefCell::new(HashMap::new()),
             suppress_soft_diagnostics: Cell::new(false),
         }
     }
@@ -1370,12 +1391,8 @@ pub struct WorkspaceEnv<'a> {
     touched: RefCell<HashSet<Name>>,
     references: RefCell<Vec<(bindings::Range, bindings::Location)>>,
     soft_diagnostics: RefCell<Vec<bindings::Diagnostic>>,
-    // Set by `get_member_internal`'s final fallback (a class chain touches something outside
-    // the workspace with no IRIS connection to confirm it, so a member's existence is simply
-    // assumed) and read right back by whichever `resolve_*` call triggered it, to raise a soft
-    // diagnostic at that exact reference — see `resolve_obj_mstr`.
-    unverified: Cell<bool>,
     lookup_failures: RefCell<HashMap<String, String>>,
+    generated: RefCell<HashMap<String, Rc<HashMap<String, MemberTy>>>>,
     // Set during a loop's throwaway priming pass (see `Flow::with_loop`) — its findings reflect
     // pre-loop bindings only, not real, so every soft diagnostic raised meanwhile is dropped.
     suppress_soft_diagnostics: Cell<bool>,
@@ -1666,15 +1683,13 @@ impl<'a> CodeEnv<'a> {
         })
     }
 
-    pub(crate) fn resolve_ty_mref(
+    pub(crate) fn get_ty_mem(
         &self,
         ty: &Ty,
         mem: &cos::MemberRef,
         range: bindings::Range,
         kind: AccessKind,
     ) -> Result<MemberTy, TypeError> {
-        let is_parameter = mem.is_parameter();
-        let mem = mem.id();
         match ty {
             // An unresolved `This`/`..#NAME` is a mask bug.
             Ty::Any | Ty::This | Ty::Param(_) => Ok(MemberTy {
@@ -1682,11 +1697,11 @@ impl<'a> CodeEnv<'a> {
                 ty: HOTy::Value(Ty::Any),
                 ..MemberTy::default()
             }),
-            Ty::OREF(obj) => self.resolve_obj_mstr(obj, mem, is_parameter, range, kind),
+            Ty::OREF(obj) => self.get_obj_mem(obj, mem.id(), mem.is_parameter(), range, kind),
         }
     }
 
-    pub(crate) fn resolve_obj_mstr(
+    pub(crate) fn get_obj_mem(
         &self,
         obj: &ClsOrIns,
         mem: String,
@@ -1694,69 +1709,86 @@ impl<'a> CodeEnv<'a> {
         range: bindings::Range,
         kind: AccessKind,
     ) -> Result<MemberTy, TypeError> {
-        self.unverified.set(false);
-        let result = self.get_member(obj.name(), &mem, is_parameter, kind, obj.is_ins());
-        if self.unverified.replace(false) {
-            let err = self
-                .lookup_failed(obj.name(), true, range)
-                .unwrap_or_else(|| {
-                    TypeError::unconfirmed_member(
-                        obj.name().to_string(),
-                        mem.clone(),
-                        false,
-                        self.workspace.iris.is_some(),
-                        range,
-                    )
-                });
-            self.add_soft_diagnostic(err.into());
-        }
-        let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
-        if let Some(mem_desc) = result.map(|mut mem| {
-            mem.ty.instantiate(receiver);
-            mem
-        }) {
-            if mem_desc.is_instance_only && !obj.is_ins() {
-                Err(
-                    QuasiTypeError::access_instance_only_member_from_class_context(mem)
-                        .into_error(|| range),
-                )
-            } else {
-                Ok(mem_desc)
-            }
-        } else if self.class_absent(obj.name()) {
-            Err(QuasiTypeError::cannot_find_class(obj.name().to_string()).into_error(|| range))
+        // A `Parameter` has no dynamic-dispatch fallback.
+        let (ns, dispatch) = if is_parameter {
+            (Visible::Parameter, None)
         } else {
-            let (suggestions, has_get) = self.member_suggestions(obj.name(), &mem);
-            Err(
-                QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get)
-                    .into_error(|| range),
-            )
-        }
+            (lookup_ns(kind), Some(kind))
+        };
+        self.resolve_mem(obj, mem, range, ns, true, dispatch)
     }
 
-    // "Did you mean" candidates for a member lookup that failed, plus whether the class has its
-    // own `%Get` (a common dynamic-property escape hatch on classes not modeled statically).
-    fn member_suggestions(&self, cls: &str, mem: &str) -> (Vec<String>, bool) {
-        let names = self.member_names(cls);
-        let mut suggestions = crate::check::top_similar(mem, names.iter().map(String::as_str), 5);
-        // A dynamic-property-style accessor (`%Get`, `%GetData`, ...) is easy to forget and call
-        // like a plain property instead -- surface every one of these regardless of how close
-        // `mem` looks to their names, since a getter's own name rarely resembles the property
-        // it was written instead of.
-        for name in &names {
-            if name.starts_with("%Get") && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(name))
-            {
-                suggestions.push(name.clone());
+    // `mem` of `obj` as code refers to it: `lookup`, else the `%Dispatch*` hook for `dispatch`;
+    // errors at `range`, a soft one for a member taken on trust.
+    fn resolve_mem(
+        &self,
+        obj: &ClsOrIns,
+        mem: String,
+        range: bindings::Range,
+        ns: Visible,
+        own: bool,
+        dispatch: Option<AccessKind>,
+    ) -> Result<MemberTy, TypeError> {
+        let at = |err: QuasiTypeError| err.into_error(|| range);
+        let found = match (self.lookup(obj, &mem, ns, own), dispatch) {
+            // Dynamic dispatch: a class overriding the hook takes any member name. Only
+            // `%DispatchGetProperty`'s return type matters; `%DispatchSetMultidimProperty` isn't
+            // consulted, a multidimensional reference not being told from a call of the wrong arity.
+            (Err(LookupError::Absent), Some(kind)) => {
+                let hook = match kind {
+                    AccessKind::Get => "%DispatchGetProperty",
+                    AccessKind::Set => "%DispatchSetProperty",
+                    AccessKind::Call if obj.is_ins() => "%DispatchMethod",
+                    AccessKind::Call => "%DispatchClassMethod",
+                };
+                self.lookup(obj, hook, Visible::Method, own)
+                    .map(|hook| MemberTy {
+                        ty: HOTy::Value(match (kind, hook.ty.as_procedure()) {
+                            (AccessKind::Get, Ok(TyProcedureOrAny::Procedure(proc))) => {
+                                proc.out.clone().unwrap_or_default()
+                            }
+                            _ => Ty::Any,
+                        }),
+                        ..MemberTy::default()
+                    })
+            }
+            (found, _) => found,
+        };
+        match found {
+            Ok(ty) => Ok(ty),
+            Err(LookupError::Absent) => {
+                let (suggestions, has_get) = self.member_suggestions(obj.name(), &mem);
+                Err(at(QuasiTypeError::cannot_find_member(
+                    obj.to_string(),
+                    mem,
+                    suggestions,
+                    has_get,
+                )))
+            }
+            Err(LookupError::NoSuchClass(cls)) => Err(at(QuasiTypeError::cannot_find_class(cls))),
+            Err(LookupError::InstanceOnly) => Err(at(
+                QuasiTypeError::access_instance_only_member_from_class_context(mem),
+            )),
+            Err(LookupError::Unverified) => {
+                let err = self
+                    .lookup_failed(obj.name(), true, range)
+                    .unwrap_or_else(|| {
+                        TypeError::unconfirmed_member(
+                            obj.name().to_string(),
+                            mem,
+                            !own,
+                            self.workspace.iris.is_some(),
+                            range,
+                        )
+                    });
+                self.add_soft_diagnostic(err.into());
+                Ok(MemberTy::default())
             }
         }
-        let has_get = self
-            .get_member_internal(cls, "%Get", &[MemberNs::HigherOrder])
-            .is_some();
-        (suggestions, has_get)
     }
 
     // `##super(...)`'s target: the enclosing method's own name, resolved against `this`'s
-    // superclasses instead of `this` itself — same shape as `resolve_obj_mstr`.
+    // superclasses instead of `this` itself.
     pub(crate) fn resolve_super_mstr(&self, range: bindings::Range) -> Result<MemberTy, TypeError> {
         let this = self.this().map_err(|err| err.into_error(|| range))?;
         let mem = self
@@ -1764,33 +1796,14 @@ impl<'a> CodeEnv<'a> {
             .ok_or_else(QuasiTypeError::not_in_class)
             .map_err(|err| err.into_error(|| range))?
             .to_string();
-        self.unverified.set(false);
-        let result = self.get_super_member(this.name(), &mem, this.is_ins());
-        if self.unverified.replace(false) {
-            let has_iris = self.workspace.iris.is_some();
-            let err = TypeError::unconfirmed_member(
-                this.name().to_string(),
-                mem.clone(),
-                true,
-                has_iris,
-                range,
-            );
-            self.add_soft_diagnostic(err.into());
-        }
-        match result {
-            Some(mem_desc) if mem_desc.is_instance_only && !this.is_ins() => Err(
-                QuasiTypeError::access_instance_only_member_from_class_context(mem)
-                    .into_error(|| range),
-            ),
-            Some(mem_desc) => Ok(mem_desc),
-            None => {
-                let (suggestions, has_get) = self.member_suggestions(this.name(), &mem);
-                Err(
-                    QuasiTypeError::cannot_find_member(this.to_string(), mem, suggestions, has_get)
-                        .into_error(|| range),
-                )
-            }
-        }
+        self.resolve_mem(
+            &this,
+            mem,
+            range,
+            Visible::Method,
+            false,
+            Some(AccessKind::Call),
+        )
     }
 
     pub(crate) fn resolve_label(

@@ -166,9 +166,15 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                     }),
                 })
             }
-            MemberKindSpecificDetails::Property { ty, element_ty, .. } => {
-                let multidimensional =
-                    details::MemberNs::of(kind).contains(&details::MemberNs::HigherOrder);
+            MemberKindSpecificDetails::Property {
+                ty,
+                element_ty,
+                keywords,
+                ..
+            } => {
+                let multidimensional = keywords
+                    .iter()
+                    .any(|k| k.eq_ignore_ascii_case("MultiDimensional"));
                 MemberKind::Property(match (ty, element_ty) {
                     (Some(ty), Some(element)) => wit_bind::PropertyInfo {
                         t: Some(element.to_string()),
@@ -245,7 +251,8 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
             deprecated: details.deprecated,
             members: details
                 .members
-                .iter()
+                .in_order()
+                .into_iter()
                 .map(wit_bind::MemberInfo::from)
                 .collect(),
             property_class_names: details.property_class_names.clone(),

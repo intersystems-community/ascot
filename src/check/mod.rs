@@ -19,12 +19,15 @@ mod builtins;
 mod env;
 mod errors;
 mod flow;
+mod similar;
 pub mod types;
+
+pub(crate) use similar::top_similar;
 
 use either::Either::{self, Left, Right};
 use env::*;
 use flow::*;
-use std::{collections::HashMap, iter::once, ops::Deref};
+use std::{iter::once, ops::Deref};
 use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
 use tygr_objectscript::cos::{CommandLike, KeywordKind, KeywordUse, Spelled};
 use types::*;
@@ -139,7 +142,7 @@ use crate::{
     SourceMap,
     bindings::{self, ArgMode, Diagnostic, DiagnosticRelatedInformation, InlayHint, Location},
     cos::{self, *},
-    details::{self, MemberDetails, MemberKindSpecificDetails, MethodDetails, WithRange},
+    details::{self, MemberDetails, MemberKindSpecificDetails, MethodDetails, Visible, WithRange},
 };
 
 pub(crate) trait CheckMember {
@@ -453,7 +456,6 @@ impl MethodDetails {
                 body.check(&code_env, flow)
             },
             true,
-            env.base.is_inherited_member(&cls.class.name, name),
         );
         for diagnostic in relocate_method_diagnostics(
             env.base.soft_diagnostics_since(diagnostics_mark),
@@ -2354,7 +2356,7 @@ impl<T> CheckExprInner for ExprOps<T> {
             ExprOps::Then { base, op } => {
                 // `$SYSTEM.X.Y()` is shorthand for `##class(%SYSTEM.X).Y()`.
                 if op.args.is_none() && !op.mem.is_parameter() && is_system_var(base) {
-                    let cls = env.resolve_class(&format!("%SYSTEM.{}", op.mem.id()));
+                    let cls = ClassTy::from(format!("%SYSTEM.{}", op.mem.id()));
                     return Ok(Ty::OREF(ClsOrIns::Cls(cls)).into());
                 }
                 let ty = base_hoty(base, env, flow)?;
@@ -2366,7 +2368,7 @@ impl<T> CheckExprInner for ExprOps<T> {
                 {
                     let nested = format!("{}.{}", cls.name, op.mem.id());
                     if env.class_exists(&nested) {
-                        let nested = env.resolve_class(&nested);
+                        let nested = ClassTy::from(nested);
                         return Ok(Ty::OREF(if op.args.is_none() {
                             ClsOrIns::Cls(nested)
                         } else {
@@ -2565,7 +2567,7 @@ fn check_mem(
     kind: AccessKind,
 ) -> Result<MemberTy, QuasiTypeError> {
     let range = env.range(mem);
-    let member = env.resolve_ty_mref(&obj, mem.deref(), range, kind)?;
+    let member = env.get_ty_mem(&obj, mem.deref(), range, kind)?;
     if let Some(location) = &member.location {
         env.reference(range, location.clone());
     }
@@ -2775,90 +2777,6 @@ fn similar_macro_names<'a>(name: &str, candidates: impl Iterator<Item = &'a str>
     top_similar(name, candidates, 20)
 }
 
-// Case-insensitive Jaro-Winkler similarity -- names the `n` closest matches out of a candidate
-// pool too large to print in full. Rewards a shared *prefix*, which is what a typo like
-// `ISERROR` for `ISERR` actually is; plain edit distance ranks unrelated same-length names just
-// as close.
-pub(crate) fn top_similar<'a>(
-    name: &str,
-    candidates: impl Iterator<Item = &'a str>,
-    n: usize,
-) -> Vec<String> {
-    let target = name.to_lowercase();
-    let mut scored: Vec<(f64, &str)> = candidates
-        .filter(|candidate| !candidate.eq_ignore_ascii_case(name))
-        .map(|candidate| (jaro_winkler(&target, &candidate.to_lowercase()), candidate))
-        .collect();
-    scored.sort_by(|(s1, n1), (s2, n2)| s2.total_cmp(s1).then_with(|| n1.cmp(n2)));
-    // Case variants score the same, so they're adjacent here, and which one survives is fixed
-    // by the sort -- not by the (hash-map) order the candidates arrived in.
-    scored.dedup_by_key(|(_, name)| name.to_lowercase());
-    scored
-        .into_iter()
-        .take(n)
-        .map(|(_, name)| name.to_string())
-        .collect()
-}
-
-// 1.0 = identical, 0.0 = nothing in common. See Winkler (1990); the standard algorithm (a Jaro
-// score, boosted for up to 4 shared leading characters).
-fn jaro_winkler(a: &str, b: &str) -> f64 {
-    let jaro = jaro(a, b);
-    let prefix_len = a
-        .chars()
-        .zip(b.chars())
-        .take(4)
-        .take_while(|(x, y)| x == y)
-        .count();
-    jaro + prefix_len as f64 * 0.1 * (1.0 - jaro)
-}
-
-fn jaro(a: &str, b: &str) -> f64 {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    if a.is_empty() || b.is_empty() {
-        return if a.is_empty() && b.is_empty() {
-            1.0
-        } else {
-            0.0
-        };
-    }
-    let match_distance = a.len().max(b.len()) / 2 - if a.len().max(b.len()) < 2 { 0 } else { 1 };
-    let mut a_matched = vec![false; a.len()];
-    let mut b_matched = vec![false; b.len()];
-    let mut matches = 0usize;
-    for (i, &ca) in a.iter().enumerate() {
-        let start = i.saturating_sub(match_distance);
-        let end = (i + match_distance + 1).min(b.len());
-        for (j, matched) in b_matched.iter_mut().enumerate().take(end).skip(start) {
-            if !*matched && ca == b[j] {
-                a_matched[i] = true;
-                *matched = true;
-                matches += 1;
-                break;
-            }
-        }
-    }
-    if matches == 0 {
-        return 0.0;
-    }
-    let mut transpositions = 0usize;
-    let mut b_iter = b
-        .iter()
-        .zip(b_matched.iter())
-        .filter(|(_, m)| **m)
-        .map(|(c, _)| c);
-    for (&ca, _) in a.iter().zip(a_matched.iter()).filter(|(_, m)| **m) {
-        if let Some(&cb) = b_iter.next()
-            && ca != cb
-        {
-            transpositions += 1;
-        }
-    }
-    let m = matches as f64;
-    (m / a.len() as f64 + m / b.len() as f64 + (m - (transpositions / 2) as f64) / m) / 3.0
-}
-
 trait MacroCallStructExt {
     fn check_args<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), QuasiTypeError>;
     fn check_as_command<'a>(
@@ -2987,11 +2905,11 @@ impl<T> CheckExprInner for ParenedExpr<T> {
                 // The only place a `##class(X)` literal's own span is visible before it gets
                 // lost to auto-deref (`AtomicExpr::to_power_ty` itself never sees a range) —
                 // peek here to record the go-to-definition reference alongside it.
-                if let AtomicExpr::Class { cls, .. } = normal.deref().deref() {
-                    let cty = env.resolve_class(&env.qualify_class_name(&cls.deref().print()));
-                    if let Some(location) = &cty.location {
-                        env.reference(env.range(normal.deref()), location.clone());
-                    }
+                if let AtomicExpr::Class { cls, .. } = normal.deref().deref()
+                    && let Some(location) =
+                        env.class_location(&env.qualify_class_name(&cls.deref().print()))
+                {
+                    env.reference(env.range(normal.deref()), location);
                 }
                 // Same trick, for a bare local-variable read's hover type — `subs: None` only,
                 // since a subscripted read's `PowerTy` only reflects "is anything under this
@@ -3041,9 +2959,7 @@ impl CheckExprInner for AtomicExpr {
                 if env.class_absent(&name) {
                     return Err(QuasiTypeError::cannot_find_class(name));
                 }
-                Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(
-                    env.resolve_class(&name),
-                ))))
+                Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(ClassTy::from(name)))))
             }
             AtomicExpr::Member { member, args } => {
                 let obj = Ty::OREF(env.this()?);
@@ -3322,7 +3238,7 @@ fn check_instance_member(
         }
         ClsOrIns::Ins(cty) => {
             let member =
-                env.resolve_obj_mstr(&ClsOrIns::Ins(cty), mem, false, mem_range, AccessKind::Get)?;
+                env.get_obj_mem(&ClsOrIns::Ins(cty), mem, false, mem_range, AccessKind::Get)?;
             if let Some(location) = &member.location {
                 env.reference(mem_range, location.clone());
             }
@@ -3391,7 +3307,6 @@ fn check_procedure(
         env.with_range(this.header.as_ref().map(|_| None)),
         |flow| check_block_body(&this.body, env, flow, true),
         true,
-        false,
     )?;
     if let Some(hint) = creates_hint(details.name.range.end, creates) {
         env.hint(hint);
@@ -3488,7 +3403,6 @@ pub(crate) fn check_cls(
     cls: &details::ClassDetails,
 ) -> Vec<bindings::Diagnostic> {
     let mut diagnostics = Vec::new();
-    let mut defined = HashMap::new();
     for keyword in &cls.keywords_without_value {
         diagnostics
             .push(TypeError::class_keyword_without_value(keyword.it.clone(), keyword.range).into());
@@ -3532,19 +3446,38 @@ pub(crate) fn check_cls(
         cls.mode.as_ref(),
         macro_definitions,
     );
-    for member in &cls.members {
+    for member in &cls.members.duplicates {
         let name = &member.name.it;
-        let conflict = details::MemberNs::of(&member.kind)
-            .iter()
-            .filter(|&&ns| ns != details::MemberNs::Other)
-            .filter_map(|&ns| defined.insert((ns, name.to_string()), member))
-            .next();
-        if let Some(previous) = conflict {
-            diagnostics.push(Diagnostic::from(TypeError::duplicated_member_name(
-                member.range,
-                name.to_string(),
-                Location::new(env.uri().to_string(), previous.range),
-            )));
+        let kept = cls
+            .member(details::MemberNs::of(&member.kind), name)
+            .expect("a duplicate is set aside in favor of a kept member");
+        diagnostics.push(Diagnostic::from(TypeError::duplicated_member_name(
+            member.range,
+            name.to_string(),
+            Location::new(env.uri().to_string(), kept.range),
+        )));
+    }
+    for member in cls.members.in_order() {
+        if let MemberKindSpecificDetails::Index { on_properties } = &member.kind {
+            for key in on_properties.iter().flatten() {
+                if env
+                    .base
+                    .member_exists(&cls.name.it, &key.it, Visible::Property)
+                    == Some(false)
+                {
+                    let (suggestions, _) = env.base.member_suggestions(&cls.name.it, &key.it);
+                    diagnostics.push(
+                        QuasiTypeError::cannot_find_member(
+                            cls.name.it.to_string(),
+                            key.it.clone(),
+                            suggestions,
+                            false,
+                        )
+                        .into_error(|| key.range)
+                        .into(),
+                    );
+                }
+            }
         }
         check_property_or_parameter_declaration(env, &cls.name.it, member, &mut diagnostics);
         // A missing `Include` (already reported once above) commonly leaves some macro
@@ -3608,7 +3541,7 @@ fn check_property_or_parameter_declaration(
                         .any(|k| k.eq_ignore_ascii_case(name));
                     let results: Vec<Option<bool>> = candidate_classes
                         .iter()
-                        .map(|cls| env.base.parameter_exists(cls, name))
+                        .map(|cls| env.base.member_exists(cls, name, Visible::Parameter))
                         .collect();
                     let found = results.contains(&Some(true));
                     // Report as absent once any candidate confirms it, even if others are

@@ -964,7 +964,8 @@ impl bindings::GuestWorkspace for Workspace {
                     },
                     members: details
                         .members
-                        .iter()
+                        .in_order()
+                        .into_iter()
                         .map(|member| bindings::SymbolInfo {
                             name: member.it.name.to_string(),
                             kind: bindings::member_kind_to_symbol_kind(
@@ -1077,7 +1078,7 @@ impl Workspace {
         let details = this.cls_details(&uri).ok()?;
         let member = details
             .members
-            .iter()
+            .all()
             .find(|member| position_in_range(position, member.range))?;
         if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.it.kind {
             let body_start = method.body.range.start;
@@ -1091,7 +1092,7 @@ impl Workspace {
                 let target = this.cls_details(&location.uri).ok()?;
                 return target
                     .members
-                    .iter()
+                    .all()
                     .find(|m| m.range == location.range)
                     .map(|m| MemberInfo {
                         uri: Some(location.uri.clone()),
@@ -1609,10 +1610,8 @@ mod tests {
         assert!(workspace.diagnostics(uri).is_empty());
     }
 
-    // A class with no `Extends` at all has no real ancestor to inherit these from -- same
-    // "rootless" bucket as an SQL view class or `%Library.Any` (see
-    // `WorkspaceEnv::confirmed_outside_system_base`), not `%Library.SystemBase`, so the hardcode
-    // must not apply here even though `is_datatype` alone wouldn't rule it out either.
+    // IRIS has no implicit root, so a class with no `Extends` must get none of
+    // `REGISTERED_OBJECT_MEMBERS`.
     #[test]
     fn registered_object_members_are_not_available_on_a_class_with_no_ancestor() {
         let workspace = Workspace::new(None, None);
@@ -2441,7 +2440,7 @@ mod tests {
                     },
                     aliases: vec![],
                     deprecated: false,
-                    kind: bindings::MemberKind::Method(bindings::MethodInfo {
+                    kind: bindings::MemberKind::ClassMethod(bindings::MethodInfo {
                         normal: vec![],
                         variadic: None,
                         t: None,
@@ -2509,6 +2508,171 @@ mod tests {
         );
         let diagnostics = workspace.diagnostics(uri);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn iris_class_method(name: &str, args: &[&str], returns: &str) -> bindings::MemberInfo {
+        let zero = bindings::Position {
+            line: 0,
+            character: 0,
+        };
+        bindings::MemberInfo {
+            doc: String::new(),
+            before: zero,
+            name: bindings::NameInfo {
+                before: zero,
+                content: name.to_string(),
+                after: zero,
+            },
+            aliases: vec![],
+            deprecated: false,
+            kind: bindings::MemberKind::ClassMethod(bindings::MethodInfo {
+                normal: args
+                    .iter()
+                    .map(|arg| bindings::NormalArg {
+                        mode: bindings::ArgMode::Default,
+                        name: arg.to_string(),
+                        t: Some("%Library.String".to_string()),
+                        default: None,
+                        declared_at: None,
+                    })
+                    .collect(),
+                variadic: None,
+                t: Some(returns.to_string()),
+                procedure_block: None,
+                body: bindings::Range {
+                    start: zero,
+                    end: zero,
+                },
+            }),
+            after: zero,
+            uri: None,
+            origin: None,
+        }
+    }
+
+    // IRIS takes a member two superclasses both define from the leftmost `Extends` entry, or the
+    // rightmost under `[ Inheritance = right ]` (confirmed against `%Dictionary.CompiledMethod`).
+    #[test]
+    fn inheritance_keyword_picks_the_superclass_a_member_comes_from() {
+        let workspace = Workspace::new(None, None);
+        workspace.open(
+            "A.cls".to_string(),
+            "Class Test.A\n{\nClassMethod Make() As Test.A\n{\n}\n}\n".to_string(),
+        );
+        workspace.open(
+            "B.cls".to_string(),
+            "Class Test.B\n{\nClassMethod Make() As Test.B\n{\n}\nMethod OnlyB()\n{\n}\n}\n"
+                .to_string(),
+        );
+        let left = "Left.cls".to_string();
+        workspace.open(
+            left.clone(),
+            "Class Test.Left Extends (Test.A, Test.B)\n{\nClassMethod Run()\n{\n Do ..Make().OnlyB()\n}\n}\n"
+                .to_string(),
+        );
+        let right = "Right.cls".to_string();
+        workspace.open(
+            right.clone(),
+            "Class Test.Right Extends (Test.A, Test.B) [ Inheritance = right ]\n{\nClassMethod Run()\n{\n Do ..Make().OnlyB()\n}\n}\n"
+                .to_string(),
+        );
+        let diagnostics = workspace.diagnostics(left);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("Cannot find member"),
+            "{diagnostics:?}"
+        );
+        let diagnostics = workspace.diagnostics(right);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn generated_members_of_a_superclass_resolve_on_a_subclass() {
+        let workspace = Workspace::new(None, None);
+        workspace.open(
+            "GenBase.cls".to_string(),
+            "Class Test.GenBase Extends %RegisteredObject\n{\nProperty Name As %String;\nIndex NameIdx On Name;\nQuery All() As %SQLQuery\n{\nSELECT 1\n}\n}\n"
+                .to_string(),
+        );
+        let uri = "GenSub.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.GenSub Extends Test.GenBase\n{\nMethod OnlySub()\n{\n}\nMethod Run()\n{\n Write ..NameSet(..NameGet())\n Write ..NameLogicalToDisplay(\"a\"), ..AllFunc()\n Do ..NameIdxOpen(\"a\").OnlySub()\n If ..NameIdxExists(\"a\") Write 1\n}\n}\n"
+                .to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    // `XLogicalToDisplay` is `%String`'s own `LogicalToDisplay` projected onto property `X`, so
+    // it has that method's arguments; the JSON pair is never projected.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn property_method_takes_the_type_classs_own_signature_from_iris() {
+        let workspace = Workspace::native(
+            Some(Box::new(MockIrisClient {
+                is_datatype: Some(true),
+                mem: Some(iris_class_method(
+                    "LogicalToDisplay",
+                    &["%val"],
+                    "%Library.String",
+                )),
+            })),
+            None,
+        );
+        let uri = "Typed.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Typed Extends %RegisteredObject\n{\nProperty X As %String;\nClassMethod Ok()\n{\n Write ..XLogicalToDisplay(\"a\")\n}\nClassMethod Few()\n{\n Write ..XLogicalToDisplay()\n}\nClassMethod Json()\n{\n Write ..XLogicalToJSON(\"a\")\n}\n}\n"
+                .to_string(),
+        );
+        let mut diagnostics: Vec<(u32, String)> = workspace
+            .diagnostics(uri)
+            .into_iter()
+            .map(|d| (d.range.start.line, d.message))
+            .collect();
+        diagnostics.sort();
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].0 == 9 && diagnostics[0].1.contains("Too few arguments"),
+            "{diagnostics:?}"
+        );
+        assert!(
+            diagnostics[1].0 == 13 && diagnostics[1].1.contains("Cannot find member"),
+            "{diagnostics:?}"
+        );
+    }
+
+    // With IRIS connected, `%ClassName` is resolved through `%RegisteredObject` to its real
+    // signature rather than taken as an untyped given.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn system_base_member_is_checked_against_its_iris_signature() {
+        let workspace = Workspace::native(
+            Some(Box::new(MockIrisClient {
+                is_datatype: Some(false),
+                mem: Some(iris_class_method(
+                    "%ClassName",
+                    &["fullname"],
+                    "%Library.String",
+                )),
+            })),
+            None,
+        );
+        let uri = "Named.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Named Extends %RegisteredObject\n{\nClassMethod Ok()\n{\n Write ..%ClassName(\"x\")\n}\nClassMethod Many()\n{\n Write ..%ClassName(\"x\", \"y\")\n}\n}\n"
+                .to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].range.start.line == 8
+                && diagnostics[0].message.contains("Too many arguments"),
+            "{diagnostics:?}"
+        );
     }
 
     #[test]
@@ -4050,7 +4214,7 @@ mod tests {
     }
 
     #[test]
-    fn unused_parameters_of_an_overriding_method_are_not_flagged() {
+    fn unused_parameters_of_an_overriding_method_are_flagged() {
         let workspace = Workspace::new(None, None);
         workspace.open(
             "Base.cls".to_string(),
@@ -4062,8 +4226,51 @@ mod tests {
             "Class Test.Sub Extends Test.Base {\nMethod M(x As %String, Output y) As %Status {\n quit 1\n}\nMethod N(z As %String) As %Status {\n quit 1\n}\n}\n".to_string(),
         );
         let diagnostics = workspace.diagnostics(uri);
+        let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "Output parameter 'y' is never assigned; its caller will get an undefined value",
+                "Variable 'x' is assigned but never read",
+                "Variable 'z' is assigned but never read",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_index_key_that_is_not_a_property_is_reported() {
+        let workspace = Workspace::new(None, None);
+        let uri = "Idx.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Idx {\nProperty Name As %String;\nIndex ByName On Nmae;\n}\n".to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(diagnostics[0].message.contains("'z'"));
+        assert!(
+            diagnostics[0].message.contains("Cannot find member 'Nmae'"),
+            "{diagnostics:?}"
+        );
+        assert!(diagnostics[0].message.contains("Name"), "{diagnostics:?}");
+        assert_eq!(
+            (
+                diagnostics[0].range.start.line,
+                diagnostics[0].range.start.character
+            ),
+            (2, 16)
+        );
+    }
+
+    #[test]
+    fn a_collection_subscript_index_key_is_not_resolved() {
+        let workspace = Workspace::new(None, None);
+        let uri = "Idx.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Idx Extends %RegisteredObject {\nProperty Tags As list Of %String;\nIndex ByTag On Tags(ELEMENTS);\nClassMethod M() {\n write ..ByTagOpen(5)\n quit\n}\n}\n".to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     #[test]
@@ -4218,6 +4425,36 @@ mod tests {
             diagnostics[0]
                 .message
                 .contains("Cannot find member 'Missing' in Demo.Child"),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn relationships_merge_by_their_element_types() {
+        let workspace = masked_iris("GetNext", "%Library.RelationshipObject", by_ref_key());
+        workspace.open(
+            "Animal.cls".to_string(),
+            "Class Demo.Animal Extends %Persistent {\nProperty Name As %String;\n}\n".to_string(),
+        );
+        workspace.open(
+            "Child.cls".to_string(),
+            "Class Demo.Child Extends Demo.Animal {\nProperty Toy As %String;\nRelationship Owner As Demo.Parent [ Cardinality = one, Inverse = Kids ];\n}\n".to_string(),
+        );
+        workspace.open(
+            "Pet.cls".to_string(),
+            "Class Demo.Pet Extends Demo.Animal {\nRelationship Owner As Demo.Parent [ Cardinality = one, Inverse = Pets ];\n}\n".to_string(),
+        );
+        let diagnostics = errors_in(
+            &workspace,
+            "Parent.cls",
+            "Class Demo.Parent Extends %Persistent {\nRelationship Kids As Demo.Child [ Cardinality = many, Inverse = Owner ];\nRelationship Pets As Demo.Pet [ Cardinality = many, Inverse = Owner ];\nMethod M(flag As %Boolean) As %String {\n If flag { Set r = ..Kids } Else { Set r = ..Pets }\n Set key = \"\"\n Set x = r.GetNext(.key)\n Quit x.Name_x.Toy\n}\n}\n",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Toy' in Demo.Animal"),
             "{diagnostics:?}"
         );
     }
@@ -5091,14 +5328,31 @@ mod tests {
     }
 
     // `..X` looks up plain properties, `..X(...)` methods and multidimensional properties: a
-    // same-named pair across the two is fine (IRIS compiles it), within one it is a conflict.
+    // same-named pair across kinds is fine (IRIS compiles a method beside a multidimensional
+    // property of the same name), within one kind it is a conflict.
+    #[test]
+    fn a_bare_reference_never_reaches_a_method() {
+        let workspace = Workspace::new(None, None);
+        let uri = "F.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.F {\nMethod M() As %String {\n Quit \"m\"\n}\nMethod N() As %String {\n Quit ..M\n}\n}\n".to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("Cannot find member 'M'"),
+            "{diagnostics:?}"
+        );
+    }
+
     #[test]
     fn member_namespaces_follow_the_access_syntax() {
         let diagnostics = class_diagnostics(
             "Property Flag As %Boolean;\nMethod Flag() As %Integer {\n Quit ..Flag\n}\nProperty Data As %String [ MultiDimensional ];\nMethod Data(k) As %String {\n Quit ..Data(k)\n}\nProperty Dup As %String;\nProperty Dup As %Integer;\nProperty Root As %String [ MultiDimensional ];\nProperty Root As %Integer;\nMethod M(k) As %String {\n Quit ..Flag()_..Flag_..Data(k)_..Root_..Root(k)\n}\n",
         );
         let lines: Vec<u32> = diagnostics.iter().map(|d| d.range.start.line).collect();
-        assert_eq!(lines, [6, 10, 12], "{diagnostics:?}");
+        assert_eq!(lines, [10, 12], "{diagnostics:?}");
     }
 
     #[test]
@@ -5246,7 +5500,7 @@ mod tests {
         let diagnostics = without_hints(diagnostics_for(&[
             (
                 "A.cls",
-                "Class Test.A Extends Test.B {\nProperty P As %String;\nClassMethod M() {\n Set o = ..%New()\n Write o.P, ..Nope()\n}\n}\n",
+                "Class Test.A Extends Test.B {\nProperty P As %String;\nClassMethod M() {\n Do ..Nope()\n}\n}\n",
             ),
             ("B.cls", "Class Test.B Extends Test.A {\n}\n"),
         ]));
@@ -5407,14 +5661,14 @@ mod tests {
 
     #[test]
     fn new_returns_an_instance_even_when_onnew_is_unresolvable() {
-        // No `Extends` at all: every member is known, so a missing one is an error.
+        // No `Extends` at all: not an object class, so IRIS gives it no `%New` either.
         let diagnostics = without_hints(diagnostics_for(&[(
             "Nw.cls",
-            "Class Test.Nw {\nProperty P As %String;\nClassMethod M() {\n Set obj = ##class(Test.Nw).%New()\n Do obj.Nope()\n Write obj.P\n}\n}\n",
+            "Class Test.Nw {\nProperty P As %String;\nClassMethod M() {\n Set obj = ##class(Test.Nw).%New()\n Write obj.P\n}\n}\n",
         )]));
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
-            diagnostics[0].message.contains("Cannot find member 'Nope'"),
+            diagnostics[0].message.contains("Cannot find member '%New'"),
             "{diagnostics:?}"
         );
         // A system superclass outside the workspace: `Nope` can't be confirmed, but `%New` can.

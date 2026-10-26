@@ -540,24 +540,12 @@ impl std::fmt::Display for HOTy {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClassTy {
     pub name: String,
-    // Where `name` is declared in the workspace, if it's been resolved — not part of the
-    // type's identity (a `##class(X)` literal and one merged from elsewhere both denote the
-    // same class regardless of which happened to resolve this), so excluded from equality.
-    pub location: Option<bindings::Location>,
-    // By parameter name; excluded from equality, like `location`.
+    // By parameter name.
     pub generics: BTreeMap<String, String>,
 }
-
-impl PartialEq for ClassTy {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl Eq for ClassTy {}
 
 pub fn normalize_class_name(name: &mut String) {
     if !name.contains(".") && name.starts_with("%") {
@@ -570,7 +558,6 @@ impl From<String> for ClassTy {
         normalize_class_name(&mut name);
         ClassTy {
             name,
-            location: None,
             generics: BTreeMap::new(),
         }
     }
@@ -998,19 +985,18 @@ pub(crate) fn ty_from_mask(t: Option<String>) -> Option<Ty> {
     }
 }
 
-// `This` is the receiver's class; `..#NAME` its generic argument for that parameter.
+// `This` is the receiver's class; `..#NAME` the receiver's argument for the parameter `NAME`
+// that `owner`, the member's declaring class, defines (its default when the receiver gives none).
 pub(crate) trait Instantiate {
-    fn instantiate(&mut self, receiver: &ClassTy);
+    fn instantiate(&mut self, receiver: &ClassTy, owner: &str);
 }
 
 impl Instantiate for Ty {
-    fn instantiate(&mut self, receiver: &ClassTy) {
+    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
         match self {
             Ty::This => *self = Ty::ins(receiver.clone()),
             Ty::Param(param) => {
-                if let Some(arg) =
-                    crate::mask::generic_arg(&receiver.name, &receiver.generics, param)
-                {
+                if let Some(arg) = crate::mask::generic_arg(owner, &receiver.generics, param) {
                     *self = Ty::from(arg);
                 }
             }
@@ -1020,30 +1006,32 @@ impl Instantiate for Ty {
 }
 
 impl<T: Instantiate> Instantiate for Option<T> {
-    fn instantiate(&mut self, receiver: &ClassTy) {
+    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
         if let Some(t) = self {
-            t.instantiate(receiver);
+            t.instantiate(receiver, owner);
         }
     }
 }
 
 impl Instantiate for TyProcedure {
-    fn instantiate(&mut self, receiver: &ClassTy) {
+    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
         for arg in &mut self.normal_args {
-            arg.ty.instantiate(receiver);
+            arg.ty.instantiate(receiver, owner);
         }
         if let Some(arg) = &mut self.variadic_arg {
-            arg.ty.instantiate(receiver);
+            arg.ty.instantiate(receiver, owner);
         }
-        self.out.instantiate(receiver);
+        self.out.instantiate(receiver, owner);
     }
 }
 
 impl Instantiate for HOTy {
-    fn instantiate(&mut self, receiver: &ClassTy) {
+    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
         match self {
-            HOTy::Value(ty) | HOTy::Collection { element: ty, .. } => ty.instantiate(receiver),
-            HOTy::Procedure(proc) => Arc::make_mut(proc).instantiate(receiver),
+            HOTy::Value(ty) | HOTy::Collection { element: ty, .. } => {
+                ty.instantiate(receiver, owner)
+            }
+            HOTy::Procedure(proc) => Arc::make_mut(proc).instantiate(receiver, owner),
         }
     }
 }
@@ -1151,12 +1139,12 @@ mod tests {
             .generics
             .insert("ELEMENTTYPE".to_string(), "Demo.Child".to_string());
         let mut element = HOTy::Value(ty_from_mask(Some("..#ELEMENTTYPE".to_string())).unwrap());
-        element.instantiate(&receiver);
+        element.instantiate(&receiver, "%Library.RelationshipObject");
         assert!(
             matches!(element, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "Demo.Child")
         );
         let mut this = HOTy::Value(ty_from_mask(Some("This".to_string())).unwrap());
-        this.instantiate(&receiver);
+        this.instantiate(&receiver, "%Library.RelationshipObject");
         assert!(
             matches!(this, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "%Library.RelationshipObject")
         );

@@ -2445,20 +2445,17 @@ pub struct Index {
 }
 
 impl Index {
-    // The properties this index is defined `On` (in order), e.g. `["Name"]` for
-    // `Index NameIdx On Name;` or `["A", "B"]` for `Index AB On (A, B);`. Empty if there's no
-    // `On` clause at all (unusual, but the grammar allows it).
-    pub fn on_properties(&self) -> Vec<String> {
+    // The keys this index is defined `On`, in order; empty without an `On` clause.
+    pub fn on_properties(&self) -> Vec<&IndexProperty> {
         let Some(on_clause) = &self.on_clause else {
             return vec![];
         };
         match &on_clause.properties {
-            IndexPropertyList::Single(property) => vec![property.name.print()],
+            IndexPropertyList::Single(property) => vec![property],
             IndexPropertyList::Multiple(properties) => properties
                 .first
                 .iter()
                 .chain(properties.rest.iter().map(|(_, property)| property))
-                .map(|property| property.name.print())
                 .collect(),
         }
     }
@@ -2489,8 +2486,8 @@ pub struct IndexPropertyMultiple {
 
 #[derive(Grammar)]
 pub struct IndexProperty {
-    pub name: ClassMemberName,
-    kind: Option<IndexPropertyKind>,
+    pub name: Range<ClassMemberName>,
+    pub kind: Option<IndexPropertyKind>,
     as_collation: Option<AsCollation>,
 }
 

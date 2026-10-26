@@ -26,14 +26,16 @@ struct ArgCorrection {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Entry {
-    Class(BTreeMap<String, Correction>),
+    // `null`: a member the dictionary lists but the compiler doesn't recognize (`##super` from
+    // an override reports it missing, MPP5386) -- the inert `%OnNew` and `%Dispatch*` defaults.
+    Class(BTreeMap<String, Option<Correction>>),
     Routine(BTreeMap<String, LabelSignature>),
 }
 
 static MASK: LazyLock<BTreeMap<String, Entry>> =
     LazyLock::new(|| serde_json::from_str(include_str!("mask.json")).expect("a valid mask.json"));
 
-fn members(cls: &str) -> impl Iterator<Item = (&'static String, &'static Correction)> {
+fn members(cls: &str) -> impl Iterator<Item = (&'static String, &'static Option<Correction>)> {
     match MASK.get(&format!("{cls}.cls")) {
         Some(Entry::Class(members)) => Some(members),
         _ => None,
@@ -42,10 +44,21 @@ fn members(cls: &str) -> impl Iterator<Item = (&'static String, &'static Correct
     .flatten()
 }
 
-pub(crate) fn correction(cls: &str, member: &str) -> Option<&'static Correction> {
+fn entry(cls: &str, member: &str) -> Option<&'static Option<Correction>> {
     members(cls)
-        .find(|(name, c)| name.eq_ignore_ascii_case(member) && c.parameter.is_none())
+        .find(|(name, _)| name.eq_ignore_ascii_case(member))
         .map(|(_, c)| c)
+}
+
+// Whether the mask says `cls` has no member `member`, whatever the dictionary lists.
+pub(crate) fn dropped(cls: &str, member: &str) -> bool {
+    matches!(entry(cls, member), Some(None))
+}
+
+pub(crate) fn correction(cls: &str, member: &str) -> Option<&'static Correction> {
+    entry(cls, member)?
+        .as_ref()
+        .filter(|c| c.parameter.is_none())
 }
 
 impl Correction {
@@ -77,9 +90,12 @@ pub(crate) fn generic_arg(
     args: &BTreeMap<String, String>,
     param: &str,
 ) -> Option<String> {
-    let (name, declared) =
-        members(cls).find(|(name, c)| c.parameter.is_some() && name.eq_ignore_ascii_case(param))?;
-    args.get(name).cloned().or_else(|| declared.default.clone())
+    let (name, declared) = members(cls).find(|(name, c)| {
+        c.as_ref().is_some_and(|c| c.parameter.is_some()) && name.eq_ignore_ascii_case(param)
+    })?;
+    args.get(name)
+        .cloned()
+        .or_else(|| declared.as_ref()?.default.clone())
 }
 
 #[derive(Deserialize)]
