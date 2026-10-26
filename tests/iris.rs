@@ -2,7 +2,7 @@
 //! (`http://user:password@host:port`); each test passes without doing anything when it's unset.
 //! CONTRIBUTING.md shows how to run one in Docker.
 
-use ascot::bindings::{DiagnosticSeverity, GuestWorkspace};
+use ascot::bindings::{DiagnosticSeverity, GuestWorkspace, MemberKind};
 use ascot::{IrisClient, Workspace};
 
 fn iris() -> Option<Box<dyn IrisClient>> {
@@ -26,6 +26,25 @@ fn system_class_has_its_members() {
             .collect::<Vec<_>>()
     );
     assert!(iris.get_cls("No.Such.Class").is_none());
+}
+
+#[test]
+fn generated_accessors_keep_their_names_and_origins() {
+    let Some(iris) = iris() else { return };
+    let cls = iris.get_cls("Security.Users").expect("Security.Users");
+    let names: Vec<&String> = cls.members.iter().map(|m| &m.name.content).collect();
+    let get = cls
+        .members
+        .iter()
+        .find(|m| m.name.content == "%ConcurrencyGet")
+        .unwrap_or_else(|| panic!("{names:?}"));
+    assert_eq!(get.origin.as_deref(), Some("%Library.Persistent"));
+    assert!(
+        matches!(&get.kind, MemberKind::Method(m) if m.t.as_deref() == Some("%Library.RawString")),
+        "{:?}",
+        get.kind
+    );
+    assert!(!names.contains(&&"IsValid".to_string()), "{names:?}");
 }
 
 #[test]

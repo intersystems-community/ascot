@@ -666,7 +666,9 @@ fn stub_parts(row: &MemberRow) -> Option<(&str, &str, &'static str)> {
 }
 
 // Replaces each stub row with its real metadata -- one query per stub table the classes use,
-// not one per stub (a property-heavy class has dozens of generated accessors).
+// not one per stub (a property-heavy class has dozens of generated accessors). The stub row keeps
+// its name: the real row is named by its short part (`Get`, not `NameGet`) and, as a generated
+// method, has no origin of its own, so the owning property's/query's/index's is taken instead.
 fn resolve_stubs(
     conn: &AtelierConnection,
     filter: &str,
@@ -682,9 +684,10 @@ fn resolve_stubs(
     for table in tables {
         let sql = |description: &str| {
             format!(
-                "SELECT parent->Parent AS Parent, Name, parent->Name AS StubOrigin, 'method' AS \
-                 MemberType, {description}, FormalSpec, ReturnType, '' AS Stub, ClassMethod, \
-                 Deprecated FROM %Dictionary.Compiled{table}Method WHERE parent->Parent {filter}"
+                "SELECT parent->Parent AS Parent, Name, parent->Name AS StubOrigin, parent->Origin \
+                 AS Origin, 'method' AS MemberType, {description}, FormalSpec, ReturnType, '' AS \
+                 Stub, ClassMethod, Deprecated FROM %Dictionary.Compiled{table}Method WHERE \
+                 parent->Parent {filter}"
             )
         };
         // Same `{`-leading-text failure mode `all_mem_rows` guards against.
@@ -713,14 +716,21 @@ fn resolve_stubs(
     }
     rows.into_iter()
         .map(|row| match stub_parts(&row) {
-            Some((origin, subname, table)) => resolved
-                .remove(&(
+            Some((origin, subname, table)) => {
+                let key = (
                     row.parent.clone(),
                     origin.to_string(),
                     subname.to_string(),
                     table,
-                ))
-                .unwrap_or(row),
+                );
+                match resolved.remove(&key) {
+                    Some(real) => MemberRow {
+                        name: row.name,
+                        ..real
+                    },
+                    None => row,
+                }
+            }
             None => row,
         })
         .collect()
