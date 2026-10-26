@@ -42,7 +42,8 @@ enum Command {
     ///
     /// Loads every .cls/.mac/.int/.inc file under each path into one workspace and prints the
     /// diagnostics of all of them. Exits non-zero if any error or warning was found, or if a path
-    /// doesn't exist; hints don't affect the exit code.
+    /// doesn't exist; hints don't affect the exit code. For example:
+    /// `ascot analyze --iris http://user:password@localhost:8080/iris --iris-namespace USER src/`.
     Analyze {
         #[command(flatten)]
         iris: IrisArgs,
