@@ -289,6 +289,11 @@ impl QuasiTypeError {
         Self::WithoutRange(TypeErrorKind::RoutineWithoutSource { routine }, vec![])
     }
 
+    pub fn iris_lookup_failed(kind: crate::DocKind, name: String, reason: String) -> Self {
+        let lookup = IrisLookup { kind, name };
+        Self::WithoutRange(TypeErrorKind::IrisLookupFailed { lookup, reason }, vec![])
+    }
+
     pub fn continue_not_in_loop() -> Self {
         Self::WithoutRange(TypeErrorKind::ContinueNotInLoop, vec![])
     }
@@ -450,12 +455,17 @@ type_error_kinds! {
     RoutineNotOnIris { routine: String },
     #[code = "A3794"]
     #[severity = Hint]
-    #[message = "The source of routine '{routine}' isn't available, so calls into it can't be checked precisely"]
+    #[message = "The labels of routine '{routine}' aren't known, so calls into it can't be checked precisely"]
     RoutineWithoutSource { routine: String },
     #[code = "A7831"]
     #[severity = Error]
     #[message = "Include file '{name}' is not defined in the current workspace"]
     CannotFindInclude { name: String },
+    /// A lookup the IRIS context couldn't answer, so what it looked for is taken on trust.
+    #[code = "A4471"]
+    #[severity = Hint]
+    #[message = "Cannot look up {lookup} on the IRIS instance ({reason}), so it is taken on trust"]
+    IrisLookupFailed { lookup: IrisLookup, reason: String },
     #[code = "A5090"]
     #[severity = Error]
     #[message = "The macro '{name}' expands recursively without end"]
@@ -736,6 +746,24 @@ impl std::fmt::Display for ClassLookup {
     }
 }
 
+/// What a failed IRIS lookup was for.
+#[derive(Debug)]
+pub struct IrisLookup {
+    pub kind: crate::DocKind,
+    pub name: String,
+}
+
+impl std::fmt::Display for IrisLookup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = match self.kind {
+            crate::DocKind::Cls => "class",
+            crate::DocKind::Inc => "include file",
+            crate::DocKind::Rtn => "routine",
+        };
+        write!(f, "{kind} '{}'", self.name)
+    }
+}
+
 /// `%Get`'s suggestion for a member, if the class has dynamic properties.
 #[derive(Debug)]
 pub struct DynamicGet(pub Option<String>);
@@ -944,6 +972,20 @@ impl TypeError {
 
     pub fn cannot_find_include(name: String, range: Range) -> Self {
         Self::new(TypeErrorKind::CannotFindInclude { name }, range, vec![])
+    }
+
+    pub fn iris_lookup_failed(
+        kind: crate::DocKind,
+        name: String,
+        reason: String,
+        range: Range,
+    ) -> Self {
+        let lookup = IrisLookup { kind, name };
+        Self::new(
+            TypeErrorKind::IrisLookupFailed { lookup, reason },
+            range,
+            vec![],
+        )
     }
 
     pub fn macro_expansion_too_deep(name: String, range: Range) -> Self {

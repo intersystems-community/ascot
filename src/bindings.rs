@@ -4,7 +4,7 @@
 //! `lib.rs`, `check/`, `lsp.rs` and `mcp.rs` is defined once in the WIT file and re-exported here,
 //! so the native front ends and the wasm component (`bindings/js`, which the InterSystems
 //! Language Server embeds) speak the same types. `GuestWorkspace` is the trait `Workspace`
-//! implements to satisfy the WIT `workspace` resource; `IrisConnection` is the host-provided
+//! implements to satisfy the WIT `workspace` resource; `IrisContext` is the host-provided
 //! import that `atelier.rs` stands in for on native builds. The rest of this file converts
 //! `details.rs`/`check/types.rs` values into those WIT records.
 
@@ -15,11 +15,12 @@ mod wit_bind {
     wit_bindgen::generate!({
         path: "src/wit/ascot.wit",
         additional_derives: [serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq, Hash],
+        additional_derives_ignore: ["env"],
     });
 
     pub use exports::iris::ascot::exported::{Guest, GuestWorkspace, Workspace};
     pub use iris::ascot::common::*;
-    pub use iris::ascot::imported::IrisConnection;
+    pub use iris::ascot::imported::{Atelier, Env, IrisContext};
 
     #[cfg(target_arch = "wasm32")]
     use super::Component;

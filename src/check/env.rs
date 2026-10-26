@@ -460,14 +460,13 @@ impl<'a> WorkspaceEnv<'a> {
             // Not a workspace class (e.g. a datatype like %Integer) -- IRIS is the only other
             // source, and doesn't expose superclass-walking the way `cls_details.extends` does,
             // so this is a single, non-recursive lookup rather than a further `collect_*` call.
-            if let Some(iris) = self.workspace.iris.as_ref() {
-                names.extend(
-                    iris.get_cls(cls)
-                        .into_iter()
-                        .flat_map(|ci| ci.members)
-                        .map(|m| m.name.content),
-                );
-            }
+            names.extend(
+                self.iris_cls(cls)
+                    .flatten()
+                    .into_iter()
+                    .flat_map(|ci| ci.members)
+                    .map(|m| m.name.content),
+            );
             return;
         };
         let Ok(details) = self.workspace.cls_details(&uri) else {
@@ -500,9 +499,7 @@ impl<'a> WorkspaceEnv<'a> {
             return;
         }
         let Some(uri) = self.resolve_cls_uri(cls) else {
-            if let Some(iris) = self.workspace.iris.as_ref()
-                && let Some(ci) = iris.get_cls(cls)
-            {
+            if let Some(Some(ci)) = self.iris_cls(cls) {
                 classes.extend(ci.property_class_names);
                 for sup in ci.extends {
                     self.collect_property_classes(&sup, seen, classes);
@@ -702,10 +699,8 @@ impl<'a> WorkspaceEnv<'a> {
                 .map(|(_, name)| name.clone())
                 .collect();
         }
-        self.workspace
-            .iris
-            .as_ref()
-            .and_then(|iris| iris.get_cls(cls))
+        self.iris_cls(cls)
+            .flatten()
             .map(|ci| {
                 ci.members
                     .into_iter()
@@ -782,8 +777,8 @@ impl<'a> WorkspaceEnv<'a> {
         let mut supers: Vec<String> = if let Some(uri) = self.resolve_cls_uri(cls) {
             let details = self.workspace.cls_details(&uri).ok()?;
             return Some(self.qualified_extends(cls, &details));
-        } else if let Some(iris) = self.workspace.iris.as_ref() {
-            iris.get_cls(cls).map(|ci| ci.extends).unwrap_or_default()
+        } else if let Some(found) = self.iris_cls(cls) {
+            found.map(|ci| ci.extends).unwrap_or_default()
         } else {
             self.unverified.set(true);
             return None;
@@ -818,12 +813,7 @@ impl<'a> WorkspaceEnv<'a> {
                 continue;
             }
             let Some(uri) = self.resolve_cls_uri(&sup) else {
-                if let Some(info) = self
-                    .workspace
-                    .iris
-                    .as_ref()
-                    .and_then(|iris| iris.get_cls(&sup))
-                {
+                if let Some(Some(info)) = self.iris_cls(&sup) {
                     names.extend(info.includes);
                     pending.extend(info.extends);
                 }
@@ -873,17 +863,42 @@ impl<'a> WorkspaceEnv<'a> {
             .unwrap_or(name)
     }
 
-    pub(crate) fn has_iris(&self) -> bool {
-        self.workspace.iris.is_some()
-    }
-
     pub(crate) fn class_exists(&self, cls: &str) -> bool {
         self.resolve_cls_uri(cls).is_some()
-            || self
-                .workspace
-                .iris
-                .as_ref()
-                .is_some_and(|iris| iris.get_cls(cls).is_some())
+            || self.iris_cls(cls).is_some_and(|found| found.is_some())
+    }
+
+    // Whether IRIS says there's no such class; `false` when it couldn't be asked.
+    pub(crate) fn class_absent(&self, cls: &str) -> bool {
+        self.resolve_cls_uri(cls).is_none() && matches!(self.iris_cls(cls), Some(None))
+    }
+
+    // `None` with no IRIS context or when it couldn't answer (noted in `lookup_failures`);
+    // `Some(None)` when IRIS has no such class.
+    fn iris_cls(&self, cls: &str) -> Option<Option<bindings::ClassInfo>> {
+        match self.workspace.iris.as_ref()?.get_cls(cls) {
+            Ok(found) => Some(found),
+            Err(reason) => {
+                self.lookup_failures
+                    .borrow_mut()
+                    .insert(cls.to_string(), reason);
+                None
+            }
+        }
+    }
+
+    // The hint for a lookup of `cls` that failed, or with `any`, of whatever class failed last.
+    fn lookup_failed(&self, cls: &str, any: bool, range: bindings::Range) -> Option<TypeError> {
+        let failures = self.lookup_failures.borrow();
+        let (cls, reason) = failures
+            .get_key_value(cls)
+            .or_else(|| any.then(|| failures.iter().next()).flatten())?;
+        Some(TypeError::iris_lookup_failed(
+            DocKind::Cls,
+            cls.clone(),
+            reason.clone(),
+            range,
+        ))
     }
 
     fn qualified_extends(&self, cls: &str, details: &crate::ClassDetails) -> Vec<String> {
@@ -926,8 +941,15 @@ impl<'a> WorkspaceEnv<'a> {
         order: &[MemberNs],
         skip_origin: Option<&str>,
     ) -> Option<MemberTy> {
-        let iris = self.workspace.iris.as_ref()?;
-        let members = iris.get_cls(cls)?.members;
+        let members = match self.iris_cls(cls) {
+            Some(found) => found?.members,
+            // Only reached with an IRIS context, so this is a lookup that failed: the member is
+            // taken on trust, like one outside the workspace with no IRIS at all.
+            None => {
+                self.unverified.set(true);
+                return None;
+            }
+        };
         let found = order.iter().find_map(|&ns| {
             members.iter().find(|m| {
                 MemberNs::of_info(&m.kind).contains(&ns)
@@ -950,12 +972,7 @@ impl<'a> WorkspaceEnv<'a> {
             if let Ok(details) = self.workspace.cls_details(&uri) {
                 cty.location = Some(bindings::Location::new(uri, details.name.range));
             }
-        } else if let Some(uri) = self
-            .workspace
-            .iris
-            .as_ref()
-            .and_then(|iris| iris.get_cls(&cty.name)?.uri)
-        {
+        } else if let Some(uri) = self.iris_cls(&cty.name).flatten().and_then(|ci| ci.uri) {
             let zero = bindings::Range::point(bindings::Position {
                 line: 0,
                 character: 0,
@@ -1013,7 +1030,7 @@ impl<'a> WorkspaceEnv<'a> {
                 Some(yes)
             }
             // Outside the workspace, IRIS's compiled ClassType resolves the whole chain.
-            None => self.workspace.iris.as_ref()?.get_cls(cls)?.is_datatype,
+            None => self.iris_cls(cls)??.is_datatype,
         }
     }
 
@@ -1046,7 +1063,7 @@ impl<'a> WorkspaceEnv<'a> {
         }
         let extends = match self.resolve_cls_uri(cls) {
             Some(uri) => self.workspace.cls_details(&uri).ok()?.extends.clone(),
-            None => self.workspace.iris.as_ref()?.get_cls(cls)?.extends,
+            None => self.iris_cls(cls)??.extends,
         };
         if extends.is_empty() {
             return Some(true);
@@ -1071,18 +1088,13 @@ impl<'a> WorkspaceEnv<'a> {
         if self.resolve_cls_uri(cls).is_some() {
             return;
         }
-        if self
-            .workspace
-            .iris
-            .as_ref()
-            .is_some_and(|iris| iris.get_cls(cls).is_some())
-        {
+        if self.iris_cls(cls).is_some_and(|found| found.is_some()) {
             return;
         }
-        let has_iris = self.workspace.iris.is_some();
-        self.add_soft_diagnostic(
-            TypeError::unconfirmed_class(cls.to_string(), has_iris, range).into(),
-        );
+        let err = self.lookup_failed(cls, false, range).unwrap_or_else(|| {
+            TypeError::unconfirmed_class(cls.to_string(), self.workspace.iris.is_some(), range)
+        });
+        self.add_soft_diagnostic(err.into());
     }
 
     // Where the include file `name` is declared, for go-to-definition on an `Include`.
@@ -1093,7 +1105,7 @@ impl<'a> WorkspaceEnv<'a> {
     pub(crate) fn resolve_class_includes(
         &self,
         names: &[String],
-    ) -> (MacroDefinitions, Vec<String>) {
+    ) -> (MacroDefinitions, Vec<crate::macro_expand::FailedInclude>) {
         let (definitions, failed, include_names) = self.workspace.resolve_class_includes(names);
         self.touched
             .borrow_mut()
@@ -1114,7 +1126,7 @@ impl<'a> WorkspaceEnv<'a> {
 
     // A workspace-wide routine's label -> signature map, for a cross-routine label call
     // (`Do Foo^OtherRoutine()`) -- same "resolve by name" shape as `resolve_cls_uri` for a
-    // cross-class method call. Falls back to `IrisConnection::get_int_or_mac` when `name` isn't
+    // cross-class method call. Falls back to `IrisContext::get_rtn` when `name` isn't
     // open in the workspace. `Ok(None)` when the routine can't be parsed (a grammar gap), so its
     // labels are simply unknown; `Err` says why its labels are out of reach.
     pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Result<Option<Labels>, QuasiTypeError> {
@@ -1125,27 +1137,23 @@ impl<'a> WorkspaceEnv<'a> {
         let Some(iris) = self.workspace.iris.as_ref() else {
             return Err(QuasiTypeError::cannot_find_routine(name.into()));
         };
-        let source = match iris.get_int_or_mac(name) {
-            Some(Some(source)) => source,
-            Some(None) => return Err(QuasiTypeError::routine_without_source(name.into())),
-            None => return Err(QuasiTypeError::routine_not_on_iris(name.into())),
-        };
-        if let Some((text, labels)) = self.workspace.iris_rtn_labels.borrow().get(name)
-            && *text == source.text
-        {
-            return Ok(labels.clone());
-        }
-        let expanded = self
-            .workspace
-            .expand_rtn(source.uri.as_deref().unwrap_or(name), &source.text)
-            .ok();
-        let labels = expanded
-            .map(|(routine, map, _)| labels_of(&map.expanded_olc, &routine, source.uri.as_deref()));
-        self.workspace
-            .iris_rtn_labels
-            .borrow_mut()
-            .insert(name.to_string(), (source.text, labels.clone()));
-        Ok(labels)
+        let info = iris
+            .get_rtn(name)
+            .map_err(|reason| {
+                QuasiTypeError::iris_lookup_failed(DocKind::Rtn, name.into(), reason)
+            })?
+            .ok_or_else(|| QuasiTypeError::routine_not_on_iris(name.into()))?;
+        let labels = info
+            .labels
+            .ok_or_else(|| QuasiTypeError::routine_without_source(name.into()))?;
+        let labels = labels.into_iter().map(|label| {
+            let name = label.name.clone();
+            (
+                name,
+                Arc::new(TyProcedure::from_label(label, info.uri.clone())),
+            )
+        });
+        Ok(Some(labels.collect()))
     }
 
     // `""` is also the null OREF (`$$$NULLOREF`), so it goes wherever an object is expected:
@@ -1217,10 +1225,11 @@ impl<'a> WorkspaceEnv<'a> {
                     .cls_details(&uri)
                     .map(|details| self.qualified_extends(&c, &details))
                     .unwrap_or_default()
-            } else if let Some(iris) = self.workspace.iris.as_ref() {
-                iris.get_cls(&c).map(|ci| ci.extends).unwrap_or_default()
             } else {
-                vec![]
+                self.iris_cls(&c)
+                    .flatten()
+                    .map(|ci| ci.extends)
+                    .unwrap_or_default()
             };
             queue.extend(supers.into_iter().map(|mut s| {
                 normalize_class_name(&mut s);
@@ -1238,6 +1247,7 @@ impl<'a> WorkspaceEnv<'a> {
             references: RefCell::new(Vec::new()),
             soft_diagnostics: RefCell::new(Vec::new()),
             unverified: Cell::new(false),
+            lookup_failures: RefCell::new(HashMap::new()),
             suppress_soft_diagnostics: Cell::new(false),
         }
     }
@@ -1365,6 +1375,7 @@ pub struct WorkspaceEnv<'a> {
     // assumed) and read right back by whichever `resolve_*` call triggered it, to raise a soft
     // diagnostic at that exact reference — see `resolve_obj_mstr`.
     unverified: Cell<bool>,
+    lookup_failures: RefCell<HashMap<String, String>>,
     // Set during a loop's throwaway priming pass (see `Flow::with_loop`) — its findings reflect
     // pre-loop bindings only, not real, so every soft diagnostic raised meanwhile is dropped.
     suppress_soft_diagnostics: Cell<bool>,
@@ -1570,12 +1581,12 @@ impl<'a> CodeEnv<'a> {
         self.base.base.add_soft_diagnostic(err.into())
     }
 
-    pub(crate) fn has_iris(&self) -> bool {
-        self.base.base.has_iris()
-    }
-
     pub(crate) fn class_exists(&self, cls: &str) -> bool {
         self.base.base.class_exists(cls)
+    }
+
+    pub(crate) fn class_absent(&self, cls: &str) -> bool {
+        self.base.base.class_absent(cls)
     }
 
     pub(crate) fn qualify_class_name(&self, name: &str) -> String {
@@ -1686,14 +1697,17 @@ impl<'a> CodeEnv<'a> {
         self.unverified.set(false);
         let result = self.get_member(obj.name(), &mem, is_parameter, kind, obj.is_ins());
         if self.unverified.replace(false) {
-            let has_iris = self.workspace.iris.is_some();
-            let err = TypeError::unconfirmed_member(
-                obj.name().to_string(),
-                mem.clone(),
-                false,
-                has_iris,
-                range,
-            );
+            let err = self
+                .lookup_failed(obj.name(), true, range)
+                .unwrap_or_else(|| {
+                    TypeError::unconfirmed_member(
+                        obj.name().to_string(),
+                        mem.clone(),
+                        false,
+                        self.workspace.iris.is_some(),
+                        range,
+                    )
+                });
             self.add_soft_diagnostic(err.into());
         }
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
@@ -1709,7 +1723,7 @@ impl<'a> CodeEnv<'a> {
             } else {
                 Ok(mem_desc)
             }
-        } else if self.workspace.iris.is_some() && !self.class_exists(obj.name()) {
+        } else if self.class_absent(obj.name()) {
             Err(QuasiTypeError::cannot_find_class(obj.name().to_string()).into_error(|| range))
         } else {
             let (suggestions, has_get) = self.member_suggestions(obj.name(), &mem);
@@ -1792,7 +1806,8 @@ impl<'a> CodeEnv<'a> {
                 (Some(label), None) => match self.resolve_rtn_labels(&routine) {
                     Err(
                         err @ QuasiTypeError::WithoutRange(
-                            TypeErrorKind::RoutineWithoutSource { .. },
+                            TypeErrorKind::RoutineWithoutSource { .. }
+                            | TypeErrorKind::IrisLookupFailed { .. },
                             _,
                         ),
                     ) => crate::mask::label(&routine, &label)

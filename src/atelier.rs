@@ -1,39 +1,42 @@
-//! Optional live-IRIS lookups over the Atelier REST API (`--iris <url>` on the CLI and LSP, the
-//! `iris` argument of the MCP `create_workspace` tool).
-//!
-//! Supplies classes, `.inc` files and routines that aren't in the local workspace, system and
-//! library code above all, so the checker can confirm them instead of leaving a hint. Results
-//! are cached per connection. `AtelierConnection` is the HTTP implementation of `iris::IrisClient`.
-//!
-//! A native (non-wasm32) `IrisConnection`-equivalent backed by the Atelier REST API, ported from
-//! `language-server`'s `server/src/ascot/index.ts` `IrisConnection` class -- the JS host-side
-//! implementation of the same WIT `imported.iris-connection` interface, which can't be
-//! implemented by native Rust guest code at all (see `src/lib.rs`'s `IrisHandle`).
+//! `Atelier`, the two Atelier REST API requests, and `AtelierContext`, the cached
+//! `IrisContext` ascot makes out of them: the `%Dictionary` queries behind `get_cls`, and the
+//! parsing behind `get_rtn`. ascot's own `Atelier` is `RawAtelier` (native only).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Mutex, mpsc};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::ops::Deref;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use base64::Engine;
-use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use serde_json::Value;
+use tygr::{Grammar, GrammarRule, Prefix, Raw, StringEq, StringOf1, VecSep};
 
-use crate::DocKind;
+#[cfg(not(target_arch = "wasm32"))]
+use {
+    crate::DocKind,
+    crate::iris::{DECLARATIONS_VERSION, Declarations},
+    base64::Engine,
+    percent_encoding::percent_decode_str,
+    std::collections::BTreeMap,
+    std::sync::atomic::{AtomicUsize, Ordering},
+    std::sync::mpsc,
+};
+
+use crate::IrisContext;
 use crate::bindings::{
     ArgMode, Cardinality, ClassInfo, CollectionKind, MemberInfo, MemberKind, MethodInfo, NameInfo,
-    NormalArg, ParameterInfo, Position, PropertyInfo, Range, RelationshipInfo, RoutineSource,
+    NormalArg, ParameterInfo, Position, PropertyInfo, Range, RelationshipInfo, RoutineInfo, Source,
     VariadicArg,
 };
-use crate::iris::{DECLARATIONS_VERSION, Declarations, IrisClient};
-
-const BATCH: usize = 100;
-const WORKERS: usize = 8;
+use crate::cos::{LocalVariableName, OSString, Space, Type};
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+#[cfg(not(target_arch = "wasm32"))]
+const BATCH: usize = 100;
+#[cfg(not(target_arch = "wasm32"))]
+const WORKERS: usize = 8;
 
-struct Cache<V: Clone>(Mutex<HashMap<String, (Instant, V)>>);
+struct Cache<V: Clone>(Mutex<HashMap<String, (Option<Instant>, V)>>);
 
 impl<V: Clone> Cache<V> {
     fn new() -> Self {
@@ -43,365 +46,15 @@ impl<V: Clone> Cache<V> {
     fn get(&self, key: &str) -> Option<V> {
         let entries = self.0.lock().unwrap();
         let (at, value) = entries.get(key)?;
-        (at.elapsed() < CACHE_TTL).then(|| value.clone())
+        at.is_none_or(|at| at.elapsed() < CACHE_TTL)
+            .then(|| value.clone())
     }
 
     fn set(&self, key: String, value: V) {
-        self.0.lock().unwrap().insert(key, (Instant::now(), value));
+        // wasm32-unknown-unknown has no clock, so entries there never expire.
+        let at = (!cfg!(target_arch = "wasm32")).then(Instant::now);
+        self.0.lock().unwrap().insert(key, (at, value));
     }
-}
-
-pub struct AtelierConnection {
-    base_url: String,
-    // `scheme://host:port/prefix/api/atelier`, for the namespace listing in `check`'s message.
-    api_root: String,
-    namespace: String,
-    username: String,
-    auth_header: String,
-    agent: ureq::Agent,
-    // Set on the first request failure, so we warn once (not once per lookup) and short-circuit
-    // every later call instead of re-attempting and re-timing-out on a connection already known
-    // to be broken.
-    broken: AtomicBool,
-    cls_cache: Cache<Option<ClassInfo>>,
-    routine_cache: Cache<Option<RoutineSource>>,
-    obj_cache: Cache<bool>,
-}
-
-impl AtelierConnection {
-    /// `url` is `scheme://user:pass@host:port`, optionally with a path prefix (e.g. `/iris`,
-    /// when the web server routes IRIS instances by path). `namespace` is a plain name (e.g.
-    /// `%SYS`) -- not URL-encoded, since it arrives as a separate CLI/tool argument.
-    pub fn connect(url: &str, namespace: &str) -> Result<Self, String> {
-        let parsed = url::Url::parse(url).map_err(|e| format!("invalid --iris URL: {e}"))?;
-        let scheme = parsed.scheme();
-        if scheme != "http" && scheme != "https" {
-            return Err(format!("--iris URL must be http or https, got {scheme:?}"));
-        }
-        let host = parsed.host_str().ok_or("--iris URL is missing a host")?;
-        let port = parsed
-            .port_or_known_default()
-            .ok_or("--iris URL is missing a port")?;
-        let path_prefix = match parsed.path() {
-            "" | "/" => "",
-            path => path.trim_end_matches('/'),
-        };
-        // `Url` hands these back still percent-encoded; IRIS wants the real characters.
-        let username = percent_decode_str(parsed.username()).decode_utf8_lossy();
-        let password = percent_decode_str(parsed.password().unwrap_or("")).decode_utf8_lossy();
-        let auth_header = format!(
-            "Basic {}",
-            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
-        );
-        let api_root = format!("{scheme}://{host}:{port}{path_prefix}/api/atelier");
-        Ok(Self {
-            base_url: format!("{api_root}/v8/{}", percent_encode(namespace)),
-            api_root,
-            namespace: namespace.to_string(),
-            username: username.into_owned(),
-            auth_header,
-            agent: ureq::Agent::new_with_config(
-                ureq::Agent::config_builder()
-                    .timeout_connect(Some(Duration::from_secs(5)))
-                    .timeout_global(Some(Duration::from_secs(20)))
-                    .build(),
-            ),
-            broken: AtomicBool::new(false),
-            cls_cache: Cache::new(),
-            routine_cache: Cache::new(),
-            obj_cache: Cache::new(),
-        })
-    }
-
-    /// One request up front, so a wrong URL, password or namespace is a clear error at startup
-    /// rather than a one-line warning followed by every system macro reported undefined.
-    pub fn check(&self) -> Result<(), String> {
-        let get = |url: &str| {
-            self.agent
-                .get(url)
-                .header("Authorization", &self.auth_header)
-                .call()
-        };
-        match get(&self.base_url) {
-            Ok(_) => Ok(()),
-            Err(ureq::Error::StatusCode(404)) => {
-                let namespaces: Option<Vec<String>> =
-                    get(&format!("{}/", self.api_root)).ok().and_then(|resp| {
-                        let body: Value = resp.into_body().read_json().ok()?;
-                        let names = body.get("result")?.get("content")?.get("namespaces")?;
-                        serde_json::from_value(names.clone()).ok()
-                    });
-                Err(match namespaces {
-                    Some(names) => format!(
-                        "namespace '{}' does not exist at {}; it has: {}",
-                        self.namespace,
-                        self.api_root,
-                        names.join(", ")
-                    ),
-                    None => format!(
-                        "no Atelier API at {} (http status 404); check the URL's path prefix",
-                        self.api_root
-                    ),
-                })
-            }
-            Err(ureq::Error::StatusCode(401)) => Err(format!(
-                "authentication failed for user '{}' at {} (http status 401)",
-                self.username, self.api_root
-            )),
-            Err(ureq::Error::StatusCode(status)) => {
-                Err(format!("{} answered http status {status}", self.base_url))
-            }
-            Err(ureq::Error::Timeout(_)) => Err(format!("cannot reach {}", self.api_root)),
-            Err(err) => Err(format!("cannot reach {}: {err}", self.api_root)),
-        }
-    }
-
-    /// Every class, include file and routine in the namespace, for `ascot declare`;
-    /// `progress(kind, done, total)` once each total is known and after each batch.
-    pub fn declarations(
-        &self,
-        mut progress: impl FnMut(DocKind, usize, usize),
-    ) -> Result<Declarations, String> {
-        let failed = || format!("IRIS connection at {} failed", self.base_url);
-        // `%sqlcq.*` are SQL cached queries; `declare`'s own queries create some, so without this
-        // each run would add classes to the next run's file.
-        let mut class_names: Vec<String> = self
-            .query("SELECT Name FROM %Dictionary.CompiledClass", &[])
-            .ok_or_else(failed)?
-            .into_iter()
-            .filter_map(|row| Some(row.get("Name")?.as_str()?.to_string()))
-            .filter(|name| !name.starts_with("%sqlcq."))
-            .collect();
-        class_names.sort();
-        let inc_names = self.docnames("INC").ok_or_else(failed)?;
-        // Every routine, system ones included, so one without source is still declared.
-        let all_rtn_names = self.routine_names("*.mac,*.int,*.obj").ok_or_else(failed)?;
-        // Hand-written routines only (`generated=0` skips a class's `.int`s), read as the `.int`
-        // where there is one (compiled, macro-expanded; what `get_int_or_mac` prefers), else the `.mac`.
-        let mut rtn_names: Vec<String> = [
-            self.docnames("MAC").ok_or_else(failed)?,
-            self.docnames("INT").ok_or_else(failed)?,
-        ]
-        .concat()
-        .iter()
-        .map(|doc| doc_basename(doc))
-        .collect();
-        rtn_names.sort();
-        rtn_names.dedup();
-
-        let totals = [class_names.len(), inc_names.len(), rtn_names.len()];
-        for kind in [DocKind::Cls, DocKind::Inc, DocKind::Rtn] {
-            progress(kind, 0, totals[kind as usize]);
-        }
-        let jobs: Vec<(DocKind, &[String])> = (class_names.chunks(BATCH))
-            .map(|batch| (DocKind::Cls, batch))
-            .chain(inc_names.chunks(BATCH).map(|batch| (DocKind::Inc, batch)))
-            .chain(rtn_names.chunks(BATCH).map(|batch| (DocKind::Rtn, batch)))
-            .collect();
-        let next = AtomicUsize::new(0);
-        let classes = Mutex::new(BTreeMap::new());
-        let includes = Mutex::new(BTreeMap::new());
-        let routines = Mutex::new(all_rtn_names.into_iter().map(|name| (name, None)).collect());
-        let (tx, rx) = mpsc::channel();
-        let mut done = [0; 3];
-        std::thread::scope(|scope| {
-            let (jobs, next) = (&jobs, &next);
-            let (classes, includes, routines) = (&classes, &includes, &routines);
-            for _ in 0..WORKERS.min(jobs.len()) {
-                let tx = tx.clone();
-                scope.spawn(move || {
-                    while !self.broken.load(Ordering::Relaxed) {
-                        let Some(&(kind, batch)) = jobs.get(next.fetch_add(1, Ordering::Relaxed))
-                        else {
-                            break;
-                        };
-                        let ok = match kind {
-                            DocKind::Cls => {
-                                let params: Vec<&str> = batch.iter().map(String::as_str).collect();
-                                let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
-                                let found = class_infos(self, &filter, &params);
-                                classes.lock().unwrap().extend(found);
-                                true
-                            }
-                            DocKind::Inc => match self.docs(batch) {
-                                Some(found) => {
-                                    includes.lock().unwrap().extend(by_basename(found));
-                                    true
-                                }
-                                None => false,
-                            },
-                            DocKind::Rtn => self.fetch_routines(batch, routines),
-                        };
-                        if !ok {
-                            break;
-                        }
-                        let _ = tx.send((kind, batch.len()));
-                    }
-                });
-            }
-            drop(tx);
-            for (kind, count) in rx {
-                done[kind as usize] += count;
-                progress(kind, done[kind as usize], totals[kind as usize]);
-            }
-        });
-        if self.broken.load(Ordering::Relaxed) || done != totals {
-            return Err(failed());
-        }
-        Ok(Declarations {
-            version: DECLARATIONS_VERSION,
-            namespace: self.namespace.clone(),
-            classes: classes.into_inner().unwrap(),
-            includes: includes.into_inner().unwrap(),
-            routines: routines.into_inner().unwrap(),
-        })
-    }
-
-    fn fetch_routines(
-        &self,
-        batch: &[String],
-        out: &Mutex<BTreeMap<String, Option<RoutineSource>>>,
-    ) -> bool {
-        let ints: Vec<String> = batch.iter().map(|name| format!("{name}.int")).collect();
-        let Some(mut found) = self.docs(&ints) else {
-            return false;
-        };
-        let macs: Vec<String> = batch
-            .iter()
-            .filter(|name| !found.contains_key(&format!("{name}.int")))
-            .map(|name| format!("{name}.mac"))
-            .collect();
-        if !macs.is_empty() {
-            let Some(more) = self.docs(&macs) else {
-                return false;
-            };
-            found.extend(more);
-        }
-        out.lock()
-            .unwrap()
-            .extend(by_basename(found).map(|(name, source)| (name, Some(source))));
-        true
-    }
-
-    // Non-generated documents of routine type `kind` (`INC`, `MAC`, `INT`), with extension.
-    fn docnames(&self, kind: &str) -> Option<Vec<String>> {
-        if self.broken.load(Ordering::Relaxed) {
-            return None;
-        }
-        let resp = self
-            .agent
-            .get(&format!(
-                "{}/docnames/RTN/{kind}?generated=0",
-                self.base_url
-            ))
-            .header("Authorization", &self.auth_header)
-            .call()
-            .map_err(|err| self.fail("docnames", err))
-            .ok()?;
-        let body: Value = resp.into_body().read_json().ok()?;
-        let docs = body.get("result")?.get("content")?.as_array()?;
-        Some(
-            docs.iter()
-                .filter_map(|doc| Some(doc.get("name")?.as_str()?.to_string()))
-                .collect(),
-        )
-    }
-
-    // A document that doesn't exist comes back with an error `status` and no content.
-    fn docs(&self, names: &[String]) -> Option<HashMap<String, RoutineSource>> {
-        if self.broken.load(Ordering::Relaxed) {
-            return None;
-        }
-        let resp = self
-            .agent
-            .post(&format!("{}/docs", self.base_url))
-            .header("Authorization", &self.auth_header)
-            .header("Content-Type", "application/json")
-            .send_json(names)
-            .map_err(|err| self.fail("docs", err))
-            .ok()?;
-        let body: Value = resp.into_body().read_json().ok()?;
-        let docs = body.get("result")?.get("content")?.as_array()?;
-        Some(
-            docs.iter()
-                .filter_map(|doc| {
-                    let lines = doc.get("content")?.as_array()?;
-                    if lines.is_empty() {
-                        return None;
-                    }
-                    let text: Vec<&str> = lines.iter().filter_map(Value::as_str).collect();
-                    let source = RoutineSource {
-                        text: text.join("\n"),
-                        // The Atelier REST API has no uri scheme of its own to offer here.
-                        uri: None,
-                    };
-                    Some((doc.get("name")?.as_str()?.to_string(), source))
-                })
-                .collect(),
-        )
-    }
-
-    fn fail(&self, context: &str, err: ureq::Error) {
-        if !self.broken.swap(true, Ordering::Relaxed) {
-            eprintln!(
-                "warning: IRIS connection at {} failed ({context}: {err}); falling back to \
-                 unconfirmed lookups for the rest of this session",
-                self.base_url
-            );
-        }
-    }
-
-    fn query(&self, sql: &str, params: &[&str]) -> Option<Vec<Value>> {
-        if self.broken.load(Ordering::Relaxed) {
-            return None;
-        }
-        let resp = self
-            .agent
-            .post(&format!("{}/action/query", self.base_url))
-            .header("Authorization", &self.auth_header)
-            .header("Content-Type", "application/json")
-            .send_json(serde_json::json!({ "query": sql, "parameters": params }))
-            .map_err(|err| self.fail("query", err))
-            .ok()?;
-        let body: Value = resp.into_body().read_json().ok()?;
-        body.get("result")?.get("content")?.as_array().cloned()
-    }
-
-    fn get_doc(&self, path: &str) -> Option<Vec<String>> {
-        if self.broken.load(Ordering::Relaxed) {
-            return None;
-        }
-        let resp = match self
-            .agent
-            .get(&format!("{}/doc/{}", self.base_url, percent_encode(path)))
-            .header("Authorization", &self.auth_header)
-            .call()
-        {
-            Ok(resp) => resp,
-            // No such document (e.g. `Name.inc` probed before `Name.mac`) -- says nothing about
-            // the connection itself.
-            Err(ureq::Error::StatusCode(404)) => return None,
-            Err(err) => {
-                self.fail("doc", err);
-                return None;
-            }
-        };
-        let body: Value = resp.into_body().read_json().ok()?;
-        let lines = body.get("result")?.get("content")?.as_array()?;
-        Some(
-            lines
-                .iter()
-                .filter_map(|l| l.as_str().map(str::to_string))
-                .collect(),
-        )
-    }
-}
-
-fn by_basename(
-    docs: HashMap<String, RoutineSource>,
-) -> impl Iterator<Item = (String, RoutineSource)> {
-    docs.into_iter()
-        .map(|(doc, source)| (doc_basename(&doc), source))
 }
 
 fn doc_basename(doc: &str) -> String {
@@ -410,80 +63,116 @@ fn doc_basename(doc: &str) -> String {
         .to_string()
 }
 
-fn percent_encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
+/// The two Atelier REST API requests the lookups are made of, for a host with its own connection.
+pub trait Atelier: Send + Sync {
+    /// The rows of `/action/query` as a JSON array, each an object keyed by column name.
+    fn query(&self, sql: &str, params: &[&str]) -> Result<String, String>;
+    /// The text of `/doc/{name}`; `None` if there's no such document.
+    fn get_doc(&self, name: &str) -> Result<Option<String>, String>;
 }
 
-impl IrisClient for AtelierConnection {
-    fn get_cls(&self, cls: &str) -> Option<ClassInfo> {
-        if let Some(cached) = self.cls_cache.get(cls) {
-            return cached;
-        }
-        let result = class_infos(self, "= ?", &[cls]).into_values().next();
-        self.cls_cache.set(cls.to_string(), result.clone());
-        result
+#[cfg(target_arch = "wasm32")]
+impl Atelier for crate::bindings::Atelier {
+    fn query(&self, sql: &str, params: &[&str]) -> Result<String, String> {
+        let params: Vec<String> = params.iter().map(|param| param.to_string()).collect();
+        crate::bindings::Atelier::query(self, sql, &params)
     }
 
-    fn get_inc(&self, name: &str) -> Option<RoutineSource> {
+    fn get_doc(&self, name: &str) -> Result<Option<String>, String> {
+        crate::bindings::Atelier::get_doc(self, name)
+    }
+}
+
+/// The `IrisContext` that looks code up through an `Atelier`, caching what it finds.
+pub struct AtelierContext {
+    atelier: Box<dyn Atelier>,
+    cls_cache: Cache<Option<ClassInfo>>,
+    routine_cache: Cache<Option<Source>>,
+    rtn_cache: Cache<Option<RoutineInfo>>,
+}
+
+impl<A: Atelier + 'static> From<A> for AtelierContext {
+    fn from(atelier: A) -> Self {
+        Self {
+            atelier: Box::new(atelier),
+            cls_cache: Cache::new(),
+            routine_cache: Cache::new(),
+            rtn_cache: Cache::new(),
+        }
+    }
+}
+
+impl IrisContext for AtelierContext {
+    fn get_cls(&self, cls: &str) -> Result<Option<ClassInfo>, String> {
+        if let Some(cached) = self.cls_cache.get(cls) {
+            return Ok(cached);
+        }
+        let result = class_infos(self, "= ?", &[cls])?.into_values().next();
+        self.cls_cache.set(cls.to_string(), result.clone());
+        Ok(result)
+    }
+
+    fn get_inc(&self, name: &str) -> Result<Option<Source>, String> {
         self.fetch_routine(&[format!("{name}.inc")])
     }
 
     // The `.int` first: it is the instance's own macro expansion of the `.mac`, so no expansion
     // (or include resolution) is needed on our side.
-    fn get_int_or_mac(&self, name: &str) -> Option<Option<RoutineSource>> {
-        if let Some(source) = self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")]) {
-            return Some(Some(source));
+    fn get_rtn(&self, name: &str) -> Result<Option<RoutineInfo>, String> {
+        if let Some(cached) = self.rtn_cache.get(name) {
+            return Ok(cached);
         }
-        // Without source, its OBJ says whether it exists; when that can't be asked, it might.
-        let exists = self.obj_cache.get(name).or_else(|| {
-            let exists = self.routine_names(&format!("{name}.obj"))?.contains(name);
-            self.obj_cache.set(name.to_string(), exists);
-            Some(exists)
-        });
-        exists.unwrap_or(true).then_some(None)
+        let result = match self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")])? {
+            Some(source) => Some(crate::routine_info(&source.text, source.uri)),
+            // Without source, its OBJ says whether it exists.
+            None => routine_names(self, &format!("{name}.obj"))?
+                .contains(name)
+                .then_some(RoutineInfo {
+                    labels: None,
+                    uri: None,
+                }),
+        };
+        self.rtn_cache.set(name.to_string(), result.clone());
+        Ok(result)
     }
 }
 
-impl AtelierConnection {
-    // The routines matching `spec` (e.g. `*.mac,*.int,*.obj`), system ones included and
-    // class-generated ones (`Name.1.obj`) left out.
-    fn routine_names(&self, spec: &str) -> Option<BTreeSet<String>> {
-        let sql = "SELECT Name FROM %Library.RoutineMgr_StudioOpenDialog(?,1,1,1,1,1,0,\
-                   'NOT (Name %PATTERN ''.E1\".\"0.1\"G\"1N1\".obj\"'' AND $LENGTH(Name,''.'') > 3)')";
-        let rows = self.query(sql, &[spec])?;
-        Some(
-            rows.iter()
-                .filter_map(|row| Some(doc_basename(row.get("Name")?.as_str()?)))
-                .collect(),
-        )
+impl AtelierContext {
+    fn rows(&self, sql: &str, params: &[&str]) -> Result<Vec<Value>, String> {
+        let rows = self.atelier.query(sql, params)?;
+        serde_json::from_str(&rows)
+            .map_err(|err| format!("query answered with other than rows: {err}"))
     }
 
     // The first of `docs` that exists, cached under the whole candidate list.
-    fn fetch_routine(&self, docs: &[String]) -> Option<RoutineSource> {
+    fn fetch_routine(&self, docs: &[String]) -> Result<Option<Source>, String> {
         let key = docs.join("|");
         if let Some(cached) = self.routine_cache.get(&key) {
-            return cached;
+            return Ok(cached);
         }
-        let result = docs
-            .iter()
-            .find_map(|doc| self.get_doc(doc))
-            .map(|lines| RoutineSource {
-                text: lines.join("\n"),
+        let mut result = None;
+        for doc in docs {
+            if let Some(text) = self.atelier.get_doc(doc)? {
                 // The Atelier REST API has no uri scheme of its own to offer here.
-                uri: None,
-            });
+                result = Some(Source { text, uri: None });
+                break;
+            }
+        }
         self.routine_cache.set(key, result.clone());
-        result
+        Ok(result)
     }
+}
+
+// The routines matching `spec` (e.g. `*.mac,*.int,*.obj`), system ones included and
+// class-generated ones (`Name.1.obj`) left out.
+fn routine_names(ctx: &AtelierContext, spec: &str) -> Result<BTreeSet<String>, String> {
+    let sql = "SELECT Name FROM %Library.RoutineMgr_StudioOpenDialog(?,1,1,1,1,1,0,\
+               'NOT (Name %PATTERN ''.E1\".\"0.1\"G\"1N1\".obj\"'' AND $LENGTH(Name,''.'') > 3)')";
+    let rows = ctx.rows(sql, &[spec])?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| Some(doc_basename(row.get("Name")?.as_str()?)))
+        .collect())
 }
 
 fn split_classes(s: &str) -> Vec<String> {
@@ -497,10 +186,10 @@ fn split_classes(s: &str) -> Vec<String> {
 // Every class satisfying `Name {filter}` (`= ?`, `IN (?,?)`; `params` bind the `?`s) with its
 // own members, keyed by name: one round trip per dictionary table for the whole set.
 fn class_infos(
-    conn: &AtelierConnection,
+    conn: &AtelierContext,
     filter: &str,
     params: &[&str],
-) -> HashMap<String, ClassInfo> {
+) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = |description: &str| {
         format!(
             "SELECT Name, {description}, Super, PropertyClass, IncludeCode, ClassType, Deprecated \
@@ -509,14 +198,13 @@ fn class_infos(
     };
     // Same `{`-leading-text failure mode `all_mem_rows` guards against.
     let rows = conn
-        .query(&sql("Description"), params)
-        .or_else(|| conn.query(&sql("'' AS Description"), params))
-        .unwrap_or_default();
+        .rows(&sql("Description"), params)
+        .or_else(|_| conn.rows(&sql("'' AS Description"), params))?;
     if rows.is_empty() {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
-    let members = resolve_stubs(conn, filter, params, all_mem_rows(conn, filter, params));
-    assemble(rows, members)
+    let members = resolve_stubs(conn, filter, params, all_mem_rows(conn, filter, params)?)?;
+    Ok(assemble(rows, members))
 }
 
 fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<String, ClassInfo> {
@@ -615,7 +303,11 @@ fn is_truthy(v: &Value) -> bool {
 // Every member declared directly on the classes matching `Parent {filter}`, across all three
 // tables -- one query per batch instead of one per member, since `get_cls` always wants the
 // whole list at once.
-fn all_mem_rows(conn: &AtelierConnection, filter: &str, params: &[&str]) -> Vec<MemberRow> {
+fn all_mem_rows(
+    conn: &AtelierContext,
+    filter: &str,
+    params: &[&str],
+) -> Result<Vec<MemberRow>, String> {
     let sql = |description: &str| {
         format!(
             "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, {description}, \
@@ -635,14 +327,13 @@ fn all_mem_rows(conn: &AtelierConnection, filter: &str, params: &[&str]) -> Vec<
     let params = [params, params, params].concat();
     // The Atelier query API fails the whole query over a text value that merely starts with `{`
     // (e.g. a `/// {$$$CPFSave+...}` parameter comment); retry without descriptions.
-    conn.query(&sql("Description"), &params)
-        .or_else(|| conn.query(&sql("'' AS Description"), &params))
+    conn.rows(&sql("Description"), &params)
+        .or_else(|_| conn.rows(&sql("'' AS Description"), &params))
         .map(|rows| {
             rows.into_iter()
                 .filter_map(|row| serde_json::from_value(row).ok())
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 // A method row with a `Stub` is a compiler-generated accessor (index/query/property/
@@ -668,11 +359,11 @@ fn stub_parts(row: &MemberRow) -> Option<(&str, &str, &'static str)> {
 // Replaces each stub row with its real metadata -- one query per stub table the classes use,
 // not one per stub (a property-heavy class has dozens of generated accessors).
 fn resolve_stubs(
-    conn: &AtelierConnection,
+    conn: &AtelierContext,
     filter: &str,
     params: &[&str],
     rows: Vec<MemberRow>,
-) -> Vec<MemberRow> {
+) -> Result<Vec<MemberRow>, String> {
     let tables: HashSet<&str> = rows
         .iter()
         .filter_map(stub_parts)
@@ -689,9 +380,8 @@ fn resolve_stubs(
         };
         // Same `{`-leading-text failure mode `all_mem_rows` guards against.
         let found = conn
-            .query(&sql("Description"), params)
-            .or_else(|| conn.query(&sql("'' AS Description"), params))
-            .unwrap_or_default();
+            .rows(&sql("Description"), params)
+            .or_else(|_| conn.rows(&sql("'' AS Description"), params))?;
         for value in found {
             let origin = value
                 .get("StubOrigin")
@@ -711,7 +401,8 @@ fn resolve_stubs(
             );
         }
     }
-    rows.into_iter()
+    Ok(rows
+        .into_iter()
         .map(|row| match stub_parts(&row) {
             Some((origin, subname, table)) => resolved
                 .remove(&(
@@ -723,7 +414,7 @@ fn resolve_stubs(
                 .unwrap_or(row),
             None => row,
         })
-        .collect()
+        .collect())
 }
 
 // A property's alias list is a comma-separated %Translate'd string.
@@ -833,105 +524,69 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
     }
 }
 
-// Ported from `splitTopLevel` in `server/src/ascot/index.ts`: splits on top-level commas,
-// respecting quote and paren nesting (a type or default value may itself contain either).
-fn split_top_level(spec: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut depth = 0i32;
-    let mut in_quote = false;
-    for c in spec.chars() {
-        if in_quote {
-            cur.push(c);
-            if c == '"' {
-                in_quote = false;
-            }
-        } else if c == '"' {
-            in_quote = true;
-            cur.push(c);
-        } else if c == '(' {
-            depth += 1;
-            cur.push(c);
-        } else if c == ')' {
-            depth -= 1;
-            cur.push(c);
-        } else if c == ',' && depth == 0 {
-            out.push(std::mem::take(&mut cur));
-        } else {
-            cur.push(c);
-        }
-    }
-    if !cur.trim().is_empty() {
-        out.push(cur);
-    }
-    out
+// A method's `FormalSpec` as `%Dictionary.CompiledMethod` reports it: minified, e.g.
+// `*out:%String,&ref:%Integer,x:%String="a",args...`.
+#[derive(Grammar)]
+struct CompiledFormalSpec(Option<VecSep<CompiledFormal, Comma>>);
+
+type Comma = Raw<(Space, StringEq!(","), Space)>;
+
+#[derive(Grammar)]
+struct CompiledFormal {
+    call_type: Option<CompiledCallType>,
+    name: LocalVariableName,
+    variadic: Option<StringEq!("...")>,
+    as_type: Option<Prefix<StringEq!(":"), Type>>,
+    default: Option<Prefix<StringEq!("="), CompiledDefault>>,
 }
 
-#[derive(PartialEq)]
-enum FormalSpecStage {
-    Name,
-    Type,
-    Default,
+#[derive(Grammar)]
+enum CompiledCallType {
+    Output(StringEq!("*")),
+    ByRef(StringEq!("&")),
 }
 
-// Ported from `parseFormalSpec` in `server/src/ascot/index.ts`: parses IRIS's minified
-// `FormalSpec` (e.g. `*out:%String,&ref:%Integer,x...`) into structured args. Prefixes: `*`
-// output, `&` by-ref; `:` starts the type, `=` the default; a trailing `...` marks the variadic
-// arg. Types/defaults may contain commas/parens/quotes, so `split_top_level` respects nesting.
+// A default value, up to the next top-level comma: strings, parentheses and braces balanced,
+// anything else (a macro, `..#PARAM`) taken as it comes.
+#[derive(Grammar)]
+struct CompiledDefault(Raw<Vec<CompiledDefaultUnit>>);
+
+#[derive(Grammar)]
+enum CompiledDefaultUnit {
+    String(OSString),
+    Paren(StringEq!("("), Raw<Vec<CompiledNestedUnit>>, StringEq!(")")),
+    Brace(StringEq!("{"), Raw<Vec<CompiledNestedUnit>>, StringEq!("}")),
+    Text(StringOf1<IsCompiledDefaultText>),
+}
+
+#[derive(Grammar)]
+enum CompiledNestedUnit {
+    Unit(CompiledDefaultUnit),
+    Comma(StringEq!(",")),
+}
+
+tygr::char_class!(IsCompiledDefaultText, "default_char", |ch| {
+    !matches!(ch, ',' | '"' | '(' | ')' | '{' | '}')
+});
+
 fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
-    let mut normal = Vec::new();
+    let Ok(CompiledFormalSpec(Some(formals))) = CompiledFormalSpec::parse(spec) else {
+        return (vec![], None);
+    };
+    let mut normal = vec![];
     let mut variadic = None;
-    for raw in split_top_level(spec) {
-        let mut s = raw.trim();
-        if s.is_empty() {
-            continue;
-        }
-        let mode = if let Some(rest) = s.strip_prefix('*') {
-            s = rest;
-            ArgMode::Output
-        } else if let Some(rest) = s.strip_prefix('&') {
-            s = rest;
-            ArgMode::ByRef
-        } else {
-            ArgMode::Default
+    for formal in &formals.items {
+        let mode = match formal.call_type {
+            Some(CompiledCallType::Output(_)) => ArgMode::Output,
+            Some(CompiledCallType::ByRef(_)) => ArgMode::ByRef,
+            None => ArgMode::Default,
         };
-
-        let mut name = String::new();
-        let mut ty = String::new();
-        let mut default = String::new();
-        let mut stage = FormalSpecStage::Name;
-        let mut depth = 0i32;
-        let mut in_quote = false;
-        for c in s.chars() {
-            if in_quote {
-                if c == '"' {
-                    in_quote = false;
-                }
-            } else if c == '"' {
-                in_quote = true;
-            } else if c == '(' {
-                depth += 1;
-            } else if c == ')' {
-                depth -= 1;
-            } else if depth == 0 && stage == FormalSpecStage::Name && c == ':' {
-                stage = FormalSpecStage::Type;
-                continue;
-            } else if depth == 0 && stage != FormalSpecStage::Default && c == '=' {
-                stage = FormalSpecStage::Default;
-                continue;
-            }
-            match stage {
-                FormalSpecStage::Name => name.push(c),
-                FormalSpecStage::Type => ty.push(c),
-                FormalSpecStage::Default => default.push(c),
-            }
-        }
-
-        let t = (!ty.is_empty()).then_some(ty);
-        if let Some(base) = name.strip_suffix("...") {
+        let name = formal.name.print();
+        let t = formal.as_type.as_ref().map(|t| t.deref().print());
+        if formal.variadic.is_some() {
             variadic = Some(VariadicArg {
                 mode,
-                name: base.to_string(),
+                name,
                 t,
                 declared_at: None,
             });
@@ -940,12 +595,321 @@ fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
                 mode,
                 name,
                 t,
-                default: (!default.is_empty()).then_some(default),
+                default: formal.default.as_ref().map(|d| d.deref().print()),
                 declared_at: None,
             });
         }
     }
     (normal, variadic)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// ascot's own `Atelier`: a connection to IRIS over the Atelier REST API.
+pub struct RawAtelier {
+    base_url: String,
+    // `scheme://host:port/prefix/api/atelier`, for the namespace listing in `check`'s message.
+    api_root: String,
+    namespace: String,
+    username: String,
+    auth_header: String,
+    // Why IRIS couldn't be reached, once it couldn't: later requests then fail at once instead of
+    // each waiting out a timeout.
+    agent: Mutex<Result<ureq::Agent, String>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl RawAtelier {
+    /// `url` is `scheme://user:pass@host:port`, optionally with a path prefix (e.g. `/iris`,
+    /// when the web server routes IRIS instances by path). `namespace` is a plain name (e.g.
+    /// `%SYS`) -- not URL-encoded, since it arrives as a separate CLI/tool argument. Makes one
+    /// request up front, so a wrong URL, password or namespace is a clear error at startup rather
+    /// than a one-line warning followed by every system macro reported undefined.
+    pub fn connect(url: &str, namespace: &str) -> Result<Self, String> {
+        let parsed = url::Url::parse(url).map_err(|e| format!("invalid --iris URL: {e}"))?;
+        let scheme = parsed.scheme();
+        if scheme != "http" && scheme != "https" {
+            return Err(format!("--iris URL must be http or https, got {scheme:?}"));
+        }
+        let host = parsed.host_str().ok_or("--iris URL is missing a host")?;
+        let port = parsed
+            .port_or_known_default()
+            .ok_or("--iris URL is missing a port")?;
+        let path_prefix = match parsed.path() {
+            "" | "/" => "",
+            path => path.trim_end_matches('/'),
+        };
+        // `Url` hands these back still percent-encoded; IRIS wants the real characters.
+        let username = percent_decode_str(parsed.username()).decode_utf8_lossy();
+        let password = percent_decode_str(parsed.password().unwrap_or("")).decode_utf8_lossy();
+        let auth_header = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
+        );
+        let api_root = format!("{scheme}://{host}:{port}{path_prefix}/api/atelier");
+        // Bounded to connect and to start answering; a long answer (`declare` reads 100 classes'
+        // members at once) takes what it takes.
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_connect(Some(Duration::from_secs(5)))
+                .timeout_recv_response(Some(Duration::from_secs(60)))
+                .build(),
+        );
+        let raw = Self {
+            base_url: format!("{api_root}/v8/{}", percent_encode(namespace)),
+            api_root,
+            namespace: namespace.to_string(),
+            username: username.into_owned(),
+            auth_header,
+            agent: Mutex::new(Ok(agent)),
+        };
+        raw.check()?;
+        Ok(raw)
+    }
+
+    fn check(&self) -> Result<(), String> {
+        let agent = self.agent()?;
+        let get = |url: &str| {
+            agent
+                .get(url)
+                .header("Authorization", &self.auth_header)
+                .call()
+        };
+        match get(&self.base_url) {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::StatusCode(404)) => {
+                let namespaces: Option<Vec<String>> =
+                    get(&format!("{}/", self.api_root)).ok().and_then(|resp| {
+                        let body: Value = resp.into_body().read_json().ok()?;
+                        let names = body.get("result")?.get("content")?.get("namespaces")?;
+                        serde_json::from_value(names.clone()).ok()
+                    });
+                Err(match namespaces {
+                    Some(names) => format!(
+                        "namespace '{}' does not exist at {}; it has: {}",
+                        self.namespace,
+                        self.api_root,
+                        names.join(", ")
+                    ),
+                    None => format!(
+                        "no Atelier API at {} (http status 404); check the URL's path prefix",
+                        self.api_root
+                    ),
+                })
+            }
+            Err(ureq::Error::StatusCode(401)) => Err(format!(
+                "authentication failed for user '{}' at {} (http status 401)",
+                self.username, self.api_root
+            )),
+            Err(ureq::Error::StatusCode(status)) => {
+                Err(format!("{} answered http status {status}", self.base_url))
+            }
+            Err(ureq::Error::Timeout(_)) => Err(format!("cannot reach {}", self.api_root)),
+            Err(err) => Err(format!("cannot reach {}: {err}", self.api_root)),
+        }
+    }
+
+    /// Every class, include file and routine in the namespace, for `ascot declare`;
+    /// `progress(kind, done, total)` once each total is known and after each batch.
+    pub fn declarations(
+        self,
+        mut progress: impl FnMut(DocKind, usize, usize),
+    ) -> Result<Declarations, String> {
+        let namespace = self.namespace.clone();
+        let ctx = AtelierContext::from(self);
+        // `%sqlcq.*` are SQL cached queries; `declare`'s own queries create some, so without this
+        // each run would add classes to the next run's file.
+        let mut class_names: Vec<String> = ctx
+            .rows("SELECT Name FROM %Dictionary.CompiledClass", &[])?
+            .into_iter()
+            .filter_map(|row| Some(row.get("Name")?.as_str()?.to_string()))
+            .filter(|name| !name.starts_with("%sqlcq."))
+            .collect();
+        class_names.sort();
+        let inc_names: Vec<String> = routine_names(&ctx, "*.inc")?.into_iter().collect();
+        // Every routine, system ones included, so one without source is still declared.
+        let all_rtn_names = routine_names(&ctx, "*.mac,*.int,*.obj")?;
+        // Hand-written routines only (a class's `.int`s are generated), read as the `.int`
+        // where there is one (compiled, macro-expanded; what `get_rtn` prefers), else the `.mac`.
+        let rtn_names: Vec<String> = routine_names(&ctx, "*.mac,*.int")?.into_iter().collect();
+
+        let totals = [class_names.len(), inc_names.len(), rtn_names.len()];
+        for kind in [DocKind::Cls, DocKind::Inc, DocKind::Rtn] {
+            progress(kind, 0, totals[kind as usize]);
+        }
+        let jobs: Vec<(DocKind, &[String])> = (class_names.chunks(BATCH))
+            .map(|batch| (DocKind::Cls, batch))
+            .chain(inc_names.chunks(BATCH).map(|batch| (DocKind::Inc, batch)))
+            .chain(rtn_names.chunks(BATCH).map(|batch| (DocKind::Rtn, batch)))
+            .collect();
+        let next = AtomicUsize::new(0);
+        let classes = Mutex::new(BTreeMap::new());
+        let includes = Mutex::new(BTreeMap::new());
+        let routines = Mutex::new(
+            all_rtn_names
+                .into_iter()
+                .map(|name| {
+                    let info = RoutineInfo {
+                        labels: None,
+                        uri: None,
+                    };
+                    (name, info)
+                })
+                .collect::<BTreeMap<_, _>>(),
+        );
+        let failed = Mutex::new(None);
+        let (tx, rx) = mpsc::channel();
+        let mut done = [0; 3];
+        std::thread::scope(|scope| {
+            let (jobs, next, ctx, failed) = (&jobs, &next, &ctx, &failed);
+            let (classes, includes, routines) = (&classes, &includes, &routines);
+            for _ in 0..WORKERS.min(jobs.len()) {
+                let tx = tx.clone();
+                scope.spawn(move || {
+                    while failed.lock().unwrap().is_none() {
+                        let Some(&(kind, batch)) = jobs.get(next.fetch_add(1, Ordering::Relaxed))
+                        else {
+                            break;
+                        };
+                        let fetched = match kind {
+                            DocKind::Cls => {
+                                let params: Vec<&str> = batch.iter().map(String::as_str).collect();
+                                let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
+                                class_infos(ctx, &filter, &params)
+                                    .map(|found| classes.lock().unwrap().extend(found))
+                            }
+                            DocKind::Inc => sources(ctx, batch, &["inc"])
+                                .map(|found| includes.lock().unwrap().extend(found)),
+                            DocKind::Rtn => sources(ctx, batch, &["int", "mac"]).map(|found| {
+                                let found = found.into_iter().map(|(name, source)| {
+                                    (name, crate::routine_info(&source.text, None))
+                                });
+                                routines.lock().unwrap().extend(found)
+                            }),
+                        };
+                        if let Err(err) = fetched {
+                            failed.lock().unwrap().get_or_insert(err);
+                            break;
+                        }
+                        let _ = tx.send((kind, batch.len()));
+                    }
+                });
+            }
+            drop(tx);
+            for (kind, count) in rx {
+                done[kind as usize] += count;
+                progress(kind, done[kind as usize], totals[kind as usize]);
+            }
+        });
+        if let Some(err) = failed.into_inner().unwrap() {
+            return Err(err);
+        }
+        Ok(Declarations {
+            version: DECLARATIONS_VERSION,
+            namespace,
+            classes: classes.into_inner().unwrap(),
+            includes: includes.into_inner().unwrap(),
+            routines: routines.into_inner().unwrap(),
+        })
+    }
+
+    fn agent(&self) -> Result<ureq::Agent, String> {
+        self.agent.lock().unwrap().clone()
+    }
+
+    fn failed(&self, context: &str, err: ureq::Error) -> String {
+        let message = format!("{context} at {} failed: {err}", self.base_url);
+        use ureq::Error::{ConnectionFailed, HostNotFound, Io, Timeout, Tls};
+        if matches!(
+            err,
+            Io(_) | Timeout(_) | HostNotFound | ConnectionFailed | Tls(_)
+        ) {
+            *self.agent.lock().unwrap() = Err(message.clone());
+        }
+        message
+    }
+}
+
+// Each of `names` that has source, read from the first of `exts` it exists as.
+#[cfg(not(target_arch = "wasm32"))]
+fn sources(
+    ctx: &AtelierContext,
+    names: &[String],
+    exts: &[&str],
+) -> Result<Vec<(String, Source)>, String> {
+    let mut found = vec![];
+    for name in names {
+        for ext in exts {
+            if let Some(text) = ctx.atelier.get_doc(&format!("{name}.{ext}"))? {
+                found.push((name.clone(), Source { text, uri: None }));
+                break;
+            }
+        }
+    }
+    Ok(found)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Atelier for RawAtelier {
+    fn query(&self, sql: &str, params: &[&str]) -> Result<String, String> {
+        let resp = self
+            .agent()?
+            .post(&format!("{}/action/query", self.base_url))
+            .header("Authorization", &self.auth_header)
+            .header("Content-Type", "application/json")
+            .send_json(serde_json::json!({ "query": sql, "parameters": params }))
+            .map_err(|err| self.failed("query", err))?;
+        let body: Value = resp
+            .into_body()
+            .read_json()
+            .map_err(|err| self.failed("query", err))?;
+        match body.get("result").and_then(|result| result.get("content")) {
+            Some(rows) => Ok(rows.to_string()),
+            None => Err(format!(
+                "query at {} failed: {}",
+                self.base_url, body["status"]
+            )),
+        }
+    }
+
+    fn get_doc(&self, name: &str) -> Result<Option<String>, String> {
+        let resp = match self
+            .agent()?
+            .get(&format!("{}/doc/{}", self.base_url, percent_encode(name)))
+            .header("Authorization", &self.auth_header)
+            .call()
+        {
+            Ok(resp) => resp,
+            // No such document (e.g. `Name.int` probed before `Name.mac`).
+            Err(ureq::Error::StatusCode(404)) => return Ok(None),
+            Err(err) => return Err(self.failed("doc", err)),
+        };
+        let body: Value = resp
+            .into_body()
+            .read_json()
+            .map_err(|err| self.failed("doc", err))?;
+        let lines: Vec<&str> = body
+            .get("result")
+            .and_then(|result| result.get("content"))
+            .and_then(Value::as_array)
+            .map(|lines| lines.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        // An existing document with no content is as good as none.
+        Ok((!lines.is_empty()).then(|| lines.join("\n")))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -995,8 +959,80 @@ mod tests {
     }
 
     #[test]
+    fn a_host_answers_the_lookups_through_its_own_atelier() {
+        struct Docs;
+        impl Atelier for Docs {
+            fn query(&self, _: &str, _: &[&str]) -> Result<String, String> {
+                Ok("[]".into())
+            }
+            fn get_doc(&self, name: &str) -> Result<Option<String>, String> {
+                Ok((name == "Util.mac").then(|| "ROUTINE Util\nFoo(a)\n Quit".into()))
+            }
+        }
+        let iris = AtelierContext::from(Docs);
+        let util = iris.get_rtn("Util").unwrap().unwrap().labels.unwrap();
+        let labels: Vec<_> = util.iter().map(|label| label.name.as_str()).collect();
+        assert_eq!(labels, ["Foo"]);
+        assert!(iris.get_inc("Util").unwrap().is_none());
+        assert!(iris.get_rtn("NoSuchRoutine").unwrap().is_none());
+        assert!(iris.get_cls("No.Such.Class").unwrap().is_none());
+    }
+
+    #[test]
     fn doc_basename_strips_the_extension() {
         assert_eq!(doc_basename("Foo.Bar.inc"), "Foo.Bar");
+    }
+
+    #[test]
+    fn parses_a_normal_and_variadic_arg_with_types_and_a_default() {
+        let (normal, variadic) =
+            parse_formal_spec(r#"*out:%String,&ref:%Integer,x:%String="a",y..."#);
+        assert_eq!(normal.len(), 3);
+        assert_eq!(normal[0].mode, ArgMode::Output);
+        assert_eq!(normal[0].name, "out");
+        assert_eq!(normal[0].t, Some("%String".to_string()));
+        assert_eq!(normal[1].mode, ArgMode::ByRef);
+        assert_eq!(normal[1].name, "ref");
+        assert_eq!(normal[1].t, Some("%Integer".to_string()));
+        assert_eq!(normal[2].mode, ArgMode::Default);
+        assert_eq!(normal[2].name, "x");
+        assert_eq!(normal[2].t, Some("%String".to_string()));
+        assert_eq!(normal[2].default, Some("\"a\"".to_string()));
+        let variadic = variadic.unwrap();
+        assert_eq!(variadic.name, "y");
+    }
+
+    #[test]
+    fn parses_a_default_containing_a_comma_inside_quotes() {
+        let (normal, _) = parse_formal_spec(r#"x:%String="a,b""#);
+        assert_eq!(normal.len(), 1);
+        assert_eq!(normal[0].name, "x");
+        assert_eq!(normal[0].t, Some("%String".to_string()));
+    }
+
+    #[test]
+    fn parses_a_type_containing_a_comma_inside_parens() {
+        let (normal, _) = parse_formal_spec("x:%String(MAXLEN=50,MINLEN=1)");
+        assert_eq!(normal.len(), 1);
+        assert_eq!(normal[0].name, "x");
+        assert_eq!(normal[0].t, Some("%String(MAXLEN=50,MINLEN=1)".to_string()));
+    }
+
+    #[test]
+    fn empty_formal_spec_has_no_args() {
+        let (normal, variadic) = parse_formal_spec("");
+        assert!(normal.is_empty());
+        assert!(variadic.is_none());
+    }
+
+    #[test]
+    fn parses_a_default_containing_a_macro_or_a_nested_call() {
+        let (normal, _) = parse_formal_spec(r#"sc:%Status=$$$OK,l=$lb(1,"a,b",$g(x)),o={{}}"#);
+        let defaults: Vec<_> = normal.iter().map(|arg| arg.default.as_deref()).collect();
+        assert_eq!(
+            defaults,
+            [Some("$$$OK"), Some(r#"$lb(1,"a,b",$g(x))"#), Some("{{}}")]
+        );
     }
 
     #[test]
@@ -1010,27 +1046,35 @@ mod tests {
 
     #[test]
     fn connect_decodes_percent_encoded_credentials() {
-        let conn =
-            AtelierConnection::connect("http://us%40er:p%40ss%25word@localhost:8080", "USER")
-                .unwrap();
+        let url =
+            stub_server(&[("", "200 OK", "{}")]).replace("user:pass", "us%40er:p%40ss%25word");
+        let conn = RawAtelier::connect(&url, "USER").unwrap();
         let expected = base64::engine::general_purpose::STANDARD.encode("us@er:p@ss%word");
         assert_eq!(conn.auth_header, format!("Basic {expected}"));
     }
 
     #[test]
     fn connect_percent_encodes_the_namespace() {
-        let conn = AtelierConnection::connect("http://user:pass@localhost:8080", "%SYS").unwrap();
-        assert_eq!(conn.base_url, "http://localhost:8080/api/atelier/v8/%25SYS");
+        let url = stub_server(&[("", "200 OK", "{}")]);
+        let conn = RawAtelier::connect(&url, "%SYS").unwrap();
+        assert_eq!(
+            conn.base_url,
+            format!("{}/api/atelier/v8/%25SYS", host(&url))
+        );
     }
 
     #[test]
     fn connect_keeps_a_path_prefix_before_api_atelier() {
-        let conn =
-            AtelierConnection::connect("http://user:pass@localhost:8080/iris", "%SYS").unwrap();
+        let url = stub_server(&[("", "200 OK", "{}")]);
+        let conn = RawAtelier::connect(&format!("{url}/iris"), "%SYS").unwrap();
         assert_eq!(
             conn.base_url,
-            "http://localhost:8080/iris/api/atelier/v8/%25SYS"
+            format!("{}/iris/api/atelier/v8/%25SYS", host(&url))
         );
+    }
+
+    fn host(url: &str) -> String {
+        url.replace("user:pass@", "")
     }
 
     // An HTTP server answering each request with the first of `routes` whose path suffix
@@ -1070,10 +1114,7 @@ mod tests {
             ),
             ("", "404 Not Found", ""),
         ]);
-        let err = AtelierConnection::connect(&url, "NOPE")
-            .unwrap()
-            .check()
-            .unwrap_err();
+        let err = RawAtelier::connect(&url, "NOPE").err().unwrap();
         assert!(err.contains("namespace 'NOPE' does not exist"), "{err}");
         assert!(err.contains("%SYS, USER"), "{err}");
     }
@@ -1081,20 +1122,14 @@ mod tests {
     #[test]
     fn check_blames_the_path_prefix_when_there_is_no_atelier_api_at_all() {
         let url = stub_server(&[("", "404 Not Found", "")]);
-        let err = AtelierConnection::connect(&url, "USER")
-            .unwrap()
-            .check()
-            .unwrap_err();
+        let err = RawAtelier::connect(&url, "USER").err().unwrap();
         assert!(err.contains("no Atelier API at"), "{err}");
     }
 
     #[test]
     fn check_reports_a_bad_password() {
         let url = stub_server(&[("", "401 Unauthorized", "")]);
-        let err = AtelierConnection::connect(&url, "USER")
-            .unwrap()
-            .check()
-            .unwrap_err();
+        let err = RawAtelier::connect(&url, "USER").err().unwrap();
         assert!(
             err.contains("authentication failed for user 'user'"),
             "{err}"
@@ -1104,69 +1139,16 @@ mod tests {
     #[test]
     fn check_passes_on_a_reachable_namespace() {
         let url = stub_server(&[("", "200 OK", r#"{"result":{"content":{"name":"USER"}}}"#)]);
-        AtelierConnection::connect(&url, "USER")
-            .unwrap()
-            .check()
-            .unwrap();
+        RawAtelier::connect(&url, "USER").unwrap();
     }
 
     #[test]
     fn connect_strips_a_trailing_slash_from_the_path_prefix() {
-        let conn =
-            AtelierConnection::connect("http://user:pass@localhost:8080/iris/", "%SYS").unwrap();
+        let url = stub_server(&[("", "200 OK", "{}")]);
+        let conn = RawAtelier::connect(&format!("{url}/iris/"), "%SYS").unwrap();
         assert_eq!(
             conn.base_url,
-            "http://localhost:8080/iris/api/atelier/v8/%25SYS"
-        );
-    }
-
-    #[test]
-    fn parses_a_normal_and_variadic_arg_with_types_and_a_default() {
-        let (normal, variadic) =
-            parse_formal_spec(r#"*out:%String,&ref:%Integer,x:%String="a",y..."#);
-        assert_eq!(normal.len(), 3);
-        assert_eq!(normal[0].mode, ArgMode::Output);
-        assert_eq!(normal[0].name, "out");
-        assert_eq!(normal[0].t, Some("%String".to_string()));
-        assert_eq!(normal[1].mode, ArgMode::ByRef);
-        assert_eq!(normal[1].name, "ref");
-        assert_eq!(normal[1].t, Some("%Integer".to_string()));
-        assert_eq!(normal[2].mode, ArgMode::Default);
-        assert_eq!(normal[2].name, "x");
-        assert_eq!(normal[2].t, Some("%String".to_string()));
-        assert_eq!(normal[2].default, Some("\"a\"".to_string()));
-        let variadic = variadic.unwrap();
-        assert_eq!(variadic.name, "y");
-    }
-
-    #[test]
-    fn parses_a_default_containing_a_comma_inside_quotes() {
-        let (normal, _) = parse_formal_spec(r#"x:%String="a,b""#);
-        assert_eq!(normal.len(), 1);
-        assert_eq!(normal[0].name, "x");
-        assert_eq!(normal[0].t, Some("%String".to_string()));
-    }
-
-    #[test]
-    fn parses_a_type_containing_a_comma_inside_parens() {
-        let (normal, _) = parse_formal_spec("x:%Array(%String,%Integer)");
-        assert_eq!(normal.len(), 1);
-        assert_eq!(normal[0].name, "x");
-        assert_eq!(normal[0].t, Some("%Array(%String,%Integer)".to_string()));
-    }
-
-    #[test]
-    fn empty_formal_spec_has_no_args() {
-        let (normal, variadic) = parse_formal_spec("");
-        assert!(normal.is_empty());
-        assert!(variadic.is_none());
-    }
-
-    #[test]
-    fn splits_top_level_commas_but_not_ones_inside_parens_or_quotes() {
-        assert_eq!(
-            split_top_level(r#"a,b(1,2),"c,d""#),
-            vec!["a", "b(1,2)", "\"c,d\""]
+            format!("{}/iris/api/atelier/v8/%25SYS", host(&url))
         );
     }
 }

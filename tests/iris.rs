@@ -3,9 +3,9 @@
 //! CONTRIBUTING.md shows how to run one in Docker.
 
 use ascot::bindings::{DiagnosticSeverity, GuestWorkspace};
-use ascot::{IrisClient, Workspace};
+use ascot::{IrisContext, Workspace};
 
-fn iris() -> Option<Box<dyn IrisClient>> {
+fn iris() -> Option<Box<dyn IrisContext>> {
     let Ok(url) = std::env::var("ASCOT_TEST_IRIS") else {
         eprintln!("ASCOT_TEST_IRIS is unset; skipped");
         return None;
@@ -16,7 +16,10 @@ fn iris() -> Option<Box<dyn IrisClient>> {
 #[test]
 fn system_class_has_its_members() {
     let Some(iris) = iris() else { return };
-    let cls = iris.get_cls("%SYSTEM.Version").expect("%SYSTEM.Version");
+    let cls = iris
+        .get_cls("%SYSTEM.Version")
+        .unwrap()
+        .expect("%SYSTEM.Version");
     assert!(
         cls.members.iter().any(|m| m.name.content == "GetVersion"),
         "{:?}",
@@ -25,21 +28,21 @@ fn system_class_has_its_members() {
             .map(|m| &m.name.content)
             .collect::<Vec<_>>()
     );
-    assert!(iris.get_cls("No.Such.Class").is_none());
+    assert!(iris.get_cls("No.Such.Class").unwrap().is_none());
 }
 
 #[test]
 fn system_include_has_its_source() {
     let Some(iris) = iris() else { return };
-    let inc = iris.get_inc("%occStatus").expect("%occStatus.inc");
+    let inc = iris.get_inc("%occStatus").unwrap().expect("%occStatus.inc");
     assert!(inc.text.contains("#define"), "{}", inc.text);
-    assert!(iris.get_inc("NoSuchInclude").is_none());
+    assert!(iris.get_inc("NoSuchInclude").unwrap().is_none());
 }
 
 #[test]
 fn missing_routine_is_none() {
     let Some(iris) = iris() else { return };
-    assert!(iris.get_int_or_mac("NoSuchRoutine").is_none());
+    assert!(iris.get_rtn("NoSuchRoutine").unwrap().is_none());
 }
 
 #[test]

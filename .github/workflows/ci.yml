@@ -49,6 +49,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
 
       # The image's default passwords come expired: every request is a 401 until they're not.
@@ -60,6 +62,18 @@ jobs:
 
       - name: Test
         run: cargo test --test iris
+        env:
+          ASCOT_TEST_IRIS: http://_SYSTEM:SYS@localhost:52773
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test the JavaScript binding
+        working-directory: bindings/js
+        run: |
+          npm ci
+          bash scripts/build.sh
+          npm test
         env:
           ASCOT_TEST_IRIS: http://_SYSTEM:SYS@localhost:52773
 

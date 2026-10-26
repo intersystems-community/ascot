@@ -36,9 +36,11 @@ npx jco transpile "$COMPONENT" \
 	--instantiation async \
 	--async-mode jspi \
 	--async-imports \
-		"iris:ascot/imported#[method]iris-connection.get-cls" \
-		"iris:ascot/imported#[method]iris-connection.get-inc" \
-		"iris:ascot/imported#[method]iris-connection.get-int-or-mac" \
+		"iris:ascot/imported#[method]iris-context.get-cls" \
+		"iris:ascot/imported#[method]iris-context.get-inc" \
+		"iris:ascot/imported#[method]iris-context.get-rtn" \
+		"iris:ascot/imported#[method]atelier.query" \
+		"iris:ascot/imported#[method]atelier.get-doc" \
 	--async-exports \
 		"iris:ascot/exported#[method]workspace.diagnostics" \
 		"iris:ascot/exported#[method]workspace.inlay-hint" \

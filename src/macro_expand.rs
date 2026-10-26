@@ -467,6 +467,12 @@ impl SourceMap {
     }
 }
 
+// An include's uri, full text, and un-substituted macro units.
+type Include = (String, String, Vec<Range<MacroedUnit>>);
+
+// An `Include` that didn't resolve, with why IRIS couldn't be asked for it, when that's why.
+pub(crate) type FailedInclude = (String, Option<String>);
+
 impl WorkspaceStruct {
     // Keeps `inc_index` in sync with `uri`'s latest tier-A header name — dropping the old
     // name's entry first, in case it changed.
@@ -474,26 +480,34 @@ impl WorkspaceStruct {
     // by fetching it from the server -- covers a system or shared include that isn't part of
     // the local editor workspace. Returns its uri (the host's own if it offered one, else a
     // synthetic placeholder just for origin-tracking), full text, and un-substituted macro units.
-    fn resolve_include(&self, name: &str) -> Option<(String, String, Vec<Range<MacroedUnit>>)> {
+    fn resolve_include(&self, name: &str) -> Result<Option<Include>, String> {
         if let Some(uri) = {
             let this = &self;
             this.inc_index.borrow().get(name).cloned()
         } {
             // `uri`'s own tier B -- just its header and un-substituted macro units, computed
             // and cached (via `ensure_details`) the moment it's first `#include`d.
-            let parsed = match self.ensure_details(&uri).ok()? {
-                DocDetails::Inc(parsed) => parsed,
-                _ => return None,
+            let Ok(DocDetails::Inc(parsed)) = self.ensure_details(&uri) else {
+                return Ok(None);
             };
-            let text = self.doc_text(&uri)?;
-            return Some((uri, text, parsed.macroed_units.clone()));
+            let Some(text) = self.doc_text(&uri) else {
+                return Ok(None);
+            };
+            return Ok(Some((uri, text, parsed.macroed_units.clone())));
         }
-        let routine = self.iris.as_ref()?.get_inc(name)?;
-        let parsed = RoutineWithMacro::parse(&routine.text).ok()?;
+        let Some(iris) = self.iris.as_ref() else {
+            return Ok(None);
+        };
+        let Some(routine) = iris.get_inc(name)? else {
+            return Ok(None);
+        };
+        let Ok(parsed) = RoutineWithMacro::parse(&routine.text) else {
+            return Ok(None);
+        };
         let uri = routine
             .uri
             .unwrap_or_else(|| format!("iris-include:///{name}.inc"));
-        Some((uri, routine.text, parsed.macroed_units))
+        Ok(Some((uri, routine.text, parsed.macroed_units)))
     }
 
     fn expand_rtn_helper(
@@ -584,8 +598,9 @@ impl WorkspaceStruct {
                             match self.resolve_include(&included_name.print()) {
                                 // IRIS processes a repeated `#include` once; this also ends
                                 // include cycles.
-                                Some((inc_uri, ..)) if dones.included.contains_key(&inc_uri) => {}
-                                Some((inc_uri, inc_text, inc_units)) => {
+                                Ok(Some((inc_uri, ..)))
+                                    if dones.included.contains_key(&inc_uri) => {}
+                                Ok(Some((inc_uri, inc_text, inc_units))) => {
                                     dones.note_included_file(inc_uri.clone(), &inc_text);
                                     let items = inc_units
                                         .into_iter()
@@ -601,8 +616,11 @@ impl WorkspaceStruct {
                                         .collect();
                                     todos.push_items(items);
                                 }
-                                None => {
+                                Ok(None) => {
                                     dones.note_unresolved_include(included_name.print(), &origin)
+                                }
+                                Err(reason) => {
+                                    dones.note_lookup_failed(included_name.print(), reason, &origin)
                                 }
                             }
                         }
@@ -928,14 +946,14 @@ impl WorkspaceStruct {
     pub(crate) fn resolve_class_includes(
         &self,
         names: &[String],
-    ) -> (MacroDefinitions, Vec<String>, HashSet<String>) {
+    ) -> (MacroDefinitions, Vec<FailedInclude>, HashSet<String>) {
         let mut definitions = HashMap::new();
         let mut failed = Vec::new();
         let mut include_names = HashSet::new();
         for name in names {
             include_names.insert(name.clone());
             match self.resolve_include(name) {
-                Some((inc_uri, inc_text, inc_units)) => {
+                Ok(Some((inc_uri, inc_text, inc_units))) => {
                     let mut dones = DoneList::new();
                     dones.note_included_file(inc_uri.clone(), &inc_text);
                     let mut todos = TodoList::new(
@@ -952,7 +970,8 @@ impl WorkspaceStruct {
                     // Whatever the include itself included: an edit there changes this class too.
                     include_names.extend(dones.include_names);
                 }
-                None => failed.push(name.clone()),
+                Ok(None) => failed.push((name.clone(), None)),
+                Err(reason) => failed.push((name.clone(), Some(reason))),
             }
         }
         (definitions, failed, include_names)
@@ -1117,7 +1136,7 @@ fn substitute_macro_body<'a>(
 }
 
 // Builds the diagnostic for something left unresolved, once its source range is known.
-type UnresolvedError = fn(String, bindings::Range) -> crate::check::TypeError;
+type UnresolvedError = Box<dyn Fn(String, bindings::Range) -> crate::check::TypeError>;
 
 struct DoneList {
     text: String,
@@ -1149,8 +1168,25 @@ impl DoneList {
         self.note_unresolved(crate::check::TypeError::cannot_find_include, name, origin);
     }
 
-    fn note_unresolved(&mut self, make: UnresolvedError, name: String, origin: &Origin) {
-        self.unresolved.push((make, name, origin.clone()));
+    fn note_lookup_failed(&mut self, name: String, reason: String, origin: &Origin) {
+        let make = move |name, range| {
+            crate::check::TypeError::iris_lookup_failed(
+                crate::DocKind::Inc,
+                name,
+                reason.clone(),
+                range,
+            )
+        };
+        self.note_unresolved(make, name, origin);
+    }
+
+    fn note_unresolved(
+        &mut self,
+        make: impl Fn(String, bindings::Range) -> crate::check::TypeError + 'static,
+        name: String,
+        origin: &Origin,
+    ) {
+        self.unresolved.push((Box::new(make), name, origin.clone()));
     }
 
     // Records a top-level macro call's own source span, for `macro_expansion_at_position`.
