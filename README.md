@@ -218,6 +218,9 @@ holds everything a connection would be asked for, fetched once:
 ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER user.d.json
 ```
 
+Without the file argument, it writes to
+`~/.ascot/<host>-<port>-<namespace>.d.json` and says so.
+
 Wherever `--iris` (or the MCP `iris` argument) takes a URL, it also takes the
 path of such a file, and no REST request is made:
 
@@ -229,7 +232,8 @@ ascot analyze --iris user.d.json src/
 file declares. The file holds every class's superclasses, members and their
 signatures and types, as a live connection would report them (no method code),
 the full source of every `.inc` file, and the labels and their arguments of every
-routine, or, for a routine without source (e.g. only its OBJ), that it exists.
+routine, or, for a routine without source (e.g. only its OBJ), that it exists, along
+with the instance's version.
 Regenerate it after the instance's code changes.
 
 ### Style
