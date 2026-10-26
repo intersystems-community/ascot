@@ -147,7 +147,7 @@ impl<'a> Flow<'a> {
         output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
     ) -> Result<Vec<String>, TypeError> {
-        Self::run(uri, env, range, args, None, output, handler, false, false)
+        Self::run(uri, env, range, args, None, output, handler, false)
     }
 
     pub(crate) fn output_expectation(&self) -> Rc<RefCell<Option<WithRange<Option<Ty>>>>> {
@@ -194,10 +194,6 @@ impl<'a> Flow<'a> {
         output: WithRange<Option<Option<Ty>>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
         auto_return: bool,
-        // The parameter list is dictated by an inherited declaration (an override), so a
-        // parameter the body never reads -- or an `Output` one it never assigns -- isn't a
-        // mistake of this method's.
-        inherited_signature: bool,
     ) -> Result<Vec<String>, TypeError> {
         let output = Rc::new(RefCell::new(
             output.it.map(|it| WithRange::new(it, output.range)),
@@ -211,7 +207,6 @@ impl<'a> Flow<'a> {
             output,
             handler,
             auto_return,
-            inherited_signature,
         )
     }
 
@@ -226,7 +221,6 @@ impl<'a> Flow<'a> {
         output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
         auto_return: bool,
-        inherited_signature: bool,
     ) -> Result<Vec<String>, TypeError> {
         let procedure_block = public_list.is_some();
         let mut bindings = HashMap::new();
@@ -252,18 +246,16 @@ impl<'a> Flow<'a> {
             let binding = {
                 let (assigned, subscript_assigned, new) = match mode {
                     ArgMode::Default => {
-                        reading_list.insert(Written::new(name.clone(), range), inherited_signature);
+                        reading_list.insert(Written::new(name.clone(), range), false);
                         let subscripts = variadic.then_some(());
                         (ty.clone().unwrap_or_default().into(), subscripts, true)
                     }
                     ArgMode::ByRef => {
-                        reading_list.insert(Written::new(name.clone(), range), inherited_signature);
+                        reading_list.insert(Written::new(name.clone(), range), false);
                         (ty.clone().unwrap_or_default().into(), Some(()), false)
                     }
                     ArgMode::Output => {
-                        if !inherited_signature {
-                            output_params.push((name.clone(), range));
-                        }
+                        output_params.push((name.clone(), range));
                         (
                             MaybeTy::Maybe(ty.clone().unwrap_or_default()).into(),
                             Some(()),

@@ -20,6 +20,9 @@
   "%Open": { "returns": "This" },
   "%OpenId": { "returns": "This" }
  },
+ "%Library.RegisteredObject.cls": {
+  "%OnNew": null
+ },
  "%Library.RelationshipObject.cls": {
   "ELEMENTTYPE": { "parameter": "CLASSNAME", "default": "%Library.ObjectHandle" },
   "GetAt": { "returns": "..#ELEMENTTYPE" },
@@ -35,6 +38,13 @@
   "%OpenId": { "returns": "This" }
  },
  "%Library.SystemBase.cls": {
+  "%DispatchClassMethod": null,
+  "%DispatchGetModified": null,
+  "%DispatchGetProperty": null,
+  "%DispatchMethod": null,
+  "%DispatchSetModified": null,
+  "%DispatchSetMultidimProperty": null,
+  "%DispatchSetProperty": null,
   "%New": { "returns": "This", "args": { "initvalue": { "optional": true } } }
  },
  "%Stream.Object.cls": {

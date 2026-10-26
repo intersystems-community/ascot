@@ -55,49 +55,119 @@ impl<T> Deref for WithRange<T> {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum MemberNs {
+    Parameter,
+    Property,
+    HigherOrder,
+    Index,
+    Query,
+    // Only reachable through the members they generate.
+    Other,
+}
+
+// The members ObjectScript names directly -- the only ones a lookup is ever for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Visible {
     // `..#X`
     Parameter,
     // `..X`: a property
     Property,
-    // `..X(...)`: a method or a multidimensional property
-    HigherOrder,
-    Other,
+    // `..X(...)`: a method, else a property (which IRIS then requires to be multidimensional)
+    Method,
 }
 
-// A multidimensional property is in both `Property` (its root node) and `HigherOrder`.
-const MULTIDIMENSIONAL: &[MemberNs] = &[MemberNs::Property, MemberNs::HigherOrder];
+impl From<Visible> for MemberNs {
+    fn from(visible: Visible) -> Self {
+        match visible {
+            Visible::Parameter => Self::Parameter,
+            Visible::Property => Self::Property,
+            Visible::Method => Self::HigherOrder,
+        }
+    }
+}
 
-impl MemberNs {
-    pub(crate) fn of(kind: &MemberKindSpecificDetails) -> &'static [Self] {
-        match kind {
-            MemberKindSpecificDetails::Parameter { .. } => &[Self::Parameter],
-            MemberKindSpecificDetails::Property { keywords, .. } => {
-                if keywords
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case("MultiDimensional"))
-                {
-                    MULTIDIMENSIONAL
-                } else {
-                    &[Self::Property]
-                }
+/// A class's members by name, one map per `MemberNs`, so a same-named pair within one is a
+/// conflict. Each key repeats its member's `name`, for the lookup.
+#[derive(Default)]
+pub(crate) struct Members {
+    pub(crate) parameter: HashMap<String, WithRange<MemberDetails>>,
+    pub(crate) property: HashMap<String, WithRange<MemberDetails>>,
+    pub(crate) higher_order: HashMap<String, WithRange<MemberDetails>>,
+    pub(crate) index: HashMap<String, WithRange<MemberDetails>>,
+    pub(crate) query: HashMap<String, WithRange<MemberDetails>>,
+    /// The `MemberNs::Other` kinds, which nothing looks up by name, in source order.
+    pub(crate) other: Vec<WithRange<MemberDetails>>,
+    /// Members whose name an earlier one of the same namespace already took, left out of the
+    /// maps for `check_cls` to report.
+    pub(crate) duplicates: Vec<WithRange<MemberDetails>>,
+}
+
+impl Members {
+    fn insert(&mut self, member: WithRange<MemberDetails>) {
+        let map = match MemberNs::of(&member.kind) {
+            MemberNs::Parameter => &mut self.parameter,
+            MemberNs::Property => &mut self.property,
+            MemberNs::HigherOrder => &mut self.higher_order,
+            MemberNs::Index => &mut self.index,
+            MemberNs::Query => &mut self.query,
+            MemberNs::Other => return self.other.push(member),
+        };
+        match map.entry(member.name.it.clone()) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(member);
             }
-            MemberKindSpecificDetails::MethodOrClassMethod(..)
-            | MemberKindSpecificDetails::ClientMethod => &[Self::HigherOrder],
-            _ => &[Self::Other],
+            std::collections::hash_map::Entry::Occupied(_) => self.duplicates.push(member),
         }
     }
 
-    pub(crate) fn of_info(kind: &bindings::MemberKind) -> &'static [Self] {
+    pub(crate) fn all(&self) -> impl Iterator<Item = &WithRange<MemberDetails>> {
+        [
+            &self.parameter,
+            &self.property,
+            &self.higher_order,
+            &self.index,
+            &self.query,
+        ]
+        .into_iter()
+        .flat_map(HashMap::values)
+        .chain(&self.other)
+        .chain(&self.duplicates)
+    }
+
+    /// Every member in source order.
+    pub(crate) fn in_order(&self) -> Vec<&WithRange<MemberDetails>> {
+        let mut members: Vec<_> = self.all().collect();
+        members.sort_by_key(|member| (member.range.start.line, member.range.start.character));
+        members
+    }
+}
+
+impl MemberNs {
+    // A multidimensional property is a `Property` too: `Visible::Method` falls back to it, and
+    // IRIS compiles a same-named method beside it.
+    pub(crate) fn of(kind: &MemberKindSpecificDetails) -> Self {
         match kind {
-            bindings::MemberKind::Parameter(_) => &[Self::Parameter],
-            bindings::MemberKind::Property(info) if info.multidimensional => MULTIDIMENSIONAL,
+            MemberKindSpecificDetails::Parameter { .. } => Self::Parameter,
+            MemberKindSpecificDetails::Property { .. } => Self::Property,
+            MemberKindSpecificDetails::MethodOrClassMethod(..)
+            | MemberKindSpecificDetails::ClientMethod => Self::HigherOrder,
+            MemberKindSpecificDetails::Index { .. } => Self::Index,
+            MemberKindSpecificDetails::Query => Self::Query,
+            _ => Self::Other,
+        }
+    }
+
+    pub(crate) fn of_info(kind: &bindings::MemberKind) -> Self {
+        match kind {
+            bindings::MemberKind::Parameter(_) => Self::Parameter,
             bindings::MemberKind::Property(_) | bindings::MemberKind::Relationship(_) => {
-                &[Self::Property]
+                Self::Property
             }
             bindings::MemberKind::Method(_)
             | bindings::MemberKind::ClassMethod(_)
-            | bindings::MemberKind::ClientMethod(_) => &[Self::HigherOrder],
-            _ => &[Self::Other],
+            | bindings::MemberKind::ClientMethod(_) => Self::HigherOrder,
+            bindings::MemberKind::Index => Self::Index,
+            bindings::MemberKind::Query => Self::Query,
+            _ => Self::Other,
         }
     }
 }
@@ -110,12 +180,12 @@ pub(crate) struct ClassDetails {
     pub(crate) imports: Vec<String>,
     pub(crate) deprecated: bool,
     pub(crate) is_datatype: bool,
+    // `[ Inheritance = right ]`: a member several superclasses define comes from the rightmost
+    // `Extends` entry rather than the leftmost.
+    pub(crate) inheritance_right: bool,
     pub(crate) language: Option<MethodLanguage>,
     pub(crate) mode: Option<CodeMode>,
-    pub(crate) members: Vec<WithRange<MemberDetails>>,
-    // One namespace per syntax (see `MemberNs`), so a same-named pair within one is a conflict.
-    // The other kinds are only reachable through the members they generate.
-    pub(crate) members_by_name: HashMap<(MemberNs, String), usize>,
+    pub(crate) members: Members,
     pub(crate) include_names: Vec<WithRange<String>>,
     // The `Include (...)` clause's own span, for pointing a "cannot find include" diagnostic at
     // it instead of at the class's declaration -- `None` only when there's no `Include` at all,
@@ -160,9 +230,9 @@ pub enum MemberKindSpecificDetails {
     ClientMethod,
     ForeignKey,
     Index {
-        // The properties this index is defined `On`, in order — used to type-check calls to
-        // its generated `<Name>Open`/`<Name>Exists`/`<Name>Delete` methods' value arguments.
-        on_properties: Vec<String>,
+        // One per `On` key, in order; `None` for a `(KEYS)`/`(ELEMENTS)` collection subscript,
+        // which isn't typed yet.
+        on_properties: Vec<Option<WithRange<String>>>,
     },
     Projection,
     Trigger,
@@ -458,9 +528,16 @@ fn type_param_names(type_params: &Option<cos::TypeParamList>) -> Vec<String> {
 
 impl ClassDetails {
     pub(crate) fn member(&self, ns: MemberNs, name: &str) -> Option<&WithRange<MemberDetails>> {
-        self.members_by_name
-            .get(&(ns, name.to_string()))
-            .map(|&idx| &self.members[idx])
+        let members = &self.members;
+        match ns {
+            MemberNs::Parameter => &members.parameter,
+            MemberNs::Property => &members.property,
+            MemberNs::HigherOrder => &members.higher_order,
+            MemberNs::Index => &members.index,
+            MemberNs::Query => &members.query,
+            MemberNs::Other => return None,
+        }
+        .get(name)
     }
 }
 
@@ -537,6 +614,8 @@ impl TryFrom<&str> for ClassDetails {
             .collect();
         let class_procedure_block = procedure_block(&cls.keyword_list).unwrap_or(true);
         let is_datatype = is_datatype(&cls.keyword_list);
+        let inheritance_right = keyword_value(&cls.keyword_list, "Inheritance")
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("right"));
         let language = cls
             .keyword_list
             .as_ref()
@@ -564,8 +643,7 @@ impl TryFrom<&str> for ClassDetails {
                 _ => vec![],
             })
             .unwrap_or_default();
-        let mut members: Vec<WithRange<MemberDetails>> = Vec::new();
-        let mut members_by_name = HashMap::new();
+        let mut members = Members::default();
         for (before_member, member) in cls.member_list.members.into_item_sep() {
             let doc = extract_document_comments(before_member.0.as_str());
             let range = range(&member, &olc);
@@ -578,10 +656,7 @@ impl TryFrom<&str> for ClassDetails {
                 member,
                 class_procedure_block,
             );
-            for &ns in MemberNs::of(&kind) {
-                members_by_name.insert((ns, name.to_string()), members.len());
-            }
-            members.push(WithRange {
+            members.insert(WithRange {
                 it: MemberDetails {
                     name,
                     doc,
@@ -597,10 +672,10 @@ impl TryFrom<&str> for ClassDetails {
             extends,
             deprecated,
             is_datatype,
+            inheritance_right,
             language,
             mode,
             members,
-            members_by_name,
             include_names,
             imports,
             keywords_without_value,
@@ -628,7 +703,11 @@ fn process_member(
             with_range_name(&index.name, olc),
             deprecated || is_deprecated(&index.keywords),
             MemberKindSpecificDetails::Index {
-                on_properties: index.on_properties(),
+                on_properties: index
+                    .on_properties()
+                    .into_iter()
+                    .map(|key| key.kind.is_none().then(|| with_range_name(&key.name, olc)))
+                    .collect(),
             },
         ),
         cos::Member::Method(method) => {
