@@ -88,8 +88,10 @@ test("a request that fails leaves what it was for taken on trust, saying why", a
     "A4471",
     `Cannot look up ${what} on the IRIS instance (IRIS is down), so it is taken on trust`,
   ];
+  // Once per call into the routine: a failed lookup isn't cached.
   assert.deepEqual((await check(new DeadAtelier())).sort(), [
     hint("class '%Library.DynamicObject'"),
+    hint("routine '%SYS.API'"),
     hint("routine '%SYS.API'"),
   ]);
 });
