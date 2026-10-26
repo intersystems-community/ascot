@@ -59,10 +59,15 @@ From [crates.io/crates/ascot](https://crates.io/crates/ascot):
 cargo install ascot
 ```
 
+On Windows, building also needs the Visual Studio C++ build tools, which newer
+rustup installers offer to set up; a build failing on `link.exe` or
+`kernel32.lib` is missing them, see rustup's
+[MSVC prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html).
+
 ### JavaScript binding
 
-A library for Node 24+ and other JS consumers (the one the InterSystems Language
-Server uses); it does not provide an `ascot` executable. From
+A library for Node 24+ and other JS consumers; it does not provide an `ascot`
+executable. From
 [npmjs.com/package/@intersystems-community/ascot](https://www.npmjs.com/package/@intersystems-community/ascot):
 
 ```sh
@@ -74,7 +79,8 @@ npm install @intersystems-community/ascot
 ### `ascot` as a CLI tool
 
 `ascot help` lists the commands, and `ascot help <COMMAND>` (or
-`ascot <COMMAND> --help`) shows one's options.
+`ascot <COMMAND> --help`) shows one's options; the IRIS and style ones are
+described under [Advanced Usage](#advanced-usage).
 
 ```sh
 ascot analyze <PATH>...
@@ -175,6 +181,8 @@ claude plugin install ascot-mcp@ascot-plugins
 claude plugin install ascot-lsp@ascot-plugins
 ```
 
+## Advanced Usage
+
 ### Connecting to IRIS
 
 Every command can use a live IRIS instance, reached through the Atelier REST
@@ -189,7 +197,7 @@ metadata. The commands take the connection differently:
   prefix (`/iris` below):
 
   ```sh
-  ascot analyze --iris http://user:password@localhost:8080/iris --iris-namespace USER <PATH>...
+  ascot analyze --iris http://user:password@localhost:8080/iris --iris-namespace USER src/
   ```
 
   The `ascot-lsp` plugin starts `ascot lsp` with no flags, so it never connects
@@ -214,7 +222,7 @@ Wherever `--iris` (or the MCP `iris` argument) takes a URL, it also takes the
 path of such a file, and no REST request is made:
 
 ```sh
-ascot analyze --iris user.d.json <PATH>...
+ascot analyze --iris user.d.json src/
 ```
 
 `--iris-namespace` is then optional; if given, it must match the namespace the
