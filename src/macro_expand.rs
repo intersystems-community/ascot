@@ -470,8 +470,7 @@ impl SourceMap {
 // An include's uri, full text, and un-substituted macro units.
 type Include = (String, String, Vec<Range<MacroedUnit>>);
 
-// An `Include` that didn't resolve: its name, and why IRIS couldn't be asked for it when that's
-// why.
+// An `Include` that didn't resolve, with why IRIS couldn't be asked for it, when that's why.
 pub(crate) type FailedInclude = (String, Option<String>);
 
 impl WorkspaceStruct {
@@ -1169,7 +1168,6 @@ impl DoneList {
         self.note_unresolved(crate::check::TypeError::cannot_find_include, name, origin);
     }
 
-    // An `#include` whose file IRIS couldn't be asked for.
     fn note_lookup_failed(&mut self, name: String, reason: String, origin: &Origin) {
         let make = move |name, range| {
             crate::check::TypeError::iris_lookup_failed(

@@ -138,7 +138,6 @@ impl IrisContext for AtelierContext {
 }
 
 impl AtelierContext {
-    // The rows of `sql`, parsed.
     fn rows(&self, sql: &str, params: &[&str]) -> Result<Vec<Value>, String> {
         let rows = self.atelier.query(sql, params)?;
         serde_json::from_str(&rows)
@@ -570,8 +569,6 @@ tygr::char_class!(IsCompiledDefaultText, "default_char", |ch| {
     !matches!(ch, ',' | '"' | '(' | ')' | '{' | '}')
 });
 
-// IRIS's minified `FormalSpec` (`*out:%String,&ref:%Integer,x...`) as arguments; none if it
-// doesn't parse.
 fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
     let Ok(CompiledFormalSpec(Some(formals))) = CompiledFormalSpec::parse(spec) else {
         return (vec![], None);
@@ -615,8 +612,8 @@ pub struct RawAtelier {
     namespace: String,
     username: String,
     auth_header: String,
-    // Replaced by why IRIS couldn't be reached on the first such failure, so every later request
-    // fails at once instead of waiting out its own timeout.
+    // Why IRIS couldn't be reached, once it couldn't: later requests then fail at once instead of
+    // each waiting out a timeout.
     agent: Mutex<Result<ureq::Agent, String>>,
 }
 
@@ -759,7 +756,6 @@ impl RawAtelier {
                 })
                 .collect::<BTreeMap<_, _>>(),
         );
-        // The first request to fail, which stops every worker.
         let failed = Mutex::new(None);
         let (tx, rx) = mpsc::channel();
         let mut done = [0; 3];
@@ -820,8 +816,6 @@ impl RawAtelier {
         self.agent.lock().unwrap().clone()
     }
 
-    // A failed request's message. One that says IRIS can't be reached, rather than that this
-    // request went wrong, is kept, failing every later request at once.
     fn failed(&self, context: &str, err: ureq::Error) -> String {
         let message = format!("{context} at {} failed: {err}", self.base_url);
         use ureq::Error::{ConnectionFailed, HostNotFound, Io, Timeout, Tls};
@@ -1079,7 +1073,6 @@ mod tests {
         );
     }
 
-    // `http://user:pass@127.0.0.1:port` without the credentials.
     fn host(url: &str) -> String {
         url.replace("user:pass@", "")
     }

@@ -873,8 +873,8 @@ impl<'a> WorkspaceEnv<'a> {
         self.resolve_cls_uri(cls).is_none() && matches!(self.iris_cls(cls), Some(None))
     }
 
-    // What IRIS says about `cls`: `None` with no IRIS context, or when it couldn't answer (kept in
-    // `lookup_failures` for the diagnostic); `Some(None)` when it has no such class.
+    // `None` with no IRIS context or when it couldn't answer (noted in `lookup_failures`);
+    // `Some(None)` when IRIS has no such class.
     fn iris_cls(&self, cls: &str) -> Option<Option<bindings::ClassInfo>> {
         match self.workspace.iris.as_ref()?.get_cls(cls) {
             Ok(found) => Some(found),
@@ -887,8 +887,7 @@ impl<'a> WorkspaceEnv<'a> {
         }
     }
 
-    // The hint that IRIS couldn't be asked about `cls` -- or, for a member of `cls`, about any
-    // class in its hierarchy -- if that's what happened.
+    // The hint for a lookup of `cls` that failed, or with `any`, of whatever class failed last.
     fn lookup_failed(&self, cls: &str, any: bool, range: bindings::Range) -> Option<TypeError> {
         let failures = self.lookup_failures.borrow();
         let (cls, reason) = failures
@@ -1376,7 +1375,6 @@ pub struct WorkspaceEnv<'a> {
     // assumed) and read right back by whichever `resolve_*` call triggered it, to raise a soft
     // diagnostic at that exact reference — see `resolve_obj_mstr`.
     unverified: Cell<bool>,
-    // Why IRIS couldn't be asked about a class, by name -- see `iris_cls`.
     lookup_failures: RefCell<HashMap<String, String>>,
     // Set during a loop's throwaway priming pass (see `Flow::with_loop`) — its findings reflect
     // pre-loop bindings only, not real, so every soft diagnostic raised meanwhile is dropped.
