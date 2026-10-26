@@ -2,7 +2,7 @@
 //! `IrisContext` ascot makes out of them: the `%Dictionary` queries behind `get_cls`, and the
 //! parsing behind `get_rtn`. ascot's own `Atelier` is `RawAtelier` (native only).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -24,9 +24,9 @@ use {
 
 use crate::IrisContext;
 use crate::bindings::{
-    ArgMode, Cardinality, ClassInfo, CollectionKind, MemberInfo, MemberKind, MethodInfo, NameInfo,
-    NormalArg, ParameterInfo, Position, PropertyInfo, Range, RelationshipInfo, RoutineInfo, Source,
-    VariadicArg,
+    ArgMode, Cardinality, ClassInfo, CollectionKind, IndexInfo, MemberInfo, MemberKind, MethodInfo,
+    NameInfo, NormalArg, ParameterInfo, Position, PropertyInfo, Range, RelationshipInfo,
+    RoutineInfo, Source, VariadicArg,
 };
 use crate::cos::{LocalVariableName, OSString, Space, Type};
 
@@ -203,11 +203,28 @@ fn class_infos(
     if rows.is_empty() {
         return Ok(HashMap::new());
     }
-    let members = resolve_stubs(conn, filter, params, all_mem_rows(conn, filter, params)?)?;
-    Ok(assemble(rows, members))
+    let members = all_mem_rows(conn, filter, params)?;
+    let storages: HashMap<String, String> = conn
+        .rows(
+            &format!(
+                "SELECT parent AS Parent, Type FROM %Dictionary.CompiledStorage WHERE parent {filter}"
+            ),
+            params,
+        )?
+        .into_iter()
+        .filter_map(|row| {
+            let field = |key: &str| Some(row.get(key)?.as_str()?.to_string());
+            Some((field("Parent")?, field("Type").filter(|t| !t.is_empty())?))
+        })
+        .collect();
+    Ok(assemble(rows, members, &storages))
 }
 
-fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<String, ClassInfo> {
+fn assemble(
+    class_rows: Vec<Value>,
+    member_rows: Vec<MemberRow>,
+    storages: &HashMap<String, String>,
+) -> HashMap<String, ClassInfo> {
     let mut members: HashMap<String, Vec<MemberInfo>> = HashMap::new();
     for row in member_rows {
         if !row.name.is_empty() {
@@ -238,6 +255,7 @@ fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<Stri
                 },
                 extends: split_classes(str_field("Super")),
                 inheritance_right: str_field("Inheritance") == "right",
+                storage: storages.get(&cls).cloned(),
                 deprecated: is_truthy(&row.get("Deprecated").cloned().unwrap_or(Value::Null)),
                 members: members.remove(&cls).unwrap_or_default(),
                 property_class_names: split_classes(str_field("PropertyClass")),
@@ -251,7 +269,7 @@ fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<Stri
         .collect()
 }
 
-// Uniform row shape across all three member tables `all_mem_uncached` unions together. IRIS
+// Uniform row shape across the member tables `all_mem_rows` unions together. IRIS
 // reports an unset SQL string column as an empty string, not JSON `null` -- normalized to `None`
 // here, at the boundary, so nothing downstream has to know that (or risk treating "" as a real,
 // if nonsense, class/type name).
@@ -281,8 +299,6 @@ struct MemberRow {
     cardinality: Option<String>,
     #[serde(default)]
     multi_dimensional: Value,
-    #[serde(deserialize_with = "empty_string_as_none")]
-    stub: Option<String>,
     class_method: Value,
     deprecated: Value,
     #[serde(default, deserialize_with = "empty_string_as_none")]
@@ -304,32 +320,57 @@ fn is_truthy(v: &Value) -> bool {
 // Every member declared directly on the classes matching `Parent {filter}`, across all three
 // tables -- one query per batch instead of one per member, since `get_cls` always wants the
 // whole list at once.
+// A class's own members (`Origin = Parent`): methods, properties and parameters, then its indices
+// and queries, whose generated methods ascot synthesizes. Two requests: one `UNION` of all five
+// tables overflows IRIS's query stack for a batch of classes.
 fn all_mem_rows(
     conn: &AtelierContext,
     filter: &str,
     params: &[&str],
 ) -> Result<Vec<MemberRow>, String> {
-    let sql = |description: &str| {
+    let declared = |description: &str| {
         format!(
             "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, {description}, \
              FormalSpec, ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS \
-             Relationship, NULL AS Cardinality, Stub, ClassMethod, Deprecated, Origin FROM \
-             %Dictionary.CompiledMethod WHERE Parent {filter} UNION ALL SELECT Parent, Name, \
-             Aliases, 'property' AS MemberType, {description}, NULL AS FormalSpec, Type AS \
-             ReturnType, Collection, MultiDimensional, Relationship, Cardinality, NULL AS Stub, \
-             0 AS ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledProperty WHERE Parent \
-             {filter} UNION ALL SELECT Parent, Name, NULL AS Aliases, 'parameter' AS MemberType, \
-             {description}, NULL AS FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS \
-             MultiDimensional, 0 AS Relationship, NULL AS Cardinality, NULL AS Stub, 0 AS \
-             ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledParameter WHERE Parent \
-             {filter}"
+             Relationship, NULL AS Cardinality, ClassMethod, Deprecated, Origin FROM \
+             %Dictionary.CompiledMethod WHERE Parent {filter} AND Origin = Parent UNION ALL SELECT \
+             Parent, Name, Aliases, 'property' AS MemberType, {description}, NULL AS FormalSpec, \
+             Type AS ReturnType, Collection, MultiDimensional, Relationship, Cardinality, 0 AS \
+             ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledProperty WHERE Parent \
+             {filter} AND Origin = Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, \
+             'parameter' AS MemberType, {description}, NULL AS FormalSpec, Type AS ReturnType, \
+             NULL AS Collection, 0 AS MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 \
+             AS ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledParameter WHERE Parent \
+             {filter} AND Origin = Parent"
         )
     };
-    let params = [params, params, params].concat();
+    let generating = |description: &str| {
+        format!(
+            "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, {description}, \
+             Properties AS FormalSpec, NULL AS ReturnType, NULL AS Collection, 0 AS \
+             MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
+             Deprecated, Origin FROM %Dictionary.CompiledIndex WHERE Parent {filter} AND Origin = \
+             Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, 'query' AS MemberType, \
+             {description}, FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS \
+             MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
+             Deprecated, Origin FROM %Dictionary.CompiledQuery WHERE Parent {filter} AND Origin = \
+             Parent"
+        )
+    };
+    let mut rows = member_rows(conn, declared, &[params, params, params].concat())?;
+    rows.extend(member_rows(conn, generating, &[params, params].concat())?);
+    Ok(rows)
+}
+
+fn member_rows(
+    conn: &AtelierContext,
+    sql: impl Fn(&str) -> String,
+    params: &[&str],
+) -> Result<Vec<MemberRow>, String> {
     // The Atelier query API fails the whole query over a text value that merely starts with `{`
     // (e.g. a `/// {$$$CPFSave+...}` parameter comment); retry without descriptions.
-    conn.rows(&sql("Description"), &params)
-        .or_else(|_| conn.rows(&sql("'' AS Description"), &params))
+    conn.rows(&sql("Description"), params)
+        .or_else(|_| conn.rows(&sql("'' AS Description"), params))
         .map(|rows| {
             rows.into_iter()
                 .filter_map(|row| serde_json::from_value(row).ok())
@@ -337,88 +378,6 @@ fn all_mem_rows(
         })
 }
 
-// A method row with a `Stub` is a compiler-generated accessor (index/query/property/
-// constraint-backed) -- its real metadata lives in a different table, keyed by the stub's
-// `origin.subname.kindchar` segments: `(origin, subname, table)`.
-fn stub_parts(row: &MemberRow) -> Option<(&str, &str, &'static str)> {
-    if row.member_type != "method" {
-        return None;
-    }
-    let mut parts = row.stub.as_deref()?.split('.');
-    let origin = parts.next().unwrap_or_default();
-    let subname = parts.next().unwrap_or_default();
-    let table = match parts.next() {
-        Some("i") => "Index",
-        Some("q") => "Query",
-        Some("a") => "Property",
-        Some("n") => "Constraint",
-        _ => return None,
-    };
-    Some((origin, subname, table))
-}
-
-// Replaces each stub row with its real metadata -- one query per stub table the classes use,
-// not one per stub (a property-heavy class has dozens of generated accessors).
-fn resolve_stubs(
-    conn: &AtelierContext,
-    filter: &str,
-    params: &[&str],
-    rows: Vec<MemberRow>,
-) -> Result<Vec<MemberRow>, String> {
-    let tables: HashSet<&str> = rows
-        .iter()
-        .filter_map(stub_parts)
-        .map(|(_, _, t)| t)
-        .collect();
-    let mut resolved: HashMap<(String, String, String, &str), MemberRow> = HashMap::new();
-    for table in tables {
-        let sql = |description: &str| {
-            format!(
-                "SELECT parent->Parent AS Parent, Name, parent->Name AS StubOrigin, 'method' AS \
-                 MemberType, {description}, FormalSpec, ReturnType, '' AS Stub, ClassMethod, \
-                 Deprecated FROM %Dictionary.Compiled{table}Method WHERE parent->Parent {filter}"
-            )
-        };
-        // Same `{`-leading-text failure mode `all_mem_rows` guards against.
-        let found = conn
-            .rows(&sql("Description"), params)
-            .or_else(|_| conn.rows(&sql("'' AS Description"), params))?;
-        for value in found {
-            let origin = value
-                .get("StubOrigin")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let Ok(row) = serde_json::from_value::<MemberRow>(value.clone()) else {
-                continue;
-            };
-            resolved.insert(
-                (
-                    row.parent.clone(),
-                    origin.to_string(),
-                    row.name.clone(),
-                    table,
-                ),
-                row,
-            );
-        }
-    }
-    Ok(rows
-        .into_iter()
-        .map(|row| match stub_parts(&row) {
-            Some((origin, subname, table)) => resolved
-                .remove(&(
-                    row.parent.clone(),
-                    origin.to_string(),
-                    subname.to_string(),
-                    table,
-                ))
-                .unwrap_or(row),
-            None => row,
-        })
-        .collect())
-}
-
-// A property's alias list is a comma-separated %Translate'd string.
 fn split_aliases(aliases: Option<&str>) -> Vec<String> {
     aliases
         .map(|aliases| {
@@ -500,6 +459,14 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
             t: row.return_type.clone(),
             v: None,
         }),
+        // `Properties` is `Name,Age`; a collection key is `Tags(ELEMENTS)`.
+        "index" => MemberKind::Index(IndexInfo {
+            properties: split_classes(row.formal_spec.as_deref().unwrap_or(""))
+                .into_iter()
+                .filter(|key| !key.contains('('))
+                .collect(),
+        }),
+        "query" => MemberKind::Query,
         _ => {
             let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
             let zero = Position {
@@ -964,17 +931,21 @@ mod tests {
             serde_json::json!({"Name": "A.C", "Super": "", "Inheritance": "right", "ClassType": "datatype", "Deprecated": 1}),
         ];
         let member_rows: Vec<MemberRow> = [
-            serde_json::json!({"parent": "A.C", "Name": "P", "MemberType": "property", "Description": "", "FormalSpec": "", "ReturnType": "%String", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
-            serde_json::json!({"parent": "A.B", "Name": "M", "MemberType": "method", "Description": "", "FormalSpec": "x:%String", "ReturnType": "%Status", "Stub": "", "ClassMethod": 1, "Deprecated": 0}),
-            serde_json::json!({"Parent": "A.B", "Name": "", "MemberType": "method", "Description": "", "FormalSpec": "", "ReturnType": "", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
+            serde_json::json!({"parent": "A.C", "Name": "P", "MemberType": "property", "Description": "", "FormalSpec": "", "ReturnType": "%String", "ClassMethod": 0, "Deprecated": 0}),
+            serde_json::json!({"parent": "A.B", "Name": "M", "MemberType": "method", "Description": "", "FormalSpec": "x:%String", "ReturnType": "%Status", "ClassMethod": 1, "Deprecated": 0}),
+            serde_json::json!({"Parent": "A.B", "Name": "", "MemberType": "method", "Description": "", "FormalSpec": "", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0}),
+            serde_json::json!({"parent": "A.C", "Name": "ByP", "MemberType": "index", "Description": "", "FormalSpec": "P,Tags(ELEMENTS)", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0}),
         ]
         .into_iter()
         .map(|row| serde_json::from_value(row).unwrap())
         .collect();
-        let classes = assemble(class_rows, member_rows);
+        let storages = [("A.B".to_string(), "%Storage.Persistent".to_string())].into();
+        let classes = assemble(class_rows, member_rows, &storages);
         assert_eq!(classes.len(), 2);
         let b = &classes["A.B"];
         assert_eq!(b.extends, vec!["%RegisteredObject"]);
+        assert_eq!(b.storage.as_deref(), Some("%Storage.Persistent"));
+        assert!(classes["A.C"].storage.is_none());
         assert_eq!(b.is_datatype, Some(false));
         assert_eq!(b.members.len(), 1, "the nameless row is dropped");
         assert_eq!(b.members[0].name.content, "M");
@@ -984,6 +955,11 @@ mod tests {
         assert_eq!(c.is_datatype, Some(true));
         assert!(c.inheritance_right && !b.inheritance_right);
         assert_eq!(c.members[0].name.content, "P");
+        assert!(
+            matches!(&c.members[1].kind, MemberKind::Index(index) if index.properties == ["P"]),
+            "{:?}",
+            c.members[1].kind
+        );
     }
 
     #[test]

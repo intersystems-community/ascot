@@ -1710,6 +1710,7 @@ mod tests {
                     },
                     extends: vec![],
                     inheritance_right: false,
+                    storage: None,
                     deprecated: false,
                     members: vec![member("%GetData"), member("Close")],
                     property_class_names: vec![],
@@ -2029,6 +2030,7 @@ mod tests {
                     },
                     extends: vec![],
                     inheritance_right: false,
+                    storage: None,
                     deprecated: false,
                     members: vec![],
                     property_class_names: vec![],
@@ -2164,6 +2166,7 @@ mod tests {
                 },
                 extends: vec![],
                 inheritance_right: false,
+                storage: None,
                 deprecated: false,
                 members: self.mem.clone().into_iter().collect(),
                 property_class_names: vec![],
@@ -2433,6 +2436,7 @@ mod tests {
                 },
                 extends: vec![],
                 inheritance_right: false,
+                storage: None,
                 deprecated: false,
                 members: vec![bindings::MemberInfo {
                     doc: String::new(),
@@ -2491,6 +2495,94 @@ mod tests {
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
             diagnostics[0].message.contains("Cannot find member"),
+            "{diagnostics:?}"
+        );
+    }
+
+    // A declaration file lists only a class's own members; the walk reaches the rest through
+    // `extends` and the storage class.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn own_member_iris_classes_are_walked_like_workspace_ones() {
+        struct OwnOnlyIris;
+        impl crate::IrisContext for OwnOnlyIris {
+            fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
+                let zero = bindings::Position {
+                    line: 0,
+                    character: 0,
+                };
+                let method = |name: &str, t: Option<&str>| bindings::MemberInfo {
+                    doc: String::new(),
+                    before: zero,
+                    name: bindings::NameInfo {
+                        before: zero,
+                        content: name.to_string(),
+                        after: zero,
+                    },
+                    aliases: vec![],
+                    deprecated: false,
+                    kind: bindings::MemberKind::Method(bindings::MethodInfo {
+                        normal: vec![],
+                        variadic: None,
+                        t: t.map(str::to_string),
+                        procedure_block: None,
+                        body: bindings::Range {
+                            start: zero,
+                            end: zero,
+                        },
+                    }),
+                    after: zero,
+                    uri: None,
+                    origin: Some(cls.to_string()),
+                };
+                let (extends, storage, members) = match cls {
+                    "%Fake.Base" => (vec![], None, vec![method("FromBase", Some("%Fake.Base"))]),
+                    "%Fake.Mid" => (
+                        vec!["%Fake.Base".to_string()],
+                        Some("%Fake.Storage".to_string()),
+                        vec![method("FromMid", None)],
+                    ),
+                    "%Fake.Storage" => (vec![], None, vec![method("%FromStorage", None)]),
+                    _ => return Ok(None),
+                };
+                Ok(Some(bindings::ClassInfo {
+                    doc: String::new(),
+                    name: bindings::NameInfo {
+                        before: zero,
+                        content: cls.to_string(),
+                        after: zero,
+                    },
+                    extends,
+                    inheritance_right: false,
+                    storage,
+                    deprecated: false,
+                    members,
+                    property_class_names: vec![],
+                    includes: vec![],
+                    is_datatype: Some(false),
+                    uri: None,
+                }))
+            }
+            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
+                Ok(None)
+            }
+            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+                Ok(None)
+            }
+        }
+        let workspace = Workspace::native(Some(Box::new(OwnOnlyIris)), None);
+        let uri = "Sub.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Sub Extends %Fake.Mid\n{\nMethod M() As %String\n{\n Do ..FromMid(), ..%FromStorage()\n Quit ..FromBase().Nope\n}\n}\n"
+                .to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("Cannot find member 'Nope' in %Fake.Base"),
             "{diagnostics:?}"
         );
     }
@@ -3614,6 +3706,7 @@ mod tests {
                     },
                     extends: vec![],
                     inheritance_right: false,
+                    storage: None,
                     deprecated: false,
                     members: vec![],
                     property_class_names: vec![],

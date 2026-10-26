@@ -165,7 +165,7 @@ impl MemberNs {
             bindings::MemberKind::Method(_)
             | bindings::MemberKind::ClassMethod(_)
             | bindings::MemberKind::ClientMethod(_) => Self::HigherOrder,
-            bindings::MemberKind::Index => Self::Index,
+            bindings::MemberKind::Index(_) => Self::Index,
             bindings::MemberKind::Query => Self::Query,
             _ => Self::Other,
         }
