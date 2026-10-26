@@ -91,7 +91,8 @@ enum Command {
         #[arg(long, value_name = "NS")]
         iris_namespace: Option<String>,
         /// The declaration file to write, for example user.d.json
-        file: PathBuf,
+        /// [default: ~/.ascot/<host>-<port>-<namespace>.d.json]
+        file: Option<PathBuf>,
     },
     /// Run the MCP server on stdio, for AI agents
     ///
@@ -155,7 +156,7 @@ fn main() {
             iris,
             iris_namespace,
             file,
-        } => declare(&iris, iris_namespace.as_deref(), &file),
+        } => declare(&iris, iris_namespace.as_deref(), file.as_deref()),
         Command::Mcp => {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
             rt.block_on(run_mcp_server());
@@ -197,7 +198,7 @@ impl StyleArgs {
 }
 
 /// Writes the declarations of the namespace at `url` to `out`, for a later `--iris <out>`.
-fn declare(url: &str, namespace: Option<&str>, out: &Path) {
+fn declare(url: &str, namespace: Option<&str>, out: Option<&Path>) {
     let namespace = namespace.unwrap_or(ascot::DEFAULT_IRIS_NAMESPACE);
     let conn = match RawAtelier::connect(url, namespace) {
         Ok(conn) => conn,
@@ -206,6 +207,19 @@ fn declare(url: &str, namespace: Option<&str>, out: &Path) {
             exit(1);
         }
     };
+    let out = match out {
+        Some(out) => out.to_path_buf(),
+        None => match default_declaration_file(url, namespace) {
+            Ok(path) => {
+                eprintln!("declare: no file given; writing to {}", path.display());
+                path
+            }
+            Err(err) => {
+                eprintln!("declare: {err}");
+                exit(1);
+            }
+        },
+    };
     let started = Instant::now();
     let mut bars = std::io::stderr().is_terminal().then(ProgressBars::default);
     let declarations = conn.declarations(|kind, done, total| {
@@ -213,7 +227,7 @@ fn declare(url: &str, namespace: Option<&str>, out: &Path) {
             bars.update(kind, done, total);
         }
     });
-    match declarations.and_then(|decls| decls.save(out).map(|()| decls)) {
+    match declarations.and_then(|decls| decls.save(&out).map(|()| decls)) {
         Ok(decls) => eprintln!(
             "{} class(es), {} include file(s), {} routine(s) of namespace {} written to {} in {}s",
             decls.classes.len(),
@@ -228,6 +242,36 @@ fn declare(url: &str, namespace: Option<&str>, out: &Path) {
             exit(1);
         }
     }
+}
+
+/// `~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json`, its directory created.
+fn default_declaration_file(url: &str, namespace: &str) -> Result<PathBuf, String> {
+    let dir = std::env::home_dir()
+        .ok_or("cannot find the home directory; give the file to write")?
+        .join(".ascot");
+    fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let parsed = url::Url::parse(url).map_err(|e| e.to_string())?;
+    let mut parts = vec![parsed.host_str().unwrap_or("iris").to_string()];
+    parts.extend(parsed.port_or_known_default().map(|port| port.to_string()));
+    parts.extend(
+        parsed
+            .path_segments()
+            .into_iter()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    );
+    parts.push(namespace.to_string());
+    let name: String = (parts.join("-").chars())
+        .map(|c| {
+            if c.is_alphanumeric() || ".-_%".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Ok(dir.join(format!("{name}.d.json")))
 }
 
 async fn run_mcp_server() {

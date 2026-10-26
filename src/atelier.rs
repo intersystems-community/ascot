@@ -715,6 +715,7 @@ impl RawAtelier {
         mut progress: impl FnMut(DocKind, usize, usize),
     ) -> Result<Declarations, String> {
         let namespace = self.namespace.clone();
+        let iris_version = self.server_version()?;
         let ctx = AtelierContext::from(self);
         // `%sqlcq.*` are SQL cached queries; `declare`'s own queries create some, so without this
         // each run would add classes to the next run's file.
@@ -806,6 +807,7 @@ impl RawAtelier {
         Ok(Declarations {
             version: DECLARATIONS_VERSION,
             namespace,
+            iris_version,
             classes: classes.into_inner().unwrap(),
             includes: includes.into_inner().unwrap(),
             routines: routines.into_inner().unwrap(),
@@ -814,6 +816,24 @@ impl RawAtelier {
 
     fn agent(&self) -> Result<ureq::Agent, String> {
         self.agent.lock().unwrap().clone()
+    }
+
+    // The instance's `$ZVERSION`, from the API listing at `api_root/`.
+    fn server_version(&self) -> Result<String, String> {
+        let resp = self
+            .agent()?
+            .get(&format!("{}/", self.api_root))
+            .header("Authorization", &self.auth_header)
+            .call()
+            .map_err(|err| self.failed("version", err))?;
+        let body: Value = resp
+            .into_body()
+            .read_json()
+            .map_err(|err| self.failed("version", err))?;
+        body.get("result")
+            .and_then(|r| r.get("content")?.get("version")?.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| format!("version at {} failed: {}", self.api_root, body["status"]))
     }
 
     fn failed(&self, context: &str, err: ureq::Error) -> String {
@@ -1101,6 +1121,23 @@ mod tests {
             }
         });
         url
+    }
+
+    #[test]
+    fn server_version_reads_the_api_listing() {
+        let url = stub_server(&[
+            (
+                "/api/atelier/",
+                "200 OK",
+                r#"{"result":{"content":{"version":"IRIS for UNIX 2026.1 (Build 220U)","namespaces":["%SYS"]}}}"#,
+            ),
+            ("", "200 OK", "{}"),
+        ]);
+        let conn = RawAtelier::connect(&url, "%SYS").unwrap();
+        assert_eq!(
+            conn.server_version().as_deref(),
+            Ok("IRIS for UNIX 2026.1 (Build 220U)")
+        );
     }
 
     #[test]
