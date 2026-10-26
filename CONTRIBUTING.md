@@ -19,13 +19,15 @@ cargo clippy --all-targets -- -D warnings
 
 ### Against IRIS
 
-`tests/iris.rs` runs against the instance in `ASCOT_TEST_IRIS`, and does nothing
-without it. To run one in Docker (its default passwords come expired):
+`tests/iris.rs` and the JavaScript binding's `npm test` run against the instance in
+`ASCOT_TEST_IRIS`, and do nothing without it. To run one in Docker (its default passwords
+come expired):
 
 ```sh
 docker run -d --name iris -p 52773:52773 containers.intersystems.com/intersystems/iris-community:2026.1
 docker exec iris iris session IRIS -U %SYS '##class(Security.Users).UnExpireUserPasswords("*")'
 ASCOT_TEST_IRIS=http://_SYSTEM:SYS@localhost:52773 cargo test --test iris
+(cd bindings/js && ASCOT_TEST_IRIS=http://_SYSTEM:SYS@localhost:52773 npm test)
 ```
 
 ### npm package
