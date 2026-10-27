@@ -5727,7 +5727,7 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
     SimpleFunction {
         names: &["ZSearch", "ZSE"],
         min: 1,
-        max: 2,
+        max: 1,
         ret: "%String",
     },
     SimpleFunction {

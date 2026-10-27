@@ -722,6 +722,24 @@ pub const PROPERTY_KEYWORDS: &[&str] = &[
     "TRANSIENT",
 ];
 
+// The property keywords that aren't `%Boolean`, so take `= value`.
+pub const PROPERTY_KEYWORDS_WITH_VALUE: &[&str] = &[
+    "ALIASES",
+    "CARDINALITY",
+    "CLIENTNAME",
+    "COLLECTION",
+    "INITIALEXPRESSION",
+    "INVERSE",
+    "ONDELETE",
+    "SERVERONLY",
+    "SQLCOLUMNNUMBER",
+    "SQLCOMPUTECODE",
+    "SQLCOMPUTEONCHANGE",
+    "SQLFIELDNAME",
+    "SQLLISTDELIMITER",
+    "SQLLISTTYPE",
+];
+
 pub const PARAMETER_KEYWORDS: &[&str] = &[
     "ABSTRACT",
     "CONSTRAINT",
