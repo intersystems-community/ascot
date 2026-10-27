@@ -29,6 +29,15 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
 
 ## Installation
 
+### Homebrew
+
+On macOS and Linux, from the [isc-klu/tap](https://github.com/isc-klu/homebrew-tap)
+tap, which each release updates:
+
+```sh
+brew install isc-klu/tap/ascot
+```
+
 ### GitHub release
 
 Prebuilt `ascot` binaries are attached to each
