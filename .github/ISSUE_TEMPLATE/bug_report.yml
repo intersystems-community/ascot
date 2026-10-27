@@ -13,7 +13,7 @@ body:
     id: platform
     attributes:
       label: Operating system
-      description: e.g. macOS 26, Windows 11, Ubuntu 24.04.
+      description: macOS, Windows or Linux.
     validations:
       required: true
   - type: textarea
