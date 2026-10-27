@@ -105,3 +105,23 @@ jobs:
       - name: Pack
         working-directory: bindings/js
         run: npm pack --dry-run
+
+  # Only humans are accountable for this work, so an AI credit in a commit or the PR is noise.
+  no-ai-attribution:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Reject AI attribution in the commits and the PR body
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          pattern='co-authored-by:.*(claude|anthropic|copilot|chatgpt|openai|gemini|cursor|codex)|generated (with|by).*(claude|copilot|chatgpt|openai|gemini|cursor|codex)|🤖'
+          if { git log --format=%B "$BASE..$HEAD"; printf '%s\n' "$BODY"; } | grep -inE "$pattern"; then
+            echo "::error::Drop the AI attribution above; only humans are accountable for this work."
+            exit 1
+          fi
