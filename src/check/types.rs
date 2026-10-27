@@ -964,7 +964,11 @@ impl TyProcedure {
 // A host can report an empty string rather than omitting a declared type entirely -- `Ty::from`
 // would otherwise take that literally, producing a nonsense class named "".
 pub(crate) fn ty_from_declared(t: Option<String>) -> Option<Ty> {
-    t.filter(|t| !t.is_empty()).map(Ty::from)
+    let ty = Ty::from(t.filter(|t| !t.is_empty())?);
+    Some(match &ty {
+        Ty::OREF(ClsOrIns::Ins(cls)) => crate::mask::class_type(&cls.name).unwrap_or(ty),
+        _ => ty,
+    })
 }
 
 pub(crate) fn relationship_object(t: Option<String>) -> Ty {

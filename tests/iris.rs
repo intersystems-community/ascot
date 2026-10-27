@@ -154,3 +154,17 @@ fn system_macros_are_checked() {
         .collect();
     assert_eq!(lines, [15, 20, 25, 30], "{diagnostics:?}");
 }
+
+#[test]
+fn system_signatures_without_defaults_are_masked() {
+    let Some(iris) = iris() else { return };
+    let workspace = Workspace::native(Some(iris), None);
+    let uri = "Live.Masked.cls".to_string();
+    workspace.open(
+        uri.clone(),
+        "Class Live.Masked Extends %RegisteredObject\n{\nClassMethod Take(ByRef x As %Any)\n{\n Set x = 1\n}\nClassMethod Run()\n{\n #Dim c As %ClassDefinition\n Do ..Take(.c)\n Set o = ..%New(), p = o.%ConstructClone(), r = ##class(%ResultSet).%New(\"X:Y\")\n While r.Next() { Write c, ..%ClassName(), p.%ClassName(1), $SYSTEM.Status.GetErrorText(1) }\n}\n}\n"
+            .to_string(),
+    );
+    let diagnostics = workspace.diagnostics(uri);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
