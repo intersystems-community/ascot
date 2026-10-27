@@ -192,7 +192,7 @@ fn class_infos(
 ) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = |description: &str| {
         format!(
-            "SELECT Name, {description}, Super, PropertyClass, IncludeCode, ClassType, Deprecated \
+            "SELECT Name, {description}, Super, Inheritance, PropertyClass, IncludeCode, ClassType, Deprecated \
              FROM %Dictionary.CompiledClass WHERE Name {filter}"
         )
     };
@@ -237,6 +237,7 @@ fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<Stri
                     after: zero,
                 },
                 extends: split_classes(str_field("Super")),
+                inheritance_right: str_field("Inheritance") == "right",
                 deprecated: is_truthy(&row.get("Deprecated").cloned().unwrap_or(Value::Null)),
                 members: members.remove(&cls).unwrap_or_default(),
                 property_class_names: split_classes(str_field("PropertyClass")),
@@ -648,10 +649,16 @@ impl RawAtelier {
         let api_root = format!("{scheme}://{host}:{port}{path_prefix}/api/atelier");
         // Bounded to connect and to start answering; a long answer (`declare` reads 100 classes'
         // members at once) takes what it takes.
+        // The OS's trust store, as browsers and curl use, rather than rustls's bundled roots: a
+        // company CA or an accepted self-signed certificate lives there.
+        let tls = ureq::tls::TlsConfig::builder()
+            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+            .build();
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
                 .timeout_connect(Some(Duration::from_secs(5)))
                 .timeout_recv_response(Some(Duration::from_secs(60)))
+                .tls_config(tls)
                 .build(),
         );
         let raw = Self {
@@ -715,6 +722,7 @@ impl RawAtelier {
         mut progress: impl FnMut(DocKind, usize, usize),
     ) -> Result<Declarations, String> {
         let namespace = self.namespace.clone();
+        let iris_version = self.server_version()?;
         let ctx = AtelierContext::from(self);
         // `%sqlcq.*` are SQL cached queries; `declare`'s own queries create some, so without this
         // each run would add classes to the next run's file.
@@ -806,6 +814,7 @@ impl RawAtelier {
         Ok(Declarations {
             version: DECLARATIONS_VERSION,
             namespace,
+            iris_version,
             classes: classes.into_inner().unwrap(),
             includes: includes.into_inner().unwrap(),
             routines: routines.into_inner().unwrap(),
@@ -814,6 +823,24 @@ impl RawAtelier {
 
     fn agent(&self) -> Result<ureq::Agent, String> {
         self.agent.lock().unwrap().clone()
+    }
+
+    // The instance's `$ZVERSION`, from the API listing at `api_root/`.
+    fn server_version(&self) -> Result<String, String> {
+        let resp = self
+            .agent()?
+            .get(&format!("{}/", self.api_root))
+            .header("Authorization", &self.auth_header)
+            .call()
+            .map_err(|err| self.failed("version", err))?;
+        let body: Value = resp
+            .into_body()
+            .read_json()
+            .map_err(|err| self.failed("version", err))?;
+        body.get("result")
+            .and_then(|r| r.get("content")?.get("version")?.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| format!("version at {} failed: {}", self.api_root, body["status"]))
     }
 
     fn failed(&self, context: &str, err: ureq::Error) -> String {
@@ -934,7 +961,7 @@ mod tests {
     fn assemble_groups_member_rows_by_their_parent_class() {
         let class_rows = vec![
             serde_json::json!({"Name": "A.B", "Super": "%RegisteredObject", "ClassType": ""}),
-            serde_json::json!({"Name": "A.C", "Super": "", "ClassType": "datatype", "Deprecated": 1}),
+            serde_json::json!({"Name": "A.C", "Super": "", "Inheritance": "right", "ClassType": "datatype", "Deprecated": 1}),
         ];
         let member_rows: Vec<MemberRow> = [
             serde_json::json!({"parent": "A.C", "Name": "P", "MemberType": "property", "Description": "", "FormalSpec": "", "ReturnType": "%String", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
@@ -955,6 +982,7 @@ mod tests {
         let c = &classes["A.C"];
         assert!(c.deprecated);
         assert_eq!(c.is_datatype, Some(true));
+        assert!(c.inheritance_right && !b.inheritance_right);
         assert_eq!(c.members[0].name.content, "P");
     }
 
@@ -1101,6 +1129,23 @@ mod tests {
             }
         });
         url
+    }
+
+    #[test]
+    fn server_version_reads_the_api_listing() {
+        let url = stub_server(&[
+            (
+                "/api/atelier/",
+                "200 OK",
+                r#"{"result":{"content":{"version":"IRIS for UNIX 2026.1 (Build 220U)","namespaces":["%SYS"]}}}"#,
+            ),
+            ("", "200 OK", "{}"),
+        ]);
+        let conn = RawAtelier::connect(&url, "%SYS").unwrap();
+        assert_eq!(
+            conn.server_version().as_deref(),
+            Ok("IRIS for UNIX 2026.1 (Build 220U)")
+        );
     }
 
     #[test]

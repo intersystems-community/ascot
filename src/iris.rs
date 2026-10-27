@@ -39,6 +39,9 @@ pub(crate) const DECLARATIONS_VERSION: u32 = 3;
 pub struct Declarations {
     pub version: u32,
     pub namespace: String,
+    /// The instance's `$ZVERSION`; empty in a file from before it was recorded.
+    #[serde(default)]
+    pub iris_version: String,
     pub classes: BTreeMap<String, ClassInfo>,
     /// `.inc` files by name without the extension.
     pub includes: BTreeMap<String, Source>,
@@ -105,6 +108,7 @@ mod tests {
                 after: zero,
             },
             extends: vec!["%RegisteredObject".to_string()],
+            inheritance_right: false,
             deprecated: false,
             members: vec![],
             property_class_names: vec![],
@@ -132,6 +136,7 @@ mod tests {
         let declarations = Declarations {
             version: DECLARATIONS_VERSION,
             namespace: "USER".to_string(),
+            iris_version: "IRIS for UNIX 2026.1".to_string(),
             classes: [("A.B".to_string(), class_info("A.B"))].into(),
             includes: [(
                 "MyInc".to_string(),
@@ -166,6 +171,7 @@ mod tests {
         let loaded = Declarations::load(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(loaded.namespace, "USER");
+        assert_eq!(loaded.iris_version, "IRIS for UNIX 2026.1");
         assert_eq!(loaded.get_cls("A.B"), Ok(Some(class_info("A.B"))));
         assert_eq!(loaded.get_cls("A.C"), Ok(None));
         assert_eq!(
@@ -220,6 +226,7 @@ mod tests {
         let declarations = Declarations {
             version: DECLARATIONS_VERSION,
             namespace: "USER".to_string(),
+            iris_version: String::new(),
             classes: BTreeMap::new(),
             includes: BTreeMap::new(),
             routines: BTreeMap::new(),
