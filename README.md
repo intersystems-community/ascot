@@ -35,8 +35,18 @@ Prebuilt `ascot` binaries for Linux, macOS and Windows are attached to each
 [GitHub release](https://github.com/intersystems-community/ascot/releases).
 
 On macOS, Gatekeeper refuses to run the unsigned binary once a browser download
-has quarantined it, so download it with `curl` instead, or clear the flag with
-`xattr -d com.apple.quarantine ascot`. Homebrew, below, avoids this.
+has quarantined it. [Homebrew](#homebrew-macos-and-linux) avoids this; otherwise
+download it with `curl`:
+
+```sh
+curl -L https://github.com/intersystems-community/ascot/releases/latest/download/ascot-cli-universal-apple-darwin.tar.gz | tar xz
+```
+
+or clear the flag on a browser download:
+
+```sh
+xattr -d com.apple.quarantine path/to/ascot
+```
 
 ### Homebrew (macOS and Linux)
 
@@ -44,7 +54,7 @@ From the
 [InterSystems Community tap](https://github.com/intersystems-community/homebrew-tap):
 
 ```sh
-brew trust intersystems-community/tap # once, on Homebrew 5.1.15 or later
+brew trust intersystems-community/tap # if Homebrew 5.1.15 or later
 brew install intersystems-community/tap/ascot
 ```
 
