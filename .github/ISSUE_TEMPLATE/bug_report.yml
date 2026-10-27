@@ -9,6 +9,13 @@ body:
       description: Crate version or git commit.
     validations:
       required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Operating system, and how ascot was installed, e.g. macOS 26 (Homebrew), Windows 11 (release binary), Ubuntu 24.04 (cargo install).
+    validations:
+      required: true
   - type: textarea
     id: repro
     attributes:
