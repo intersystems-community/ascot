@@ -644,7 +644,15 @@ impl std::fmt::Display for Ty {
 
 impl From<String> for Ty {
     fn from(value: String) -> Self {
-        Self::OREF(ClsOrIns::Ins(ClassTy::from(value)))
+        Self::from(ClassTy::from(value))
+    }
+}
+
+// The one place a class becomes a type, so the mask's reading of a class (`%Any` is `Any`)
+// holds wherever the class is named.
+impl From<ClassTy> for Ty {
+    fn from(cls: ClassTy) -> Self {
+        crate::mask::class_type(&cls.name).unwrap_or(Self::OREF(ClsOrIns::Ins(cls)))
     }
 }
 

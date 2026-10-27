@@ -30,10 +30,20 @@ enum Entry {
     // an override reports it missing, MPP5386) -- the inert `%OnNew` and `%Dispatch*` defaults.
     Class(BTreeMap<String, Option<Correction>>),
     Routine(BTreeMap<String, LabelSignature>),
+    // What a class stands for as a type: `"Any"`, or another class's name.
+    Type(String),
 }
 
 static MASK: LazyLock<BTreeMap<String, Entry>> =
     LazyLock::new(|| serde_json::from_str(include_str!("mask.json")).expect("a valid mask.json"));
+
+pub(crate) fn class_type(cls: &str) -> Option<Ty> {
+    match MASK.get(&format!("{cls}.cls"))? {
+        Entry::Type(t) if t == "Any" => Some(Ty::Any),
+        Entry::Type(t) => Some(Ty::from(t.clone())),
+        _ => None,
+    }
+}
 
 fn members(cls: &str) -> impl Iterator<Item = (&'static String, &'static Option<Correction>)> {
     match MASK.get(&format!("{cls}.cls")) {

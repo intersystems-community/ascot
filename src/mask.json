@@ -1,4 +1,9 @@
 {
+ "%Library.Any.cls": "Any",
+ "%Library.Base.cls": {
+  "%ClassName": { "args": { "fullname": { "optional": true } } },
+  "%New": { "returns": "This", "args": { "initvalue": { "optional": true } } }
+ },
  "%Library.DynamicAbstractObject.cls": {
   "%ToJSON": { "args": { "outstrm": { "optional": true } } }
  },
@@ -21,6 +26,9 @@
   "%OpenId": { "returns": "This" }
  },
  "%Library.RegisteredObject.cls": {
+  "%ClassName": { "args": { "fullname": { "optional": true } } },
+  "%ConstructClone": { "returns": "This", "args": { "cloned": { "optional": true }, "location": { "optional": true } } },
+  "%New": { "returns": "This", "args": { "initvalue": { "optional": true } } },
   "%OnNew": null
  },
  "%Library.RelationshipObject.cls": {
@@ -30,6 +38,9 @@
   "GetOrefAt": { "returns": "..#ELEMENTTYPE" },
   "GetPrevious": { "returns": "..#ELEMENTTYPE" }
  },
+ "%Library.ResultSet.cls": {
+  "Next": { "args": { "sc": { "optional": true } } }
+ },
  "%Library.ScrollableResultSet.cls": {
   "%OpenId": { "returns": "This" }
  },
@@ -38,6 +49,7 @@
   "%OpenId": { "returns": "This" }
  },
  "%Library.SystemBase.cls": {
+  "%ClassName": { "args": { "fullname": { "optional": true } } },
   "%DispatchClassMethod": null,
   "%DispatchGetModified": null,
   "%DispatchGetProperty": null,
@@ -46,6 +58,9 @@
   "%DispatchSetMultidimProperty": null,
   "%DispatchSetProperty": null,
   "%New": { "returns": "This", "args": { "initvalue": { "optional": true } } }
+ },
+ "%SYSTEM.Status.cls": {
+  "GetErrorText": { "args": { "language": { "optional": true } } }
  },
  "%Stream.Object.cls": {
   "%Open": { "returns": "This" },
