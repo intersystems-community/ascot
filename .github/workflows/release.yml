@@ -14,6 +14,9 @@ env:
   BIN: ascot
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   build:
     strategy:
       matrix:
@@ -67,7 +70,7 @@ jobs:
 
   # One job publishes the release, so the generated notes appear once and all assets land together.
   release:
-    needs: build
+    needs: [ci, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -139,3 +142,39 @@ jobs:
           if [ -z "$(gh pr list --head $BIN-$version --json number -q '.[]')" ]; then
             gh pr create --fill --base master --head $BIN-$version
           fi
+
+  publish-crates:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # `tygr-objectscript` is a path dependency of `ascot`; `--workspace` publishes
+      # it first and waits for the index before publishing `ascot`.
+      - name: Publish
+        run: cargo publish --workspace
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package
+          path: bindings/js
+
+      - name: Stage
+        working-directory: bindings/js
+        run: npm stage publish --provenance
