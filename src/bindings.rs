@@ -199,7 +199,13 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                 })
             }
             MemberKindSpecificDetails::ForeignKey => MemberKind::ForeignKey,
-            MemberKindSpecificDetails::Index { .. } => MemberKind::Index,
+            MemberKindSpecificDetails::Index { on_properties } => MemberKind::Index(IndexInfo {
+                properties: on_properties
+                    .iter()
+                    .flatten()
+                    .map(|k| k.it.clone())
+                    .collect(),
+            }),
             MemberKindSpecificDetails::Projection => MemberKind::Projection,
             MemberKindSpecificDetails::Trigger => MemberKind::Trigger,
             MemberKindSpecificDetails::XData => MemberKind::XData,
@@ -217,7 +223,7 @@ pub(crate) fn member_kind_to_symbol_kind(kind: &wit_bind::MemberKind) -> wit_bin
         MemberKind::Property(_) | MemberKind::Relationship(_) => SymbolKind::Property,
         MemberKind::Parameter(_) => SymbolKind::Constant,
         MemberKind::ForeignKey => SymbolKind::Key,
-        MemberKind::Index => SymbolKind::Array,
+        MemberKind::Index(_) => SymbolKind::Array,
         MemberKind::Projection => SymbolKind::Interface,
         MemberKind::Trigger => SymbolKind::Event,
         MemberKind::XData => SymbolKind::Struct,
@@ -249,6 +255,7 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
             name: NameInfo::from(&details.name),
             extends: details.extends.clone(),
             inheritance_right: details.inheritance_right,
+            storage: None,
             deprecated: details.deprecated,
             members: details
                 .members

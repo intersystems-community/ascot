@@ -2,7 +2,7 @@
 //! (`http://user:password@host:port`); each test passes without doing anything when it's unset.
 //! CONTRIBUTING.md shows how to run one in Docker.
 
-use ascot::bindings::{DiagnosticSeverity, GuestWorkspace};
+use ascot::bindings::{DiagnosticSeverity, GuestWorkspace, MemberKind};
 use ascot::{IrisContext, Workspace};
 
 fn iris() -> Option<Box<dyn IrisContext>> {
@@ -29,6 +29,53 @@ fn system_class_has_its_members() {
             .collect::<Vec<_>>()
     );
     assert!(iris.get_cls("No.Such.Class").unwrap().is_none());
+}
+
+#[test]
+fn a_class_has_only_its_own_members_plus_its_storage_class() {
+    let Some(iris) = iris() else { return };
+    let cls = iris
+        .get_cls("Security.Users")
+        .unwrap()
+        .expect("Security.Users");
+    assert_eq!(cls.storage.as_deref(), Some("%SYSTEM.Security.Storage"));
+    assert!(
+        cls.members
+            .iter()
+            .all(|m| m.origin.as_deref() == Some("Security.Users")),
+        "{:?}",
+        cls.members
+            .iter()
+            .filter(|m| m.origin.as_deref() != Some("Security.Users"))
+            .map(|m| (&m.name.content, &m.origin))
+            .collect::<Vec<_>>()
+    );
+    assert!(cls.members.iter().any(|m| {
+        matches!(&m.kind, MemberKind::Index(index) if index.properties == ["NameLowerCase"])
+    }));
+    assert!(
+        cls.members
+            .iter()
+            .any(|m| m.name.content == "Detail" && m.kind == MemberKind::Query)
+    );
+}
+
+// Inherited, storage-class and generated members resolve through the walk.
+#[test]
+fn inherited_and_generated_members_resolve_through_the_walk() {
+    let Some(iris) = iris() else { return };
+    let workspace = Workspace::native(Some(iris), None);
+    let uri = "P.cls".to_string();
+    workspace.open(
+        uri.clone(),
+        "Class Probe.P Extends %Persistent\n{\nProperty Name As %String;\nIndex ByName On Name;\nClassMethod T() As %Status\n{\n Set u = ##class(Security.Users).%OpenId(\"x\")\n Write u.Name, u.NameLowerCaseIndexExists(\"x\"), ##class(Security.Users).DetailFunc()\n Set p = ..ByNameOpen(\"n\")\n Write p.NameGet(), p.%Id(), ##class(Security.Users).%Exists(\"x\")\n Do p.Nope()\n Quit p.%Save()\n}\n}\n".to_string(),
+    );
+    let diagnostics = workspace.diagnostics(uri);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(
+        diagnostics[0].message.contains("Cannot find member 'Nope'"),
+        "{diagnostics:?}"
+    );
 }
 
 #[test]

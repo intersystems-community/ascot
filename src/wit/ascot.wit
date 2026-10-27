@@ -84,7 +84,7 @@ interface common {
         property(property-info),
         relationship(relationship-info),
         foreign-key,
-        index,
+        index(index-info),
         projection,
         trigger,
         x-data,
@@ -93,6 +93,11 @@ interface common {
         method(method-info),
         class-method(method-info),
         client-method(method-info),
+    }
+
+    record index-info {
+        // The `On` keys, by property name.
+        properties: list<string>,
     }
 
     record member-info {
@@ -104,8 +109,7 @@ interface common {
         kind: member-kind,
         after: position,
         uri: option<string>,
-        // The class declaring it, to tell an override of an IRIS hook from an inherited stub;
-        // `none` in the workspace.
+        // The class declaring it; `none` in the workspace.
         origin: option<string>,
     }
 
@@ -116,7 +120,12 @@ interface common {
         // `[ Inheritance = right ]`: a member several superclasses define comes from the rightmost
         // `extends` entry rather than the leftmost.
         inheritance-right: bool,
+        // The storage class a persistent class also inherits from (`%Storage.Persistent`), named by
+        // its storage definition rather than `extends`.
+        storage: option<string>,
         deprecated: bool,
+        // Its own members only; ascot reaches the inherited ones through `extends` and `storage`,
+        // and synthesizes the generated ones.
         members: list<member-info>,
         // Its own (not inherited) `[PropertyClass = ...]` classes.
         property-class-names: list<string>,

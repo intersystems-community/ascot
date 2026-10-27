@@ -34,7 +34,7 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisContext>,
 pub(crate) const DECLARATIONS_VERSION: u32 = 3;
 
 /// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
-/// argument to its answer.
+/// argument to its answer. A class holds only its own members; ascot walks its superclasses.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Declarations {
     pub version: u32,
@@ -109,6 +109,7 @@ mod tests {
             },
             extends: vec!["%RegisteredObject".to_string()],
             inheritance_right: false,
+            storage: None,
             deprecated: false,
             members: vec![],
             property_class_names: vec![],

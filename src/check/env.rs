@@ -98,7 +98,7 @@ enum Resolved {
     Unknown,
 }
 
-// `mem` among `info`'s flattened members; `%New` takes the class's `%OnNew`'s arguments.
+// `mem` among `info`'s own members; `%New` takes the class's `%OnNew`'s arguments.
 fn iris_member(info: &bindings::ClassInfo, cls: &str, mem: &str, ns: Visible) -> Option<Found> {
     if mem.eq_ignore_ascii_case("%New")
         && ns == Visible::Method
@@ -416,7 +416,7 @@ impl TryFrom<bindings::MemberInfo> for MemberTy {
             }),
             MemberKind::ClientMethod(_)
             | MemberKind::ForeignKey
-            | MemberKind::Index
+            | MemberKind::Index(_)
             | MemberKind::Projection
             | MemberKind::Trigger
             | MemberKind::XData
@@ -477,7 +477,7 @@ impl<'a> WorkspaceEnv<'a> {
                         .chain(members.parameter.keys())
                         .cloned(),
                 );
-                names.extend(self.generated_members(details).keys().cloned());
+                names.extend(self.generated_members(cls, resolved).keys().cloned());
                 ControlFlow::Continue(true)
             }
             Resolved::Iris(info) => {
@@ -495,7 +495,8 @@ impl<'a> WorkspaceEnv<'a> {
                         })
                         .map(|m| m.name.content.clone()),
                 );
-                ControlFlow::Continue(false)
+                names.extend(self.generated_members(cls, resolved).keys().cloned());
+                ControlFlow::Continue(true)
             }
             Resolved::Unknown => ControlFlow::Continue(false),
         });
@@ -545,10 +546,9 @@ impl<'a> WorkspaceEnv<'a> {
         classes
     }
 
-    // The methods IRIS generates for `details`' own properties, indices and queries, built on the
+    // The methods IRIS generates for `cls`'s own properties, indices and queries, built on the
     // first miss among the declared ones. Over-approximates: what IRIS emits is generator-dependent.
-    fn generated_members(&self, details: &crate::ClassDetails) -> Rc<HashMap<String, MemberTy>> {
-        let cls = &details.name.it;
+    fn generated_members(&self, cls: &str, resolved: &Resolved) -> Rc<HashMap<String, MemberTy>> {
         if let Some(built) = self.generated.borrow().get(cls) {
             return built.clone();
         }
@@ -558,31 +558,70 @@ impl<'a> WorkspaceEnv<'a> {
                 generated.entry(format!("{name}{suffix}")).or_insert(method);
             }
         };
-        for (name, property) in &details.members.property {
-            if let MemberKindSpecificDetails::Property { ty, .. } = &property.kind {
-                add(name, self.property_methods(ty.clone().unwrap_or_default()));
-            }
-        }
-        for (name, index) in &details.members.index {
-            if let MemberKindSpecificDetails::Index { on_properties } = &index.kind {
-                add(name, self.index_methods(&details.name.it, on_properties));
-            }
-        }
-        for name in details.members.query.keys() {
-            add(name, query_methods());
-        }
         // `%New` takes the class's own `%OnNew`'s arguments, which the dictionary doesn't record.
-        if details.members.higher_order.contains_key("%OnNew")
-            && let Some(uri) = self.resolve_cls_uri(cls)
-            && let Some(on_new) = self.declared_member(&uri, details, "%OnNew", Visible::Method)
-            && let Ok(TyProcedureOrAny::Procedure(on_new)) = on_new.ty.as_procedure()
-        {
-            add("", vec![("%New".to_string(), new_from_on_new(&on_new))]);
+        let new = |on_new: MemberTy| match on_new.ty.as_procedure() {
+            Ok(TyProcedureOrAny::Procedure(on_new)) => {
+                vec![("%New".to_string(), new_from_on_new(&on_new))]
+            }
+            _ => vec![],
+        };
+        match resolved {
+            Resolved::Workspace(uri, details) => {
+                for (name, property) in &details.members.property {
+                    if let MemberKindSpecificDetails::Property { ty, .. } = &property.kind {
+                        add(name, self.property_methods(ty.clone().unwrap_or_default()));
+                    }
+                }
+                for (name, index) in &details.members.index {
+                    if let MemberKindSpecificDetails::Index { on_properties } = &index.kind {
+                        add(name, self.index_methods(cls, on_properties));
+                    }
+                }
+                for name in details.members.query.keys() {
+                    add(name, query_methods());
+                }
+                if let Some(on_new) = self.declared_member(uri, details, "%OnNew", Visible::Method)
+                {
+                    add("", new(on_new));
+                }
+            }
+            Resolved::Iris(Some(info)) => {
+                let zero = bindings::Range::point(bindings::Position {
+                    line: 0,
+                    character: 0,
+                });
+                for member in &info.members {
+                    let name = member.name.content.as_str();
+                    match &member.kind {
+                        MemberKind::Property(_) | MemberKind::Relationship(_) => {
+                            let ty = match found_in_iris(member.clone(), cls).map(|f| f.ty.ty) {
+                                Some(HOTy::Value(ty)) => ty,
+                                _ => Ty::Any,
+                            };
+                            add(name, self.property_methods(ty));
+                        }
+                        MemberKind::Index(index) => {
+                            let keys: Vec<_> = (index.properties.iter())
+                                .map(|key| Some(WithRange::new(key.clone(), zero)))
+                                .collect();
+                            add(name, self.index_methods(cls, &keys));
+                        }
+                        MemberKind::Query => add(name, query_methods()),
+                        MemberKind::Method(_) if name == "%OnNew" => {
+                            if let Some(on_new) = found_in_iris(member.clone(), cls) {
+                                add("", new(on_new.ty));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
         }
         let generated = Rc::new(generated);
         self.generated
             .borrow_mut()
-            .insert(cls.clone(), generated.clone());
+            .insert(cls.to_string(), generated.clone());
         generated
     }
 
@@ -650,7 +689,7 @@ impl<'a> WorkspaceEnv<'a> {
                             .or_insert(found.ty);
                     }
                 }
-                ControlFlow::Continue(false)
+                ControlFlow::Continue(true)
             }
             Resolved::Unknown => {
                 complete = false;
@@ -761,8 +800,7 @@ impl<'a> WorkspaceEnv<'a> {
     // Where IRIS finds `mem` on `obj`: own declared members, then generated ones, then each direct
     // superclass in precedence order the same way -- IRIS's order, so the first match is the one
     // it compiles in; no implicit root. `own = false` starts at the superclasses, for `##super`.
-    // The walk ends at an IRIS class (its entry is flattened) and at one nobody can see (whatever
-    // it declares would shadow the rest).
+    // The walk ends at a class nobody can see, since whatever it declares would shadow the rest.
     fn lookup(
         &self,
         obj: &ClsOrIns,
@@ -780,27 +818,17 @@ impl<'a> WorkspaceEnv<'a> {
         }
         let mut no_class = false;
         let found = self.walk(cls, own, &mut |cls, resolved| {
-            let found = match resolved {
-                Resolved::Workspace(uri, details) => self
-                    .declared_member(uri, details, mem, ns)
-                    .or_else(|| {
-                        // Only once it's needed: building the table looks properties up itself.
-                        let generated = methods.then(|| self.generated_members(details))?;
-                        generated.get(mem).cloned()
-                    })
-                    .map(|ty| Found {
+            let declared = match resolved {
+                Resolved::Workspace(uri, details) => {
+                    self.declared_member(uri, details, mem, ns).map(|ty| Found {
                         ty,
                         origin: cls.to_string(),
-                    }),
-                Resolved::Iris(info) => {
-                    no_class |= info.is_none() && cls == receiver.name;
-                    return match info
-                        .as_ref()
-                        .and_then(|info| iris_member(info, cls, mem, ns))
-                    {
-                        Some(found) => ControlFlow::Break(Ok(found)),
-                        None => ControlFlow::Continue(false),
-                    };
+                    })
+                }
+                Resolved::Iris(Some(info)) => iris_member(info, cls, mem, ns),
+                Resolved::Iris(None) => {
+                    no_class |= cls == receiver.name;
+                    return ControlFlow::Continue(false);
                 }
                 Resolved::Unknown => {
                     return ControlFlow::Break(
@@ -808,6 +836,14 @@ impl<'a> WorkspaceEnv<'a> {
                     );
                 }
             };
+            let found = declared.or_else(|| {
+                // Only once it's needed: building the table looks properties up itself.
+                let generated = methods.then(|| self.generated_members(cls, resolved))?;
+                Some(Found {
+                    ty: generated.get(mem).cloned()?,
+                    origin: cls.to_string(),
+                })
+            });
             match found {
                 Some(found) => ControlFlow::Break(Ok(found)),
                 None => ControlFlow::Continue(true),
@@ -975,6 +1011,7 @@ impl<'a> WorkspaceEnv<'a> {
                 if info.inheritance_right {
                     supers.reverse();
                 }
+                supers.extend(info.storage.clone());
                 supers.iter_mut().for_each(normalize_class_name);
                 supers
             }

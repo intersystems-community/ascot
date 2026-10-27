@@ -35,7 +35,7 @@ pub(crate) fn format_member_hover(member: &MemberInfo) -> String {
             format!("Parameter {name}{}{default}", format_as(info.t.as_deref()))
         }
         MemberKind::ForeignKey => format!("ForeignKey {name}"),
-        MemberKind::Index => format!("Index {name}"),
+        MemberKind::Index(_) => format!("Index {name}"),
         MemberKind::Projection => format!("Projection {name}"),
         MemberKind::Trigger => format!("Trigger {name}"),
         MemberKind::XData => format!("XData {name}"),
