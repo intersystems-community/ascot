@@ -711,13 +711,29 @@ impl WorkspaceStruct {
                                 true
                             }
                             Some(MacroDefinition {
+                                params: Some(pars), ..
+                            }) if args
+                                .as_ref()
+                                .is_some_and(|args| args.items.len() != pars.len()) =>
+                            {
+                                let expected = pars.len();
+                                let make = if args.as_ref().unwrap().items.len() > expected {
+                                    crate::check::TypeError::macro_too_many_arguments
+                                } else {
+                                    crate::check::TypeError::macro_too_few_arguments
+                                };
+                                dones.note_unresolved(
+                                    move |name, range| make(name, expected, range),
+                                    name.print(),
+                                    &origin,
+                                );
+                                false
+                            }
+                            Some(MacroDefinition {
                                 params: Some(pars),
                                 body,
                                 ..
-                            }) if args
-                                .as_ref()
-                                .is_some_and(|args| pars.len() == args.items.len()) =>
-                            {
+                            }) if args.is_some() => {
                                 let args = args.as_deref().unwrap();
                                 let mut param_map: Vec<(&String, String, Origin, bool)> = pars
                                     .iter()

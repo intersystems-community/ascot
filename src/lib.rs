@@ -3886,6 +3886,50 @@ mod tests {
     }
 
     #[test]
+    fn a_macro_call_with_the_wrong_number_of_arguments_is_an_error() {
+        let diagnostics = |uri: &str, text: &str| {
+            let workspace = Workspace::native(None, None);
+            workspace.open(uri.to_string(), text.to_string());
+            workspace
+                .diagnostics(uri.to_string())
+                .into_iter()
+                .map(|d| (d.code, d.range.start.line, d.message))
+                .collect::<Vec<_>>()
+        };
+        let expected = |line| {
+            vec![
+                (
+                    "A2716".to_string(),
+                    line,
+                    "Too many arguments to the macro 'TWO', which takes 2".to_string(),
+                ),
+                (
+                    "A6127".to_string(),
+                    line + 1,
+                    "Not enough arguments to the macro 'TWO', which takes 2".to_string(),
+                ),
+            ]
+        };
+        let calls = "Write $$$TWO(1,2,3)\n Write $$$TWO(1)\n Write $$$TWO(1,2)";
+        assert_eq!(
+            diagnostics(
+                "Main.mac",
+                &format!("ROUTINE Main\n#define TWO(%a,%b) %a_%b\n {calls}\n Quit\n")
+            ),
+            expected(2)
+        );
+        assert_eq!(
+            diagnostics(
+                "Demo.T.cls",
+                &format!(
+                    "Class Demo.T\n{{\nClassMethod Run()\n{{\n#define TWO(%a,%b) %a_%b\n {calls}\n}}\n}}\n"
+                )
+            ),
+            expected(5)
+        );
+    }
+
+    #[test]
     fn a_failed_iris_lookup_is_a_hint_about_why() {
         struct DeadIris;
         impl crate::IrisContext for DeadIris {

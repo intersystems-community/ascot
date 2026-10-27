@@ -412,6 +412,11 @@ impl MethodDetails {
             doc_olc: env.olc(),
             body_start_offset: self.header_start,
         };
+        for diagnostic in &source_map.unresolved {
+            let mut diagnostic = diagnostic.clone();
+            diagnostic.range = shifter.range(diagnostic.range);
+            env.base.add_soft_diagnostic(diagnostic);
+        }
         let body_text = expanded[header_len..].to_string();
         let body_range = bindings::Range {
             start: bindings::Position::from(expanded_olc.offset_to_line_character(header_len)),
