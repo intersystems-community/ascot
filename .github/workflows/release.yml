@@ -89,7 +89,7 @@ jobs:
           version=${GITHUB_REF_NAME#v}
           url=https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME
           git clone -q "https://x-access-token:$GH_TOKEN@github.com/$TAP" tap
-          current=$(grep -o 'download/v[^/]*' tap/Formula/$BIN.rb | cut -c11- || true)
+          current=$(grep -o -m1 'download/v[^/]*' tap/Formula/$BIN.rb | cut -c11- || true)
           if [ "$(printf '%s\n' "$current" "$version" | sort -V | tail -1)" != "$version" ] || [ "$current" = "$version" ]; then
             echo "The tap already has $BIN $current; not replacing it with $version"
             exit 0
