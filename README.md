@@ -29,16 +29,6 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
 
 ## Installation
 
-### Homebrew
-
-On macOS and Linux, from the
-[InterSystems Community tap](https://github.com/intersystems-community/homebrew-tap):
-
-```sh
-brew trust intersystems-community/tap # once, on Homebrew 5.1.15 or later
-brew install intersystems-community/tap/ascot
-```
-
 ### GitHub release
 
 Prebuilt `ascot` binaries are attached to each
@@ -60,6 +50,16 @@ Prebuilt `ascot` binaries are attached to each
   ```sh
   xattr -d com.apple.quarantine ascot
   ```
+
+### Homebrew (macOS and Linux)
+
+From the
+[InterSystems Community tap](https://github.com/intersystems-community/homebrew-tap):
+
+```sh
+brew trust intersystems-community/tap # once, on Homebrew 5.1.15 or later
+brew install intersystems-community/tap/ascot
+```
 
 ### Rust
 
