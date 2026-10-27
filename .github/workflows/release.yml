@@ -14,7 +14,11 @@ env:
   BIN: ascot
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: ci
     strategy:
       matrix:
         include:
@@ -139,3 +143,47 @@ jobs:
           if [ -z "$(gh pr list --head $BIN-$version --json number -q '.[]')" ]; then
             gh pr create --fill --base master --head $BIN-$version
           fi
+
+  publish-crates:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # `tygr-objectscript` is a path dependency of `ascot`; `--workspace` publishes
+      # it first and waits for the index before publishing `ascot`.
+      - name: Publish
+        run: cargo publish --workspace
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install devDependencies
+        working-directory: bindings/js
+        run: npm ci
+
+      - name: Build (wasm -> jco -> tsc)
+        working-directory: bindings/js
+        run: bash scripts/build.sh
+
+      - name: Stage
+        working-directory: bindings/js
+        run: npm stage publish --provenance
