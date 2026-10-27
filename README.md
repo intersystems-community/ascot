@@ -32,12 +32,10 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
 ### Homebrew
 
 On macOS and Linux, from the
-[InterSystems Community tap](https://github.com/intersystems-community/homebrew-tap).
-Homebrew 5.1.15 and later load nothing from a tap you haven't trusted, so the
-first line is needed once:
+[InterSystems Community tap](https://github.com/intersystems-community/homebrew-tap):
 
 ```sh
-brew trust intersystems-community/tap
+brew trust intersystems-community/tap # once, on Homebrew 5.1.15 or later
 brew install intersystems-community/tap/ascot
 ```
 
