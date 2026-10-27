@@ -1,6 +1,6 @@
 {
     "name": "ascot-lsp",
-    "version": "0.3.1",
+    "version": "0.4.0",
     "description": "ascot as an LSP server for InterSystems ObjectScript",
     "lspServers": {
         "objectscript": {
