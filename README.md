@@ -200,6 +200,9 @@ metadata. The commands take the connection differently:
   ascot analyze --iris http://user:password@localhost:8080/iris --iris-namespace USER src/
   ```
 
+  An `https` instance's certificate is checked against the operating system's
+  trust store, so one it trusts, such as a company CA's, works.
+
   The `ascot-lsp` plugin starts `ascot lsp` with no flags, so it never connects
   to IRIS.
 

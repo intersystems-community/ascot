@@ -648,10 +648,16 @@ impl RawAtelier {
         let api_root = format!("{scheme}://{host}:{port}{path_prefix}/api/atelier");
         // Bounded to connect and to start answering; a long answer (`declare` reads 100 classes'
         // members at once) takes what it takes.
+        // The OS's trust store, as browsers and curl use, rather than rustls's bundled roots: a
+        // company CA or an accepted self-signed certificate lives there.
+        let tls = ureq::tls::TlsConfig::builder()
+            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+            .build();
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
                 .timeout_connect(Some(Duration::from_secs(5)))
                 .timeout_recv_response(Some(Duration::from_secs(60)))
+                .tls_config(tls)
                 .build(),
         );
         let raw = Self {
