@@ -89,7 +89,7 @@ jobs:
           version=${GITHUB_REF_NAME#v}
           url=https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME
           git clone -q "https://x-access-token:$GH_TOKEN@github.com/$TAP" tap
-          current=$(grep -o 'download/v[^/]*' tap/Formula/$BIN.rb | cut -c11- || true)
+          current=$(grep -o -m1 'download/v[^/]*' tap/Formula/$BIN.rb | cut -c11- || true)
           if [ "$(printf '%s\n' "$current" "$version" | sort -V | tail -1)" != "$version" ] || [ "$current" = "$version" ]; then
             echo "The tap already has $BIN $current; not replacing it with $version"
             exit 0
@@ -98,11 +98,24 @@ jobs:
           class Ascot < Formula
             desc "Type checker and code intelligence engine for InterSystems ObjectScript"
             homepage "https://github.com/$GITHUB_REPOSITORY"
-            url "$url/$BIN-cli-universal-apple-darwin.tar.gz"
-            sha256 "$(shasum -a 256 $BIN-cli-universal-apple-darwin.tar.gz | cut -c1-64)"
+            version "$version"
             license any_of: ["MIT", "Apache-2.0"]
 
-            depends_on :macos
+            on_macos do
+              url "$url/$BIN-cli-universal-apple-darwin.tar.gz"
+              sha256 "$(shasum -a 256 $BIN-cli-universal-apple-darwin.tar.gz | cut -c1-64)"
+            end
+
+            on_linux do
+              on_intel do
+                url "$url/$BIN-cli-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "$(shasum -a 256 $BIN-cli-x86_64-unknown-linux-gnu.tar.gz | cut -c1-64)"
+              end
+              on_arm do
+                url "$url/$BIN-cli-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "$(shasum -a 256 $BIN-cli-aarch64-unknown-linux-gnu.tar.gz | cut -c1-64)"
+              end
+            end
 
             def install
               bin.install "$BIN"
