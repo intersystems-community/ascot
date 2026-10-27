@@ -31,25 +31,32 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
 
 ### GitHub release
 
-Prebuilt `ascot` binaries are attached to each
+Prebuilt `ascot` binaries for Linux, macOS and Windows are attached to each
 [GitHub release](https://github.com/intersystems-community/ascot/releases).
 
-- **Linux** (x86_64 and ARM64) and **Windows** (x86_64): download the archive
-  for your platform from the release page.
-- **macOS**: one universal binary covers Intel and Apple silicon. Download it
-  with `curl` rather than a browser, since Gatekeeper refuses to run an
-  unsigned binary that a browser download has quarantined:
+On macOS, Gatekeeper refuses to run the unsigned binary once a browser download
+has quarantined it. [Homebrew](#homebrew-macos-and-linux) avoids this; otherwise
+download it with `curl`:
 
-  ```sh
-  curl -L https://github.com/intersystems-community/ascot/releases/latest/download/ascot-cli-universal-apple-darwin.tar.gz | tar xz
-  ```
+```sh
+curl -L https://github.com/intersystems-community/ascot/releases/latest/download/ascot-cli-universal-apple-darwin.tar.gz | tar xz
+```
 
-  If you already downloaded it with a browser, clear the quarantine flag
-  instead:
+or clear the flag on a browser download:
 
-  ```sh
-  xattr -d com.apple.quarantine ascot
-  ```
+```sh
+xattr -d com.apple.quarantine path/to/ascot
+```
+
+### Homebrew (macOS and Linux)
+
+From the
+[InterSystems Community tap](https://github.com/intersystems-community/homebrew-tap):
+
+```sh
+brew trust intersystems-community/tap # if Homebrew 5.1.15 or later
+brew install intersystems-community/tap/ascot
+```
 
 ### Rust
 
