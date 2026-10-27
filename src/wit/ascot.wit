@@ -113,6 +113,9 @@ interface common {
         doc: string,
         name: name-info,
         extends: list<string>,
+        // `[ Inheritance = right ]`: a member several superclasses define comes from the rightmost
+        // `extends` entry rather than the leftmost.
+        inheritance-right: bool,
         deprecated: bool,
         members: list<member-info>,
         // Its own (not inherited) `[PropertyClass = ...]` classes.

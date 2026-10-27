@@ -248,6 +248,7 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
             doc: details.doc.clone(),
             name: NameInfo::from(&details.name),
             extends: details.extends.clone(),
+            inheritance_right: details.inheritance_right,
             deprecated: details.deprecated,
             members: details
                 .members
