@@ -1251,9 +1251,9 @@ impl<'a> WorkspaceEnv<'a> {
 
     pub fn merge_ty(&self, x: Ty, y: Ty) -> Ty {
         match (x, y) {
-            (Ty::OREF(ClsOrIns::Ins(x)), Ty::OREF(ClsOrIns::Ins(y))) => Ty::OREF(ClsOrIns::Ins(
-                self.merge_class(Cow::Owned(x), Cow::Owned(y)),
-            )),
+            (Ty::OREF(ClsOrIns::Ins(x)), Ty::OREF(ClsOrIns::Ins(y))) => {
+                Ty::from(self.merge_class(Cow::Owned(x), Cow::Owned(y)))
+            }
             _ => Ty::Any,
         }
     }

@@ -644,7 +644,15 @@ impl std::fmt::Display for Ty {
 
 impl From<String> for Ty {
     fn from(value: String) -> Self {
-        Self::OREF(ClsOrIns::Ins(ClassTy::from(value)))
+        Self::from(ClassTy::from(value))
+    }
+}
+
+// The one place a class becomes a type, so the mask's reading of a class (`%Any` is `Any`)
+// holds wherever the class is named.
+impl From<ClassTy> for Ty {
+    fn from(cls: ClassTy) -> Self {
+        crate::mask::class_type(&cls.name).unwrap_or(Self::OREF(ClsOrIns::Ins(cls)))
     }
 }
 
@@ -964,11 +972,7 @@ impl TyProcedure {
 // A host can report an empty string rather than omitting a declared type entirely -- `Ty::from`
 // would otherwise take that literally, producing a nonsense class named "".
 pub(crate) fn ty_from_declared(t: Option<String>) -> Option<Ty> {
-    let ty = Ty::from(t.filter(|t| !t.is_empty())?);
-    Some(match &ty {
-        Ty::OREF(ClsOrIns::Ins(cls)) => crate::mask::class_type(&cls.name).unwrap_or(ty),
-        _ => ty,
-    })
+    t.filter(|t| !t.is_empty()).map(Ty::from)
 }
 
 pub(crate) fn relationship_object(t: Option<String>) -> Ty {
