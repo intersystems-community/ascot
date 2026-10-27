@@ -31,11 +31,11 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
 
 ### Homebrew
 
-On macOS and Linux, from the [isc-klu/tap](https://github.com/isc-klu/homebrew-tap)
-tap, which each release updates:
+On macOS and Linux, from the
+[InterSystems Community tap](https://github.com/intersystems-community/homebrew-tap):
 
 ```sh
-brew install isc-klu/tap/ascot
+brew install intersystems-community/tap/ascot
 ```
 
 ### GitHub release
