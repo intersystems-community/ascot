@@ -18,7 +18,6 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   build:
-    needs: ci
     strategy:
       matrix:
         include:
@@ -71,7 +70,7 @@ jobs:
 
   # One job publishes the release, so the generated notes appear once and all assets land together.
   release:
-    needs: build
+    needs: [ci, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -167,22 +166,14 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-
-      - name: Install devDependencies
-        working-directory: bindings/js
-        run: npm ci
-
-      - name: Build (wasm -> jco -> tsc)
-        working-directory: bindings/js
-        run: bash scripts/build.sh
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package
+          path: bindings/js
 
       - name: Stage
         working-directory: bindings/js

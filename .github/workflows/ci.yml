@@ -106,6 +106,16 @@ jobs:
         working-directory: bindings/js
         run: npm pack --dry-run
 
+      # What `release.yml` publishes to npm, so the package shipped is the one tested here.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-package
+          path: |
+            bindings/js/dist
+            bindings/js/generated
+            bindings/js/lib/*.core*.wasm
+          if-no-files-found: error
+
   # Only humans are accountable for this work, so an AI credit in a commit or the PR is noise.
   no-ai-attribution:
     if: github.event_name == 'pull_request'
