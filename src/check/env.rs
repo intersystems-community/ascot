@@ -972,6 +972,9 @@ impl<'a> WorkspaceEnv<'a> {
             Resolved::Workspace(_, details) => self.supers(cls, details),
             Resolved::Iris(Some(info)) => {
                 let mut supers = info.extends.clone();
+                if info.inheritance_right {
+                    supers.reverse();
+                }
                 supers.iter_mut().for_each(normalize_class_name);
                 supers
             }

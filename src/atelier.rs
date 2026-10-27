@@ -192,7 +192,7 @@ fn class_infos(
 ) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = |description: &str| {
         format!(
-            "SELECT Name, {description}, Super, PropertyClass, IncludeCode, ClassType, Deprecated \
+            "SELECT Name, {description}, Super, Inheritance, PropertyClass, IncludeCode, ClassType, Deprecated \
              FROM %Dictionary.CompiledClass WHERE Name {filter}"
         )
     };
@@ -237,6 +237,7 @@ fn assemble(class_rows: Vec<Value>, member_rows: Vec<MemberRow>) -> HashMap<Stri
                     after: zero,
                 },
                 extends: split_classes(str_field("Super")),
+                inheritance_right: str_field("Inheritance") == "right",
                 deprecated: is_truthy(&row.get("Deprecated").cloned().unwrap_or(Value::Null)),
                 members: members.remove(&cls).unwrap_or_default(),
                 property_class_names: split_classes(str_field("PropertyClass")),
@@ -960,7 +961,7 @@ mod tests {
     fn assemble_groups_member_rows_by_their_parent_class() {
         let class_rows = vec![
             serde_json::json!({"Name": "A.B", "Super": "%RegisteredObject", "ClassType": ""}),
-            serde_json::json!({"Name": "A.C", "Super": "", "ClassType": "datatype", "Deprecated": 1}),
+            serde_json::json!({"Name": "A.C", "Super": "", "Inheritance": "right", "ClassType": "datatype", "Deprecated": 1}),
         ];
         let member_rows: Vec<MemberRow> = [
             serde_json::json!({"parent": "A.C", "Name": "P", "MemberType": "property", "Description": "", "FormalSpec": "", "ReturnType": "%String", "Stub": "", "ClassMethod": 0, "Deprecated": 0}),
@@ -981,6 +982,7 @@ mod tests {
         let c = &classes["A.C"];
         assert!(c.deprecated);
         assert_eq!(c.is_datatype, Some(true));
+        assert!(c.inheritance_right && !b.inheritance_right);
         assert_eq!(c.members[0].name.content, "P");
     }
 
