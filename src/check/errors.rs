@@ -470,6 +470,14 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "The macro '{name}' expands recursively without end"]
     MacroExpansionTooDeep { name: String },
+    #[code = "A2716"]
+    #[severity = Error]
+    #[message = "Too many arguments to the macro '{name}', which takes {expected}"]
+    MacroTooManyArguments { name: String, expected: usize },
+    #[code = "A6127"]
+    #[severity = Error]
+    #[message = "Not enough arguments to the macro '{name}', which takes {expected}"]
+    MacroTooFewArguments { name: String, expected: usize },
     #[code = "A8914"]
     #[severity = Error]
     #[message = "Cannot reference instance-only member '{name}' in a class method"]
@@ -990,6 +998,22 @@ impl TypeError {
 
     pub fn macro_expansion_too_deep(name: String, range: Range) -> Self {
         Self::new(TypeErrorKind::MacroExpansionTooDeep { name }, range, vec![])
+    }
+
+    pub fn macro_too_many_arguments(name: String, expected: usize, range: Range) -> Self {
+        Self::new(
+            TypeErrorKind::MacroTooManyArguments { name, expected },
+            range,
+            vec![],
+        )
+    }
+
+    pub fn macro_too_few_arguments(name: String, expected: usize, range: Range) -> Self {
+        Self::new(
+            TypeErrorKind::MacroTooFewArguments { name, expected },
+            range,
+            vec![],
+        )
     }
 
     pub fn mismatch_argument_mode(
