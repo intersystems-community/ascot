@@ -114,9 +114,15 @@ jobs:
           end
           FORMULA
           cd tap
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git checkout -q -b $BIN-$version
-          git commit -qam "Bump $BIN to $version"
-          git push -q origin HEAD
-          gh pr create --fill --base master
+          if git ls-remote --exit-code --heads origin $BIN-$version >/dev/null; then
+            echo "Branch $BIN-$version already exists; reusing it"
+          else
+            git config user.name github-actions
+            git config user.email github-actions@github.com
+            git checkout -q -b $BIN-$version
+            git commit -qam "Bump $BIN to $version"
+            git push -q origin HEAD
+          fi
+          if [ -z "$(gh pr list --head $BIN-$version --json number -q '.[]')" ]; then
+            gh pr create --fill --base master --head $BIN-$version
+          fi
