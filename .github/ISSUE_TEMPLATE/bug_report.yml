@@ -9,6 +9,13 @@ body:
       description: Crate version or git commit.
     validations:
       required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system
+      description: Windows, macOS or Linux.
+    validations:
+      required: true
   - type: textarea
     id: repro
     attributes:
