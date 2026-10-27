@@ -212,6 +212,8 @@ pub enum MemberKindSpecificDetails {
     Property {
         ty: Option<Ty>,
         keywords: Vec<String>,
+        // Those of `keywords` written without `= value`.
+        bare_keywords: Vec<String>,
         // Names from the type's own `(...)` parameter list -- e.g. %String's `MAXLEN` -- kept
         // separately from `keywords` (the `[...]` list) since the two are easy to confuse (see
         // `check::mod`'s cross-check against `PROPERTY_KEYWORDS`).
@@ -473,6 +475,28 @@ fn class_list_text(value: &str) -> Vec<String> {
         .collect()
 }
 
+// A method's `[ PublicList = (a, b) ]`, each name at the keyword's own range.
+fn public_list_keyword(keywords: &Option<KeywordList>, olc: &OLC) -> Vec<WithRange<String>> {
+    let entry = keywords
+        .iter()
+        .flat_map(|keywords| keywords.entries.iter())
+        .flat_map(|entries| entries.items.iter())
+        .find(|entry| {
+            matches!(&****entry, cos::KeywordEntry::Assign { keyword, .. }
+                if keyword.print().eq_ignore_ascii_case("PublicList"))
+        });
+    let (Some(entry), Some(value)) = (entry, keyword_value(keywords, "PublicList")) else {
+        return vec![];
+    };
+    value
+        .trim_matches(|c: char| c == '(' || c == ')' || c.is_whitespace())
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| WithRange::new(name.to_string(), range(entry, olc)))
+        .collect()
+}
+
 fn keyword_value(keywords: &Option<KeywordList>, name: &str) -> Option<String> {
     keywords
         .iter()
@@ -491,6 +515,23 @@ fn keyword_value(keywords: &Option<KeywordList>, name: &str) -> Option<String> {
             }
             _ => None,
         })
+}
+
+fn bare_keyword_names(keywords: &Option<KeywordList>) -> Vec<String> {
+    keywords
+        .iter()
+        .flat_map(|keywords| keywords.entries.iter())
+        .flat_map(|entries| entries.items.iter())
+        .filter_map(|entry| match &***entry {
+            cos::KeywordEntry::Assign {
+                keyword,
+                value: None,
+                ..
+            }
+            | cos::KeywordEntry::Flag(keyword) => Some(keyword.print()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn keyword_names(keywords: &Option<KeywordList>) -> Vec<String> {
@@ -765,6 +806,7 @@ fn process_member(
                     ty: as_type.as_deref().map(Ty::from),
                     element_ty: as_type.as_deref().and_then(element_ty),
                     keywords: keyword_names(&keywords),
+                    bare_keywords: bare_keyword_names(&keywords),
                     type_param_names: type_param_names(&type_params),
                 },
             ),
@@ -789,6 +831,7 @@ fn process_member(
                     },
                     element_ty: None,
                     keywords: keyword_names(&keywords),
+                    bare_keywords: bare_keyword_names(&keywords),
                     type_param_names: vec![],
                 },
             ),
@@ -870,7 +913,7 @@ fn method_kind(
         });
     let procedure_block = procedure_block(&method.keywords)
         .unwrap_or(class_procedure_block)
-        .then(Vec::new);
+        .then(|| public_list_keyword(&method.keywords, olc));
     let is_abstract = method
         .keywords
         .as_ref()

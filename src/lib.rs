@@ -1792,11 +1792,16 @@ mod tests {
         let uri = "PropTest.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.PropTest {\nProperty Name As %String;\nMethod Foo() {\n write ..NameGet()\n write ..NameSet(\"bob\")\n write ..NameReset()\n write ..NameIsValid(\"bob\")\n quit\n}\n}\n".to_string(),
+            "Class Test.PropTest {\nProperty Name As %String;\nMethod Foo() {\n write ..NameGet()\n write ..NameSet(\"bob\")\n write ..NameIsModified()\n write ..NameIsValid(\"bob\")\n write ..NameReset()\n quit\n}\n}\n".to_string(),
         );
 
-        let diagnostics = workspace.diagnostics(uri);
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        // IRIS generates no `Reset` accessor.
+        let diagnostics: Vec<_> = workspace
+            .diagnostics(uri)
+            .into_iter()
+            .map(|d| (d.range.start.line, d.code))
+            .collect();
+        assert_eq!(diagnostics, [(7, "A3139".to_string())]);
     }
 
     #[test]
@@ -3886,6 +3891,50 @@ mod tests {
     }
 
     #[test]
+    fn what_iris_refuses_to_compile_is_an_error() {
+        let codes = |members: &str| {
+            let workspace = Workspace::native(None, None);
+            let uri = "Demo.T.cls".to_string();
+            workspace.open(
+                uri.clone(),
+                format!("Class Demo.T Extends %RegisteredObject\n{{\n{members}\n}}\n"),
+            );
+            workspace
+                .diagnostics(uri)
+                .into_iter()
+                .filter(|d| d.severity == bindings::DiagnosticSeverity::Error)
+                .map(|d| d.code)
+                .collect::<Vec<_>>()
+        };
+        let body = |code: &str| format!("ClassMethod T(s, v) [ PublicList = p ]\n{{\n {code}\n}}");
+        for (code, expected) in [
+            ("write $NAME(s)", Some("A3485")),
+            ("write $QUERY(s(1))", Some("A3485")),
+            ("write $NAME(^g), $NAME(%x), $NAME(p), $QUERY(^g)", None),
+            (r#"do $ZF(-3, "d", "f", .s)"#, Some("A5268")),
+            (r#"write $ZF(-3, "d", "f", 1, s)"#, None),
+            ("write $ZSEARCH(s, s)", Some("A8073")),
+            ("set $VECTOR(v, 1) = 5", Some("A8820")),
+            (r#"set $VECTOR(v, 1, "int") = 5"#, None),
+            (r#"write $ZCVT(,"L")"#, Some("A7342")),
+            ("write $ZU(28,,5)", Some("A7342")),
+            (
+                r#"write $ZDATETIME($H,3,,2), $LISTBUILD(1,,3), $ZSTRIP(s,"*P",,"-")"#,
+                None,
+            ),
+        ] {
+            let found = codes(&body(code));
+            assert_eq!(found, expected.into_iter().collect::<Vec<_>>(), "{code}");
+        }
+        assert_eq!(codes("ClassMethod T(x, x)\n{\n quit\n}"), ["A4983"]);
+        assert_eq!(
+            codes("Property P As %String [ SqlComputeOnChange ];"),
+            ["A6463"]
+        );
+        assert!(codes("Property P As %String [ Required, SqlComputeOnChange = P ];").is_empty());
+    }
+
+    #[test]
     fn a_macro_call_with_the_wrong_number_of_arguments_is_an_error() {
         let diagnostics = |uri: &str, text: &str| {
             let workspace = Workspace::native(None, None);
@@ -5563,7 +5612,7 @@ mod tests {
     #[test]
     fn function_arity_is_reported_with_the_extra_arguments() {
         let diagnostics = class_diagnostics(
-            "ClassMethod A(a, b) As %String {\n Quit $ZBITLEN(a,b)\n}\nClassMethod B(a, b, c, d, e) As %String {\n Quit $ZCONVERT(a,b,c,d,e)\n}\nClassMethod C() As %String {\n Quit $RANDOM()\n}\nClassMethod D(a) As %String {\n Quit $ZCONVERT(a,\"U\")_$LENGTH(a,\"x\")_$RANDOM(5)_$VIEW(1,,3)_$NOW()_$LISTBUILD()_$LIST(a,1:2,3:4)\n}\nClassMethod E(a) As %String {\n Quit $LENGTH(a,1,2)\n}\nClassMethod F(a) As %String {\n Quit $ORDER(a+1)\n}\nClassMethod G(a) As %String {\n Quit $TEXT(a,1)\n}\nClassMethod H(a) As %String {\n Quit $CASE(a,1:2,:3,:4)\n}\n",
+            "ClassMethod A(a, b) As %String {\n Quit $ZBITLEN(a,b)\n}\nClassMethod B(a, b, c, d, e) As %String {\n Quit $ZCONVERT(a,b,c,d,e)\n}\nClassMethod C() As %String {\n Quit $RANDOM()\n}\nClassMethod D(a) As %String {\n Quit $ZCONVERT(a,\"U\")_$LENGTH(a,\"x\")_$RANDOM(5)_$VIEW(1,-1,3)_$NOW()_$LISTBUILD()_$LIST(a,1:2,3:4)\n}\nClassMethod E(a) As %String {\n Quit $LENGTH(a,1,2)\n}\nClassMethod F(a) As %String {\n Quit $ORDER(a+1)\n}\nClassMethod G(a) As %String {\n Quit $TEXT(a,1)\n}\nClassMethod H(a) As %String {\n Quit $CASE(a,1:2,:3,:4)\n}\n",
         );
         let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
         assert_eq!(messages.len(), 7, "{diagnostics:?}");

@@ -8,6 +8,236 @@
 
 use super::*;
 
+// Which functions refuse an empty argument, by position, as measured on IRIS: the first, the
+// second, and any later one. A function not listed for a position isn't checked there.
+const NO_EMPTY_FIRST: &[&str] = &[
+    "Ascii",
+    "Bit",
+    "BitCount",
+    "BitFind",
+    "BitLogic",
+    "Char",
+    "Data",
+    "Decimal",
+    "Extract",
+    "FNumber",
+    "Factor",
+    "Find",
+    "Get",
+    "INumber",
+    "Increment",
+    "IsValidDouble",
+    "IsValidNum",
+    "Justify",
+    "Length",
+    "List",
+    "ListData",
+    "ListFind",
+    "ListFromString",
+    "ListGet",
+    "ListSame",
+    "ListToString",
+    "Locate",
+    "MV",
+    "Match",
+    "NConvert",
+    "Next",
+    "Normalize",
+    "Number",
+    "Piece",
+    "QSubscript",
+    "SConvert",
+    "Stack",
+    "Translate",
+    "Vector",
+    "VectorDefined",
+    "View",
+    "WAscii",
+    "WChar",
+    "WExtract",
+    "WFind",
+    "WLength",
+    "Xecute",
+    "ZBitAnd",
+    "ZBitFind",
+    "ZBitGet",
+    "ZBitOr",
+    "ZBitStr",
+    "ZBitXor",
+    "ZConvert",
+    "ZCrc",
+    "ZDAscii",
+    "ZDChar",
+    "ZDate",
+    "ZDateH",
+    "ZDateTime",
+    "ZDateTimeH",
+    "ZF",
+    "ZIncrement",
+    "ZLAscii",
+    "ZLChar",
+    "ZName",
+    "ZPosition",
+    "ZPower",
+    "ZQAscii",
+    "ZQChar",
+    "ZSeek",
+    "ZStrip",
+    "ZTime",
+    "ZTimeH",
+    "ZUtil",
+    "ZWAscii",
+    "ZWChar",
+    "ZWidth",
+    "ZZenkaku",
+];
+
+const NO_EMPTY_SECOND: &[&str] = &[
+    "Ascii",
+    "Bit",
+    "BitCount",
+    "BitFind",
+    "BitLogic",
+    "Change",
+    "Char",
+    "ClassMethod",
+    "Compile",
+    "Data",
+    "Decimal",
+    "Extract",
+    "Factor",
+    "Find",
+    "Get",
+    "INumber",
+    "Increment",
+    "Justify",
+    "Length",
+    "List",
+    "ListData",
+    "ListFind",
+    "ListGet",
+    "ListNext",
+    "ListSame",
+    "ListUpdate",
+    "Locate",
+    "Match",
+    "Method",
+    "NConvert",
+    "Next",
+    "Normalize",
+    "Parameter",
+    "Piece",
+    "Property",
+    "QSubscript",
+    "Replace",
+    "SConvert",
+    "Stack",
+    "Translate",
+    "Vector",
+    "VectorDefined",
+    "View",
+    "WAscii",
+    "WChar",
+    "WExtract",
+    "WFind",
+    "WLength",
+    "ZBitAnd",
+    "ZBitFind",
+    "ZBitGet",
+    "ZBitOr",
+    "ZBitSet",
+    "ZBitStr",
+    "ZBitXor",
+    "ZBoolean",
+    "ZConvert",
+    "ZCrc",
+    "ZDAscii",
+    "ZDChar",
+    "ZF",
+    "ZIncrement",
+    "ZLAscii",
+    "ZLChar",
+    "ZName",
+    "ZObjClassMethod",
+    "ZObjMethod",
+    "ZObjProperty",
+    "ZPosition",
+    "ZPower",
+    "ZQAscii",
+    "ZQChar",
+    "ZSeek",
+    "ZStrip",
+    "ZUtil",
+    "ZWAscii",
+    "ZWChar",
+    "ZWidth",
+    "ZZenkaku",
+];
+
+const NO_EMPTY_LATER: &[&str] = &[
+    "BitFind",
+    "Char",
+    "Piece",
+    "View",
+    "WChar",
+    "ZConvert",
+    "ZDChar",
+    "ZF",
+    "ZLChar",
+    "ZPosition",
+    "ZQChar",
+    "ZUtil",
+    "ZWChar",
+];
+
+// Any `$`-function call, to see which of its arguments are empty.
+#[derive(Grammar)]
+struct AnyCall(
+    Option<tygr::StringEq!("$")>,
+    tygr::StringOf1<cos::IsAlphabetic>,
+    cos::FunArgList,
+);
+
+fn check_empty_args(call: &cos::FunctionCall) -> Result<(), QuasiTypeError> {
+    let Some(name) = call.name() else {
+        return Ok(());
+    };
+    let Ok(AnyCall(_, _, args)) = AnyCall::parse(&call.print()) else {
+        return Ok(());
+    };
+    for (i, arg) in args.items.iter().enumerate() {
+        let table = match i {
+            0 => NO_EMPTY_FIRST,
+            1 => NO_EMPTY_SECOND,
+            _ => NO_EMPTY_LATER,
+        };
+        if arg.is_none() && table.iter().any(|f| f.eq_ignore_ascii_case(name.full)) {
+            let function = format!("${}", name.full.to_uppercase());
+            return Err(QuasiTypeError::omitted_argument(function, i + 1));
+        }
+    }
+    Ok(())
+}
+
+// IRIS won't name a procedure block's private variable.
+fn require_public<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    target: &cos::GetTarget,
+    function: &str,
+) -> Result<(), QuasiTypeError> {
+    if let cos::GetTarget::Var(variable) = target
+        && let Left(local) = variable.as_local(env, flow)?
+        && !flow.is_public(&local.name)?
+    {
+        return Err(QuasiTypeError::private_variable_not_allowed(
+            function.to_string(),
+            local.name,
+        ));
+    }
+    Ok(())
+}
+
 // An argument that may be left empty (`$FN(x,,0)`): the expression inside, if any.
 fn opt_arg<'b, M, W, T>(arg: &'b Option<M>) -> Option<&'b Range<T>>
 where
@@ -24,6 +254,7 @@ impl CheckExprInner for cos::FunctionCall {
         flow: &mut Flow<'a>,
     ) -> Result<PowerTy, QuasiTypeError> {
         super::report_style(env, self.name());
+        check_empty_args(self)?;
         match self {
             FunctionCall::Length {
                 args:
@@ -173,6 +404,12 @@ impl CheckExprInner for cos::FunctionCall {
                 Ok(Ty::from("%Integer").into())
             }
             FunctionCall::ZFm3 { dll, args, .. } => {
+                if args
+                    .iter()
+                    .any(|arg| matches!(&****arg, Some(cos::MthArg::ByRef { .. })))
+                {
+                    return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
+                }
                 let _ = dll.to_ty(env, flow)?;
                 Ok(check_args_any(env, flow, args.iter().map(|v| &***v))?.into())
             }
@@ -424,6 +661,7 @@ impl CheckExprInner for cos::FunctionCall {
                 args: NameArgs { variable, integer },
                 ..
             } => {
+                require_public(env, flow, variable.deref(), "$NAME")?;
                 let _ = variable.deref().to_ty(env, flow)?;
                 check_read_args(env, flow, [integer.as_deref().map(|v| &**v)], "%String")
             }
@@ -469,6 +707,7 @@ impl CheckExprInner for cos::FunctionCall {
                     },
                 ..
             } => {
+                require_public(env, flow, reference.deref(), "$QUERY")?;
                 let _ = reference.deref().to_ty(env, flow)?;
                 if let Some(direction) = direction.as_deref().map(|v| &**v) {
                     let _ = direction.to_ty(env, flow)?;
@@ -664,6 +903,9 @@ pub(super) fn check_settarget_fun<'a>(
             let _ = check_bit_call(env, flow, c)?;
         }
         Vector(c) => {
+            if c.third.is_none() {
+                return Err(QuasiTypeError::set_vector_without_type());
+            }
             define_set_target_base(env, flow, &c.vector)?;
             let _ = check_vector_call(env, flow, c)?;
         }

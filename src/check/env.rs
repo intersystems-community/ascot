@@ -239,7 +239,6 @@ impl Shape {
 const ACCESSORS: &[Shape] = &[
     Shape("Get", Arg::None, Out::Prop, true),
     Shape("Set", Arg::Value, Out::Status, true),
-    Shape("Reset", Arg::None, Out::Status, true),
     Shape("IsModified", Arg::None, Out::Boolean, true),
     Shape("GetStored", Arg::Id, Out::Prop, false),
 ];

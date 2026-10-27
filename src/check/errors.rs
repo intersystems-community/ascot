@@ -285,6 +285,28 @@ impl QuasiTypeError {
         Self::WithoutRange(TypeErrorKind::RoutineNotOnIris { routine }, vec![])
     }
 
+    pub fn private_variable_not_allowed(function: String, name: String) -> Self {
+        Self::WithoutRange(
+            TypeErrorKind::PrivateVariableNotAllowed { function, name },
+            vec![],
+        )
+    }
+
+    pub fn by_ref_argument_not_allowed(function: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::ByRefArgumentNotAllowed { function }, vec![])
+    }
+
+    pub fn omitted_argument(function: String, position: usize) -> Self {
+        Self::WithoutRange(
+            TypeErrorKind::OmittedArgument { function, position },
+            vec![],
+        )
+    }
+
+    pub fn set_vector_without_type() -> Self {
+        Self::WithoutRange(TypeErrorKind::SetVectorWithoutType, vec![])
+    }
+
     pub fn routine_without_source(routine: String) -> Self {
         Self::WithoutRange(TypeErrorKind::RoutineWithoutSource { routine }, vec![])
     }
@@ -478,12 +500,32 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Not enough arguments to the macro '{name}', which takes {expected}"]
     MacroTooFewArguments { name: String, expected: usize },
+    #[code = "A3485"]
+    #[severity = Error]
+    #[message = "{function} can't take '{name}', which is private to this procedure block"]
+    PrivateVariableNotAllowed { function: String, name: String },
+    #[code = "A5268"]
+    #[severity = Error]
+    #[message = "{function} takes no by-reference argument"]
+    ByRefArgumentNotAllowed { function: String },
+    #[code = "A7342"]
+    #[severity = Error]
+    #[message = "Argument {position} of {function} can't be left empty"]
+    OmittedArgument { function: String, position: usize },
+    #[code = "A8820"]
+    #[severity = Error]
+    #[message = "SET $VECTOR needs its third argument, the type"]
+    SetVectorWithoutType,
+    #[code = "A6463"]
+    #[severity = Error]
+    #[message = "The property keyword '{keyword}' needs a value"]
+    PropertyKeywordWithoutValue { keyword: String },
     #[code = "A8914"]
     #[severity = Error]
     #[message = "Cannot reference instance-only member '{name}' in a class method"]
     AccessInstanceOnlyMemberFromClassContext { name: String },
     #[code = "A4983"]
-    #[severity = Warning]
+    #[severity = Error]
     #[message = "Variable '{name}' is already declared"]
     RedeclareVariable { name: String },
     #[code = "A1817"]
@@ -1003,6 +1045,14 @@ impl TypeError {
     pub fn macro_too_many_arguments(name: String, expected: usize, range: Range) -> Self {
         Self::new(
             TypeErrorKind::MacroTooManyArguments { name, expected },
+            range,
+            vec![],
+        )
+    }
+
+    pub(crate) fn property_keyword_without_value(keyword: String, range: Range) -> Self {
+        Self::new(
+            TypeErrorKind::PropertyKeywordWithoutValue { keyword },
             range,
             vec![],
         )

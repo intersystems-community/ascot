@@ -3508,8 +3508,20 @@ fn check_property_or_parameter_declaration(
             ty,
             element_ty,
             keywords,
+            bare_keywords,
             type_param_names,
         } => {
+            for keyword in bare_keywords {
+                if PROPERTY_KEYWORDS_WITH_VALUE
+                    .iter()
+                    .any(|k| k.eq_ignore_ascii_case(keyword))
+                {
+                    diagnostics.push(
+                        TypeError::property_keyword_without_value(keyword.clone(), member.range)
+                            .into(),
+                    );
+                }
+            }
             if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = ty {
                 let name = env.base.qualify_class_name(&cty.name, Some(class_name));
                 env.base.check_declared_class_exists(&name, member.range);
