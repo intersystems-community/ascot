@@ -288,11 +288,21 @@ impl Namespace for Methods {
     }
 }
 
-// Why `find` has no member to give.
+// Why `find` can't even say whether the member exists.
 enum Miss {
-    Absent,
     NoSuchClass(String),
-    InstanceOnly,
+    InstanceOnly(String),
+}
+
+impl From<Miss> for QuasiTypeError {
+    fn from(miss: Miss) -> Self {
+        match miss {
+            Miss::NoSuchClass(cls) => QuasiTypeError::cannot_find_class(cls),
+            Miss::InstanceOnly(mem) => {
+                QuasiTypeError::access_instance_only_member_from_class_context(mem)
+            }
+        }
+    }
 }
 
 impl<T> Member<T> {
@@ -746,6 +756,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let found = property.as_ref().and_then(|p| {
                     self.find::<Properties<Read>>(&cls, &p.it, true, p.range)
                         .ok()
+                        .flatten()
                 });
                 self.restore_soft_diagnostics(was_suppressed);
                 let ty = match found.map(|found| found.ty) {
@@ -808,46 +819,38 @@ impl<'a> WorkspaceEnv<'a> {
         let Ty::OREF(obj) = ty else {
             return Ok(Member::untyped(N::Ty::default()));
         };
-        let at = |err: QuasiTypeError| err.into_error(|| range);
-        let mut found = self.find::<N>(obj, &mem, own, range);
+        let at = |miss: Miss| QuasiTypeError::from(miss).into_error(|| range);
+        let mut found = self.find::<N>(obj, &mem, own, range).map_err(at)?;
         // Dynamic dispatch: a class overriding the hook takes any member name no class has.
-        if let (Err(Miss::Absent), Some(hook)) = (&found, N::hook(obj)) {
+        if found.is_none()
+            && let Some(hook) = N::hook(obj)
+        {
             found = self
                 .find::<Methods>(obj, hook, own, range)
+                .map_err(at)?
                 .map(|hook| Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref))));
         }
-        match found {
-            Ok(member) => Ok(member),
-            Err(Miss::Absent) => {
-                let names = self.names::<N>(obj.name());
-                let mut suggestions =
-                    crate::check::top_similar(&mem, names.iter().map(String::as_str), 5);
-                let mut has_get = false;
-                if N::NS == MemberNs::Property {
-                    // Every `%Get`-style accessor regardless of score: a misspelled property is
-                    // often one, and a `%Get` means the class may take any name.
-                    for name in self.names::<Methods>(obj.name()) {
-                        has_get |= name.eq_ignore_ascii_case("%Get");
-                        if name.starts_with("%Get")
-                            && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(&name))
-                        {
-                            suggestions.push(name);
-                        }
+        found.ok_or_else(|| {
+            let names = self.names::<N>(obj.name());
+            let mut suggestions =
+                crate::check::top_similar(&mem, names.iter().map(String::as_str), 5);
+            let mut has_get = false;
+            if N::NS == MemberNs::Property {
+                // Every `%Get`-style accessor regardless of score: a misspelled property is
+                // often one, and a `%Get` means the class may take any name.
+                for name in self.names::<Methods>(obj.name()) {
+                    has_get |= name.eq_ignore_ascii_case("%Get");
+                    if name.starts_with("%Get")
+                        && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(&name))
+                    {
+                        suggestions.push(name);
                     }
                 }
-                let cls = obj.to_string();
-                Err(at(QuasiTypeError::cannot_find_member(
-                    cls,
-                    mem,
-                    suggestions,
-                    has_get,
-                )))
             }
-            Err(Miss::NoSuchClass(cls)) => Err(at(QuasiTypeError::cannot_find_class(cls))),
-            Err(Miss::InstanceOnly) => Err(at(
-                QuasiTypeError::access_instance_only_member_from_class_context(mem),
-            )),
-        }
+            let err =
+                QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get);
+            err.into_error(|| range)
+        })
     }
 
     // Where IRIS finds `mem` on `obj`: each class along the chain in precedence order, its own
@@ -860,7 +863,7 @@ impl<'a> WorkspaceEnv<'a> {
         mem: &str,
         own: bool,
         range: bindings::Range,
-    ) -> Result<Member<N::Ty>, Miss> {
+    ) -> Result<Option<Member<N::Ty>>, Miss> {
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
         let cls = receiver.name.as_str();
         // Past a class nobody can see, the member may be anything: taken on trust, with a hint.
@@ -881,7 +884,7 @@ impl<'a> WorkspaceEnv<'a> {
                 }
             };
             self.add_soft_diagnostic(err.into());
-            Ok(Member::untyped(N::Ty::default()))
+            Ok(Some(Member::untyped(N::Ty::default())))
         };
         // `##super` from a class nobody can see has no superclasses to walk.
         if !own && let Err(Unresolved::Unknown(reason)) = self.resolve(cls) {
@@ -923,15 +926,15 @@ impl<'a> WorkspaceEnv<'a> {
         match found {
             Some(Ok(found)) => {
                 if found.is_instance_only && !obj.is_ins() {
-                    return Err(Miss::InstanceOnly);
+                    return Err(Miss::InstanceOnly(mem.to_string()));
                 }
                 let mut member = found.member;
                 member.ty.instantiate(receiver, &found.origin);
-                Ok(member)
+                Ok(Some(member))
             }
             Some(Err((unknown, reason))) => unverified(&unknown, reason),
             None if no_class => Err(Miss::NoSuchClass(cls.to_string())),
-            None => Err(Miss::Absent),
+            None => Ok(None),
         }
     }
 
@@ -1773,14 +1776,8 @@ impl<'a> CodeEnv<'a> {
             .ok_or_else(QuasiTypeError::not_in_class)
             .map_err(|err| err.into_error(|| range))?
             .to_string();
-        let this = Ty::OREF(this);
-        match self.resolve_mem::<Methods>(&this, mem.clone(), range, false) {
-            // No superclass method of the name: `%DispatchMethod` there may still take the call.
-            Err(err) if matches!(err.kind, TypeErrorKind::CannotFindMember { .. }) => self
-                .resolve_mem::<Properties<Called>>(&this, mem, range, false)
-                .map(|_| TyProcedureOrAny::Any),
-            method => method.map(|method| method.ty),
-        }
+        let method = self.resolve_mem::<Methods>(&Ty::OREF(this), mem, range, false)?;
+        Ok(method.ty)
     }
 
     pub(crate) fn resolve_label(
