@@ -3619,15 +3619,19 @@ fn check_property_or_parameter_declaration(
                         let class = type_class
                             .clone()
                             .unwrap_or_else(|| "this property's type".to_string());
-                        let suggestions = if is_property_keyword {
-                            vec![]
-                        } else {
-                            let names: Vec<String> = candidate_classes
-                                .iter()
-                                .flat_map(|cls| env.base.parameter_names(cls))
-                                .collect();
-                            top_similar(name, names.iter().map(String::as_str), 5)
-                        };
+                        // Each absent candidate's own "did you mean", pooled.
+                        let mut suggestions: Vec<String> = vec![];
+                        for result in &results {
+                            if let Err(err) = result
+                                && let TypeErrorKind::CannotFindMember {
+                                    suggestions: more, ..
+                                } = &err.kind
+                                && !is_property_keyword
+                            {
+                                suggestions.extend(more.0.iter().cloned());
+                            }
+                        }
+                        suggestions.dedup();
                         diagnostics.push(
                             TypeError::unrecognized_type_param(
                                 name.clone(),

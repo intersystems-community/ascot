@@ -280,13 +280,33 @@ impl Namespace for Methods {
     }
 }
 
-// Why `lookup` has no member to give.
+// Why `lookup` has no member to give, with what its message needs.
 enum LookupError {
-    Absent,
+    Absent {
+        cls: String,
+        mem: String,
+        suggestions: Vec<String>,
+        has_get: bool,
+    },
     NoSuchClass(String),
-    // The chain reached a class nobody can see before any had the member, so it may be anything.
-    Unverified,
-    InstanceOnly,
+    InstanceOnly(String),
+}
+
+impl From<LookupError> for QuasiTypeError {
+    fn from(err: LookupError) -> Self {
+        match err {
+            LookupError::Absent {
+                cls,
+                mem,
+                suggestions,
+                has_get,
+            } => QuasiTypeError::cannot_find_member(cls, mem, suggestions, has_get),
+            LookupError::NoSuchClass(cls) => QuasiTypeError::cannot_find_class(cls),
+            LookupError::InstanceOnly(mem) => {
+                QuasiTypeError::access_instance_only_member_from_class_context(mem)
+            }
+        }
+    }
 }
 
 impl<T> Member<T> {
@@ -556,59 +576,46 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
 ];
 
 impl<'a> WorkspaceEnv<'a> {
-    // The properties, methods and parameters along `cls`'s chain -- all ObjectScript can name.
-    pub(crate) fn member_names(&self, cls: &str) -> Vec<String> {
+    // The names in `N`'s namespace along `cls`'s chain -- all ObjectScript can refer to there.
+    fn names<N: Namespace>(&self, cls: &str) -> Vec<String> {
+        let generated = N::NS.contains(&MemberNs::HigherOrder);
         let mut names = Vec::new();
-        self.walk::<()>(cls, true, &mut |cls, resolved| match resolved {
-            Resolved::Workspace(_, details) => {
-                let members = &details.members;
-                names.extend(
-                    (members.property.keys())
-                        .chain(members.higher_order.keys())
-                        .chain(members.parameter.keys())
-                        .cloned(),
-                );
-                names.extend(self.generated_members(cls, resolved).keys().cloned());
-                ControlFlow::Continue(true)
-            }
-            Resolved::Iris(info) => {
-                names.extend(
+        self.walk::<()>(cls, true, &mut |cls, resolved| {
+            match resolved {
+                Resolved::Workspace(_, details) => {
+                    for ns in N::NS {
+                        let members = &details.members;
+                        names.extend(
+                            match ns {
+                                MemberNs::Parameter => members.parameter.keys(),
+                                MemberNs::Property => members.property.keys(),
+                                MemberNs::HigherOrder => members.higher_order.keys(),
+                                _ => continue,
+                            }
+                            .cloned(),
+                        );
+                    }
+                }
+                Resolved::Iris(info) => names.extend(
                     info.iter()
                         .flat_map(|info| &info.members)
                         .filter(|m| {
-                            matches!(
-                                MemberNs::of_info(&m.kind),
-                                MemberNs::Property | MemberNs::HigherOrder | MemberNs::Parameter
-                            ) && !crate::mask::dropped(
-                                m.origin.as_deref().unwrap_or(cls),
-                                &m.name.content,
-                            )
+                            N::NS.contains(&MemberNs::of_info(&m.kind))
+                                && !crate::mask::dropped(
+                                    m.origin.as_deref().unwrap_or(cls),
+                                    &m.name.content,
+                                )
                         })
                         .map(|m| m.name.content.clone()),
-                );
-                names.extend(self.generated_members(cls, resolved).keys().cloned());
-                ControlFlow::Continue(true)
+                ),
+                Resolved::Unknown => return ControlFlow::Continue(false),
             }
-            Resolved::Unknown => ControlFlow::Continue(false),
+            if generated {
+                names.extend(self.generated_members(cls, resolved).keys().cloned());
+            }
+            ControlFlow::Continue(true)
         });
         names
-    }
-
-    // "Did you mean" candidates for `mem`, and whether `cls` has `%Get` to suggest instead.
-    pub(crate) fn member_suggestions(&self, cls: &str, mem: &str) -> (Vec<String>, bool) {
-        let names = self.member_names(cls);
-        let mut suggestions = crate::check::top_similar(mem, names.iter().map(String::as_str), 5);
-        // Every `%Get`-style accessor regardless of score: a misspelled property is often one.
-        for name in &names {
-            if name.starts_with("%Get") && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(name))
-            {
-                suggestions.push(name.clone());
-            }
-        }
-        let has_get = self
-            .lookup::<Methods>(&ClsOrIns::Ins(ClassTy::from(cls.to_string())), "%Get", true)
-            .is_ok();
-        (suggestions, has_get)
     }
 
     // Every class named in `cls`'s own or any ancestor's `[PropertyClass = ...]` -- each one's
@@ -805,12 +812,12 @@ impl<'a> WorkspaceEnv<'a> {
             .map(|property| {
                 let property = property
                     .as_ref()
-                    .map(|p| self.lookup::<Properties>(&cls, &p.it, true));
+                    .map(|p| self.find::<Properties>(&cls, &p.it, true));
                 let ty = match property {
-                    Some(Ok(Member {
+                    Some(Ok(Some(Member {
                         ty: PropertyTy::Value(ty),
                         ..
-                    })) => ty,
+                    }))) => ty,
                     _ => Ty::Any,
                 };
                 NormalArg::new(ArgMode::Default, "value".into(), Some(ty), None)
@@ -907,30 +914,25 @@ impl<'a> WorkspaceEnv<'a> {
         let Ty::OREF(obj) = ty else {
             return Ok(Member::untyped(N::Ty::default()));
         };
-        let at = |err: QuasiTypeError| err.into_error(|| range);
         let found = match (self.lookup::<N>(obj, &mem, own), hook) {
             // Dynamic dispatch: a class overriding the hook takes any member name.
-            (Err(LookupError::Absent), Some(hook)) => self
-                .lookup::<Methods>(obj, hook, own)
-                .map(|hook| Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref)))),
+            (Err(absent @ LookupError::Absent { .. }), Some(hook)) => {
+                match self.find::<Methods>(obj, hook, own) {
+                    Err(LookupError::Absent { .. }) => Err(absent),
+                    hook => hook.map(|hook| {
+                        hook.map(|hook| {
+                            Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref)))
+                        })
+                    }),
+                }
+            }
             (found, _) => found,
         };
-        match found {
-            Ok(ty) => Ok(ty),
-            Err(LookupError::Absent) => {
-                let (suggestions, has_get) = self.member_suggestions(obj.name(), &mem);
-                Err(at(QuasiTypeError::cannot_find_member(
-                    obj.to_string(),
-                    mem,
-                    suggestions,
-                    has_get,
-                )))
-            }
-            Err(LookupError::NoSuchClass(cls)) => Err(at(QuasiTypeError::cannot_find_class(cls))),
-            Err(LookupError::InstanceOnly) => Err(at(
-                QuasiTypeError::access_instance_only_member_from_class_context(mem),
-            )),
-            Err(LookupError::Unverified) => {
+        match found.map_err(|err| QuasiTypeError::from(err).into_error(|| range))? {
+            Some(member) => Ok(member),
+            // The chain reached a class nobody can see before any had the member, so it may be
+            // anything: taken on trust, with a hint.
+            None => {
                 let err = self
                     .lookup_failed(obj.name(), true, range)
                     .unwrap_or_else(|| {
@@ -948,26 +950,6 @@ impl<'a> WorkspaceEnv<'a> {
         }
     }
 
-    // "Did you mean" candidates for an absent type parameter -- `cls`'s own other
-    // `Parameter`s (workspace) or `Parameter`-tagged members (IRIS's `get_cls`).
-    pub(crate) fn parameter_names(&self, cls: &str) -> Vec<String> {
-        if let Some(uri) = self.resolve_cls_uri(cls)
-            && let Ok(details) = self.workspace.cls_details(&uri)
-        {
-            return details.members.parameter.keys().cloned().collect();
-        }
-        self.iris_cls(cls)
-            .flatten()
-            .map(|ci| {
-                ci.members
-                    .into_iter()
-                    .filter(|m| matches!(m.kind, MemberKind::Parameter(_)))
-                    .map(|m| m.name.content)
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     // Where IRIS finds `mem` on `obj`: own declared members, then generated ones, then each direct
     // superclass in precedence order the same way -- IRIS's order, so the first match is the one
     // it compiles in; no implicit root. `own = false` starts at the superclasses, for `##super`.
@@ -977,12 +959,49 @@ impl<'a> WorkspaceEnv<'a> {
         obj: &ClsOrIns,
         mem: &str,
         own: bool,
-    ) -> Result<Member<N::Ty>, LookupError> {
+    ) -> Result<Option<Member<N::Ty>>, LookupError> {
+        self.find::<N>(obj, mem, own).map_err(|err| match err {
+            LookupError::Absent { cls, mem, .. } => {
+                let names = self.names::<N>(obj.name());
+                let mut suggestions =
+                    crate::check::top_similar(&mem, names.iter().map(String::as_str), 5);
+                let mut has_get = false;
+                if N::NS.contains(&MemberNs::Property) {
+                    // Every `%Get`-style accessor regardless of score: a misspelled property is
+                    // often one, and a `%Get` means the class may take any name.
+                    for name in self.names::<Methods>(obj.name()) {
+                        has_get |= name.eq_ignore_ascii_case("%Get");
+                        if name.starts_with("%Get")
+                            && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(&name))
+                        {
+                            suggestions.push(name);
+                        }
+                    }
+                }
+                LookupError::Absent {
+                    cls,
+                    mem,
+                    suggestions,
+                    has_get,
+                }
+            }
+            err => err,
+        })
+    }
+
+    // `lookup` without the "did you mean" for a miss, for probes that discard the error -- and
+    // that building the generated-member table makes, so suggestions can't ask for that table.
+    fn find<N: Namespace>(
+        &self,
+        obj: &ClsOrIns,
+        mem: &str,
+        own: bool,
+    ) -> Result<Option<Member<N::Ty>>, LookupError> {
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
         let cls = receiver.name.as_str();
         // `##super` from a class nobody can see has no superclasses to walk.
         if !own && matches!(self.resolve(cls), Resolved::Unknown) {
-            return Err(LookupError::Unverified);
+            return Ok(None);
         }
         let mut no_class = false;
         let found = self.walk(cls, own, &mut |cls, resolved| {
@@ -994,8 +1013,7 @@ impl<'a> WorkspaceEnv<'a> {
                     return ControlFlow::Continue(false);
                 }
                 Resolved::Unknown => {
-                    let found = registered_object_member::<N>(cls, mem);
-                    return ControlFlow::Break(found.ok_or(LookupError::Unverified));
+                    return ControlFlow::Break(Ok(registered_object_member::<N>(cls, mem)));
                 }
             };
             // Every generated member is a method, so only a method lookup consults them, and only
@@ -1013,21 +1031,29 @@ impl<'a> WorkspaceEnv<'a> {
                 })
             });
             match found {
-                Some(found) => ControlFlow::Break(Ok(found)),
+                Some(found) => ControlFlow::Break(Ok(Some(found))),
                 None => ControlFlow::Continue(true),
             }
         });
         match found {
             Some(found) => found.and_then(|found| {
+                let Some(found) = found else {
+                    return Ok(None);
+                };
                 if found.is_instance_only && !obj.is_ins() {
-                    return Err(LookupError::InstanceOnly);
+                    return Err(LookupError::InstanceOnly(mem.to_string()));
                 }
                 let mut member = found.member;
                 member.ty.instantiate(receiver, &found.origin);
-                Ok(member)
+                Ok(Some(member))
             }),
             None if no_class => Err(LookupError::NoSuchClass(cls.to_string())),
-            None => Err(LookupError::Absent),
+            None => Err(LookupError::Absent {
+                cls: obj.to_string(),
+                mem: mem.to_string(),
+                suggestions: vec![],
+                has_get: false,
+            }),
         }
     }
 
