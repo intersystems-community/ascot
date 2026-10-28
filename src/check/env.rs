@@ -1776,8 +1776,14 @@ impl<'a> CodeEnv<'a> {
             .ok_or_else(QuasiTypeError::not_in_class)
             .map_err(|err| err.into_error(|| range))?
             .to_string();
-        let method = self.resolve_mem::<Methods>(&Ty::OREF(this), mem, range, false)?;
-        Ok(method.ty)
+        match self.find::<Methods>(&this, &mem, false, range) {
+            Ok(Some(method)) => Ok(method.ty),
+            Ok(None) => {
+                let err = QuasiTypeError::super_without_method(mem, this.name().to_string());
+                Err(err.into_error(|| range))
+            }
+            Err(err) => Err(QuasiTypeError::from(err).into_error(|| range)),
+        }
     }
 
     pub(crate) fn resolve_label(

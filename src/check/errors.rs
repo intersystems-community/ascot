@@ -259,6 +259,10 @@ impl QuasiTypeError {
         Self::WithoutRange(TypeErrorKind::CannotFindClass { cls }, vec![])
     }
 
+    pub fn super_without_method(method: String, cls: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::SuperWithoutMethod { method, cls }, vec![])
+    }
+
     pub fn cannot_find_label(label: String, routine: Option<String>) -> Self {
         Self::WithoutRange(
             TypeErrorKind::CannotFindLabel {
@@ -455,6 +459,12 @@ type_error_kinds! {
         on: SuperclassOf,
         reason: UnconfirmedReason,
     },
+    /// `##super()` binds to the superclass's version of the method at compile time; no
+    /// `%DispatchMethod` and no same-named property stands in.
+    #[code = "A7461"]
+    #[severity = Error]
+    #[message = "Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call"]
+    SuperWithoutMethod { method: String, cls: String },
     #[code = "A6851"]
     #[severity = Error]
     #[message = "Cannot find label '{label}' in {routine}"]
