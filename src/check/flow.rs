@@ -73,6 +73,10 @@ impl LoopContext {
     }
 }
 
+// What a flow's returns are held to, once one establishes it: shared by the labels that return
+// for the same caller.
+pub(crate) type OutputCell = Rc<RefCell<Option<WithRange<Option<Ty>>>>>;
+
 // The life time 'a is for the entire code block (i.e., method body or a stand-alone expression)
 pub struct Flow<'a> {
     shared: Rc<Shared<'a>>,
@@ -162,9 +166,14 @@ impl<'a> Flow<'a> {
     // returns for this body, and reads what it assigned (so the deferred "never read" reports
     // can't be trusted). With nothing to run into, that's worth a word.
     #[allow(clippy::type_complexity)]
+    // `label` returns for this flow, so its returns are held to this flow's.
+    pub(crate) fn share_output(&self, label: &OnceCell<OutputCell>) {
+        let _ = label.set(self.shared.output.clone());
+    }
+
     pub(crate) fn tail_call(
         &mut self,
-        next: Option<&OnceCell<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>>,
+        next: Option<&OnceCell<OutputCell>>,
         range: bindings::Range,
     ) -> Result<(), TypeError> {
         if self.bindings.is_none() {
@@ -172,7 +181,7 @@ impl<'a> Flow<'a> {
         }
         match next {
             Some(next) => {
-                let _ = next.set(self.shared.output.clone());
+                self.share_output(next);
                 self.mark_incomplete();
             }
             None => self.add_soft_diagnostic(TypeError::missing_quit(range).into()),

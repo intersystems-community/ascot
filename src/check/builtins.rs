@@ -389,7 +389,19 @@ impl CheckExprInner for cos::FunctionCall {
                 }
                 Ok(Ty::from("%String").into())
             }
-            FunctionCall::ZFm1 { program, .. } | FunctionCall::ZFm2 { program, .. } => {
+            FunctionCall::ZFm1 { program, extra, .. } => {
+                if !extra.is_empty() {
+                    check_read_args(env, flow, extra.iter().map(|v| Some(&***v)), "%Integer")?;
+                    let given = 2 + extra.len();
+                    flow.add_soft_diagnostic(QuasiTypeError::undocumented_argument(
+                        "ZF(-1)".to_string(),
+                        2,
+                        given,
+                    ));
+                }
+                check_read_args(env, flow, [program.as_deref().map(|v| &**v)], "%Integer")
+            }
+            FunctionCall::ZFm2 { program, .. } => {
                 check_read_args(env, flow, [program.as_deref().map(|v| &**v)], "%Integer")
             }
             FunctionCall::ZFm100 {
@@ -1228,6 +1240,18 @@ fn check_simple_function<'a>(
             continue;
         }
         let _ = expr.to_ty(env, flow)?;
+    }
+    let given = match call.args.items.as_slice() {
+        [only] if only.is_none() => 0,
+        items => items.len(),
+    };
+    if given > function.max {
+        let name = call.name.print().to_uppercase();
+        flow.add_soft_diagnostic(QuasiTypeError::undocumented_argument(
+            name,
+            function.max,
+            given,
+        ));
     }
     Ok(Ty::from(function.ret).into())
 }
