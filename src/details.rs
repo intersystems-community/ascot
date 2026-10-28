@@ -121,8 +121,8 @@ impl Members {
 }
 
 impl MemberNs {
-    // A multidimensional property is a `Property` too: `Visible::Method` falls back to it, and
-    // IRIS compiles a same-named method beside it.
+    // A multidimensional property is a `Property` too: `..X(subs)` reaches it once no method is
+    // named `X`, and IRIS compiles a same-named method beside it.
     pub(crate) fn of(kind: &MemberKindSpecificDetails) -> Self {
         match kind {
             MemberKindSpecificDetails::Parameter { .. } => Self::Parameter,
