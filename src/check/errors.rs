@@ -455,6 +455,10 @@ type_error_kinds! {
         on: SuperclassOf,
         reason: UnconfirmedReason,
     },
+    #[code = "A7604"]
+    #[severity = Error]
+    #[message = "Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>); `{label}()` would make it a function"]
+    LabelNotAFunction { label: String },
     #[code = "A6851"]
     #[severity = Error]
     #[message = "Cannot find label '{label}' in {routine}"]
@@ -1178,6 +1182,10 @@ impl TypeError {
             range,
             vec![],
         )
+    }
+
+    pub fn label_not_a_function(label: String, range: Range) -> Self {
+        Self::new(TypeErrorKind::LabelNotAFunction { label }, range, vec![])
     }
 
     pub fn new_in_procedure_block(name: String, range: Range) -> Self {

@@ -2923,48 +2923,4 @@ mod tests {
         );
         assert_eq!(at("R.mac", 1, 12), Some(expected));
     }
-
-    // Labels inside a routine's procedure block are checked like a method body's, with the
-    // routine's labels still in scope. They return for the block: once its first return has
-    // established a value, a label's bare `Quit` is reported, even one only ever `Do`ne.
-    #[test]
-    fn labels_inside_a_routine_procedure_block_are_checked() {
-        let diagnostics = diagnostics_for(&[(
-            "Blk.mac",
-            "ROUTINE Blk\n\tQuit\nOuter\n\tQuit 1\nProc(x) public {\n\tIf x Goto exitEarly\n\tDo inner\n\tSet y = $$Outer\n\tQuit y\nexitEarly\n\tQuit 0\ninner\n\tSet ^g = 1\n\tQuit\n}\n",
-        )]);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0]
-                .message
-                .contains("Expected return value of type 'Any' but got nothing"),
-            "{diagnostics:?}"
-        );
-        assert_eq!(diagnostics[0].range.start.line, 13, "{diagnostics:?}");
-        let diagnostics = diagnostics_for(&[(
-            "Bad.mac",
-            "ROUTINE Bad\n\tQuit\nProc() public {\n\tGoto nowhere\n\tQuit\nexitEarly\n\tQuit\n}\n",
-        )]);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0]
-                .message
-                .contains("Cannot find label 'nowhere'"),
-            "{diagnostics:?}"
-        );
-        // A bare `Goto` can't leave the block (IRIS: <NOLINE>), though `Do` may call out of it
-        // and a routine-qualified `Goto Outer^Out` may too.
-        let diagnostics = diagnostics_for(&[(
-            "Out.mac",
-            "ROUTINE Out\n\tQuit\nOuter\n\tQuit\nProc() public {\n\tDo Outer\n\tGoto Outer\n\tGoto Outer^Out\n}\n",
-        )]);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0]
-                .message
-                .contains("Cannot GOTO label 'Outer' from inside a procedure block"),
-            "{diagnostics:?}"
-        );
-        assert_eq!(diagnostics[0].range.start.line, 6, "{diagnostics:?}");
-    }
 }

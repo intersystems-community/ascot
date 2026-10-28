@@ -626,16 +626,15 @@ fn label_details(
         normal_args,
         variadic_arg,
         kind: details::RoutineElementKind::Subroutine,
+        formal_list: header.params.is_some(),
     })
 }
 
 // A method body or routine procedure block, with its own labels (`Set $ZT="Trap"` handlers,
-// `Goto` targets), checked the way a routine's labels are. In a procedure (a routine's `{...}`
-// block; a method unless `ProcedureBlock = 0`) they return for the body: a method's declared
-// return type, or whatever a procedure's first return establishes. (A label meant for `Do`
-// belongs at class level.) A `Not ProcedureBlock` method's labels are subroutines like a
-// routine's, with their own returns, falling through into one another. `is_body` is false for
-// a control-flow block (`If {...}`), which a `Goto` may leave.
+// `Goto` targets, `Do`ne subroutines), checked the way a routine's labels are: each with returns
+// of its own, falling through into one another. Whether one returns for the body depends on how
+// it is reached, which isn't tracked. `is_body` is false for a control-flow block (`If {...}`),
+// which a `Goto` may leave.
 fn check_block_body<'a>(
     body: &cos::ProcedureBody,
     env: &CodeEnv<'a>,
@@ -652,7 +651,6 @@ fn check_block_body<'a>(
     let labels = env::scoped_labels(
         env.uri(),
         &details.iter().map(|d| (d, false)).collect::<Vec<_>>(),
-        flow.is_procedure_block().then(|| flow.output_expectation()),
     );
     let nested;
     let env = if is_body || !labels.is_empty() {
@@ -791,7 +789,7 @@ impl CheckCommandInner for cos::EntryRefAndArgs {
                 }
             },
             EntryRefAndArgs::Legacy { proc, args } => {
-                let ret = check_legacy_label_call(env, flow, proc, args)?;
+                let ret = check_legacy_label_call(env, flow, proc, args, false)?;
                 warn_if_discarding_status_or_boolean(flow, ret.as_ref());
                 Ok(())
             }
@@ -827,6 +825,7 @@ fn check_legacy_label_call<'a>(
     flow: &mut Flow<'a>,
     proc: &Range<LegacyEntryRef>,
     args: &Option<MthArgList>,
+    extrinsic: bool,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     let label;
     let offset;
@@ -843,7 +842,16 @@ fn check_legacy_label_call<'a>(
             routine = Some(rtn);
         }
     }
-    check_label_call(env, flow, label, offset, routine, args, env.range(proc))
+    check_label_call(
+        env,
+        flow,
+        label,
+        offset,
+        routine,
+        args,
+        env.range(proc),
+        extrinsic,
+    )
 }
 
 // `Goto $CASE(selector, v1:label1, ..., :default)`: every arm names a label of this routine.
@@ -856,7 +864,17 @@ fn check_goto_case<'a>(
         match target.as_variable() {
             Some(label) => {
                 let range = env.range(target);
-                call_label(env, flow, Some(label.print()), None, None, &None, range).map(|_| ())
+                call_label(
+                    env,
+                    flow,
+                    Some(label.print()),
+                    None,
+                    None,
+                    &None,
+                    range,
+                    false,
+                )
+                .map(|_| ())
             }
             None => target
                 .to_power_ty(env, flow)
@@ -1034,7 +1052,7 @@ impl CheckCommandInner for cos::Command {
                                         return Err(QuasiTypeError::goto_out_of_block(label));
                                     }
                                 }
-                                let _ = check_legacy_label_call(env, flow, location, &None)?;
+                                let _ = check_legacy_label_call(env, flow, location, &None, false)?;
                                 Ok(flow.handle_void()?)
                             }
                             AllowIndirection::Indirection(indir) => {
@@ -2497,6 +2515,7 @@ fn collection_method(
         variadic_arg: None,
         out: Some(out),
         procedure_block: Some(vec![]),
+        formal_list: true,
         uri: None,
         declared_at: None,
     }))
@@ -3011,6 +3030,7 @@ impl CheckExprInner for AtomicExpr {
                 routine.as_ref(),
                 args,
                 env.range(label),
+                true,
             )?
             .ok_or_else(QuasiTypeError::undefined)?
             .into()),
@@ -3024,6 +3044,7 @@ impl CheckExprInner for AtomicExpr {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_label_call<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -3032,6 +3053,7 @@ fn check_label_call<'a>(
     routine: Option<&ExtendedRoutineReference>,
     args: &Option<MthArgList>,
     range: bindings::Range,
+    extrinsic: bool,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     let label = label
         .map(|label| check_label(env, flow, label))
@@ -3046,9 +3068,10 @@ fn check_label_call<'a>(
         .map(|routine| check_routine(env, flow, routine))
         .transpose()?
         .flatten();
-    call_label(env, flow, label, offset, routine, args, range)
+    call_label(env, flow, label, offset, routine, args, range, extrinsic)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn call_label<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -3057,9 +3080,10 @@ fn call_label<'a>(
     routine: Option<String>,
     args: &Option<MthArgList>,
     range: bindings::Range,
+    extrinsic: bool,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     // A routine whose labels are out of reach: say why, and check the call as untyped.
-    let proc = match env.resolve_label(label, offset, routine) {
+    let proc = match env.resolve_label(label.clone(), offset, routine) {
         Err(
             err @ QuasiTypeError::WithoutRange(
                 TypeErrorKind::CannotFindRoutine { .. }
@@ -3078,6 +3102,11 @@ fn call_label<'a>(
         && let Some(location) = proc.location()
     {
         env.reference(range, location);
+    }
+    if let (true, TyProcedureOrAny::Procedure(proc), Some(label)) = (extrinsic, &proc, label)
+        && !proc.formal_list
+    {
+        env.soft_diagnostic(TypeError::label_not_a_function(label, range));
     }
     check_call(
         env,
@@ -3372,7 +3401,7 @@ pub(crate) fn check_rtn(
             Some((details, matches!(elem, cos::RoutineElement::Procedure(_))))
         })
         .collect();
-    let env = env.for_routine(env::scoped_labels(env.uri(), &labels, None), definitions);
+    let env = env.for_routine(env::scoped_labels(env.uri(), &labels), definitions);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a
     // tags-only routine — there's no meaningful position to blame it falling through on, so

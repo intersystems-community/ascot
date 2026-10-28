@@ -150,10 +150,6 @@ impl<'a> Flow<'a> {
         Self::run(uri, env, range, args, None, output, handler, false)
     }
 
-    pub(crate) fn output_expectation(&self) -> Rc<RefCell<Option<WithRange<Option<Ty>>>>> {
-        self.shared.output.clone()
-    }
-
     pub(crate) fn current_range(&self) -> bindings::Range {
         self.current_range
     }
