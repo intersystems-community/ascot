@@ -855,18 +855,100 @@ impl<'a> WorkspaceEnv<'a> {
         .collect()
     }
 
-    // Whether `cls` declares or inherits `name` in `N`; `None` if it can't be determined.
-    pub(crate) fn member_exists<N: Namespace>(&self, cls: &str, name: &str) -> Option<bool> {
-        let obj = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
-        match self.lookup::<N>(&obj, name, true) {
-            Ok(_) => Some(true),
-            Err(LookupError::Absent) => Some(false),
-            // The missing class is what to report (`check_declared_class_exists`).
-            Err(_) => None,
+    // The three lookups below each search one namespace -- IRIS keeps them apart by syntax:
+    // `..#X` is a parameter, `..X(...)` a method before a property, bare `..X` a property only,
+    // never a method, even one without arguments.
+
+    pub(crate) fn parameter_of(
+        &self,
+        ty: &Ty,
+        name: String,
+        range: bindings::Range,
+    ) -> Result<Member<Ty>, TypeError> {
+        self.resolve_mem::<Parameters>(ty, name, range, true, None)
+    }
+
+    pub(crate) fn property_of(
+        &self,
+        ty: &Ty,
+        name: String,
+        range: bindings::Range,
+        access: PropertyAccess,
+    ) -> Result<Member<PropertyTy>, TypeError> {
+        let hook = match access {
+            PropertyAccess::Get => "%DispatchGetProperty",
+            PropertyAccess::Set => "%DispatchSetProperty",
+            PropertyAccess::SetNode => "%DispatchSetMultidimProperty",
+        };
+        self.resolve_mem::<Properties>(ty, name, range, true, Some(hook))
+    }
+
+    pub(crate) fn method_of(
+        &self,
+        ty: &Ty,
+        name: String,
+        range: bindings::Range,
+    ) -> Result<Member<Callee>, TypeError> {
+        let hook = Some(method_hook(ty));
+        let found = self.resolve_mem::<Methods>(ty, name.clone(), range, true, hook)?;
+        callee(found, &name, range)
+    }
+
+    pub(crate) fn resolve_mem<N: Namespace>(
+        &self,
+        ty: &Ty,
+        mem: String,
+        range: bindings::Range,
+        own: bool,
+        hook: Option<&str>,
+    ) -> Result<Member<N::Ty>, TypeError> {
+        // A member of an unresolved `Any`/`This`/`..#NAME` type (the last a mask bug) is taken
+        // as present and untyped.
+        let Ty::OREF(obj) = ty else {
+            return Ok(Member::untyped(N::Ty::default()));
+        };
+        let at = |err: QuasiTypeError| err.into_error(|| range);
+        let found = match (self.lookup::<N>(obj, &mem, own), hook) {
+            // Dynamic dispatch: a class overriding the hook takes any member name.
+            (Err(LookupError::Absent), Some(hook)) => self
+                .lookup::<Methods>(obj, hook, own)
+                .map(|hook| Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref)))),
+            (found, _) => found,
+        };
+        match found {
+            Ok(ty) => Ok(ty),
+            Err(LookupError::Absent) => {
+                let (suggestions, has_get) = self.member_suggestions(obj.name(), &mem);
+                Err(at(QuasiTypeError::cannot_find_member(
+                    obj.to_string(),
+                    mem,
+                    suggestions,
+                    has_get,
+                )))
+            }
+            Err(LookupError::NoSuchClass(cls)) => Err(at(QuasiTypeError::cannot_find_class(cls))),
+            Err(LookupError::InstanceOnly) => Err(at(
+                QuasiTypeError::access_instance_only_member_from_class_context(mem),
+            )),
+            Err(LookupError::Unverified) => {
+                let err = self
+                    .lookup_failed(obj.name(), true, range)
+                    .unwrap_or_else(|| {
+                        TypeError::unconfirmed_member(
+                            obj.name().to_string(),
+                            mem,
+                            !own,
+                            self.workspace.iris.is_some(),
+                            range,
+                        )
+                    });
+                self.add_soft_diagnostic(err.into());
+                Ok(Member::untyped(N::Ty::default()))
+            }
         }
     }
 
-    // "Did you mean" candidates for `member_exists`'s negative case -- `cls`'s own other
+    // "Did you mean" candidates for an absent type parameter -- `cls`'s own other
     // `Parameter`s (workspace) or `Parameter`-tagged members (IRIS's `get_cls`).
     pub(crate) fn parameter_names(&self, cls: &str) -> Vec<String> {
         if let Some(uri) = self.resolve_cls_uri(cls)
@@ -1790,99 +1872,6 @@ impl<'a> CodeEnv<'a> {
         } else {
             ClsOrIns::Cls(this)
         })
-    }
-
-    // The three lookups below each search one namespace -- IRIS keeps them apart by syntax:
-    // `..#X` is a parameter, `..X(...)` a method before a property, bare `..X` a property only,
-    // never a method, even one without arguments.
-
-    pub(crate) fn parameter_of(
-        &self,
-        ty: &Ty,
-        name: String,
-        range: bindings::Range,
-    ) -> Result<Member<Ty>, TypeError> {
-        self.resolve_mem::<Parameters>(ty, name, range, true, None)
-    }
-
-    pub(crate) fn property_of(
-        &self,
-        ty: &Ty,
-        name: String,
-        range: bindings::Range,
-        access: PropertyAccess,
-    ) -> Result<Member<PropertyTy>, TypeError> {
-        let hook = match access {
-            PropertyAccess::Get => "%DispatchGetProperty",
-            PropertyAccess::Set => "%DispatchSetProperty",
-            PropertyAccess::SetNode => "%DispatchSetMultidimProperty",
-        };
-        self.resolve_mem::<Properties>(ty, name, range, true, Some(hook))
-    }
-
-    pub(crate) fn method_of(
-        &self,
-        ty: &Ty,
-        name: String,
-        range: bindings::Range,
-    ) -> Result<Member<Callee>, TypeError> {
-        let hook = Some(method_hook(ty));
-        let found = self.resolve_mem::<Methods>(ty, name.clone(), range, true, hook)?;
-        callee(found, &name, range)
-    }
-
-    fn resolve_mem<N: Namespace>(
-        &self,
-        ty: &Ty,
-        mem: String,
-        range: bindings::Range,
-        own: bool,
-        hook: Option<&str>,
-    ) -> Result<Member<N::Ty>, TypeError> {
-        // A member of an unresolved `Any`/`This`/`..#NAME` type (the last a mask bug) is taken
-        // as present and untyped.
-        let Ty::OREF(obj) = ty else {
-            return Ok(Member::untyped(N::Ty::default()));
-        };
-        let at = |err: QuasiTypeError| err.into_error(|| range);
-        let found = match (self.lookup::<N>(obj, &mem, own), hook) {
-            // Dynamic dispatch: a class overriding the hook takes any member name.
-            (Err(LookupError::Absent), Some(hook)) => self
-                .lookup::<Methods>(obj, hook, own)
-                .map(|hook| Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref)))),
-            (found, _) => found,
-        };
-        match found {
-            Ok(ty) => Ok(ty),
-            Err(LookupError::Absent) => {
-                let (suggestions, has_get) = self.member_suggestions(obj.name(), &mem);
-                Err(at(QuasiTypeError::cannot_find_member(
-                    obj.to_string(),
-                    mem,
-                    suggestions,
-                    has_get,
-                )))
-            }
-            Err(LookupError::NoSuchClass(cls)) => Err(at(QuasiTypeError::cannot_find_class(cls))),
-            Err(LookupError::InstanceOnly) => Err(at(
-                QuasiTypeError::access_instance_only_member_from_class_context(mem),
-            )),
-            Err(LookupError::Unverified) => {
-                let err = self
-                    .lookup_failed(obj.name(), true, range)
-                    .unwrap_or_else(|| {
-                        TypeError::unconfirmed_member(
-                            obj.name().to_string(),
-                            mem,
-                            !own,
-                            self.workspace.iris.is_some(),
-                            range,
-                        )
-                    });
-                self.add_soft_diagnostic(err.into());
-                Ok(Member::untyped(N::Ty::default()))
-            }
-        }
     }
 
     // `##super(...)`'s target: the enclosing method's own name, resolved against `this`'s

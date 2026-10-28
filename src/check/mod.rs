@@ -3508,19 +3508,22 @@ pub(crate) fn check_cls(
     }
     for member in cls.members.in_order() {
         if let MemberKindSpecificDetails::Index { on_properties } = &member.kind {
+            // No `%Dispatch*` hook stands in for an index key: IRIS wants a declared property.
+            let this = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.name.it.clone())));
             for key in on_properties.iter().flatten() {
-                if env.base.member_exists::<Properties>(&cls.name.it, &key.it) == Some(false) {
-                    let (suggestions, _) = env.base.member_suggestions(&cls.name.it, &key.it);
-                    diagnostics.push(
-                        QuasiTypeError::cannot_find_member(
-                            cls.name.it.to_string(),
-                            key.it.clone(),
-                            suggestions,
-                            false,
-                        )
-                        .into_error(|| key.range)
-                        .into(),
-                    );
+                match env.base.resolve_mem::<Properties>(
+                    &this,
+                    key.it.clone(),
+                    key.range,
+                    true,
+                    None,
+                ) {
+                    Ok(property) => {
+                        if let Some(location) = property.location {
+                            env.base.reference(key.range, location);
+                        }
+                    }
+                    Err(err) => diagnostics.push(err.into()),
                 }
             }
         }
@@ -3596,14 +3599,22 @@ fn check_property_or_parameter_declaration(
                     let is_property_keyword = PROPERTY_KEYWORDS
                         .iter()
                         .any(|k| k.eq_ignore_ascii_case(name));
-                    let results: Vec<Option<bool>> = candidate_classes
+                    // Probed quietly: a candidate nobody can see resolves the parameter on trust,
+                    // and offline that is every system type class.
+                    let was_suppressed = env.base.suppress_soft_diagnostics();
+                    let results: Vec<_> = candidate_classes
                         .iter()
-                        .map(|cls| env.base.member_exists::<Parameters>(cls, name))
+                        .map(|cls| {
+                            let cls = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.to_string())));
+                            env.base.parameter_of(&cls, name.clone(), member.range)
+                        })
                         .collect();
-                    let found = results.contains(&Some(true));
-                    // Report as absent once any candidate confirms it, even if others are
-                    // unverifiable -- not just when every candidate is.
-                    let confirmed_absent = !found && results.contains(&Some(false));
+                    env.base.restore_soft_diagnostics(was_suppressed);
+                    let found = results.iter().any(Result::is_ok);
+                    let confirmed_absent = !found
+                        && results.iter().any(|result| {
+                            matches!(result, Err(err) if matches!(err.kind, TypeErrorKind::CannotFindMember { .. }))
+                        });
                     if is_property_keyword || confirmed_absent {
                         let class = type_class
                             .clone()
