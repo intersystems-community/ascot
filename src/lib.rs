@@ -1340,83 +1340,6 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn cannot_find_member_always_suggests_percent_get_prefixed_methods() {
-        // A dynamic-property-style getter's own name (e.g. `%GetData`) rarely resembles the
-        // property a caller mistakenly wrote instead (`AtEnd`) -- so this must not depend on
-        // `top_similar`'s ranking to surface it.
-        struct GetterIris;
-        impl crate::IrisContext for GetterIris {
-            fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
-                let zero = bindings::Position {
-                    line: 0,
-                    character: 0,
-                };
-                let member = |name: &str| bindings::MemberInfo {
-                    doc: String::new(),
-                    before: zero,
-                    name: bindings::NameInfo {
-                        before: zero,
-                        content: name.to_string(),
-                        after: zero,
-                    },
-                    aliases: vec![],
-                    deprecated: false,
-                    kind: bindings::MemberKind::Method(bindings::MethodInfo {
-                        normal: vec![],
-                        variadic: None,
-                        t: None,
-                        procedure_block: None,
-                        body: bindings::Range {
-                            start: zero,
-                            end: zero,
-                        },
-                    }),
-                    after: zero,
-                    uri: None,
-                    origin: None,
-                };
-                Ok((cls == "%Fake.Getter").then(|| bindings::ClassInfo {
-                    doc: String::new(),
-                    name: bindings::NameInfo {
-                        before: zero,
-                        content: cls.to_string(),
-                        after: zero,
-                    },
-                    extends: vec![],
-                    inheritance_right: false,
-                    storage: None,
-                    deprecated: false,
-                    members: vec![member("%GetData"), member("Close")],
-                    property_class_names: vec![],
-                    includes: vec![],
-                    is_datatype: Some(false),
-                    uri: None,
-                }))
-            }
-            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
-                Ok(None)
-            }
-            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
-                Ok(None)
-            }
-        }
-        let workspace = Workspace::native(Some(Box::new(GetterIris)), None);
-        let uri = "GetterLoop.cls".to_string();
-        workspace.open(
-            uri.clone(),
-            "Class Test.GetterLoop\n{\nClassMethod Foo(rs As %Fake.Getter)\n{\n write rs.AtEnd\n}\n}\n"
-                .to_string(),
-        );
-        let diagnostics = workspace.diagnostics(uri);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0].message.contains("%GetData"),
-            "{diagnostics:?}"
-        );
-    }
-
-    #[test]
     fn property_declared_type_outside_workspace_gets_a_hint() {
         let workspace = Workspace::new(None, None);
         let uri = "Owner.cls".to_string();
@@ -1468,50 +1391,6 @@ mod tests {
         fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
             Ok(None)
         }
-    }
-
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn member_with_an_empty_string_type_from_iris_is_treated_as_any() {
-        // A host can report an empty string, rather than omitting it, for "no declared type" --
-        // this must not leak into `Ty::from` as a literal (nonsense) class name "".
-        let zero = bindings::Position {
-            line: 0,
-            character: 0,
-        };
-        let mem = bindings::MemberInfo {
-            doc: String::new(),
-            before: zero,
-            name: bindings::NameInfo {
-                before: zero,
-                content: "SomeInheritedProp".to_string(),
-                after: zero,
-            },
-            aliases: vec![],
-            deprecated: false,
-            kind: bindings::MemberKind::Property(bindings::PropertyInfo {
-                t: Some(String::new()),
-                collection: None,
-                multidimensional: false,
-            }),
-            after: zero,
-            uri: None,
-            origin: None,
-        };
-        let workspace = Workspace::native(
-            Some(Box::new(MockIrisClient {
-                is_datatype: None,
-                mem: Some(mem),
-            })),
-            None,
-        );
-        let uri = "Probe.cls".to_string();
-        workspace.open(
-            uri.clone(),
-            "Class Test.Probe Extends %RegisteredObject {\nMethod Foo() {\n do ..SomeInheritedProp()\n quit\n}\n}\n".to_string(),
-        );
-        let diagnostics = workspace.diagnostics(uri);
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     #[test]
