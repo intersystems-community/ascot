@@ -2399,32 +2399,26 @@ fn base_property<'a, T>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<PropertyTy, QuasiTypeError> {
-    match base.deref() {
+    let (obj, mem) = match base.deref() {
         ExprOps::Then { base: inner, op }
             if op.args.is_none() && !op.mem.is_parameter() && !is_system_var(inner) =>
         {
-            let obj = inner.to_ty(env, flow)?;
-            let range = env.range(&op.mem);
-            referenced(
-                env,
-                &op.mem,
-                env.property_of(&obj, op.mem.id(), range, PropertyAccess::Get),
-            )
+            (inner.to_ty(env, flow)?, op.mem.deref())
         }
         ExprOps::Base(atom)
             if let ParenedExpr::Normal(atom) = atom.deref()
                 && let AtomicExpr::Member { member, args: None } = atom.deref().deref() =>
         {
-            let obj = Ty::OREF(env.this()?);
-            let range = env.range(member);
-            referenced(
-                env,
-                member,
-                env.property_of(&obj, member.id(), range, PropertyAccess::Get),
-            )
+            (Ty::OREF(env.this()?), member.deref())
         }
-        _ => base.to_ty(env, flow).map(PropertyTy::Value),
-    }
+        _ => return base.to_ty(env, flow).map(PropertyTy::Value),
+    };
+    let range = env.range(mem);
+    referenced(
+        env,
+        mem,
+        env.property_of(&obj, mem.id(), range, PropertyAccess::Get),
+    )
 }
 
 fn check_member_of<'a>(
@@ -2534,14 +2528,17 @@ fn check_member<'a>(
             let property = env.property_of(&ty, name, range, PropertyAccess::Get);
             Ok(Some(referenced(env, mem, property)?.to_ty()))
         }
-        (false, Some(args)) => match referenced(env, mem, env.method_of(&ty, name, range))? {
-            Callee::Method(proc) => check_call(env, flow, proc, args.items.iter(), env.range(mem)),
-            // `..Prop(subs)`: a multidimensional property's node, typed like the property.
-            Callee::Node(ty) => {
-                builtins::check_args_any(env, flow, args.items.iter())?;
-                Ok(Some(ty))
+        (false, Some(args)) => {
+            match referenced(env, mem, env.method_of(&ty, name.clone(), range))? {
+                Callee::Method(proc) => check_call(env, flow, proc, args.items.iter(), range),
+                // `..Prop(subs)`: a multidimensional property's node, typed like the property.
+                Callee::Property(PropertyTy::Multidimensional(ty)) => {
+                    builtins::check_args_any(env, flow, args.items.iter())?;
+                    Ok(Some(ty))
+                }
+                Callee::Property(_) => Err(QuasiTypeError::not_multidimensional(name)),
             }
-        },
+        }
     }
 }
 
@@ -3611,26 +3608,28 @@ fn check_property_or_parameter_declaration(
                         .collect();
                     env.base.restore_soft_diagnostics(was_suppressed);
                     let found = results.iter().any(Result::is_ok);
-                    let confirmed_absent = !found
-                        && results.iter().any(|result| {
-                            matches!(result, Err(err) if matches!(err.kind, TypeErrorKind::CannotFindMember { .. }))
-                        });
+                    // Each absent candidate's own "did you mean"; a missing class is reported
+                    // on its own and says nothing about the parameter.
+                    let absent: Vec<&Suggestions> = results
+                        .iter()
+                        .filter_map(|result| match result {
+                            Err(TypeError {
+                                kind: TypeErrorKind::CannotFindMember { suggestions, .. },
+                                ..
+                            }) => Some(suggestions),
+                            _ => None,
+                        })
+                        .collect();
+                    let confirmed_absent = !found && !absent.is_empty();
                     if is_property_keyword || confirmed_absent {
                         let class = type_class
                             .clone()
                             .unwrap_or_else(|| "this property's type".to_string());
-                        // Each absent candidate's own "did you mean", pooled.
-                        let mut suggestions: Vec<String> = vec![];
-                        for result in &results {
-                            if let Err(err) = result
-                                && let TypeErrorKind::CannotFindMember {
-                                    suggestions: more, ..
-                                } = &err.kind
-                                && !is_property_keyword
-                            {
-                                suggestions.extend(more.0.iter().cloned());
-                            }
-                        }
+                        let mut suggestions: Vec<String> = if is_property_keyword {
+                            vec![]
+                        } else {
+                            absent.iter().flat_map(|s| s.0.iter().cloned()).collect()
+                        };
                         suggestions.dedup();
                         diagnostics.push(
                             TypeError::unrecognized_type_param(

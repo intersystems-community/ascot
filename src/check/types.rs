@@ -602,11 +602,20 @@ impl PropertyTy {
     }
 }
 
-// What `..X(...)` reaches: a method, else a multidimensional property, whose arguments subscript
-// a node typed like the property.
+// What `..X(...)` reaches: a method, else a property, which IRIS then requires to be
+// multidimensional, the arguments subscripting a node typed like the property.
 pub enum Callee {
     Method(TyProcedureOrAny),
-    Node(Ty),
+    Property(PropertyTy),
+}
+
+impl Callee {
+    pub fn procedure(&self) -> Option<&Arc<TyProcedure>> {
+        match self {
+            Callee::Method(TyProcedureOrAny::Procedure(proc)) => Some(proc),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for ClsOrIns {
@@ -1048,6 +1057,15 @@ impl Instantiate for TyProcedureOrAny {
     fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
         if let TyProcedureOrAny::Procedure(proc) = self {
             Arc::make_mut(proc).instantiate(receiver, owner);
+        }
+    }
+}
+
+impl Instantiate for Callee {
+    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
+        match self {
+            Callee::Method(proc) => proc.instantiate(receiver, owner),
+            Callee::Property(ty) => ty.instantiate(receiver, owner),
         }
     }
 }

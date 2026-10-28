@@ -547,17 +547,24 @@ fn type_param_names(type_params: &Option<cos::TypeParamList>) -> Vec<String> {
 }
 
 impl ClassDetails {
-    pub(crate) fn member(&self, ns: MemberNs, name: &str) -> Option<&WithRange<MemberDetails>> {
+    fn namespace(&self, ns: MemberNs) -> Option<&HashMap<String, WithRange<MemberDetails>>> {
         let members = &self.members;
-        match ns {
+        Some(match ns {
             MemberNs::Parameter => &members.parameter,
             MemberNs::Property => &members.property,
             MemberNs::HigherOrder => &members.higher_order,
             MemberNs::Index => &members.index,
             MemberNs::Query => &members.query,
             MemberNs::Other => return None,
-        }
-        .get(name)
+        })
+    }
+
+    pub(crate) fn member(&self, ns: MemberNs, name: &str) -> Option<&WithRange<MemberDetails>> {
+        self.namespace(ns)?.get(name)
+    }
+
+    pub(crate) fn names(&self, ns: MemberNs) -> impl Iterator<Item = &String> {
+        self.namespace(ns).into_iter().flat_map(HashMap::keys)
     }
 }
 

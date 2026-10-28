@@ -169,43 +169,11 @@ impl Namespace for Properties {
     }
 }
 
-// What `..X(...)` reaches, before it's known to be callable: a method, else a property, which
-// IRIS requires to be multidimensional.
-pub(crate) enum Invoked {
-    Method(TyProcedureOrAny),
-    Property(PropertyTy),
-}
-
-impl Invoked {
-    fn procedure(&self) -> Option<&Arc<TyProcedure>> {
-        match self {
-            Invoked::Method(TyProcedureOrAny::Procedure(proc)) => Some(proc),
-            _ => None,
-        }
-    }
-}
-
-impl Default for Invoked {
-    fn default() -> Self {
-        Invoked::Method(TyProcedureOrAny::Any)
-    }
-}
-
-impl Instantiate for Invoked {
-    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
-        match self {
-            Invoked::Method(proc) => proc.instantiate(receiver, owner),
-            Invoked::Property(ty) => ty.instantiate(receiver, owner),
-        }
-    }
-}
-
 impl Namespace for Methods {
-    type Ty = Invoked;
-    // `..X(...)` also reaches a property, which IRIS then requires to be multidimensional.
+    type Ty = Callee;
     const NS: &'static [MemberNs] = &[MemberNs::HigherOrder, MemberNs::Property];
 
-    fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(Invoked, bool)> {
+    fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(Callee, bool)> {
         match &member.kind {
             MemberKindSpecificDetails::MethodOrClassMethod(m) => {
                 let proc = TyProcedure {
@@ -225,11 +193,11 @@ impl Namespace for Methods {
                     declared_at: Some(member.range),
                 };
                 let proc = TyProcedureOrAny::Procedure(Arc::new(proc));
-                Some((Invoked::Method(proc), !m.is_class_method))
+                Some((Callee::Method(proc), !m.is_class_method))
             }
             MemberKindSpecificDetails::Property { .. } => {
                 let (ty, is_instance_only) = Properties::declared(member, uri)?;
-                Some((Invoked::Property(ty), is_instance_only))
+                Some((Callee::Property(ty), is_instance_only))
             }
             _ => None,
         }
@@ -238,7 +206,7 @@ impl Namespace for Methods {
     fn reported(
         member: bindings::MemberInfo,
         correction: Option<&Correction>,
-    ) -> Option<(Invoked, bool)> {
+    ) -> Option<(Callee, bool)> {
         let uri = member.uri.clone();
         let declared_at = bindings::Range {
             start: member.before,
@@ -249,7 +217,7 @@ impl Namespace for Methods {
             MemberKind::ClassMethod(m) => (m, false),
             MemberKind::Property(_) | MemberKind::Relationship(_) => {
                 let (ty, is_instance_only) = Properties::reported(member, None)?;
-                return Some((Invoked::Property(ty), is_instance_only));
+                return Some((Callee::Property(ty), is_instance_only));
             }
             _ => return None,
         };
@@ -260,22 +228,22 @@ impl Namespace for Methods {
             correction.apply(&mut proc);
         }
         let proc = TyProcedureOrAny::Procedure(Arc::new(proc));
-        Some((Invoked::Method(proc), is_instance_only))
+        Some((Callee::Method(proc), is_instance_only))
     }
 
-    fn method(proc: TyProcedureOrAny) -> Option<Invoked> {
-        Some(Invoked::Method(proc))
+    fn method(proc: TyProcedureOrAny) -> Option<Callee> {
+        Some(Callee::Method(proc))
     }
 
-    fn class_names(ty: &mut Invoked, mut f: impl FnMut(&mut Ty)) {
+    fn class_names(ty: &mut Callee, mut f: impl FnMut(&mut Ty)) {
         match ty {
-            Invoked::Method(TyProcedureOrAny::Procedure(proc)) => {
+            Callee::Method(TyProcedureOrAny::Procedure(proc)) => {
                 if matches!(proc.out, Some(Ty::OREF(_))) {
                     f(Arc::make_mut(proc).out.as_mut().unwrap());
                 }
             }
-            Invoked::Method(TyProcedureOrAny::Any) => {}
-            Invoked::Property(ty) => Properties::class_names(ty, f),
+            Callee::Method(TyProcedureOrAny::Any) => {}
+            Callee::Property(ty) => Properties::class_names(ty, f),
         }
     }
 }
@@ -313,26 +281,6 @@ impl<T> Member<T> {
     fn untyped(ty: T) -> Self {
         Member { ty, location: None }
     }
-}
-
-// What `..X(...)` found, once it must be callable.
-fn callee(
-    found: Member<Invoked>,
-    name: &str,
-    range: bindings::Range,
-) -> Result<Member<Callee>, TypeError> {
-    let ty = match found.ty {
-        Invoked::Method(proc) => Callee::Method(proc),
-        Invoked::Property(PropertyTy::Multidimensional(ty)) => Callee::Node(ty),
-        Invoked::Property(_) => {
-            let err = QuasiTypeError::not_multidimensional(name.to_string());
-            return Err(err.into_error(|| range));
-        }
-    };
-    Ok(Member {
-        ty,
-        location: found.location,
-    })
 }
 
 fn method_hook(ty: &Ty) -> &'static str {
@@ -583,18 +531,7 @@ impl<'a> WorkspaceEnv<'a> {
         self.walk::<()>(cls, true, &mut |cls, resolved| {
             match resolved {
                 Resolved::Workspace(_, details) => {
-                    for ns in N::NS {
-                        let members = &details.members;
-                        names.extend(
-                            match ns {
-                                MemberNs::Parameter => members.parameter.keys(),
-                                MemberNs::Property => members.property.keys(),
-                                MemberNs::HigherOrder => members.higher_order.keys(),
-                                _ => continue,
-                            }
-                            .cloned(),
-                        );
-                    }
+                    names.extend(N::NS.iter().flat_map(|ns| details.names(*ns)).cloned());
                 }
                 Resolved::Iris(info) => names.extend(
                     info.iter()
@@ -652,7 +589,7 @@ impl<'a> WorkspaceEnv<'a> {
             }
         };
         // `%New` takes the class's own `%OnNew`'s arguments, which the dictionary doesn't record.
-        let new = |on_new: Option<Found<Invoked>>| match on_new
+        let new = |on_new: Option<Found<Callee>>| match on_new
             .and_then(|f| f.member.ty.procedure().cloned())
         {
             Some(on_new) => vec![("%New".to_string(), (new_from_on_new(&on_new), false))],
@@ -687,15 +624,9 @@ impl<'a> WorkspaceEnv<'a> {
                     let name = member.name.content.as_str();
                     match &member.kind {
                         MemberKind::Property(_) | MemberKind::Relationship(_) => {
-                            let ty = match iris_found::<Properties>(member.clone(), cls) {
-                                Some(Found {
-                                    member:
-                                        Member {
-                                            ty: PropertyTy::Value(ty),
-                                            ..
-                                        },
-                                    ..
-                                }) => ty,
+                            let found = iris_found::<Properties>(member.clone(), cls);
+                            let ty = match found.map(|found| found.member.ty) {
+                                Some(PropertyTy::Value(ty)) => ty,
                                 _ => Ty::Any,
                             };
                             add(name, self.property_methods(ty));
@@ -810,14 +741,11 @@ impl<'a> WorkspaceEnv<'a> {
         let keys: Vec<NormalArg> = on_properties
             .iter()
             .map(|property| {
-                let property = property
+                let found = property
                     .as_ref()
-                    .map(|p| self.find::<Properties>(&cls, &p.it, true));
-                let ty = match property {
-                    Some(Ok(Some(Member {
-                        ty: PropertyTy::Value(ty),
-                        ..
-                    }))) => ty,
+                    .and_then(|p| self.find::<Properties>(&cls, &p.it, true).ok().flatten());
+                let ty = match found.map(|found| found.ty) {
+                    Some(PropertyTy::Value(ty)) => ty,
                     _ => Ty::Any,
                 };
                 NormalArg::new(ArgMode::Default, "value".into(), Some(ty), None)
@@ -878,7 +806,7 @@ impl<'a> WorkspaceEnv<'a> {
     pub(crate) fn property_of(
         &self,
         ty: &Ty,
-        name: String,
+        mem: String,
         range: bindings::Range,
         access: PropertyAccess,
     ) -> Result<Member<PropertyTy>, TypeError> {
@@ -887,7 +815,7 @@ impl<'a> WorkspaceEnv<'a> {
             PropertyAccess::Set => "%DispatchSetProperty",
             PropertyAccess::SetNode => "%DispatchSetMultidimProperty",
         };
-        self.resolve_mem::<Properties>(ty, name, range, true, Some(hook))
+        self.resolve_mem::<Properties>(ty, mem, range, true, Some(hook))
     }
 
     pub(crate) fn method_of(
@@ -896,9 +824,7 @@ impl<'a> WorkspaceEnv<'a> {
         name: String,
         range: bindings::Range,
     ) -> Result<Member<Callee>, TypeError> {
-        let hook = Some(method_hook(ty));
-        let found = self.resolve_mem::<Methods>(ty, name.clone(), range, true, hook)?;
-        callee(found, &name, range)
+        self.resolve_mem::<Methods>(ty, name, range, true, Some(method_hook(ty)))
     }
 
     pub(crate) fn resolve_mem<N: Namespace>(
@@ -1914,11 +1840,13 @@ impl<'a> CodeEnv<'a> {
             .to_string();
         let this = Ty::OREF(this);
         let hook = Some(method_hook(&this));
-        let found = self.resolve_mem::<Methods>(&this, mem.clone(), range, false, hook)?;
-        match callee(found, &mem, range)?.ty {
+        match self
+            .resolve_mem::<Methods>(&this, mem, range, false, hook)?
+            .ty
+        {
             Callee::Method(proc) => Ok(proc),
             // A superclass property named like this method: nothing to check the call against.
-            Callee::Node(_) => Ok(TyProcedureOrAny::Any),
+            Callee::Property(_) => Ok(TyProcedureOrAny::Any),
         }
     }
 
