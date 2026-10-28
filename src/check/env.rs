@@ -787,18 +787,15 @@ impl<'a> WorkspaceEnv<'a> {
             return Ok(Member::untyped(N::Ty::default()));
         };
         let at = |err: QuasiTypeError| err.into_error(|| range);
-        let found = match (self.find::<N>(obj, &mem, own), N::hook(obj)) {
-            // Dynamic dispatch: a class overriding the hook takes any member name.
-            (Err(Miss::Absent), Some(hook)) => match self.find::<Methods>(obj, hook, own) {
-                Err(Miss::Absent) => Err(Miss::Absent),
-                hook => hook.map(|hook| {
-                    hook.map(|hook| {
-                        Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref)))
-                    })
-                }),
-            },
-            (found, _) => found,
-        };
+        let mut found = self.find::<N>(obj, &mem, own);
+        // Dynamic dispatch: a class overriding the hook takes any member name no class has.
+        if let (Err(Miss::Absent), Some(hook)) = (&found, N::hook(obj)) {
+            found = self.find::<Methods>(obj, hook, own).map(|hook| {
+                hook.map(|hook| {
+                    Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref)))
+                })
+            });
+        }
         match found {
             Ok(Some(member)) => Ok(member),
             // The chain reached a class nobody can see before any had the member, so it may be
