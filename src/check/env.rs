@@ -721,11 +721,13 @@ impl<'a> WorkspaceEnv<'a> {
         let keys: Vec<NormalArg> = on_properties
             .iter()
             .map(|property| {
+                // Quietly: `check_cls` resolves the key itself, hint and all.
+                let was_suppressed = self.suppress_soft_diagnostics();
                 let found = property.as_ref().and_then(|p| {
-                    self.find::<Properties<Read>>(&cls, &p.it, true)
+                    self.find::<Properties<Read>>(&cls, &p.it, true, p.range)
                         .ok()
-                        .flatten()
                 });
+                self.restore_soft_diagnostics(was_suppressed);
                 let ty = match found.map(|found| found.ty) {
                     Some(PropertyTy::Value(ty)) => ty,
                     _ => Ty::Any,
@@ -787,34 +789,15 @@ impl<'a> WorkspaceEnv<'a> {
             return Ok(Member::untyped(N::Ty::default()));
         };
         let at = |err: QuasiTypeError| err.into_error(|| range);
-        let mut found = self.find::<N>(obj, &mem, own);
+        let mut found = self.find::<N>(obj, &mem, own, range);
         // Dynamic dispatch: a class overriding the hook takes any member name no class has.
         if let (Err(Miss::Absent), Some(hook)) = (&found, N::hook(obj)) {
-            found = self.find::<Methods>(obj, hook, own).map(|hook| {
-                hook.map(|hook| {
-                    Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref)))
-                })
-            });
+            found = self
+                .find::<Methods>(obj, hook, own, range)
+                .map(|hook| Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref))));
         }
         match found {
-            Ok(Some(member)) => Ok(member),
-            // The chain reached a class nobody can see before any had the member, so it may be
-            // anything: taken on trust, with a hint.
-            Ok(None) => {
-                let err = self
-                    .lookup_failed(obj.name(), true, range)
-                    .unwrap_or_else(|| {
-                        TypeError::unconfirmed_member(
-                            obj.name().to_string(),
-                            mem,
-                            !own,
-                            self.workspace.iris.is_some(),
-                            range,
-                        )
-                    });
-                self.add_soft_diagnostic(err.into());
-                Ok(Member::untyped(N::Ty::default()))
-            }
+            Ok(member) => Ok(member),
             Err(Miss::Absent) => {
                 let names = self.names::<N>(obj.name());
                 let mut suggestions =
@@ -849,19 +832,29 @@ impl<'a> WorkspaceEnv<'a> {
 
     // Where IRIS finds `mem` on `obj`: each class along the chain in precedence order, its own
     // declared members then its generated ones, so the first match is the one IRIS compiles in.
-    // `None` past a class nobody can see, since whatever it declares would shadow the rest;
+    // The walk ends at a class nobody can see, since whatever it declares would shadow the rest;
     // `own = false` starts at the superclasses, for `##super`.
     fn find<N: Namespace>(
         &self,
         obj: &ClsOrIns,
         mem: &str,
         own: bool,
-    ) -> Result<Option<Member<N::Ty>>, Miss> {
+        range: bindings::Range,
+    ) -> Result<Member<N::Ty>, Miss> {
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
         let cls = receiver.name.as_str();
+        // Past a class nobody can see, the member may be anything: taken on trust, with a hint.
+        let unverified = |cls: &str| {
+            let err = self.lookup_failed(cls, true, range).unwrap_or_else(|| {
+                let iris = self.workspace.iris.is_some();
+                TypeError::unconfirmed_member(cls.to_string(), mem.to_string(), !own, iris, range)
+            });
+            self.add_soft_diagnostic(err.into());
+            Ok(Member::untyped(N::Ty::default()))
+        };
         // `##super` from a class nobody can see has no superclasses to walk.
         if !own && matches!(self.resolve(cls), Resolved::Unknown) {
-            return Ok(None);
+            return unverified(cls);
         }
         let mut no_class = false;
         let found = self.walk(cls, own, &mut |cls, resolved| match resolved {
@@ -869,7 +862,12 @@ impl<'a> WorkspaceEnv<'a> {
                 no_class |= cls == receiver.name;
                 ControlFlow::Continue(false)
             }
-            Resolved::Unknown => ControlFlow::Break(registered_object_member::<N>(cls, mem)),
+            Resolved::Unknown => {
+                ControlFlow::Break(match registered_object_member::<N>(cls, mem) {
+                    Some(found) => Ok(found),
+                    None => Err(cls.to_string()),
+                })
+            }
             _ => {
                 // Every generated member is a method, so only a method lookup consults them, and
                 // only once it's needed: building the table looks properties up itself.
@@ -886,21 +884,21 @@ impl<'a> WorkspaceEnv<'a> {
                     })
                 };
                 match self.declared_in::<N>(cls, resolved, mem).or_else(generated) {
-                    Some(found) => ControlFlow::Break(Some(found)),
+                    Some(found) => ControlFlow::Break(Ok(found)),
                     None => ControlFlow::Continue(true),
                 }
             }
         });
         match found {
-            Some(Some(found)) => {
+            Some(Ok(found)) => {
                 if found.is_instance_only && !obj.is_ins() {
                     return Err(Miss::InstanceOnly);
                 }
                 let mut member = found.member;
                 member.ty.instantiate(receiver, &found.origin);
-                Ok(Some(member))
+                Ok(member)
             }
-            Some(None) => Ok(None),
+            Some(Err(unknown)) => unverified(&unknown),
             None if no_class => Err(Miss::NoSuchClass(cls.to_string())),
             None => Err(Miss::Absent),
         }
