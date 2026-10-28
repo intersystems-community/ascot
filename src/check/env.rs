@@ -340,11 +340,31 @@ fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<F
     })
 }
 
-// A class as a check run sees it; `Unknown`: no IRIS, or a lookup that failed (see `iris_cls`).
-enum Resolved {
+// A class as a check run sees it.
+enum Class {
     Workspace(String, Arc<crate::ClassDetails>),
-    Iris(Option<bindings::ClassInfo>),
-    Unknown,
+    Iris(bindings::ClassInfo),
+}
+
+// Why it can't be seen: IRIS has none by that name, or nobody can say -- no IRIS, an IRIS
+// lookup that failed (with its reason), or a workspace file that doesn't parse.
+enum Unresolved {
+    Missing,
+    Unknown(Option<String>),
+}
+
+type Resolved = Result<Class, Unresolved>;
+
+impl Unresolved {
+    // The hint for a class taken on trust.
+    fn unconfirmed(self, cls: &str, iris: bool, range: bindings::Range) -> TypeError {
+        match self {
+            Unresolved::Unknown(Some(reason)) => {
+                TypeError::iris_lookup_failed(DocKind::Cls, cls.to_string(), reason, range)
+            }
+            _ => TypeError::unconfirmed_class(cls.to_string(), iris, range),
+        }
+    }
 }
 
 // Past a class nobody can see, the methods every object class gets from `%SystemBase`/
@@ -510,12 +530,12 @@ impl<'a> WorkspaceEnv<'a> {
         let mut names = Vec::new();
         self.walk::<()>(cls, true, &mut |cls, resolved| {
             match resolved {
-                Resolved::Workspace(_, details) => {
+                Ok(Class::Workspace(_, details)) => {
                     names.extend(details.names(N::NS).cloned());
                 }
-                Resolved::Iris(info) => names.extend(
-                    info.iter()
-                        .flat_map(|info| &info.members)
+                Ok(Class::Iris(info)) => names.extend(
+                    info.members
+                        .iter()
                         .filter(|m| {
                             MemberNs::of_info(&m.kind) == N::NS
                                 && !crate::mask::dropped(
@@ -525,7 +545,7 @@ impl<'a> WorkspaceEnv<'a> {
                         })
                         .map(|m| m.name.content.clone()),
                 ),
-                Resolved::Unknown => return ControlFlow::Continue(false),
+                Err(_) => return ControlFlow::Continue(false),
             }
             if generated {
                 names.extend(self.generated_members(cls, resolved).keys().cloned());
@@ -543,12 +563,10 @@ impl<'a> WorkspaceEnv<'a> {
         let mut classes = Vec::new();
         self.walk::<()>(cls, true, &mut |_, resolved| {
             match resolved {
-                Resolved::Workspace(_, details) => {
+                Ok(Class::Workspace(_, details)) => {
                     classes.extend(details.property_class_names.iter().cloned());
                 }
-                Resolved::Iris(Some(info)) => {
-                    classes.extend(info.property_class_names.iter().cloned())
-                }
+                Ok(Class::Iris(info)) => classes.extend(info.property_class_names.iter().cloned()),
                 _ => {}
             }
             ControlFlow::Continue(true)
@@ -576,7 +594,7 @@ impl<'a> WorkspaceEnv<'a> {
             None => vec![],
         };
         match resolved {
-            Resolved::Workspace(_, details) => {
+            Ok(Class::Workspace(_, details)) => {
                 for (name, property) in &details.members.property {
                     if let MemberKindSpecificDetails::Property { ty, .. } = &property.kind {
                         add(name, self.property_methods(ty.clone().unwrap_or_default()));
@@ -595,7 +613,7 @@ impl<'a> WorkspaceEnv<'a> {
                     new(self.declared_in::<Methods>(cls, resolved, "%OnNew")),
                 );
             }
-            Resolved::Iris(Some(info)) => {
+            Ok(Class::Iris(info)) => {
                 let zero = bindings::Range::point(bindings::Position {
                     line: 0,
                     character: 0,
@@ -677,7 +695,7 @@ impl<'a> WorkspaceEnv<'a> {
         let mut methods: HashMap<String, Generated> = HashMap::new();
         let mut complete = true;
         self.walk::<()>(cls, true, &mut |cls, resolved| match resolved {
-            Resolved::Workspace(_, details) => {
+            Ok(Class::Workspace(_, details)) => {
                 for (name, member) in &details.members.method {
                     if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
                         && method.is_class_method
@@ -689,8 +707,8 @@ impl<'a> WorkspaceEnv<'a> {
                 }
                 ControlFlow::Continue(true)
             }
-            Resolved::Iris(info) => {
-                for member in info.iter().flat_map(|info| &info.members) {
+            Ok(Class::Iris(info)) => {
+                for member in &info.members {
                     if matches!(member.kind, MemberKind::ClassMethod(_))
                         && let Some(found) = iris_found::<Methods>(member.clone(), cls)
                         && let Some(proc) = found.member.ty.procedure()
@@ -702,7 +720,7 @@ impl<'a> WorkspaceEnv<'a> {
                 }
                 ControlFlow::Continue(true)
             }
-            Resolved::Unknown => {
+            Err(_) => {
                 complete = false;
                 ControlFlow::Continue(false)
             }
@@ -844,28 +862,39 @@ impl<'a> WorkspaceEnv<'a> {
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
         let cls = receiver.name.as_str();
         // Past a class nobody can see, the member may be anything: taken on trust, with a hint.
-        let unverified = |cls: &str| {
-            let err = self.lookup_failed(cls, true, range).unwrap_or_else(|| {
-                let iris = self.workspace.iris.is_some();
-                TypeError::unconfirmed_member(cls.to_string(), mem.to_string(), !own, iris, range)
-            });
+        let unverified = |cls: &str, reason: Option<String>| {
+            let err = match reason {
+                Some(reason) => {
+                    TypeError::iris_lookup_failed(DocKind::Cls, cls.to_string(), reason, range)
+                }
+                None => {
+                    let iris = self.workspace.iris.is_some();
+                    TypeError::unconfirmed_member(
+                        cls.to_string(),
+                        mem.to_string(),
+                        !own,
+                        iris,
+                        range,
+                    )
+                }
+            };
             self.add_soft_diagnostic(err.into());
             Ok(Member::untyped(N::Ty::default()))
         };
         // `##super` from a class nobody can see has no superclasses to walk.
-        if !own && matches!(self.resolve(cls), Resolved::Unknown) {
-            return unverified(cls);
+        if !own && let Err(Unresolved::Unknown(reason)) = self.resolve(cls) {
+            return unverified(cls, reason);
         }
         let mut no_class = false;
         let found = self.walk(cls, own, &mut |cls, resolved| match resolved {
-            Resolved::Iris(None) => {
+            Err(Unresolved::Missing) => {
                 no_class |= cls == receiver.name;
                 ControlFlow::Continue(false)
             }
-            Resolved::Unknown => {
+            Err(Unresolved::Unknown(reason)) => {
                 ControlFlow::Break(match registered_object_member::<N>(cls, mem) {
                     Some(found) => Ok(found),
-                    None => Err(cls.to_string()),
+                    None => Err((cls.to_string(), reason.clone())),
                 })
             }
             _ => {
@@ -898,7 +927,7 @@ impl<'a> WorkspaceEnv<'a> {
                 member.ty.instantiate(receiver, &found.origin);
                 Ok(member)
             }
-            Some(Err(unknown)) => unverified(&unknown),
+            Some(Err((unknown, reason))) => unverified(&unknown, reason),
             None if no_class => Err(Miss::NoSuchClass(cls.to_string())),
             None => Err(Miss::Absent),
         }
@@ -912,7 +941,7 @@ impl<'a> WorkspaceEnv<'a> {
         mem: &str,
     ) -> Option<Found<N::Ty>> {
         match resolved {
-            Resolved::Workspace(uri, details) => {
+            Ok(Class::Workspace(uri, details)) => {
                 let member = details.member(N::NS, mem)?;
                 let (mut ty, is_instance_only) = N::declared(member, uri)?;
                 // A member's declared type names are written relative to the declaring class.
@@ -927,7 +956,7 @@ impl<'a> WorkspaceEnv<'a> {
                     origin: details.name.it.clone(),
                 })
             }
-            Resolved::Iris(Some(info)) => {
+            Ok(Class::Iris(info)) => {
                 let named = |m: &&bindings::MemberInfo| {
                     m.name.content.eq_ignore_ascii_case(mem)
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
@@ -949,10 +978,10 @@ impl<'a> WorkspaceEnv<'a> {
         let mut names = Vec::new();
         self.walk::<()>(&cls.name.it, false, &mut |_, resolved| {
             match resolved {
-                Resolved::Workspace(_, details) => {
+                Ok(Class::Workspace(_, details)) => {
                     names.extend(details.include_names.iter().map(|i| i.it.clone()));
                 }
-                Resolved::Iris(Some(info)) => names.extend(info.includes.iter().cloned()),
+                Ok(Class::Iris(info)) => names.extend(info.includes.iter().cloned()),
                 _ => {}
             }
             ControlFlow::Continue(true)
@@ -987,41 +1016,12 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     pub(crate) fn class_exists(&self, cls: &str) -> bool {
-        self.resolve_cls_uri(cls).is_some()
-            || self.iris_cls(cls).is_some_and(|found| found.is_some())
+        self.resolve(cls).is_ok()
     }
 
     // Whether IRIS says there's no such class; `false` when it couldn't be asked.
     pub(crate) fn class_absent(&self, cls: &str) -> bool {
-        self.resolve_cls_uri(cls).is_none() && matches!(self.iris_cls(cls), Some(None))
-    }
-
-    // `None` with no IRIS context or when it couldn't answer (noted in `lookup_failures`);
-    // `Some(None)` when IRIS has no such class.
-    fn iris_cls(&self, cls: &str) -> Option<Option<bindings::ClassInfo>> {
-        match self.workspace.iris.as_ref()?.get_cls(cls) {
-            Ok(found) => Some(found),
-            Err(reason) => {
-                self.lookup_failures
-                    .borrow_mut()
-                    .insert(cls.to_string(), reason);
-                None
-            }
-        }
-    }
-
-    // The hint for a lookup of `cls` that failed, or with `any`, of whatever class failed last.
-    fn lookup_failed(&self, cls: &str, any: bool, range: bindings::Range) -> Option<TypeError> {
-        let failures = self.lookup_failures.borrow();
-        let (cls, reason) = failures
-            .get_key_value(cls)
-            .or_else(|| any.then(|| failures.iter().next()).flatten())?;
-        Some(TypeError::iris_lookup_failed(
-            DocKind::Cls,
-            cls.clone(),
-            reason.clone(),
-            range,
-        ))
+        matches!(self.resolve(cls), Err(Unresolved::Missing))
     }
 
     fn qualified_extends(&self, cls: &str, details: &crate::ClassDetails) -> Vec<String> {
@@ -1045,21 +1045,25 @@ impl<'a> WorkspaceEnv<'a> {
     fn resolve(&self, cls: &str) -> Resolved {
         if let Some(uri) = self.resolve_cls_uri(cls) {
             return match self.workspace.cls_details(&uri) {
-                Ok(details) => Resolved::Workspace(uri, details),
-                Err(_) => Resolved::Unknown,
+                Ok(details) => Ok(Class::Workspace(uri, details)),
+                Err(_) => Err(Unresolved::Unknown(None)),
             };
         }
-        match self.iris_cls(cls) {
-            Some(info) => Resolved::Iris(info),
-            None => Resolved::Unknown,
+        let Some(iris) = self.workspace.iris.as_ref() else {
+            return Err(Unresolved::Unknown(None));
+        };
+        match iris.get_cls(cls) {
+            Ok(Some(info)) => Ok(Class::Iris(info)),
+            Ok(None) => Err(Unresolved::Missing),
+            Err(reason) => Err(Unresolved::Unknown(Some(reason))),
         }
     }
 
     // `cls`'s direct superclasses in precedence order, as far as `resolved` tells.
     fn supers_of(&self, cls: &str, resolved: &Resolved) -> Vec<String> {
         match resolved {
-            Resolved::Workspace(_, details) => self.supers(cls, details),
-            Resolved::Iris(Some(info)) => {
+            Ok(Class::Workspace(_, details)) => self.supers(cls, details),
+            Ok(Class::Iris(info)) => {
                 let mut supers = info.extends.clone();
                 if info.inheritance_right {
                     supers.reverse();
@@ -1121,16 +1125,17 @@ impl<'a> WorkspaceEnv<'a> {
 
     // Where the class `name` is declared, for go-to-definition.
     pub fn class_location(&self, name: &str) -> Option<bindings::Location> {
-        if let Some(uri) = self.resolve_cls_uri(name) {
-            let details = self.workspace.cls_details(&uri).ok()?;
-            Some(bindings::Location::new(uri, details.name.range))
-        } else {
-            let uri = self.iris_cls(name).flatten()?.uri?;
-            let zero = bindings::Range::point(bindings::Position {
-                line: 0,
-                character: 0,
-            });
-            Some(bindings::Location::new(uri, zero))
+        match self.resolve(name).ok()? {
+            Class::Workspace(uri, details) => {
+                Some(bindings::Location::new(uri, details.name.range))
+            }
+            Class::Iris(info) => {
+                let zero = bindings::Range::point(bindings::Position {
+                    line: 0,
+                    character: 0,
+                });
+                Some(bindings::Location::new(info.uri?, zero))
+            }
         }
     }
 
@@ -1158,14 +1163,14 @@ impl<'a> WorkspaceEnv<'a> {
             _ if cls == "%Library.DataType" => ControlFlow::Break(true),
             // Never a datatype, even unresolved.
             _ if cls == "%Library.RegisteredObject" => ControlFlow::Continue(false),
-            Resolved::Workspace(_, details) if details.is_datatype => ControlFlow::Break(true),
-            Resolved::Workspace(..) => ControlFlow::Continue(true),
+            Ok(Class::Workspace(_, details)) if details.is_datatype => ControlFlow::Break(true),
+            Ok(Class::Workspace(..)) => ControlFlow::Continue(true),
             // Outside the workspace, IRIS's compiled ClassType resolves the whole chain.
-            Resolved::Iris(Some(bindings::ClassInfo {
+            Ok(Class::Iris(bindings::ClassInfo {
                 is_datatype: Some(true),
                 ..
             })) => ControlFlow::Break(true),
-            Resolved::Iris(Some(bindings::ClassInfo {
+            Ok(Class::Iris(bindings::ClassInfo {
                 is_datatype: Some(false),
                 ..
             })) => ControlFlow::Continue(false),
@@ -1185,16 +1190,10 @@ impl<'a> WorkspaceEnv<'a> {
         if cls.starts_with('%') {
             return;
         }
-        if self.resolve_cls_uri(cls).is_some() {
-            return;
+        if let Err(unresolved) = self.resolve(cls) {
+            let iris = self.workspace.iris.is_some();
+            self.add_soft_diagnostic(unresolved.unconfirmed(cls, iris, range).into());
         }
-        if self.iris_cls(cls).is_some_and(|found| found.is_some()) {
-            return;
-        }
-        let err = self.lookup_failed(cls, false, range).unwrap_or_else(|| {
-            TypeError::unconfirmed_class(cls.to_string(), self.workspace.iris.is_some(), range)
-        });
-        self.add_soft_diagnostic(err.into());
     }
 
     // Where the include file `name` is declared, for go-to-definition on an `Include`.
@@ -1335,7 +1334,7 @@ impl<'a> WorkspaceEnv<'a> {
         let mut order = Vec::new();
         self.walk::<()>(cls, true, &mut |cls, resolved| {
             order.push(cls.to_string());
-            ControlFlow::Continue(!matches!(resolved, Resolved::Unknown))
+            ControlFlow::Continue(!matches!(resolved, Err(Unresolved::Unknown(_))))
         });
         order
     }
@@ -1346,7 +1345,6 @@ impl<'a> WorkspaceEnv<'a> {
             touched: RefCell::new(HashSet::new()),
             references: RefCell::new(Vec::new()),
             soft_diagnostics: RefCell::new(Vec::new()),
-            lookup_failures: RefCell::new(HashMap::new()),
             generated: RefCell::new(HashMap::new()),
             suppress_soft_diagnostics: Cell::new(false),
         }
@@ -1470,7 +1468,6 @@ pub struct WorkspaceEnv<'a> {
     touched: RefCell<HashSet<Name>>,
     references: RefCell<Vec<(bindings::Range, bindings::Location)>>,
     soft_diagnostics: RefCell<Vec<bindings::Diagnostic>>,
-    lookup_failures: RefCell<HashMap<String, String>>,
     generated: RefCell<HashMap<String, Rc<HashMap<String, Generated>>>>,
     // Set during a loop's throwaway priming pass (see `Flow::with_loop`) — its findings reflect
     // pre-loop bindings only, not real, so every soft diagnostic raised meanwhile is dropped.
