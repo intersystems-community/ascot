@@ -26,33 +26,258 @@ use crate::check::errors::*;
 use crate::check::types::*;
 use crate::cos::{CodeMode, MethodLanguage};
 use crate::details::{
-    MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, Visible, WithRange,
+    MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
 };
+use crate::mask::Correction;
 use crate::{DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos};
 
-#[derive(Clone)]
-pub struct MemberTy {
+// A member a lookup found, with the class declaring it, which its type parameters resolve against.
+struct Found<T> {
+    member: Member<T>,
     is_instance_only: bool,
-    // `Property X [ MultiDimensional ]`: `..X(subs)` addresses a node, not a call.
-    pub multidimensional: bool,
-    pub ty: HOTy,
-    // Where this member is declared — only known when resolved directly against a workspace
-    // class (not for callee-synthesized members like `%New`, or ones resolved via IRIS).
-    pub location: Option<bindings::Location>,
-}
-
-// A member as declared, and the class declaring it, which its type parameters resolve against.
-struct Found {
-    ty: MemberTy,
     origin: String,
 }
 
-// Which of IRIS's dynamic-dispatch methods a failed member lookup falls back to -- see
-// https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GOOP_dynamic_dispatch
-#[derive(Clone, Copy)]
-enum Dispatch {
-    Property(PropertyAccess),
-    Method,
+// A generated method, and whether it's instance-only.
+type Generated = (Arc<TyProcedure>, bool);
+
+// One of the three member namespaces IRIS tells apart by syntax -- `..#X`, `..X`, `..X(...)` --
+// and the shape of what it holds.
+pub(crate) trait Namespace {
+    type Ty: Instantiate + Default;
+    // Where its members are declared, in lookup order.
+    const NS: &'static [MemberNs];
+    // The type of a member a workspace class declares, and whether it's instance-only.
+    fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(Self::Ty, bool)>;
+    // Likewise for one IRIS reports, corrected by the mask.
+    fn reported(
+        member: bindings::MemberInfo,
+        correction: Option<&Correction>,
+    ) -> Option<(Self::Ty, bool)>;
+    // A method as this namespace sees it: the generated members, and those taken as present past
+    // a class nobody can see, are all methods.
+    fn method(_proc: TyProcedureOrAny) -> Option<Self::Ty> {
+        None
+    }
+    // What the `%Dispatch*` hook yields in place of a missing member.
+    fn dispatched(_hook: Option<&TyProcedure>) -> Self::Ty {
+        Self::Ty::default()
+    }
+    // The class names written in the type, to qualify against the declaring class.
+    fn class_names(ty: &mut Self::Ty, f: impl FnMut(&mut Ty));
+}
+
+pub(crate) struct Parameters;
+pub(crate) struct Properties;
+pub(crate) struct Methods;
+
+impl Namespace for Parameters {
+    type Ty = Ty;
+    const NS: &'static [MemberNs] = &[MemberNs::Parameter];
+
+    fn declared(member: &WithRange<MemberDetails>, _: &str) -> Option<(Ty, bool)> {
+        let MemberKindSpecificDetails::Parameter { ty, .. } = &member.kind else {
+            return None;
+        };
+        Some((ty.clone().unwrap_or_default(), false))
+    }
+
+    fn reported(member: bindings::MemberInfo, _: Option<&Correction>) -> Option<(Ty, bool)> {
+        let MemberKind::Parameter(p) = member.kind else {
+            return None;
+        };
+        Some((p.t.as_deref().map(parameter_ty).unwrap_or_default(), false))
+    }
+
+    fn class_names(ty: &mut Ty, mut f: impl FnMut(&mut Ty)) {
+        f(ty)
+    }
+}
+
+impl Namespace for Properties {
+    type Ty = PropertyTy;
+    const NS: &'static [MemberNs] = &[MemberNs::Property];
+
+    fn declared(member: &WithRange<MemberDetails>, _: &str) -> Option<(PropertyTy, bool)> {
+        let MemberKindSpecificDetails::Property { ty, element_ty, .. } = &member.kind else {
+            return None;
+        };
+        let ty = match (ty, element_ty) {
+            (Some(Ty::OREF(cls)), Some(element)) => PropertyTy::Collection {
+                kind: if cls.name().ends_with("List") {
+                    CollectionClass::List
+                } else {
+                    CollectionClass::Array
+                },
+                element: element.clone(),
+            },
+            _ => PropertyTy::Value(ty.clone().unwrap_or_default()),
+        };
+        Some((ty, true))
+    }
+
+    fn reported(
+        member: bindings::MemberInfo,
+        _: Option<&Correction>,
+    ) -> Option<(PropertyTy, bool)> {
+        let ty = match member.kind {
+            MemberKind::Property(info) => match info.collection {
+                Some(collection) => PropertyTy::Collection {
+                    kind: match collection {
+                        bindings::CollectionKind::List => CollectionClass::List,
+                        bindings::CollectionKind::Array => CollectionClass::Array,
+                    },
+                    element: ty_from_declared(info.t).unwrap_or_default(),
+                },
+                None => PropertyTy::Value(ty_from_declared(info.t).unwrap_or_default()),
+            },
+            MemberKind::Relationship(info) => PropertyTy::Value(match info.cardinality {
+                Some(bindings::Cardinality::Many | bindings::Cardinality::Children) => {
+                    relationship_object(info.t)
+                }
+                _ => ty_from_declared(info.t).unwrap_or_default(),
+            }),
+            _ => return None,
+        };
+        Some((ty, true))
+    }
+
+    // Only `%DispatchGetProperty`'s return type matters.
+    fn dispatched(hook: Option<&TyProcedure>) -> PropertyTy {
+        PropertyTy::Value(hook.and_then(|hook| hook.out.clone()).unwrap_or_default())
+    }
+
+    fn class_names(ty: &mut PropertyTy, mut f: impl FnMut(&mut Ty)) {
+        match ty {
+            PropertyTy::Value(ty) | PropertyTy::Collection { element: ty, .. } => f(ty),
+        }
+    }
+}
+
+// What `..X(...)` reaches, before it's known to be callable: a method, else a property, which
+// IRIS requires to be multidimensional.
+pub(crate) enum Invoked {
+    Method(TyProcedureOrAny),
+    Property { ty: Ty, multidimensional: bool },
+}
+
+impl Invoked {
+    fn procedure(&self) -> Option<&Arc<TyProcedure>> {
+        match self {
+            Invoked::Method(TyProcedureOrAny::Procedure(proc)) => Some(proc),
+            _ => None,
+        }
+    }
+}
+
+impl Default for Invoked {
+    fn default() -> Self {
+        Invoked::Method(TyProcedureOrAny::Any)
+    }
+}
+
+impl Instantiate for Invoked {
+    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
+        match self {
+            Invoked::Method(proc) => proc.instantiate(receiver, owner),
+            Invoked::Property { ty, .. } => ty.instantiate(receiver, owner),
+        }
+    }
+}
+
+impl Namespace for Methods {
+    type Ty = Invoked;
+    // `..X(...)` also reaches a property, which IRIS then requires to be multidimensional.
+    const NS: &'static [MemberNs] = &[MemberNs::HigherOrder, MemberNs::Property];
+
+    fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(Invoked, bool)> {
+        match &member.kind {
+            MemberKindSpecificDetails::MethodOrClassMethod(m) => {
+                let proc = TyProcedure {
+                    normal_args: m
+                        .normal_args
+                        .iter()
+                        .map(|arg| arg.it.clone().with_declared_at(arg.range))
+                        .collect(),
+                    variadic_arg: m.variadic_arg.as_ref().map(|arg| arg.it.clone()),
+                    out: m.out.it.clone(),
+                    procedure_block: Some(
+                        m.procedure_block
+                            .as_ref()
+                            .map_or(vec![], |x| x.iter().map(|x| x.to_string()).collect()),
+                    ),
+                    uri: Some(uri.to_string()),
+                    declared_at: Some(member.range),
+                };
+                let proc = TyProcedureOrAny::Procedure(Arc::new(proc));
+                Some((Invoked::Method(proc), !m.is_class_method))
+            }
+            MemberKindSpecificDetails::Property { keywords, .. } => {
+                let multidimensional = keywords
+                    .iter()
+                    .any(|k| k.eq_ignore_ascii_case("MultiDimensional"));
+                let (ty, is_instance_only) = Properties::declared(member, uri)?;
+                let ty = Invoked::Property {
+                    ty: ty.to_ty(),
+                    multidimensional,
+                };
+                Some((ty, is_instance_only))
+            }
+            _ => None,
+        }
+    }
+
+    fn reported(
+        member: bindings::MemberInfo,
+        correction: Option<&Correction>,
+    ) -> Option<(Invoked, bool)> {
+        let uri = member.uri.clone();
+        let declared_at = bindings::Range {
+            start: member.before,
+            end: member.after,
+        };
+        let multidimensional = match &member.kind {
+            MemberKind::Property(info) => info.multidimensional,
+            _ => false,
+        };
+        let (m, is_instance_only) = match member.kind {
+            MemberKind::Method(m) => (m, true),
+            MemberKind::ClassMethod(m) => (m, false),
+            MemberKind::Property(_) | MemberKind::Relationship(_) => {
+                let (ty, is_instance_only) = Properties::reported(member, None)?;
+                let ty = Invoked::Property {
+                    ty: ty.to_ty(),
+                    multidimensional,
+                };
+                return Some((ty, is_instance_only));
+            }
+            _ => return None,
+        };
+        let mut proc = TyProcedure::from(m);
+        proc.uri = uri.clone();
+        proc.declared_at = uri.is_some().then_some(declared_at);
+        if let Some(correction) = correction {
+            correction.apply(&mut proc);
+        }
+        let proc = TyProcedureOrAny::Procedure(Arc::new(proc));
+        Some((Invoked::Method(proc), is_instance_only))
+    }
+
+    fn method(proc: TyProcedureOrAny) -> Option<Invoked> {
+        Some(Invoked::Method(proc))
+    }
+
+    fn class_names(ty: &mut Invoked, mut f: impl FnMut(&mut Ty)) {
+        match ty {
+            Invoked::Method(TyProcedureOrAny::Procedure(proc)) => {
+                if matches!(proc.out, Some(Ty::OREF(_))) {
+                    f(Arc::make_mut(proc).out.as_mut().unwrap());
+                }
+            }
+            Invoked::Method(TyProcedureOrAny::Any) => {}
+            Invoked::Property { ty, .. } => f(ty),
+        }
+    }
 }
 
 // Why `lookup` has no member to give.
@@ -70,24 +295,18 @@ impl<T> Member<T> {
     }
 }
 
-// A parameter or property lookup never finds a method, so a procedure here is `Any`.
-fn value_of(ty: HOTy) -> Ty {
-    match ty {
-        HOTy::Value(ty) => ty,
-        HOTy::Collection { kind, .. } => kind.class(),
-        HOTy::Procedure(_) => Ty::Any,
-    }
-}
-
-// What `..X(...)` found: a method, else a property, which IRIS requires to be multidimensional.
-fn callee(found: MemberTy, range: bindings::Range) -> Result<Member<Callee>, TypeError> {
+// What `..X(...)` found, once it must be callable.
+fn callee(found: Member<Invoked>, range: bindings::Range) -> Result<Member<Callee>, TypeError> {
     let ty = match found.ty {
-        HOTy::Procedure(proc) => Callee::Method(TyProcedureOrAny::Procedure(proc)),
-        HOTy::Value(Ty::Any) => Callee::Method(TyProcedureOrAny::Any),
-        HOTy::Value(ty) if found.multidimensional => Callee::Node(ty),
-        HOTy::Value(ty) => return Err(QuasiTypeError::not_procedure(ty).into_error(|| range)),
-        HOTy::Collection { kind, .. } => {
-            return Err(QuasiTypeError::not_procedure(kind.class()).into_error(|| range));
+        Invoked::Method(proc) => Callee::Method(proc),
+        Invoked::Property {
+            ty,
+            multidimensional: true,
+        } => Callee::Node(ty),
+        // A property of no known type may well be multidimensional.
+        Invoked::Property { ty: Ty::Any, .. } => Callee::default(),
+        Invoked::Property { ty, .. } => {
+            return Err(QuasiTypeError::not_procedure(ty).into_error(|| range));
         }
     };
     Ok(Member {
@@ -96,39 +315,51 @@ fn callee(found: MemberTy, range: bindings::Range) -> Result<Member<Callee>, Typ
     })
 }
 
+fn method_hook(ty: &Ty) -> &'static str {
+    if matches!(ty, Ty::OREF(ClsOrIns::Ins(_))) {
+        "%DispatchMethod"
+    } else {
+        "%DispatchClassMethod"
+    }
+}
+
 fn generated_procedure(
     normal_args: Vec<NormalArg>,
     variadic: bool,
     out: Option<Ty>,
-    is_instance_only: bool,
-) -> MemberTy {
-    MemberTy {
-        is_instance_only,
-        multidimensional: false,
-        ty: HOTy::Procedure(Arc::new(TyProcedure {
-            normal_args,
-            variadic_arg: variadic.then(|| VariadicArg::new(ArgMode::Default, "args".into(), None)),
-            out,
-            procedure_block: Some(vec![]),
-            uri: None,
-            declared_at: None,
-        })),
-        location: None,
-    }
+) -> Arc<TyProcedure> {
+    Arc::new(TyProcedure {
+        normal_args,
+        variadic_arg: variadic.then(|| VariadicArg::new(ArgMode::Default, "args".into(), None)),
+        out,
+        procedure_block: Some(vec![]),
+        uri: None,
+        declared_at: None,
+    })
 }
 
 // An IRIS-reported member of `cls`, typed and masked by its declaring class.
-fn found_in_iris(member: bindings::MemberInfo, cls: &str) -> Option<Found> {
+fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<Found<N::Ty>> {
     let origin = member.origin.clone().unwrap_or_else(|| cls.to_string());
     if crate::mask::dropped(&origin, &member.name.content) {
         return None;
     }
     let correction = crate::mask::correction(&origin, &member.name.content);
-    let mut ty = MemberTy::try_from(member).ok()?;
-    if let Some(correction) = correction {
-        correction.apply(&mut ty.ty);
-    }
-    Some(Found { ty, origin })
+    // Only known when the host that answered this query could map the member to a uri
+    // (e.g. not a bare IRIS system class).
+    let location = member.uri.clone().map(|uri| {
+        let range = bindings::Range {
+            start: member.before,
+            end: member.after,
+        };
+        bindings::Location::new(uri, range)
+    });
+    let (ty, is_instance_only) = N::reported(member, correction)?;
+    Some(Found {
+        member: Member { ty, location },
+        is_instance_only,
+        origin,
+    })
 }
 
 // A class as a check run sees it; `Unknown`: no IRIS, or a lookup that failed (see `iris_cls`).
@@ -139,15 +370,20 @@ enum Resolved {
 }
 
 // `mem` among `info`'s own members; `%New` takes the class's `%OnNew`'s arguments.
-fn iris_member(info: &bindings::ClassInfo, cls: &str, mem: &str, ns: Visible) -> Option<Found> {
+fn iris_member<N: Namespace>(
+    info: &bindings::ClassInfo,
+    cls: &str,
+    mem: &str,
+) -> Option<Found<N::Ty>> {
     if mem.eq_ignore_ascii_case("%New")
-        && ns == Visible::Method
         && let Some(on_new) = info.members.iter().find(|m| m.name.content == "%OnNew")
-        && let Some(on_new) = found_in_iris(on_new.clone(), cls)
-        && let Some(proc) = on_new.ty.ty.procedure()
+        && let Some(on_new) = iris_found::<Methods>(on_new.clone(), cls)
+        && let Some(proc) = on_new.member.ty.procedure()
+        && let Some(ty) = N::method(TyProcedureOrAny::Procedure(new_from_on_new(proc)))
     {
         return Some(Found {
-            ty: new_from_on_new(proc),
+            member: Member::untyped(ty),
+            is_instance_only: false,
             origin: on_new.origin,
         });
     }
@@ -155,69 +391,51 @@ fn iris_member(info: &bindings::ClassInfo, cls: &str, mem: &str, ns: Visible) ->
         m.name.content.eq_ignore_ascii_case(mem)
             || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
     };
-    let found = info
-        .members
-        .iter()
-        .find(|m| named(m) && MemberNs::of_info(&m.kind) == ns.into())
-        .or_else(|| {
-            // `..X(...)` also reaches a property, which IRIS then requires to be multidimensional.
-            (ns == Visible::Method)
-                .then(|| {
-                    info.members
-                        .iter()
-                        .find(|m| named(m) && MemberNs::of_info(&m.kind) == MemberNs::Property)
-                })
-                .flatten()
-        })?;
-    found_in_iris(found.clone(), cls)
+    let found = N::NS.iter().find_map(|ns| {
+        info.members
+            .iter()
+            .find(|m| named(m) && MemberNs::of_info(&m.kind) == *ns)
+    })?;
+    iris_found::<N>(found.clone(), cls)
 }
 
-// Past a class nobody can see, the members every object class gets from `%SystemBase`/
+// Past a class nobody can see, the methods every object class gets from `%SystemBase`/
 // `%RegisteredObject` are taken as present and untyped -- unless `cls` is another hierarchy root.
-fn registered_object_member(cls: &str, mem: &str, methods: bool) -> Option<Found> {
-    if !methods
-        || !REGISTERED_OBJECT_MEMBERS.contains(&mem)
+fn registered_object_member<N: Namespace>(cls: &str, mem: &str) -> Option<Found<N::Ty>> {
+    if !REGISTERED_OBJECT_MEMBERS.contains(&mem)
         || ["%Library.DataType", "%Library.FunctionalIndex"].contains(&cls)
     {
         return None;
     }
-    let ty = if mem == "%New" {
-        generated_procedure(vec![], true, Some(Ty::This), false)
+    let proc = if mem == "%New" {
+        TyProcedureOrAny::Procedure(generated_procedure(vec![], true, Some(Ty::This)))
     } else {
-        MemberTy {
-            is_instance_only: false,
-            ty: HOTy::Value(Ty::Any),
-            ..MemberTy::default()
-        }
+        TyProcedureOrAny::Any
     };
     Some(Found {
-        ty,
+        member: Member::untyped(N::method(proc)?),
+        is_instance_only: false,
         origin: cls.to_string(),
     })
 }
 
-fn new_from_on_new(on_new: &TyProcedure) -> MemberTy {
-    MemberTy {
-        is_instance_only: false,
-        multidimensional: false,
-        ty: HOTy::Procedure(Arc::new(TyProcedure {
-            normal_args: on_new.normal_args.clone(),
-            variadic_arg: on_new.variadic_arg.clone(),
-            out: Some(Ty::This),
-            procedure_block: Some(vec![]),
-            uri: on_new.uri.clone(),
-            declared_at: on_new.declared_at,
-        })),
-        location: None,
-    }
+fn new_from_on_new(on_new: &TyProcedure) -> Arc<TyProcedure> {
+    Arc::new(TyProcedure {
+        normal_args: on_new.normal_args.clone(),
+        variadic_arg: on_new.variadic_arg.clone(),
+        out: Some(Ty::This),
+        procedure_block: Some(vec![]),
+        uri: on_new.uri.clone(),
+        declared_at: on_new.declared_at,
+    })
 }
 
 // `Query Q`'s `QFunc` (its result set) and `QExecute`/`QFetch`/... family; the query's own
 // arguments aren't tracked.
-fn query_methods() -> Vec<(String, MemberTy)> {
+fn query_methods() -> Vec<(String, Generated)> {
     let method = |suffix: &str, out: &str| {
-        let ty = generated_procedure(vec![], true, Some(Ty::from(out)), false);
-        (suffix.to_string(), ty)
+        let proc = generated_procedure(vec![], true, Some(Ty::from(out)));
+        (suffix.to_string(), (proc, false))
     };
     std::iter::once(method("Func", "%SQL.StatementResult"))
         .chain(
@@ -257,7 +475,7 @@ enum Out {
 }
 
 impl Shape {
-    fn procedure(&self, prop: &Ty) -> MemberTy {
+    fn procedure(&self, prop: &Ty) -> Generated {
         let Shape(_, arg, out, is_instance_only) = *self;
         let one = |mode, name: &str, ty| vec![NormalArg::new(mode, name.into(), Some(ty), None)];
         let args = match arg {
@@ -272,7 +490,10 @@ impl Shape {
             Out::Status => Ty::from("%Status"),
             Out::Boolean => Ty::from("%Boolean"),
         };
-        generated_procedure(args, false, Some(out), is_instance_only)
+        (
+            generated_procedure(args, false, Some(out)),
+            is_instance_only,
+        )
     }
 }
 
@@ -304,166 +525,6 @@ const CONVERSIONS: &[Shape] = &[
     Shape("StorageToLogical", Arg::Value, Out::Prop, false),
     Shape("XSDToLogical", Arg::Value, Out::Prop, false),
 ];
-
-impl Default for MemberTy {
-    fn default() -> Self {
-        Self {
-            is_instance_only: false,
-            multidimensional: false,
-            ty: HOTy::Value(Ty::Any),
-            location: None,
-        }
-    }
-}
-
-impl TryFrom<&MemberDetails> for MemberTy {
-    type Error = ();
-
-    fn try_from(details: &MemberDetails) -> Result<Self, Self::Error> {
-        Self::try_from(&details.kind)
-    }
-}
-
-impl TryFrom<&MemberKindSpecificDetails> for MemberTy {
-    type Error = ();
-
-    fn try_from(value: &MemberKindSpecificDetails) -> Result<Self, Self::Error> {
-        match value {
-            MemberKindSpecificDetails::MethodOrClassMethod(m) => Ok(MemberTy {
-                is_instance_only: !m.is_class_method,
-                ty: HOTy::Procedure(Arc::new(TyProcedure {
-                    normal_args: m
-                        .normal_args
-                        .iter()
-                        .map(|arg| arg.it.clone().with_declared_at(arg.range))
-                        .collect(),
-                    variadic_arg: m.variadic_arg.as_ref().map(|arg| arg.it.clone()),
-                    out: m.out.it.clone(),
-                    procedure_block: Some(
-                        m.procedure_block
-                            .as_ref()
-                            .map_or(vec![], |x| x.iter().map(|x| x.to_string()).collect()),
-                    ),
-                    uri: None,
-                    declared_at: None,
-                })),
-                ..MemberTy::default()
-            }),
-            MemberKindSpecificDetails::Property {
-                ty,
-                element_ty,
-                keywords,
-                ..
-            } => Ok(MemberTy {
-                is_instance_only: true,
-                multidimensional: keywords
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case("MultiDimensional")),
-                ty: match (ty, element_ty) {
-                    (Some(Ty::OREF(cls)), Some(element)) => HOTy::Collection {
-                        kind: if cls.name().ends_with("List") {
-                            CollectionClass::List
-                        } else {
-                            CollectionClass::Array
-                        },
-                        element: element.clone(),
-                    },
-                    _ => HOTy::Value(ty.clone().unwrap_or_default()),
-                },
-                ..MemberTy::default()
-            }),
-            MemberKindSpecificDetails::Parameter { ty, .. } => Ok(MemberTy {
-                is_instance_only: false,
-                ty: HOTy::Value(ty.clone().unwrap_or_default()),
-                ..MemberTy::default()
-            }),
-            MemberKindSpecificDetails::ClientMethod
-            | MemberKindSpecificDetails::ForeignKey
-            | MemberKindSpecificDetails::Index { .. }
-            | MemberKindSpecificDetails::Projection
-            | MemberKindSpecificDetails::Trigger
-            | MemberKindSpecificDetails::XData
-            | MemberKindSpecificDetails::Storage
-            | MemberKindSpecificDetails::Query => Err(()),
-        }
-    }
-}
-
-impl TryFrom<bindings::MemberInfo> for MemberTy {
-    type Error = ();
-
-    fn try_from(member: bindings::MemberInfo) -> Result<Self, Self::Error> {
-        let uri = member.uri.clone();
-        let declared_at = bindings::Range {
-            start: member.before,
-            end: member.after,
-        };
-        // Only known when the host that answered this query could map the member to a uri
-        // (e.g. not a bare IRIS system class).
-        let location = uri
-            .clone()
-            .map(|uri| bindings::Location::new(uri, declared_at));
-        let locate = |mut proc: TyProcedure| {
-            proc.uri = uri.clone();
-            proc.declared_at = uri.is_some().then_some(declared_at);
-            proc
-        };
-        match member.kind {
-            MemberKind::Method(m) => Ok(MemberTy {
-                is_instance_only: true,
-                ty: HOTy::Procedure(Arc::new(locate(TyProcedure::from(m)))),
-                location,
-                multidimensional: false,
-            }),
-            MemberKind::ClassMethod(m) => Ok(MemberTy {
-                is_instance_only: false,
-                ty: HOTy::Procedure(Arc::new(locate(TyProcedure::from(m)))),
-                location,
-                multidimensional: false,
-            }),
-            MemberKind::Property(info) => Ok(MemberTy {
-                is_instance_only: true,
-                multidimensional: info.multidimensional,
-                ty: match info.collection {
-                    Some(collection) => HOTy::Collection {
-                        kind: match collection {
-                            bindings::CollectionKind::List => CollectionClass::List,
-                            bindings::CollectionKind::Array => CollectionClass::Array,
-                        },
-                        element: ty_from_declared(info.t).unwrap_or_default(),
-                    },
-                    None => HOTy::Value(ty_from_declared(info.t).unwrap_or_default()),
-                },
-                location,
-            }),
-            MemberKind::Relationship(info) => Ok(MemberTy {
-                is_instance_only: true,
-                ty: HOTy::Value(match info.cardinality {
-                    Some(bindings::Cardinality::Many | bindings::Cardinality::Children) => {
-                        relationship_object(info.t)
-                    }
-                    _ => ty_from_declared(info.t).unwrap_or_default(),
-                }),
-                location,
-                multidimensional: false,
-            }),
-            MemberKind::Parameter(p) => Ok(MemberTy {
-                is_instance_only: false,
-                ty: HOTy::Value(p.t.as_deref().map(parameter_ty).unwrap_or_default()),
-                location,
-                multidimensional: false,
-            }),
-            MemberKind::ClientMethod(_)
-            | MemberKind::ForeignKey
-            | MemberKind::Index(_)
-            | MemberKind::Projection
-            | MemberKind::Trigger
-            | MemberKind::XData
-            | MemberKind::Storage
-            | MemberKind::Query => Err(()),
-        }
-    }
-}
 
 // Every member `%Library.SystemBase` and `%Library.RegisteredObject` contribute
 // to every object class, taken as present when that chain can't be resolved (see
@@ -545,12 +606,7 @@ impl<'a> WorkspaceEnv<'a> {
             }
         }
         let has_get = self
-            .lookup(
-                &ClsOrIns::Ins(ClassTy::from(cls.to_string())),
-                "%Get",
-                Visible::Method,
-                true,
-            )
+            .lookup::<Methods>(&ClsOrIns::Ins(ClassTy::from(cls.to_string())), "%Get", true)
             .is_ok();
         (suggestions, has_get)
     }
@@ -578,19 +634,21 @@ impl<'a> WorkspaceEnv<'a> {
 
     // The methods IRIS generates for `cls`'s own properties, indices and queries, built on the
     // first miss among the declared ones. Over-approximates: what IRIS emits is generator-dependent.
-    fn generated_members(&self, cls: &str, resolved: &Resolved) -> Rc<HashMap<String, MemberTy>> {
+    fn generated_members(&self, cls: &str, resolved: &Resolved) -> Rc<HashMap<String, Generated>> {
         if let Some(built) = self.generated.borrow().get(cls) {
             return built.clone();
         }
-        let mut generated: HashMap<String, MemberTy> = HashMap::new();
-        let mut add = |name: &str, family: Vec<(String, MemberTy)>| {
+        let mut generated: HashMap<String, Generated> = HashMap::new();
+        let mut add = |name: &str, family: Vec<(String, Generated)>| {
             for (suffix, method) in family {
                 generated.entry(format!("{name}{suffix}")).or_insert(method);
             }
         };
         // `%New` takes the class's own `%OnNew`'s arguments, which the dictionary doesn't record.
-        let new = |on_new: MemberTy| match on_new.ty.procedure() {
-            Some(on_new) => vec![("%New".to_string(), new_from_on_new(on_new))],
+        let new = |on_new: Option<Found<Invoked>>| match on_new
+            .and_then(|f| f.member.ty.procedure().cloned())
+        {
+            Some(on_new) => vec![("%New".to_string(), (new_from_on_new(&on_new), false))],
             None => vec![],
         };
         match resolved {
@@ -608,10 +666,10 @@ impl<'a> WorkspaceEnv<'a> {
                 for name in details.members.query.keys() {
                     add(name, query_methods());
                 }
-                if let Some(on_new) = self.declared_member(uri, details, "%OnNew", Visible::Method)
-                {
-                    add("", new(on_new));
-                }
+                add(
+                    "",
+                    new(self.declared_member::<Methods>(uri, details, "%OnNew")),
+                );
             }
             Resolved::Iris(Some(info)) => {
                 let zero = bindings::Range::point(bindings::Position {
@@ -622,8 +680,15 @@ impl<'a> WorkspaceEnv<'a> {
                     let name = member.name.content.as_str();
                     match &member.kind {
                         MemberKind::Property(_) | MemberKind::Relationship(_) => {
-                            let ty = match found_in_iris(member.clone(), cls).map(|f| f.ty.ty) {
-                                Some(HOTy::Value(ty)) => ty,
+                            let ty = match iris_found::<Properties>(member.clone(), cls) {
+                                Some(Found {
+                                    member:
+                                        Member {
+                                            ty: PropertyTy::Value(ty),
+                                            ..
+                                        },
+                                    ..
+                                }) => ty,
                                 _ => Ty::Any,
                             };
                             add(name, self.property_methods(ty));
@@ -636,9 +701,7 @@ impl<'a> WorkspaceEnv<'a> {
                         }
                         MemberKind::Query => add(name, query_methods()),
                         MemberKind::Method(_) if name == "%OnNew" => {
-                            if let Some(on_new) = found_in_iris(member.clone(), cls) {
-                                add("", new(on_new.ty));
-                            }
+                            add("", new(iris_found::<Methods>(member.clone(), cls)));
                         }
                         _ => {}
                     }
@@ -655,8 +718,8 @@ impl<'a> WorkspaceEnv<'a> {
 
     // `Property X As <ty>`'s accessors, object accessors for a reference, and the type class's
     // class methods projected under `X` (`%String`'s `LogicalToDisplay` becomes `XLogicalToDisplay`).
-    fn property_methods(&self, ty: Ty) -> Vec<(String, MemberTy)> {
-        let family = |shapes: &[Shape]| -> Vec<(String, MemberTy)> {
+    fn property_methods(&self, ty: Ty) -> Vec<(String, Generated)> {
+        let family = |shapes: &[Shape]| -> Vec<(String, Generated)> {
             shapes
                 .iter()
                 .map(|shape| (shape.0.to_string(), shape.procedure(&ty)))
@@ -692,17 +755,18 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     // `cls`'s class methods, own and inherited, nearest first; `false` past a class nobody can see.
-    fn class_methods(&self, cls: &str) -> (HashMap<String, MemberTy>, bool) {
-        let mut methods: HashMap<String, MemberTy> = HashMap::new();
+    fn class_methods(&self, cls: &str) -> (HashMap<String, Generated>, bool) {
+        let mut methods: HashMap<String, Generated> = HashMap::new();
         let mut complete = true;
         self.walk::<()>(cls, true, &mut |cls, resolved| match resolved {
             Resolved::Workspace(uri, details) => {
                 for (name, member) in &details.members.higher_order {
                     if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
                         && method.is_class_method
-                        && let Some(ty) = self.declared_member(uri, details, name, Visible::Method)
+                        && let Some(found) = self.declared_member::<Methods>(uri, details, name)
+                        && let Some(proc) = found.member.ty.procedure()
                     {
-                        methods.entry(name.clone()).or_insert(ty);
+                        methods.entry(name.clone()).or_insert((proc.clone(), false));
                     }
                 }
                 ControlFlow::Continue(true)
@@ -710,11 +774,12 @@ impl<'a> WorkspaceEnv<'a> {
             Resolved::Iris(info) => {
                 for member in info.iter().flat_map(|info| &info.members) {
                     if matches!(member.kind, MemberKind::ClassMethod(_))
-                        && let Some(found) = found_in_iris(member.clone(), cls)
+                        && let Some(found) = iris_found::<Methods>(member.clone(), cls)
+                        && let Some(proc) = found.member.ty.procedure()
                     {
                         methods
                             .entry(member.name.content.clone())
-                            .or_insert(found.ty);
+                            .or_insert((proc.clone(), false));
                     }
                 }
                 ControlFlow::Continue(true)
@@ -733,17 +798,17 @@ impl<'a> WorkspaceEnv<'a> {
         &self,
         cls: &str,
         on_properties: &[Option<WithRange<String>>],
-    ) -> Vec<(String, MemberTy)> {
+    ) -> Vec<(String, Generated)> {
         let cls = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
         let keys: Vec<NormalArg> = on_properties
             .iter()
             .map(|property| {
                 let property = property
                     .as_ref()
-                    .map(|p| self.lookup(&cls, &p.it, Visible::Property, true));
+                    .map(|p| self.lookup::<Properties>(&cls, &p.it, true));
                 let ty = match property {
-                    Some(Ok(MemberTy {
-                        ty: HOTy::Value(ty),
+                    Some(Ok(Member {
+                        ty: PropertyTy::Value(ty),
                         ..
                     })) => ty,
                     _ => Ty::Any,
@@ -784,20 +849,16 @@ impl<'a> WorkspaceEnv<'a> {
             let args = keys.iter().cloned().chain(extra).collect();
             (
                 suffix.to_string(),
-                generated_procedure(args, false, Some(out), false),
+                (generated_procedure(args, false, Some(out)), false),
             )
         })
         .collect()
     }
 
-    // Whether `cls` declares or inherits `name` in `ns`; `None` if it can't be determined.
-    pub(crate) fn member_exists(&self, cls: &str, name: &str, ns: Visible) -> Option<bool> {
-        match self.lookup(
-            &ClsOrIns::Ins(ClassTy::from(cls.to_string())),
-            name,
-            ns,
-            true,
-        ) {
+    // Whether `cls` declares or inherits `name` in `N`; `None` if it can't be determined.
+    pub(crate) fn member_exists<N: Namespace>(&self, cls: &str, name: &str) -> Option<bool> {
+        let obj = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
+        match self.lookup::<N>(&obj, name, true) {
             Ok(_) => Some(true),
             Err(LookupError::Absent) => Some(false),
             // The missing class is what to report (`check_declared_class_exists`).
@@ -829,15 +890,12 @@ impl<'a> WorkspaceEnv<'a> {
     // superclass in precedence order the same way -- IRIS's order, so the first match is the one
     // it compiles in; no implicit root. `own = false` starts at the superclasses, for `##super`.
     // The walk ends at a class nobody can see, since whatever it declares would shadow the rest.
-    fn lookup(
+    fn lookup<N: Namespace>(
         &self,
         obj: &ClsOrIns,
         mem: &str,
-        ns: Visible,
         own: bool,
-    ) -> Result<MemberTy, LookupError> {
-        // Every generated member is a method, so only a method lookup consults them.
-        let methods = ns == Visible::Method;
+    ) -> Result<Member<N::Ty>, LookupError> {
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
         let cls = receiver.name.as_str();
         // `##super` from a class nobody can see has no superclasses to walk.
@@ -847,28 +905,28 @@ impl<'a> WorkspaceEnv<'a> {
         let mut no_class = false;
         let found = self.walk(cls, own, &mut |cls, resolved| {
             let declared = match resolved {
-                Resolved::Workspace(uri, details) => {
-                    self.declared_member(uri, details, mem, ns).map(|ty| Found {
-                        ty,
-                        origin: cls.to_string(),
-                    })
-                }
-                Resolved::Iris(Some(info)) => iris_member(info, cls, mem, ns),
+                Resolved::Workspace(uri, details) => self.declared_member::<N>(uri, details, mem),
+                Resolved::Iris(Some(info)) => iris_member::<N>(info, cls, mem),
                 Resolved::Iris(None) => {
                     no_class |= cls == receiver.name;
                     return ControlFlow::Continue(false);
                 }
                 Resolved::Unknown => {
-                    return ControlFlow::Break(
-                        registered_object_member(cls, mem, methods).ok_or(LookupError::Unverified),
-                    );
+                    let found = registered_object_member::<N>(cls, mem);
+                    return ControlFlow::Break(found.ok_or(LookupError::Unverified));
                 }
             };
+            // Every generated member is a method, so only a method lookup consults them, and only
+            // once it's needed: building the table looks properties up itself.
             let found = declared.or_else(|| {
-                // Only once it's needed: building the table looks properties up itself.
-                let generated = methods.then(|| self.generated_members(cls, resolved))?;
+                let generated = N::NS.contains(&MemberNs::HigherOrder);
+                let (proc, is_instance_only) = generated
+                    .then(|| self.generated_members(cls, resolved))?
+                    .get(mem)
+                    .cloned()?;
                 Some(Found {
-                    ty: generated.get(mem).cloned()?,
+                    member: Member::untyped(N::method(TyProcedureOrAny::Procedure(proc))?),
+                    is_instance_only,
                     origin: cls.to_string(),
                 })
             });
@@ -878,12 +936,13 @@ impl<'a> WorkspaceEnv<'a> {
             }
         });
         match found {
-            Some(found) => found.and_then(|Found { mut ty, origin }| {
-                if ty.is_instance_only && !obj.is_ins() {
+            Some(found) => found.and_then(|found| {
+                if found.is_instance_only && !obj.is_ins() {
                     return Err(LookupError::InstanceOnly);
                 }
-                ty.ty.instantiate(receiver, &origin);
-                Ok(ty)
+                let mut member = found.member;
+                member.ty.instantiate(receiver, &found.origin);
+                Ok(member)
             }),
             None if no_class => Err(LookupError::NoSuchClass(cls.to_string())),
             None => Err(LookupError::Absent),
@@ -891,28 +950,24 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     // `mem` as `cls` itself declares it.
-    fn declared_member(
+    fn declared_member<N: Namespace>(
         &self,
         uri: &str,
         details: &crate::ClassDetails,
         mem: &str,
-        ns: Visible,
-    ) -> Option<MemberTy> {
-        let member = details.member(ns.into(), mem).or_else(|| {
-            // `..X(...)` also reaches a property, which IRIS then requires to be multidimensional.
-            (ns == Visible::Method)
-                .then(|| details.member(MemberNs::Property, mem))
-                .flatten()
-        })?;
-        let mut ty: MemberTy = member.deref().try_into().ok()?;
-        ty.location = Some(bindings::Location::new(uri.to_string(), member.range));
-        if let HOTy::Procedure(proc) = &ty.ty {
-            let mut proc = proc.as_ref().clone();
-            proc.uri = Some(uri.to_string());
-            proc.declared_at = Some(member.range);
-            ty.ty = HOTy::Procedure(Arc::new(proc));
-        }
-        Some(self.qualify_member_ty(ty, &details.name.it))
+    ) -> Option<Found<N::Ty>> {
+        let member = N::NS.iter().find_map(|ns| details.member(*ns, mem))?;
+        let (mut ty, is_instance_only) = N::declared(member, uri)?;
+        // A member's declared type names are written relative to the declaring class.
+        N::class_names(&mut ty, |t| self.qualify_ty(t, &details.name.it));
+        Some(Found {
+            member: Member {
+                ty,
+                location: Some(bindings::Location::new(uri.to_string(), member.range)),
+            },
+            is_instance_only,
+            origin: details.name.it.clone(),
+        })
     }
 
     // Every `Include` declared by a superclass of `cls`, open in this workspace or reached
@@ -1085,27 +1140,13 @@ impl<'a> WorkspaceEnv<'a> {
         }
     }
 
-    // A member's declared type names are written relative to the declaring class.
-    fn qualify_member_ty(&self, mut ty: MemberTy, context: &str) -> MemberTy {
-        let qualify = |t: &mut Ty| {
-            if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = t {
-                c.name = self.qualify_class_name(&c.name, Some(context));
-                for arg in c.generics.values_mut() {
-                    *arg = self.qualify_class_name(arg, Some(context));
-                }
-            }
-        };
-        match &mut ty.ty {
-            HOTy::Value(t) | HOTy::Collection { element: t, .. } => qualify(t),
-            HOTy::Procedure(proc) => {
-                if matches!(proc.out, Some(Ty::OREF(_))) {
-                    let mut proc = proc.as_ref().clone();
-                    qualify(proc.out.as_mut().unwrap());
-                    ty.ty = HOTy::Procedure(Arc::new(proc));
-                }
+    fn qualify_ty(&self, t: &mut Ty, context: &str) {
+        if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = t {
+            c.name = self.qualify_class_name(&c.name, Some(context));
+            for arg in c.generics.values_mut() {
+                *arg = self.qualify_class_name(arg, Some(context));
             }
         }
-        ty
     }
 
     // Where the class `name` is declared, for go-to-definition.
@@ -1460,7 +1501,7 @@ pub struct WorkspaceEnv<'a> {
     references: RefCell<Vec<(bindings::Range, bindings::Location)>>,
     soft_diagnostics: RefCell<Vec<bindings::Diagnostic>>,
     lookup_failures: RefCell<HashMap<String, String>>,
-    generated: RefCell<HashMap<String, Rc<HashMap<String, MemberTy>>>>,
+    generated: RefCell<HashMap<String, Rc<HashMap<String, Generated>>>>,
     // Set during a loop's throwaway priming pass (see `Flow::with_loop`) — its findings reflect
     // pre-loop bindings only, not real, so every soft diagnostic raised meanwhile is dropped.
     suppress_soft_diagnostics: Cell<bool>,
@@ -1753,8 +1794,7 @@ impl<'a> CodeEnv<'a> {
 
     // The three lookups below each search one namespace -- IRIS keeps them apart by syntax:
     // `..#X` is a parameter, `..X(...)` a method before a property, bare `..X` a property only,
-    // never a method, even one without arguments. A member of an unresolved `Any`/`This`/
-    // `..#NAME` type (the latter a mask bug) is taken as present and untyped.
+    // never a method, even one without arguments.
 
     pub(crate) fn parameter_of(
         &self,
@@ -1762,10 +1802,7 @@ impl<'a> CodeEnv<'a> {
         name: String,
         range: bindings::Range,
     ) -> Result<Member<Ty>, TypeError> {
-        match ty {
-            Ty::Any | Ty::This | Ty::Param(_) => Ok(Member::untyped(Ty::Any)),
-            Ty::OREF(obj) => self.get_parameter(obj, name, range),
-        }
+        self.resolve_mem::<Parameters>(ty, name, range, true, None)
     }
 
     pub(crate) fn property_of(
@@ -1775,10 +1812,12 @@ impl<'a> CodeEnv<'a> {
         range: bindings::Range,
         access: PropertyAccess,
     ) -> Result<Member<PropertyTy>, TypeError> {
-        match ty {
-            Ty::Any | Ty::This | Ty::Param(_) => Ok(Member::untyped(PropertyTy::Value(Ty::Any))),
-            Ty::OREF(obj) => self.get_property(obj, name, range, access),
-        }
+        let hook = match access {
+            PropertyAccess::Get => "%DispatchGetProperty",
+            PropertyAccess::Set => "%DispatchSetProperty",
+            PropertyAccess::SetNode => "%DispatchSetMultidimProperty",
+        };
+        self.resolve_mem::<Properties>(ty, name, range, true, Some(hook))
     }
 
     pub(crate) fn method_of(
@@ -1787,91 +1826,32 @@ impl<'a> CodeEnv<'a> {
         name: String,
         range: bindings::Range,
     ) -> Result<Member<Callee>, TypeError> {
-        match ty {
-            Ty::Any | Ty::This | Ty::Param(_) => {
-                Ok(Member::untyped(Callee::Method(TyProcedureOrAny::Any)))
-            }
-            Ty::OREF(obj) => self.get_method(obj, name, range),
-        }
+        let hook = Some(method_hook(ty));
+        callee(
+            self.resolve_mem::<Methods>(ty, name, range, true, hook)?,
+            range,
+        )
     }
 
-    // A parameter has no dynamic-dispatch fallback.
-    pub(crate) fn get_parameter(
+    fn resolve_mem<N: Namespace>(
         &self,
-        obj: &ClsOrIns,
+        ty: &Ty,
         mem: String,
         range: bindings::Range,
-    ) -> Result<Member<Ty>, TypeError> {
-        let found = self.resolve_mem(obj, mem, range, Visible::Parameter, true, None)?;
-        Ok(Member {
-            ty: value_of(found.ty),
-            location: found.location,
-        })
-    }
-
-    pub(crate) fn get_property(
-        &self,
-        obj: &ClsOrIns,
-        mem: String,
-        range: bindings::Range,
-        access: PropertyAccess,
-    ) -> Result<Member<PropertyTy>, TypeError> {
-        let dispatch = Some(Dispatch::Property(access));
-        let found = self.resolve_mem(obj, mem, range, Visible::Property, true, dispatch)?;
-        Ok(Member {
-            ty: match found.ty {
-                HOTy::Collection { kind, element } => PropertyTy::Collection { kind, element },
-                ty => PropertyTy::Value(value_of(ty)),
-            },
-            location: found.location,
-        })
-    }
-
-    pub(crate) fn get_method(
-        &self,
-        obj: &ClsOrIns,
-        mem: String,
-        range: bindings::Range,
-    ) -> Result<Member<Callee>, TypeError> {
-        let dispatch = Some(Dispatch::Method);
-        let found = self.resolve_mem(obj, mem, range, Visible::Method, true, dispatch)?;
-        callee(found, range)
-    }
-
-    // `mem` of `obj` as code refers to it: `lookup`, else the `%Dispatch*` hook for `dispatch`;
-    // errors at `range`, a soft one for a member taken on trust.
-    fn resolve_mem(
-        &self,
-        obj: &ClsOrIns,
-        mem: String,
-        range: bindings::Range,
-        ns: Visible,
         own: bool,
-        dispatch: Option<Dispatch>,
-    ) -> Result<MemberTy, TypeError> {
+        hook: Option<&str>,
+    ) -> Result<Member<N::Ty>, TypeError> {
+        // A member of an unresolved `Any`/`This`/`..#NAME` type (the last a mask bug) is taken
+        // as present and untyped.
+        let Ty::OREF(obj) = ty else {
+            return Ok(Member::untyped(N::Ty::default()));
+        };
         let at = |err: QuasiTypeError| err.into_error(|| range);
-        let found = match (self.lookup(obj, &mem, ns, own), dispatch) {
-            // Dynamic dispatch: a class overriding the hook takes any member name. Only
-            // `%DispatchGetProperty`'s return type matters; `%DispatchSetMultidimProperty` isn't
-            // consulted, a multidimensional reference not being told from a call of the wrong arity.
-            (Err(LookupError::Absent), Some(dispatch)) => {
-                let hook = match dispatch {
-                    Dispatch::Property(PropertyAccess::Get) => "%DispatchGetProperty",
-                    Dispatch::Property(PropertyAccess::Set) => "%DispatchSetProperty",
-                    Dispatch::Method if obj.is_ins() => "%DispatchMethod",
-                    Dispatch::Method => "%DispatchClassMethod",
-                };
-                self.lookup(obj, hook, Visible::Method, own)
-                    .map(|hook| MemberTy {
-                        ty: HOTy::Value(match (dispatch, hook.ty) {
-                            (Dispatch::Property(PropertyAccess::Get), HOTy::Procedure(proc)) => {
-                                proc.out.clone().unwrap_or_default()
-                            }
-                            _ => Ty::Any,
-                        }),
-                        ..MemberTy::default()
-                    })
-            }
+        let found = match (self.lookup::<N>(obj, &mem, own), hook) {
+            // Dynamic dispatch: a class overriding the hook takes any member name.
+            (Err(LookupError::Absent), Some(hook)) => self
+                .lookup::<Methods>(obj, hook, own)
+                .map(|hook| Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref)))),
             (found, _) => found,
         };
         match found {
@@ -1902,7 +1882,7 @@ impl<'a> CodeEnv<'a> {
                         )
                     });
                 self.add_soft_diagnostic(err.into());
-                Ok(MemberTy::default())
+                Ok(Member::untyped(N::Ty::default()))
             }
         }
     }
@@ -1919,9 +1899,14 @@ impl<'a> CodeEnv<'a> {
             .ok_or_else(QuasiTypeError::not_in_class)
             .map_err(|err| err.into_error(|| range))?
             .to_string();
-        let dispatch = Some(Dispatch::Method);
-        let found = self.resolve_mem(&this, mem, range, Visible::Method, false, dispatch)?;
-        match callee(found, range)?.ty {
+        let this = Ty::OREF(this);
+        let hook = Some(method_hook(&this));
+        match callee(
+            self.resolve_mem::<Methods>(&this, mem, range, false, hook)?,
+            range,
+        )?
+        .ty
+        {
             Callee::Method(proc) => Ok(proc),
             Callee::Node(ty) => Err(QuasiTypeError::not_procedure(ty).into_error(|| range)),
         }
@@ -2085,7 +2070,8 @@ mod tests {
             uri: None,
             origin: None,
         };
-        let HOTy::Value(Ty::OREF(ClsOrIns::Ins(cls))) = MemberTy::try_from(children).unwrap().ty
+        let Some((PropertyTy::Value(Ty::OREF(ClsOrIns::Ins(cls))), _)) =
+            Properties::reported(children, None)
         else {
             panic!("not an instance")
         };

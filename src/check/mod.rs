@@ -142,7 +142,7 @@ use crate::{
     SourceMap,
     bindings::{self, ArgMode, Diagnostic, DiagnosticRelatedInformation, InlayHint, Location},
     cos::{self, *},
-    details::{self, MemberDetails, MemberKindSpecificDetails, MethodDetails, Visible, WithRange},
+    details::{self, MemberDetails, MemberKindSpecificDetails, MethodDetails, WithRange},
 };
 
 pub(crate) trait CheckMember {
@@ -2017,13 +2017,11 @@ fn check_set_target<'a>(
     match target {
         SetTarget::Sub { obj, op } => {
             let obj = obj.to_ty(env, flow)?;
-            check_set_member(env, obj, op.mem.deref())
+            check_set_member(env, flow, obj, op.mem.deref(), op.args.as_ref())
         }
-        // `Set ..Prop(subs) = value` isn't modeled apart from `Set ..Prop = value`, so
-        // `%DispatchSetMultidimProperty` is never consulted (see `dispatch_member`).
-        SetTarget::Member { member, .. } => {
+        SetTarget::Member { member, args } => {
             let obj = Ty::OREF(env.this()?);
-            check_set_member(env, obj, member.deref())
+            check_set_member(env, flow, obj, member.deref(), args.as_ref())
         }
         SetTarget::Var(variable) => {
             let _ = variable.to_maybe_ty(env, flow)?;
@@ -2405,13 +2403,25 @@ fn base_property<'a, T>(
         ExprOps::Then { base: inner, op }
             if op.args.is_none() && !op.mem.is_parameter() && !is_system_var(inner) =>
         {
-            check_property(env, inner.to_ty(env, flow)?, &op.mem, PropertyAccess::Get)
+            let obj = inner.to_ty(env, flow)?;
+            let range = env.range(&op.mem);
+            referenced(
+                env,
+                &op.mem,
+                env.property_of(&obj, op.mem.id(), range, PropertyAccess::Get),
+            )
         }
         ExprOps::Base(atom)
             if let ParenedExpr::Normal(atom) = atom.deref()
                 && let AtomicExpr::Member { member, args: None } = atom.deref().deref() =>
         {
-            check_property(env, Ty::OREF(env.this()?), member, PropertyAccess::Get)
+            let obj = Ty::OREF(env.this()?);
+            let range = env.range(member);
+            referenced(
+                env,
+                member,
+                env.property_of(&obj, member.id(), range, PropertyAccess::Get),
+            )
         }
         _ => base.to_ty(env, flow).map(PropertyTy::Value),
     }
@@ -2508,16 +2518,24 @@ fn check_member<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<Option<Ty>, QuasiTypeError> {
+    let range = env.range(mem);
+    let name = mem.id();
     match (mem.is_parameter(), args) {
-        (true, None) => Ok(Some(check_parameter(env, ty, mem)?)),
-        // `..#P(...)`: a parameter is a value, never a callee.
-        (true, Some(_)) => Err(QuasiTypeError::not_procedure(check_parameter(
-            env, ty, mem,
+        (true, None) => Ok(Some(referenced(
+            env,
+            mem,
+            env.parameter_of(&ty, name, range),
         )?)),
-        (false, None) => Ok(Some(
-            check_property(env, ty, mem, PropertyAccess::Get)?.to_ty(),
-        )),
-        (false, Some(args)) => match check_method(env, ty, mem)? {
+        // `..#P(...)`: a parameter is a value, never a callee.
+        (true, Some(_)) => {
+            let parameter = referenced(env, mem, env.parameter_of(&ty, name, range))?;
+            Err(QuasiTypeError::not_procedure(parameter))
+        }
+        (false, None) => {
+            let property = env.property_of(&ty, name, range, PropertyAccess::Get);
+            Ok(Some(referenced(env, mem, property)?.to_ty()))
+        }
+        (false, Some(args)) => match referenced(env, mem, env.method_of(&ty, name, range))? {
             Callee::Method(proc) => check_call(env, flow, proc, args.items.iter(), env.range(mem)),
             // `..Prop(subs)`: a multidimensional property's node, typed like the property.
             Callee::Node(ty) => {
@@ -2565,61 +2583,42 @@ fn check_super_call<'a>(
     check_call(env, flow, ty, args.items.iter(), range)
 }
 
-fn check_parameter(
+// A member of `obj`, recorded as a reference to where it's declared.
+fn referenced<T>(
     env: &CodeEnv<'_>,
-    obj: Ty,
     mem: &Range<MemberRef>,
-) -> Result<Ty, QuasiTypeError> {
-    let range = env.range(mem);
-    Ok(reference(
-        env,
-        range,
-        env.parameter_of(&obj, mem.id(), range)?,
-    ))
-}
-
-fn check_property(
-    env: &CodeEnv<'_>,
-    obj: Ty,
-    mem: &Range<MemberRef>,
-    access: PropertyAccess,
-) -> Result<PropertyTy, QuasiTypeError> {
-    let range = env.range(mem);
-    Ok(reference(
-        env,
-        range,
-        env.property_of(&obj, mem.id(), range, access)?,
-    ))
-}
-
-fn check_method(
-    env: &CodeEnv<'_>,
-    obj: Ty,
-    mem: &Range<MemberRef>,
-) -> Result<Callee, QuasiTypeError> {
-    let range = env.range(mem);
-    Ok(reference(env, range, env.method_of(&obj, mem.id(), range)?))
-}
-
-// `Set obj.X = v`: the member must exist; a parameter resolves too, though IRIS then rejects it.
-fn check_set_member(
-    env: &CodeEnv<'_>,
-    obj: Ty,
-    mem: &Range<MemberRef>,
-) -> Result<(), QuasiTypeError> {
-    if mem.is_parameter() {
-        check_parameter(env, obj, mem)?;
-    } else {
-        check_property(env, obj, mem, PropertyAccess::Set)?;
-    }
-    Ok(())
-}
-
-fn reference<T>(env: &CodeEnv<'_>, range: bindings::Range, member: types::Member<T>) -> T {
+    member: Result<types::Member<T>, TypeError>,
+) -> Result<T, QuasiTypeError> {
+    let member = member?;
     if let Some(location) = &member.location {
-        env.reference(range, location.clone());
+        env.reference(env.range(mem), location.clone());
     }
-    member.ty
+    Ok(member.ty)
+}
+
+// `Set obj.X = v`, or `Set obj.X(subs) = v` for a node of a multidimensional property: the member
+// must exist; a parameter resolves too, though IRIS then rejects it.
+fn check_set_member<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    obj: Ty,
+    mem: &Range<MemberRef>,
+    subs: Option<&Range<MthArgList>>,
+) -> Result<(), QuasiTypeError> {
+    let range = env.range(mem);
+    if mem.is_parameter() {
+        referenced(env, mem, env.parameter_of(&obj, mem.id(), range))?;
+        return Ok(());
+    }
+    let access = match subs {
+        Some(subs) => {
+            builtins::check_args_any(env, flow, subs.items.iter())?;
+            PropertyAccess::SetNode
+        }
+        None => PropertyAccess::Set,
+    };
+    referenced(env, mem, env.property_of(&obj, mem.id(), range, access))?;
+    Ok(())
 }
 
 fn check_param_arg<'a>(
@@ -3285,9 +3284,12 @@ fn check_instance_member(
             Err(QuasiTypeError::access_instance_only_member_from_class_context(mem))
         }
         ClsOrIns::Ins(cty) => {
-            let member =
-                env.get_property(&ClsOrIns::Ins(cty), mem, mem_range, PropertyAccess::Get)?;
-            Ok(Right(reference(env, mem_range, member).to_ty().into()))
+            let obj = Ty::OREF(ClsOrIns::Ins(cty));
+            let member = env.property_of(&obj, mem, mem_range, PropertyAccess::Get)?;
+            if let Some(location) = &member.location {
+                env.reference(mem_range, location.clone());
+            }
+            Ok(Right(member.ty.to_ty().into()))
         }
     }
 }
@@ -3505,11 +3507,7 @@ pub(crate) fn check_cls(
     for member in cls.members.in_order() {
         if let MemberKindSpecificDetails::Index { on_properties } = &member.kind {
             for key in on_properties.iter().flatten() {
-                if env
-                    .base
-                    .member_exists(&cls.name.it, &key.it, Visible::Property)
-                    == Some(false)
-                {
+                if env.base.member_exists::<Properties>(&cls.name.it, &key.it) == Some(false) {
                     let (suggestions, _) = env.base.member_suggestions(&cls.name.it, &key.it);
                     diagnostics.push(
                         QuasiTypeError::cannot_find_member(
@@ -3598,7 +3596,7 @@ fn check_property_or_parameter_declaration(
                         .any(|k| k.eq_ignore_ascii_case(name));
                     let results: Vec<Option<bool>> = candidate_classes
                         .iter()
-                        .map(|cls| env.base.member_exists(cls, name, Visible::Parameter))
+                        .map(|cls| env.base.member_exists::<Parameters>(cls, name))
                         .collect();
                     let found = results.contains(&Some(true));
                     // Report as absent once any candidate confirms it, even if others are

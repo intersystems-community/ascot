@@ -467,15 +467,6 @@ pub enum Ty {
     Param(String),
 }
 
-// A member's type as the resolver carries it, whatever namespace it came from. The lookups hand
-// out a `Ty`, `PropertyTy` or `Callee` according to the namespace they searched.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HOTy {
-    Value(Ty),
-    Procedure(Arc<TyProcedure>),
-    Collection { kind: CollectionClass, element: Ty },
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CollectionClass {
     List,
@@ -495,34 +486,6 @@ impl CollectionClass {
             CollectionClass::List => "%Integer",
             CollectionClass::Array => "%String",
         })
-    }
-}
-
-impl HOTy {
-    pub fn procedure(&self) -> Option<&Arc<TyProcedure>> {
-        match self {
-            HOTy::Procedure(proc) => Some(proc),
-            _ => None,
-        }
-    }
-}
-
-impl From<Ty> for HOTy {
-    fn from(ty: Ty) -> Self {
-        Self::Value(ty)
-    }
-}
-
-impl std::fmt::Display for HOTy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HOTy::Value(ty) => ty.fmt(f),
-            HOTy::Procedure(proc) => proc.fmt(f),
-            HOTy::Collection { kind, element } => match kind {
-                CollectionClass::List => write!(f, "list Of {element}"),
-                CollectionClass::Array => write!(f, "array Of {element}"),
-            },
-        }
     }
 }
 
@@ -593,12 +556,13 @@ impl ClsOrIns {
     }
 }
 
-// Whether `..X` is read or assigned; a missing property falls back to the matching
-// `%Dispatch*Property` hook.
+// How `..X` is used; a missing property falls back to the matching `%Dispatch*Property` hook.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PropertyAccess {
     Get,
     Set,
+    // `Set ..X(subs) = v`, a node of a multidimensional property.
+    SetNode,
 }
 
 // A member as a lookup found it, with where it's declared when a workspace class declares it.
@@ -613,6 +577,18 @@ pub struct Member<T> {
 pub enum PropertyTy {
     Value(Ty),
     Collection { kind: CollectionClass, element: Ty },
+}
+
+impl Default for Callee {
+    fn default() -> Self {
+        Callee::Method(TyProcedureOrAny::Any)
+    }
+}
+
+impl Default for PropertyTy {
+    fn default() -> Self {
+        PropertyTy::Value(Ty::Any)
+    }
 }
 
 impl PropertyTy {
@@ -1066,13 +1042,20 @@ impl Instantiate for TyProcedure {
     }
 }
 
-impl Instantiate for HOTy {
+impl Instantiate for TyProcedureOrAny {
+    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
+        if let TyProcedureOrAny::Procedure(proc) = self {
+            Arc::make_mut(proc).instantiate(receiver, owner);
+        }
+    }
+}
+
+impl Instantiate for PropertyTy {
     fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
         match self {
-            HOTy::Value(ty) | HOTy::Collection { element: ty, .. } => {
+            PropertyTy::Value(ty) | PropertyTy::Collection { element: ty, .. } => {
                 ty.instantiate(receiver, owner)
             }
-            HOTy::Procedure(proc) => Arc::make_mut(proc).instantiate(receiver, owner),
         }
     }
 }
@@ -1179,15 +1162,13 @@ mod tests {
         receiver
             .generics
             .insert("ELEMENTTYPE".to_string(), "Demo.Child".to_string());
-        let mut element = HOTy::Value(ty_from_mask(Some("..#ELEMENTTYPE".to_string())).unwrap());
+        let mut element = ty_from_mask(Some("..#ELEMENTTYPE".to_string())).unwrap();
         element.instantiate(&receiver, "%Library.RelationshipObject");
-        assert!(
-            matches!(element, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "Demo.Child")
-        );
-        let mut this = HOTy::Value(ty_from_mask(Some("This".to_string())).unwrap());
+        assert!(matches!(element, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "Demo.Child"));
+        let mut this = ty_from_mask(Some("This".to_string())).unwrap();
         this.instantiate(&receiver, "%Library.RelationshipObject");
         assert!(
-            matches!(this, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "%Library.RelationshipObject")
+            matches!(this, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "%Library.RelationshipObject")
         );
     }
 }

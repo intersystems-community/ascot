@@ -64,27 +64,6 @@ pub(crate) enum MemberNs {
     Other,
 }
 
-// The members ObjectScript names directly -- the only ones a lookup is ever for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Visible {
-    // `..#X`
-    Parameter,
-    // `..X`: a property
-    Property,
-    // `..X(...)`: a method, else a property (which IRIS then requires to be multidimensional)
-    Method,
-}
-
-impl From<Visible> for MemberNs {
-    fn from(visible: Visible) -> Self {
-        match visible {
-            Visible::Parameter => Self::Parameter,
-            Visible::Property => Self::Property,
-            Visible::Method => Self::HigherOrder,
-        }
-    }
-}
-
 /// A class's members by name, one map per `MemberNs`, so a same-named pair within one is a
 /// conflict. Each key repeats its member's `name`, for the lookup.
 #[derive(Default)]
