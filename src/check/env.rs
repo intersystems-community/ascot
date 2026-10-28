@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet},
-    ops::{ControlFlow, Deref},
+    ops::Deref,
 };
 
 use tygr::{IntoInner, OLC, Range};
@@ -537,32 +537,27 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
 impl<'a> WorkspaceEnv<'a> {
     // The names in `N`'s namespace along `cls`'s chain -- all ObjectScript can refer to there.
     fn names<N: Namespace>(&self, cls: &str) -> Vec<String> {
-        let generated = N::NS == MemberNs::Method;
         let mut names = Vec::new();
-        self.walk::<()>(cls, true, &mut |cls, resolved| {
-            match resolved {
-                Ok(Class::Workspace(_, details)) => {
-                    names.extend(details.names(N::NS).cloned());
-                }
+        for (cls, resolved) in self.ancestry(cls, true) {
+            match &resolved {
+                Ok(Class::Workspace(_, details)) => names.extend(details.names(N::NS).cloned()),
                 Ok(Class::Iris(info)) => names.extend(
-                    info.members
-                        .iter()
+                    (info.members.iter())
+                        .filter(|m| MemberNs::of_info(&m.kind) == N::NS)
                         .filter(|m| {
-                            MemberNs::of_info(&m.kind) == N::NS
-                                && !crate::mask::dropped(
-                                    m.origin.as_deref().unwrap_or(cls),
-                                    &m.name.content,
-                                )
+                            !crate::mask::dropped(
+                                m.origin.as_deref().unwrap_or(&cls),
+                                &m.name.content,
+                            )
                         })
                         .map(|m| m.name.content.clone()),
                 ),
-                Err(_) => return ControlFlow::Continue(false),
+                Err(_) => continue,
             }
-            if generated {
-                names.extend(self.generated_members(cls, resolved).keys().cloned());
+            if N::NS == MemberNs::Method {
+                names.extend(self.generated_members(&cls, &resolved).keys().cloned());
             }
-            ControlFlow::Continue(true)
-        });
+        }
         names
     }
 
@@ -571,18 +566,13 @@ impl<'a> WorkspaceEnv<'a> {
     // https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class_propertyclass,
     // "Effect on Subclasses").
     pub(crate) fn property_classes(&self, cls: &str) -> Vec<String> {
-        let mut classes = Vec::new();
-        self.walk::<()>(cls, true, &mut |_, resolved| {
-            match resolved {
-                Ok(Class::Workspace(_, details)) => {
-                    classes.extend(details.property_class_names.iter().cloned());
-                }
-                Ok(Class::Iris(info)) => classes.extend(info.property_class_names.iter().cloned()),
-                _ => {}
-            }
-            ControlFlow::Continue(true)
-        });
-        classes
+        (self.ancestry(cls, true))
+            .flat_map(|(_, resolved)| match resolved {
+                Ok(Class::Workspace(_, details)) => details.property_class_names.clone(),
+                Ok(Class::Iris(info)) => info.property_class_names,
+                Err(_) => vec![],
+            })
+            .collect()
     }
 
     // The methods IRIS generates for `cls`'s own properties, indices and queries, built on the
@@ -709,37 +699,34 @@ impl<'a> WorkspaceEnv<'a> {
     fn class_methods(&self, cls: &str) -> (HashMap<String, Generated>, bool) {
         let mut methods: HashMap<String, Generated> = HashMap::new();
         let mut complete = true;
-        self.walk::<()>(cls, true, &mut |cls, resolved| match resolved {
-            Ok(Class::Workspace(_, details)) => {
-                for (name, member) in &details.members.method {
-                    if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
-                        && method.is_class_method
-                        && let Some(found) = self.declared_in::<Methods>(cls, resolved, name)
-                        && let Some(proc) = found.member.ty.procedure()
-                    {
-                        methods.entry(name.clone()).or_insert((proc.clone(), false));
+        for (cls, resolved) in self.ancestry(cls, true) {
+            match &resolved {
+                Ok(Class::Workspace(_, details)) => {
+                    for (name, member) in &details.members.method {
+                        if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
+                            && method.is_class_method
+                            && let Some(found) = self.declared_in::<Methods>(&cls, &resolved, name)
+                            && let Some(proc) = found.member.ty.procedure()
+                        {
+                            methods.entry(name.clone()).or_insert((proc.clone(), false));
+                        }
                     }
                 }
-                ControlFlow::Continue(true)
-            }
-            Ok(Class::Iris(info)) => {
-                for member in &info.members {
-                    if matches!(member.kind, MemberKind::ClassMethod(_))
-                        && let Some(found) = iris_found::<Methods>(member.clone(), cls)
-                        && let Some(proc) = found.member.ty.procedure()
-                    {
-                        methods
-                            .entry(member.name.content.clone())
-                            .or_insert((proc.clone(), false));
+                Ok(Class::Iris(info)) => {
+                    for member in &info.members {
+                        if matches!(member.kind, MemberKind::ClassMethod(_))
+                            && let Some(found) = iris_found::<Methods>(member.clone(), &cls)
+                            && let Some(proc) = found.member.ty.procedure()
+                        {
+                            methods
+                                .entry(member.name.content.clone())
+                                .or_insert((proc.clone(), false));
+                        }
                     }
                 }
-                ControlFlow::Continue(true)
+                Err(_) => complete = false,
             }
-            Err(_) => {
-                complete = false;
-                ControlFlow::Continue(false)
-            }
-        });
+        }
         (methods, complete)
     }
 
@@ -868,60 +855,62 @@ impl<'a> WorkspaceEnv<'a> {
         if own && let Err(Unresolved::Missing) = self.resolve(&receiver.name) {
             return Err(FindError::NoSuchClass(receiver.name.clone()));
         }
-        let found = self.walk(&receiver.name, own, &mut |cls, resolved| {
-            let found = match resolved {
-                Err(Unresolved::Missing) => return ControlFlow::Continue(false),
-                // Past a class nobody can see, the member may be anything: taken on trust, with
-                // a hint -- except what every object class has.
-                Err(Unresolved::Unknown(reason)) => match registered_object_member::<N>(cls, mem) {
-                    Some(found) => found,
-                    None => {
-                        let err = match reason {
-                            Some(reason) => TypeError::iris_lookup_failed(
-                                DocKind::Cls,
-                                cls.to_string(),
-                                reason.clone(),
-                                range,
-                            ),
-                            None => TypeError::unconfirmed_member(
-                                cls.to_string(),
-                                mem.to_string(),
-                                !own,
-                                self.workspace.iris.is_some(),
-                                range,
-                            ),
+        let found = self
+            .ancestry(&receiver.name, own)
+            .find_map(|(cls, resolved)| {
+                let found = match &resolved {
+                    Err(Unresolved::Missing) => return None,
+                    // Past a class nobody can see, the member may be anything: taken on trust, with
+                    // a hint -- except what every object class has.
+                    Err(Unresolved::Unknown(reason)) => {
+                        match registered_object_member::<N>(&cls, mem) {
+                            Some(found) => found,
+                            None => {
+                                let err = match reason {
+                                    Some(reason) => TypeError::iris_lookup_failed(
+                                        DocKind::Cls,
+                                        cls.clone(),
+                                        reason.clone(),
+                                        range,
+                                    ),
+                                    None => TypeError::unconfirmed_member(
+                                        cls.clone(),
+                                        mem.to_string(),
+                                        !own,
+                                        self.workspace.iris.is_some(),
+                                        range,
+                                    ),
+                                };
+                                self.add_soft_diagnostic(err.into());
+                                return Some(Ok(Some(Member::undeclared(N::Ty::default()))));
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        // Every generated member is a method, so only a method lookup consults them,
+                        // and only once it's needed: building the table looks properties up itself.
+                        let generated = || {
+                            let table = (N::NS == MemberNs::Method)
+                                .then(|| self.generated_members(&cls, &resolved))?;
+                            let (proc, is_instance_only) = table.get(mem).cloned()?;
+                            let proc = N::method(TyProcedureOrAny::Procedure(proc))?;
+                            Some(Found {
+                                member: Member::undeclared(proc),
+                                is_instance_only,
+                                origin: cls.clone(),
+                            })
                         };
-                        self.add_soft_diagnostic(err.into());
-                        return ControlFlow::Break(Ok(Some(Member::undeclared(N::Ty::default()))));
+                        self.declared_in::<N>(&cls, &resolved, mem)
+                            .or_else(generated)?
                     }
-                },
-                Ok(_) => {
-                    // Every generated member is a method, so only a method lookup consults them,
-                    // and only once it's needed: building the table looks properties up itself.
-                    let generated = || {
-                        let table = (N::NS == MemberNs::Method)
-                            .then(|| self.generated_members(cls, resolved))?;
-                        let (proc, is_instance_only) = table.get(mem).cloned()?;
-                        let proc = N::method(TyProcedureOrAny::Procedure(proc))?;
-                        Some(Found {
-                            member: Member::undeclared(proc),
-                            is_instance_only,
-                            origin: cls.to_string(),
-                        })
-                    };
-                    match self.declared_in::<N>(cls, resolved, mem).or_else(generated) {
-                        Some(found) => found,
-                        None => return ControlFlow::Continue(true),
-                    }
+                };
+                if found.is_instance_only && !obj.is_ins() {
+                    return Some(Err(FindError::InstanceOnly(mem.to_string())));
                 }
-            };
-            if found.is_instance_only && !obj.is_ins() {
-                return ControlFlow::Break(Err(FindError::InstanceOnly(mem.to_string())));
-            }
-            let mut member = found.member;
-            member.ty.instantiate(receiver, &found.origin);
-            ControlFlow::Break(Ok(Some(member)))
-        });
+                let mut member = found.member;
+                member.ty.instantiate(receiver, &found.origin);
+                Some(Ok(Some(member)))
+            });
         found.unwrap_or(Ok(None))
     }
 
@@ -967,18 +956,15 @@ impl<'a> WorkspaceEnv<'a> {
         &self,
         cls: &crate::details::ClassDetails,
     ) -> Vec<String> {
-        let mut names = Vec::new();
-        self.walk::<()>(&cls.name.it, false, &mut |_, resolved| {
-            match resolved {
+        (self.ancestry(&cls.name.it, false))
+            .flat_map(|(_, resolved)| match resolved {
                 Ok(Class::Workspace(_, details)) => {
-                    names.extend(details.include_names.iter().map(|i| i.it.clone()));
+                    details.include_names.iter().map(|i| i.it.clone()).collect()
                 }
-                Ok(Class::Iris(info)) => names.extend(info.includes.iter().cloned()),
-                _ => {}
-            }
-            ControlFlow::Continue(true)
-        });
-        names
+                Ok(Class::Iris(info)) => info.includes,
+                Err(_) => vec![],
+            })
+            .collect()
     }
 
     // IRIS resolves an unqualified class name (`Extends AbstractModel`, `##class(Date)`) against
@@ -1068,42 +1054,31 @@ impl<'a> WorkspaceEnv<'a> {
         }
     }
 
-    // Visits `cls` (unless `!own`) and its ancestors depth first in precedence order, each once,
-    // until `visit` breaks; `visit`'s `bool` says whether to go on into that class's superclasses.
-    fn walk<T>(
+    // `cls` (unless `!own`) and its ancestors, nearest first in IRIS's precedence order and each
+    // once, resolved as they come so a search stops as soon as it can.
+    fn ancestry(
         &self,
         cls: &str,
         own: bool,
-        visit: &mut impl FnMut(&str, &Result<Class, Unresolved>) -> ControlFlow<T, bool>,
-    ) -> Option<T> {
+    ) -> impl Iterator<Item = (String, Result<Class, Unresolved>)> + '_ {
         let mut seen = HashSet::new();
-        if own {
-            return self.walk_in(cls, visit, &mut seen);
+        let mut pending = vec![cls.to_string()];
+        if !own {
+            seen.insert(cls.to_string());
+            pending = self.supers_of(cls, &self.resolve(cls));
+            pending.reverse();
         }
-        seen.insert(cls.to_string());
-        self.supers_of(cls, &self.resolve(cls))
-            .iter()
-            .find_map(|sup| self.walk_in(sup, visit, &mut seen))
-    }
-
-    fn walk_in<T>(
-        &self,
-        cls: &str,
-        visit: &mut impl FnMut(&str, &Result<Class, Unresolved>) -> ControlFlow<T, bool>,
-        seen: &mut HashSet<String>,
-    ) -> Option<T> {
-        if !seen.insert(cls.to_string()) {
-            return None;
-        }
-        let resolved = self.resolve(cls);
-        match visit(cls, &resolved) {
-            ControlFlow::Break(found) => Some(found),
-            ControlFlow::Continue(false) => None,
-            ControlFlow::Continue(true) => self
-                .supers_of(cls, &resolved)
-                .iter()
-                .find_map(|sup| self.walk_in(sup, visit, seen)),
-        }
+        std::iter::from_fn(move || {
+            loop {
+                let cls = pending.pop()?;
+                if !seen.insert(cls.clone()) {
+                    continue;
+                }
+                let resolved = self.resolve(&cls);
+                pending.extend(self.supers_of(&cls, &resolved).into_iter().rev());
+                return Some((cls, resolved));
+            }
+        })
     }
 
     fn qualify_ty(&self, t: &mut Ty, context: &str) {
@@ -1151,26 +1126,26 @@ impl<'a> WorkspaceEnv<'a> {
     // `None` means we can't tell (class outside the workspace with no IRIS connection).
     pub(crate) fn is_datatype(&self, cls: &str) -> Option<bool> {
         let mut unknown = false;
-        let yes = self.walk(cls, true, &mut |cls, resolved| match resolved {
-            _ if cls == "%Library.DataType" => ControlFlow::Break(true),
-            // Never a datatype, even unresolved.
-            _ if cls == "%Library.RegisteredObject" => ControlFlow::Continue(false),
-            Ok(Class::Workspace(_, details)) if details.is_datatype => ControlFlow::Break(true),
-            Ok(Class::Workspace(..)) => ControlFlow::Continue(true),
-            // Outside the workspace, IRIS's compiled ClassType resolves the whole chain.
-            Ok(Class::Iris(bindings::ClassInfo {
-                is_datatype: Some(true),
-                ..
-            })) => ControlFlow::Break(true),
-            Ok(Class::Iris(bindings::ClassInfo {
-                is_datatype: Some(false),
-                ..
-            })) => ControlFlow::Continue(false),
-            _ => {
-                unknown = true;
-                ControlFlow::Continue(false)
-            }
-        });
+        let yes = self
+            .ancestry(cls, true)
+            .find_map(|(cls, resolved)| match resolved {
+                _ if cls == "%Library.DataType" => Some(true),
+                // Never a datatype, even unresolved, and IRIS lets nothing mix it with one.
+                _ if cls == "%Library.RegisteredObject" => Some(false),
+                Ok(Class::Workspace(_, details)) => details.is_datatype.then_some(true),
+                // Outside the workspace, IRIS's compiled ClassType is known.
+                Ok(Class::Iris(info)) => match info.is_datatype {
+                    Some(is_datatype) => is_datatype.then_some(true),
+                    None => {
+                        unknown = true;
+                        None
+                    }
+                },
+                Err(_) => {
+                    unknown = true;
+                    None
+                }
+            });
         yes.or((!unknown).then_some(false))
     }
 
@@ -1323,12 +1298,7 @@ impl<'a> WorkspaceEnv<'a> {
     // `cls` and its ancestors, nearest first. Not IRIS's exact MRO, but any
     // shared ancestor is a sound upper bound for merging.
     fn ancestors(&self, cls: &str) -> Vec<String> {
-        let mut order = Vec::new();
-        self.walk::<()>(cls, true, &mut |cls, resolved| {
-            order.push(cls.to_string());
-            ControlFlow::Continue(!matches!(resolved, Err(Unresolved::Unknown(_))))
-        });
-        order
+        self.ancestry(cls, true).map(|(cls, _)| cls).collect()
     }
 
     pub fn new(workspace: &'a WorkspaceStruct) -> Self {
