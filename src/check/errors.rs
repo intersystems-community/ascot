@@ -146,6 +146,21 @@ impl QuasiTypeError {
         )
     }
 
+    pub fn node_without_subscripts(name: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::NodeWithoutSubscripts { name }, vec![])
+    }
+
+    pub fn undocumented_argument(function: String, documented: usize, given: usize) -> Self {
+        Self::WithoutRange(
+            TypeErrorKind::UndocumentedArgument {
+                function,
+                documented,
+                given,
+            },
+            vec![],
+        )
+    }
+
     pub fn not_multidimensional(name: String) -> Self {
         Self::WithoutRange(TypeErrorKind::NotMultidimensional { name }, vec![])
     }
@@ -567,7 +582,7 @@ type_error_kinds! {
     #[message = "'{keyword}' is not a recognized parameter keyword; available: {available}"]
     UnrecognizedParameterKeyword { keyword: String, available: Available },
     #[code = "A8317"]
-    #[severity = Error]
+    #[severity = Warning]
     #[message = "'{meta_type}' is not a recognized parameter type; available: {available}"]
     UnrecognizedParameterType { meta_type: String, available: Available },
     #[code = "A7155"]
@@ -616,6 +631,17 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Property '{name}' is not MultiDimensional, so it takes no subscripts"]
     NotMultidimensional { name: String },
+    /// IRIS throws `<OBJECT DISPATCH>` "missing subscripts" on reading `..X()`, and refuses to
+    /// compile `Set ..X() = v`.
+    #[code = "A3942"]
+    #[severity = Error]
+    #[message = "Property '{name}' is MultiDimensional, so `{name}()` names no node: give it a subscript"]
+    NodeWithoutSubscripts { name: String },
+    /// IRIS compiles and runs the call, but the documentation gives the extra argument no meaning.
+    #[code = "A5156"]
+    #[severity = Warning]
+    #[message = "${function} is documented to take at most {documented} argument(s), but was given {given}; IRIS tolerates the extra"]
+    UndocumentedArgument { function: String, documented: usize, given: usize },
     #[code = "A6319"]
     #[severity = Error]
     #[message = "Parameter '{name}' is a constant: it takes no arguments and can't be assigned"]
@@ -738,7 +764,7 @@ type_error_kinds! {
     #[message = "The member name {name} is defined twice"]
     DuplicatedMemberName { name: String },
     #[code = "A3717"]
-    #[severity = Error]
+    #[severity = Warning]
     #[message = "Class '{name}' is also declared in {other_uri}"]
     DuplicateClassName { name: String, other_uri: String },
     /// Code that doesn't parse. Where the grammar knows what went wrong, such as an unknown

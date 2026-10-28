@@ -23,6 +23,7 @@ use tygr::{IntoInner, OLC, Range};
 
 use crate::bindings::{ArgMode, InlayHint, MemberKind};
 use crate::check::errors::*;
+use crate::check::flow::OutputCell;
 use crate::check::types::*;
 use crate::cos::{CodeMode, MethodLanguage};
 use crate::details::{
@@ -1527,11 +1528,12 @@ pub struct LabelEntry {
     // The label after this one, which it runs into when it falls off its end. `None` for the
     // last, or when a procedure block follows.
     pub next: Option<String>,
-    // What its returns are held to: set by the label before it when that one falls through, else
-    // its own when checked. How a nested label is reached (`Do`, `Goto`, an error trap) decides
-    // whether it returns for its block, which isn't tracked, so nothing is assumed.
-    #[allow(clippy::type_complexity)]
-    pub output: OnceCell<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
+    // A label inside a method or procedure body, as opposed to one of the routine's own.
+    pub nested: bool,
+    // What its returns are held to: the body's when a `Goto` in the body reaches it, the label
+    // before it's when that one falls through, else its own when checked. A nested label only
+    // `Do`ne, or reached by an error trap, returns for its caller, so nothing is assumed of it.
+    pub output: OnceCell<OutputCell>,
 }
 
 // `labels` in source order, each flagged when it's a procedure block.
@@ -1547,6 +1549,7 @@ pub(crate) fn scoped_labels(uri: &str, labels: &[(&RoutineElementDetails, bool)]
             let entry = LabelEntry {
                 proc: Arc::new(details.to_ty_procedure(Some(uri))),
                 outside_block: false,
+                nested: false,
                 next,
                 output: OnceCell::new(),
             };
@@ -1635,7 +1638,10 @@ impl<'a> CodeEnv<'a> {
                 (name.clone(), label)
             })
             .collect();
-        labels.extend(nested);
+        labels.extend(nested.into_iter().map(|(name, mut label)| {
+            label.nested = true;
+            (name, label)
+        }));
         CodeEnv {
             this: self.this,
             base: self.base,
