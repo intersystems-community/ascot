@@ -530,7 +530,7 @@ type_error_kinds! {
     RedundantNew { name: String },
     #[code = "A6866"]
     #[severity = Error]
-    #[message = "'{name}' is already NEW'd here — every local variable is implicitly NEW'd on entry to a procedure block"]
+    #[message = "Cannot NEW the private variable '{name}' in a procedure block, where every local variable is already NEW'd on entry"]
     NewInProcedureBlock { name: String },
     #[code = "A5573"]
     #[severity = Warning]
@@ -702,6 +702,10 @@ type_error_kinds! {
     #[severity = Information]
     #[message = "Type checking not implemented for '{what}'"]
     Unimplemented { what: String },
+    #[code = "A3904"]
+    #[severity = Warning]
+    #[message = "The macro '{name}' is defined in the body of method '{method}'; IRIS keeps it for the methods compiled after it (alphabetically), but it belongs in an include file or at class level"]
+    MacroFromMethodBody { name: String, method: String },
     #[code = "A2797"]
     #[severity = Error]
     #[message = "The macro '{name}' is undefined{suggestions}"]
@@ -1165,6 +1169,14 @@ impl TypeError {
                 location: previous,
                 message: "Previous NEW".into(),
             }],
+        )
+    }
+
+    pub fn macro_from_method_body(name: String, method: String, range: Range) -> Self {
+        Self::new(
+            TypeErrorKind::MacroFromMethodBody { name, method },
+            range,
+            vec![],
         )
     }
 

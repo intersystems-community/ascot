@@ -1179,9 +1179,10 @@ impl<'a> WorkspaceEnv<'a> {
         header: &str,
         body: &str,
         base_definitions: &MacroDefinitions,
+        body_macros: &crate::macro_expand::BodyMacros,
     ) -> Result<(String, SourceMap, MacroDefinitions), bindings::Diagnostic> {
         self.workspace
-            .expand_method_body(uri, header, body, base_definitions)
+            .expand_method_body(uri, header, body, base_definitions, body_macros)
     }
 
     // A workspace-wide routine's label -> signature map, for a cross-routine label call
@@ -1442,6 +1443,7 @@ pub struct ClassDocument<'a> {
     pub language: Option<&'a MethodLanguage>,
     pub mode: Option<&'a CodeMode>,
     pub macro_definitions: MacroDefinitions,
+    pub body_macros: RefCell<crate::macro_expand::BodyMacros>,
 }
 
 impl<'a> ClassDocument<'a> {
@@ -1456,6 +1458,7 @@ impl<'a> ClassDocument<'a> {
             language,
             mode,
             macro_definitions,
+            body_macros: Default::default(),
         }
     }
 }
