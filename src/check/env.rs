@@ -60,12 +60,13 @@ pub(crate) trait Namespace {
     fn method(_proc: TyProcedureOrAny) -> Option<Self::Ty> {
         None
     }
-    // The `%Dispatch*` hook of `obj` that stands in for a missing member, and what it yields.
-    fn hook(_obj: &ClsOrIns) -> Option<&'static str> {
+    // The member a `%Dispatch*` hook of `obj` stands in for when no class has the name, typed
+    // from the hook's signature as `find` resolves it; `None` where no hook applies.
+    fn dispatched(
+        _obj: &ClsOrIns,
+        _find: impl FnOnce(&str) -> Option<TyProcedureOrAny>,
+    ) -> Option<Self::Ty> {
         None
-    }
-    fn dispatched(_hook: Option<&TyProcedure>) -> Self::Ty {
-        Self::Ty::default()
     }
     // The class names written in the type, to qualify against the declaring class.
     fn class_names(ty: &mut Self::Ty, f: impl FnMut(&mut Ty));
@@ -201,13 +202,14 @@ impl<A: Access> Namespace for Properties<A> {
         Some((ty, true))
     }
 
-    fn hook(obj: &ClsOrIns) -> Option<&'static str> {
-        A::hook(obj)
-    }
-
     // Only `%DispatchGetProperty`'s return type matters; a dispatched name takes any subscripts.
-    fn dispatched(hook: Option<&TyProcedure>) -> PropertyTy {
-        PropertyTy::Multidimensional(hook.and_then(|hook| hook.out.clone()).unwrap_or_default())
+    fn dispatched(
+        obj: &ClsOrIns,
+        find: impl FnOnce(&str) -> Option<TyProcedureOrAny>,
+    ) -> Option<PropertyTy> {
+        let hook = find(A::hook(obj)?)?;
+        let out = hook.procedure().and_then(|hook| hook.out.clone());
+        Some(PropertyTy::Multidimensional(out.unwrap_or_default()))
     }
 
     fn class_names(ty: &mut PropertyTy, mut f: impl FnMut(&mut Ty)) {
@@ -822,13 +824,9 @@ impl<'a> WorkspaceEnv<'a> {
         let at = |err: FindError| QuasiTypeError::from(err).into_error(|| range);
         let mut found = self.find::<N>(obj, &mem, own, range).map_err(at)?;
         // Dynamic dispatch: a class overriding the hook takes any member name no class has.
-        if found.is_none()
-            && let Some(hook) = N::hook(obj)
-        {
-            found = self
-                .find::<Methods>(obj, hook, own, range)
-                .map_err(at)?
-                .map(|hook| Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref))));
+        if found.is_none() {
+            let hook = |hook: &str| Some(self.find::<Methods>(obj, hook, own, range).ok()??.ty);
+            found = N::dispatched(obj, hook).map(Member::untyped);
         }
         found.ok_or_else(|| {
             let names = self.names::<N>(obj.name());
