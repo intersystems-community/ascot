@@ -308,7 +308,8 @@ impl From<FindError> for QuasiTypeError {
 }
 
 impl<T> Member<T> {
-    fn untyped(ty: T) -> Self {
+    // A member no source declares: generated, dispatched, or taken on trust.
+    fn undeclared(ty: T) -> Self {
         Member { ty, location: None }
     }
 }
@@ -391,7 +392,7 @@ fn registered_object_member<N: Namespace>(cls: &str, mem: &str) -> Option<Found<
         TyProcedureOrAny::Any
     };
     Some(Found {
-        member: Member::untyped(N::method(proc)?),
+        member: Member::undeclared(N::method(proc)?),
         is_instance_only: false,
         origin: cls.to_string(),
     })
@@ -819,14 +820,14 @@ impl<'a> WorkspaceEnv<'a> {
         // A member of an unresolved `Any`/`This`/`..#NAME` type (the last a mask bug) is taken
         // as present and untyped.
         let Ty::OREF(obj) = ty else {
-            return Ok(Member::untyped(N::Ty::default()));
+            return Ok(Member::undeclared(N::Ty::default()));
         };
         let at = |err: FindError| QuasiTypeError::from(err).into_error(|| range);
         let mut found = self.find::<N>(obj, &mem, own, range).map_err(at)?;
         // Dynamic dispatch: a class overriding the hook takes any member name no class has.
         if found.is_none() {
             let hook = |hook: &str| Some(self.find::<Methods>(obj, hook, own, range).ok()??.ty);
-            found = N::dispatched(obj, hook).map(Member::untyped);
+            found = N::dispatched(obj, hook).map(Member::undeclared);
         }
         found.ok_or_else(|| {
             let names = self.names::<N>(obj.name());
@@ -882,7 +883,7 @@ impl<'a> WorkspaceEnv<'a> {
                 }
             };
             self.add_soft_diagnostic(err.into());
-            Ok(Some(Member::untyped(N::Ty::default())))
+            Ok(Some(Member::undeclared(N::Ty::default())))
         };
         // `##super` from a class nobody can see has no superclasses to walk.
         if !own && let Err(Unresolved::Unknown(reason)) = self.resolve(cls) {
@@ -910,7 +911,7 @@ impl<'a> WorkspaceEnv<'a> {
                         .get(mem)
                         .cloned()?;
                     Some(Found {
-                        member: Member::untyped(N::method(TyProcedureOrAny::Procedure(proc))?),
+                        member: Member::undeclared(N::method(TyProcedureOrAny::Procedure(proc))?),
                         is_instance_only,
                         origin: cls.to_string(),
                     })
