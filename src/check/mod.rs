@@ -2417,7 +2417,7 @@ fn base_property<'a, T>(
     referenced(
         env,
         mem,
-        env.property_of(&obj, mem.id(), range, PropertyAccess::Get),
+        env.resolve_mem::<Properties<Read>>(&obj, mem.id(), range, true),
     )
 }
 
@@ -2515,21 +2515,22 @@ fn check_member<'a>(
     let range = env.range(mem);
     let name = mem.id();
     match (mem.is_parameter(), args) {
-        (true, None) => Ok(Some(referenced(
-            env,
-            mem,
-            env.parameter_of(&ty, name, range),
-        )?)),
+        (true, None) => {
+            let parameter = env.resolve_mem::<Parameters>(&ty, name, range, true);
+            Ok(Some(referenced(env, mem, parameter)?))
+        }
         (true, Some(_)) => {
-            referenced(env, mem, env.parameter_of(&ty, name.clone(), range))?;
+            let parameter = env.resolve_mem::<Parameters>(&ty, name.clone(), range, true);
+            referenced(env, mem, parameter)?;
             Err(QuasiTypeError::parameter_is_constant(name))
         }
         (false, None) => {
-            let property = env.property_of(&ty, name, range, PropertyAccess::Get);
+            let property = env.resolve_mem::<Properties<Read>>(&ty, name, range, true);
             Ok(Some(referenced(env, mem, property)?.to_ty()))
         }
         (false, Some(args)) => {
-            match referenced(env, mem, env.method_of(&ty, name.clone(), range))? {
+            let method = env.resolve_mem::<Methods>(&ty, name.clone(), range, true);
+            match referenced(env, mem, method)? {
                 Callee::Method(proc) => check_call(env, flow, proc, args.items.iter(), range),
                 // `..Prop(subs)`: a multidimensional property's node, typed like the property.
                 Callee::Property(PropertyTy::Multidimensional(ty)) => {
@@ -2603,17 +2604,18 @@ fn check_set_member<'a>(
     let range = env.range(mem);
     let name = mem.id();
     if mem.is_parameter() {
-        referenced(env, mem, env.parameter_of(&obj, name.clone(), range))?;
+        let parameter = env.resolve_mem::<Parameters>(&obj, name.clone(), range, true);
+        referenced(env, mem, parameter)?;
         return Err(QuasiTypeError::parameter_is_constant(name));
     }
-    let access = match subs {
+    let property = match subs {
         Some(subs) => {
             builtins::check_args_any(env, flow, subs.items.iter())?;
-            PropertyAccess::SetNode
+            env.resolve_mem::<Properties<AssignNode>>(&obj, name.clone(), range, true)
         }
-        None => PropertyAccess::Set,
+        None => env.resolve_mem::<Properties<Assign>>(&obj, name.clone(), range, true),
     };
-    let property = referenced(env, mem, env.property_of(&obj, name.clone(), range, access))?;
+    let property = referenced(env, mem, property)?;
     if subs.is_some() && !matches!(property, PropertyTy::Multidimensional(_)) {
         return Err(QuasiTypeError::not_multidimensional(name));
     }
@@ -3284,7 +3286,7 @@ fn check_instance_member(
         }
         ClsOrIns::Ins(cty) => {
             let obj = Ty::OREF(ClsOrIns::Ins(cty));
-            let member = env.property_of(&obj, mem, mem_range, PropertyAccess::Get)?;
+            let member = env.resolve_mem::<Properties<Read>>(&obj, mem, mem_range, true)?;
             if let Some(location) = &member.location {
                 env.reference(mem_range, location.clone());
             }
@@ -3505,15 +3507,14 @@ pub(crate) fn check_cls(
     }
     for member in cls.members.in_order() {
         if let MemberKindSpecificDetails::Index { on_properties } = &member.kind {
-            // No `%Dispatch*` hook stands in for an index key: IRIS wants a declared property.
             let this = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.name.it.clone())));
             for key in on_properties.iter().flatten() {
-                match env.base.resolve_mem::<Properties>(
+                let key_range = key.range;
+                match env.base.resolve_mem::<Properties<Indexed>>(
                     &this,
                     key.it.clone(),
-                    key.range,
+                    key_range,
                     true,
-                    None,
                 ) {
                     Ok(property) => {
                         if let Some(location) = property.location {
@@ -3603,7 +3604,12 @@ fn check_property_or_parameter_declaration(
                         .iter()
                         .map(|cls| {
                             let cls = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.to_string())));
-                            env.base.parameter_of(&cls, name.clone(), member.range)
+                            env.base.resolve_mem::<Parameters>(
+                                &cls,
+                                name.clone(),
+                                member.range,
+                                true,
+                            )
                         })
                         .collect();
                     env.base.restore_soft_diagnostics(was_suppressed);

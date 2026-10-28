@@ -556,15 +556,6 @@ impl ClsOrIns {
     }
 }
 
-// How `..X` is used; a missing property falls back to the matching `%Dispatch*Property` hook.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PropertyAccess {
-    Get,
-    Set,
-    // `Set ..X(subs) = v`, a node of a multidimensional property.
-    SetNode,
-}
-
 // A member as a lookup found it, with where it's declared when a workspace class declares it.
 pub struct Member<T> {
     pub ty: T,

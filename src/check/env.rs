@@ -30,6 +30,7 @@ use crate::details::{
 };
 use crate::mask::Correction;
 use crate::{DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos};
+use std::marker::PhantomData;
 
 // A member a lookup found, with the class declaring it, which its type parameters resolve against.
 struct Found<T> {
@@ -59,7 +60,10 @@ pub(crate) trait Namespace {
     fn method(_proc: TyProcedureOrAny) -> Option<Self::Ty> {
         None
     }
-    // What the `%Dispatch*` hook yields in place of a missing member.
+    // The `%Dispatch*` hook of `obj` that stands in for a missing member, and what it yields.
+    fn hook(_obj: &ClsOrIns) -> Option<&'static str> {
+        None
+    }
     fn dispatched(_hook: Option<&TyProcedure>) -> Self::Ty {
         Self::Ty::default()
     }
@@ -68,8 +72,31 @@ pub(crate) trait Namespace {
 }
 
 pub(crate) struct Parameters;
-pub(crate) struct Properties;
+pub(crate) struct Properties<A>(PhantomData<A>);
 pub(crate) struct Methods;
+
+// How `..X` is used, which decides the `%Dispatch*Property` hook a missing property falls back to.
+pub(crate) trait Access {
+    const HOOK: Option<&'static str>;
+}
+pub(crate) struct Read;
+pub(crate) struct Assign;
+// `Set ..X(subs) = v`, a node of a multidimensional property.
+pub(crate) struct AssignNode;
+// An index key: IRIS wants a declared property, hook or not.
+pub(crate) struct Indexed;
+impl Access for Read {
+    const HOOK: Option<&'static str> = Some("%DispatchGetProperty");
+}
+impl Access for Assign {
+    const HOOK: Option<&'static str> = Some("%DispatchSetProperty");
+}
+impl Access for AssignNode {
+    const HOOK: Option<&'static str> = Some("%DispatchSetMultidimProperty");
+}
+impl Access for Indexed {
+    const HOOK: Option<&'static str> = None;
+}
 
 impl Namespace for Parameters {
     type Ty = Ty;
@@ -94,7 +121,7 @@ impl Namespace for Parameters {
     }
 }
 
-impl Namespace for Properties {
+impl<A: Access> Namespace for Properties<A> {
     type Ty = PropertyTy;
     const NS: &'static [MemberNs] = &[MemberNs::Property];
 
@@ -155,6 +182,10 @@ impl Namespace for Properties {
         Some((ty, true))
     }
 
+    fn hook(_: &ClsOrIns) -> Option<&'static str> {
+        A::HOOK
+    }
+
     // Only `%DispatchGetProperty`'s return type matters; a dispatched name takes any subscripts.
     fn dispatched(hook: Option<&TyProcedure>) -> PropertyTy {
         PropertyTy::Multidimensional(hook.and_then(|hook| hook.out.clone()).unwrap_or_default())
@@ -196,7 +227,7 @@ impl Namespace for Methods {
                 Some((Callee::Method(proc), !m.is_class_method))
             }
             MemberKindSpecificDetails::Property { .. } => {
-                let (ty, is_instance_only) = Properties::declared(member, uri)?;
+                let (ty, is_instance_only) = Properties::<Read>::declared(member, uri)?;
                 Some((Callee::Property(ty), is_instance_only))
             }
             _ => None,
@@ -216,7 +247,7 @@ impl Namespace for Methods {
             MemberKind::Method(m) => (m, true),
             MemberKind::ClassMethod(m) => (m, false),
             MemberKind::Property(_) | MemberKind::Relationship(_) => {
-                let (ty, is_instance_only) = Properties::reported(member, None)?;
+                let (ty, is_instance_only) = Properties::<Read>::reported(member, None)?;
                 return Some((Callee::Property(ty), is_instance_only));
             }
             _ => return None,
@@ -235,6 +266,14 @@ impl Namespace for Methods {
         Some(Callee::Method(proc))
     }
 
+    fn hook(obj: &ClsOrIns) -> Option<&'static str> {
+        Some(if obj.is_ins() {
+            "%DispatchMethod"
+        } else {
+            "%DispatchClassMethod"
+        })
+    }
+
     fn class_names(ty: &mut Callee, mut f: impl FnMut(&mut Ty)) {
         match ty {
             Callee::Method(TyProcedureOrAny::Procedure(proc)) => {
@@ -243,7 +282,7 @@ impl Namespace for Methods {
                 }
             }
             Callee::Method(TyProcedureOrAny::Any) => {}
-            Callee::Property(ty) => Properties::class_names(ty, f),
+            Callee::Property(ty) => Properties::<Read>::class_names(ty, f),
         }
     }
 }
@@ -258,14 +297,6 @@ enum Miss {
 impl<T> Member<T> {
     fn untyped(ty: T) -> Self {
         Member { ty, location: None }
-    }
-}
-
-fn method_hook(ty: &Ty) -> &'static str {
-    if matches!(ty, Ty::OREF(ClsOrIns::Ins(_))) {
-        "%DispatchMethod"
-    } else {
-        "%DispatchClassMethod"
     }
 }
 
@@ -572,7 +603,7 @@ impl<'a> WorkspaceEnv<'a> {
                     let name = member.name.content.as_str();
                     match &member.kind {
                         MemberKind::Property(_) | MemberKind::Relationship(_) => {
-                            let found = iris_found::<Properties>(member.clone(), cls);
+                            let found = iris_found::<Properties<Read>>(member.clone(), cls);
                             let ty = match found.map(|found| found.member.ty) {
                                 Some(PropertyTy::Value(ty)) => ty,
                                 _ => Ty::Any,
@@ -689,9 +720,11 @@ impl<'a> WorkspaceEnv<'a> {
         let keys: Vec<NormalArg> = on_properties
             .iter()
             .map(|property| {
-                let found = property
-                    .as_ref()
-                    .and_then(|p| self.find::<Properties>(&cls, &p.it, true).ok().flatten());
+                let found = property.as_ref().and_then(|p| {
+                    self.find::<Properties<Read>>(&cls, &p.it, true)
+                        .ok()
+                        .flatten()
+                });
                 let ty = match found.map(|found| found.ty) {
                     Some(PropertyTy::Value(ty)) => ty,
                     _ => Ty::Any,
@@ -738,50 +771,14 @@ impl<'a> WorkspaceEnv<'a> {
         .collect()
     }
 
-    // The three lookups below each search one namespace -- IRIS keeps them apart by syntax:
-    // `..#X` is a parameter, `..X(...)` a method before a property, bare `..X` a property only,
-    // never a method, even one without arguments.
-
-    pub(crate) fn parameter_of(
-        &self,
-        ty: &Ty,
-        name: String,
-        range: bindings::Range,
-    ) -> Result<Member<Ty>, TypeError> {
-        self.resolve_mem::<Parameters>(ty, name, range, true, None)
-    }
-
-    pub(crate) fn property_of(
-        &self,
-        ty: &Ty,
-        mem: String,
-        range: bindings::Range,
-        access: PropertyAccess,
-    ) -> Result<Member<PropertyTy>, TypeError> {
-        let hook = match access {
-            PropertyAccess::Get => "%DispatchGetProperty",
-            PropertyAccess::Set => "%DispatchSetProperty",
-            PropertyAccess::SetNode => "%DispatchSetMultidimProperty",
-        };
-        self.resolve_mem::<Properties>(ty, mem, range, true, Some(hook))
-    }
-
-    pub(crate) fn method_of(
-        &self,
-        ty: &Ty,
-        name: String,
-        range: bindings::Range,
-    ) -> Result<Member<Callee>, TypeError> {
-        self.resolve_mem::<Methods>(ty, name, range, true, Some(method_hook(ty)))
-    }
-
+    // IRIS keeps the three namespaces apart by syntax: `..#X` is a parameter, `..X(...)` a method
+    // before a property, bare `..X` a property only, never a method, even one without arguments.
     pub(crate) fn resolve_mem<N: Namespace>(
         &self,
         ty: &Ty,
         mem: String,
         range: bindings::Range,
         own: bool,
-        hook: Option<&str>,
     ) -> Result<Member<N::Ty>, TypeError> {
         // A member of an unresolved `Any`/`This`/`..#NAME` type (the last a mask bug) is taken
         // as present and untyped.
@@ -789,7 +786,7 @@ impl<'a> WorkspaceEnv<'a> {
             return Ok(Member::untyped(N::Ty::default()));
         };
         let at = |err: QuasiTypeError| err.into_error(|| range);
-        let found = match (self.find::<N>(obj, &mem, own), hook) {
+        let found = match (self.find::<N>(obj, &mem, own), N::hook(obj)) {
             // Dynamic dispatch: a class overriding the hook takes any member name.
             (Err(Miss::Absent), Some(hook)) => match self.find::<Methods>(obj, hook, own) {
                 Err(Miss::Absent) => Err(Miss::Absent),
@@ -1780,10 +1777,8 @@ impl<'a> CodeEnv<'a> {
             .ok_or_else(QuasiTypeError::not_in_class)
             .map_err(|err| err.into_error(|| range))?
             .to_string();
-        let this = Ty::OREF(this);
-        let hook = Some(method_hook(&this));
         match self
-            .resolve_mem::<Methods>(&this, mem, range, false, hook)?
+            .resolve_mem::<Methods>(&Ty::OREF(this), mem, range, false)?
             .ty
         {
             Callee::Method(proc) => Ok(proc),
@@ -1951,7 +1946,7 @@ mod tests {
             origin: None,
         };
         let Some((PropertyTy::Value(Ty::OREF(ClsOrIns::Ins(cls))), _)) =
-            Properties::reported(children, None)
+            Properties::<Read>::reported(children, None)
         else {
             panic!("not an instance")
         };
