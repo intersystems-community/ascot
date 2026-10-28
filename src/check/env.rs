@@ -289,16 +289,16 @@ impl Namespace for Methods {
 }
 
 // Why `find` can't even say whether the member exists.
-enum Miss {
+enum FindError {
     NoSuchClass(String),
     InstanceOnly(String),
 }
 
-impl From<Miss> for QuasiTypeError {
-    fn from(miss: Miss) -> Self {
+impl From<FindError> for QuasiTypeError {
+    fn from(miss: FindError) -> Self {
         match miss {
-            Miss::NoSuchClass(cls) => QuasiTypeError::cannot_find_class(cls),
-            Miss::InstanceOnly(mem) => {
+            FindError::NoSuchClass(cls) => QuasiTypeError::cannot_find_class(cls),
+            FindError::InstanceOnly(mem) => {
                 QuasiTypeError::access_instance_only_member_from_class_context(mem)
             }
         }
@@ -819,7 +819,7 @@ impl<'a> WorkspaceEnv<'a> {
         let Ty::OREF(obj) = ty else {
             return Ok(Member::untyped(N::Ty::default()));
         };
-        let at = |miss: Miss| QuasiTypeError::from(miss).into_error(|| range);
+        let at = |miss: FindError| QuasiTypeError::from(miss).into_error(|| range);
         let mut found = self.find::<N>(obj, &mem, own, range).map_err(at)?;
         // Dynamic dispatch: a class overriding the hook takes any member name no class has.
         if found.is_none()
@@ -863,7 +863,7 @@ impl<'a> WorkspaceEnv<'a> {
         mem: &str,
         own: bool,
         range: bindings::Range,
-    ) -> Result<Option<Member<N::Ty>>, Miss> {
+    ) -> Result<Option<Member<N::Ty>>, FindError> {
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
         let cls = receiver.name.as_str();
         // Past a class nobody can see, the member may be anything: taken on trust, with a hint.
@@ -926,14 +926,14 @@ impl<'a> WorkspaceEnv<'a> {
         match found {
             Some(Ok(found)) => {
                 if found.is_instance_only && !obj.is_ins() {
-                    return Err(Miss::InstanceOnly(mem.to_string()));
+                    return Err(FindError::InstanceOnly(mem.to_string()));
                 }
                 let mut member = found.member;
                 member.ty.instantiate(receiver, &found.origin);
                 Ok(Some(member))
             }
             Some(Err((unknown, reason))) => unverified(&unknown, reason),
-            None if no_class => Err(Miss::NoSuchClass(cls.to_string())),
+            None if no_class => Err(FindError::NoSuchClass(cls.to_string())),
             None => Ok(None),
         }
     }
