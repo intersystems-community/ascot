@@ -333,6 +333,8 @@ fn analyze<'a>(
 
     let count = report_diagnostics(&workspace, &files);
     eprintln!("{} diagnostic(s) across {} file(s)", count, files.len());
+    // `exit` runs no destructors; dropping the workspace ends its IRIS session.
+    drop(workspace);
     if count > 0 {
         exit(1);
     }
@@ -394,6 +396,8 @@ fn analyze_workspace<'a>(
         diagnose_files.len(),
         all_files.len()
     );
+    // `exit` runs no destructors; dropping the workspace ends its IRIS session.
+    drop(workspace);
     if count > 0 {
         exit(1);
     }
