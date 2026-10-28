@@ -75,7 +75,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "ascot"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64",
  "clap",
@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "tygr-objectscript"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "either",
  "tygr",
@@ -1564,6 +1564,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ureq-proto",
+ "url",
  "utf8-zero",
  "webpki-roots",
 ]
