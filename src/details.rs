@@ -57,7 +57,7 @@ impl<T> Deref for WithRange<T> {
 pub(crate) enum MemberNs {
     Parameter,
     Property,
-    HigherOrder,
+    Method,
     Index,
     Query,
     // Only reachable through the members they generate.
@@ -70,7 +70,7 @@ pub(crate) enum MemberNs {
 pub(crate) struct Members {
     pub(crate) parameter: HashMap<String, WithRange<MemberDetails>>,
     pub(crate) property: HashMap<String, WithRange<MemberDetails>>,
-    pub(crate) higher_order: HashMap<String, WithRange<MemberDetails>>,
+    pub(crate) method: HashMap<String, WithRange<MemberDetails>>,
     pub(crate) index: HashMap<String, WithRange<MemberDetails>>,
     pub(crate) query: HashMap<String, WithRange<MemberDetails>>,
     /// The `MemberNs::Other` kinds, which nothing looks up by name, in source order.
@@ -85,7 +85,7 @@ impl Members {
         let map = match MemberNs::of(&member.kind) {
             MemberNs::Parameter => &mut self.parameter,
             MemberNs::Property => &mut self.property,
-            MemberNs::HigherOrder => &mut self.higher_order,
+            MemberNs::Method => &mut self.method,
             MemberNs::Index => &mut self.index,
             MemberNs::Query => &mut self.query,
             MemberNs::Other => return self.other.push(member),
@@ -102,7 +102,7 @@ impl Members {
         [
             &self.parameter,
             &self.property,
-            &self.higher_order,
+            &self.method,
             &self.index,
             &self.query,
         ]
@@ -128,7 +128,7 @@ impl MemberNs {
             MemberKindSpecificDetails::Parameter { .. } => Self::Parameter,
             MemberKindSpecificDetails::Property { .. } => Self::Property,
             MemberKindSpecificDetails::MethodOrClassMethod(..)
-            | MemberKindSpecificDetails::ClientMethod => Self::HigherOrder,
+            | MemberKindSpecificDetails::ClientMethod => Self::Method,
             MemberKindSpecificDetails::Index { .. } => Self::Index,
             MemberKindSpecificDetails::Query => Self::Query,
             _ => Self::Other,
@@ -143,7 +143,7 @@ impl MemberNs {
             }
             bindings::MemberKind::Method(_)
             | bindings::MemberKind::ClassMethod(_)
-            | bindings::MemberKind::ClientMethod(_) => Self::HigherOrder,
+            | bindings::MemberKind::ClientMethod(_) => Self::Method,
             bindings::MemberKind::Index(_) => Self::Index,
             bindings::MemberKind::Query => Self::Query,
             _ => Self::Other,
@@ -552,7 +552,7 @@ impl ClassDetails {
         Some(match ns {
             MemberNs::Parameter => &members.parameter,
             MemberNs::Property => &members.property,
-            MemberNs::HigherOrder => &members.higher_order,
+            MemberNs::Method => &members.method,
             MemberNs::Index => &members.index,
             MemberNs::Query => &members.query,
             MemberNs::Other => return None,

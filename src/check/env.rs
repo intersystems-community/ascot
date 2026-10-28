@@ -221,7 +221,7 @@ impl<A: Access> Namespace for Properties<A> {
 
 impl Namespace for Methods {
     type Ty = TyProcedureOrAny;
-    const NS: MemberNs = MemberNs::HigherOrder;
+    const NS: MemberNs = MemberNs::Method;
 
     fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(TyProcedureOrAny, bool)> {
         let MemberKindSpecificDetails::MethodOrClassMethod(m) = &member.kind else {
@@ -506,7 +506,7 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
 impl<'a> WorkspaceEnv<'a> {
     // The names in `N`'s namespace along `cls`'s chain -- all ObjectScript can refer to there.
     fn names<N: Namespace>(&self, cls: &str) -> Vec<String> {
-        let generated = N::NS == MemberNs::HigherOrder;
+        let generated = N::NS == MemberNs::Method;
         let mut names = Vec::new();
         self.walk::<()>(cls, true, &mut |cls, resolved| {
             match resolved {
@@ -678,7 +678,7 @@ impl<'a> WorkspaceEnv<'a> {
         let mut complete = true;
         self.walk::<()>(cls, true, &mut |cls, resolved| match resolved {
             Resolved::Workspace(_, details) => {
-                for (name, member) in &details.members.higher_order {
+                for (name, member) in &details.members.method {
                     if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
                         && method.is_class_method
                         && let Some(found) = self.declared_in::<Methods>(cls, resolved, name)
@@ -875,7 +875,7 @@ impl<'a> WorkspaceEnv<'a> {
                 // Every generated member is a method, so only a method lookup consults them, and
                 // only once it's needed: building the table looks properties up itself.
                 let generated = || {
-                    let table = N::NS == MemberNs::HigherOrder;
+                    let table = N::NS == MemberNs::Method;
                     let (proc, is_instance_only) = table
                         .then(|| self.generated_members(cls, resolved))?
                         .get(mem)
