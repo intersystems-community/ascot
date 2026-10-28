@@ -47,6 +47,14 @@ struct Found {
     origin: String,
 }
 
+// Which of IRIS's dynamic-dispatch methods a failed member lookup falls back to -- see
+// https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GOOP_dynamic_dispatch
+#[derive(Clone, Copy)]
+enum Dispatch {
+    Property(PropertyAccess),
+    Method,
+}
+
 // Why `lookup` has no member to give.
 enum LookupError {
     Absent,
@@ -54,6 +62,38 @@ enum LookupError {
     // The chain reached a class nobody can see before any had the member, so it may be anything.
     Unverified,
     InstanceOnly,
+}
+
+impl<T> Member<T> {
+    fn untyped(ty: T) -> Self {
+        Member { ty, location: None }
+    }
+}
+
+// A parameter or property lookup never finds a method, so a procedure here is `Any`.
+fn value_of(ty: HOTy) -> Ty {
+    match ty {
+        HOTy::Value(ty) => ty,
+        HOTy::Collection { kind, .. } => kind.class(),
+        HOTy::Procedure(_) => Ty::Any,
+    }
+}
+
+// What `..X(...)` found: a method, else a property, which IRIS requires to be multidimensional.
+fn callee(found: MemberTy, range: bindings::Range) -> Result<Member<Callee>, TypeError> {
+    let ty = match found.ty {
+        HOTy::Procedure(proc) => Callee::Method(TyProcedureOrAny::Procedure(proc)),
+        HOTy::Value(Ty::Any) => Callee::Method(TyProcedureOrAny::Any),
+        HOTy::Value(ty) if found.multidimensional => Callee::Node(ty),
+        HOTy::Value(ty) => return Err(QuasiTypeError::not_procedure(ty).into_error(|| range)),
+        HOTy::Collection { kind, .. } => {
+            return Err(QuasiTypeError::not_procedure(kind.class()).into_error(|| range));
+        }
+    };
+    Ok(Member {
+        ty,
+        location: found.location,
+    })
 }
 
 fn generated_procedure(
@@ -104,10 +144,10 @@ fn iris_member(info: &bindings::ClassInfo, cls: &str, mem: &str, ns: Visible) ->
         && ns == Visible::Method
         && let Some(on_new) = info.members.iter().find(|m| m.name.content == "%OnNew")
         && let Some(on_new) = found_in_iris(on_new.clone(), cls)
-        && let Ok(TyProcedureOrAny::Procedure(proc)) = on_new.ty.ty.as_procedure()
+        && let Some(proc) = on_new.ty.ty.procedure()
     {
         return Some(Found {
-            ty: new_from_on_new(&proc),
+            ty: new_from_on_new(proc),
             origin: on_new.origin,
         });
     }
@@ -454,15 +494,6 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
     "%ValidateObject",
 ];
 
-// IRIS keeps the two apart by syntax: `..X(...)` is a method before a property, bare `..X` a
-// property only -- never a method, even one without arguments.
-fn lookup_ns(kind: AccessKind) -> Visible {
-    match kind {
-        AccessKind::Call => Visible::Method,
-        AccessKind::Get | AccessKind::Set => Visible::Property,
-    }
-}
-
 impl<'a> WorkspaceEnv<'a> {
     // The properties, methods and parameters along `cls`'s chain -- all ObjectScript can name.
     pub(crate) fn member_names(&self, cls: &str) -> Vec<String> {
@@ -558,11 +589,9 @@ impl<'a> WorkspaceEnv<'a> {
             }
         };
         // `%New` takes the class's own `%OnNew`'s arguments, which the dictionary doesn't record.
-        let new = |on_new: MemberTy| match on_new.ty.as_procedure() {
-            Ok(TyProcedureOrAny::Procedure(on_new)) => {
-                vec![("%New".to_string(), new_from_on_new(&on_new))]
-            }
-            _ => vec![],
+        let new = |on_new: MemberTy| match on_new.ty.procedure() {
+            Some(on_new) => vec![("%New".to_string(), new_from_on_new(on_new))],
+            None => vec![],
         };
         match resolved {
             Resolved::Workspace(uri, details) => {
@@ -1722,39 +1751,91 @@ impl<'a> CodeEnv<'a> {
         })
     }
 
-    pub(crate) fn get_ty_mem(
+    // The three lookups below each search one namespace -- IRIS keeps them apart by syntax:
+    // `..#X` is a parameter, `..X(...)` a method before a property, bare `..X` a property only,
+    // never a method, even one without arguments. A member of an unresolved `Any`/`This`/
+    // `..#NAME` type (the latter a mask bug) is taken as present and untyped.
+
+    pub(crate) fn parameter_of(
         &self,
         ty: &Ty,
-        mem: &cos::MemberRef,
+        name: String,
         range: bindings::Range,
-        kind: AccessKind,
-    ) -> Result<MemberTy, TypeError> {
+    ) -> Result<Member<Ty>, TypeError> {
         match ty {
-            // An unresolved `This`/`..#NAME` is a mask bug.
-            Ty::Any | Ty::This | Ty::Param(_) => Ok(MemberTy {
-                is_instance_only: false,
-                ty: HOTy::Value(Ty::Any),
-                ..MemberTy::default()
-            }),
-            Ty::OREF(obj) => self.get_obj_mem(obj, mem.id(), mem.is_parameter(), range, kind),
+            Ty::Any | Ty::This | Ty::Param(_) => Ok(Member::untyped(Ty::Any)),
+            Ty::OREF(obj) => self.get_parameter(obj, name, range),
         }
     }
 
-    pub(crate) fn get_obj_mem(
+    pub(crate) fn property_of(
+        &self,
+        ty: &Ty,
+        name: String,
+        range: bindings::Range,
+        access: PropertyAccess,
+    ) -> Result<Member<PropertyTy>, TypeError> {
+        match ty {
+            Ty::Any | Ty::This | Ty::Param(_) => Ok(Member::untyped(PropertyTy::Value(Ty::Any))),
+            Ty::OREF(obj) => self.get_property(obj, name, range, access),
+        }
+    }
+
+    pub(crate) fn method_of(
+        &self,
+        ty: &Ty,
+        name: String,
+        range: bindings::Range,
+    ) -> Result<Member<Callee>, TypeError> {
+        match ty {
+            Ty::Any | Ty::This | Ty::Param(_) => {
+                Ok(Member::untyped(Callee::Method(TyProcedureOrAny::Any)))
+            }
+            Ty::OREF(obj) => self.get_method(obj, name, range),
+        }
+    }
+
+    // A parameter has no dynamic-dispatch fallback.
+    pub(crate) fn get_parameter(
         &self,
         obj: &ClsOrIns,
         mem: String,
-        is_parameter: bool,
         range: bindings::Range,
-        kind: AccessKind,
-    ) -> Result<MemberTy, TypeError> {
-        // A `Parameter` has no dynamic-dispatch fallback.
-        let (ns, dispatch) = if is_parameter {
-            (Visible::Parameter, None)
-        } else {
-            (lookup_ns(kind), Some(kind))
-        };
-        self.resolve_mem(obj, mem, range, ns, true, dispatch)
+    ) -> Result<Member<Ty>, TypeError> {
+        let found = self.resolve_mem(obj, mem, range, Visible::Parameter, true, None)?;
+        Ok(Member {
+            ty: value_of(found.ty),
+            location: found.location,
+        })
+    }
+
+    pub(crate) fn get_property(
+        &self,
+        obj: &ClsOrIns,
+        mem: String,
+        range: bindings::Range,
+        access: PropertyAccess,
+    ) -> Result<Member<PropertyTy>, TypeError> {
+        let dispatch = Some(Dispatch::Property(access));
+        let found = self.resolve_mem(obj, mem, range, Visible::Property, true, dispatch)?;
+        Ok(Member {
+            ty: match found.ty {
+                HOTy::Collection { kind, element } => PropertyTy::Collection { kind, element },
+                ty => PropertyTy::Value(value_of(ty)),
+            },
+            location: found.location,
+        })
+    }
+
+    pub(crate) fn get_method(
+        &self,
+        obj: &ClsOrIns,
+        mem: String,
+        range: bindings::Range,
+    ) -> Result<Member<Callee>, TypeError> {
+        let dispatch = Some(Dispatch::Method);
+        let found = self.resolve_mem(obj, mem, range, Visible::Method, true, dispatch)?;
+        callee(found, range)
     }
 
     // `mem` of `obj` as code refers to it: `lookup`, else the `%Dispatch*` hook for `dispatch`;
@@ -1766,24 +1847,24 @@ impl<'a> CodeEnv<'a> {
         range: bindings::Range,
         ns: Visible,
         own: bool,
-        dispatch: Option<AccessKind>,
+        dispatch: Option<Dispatch>,
     ) -> Result<MemberTy, TypeError> {
         let at = |err: QuasiTypeError| err.into_error(|| range);
         let found = match (self.lookup(obj, &mem, ns, own), dispatch) {
             // Dynamic dispatch: a class overriding the hook takes any member name. Only
             // `%DispatchGetProperty`'s return type matters; `%DispatchSetMultidimProperty` isn't
             // consulted, a multidimensional reference not being told from a call of the wrong arity.
-            (Err(LookupError::Absent), Some(kind)) => {
-                let hook = match kind {
-                    AccessKind::Get => "%DispatchGetProperty",
-                    AccessKind::Set => "%DispatchSetProperty",
-                    AccessKind::Call if obj.is_ins() => "%DispatchMethod",
-                    AccessKind::Call => "%DispatchClassMethod",
+            (Err(LookupError::Absent), Some(dispatch)) => {
+                let hook = match dispatch {
+                    Dispatch::Property(PropertyAccess::Get) => "%DispatchGetProperty",
+                    Dispatch::Property(PropertyAccess::Set) => "%DispatchSetProperty",
+                    Dispatch::Method if obj.is_ins() => "%DispatchMethod",
+                    Dispatch::Method => "%DispatchClassMethod",
                 };
                 self.lookup(obj, hook, Visible::Method, own)
                     .map(|hook| MemberTy {
-                        ty: HOTy::Value(match (kind, hook.ty.as_procedure()) {
-                            (AccessKind::Get, Ok(TyProcedureOrAny::Procedure(proc))) => {
+                        ty: HOTy::Value(match (dispatch, hook.ty) {
+                            (Dispatch::Property(PropertyAccess::Get), HOTy::Procedure(proc)) => {
                                 proc.out.clone().unwrap_or_default()
                             }
                             _ => Ty::Any,
@@ -1828,21 +1909,22 @@ impl<'a> CodeEnv<'a> {
 
     // `##super(...)`'s target: the enclosing method's own name, resolved against `this`'s
     // superclasses instead of `this` itself.
-    pub(crate) fn resolve_super_mstr(&self, range: bindings::Range) -> Result<MemberTy, TypeError> {
+    pub(crate) fn resolve_super_mstr(
+        &self,
+        range: bindings::Range,
+    ) -> Result<TyProcedureOrAny, TypeError> {
         let this = self.this().map_err(|err| err.into_error(|| range))?;
         let mem = self
             .method_name
             .ok_or_else(QuasiTypeError::not_in_class)
             .map_err(|err| err.into_error(|| range))?
             .to_string();
-        self.resolve_mem(
-            &this,
-            mem,
-            range,
-            Visible::Method,
-            false,
-            Some(AccessKind::Call),
-        )
+        let dispatch = Some(Dispatch::Method);
+        let found = self.resolve_mem(&this, mem, range, Visible::Method, false, dispatch)?;
+        match callee(found, range)?.ty {
+            Callee::Method(proc) => Ok(proc),
+            Callee::Node(ty) => Err(QuasiTypeError::not_procedure(ty).into_error(|| range)),
+        }
     }
 
     pub(crate) fn resolve_label(

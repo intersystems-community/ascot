@@ -744,8 +744,9 @@ impl CheckCommandInner for cos::EntryRefAndArgs {
         match self {
             EntryRefAndArgs::Expression(expr_call) => match expr_call {
                 cos::MethodOrFuncCallExpr::Method { obj, mem, args } => {
-                    let ty = base_hoty(obj, env, flow)?;
-                    let diverges = matches!(&ty, HOTy::Value(ty) if never_returns(ty, &mem.id()));
+                    let ty = base_property(obj, env, flow)?;
+                    let diverges =
+                        matches!(&ty, PropertyTy::Value(ty) if never_returns(ty, &mem.id()));
                     let ret = check_member_of(ty, mem.deref(), Some(args), env, flow)?;
                     warn_if_discarding_status_or_boolean(flow, ret.as_ref());
                     if diverges {
@@ -2016,15 +2017,13 @@ fn check_set_target<'a>(
     match target {
         SetTarget::Sub { obj, op } => {
             let obj = obj.to_ty(env, flow)?;
-            check_mem(env, obj, op.mem.deref(), AccessKind::Set)?;
-            Ok(())
+            check_set_member(env, obj, op.mem.deref())
         }
         // `Set ..Prop(subs) = value` isn't modeled apart from `Set ..Prop = value`, so
         // `%DispatchSetMultidimProperty` is never consulted (see `dispatch_member`).
         SetTarget::Member { member, .. } => {
             let obj = Ty::OREF(env.this()?);
-            check_mem(env, obj, member.deref(), AccessKind::Set)?;
-            Ok(())
+            check_set_member(env, obj, member.deref())
         }
         SetTarget::Var(variable) => {
             let _ = variable.to_maybe_ty(env, flow)?;
@@ -2364,10 +2363,10 @@ impl<T> CheckExprInner for ExprOps<T> {
                     let cls = ClassTy::from(format!("%SYSTEM.{}", op.mem.id()));
                     return Ok(Ty::OREF(ClsOrIns::Cls(cls)).into());
                 }
-                let ty = base_hoty(base, env, flow)?;
+                let ty = base_property(base, env, flow)?;
                 // `$SYSTEM.Security.System.M()`, `$system.Context.SQL()`: a nested `%SYSTEM`
                 // class, the latter reached through a kernel accessor that yields its instance.
-                if let HOTy::Value(Ty::OREF(ClsOrIns::Cls(cls))) = &ty
+                if let PropertyTy::Value(Ty::OREF(ClsOrIns::Cls(cls))) = &ty
                     && cls.name.starts_with("%SYSTEM.")
                     && !op.mem.is_parameter()
                 {
@@ -2395,43 +2394,44 @@ impl<T> CheckExprInner for ExprOps<T> {
 
 // The base of a member operation, keeping a collection property a collection (rather than its
 // `%Collection.Abstract*` class) so `..List.GetAt(i)` is typed by the element.
-fn base_hoty<'a, T>(
+// The base of a member access as a property, so that a collection property keeps its element
+// type for the collection method called on it.
+fn base_property<'a, T>(
     base: &Range<ExprOps<T>>,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-) -> Result<HOTy, QuasiTypeError> {
-    let member = match base.deref() {
+) -> Result<PropertyTy, QuasiTypeError> {
+    match base.deref() {
         ExprOps::Then { base: inner, op }
             if op.args.is_none() && !op.mem.is_parameter() && !is_system_var(inner) =>
         {
-            check_mem(env, inner.to_ty(env, flow)?, &op.mem, AccessKind::Get)?
+            check_property(env, inner.to_ty(env, flow)?, &op.mem, PropertyAccess::Get)
         }
         ExprOps::Base(atom)
             if let ParenedExpr::Normal(atom) = atom.deref()
                 && let AtomicExpr::Member { member, args: None } = atom.deref().deref() =>
         {
-            check_mem(env, Ty::OREF(env.this()?), member, AccessKind::Get)?
+            check_property(env, Ty::OREF(env.this()?), member, PropertyAccess::Get)
         }
-        _ => return base.to_ty(env, flow).map(HOTy::Value),
-    };
-    Ok(member.ty)
+        _ => base.to_ty(env, flow).map(PropertyTy::Value),
+    }
 }
 
 fn check_member_of<'a>(
-    base: HOTy,
+    base: PropertyTy,
     mem: &Range<MemberRef>,
     args: Option<&Range<MthArgList>>,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<Option<Ty>, QuasiTypeError> {
-    if let HOTy::Collection { kind, element } = &base
+    if let PropertyTy::Collection { kind, element } = &base
         && let Some(args) = args
         && let Some(proc) = collection_method(*kind, element, &mem.id())
     {
         let proc = TyProcedureOrAny::Procedure(proc);
         return check_call(env, flow, proc, args.items.iter(), env.range(mem));
     }
-    check_member(base.to_ty()?, mem, args, env, flow)
+    check_member(base.to_ty(), mem, args, env, flow)
 }
 
 // The `%Collection.AbstractList`/`AbstractArray` methods whose signatures involve the element
@@ -2508,23 +2508,23 @@ fn check_member<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<Option<Ty>, QuasiTypeError> {
-    let kind = if args.is_some() {
-        AccessKind::Call
-    } else {
-        AccessKind::Get
-    };
-    let member = check_mem(env, ty, mem, kind)?;
-    match (member.ty, args) {
-        // `..Prop(subs)`: a multidimensional property's node, typed like the property.
-        (HOTy::Value(ty), Some(args)) if member.multidimensional => {
-            builtins::check_args_any(env, flow, args.items.iter())?;
-            Ok(Some(ty))
-        }
-        (ty, Some(args)) => {
-            let ty = ty.as_procedure()?;
-            check_call(env, flow, ty, args.items.iter(), env.range(mem))
-        }
-        (ty, None) => Ok(ty.to_ty()?.into()),
+    match (mem.is_parameter(), args) {
+        (true, None) => Ok(Some(check_parameter(env, ty, mem)?)),
+        // `..#P(...)`: a parameter is a value, never a callee.
+        (true, Some(_)) => Err(QuasiTypeError::not_procedure(check_parameter(
+            env, ty, mem,
+        )?)),
+        (false, None) => Ok(Some(
+            check_property(env, ty, mem, PropertyAccess::Get)?.to_ty(),
+        )),
+        (false, Some(args)) => match check_method(env, ty, mem)? {
+            Callee::Method(proc) => check_call(env, flow, proc, args.items.iter(), env.range(mem)),
+            // `..Prop(subs)`: a multidimensional property's node, typed like the property.
+            Callee::Node(ty) => {
+                builtins::check_args_any(env, flow, args.items.iter())?;
+                Ok(Some(ty))
+            }
+        },
     }
 }
 
@@ -2545,7 +2545,7 @@ impl CheckExprInner for cos::GetTarget {
             cos::GetTarget::Indirection(ind) => Ok(ind.to_power_ty(env, flow)?),
             cos::GetTarget::Fun(call) => call.to_power_ty(env, flow),
             cos::GetTarget::Sub { base, op } => {
-                let base = base_hoty(base, env, flow)?;
+                let base = base_property(base, env, flow)?;
                 check_member_of(base, &op.mem, op.args.as_ref(), env, flow)?
                     .map(PowerTy::from)
                     .ok_or_else(QuasiTypeError::undefined)
@@ -2561,22 +2561,65 @@ fn check_super_call<'a>(
     args: &Range<MthArgList>,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     let range = env.range(args);
-    let ty = env.resolve_super_mstr(range)?.ty.as_procedure()?;
+    let ty = env.resolve_super_mstr(range)?;
     check_call(env, flow, ty, args.items.iter(), range)
 }
 
-fn check_mem(
+fn check_parameter(
     env: &CodeEnv<'_>,
     obj: Ty,
     mem: &Range<MemberRef>,
-    kind: AccessKind,
-) -> Result<MemberTy, QuasiTypeError> {
+) -> Result<Ty, QuasiTypeError> {
     let range = env.range(mem);
-    let member = env.get_ty_mem(&obj, mem.deref(), range, kind)?;
+    Ok(reference(
+        env,
+        range,
+        env.parameter_of(&obj, mem.id(), range)?,
+    ))
+}
+
+fn check_property(
+    env: &CodeEnv<'_>,
+    obj: Ty,
+    mem: &Range<MemberRef>,
+    access: PropertyAccess,
+) -> Result<PropertyTy, QuasiTypeError> {
+    let range = env.range(mem);
+    Ok(reference(
+        env,
+        range,
+        env.property_of(&obj, mem.id(), range, access)?,
+    ))
+}
+
+fn check_method(
+    env: &CodeEnv<'_>,
+    obj: Ty,
+    mem: &Range<MemberRef>,
+) -> Result<Callee, QuasiTypeError> {
+    let range = env.range(mem);
+    Ok(reference(env, range, env.method_of(&obj, mem.id(), range)?))
+}
+
+// `Set obj.X = v`: the member must exist; a parameter resolves too, though IRIS then rejects it.
+fn check_set_member(
+    env: &CodeEnv<'_>,
+    obj: Ty,
+    mem: &Range<MemberRef>,
+) -> Result<(), QuasiTypeError> {
+    if mem.is_parameter() {
+        check_parameter(env, obj, mem)?;
+    } else {
+        check_property(env, obj, mem, PropertyAccess::Set)?;
+    }
+    Ok(())
+}
+
+fn reference<T>(env: &CodeEnv<'_>, range: bindings::Range, member: types::Member<T>) -> T {
     if let Some(location) = &member.location {
         env.reference(range, location.clone());
     }
-    Ok(member)
+    member.ty
 }
 
 fn check_param_arg<'a>(
@@ -3243,11 +3286,8 @@ fn check_instance_member(
         }
         ClsOrIns::Ins(cty) => {
             let member =
-                env.get_obj_mem(&ClsOrIns::Ins(cty), mem, false, mem_range, AccessKind::Get)?;
-            if let Some(location) = &member.location {
-                env.reference(mem_range, location.clone());
-            }
-            Ok(Right(member.ty.to_ty()?.into()))
+                env.get_property(&ClsOrIns::Ins(cty), mem, mem_range, PropertyAccess::Get)?;
+            Ok(Right(reference(env, mem_range, member).to_ty().into()))
         }
     }
 }

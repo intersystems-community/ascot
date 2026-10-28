@@ -467,16 +467,12 @@ pub enum Ty {
     Param(String),
 }
 
-// A member's resolved type, before it's known whether it's about to be called. ObjectScript has
-// no first-class functions, so a `Procedure` is only ever valid as the callee of a call — using
-// it any other way (assigning it, member-accessing it) must error at the point it's coerced to a
-// plain `Ty` via `to_ty`, not later.
+// A member's type as the resolver carries it, whatever namespace it came from. The lookups hand
+// out a `Ty`, `PropertyTy` or `Callee` according to the namespace they searched.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HOTy {
     Value(Ty),
     Procedure(Arc<TyProcedure>),
-    // A `list Of X` / `array Of X` property. Collections don't nest, so this lives here rather
-    // than in `Ty`; forced into a `Ty` it is the collection class.
     Collection { kind: CollectionClass, element: Ty },
 }
 
@@ -503,20 +499,10 @@ impl CollectionClass {
 }
 
 impl HOTy {
-    pub fn to_ty(&self) -> Result<Ty, QuasiTypeError> {
+    pub fn procedure(&self) -> Option<&Arc<TyProcedure>> {
         match self {
-            HOTy::Value(ty) => Ok(ty.clone()),
-            HOTy::Collection { kind, .. } => Ok(kind.class()),
-            HOTy::Procedure(_) => Err(QuasiTypeError::procedure_not_called()),
-        }
-    }
-
-    pub fn as_procedure(&self) -> Result<TyProcedureOrAny, QuasiTypeError> {
-        match self {
-            HOTy::Procedure(v) => Ok(TyProcedureOrAny::Procedure(v.clone())),
-            HOTy::Value(Ty::Any) => Ok(TyProcedureOrAny::Any),
-            HOTy::Value(ty) => Err(QuasiTypeError::not_procedure(ty.clone())),
-            HOTy::Collection { kind, .. } => Err(QuasiTypeError::not_procedure(kind.class())),
+            HOTy::Procedure(proc) => Some(proc),
+            _ => None,
         }
     }
 }
@@ -607,13 +593,42 @@ impl ClsOrIns {
     }
 }
 
-// Which of IRIS's dynamic-dispatch methods (if any) a failed member lookup should fall back to
-// -- see https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GOOP_dynamic_dispatch
+// Whether `..X` is read or assigned; a missing property falls back to the matching
+// `%Dispatch*Property` hook.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum AccessKind {
+pub enum PropertyAccess {
     Get,
     Set,
-    Call,
+}
+
+// A member as a lookup found it, with where it's declared when a workspace class declares it.
+pub struct Member<T> {
+    pub ty: T,
+    pub location: Option<bindings::Location>,
+}
+
+// What a property holds: a value, or a `list Of X` / `array Of X` collection. Collections don't
+// nest, so this lives here rather than in `Ty`; forced into a `Ty` it is the collection class.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PropertyTy {
+    Value(Ty),
+    Collection { kind: CollectionClass, element: Ty },
+}
+
+impl PropertyTy {
+    pub fn to_ty(&self) -> Ty {
+        match self {
+            PropertyTy::Value(ty) => ty.clone(),
+            PropertyTy::Collection { kind, .. } => kind.class(),
+        }
+    }
+}
+
+// What `..X(...)` reaches: a method, else a multidimensional property, whose arguments subscript
+// a node typed like the property.
+pub enum Callee {
+    Method(TyProcedureOrAny),
+    Node(Ty),
 }
 
 impl std::fmt::Display for ClsOrIns {

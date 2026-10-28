@@ -150,10 +150,6 @@ impl QuasiTypeError {
         Self::WithoutRange(TypeErrorKind::NotProcedure { ty }, vec![])
     }
 
-    pub fn procedure_not_called() -> Self {
-        Self::WithoutRange(TypeErrorKind::ProcedureNotCalled, vec![])
-    }
-
     pub fn not_in_class() -> Self {
         Self::WithoutRange(TypeErrorKind::NotInClass, vec![])
     }
@@ -600,10 +596,6 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Expression is not a procedure; its type is {ty}"]
     NotProcedure { ty: Ty },
-    #[code = "A3671"]
-    #[severity = Error]
-    #[message = "ObjectScript has no first-class methods; call it with ()"]
-    ProcedureNotCalled,
     #[code = "A6705"]
     #[severity = Warning]
     #[message = "Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional."]
