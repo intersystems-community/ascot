@@ -598,7 +598,7 @@ type_error_kinds! {
     ConditionAlways { value: bool },
     /// IRIS compiles `..X(subs)` for any property but, unless `X` is `MultiDimensional`, throws
     /// `<OBJECT DISPATCH>` on reaching it, whatever `X`'s type.
-    #[code = "A2648"]
+    #[code = "A8496"]
     #[severity = Error]
     #[message = "Property '{name}' is not MultiDimensional, so it takes no subscripts"]
     NotMultidimensional { name: String },
