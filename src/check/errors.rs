@@ -146,12 +146,12 @@ impl QuasiTypeError {
         )
     }
 
-    pub fn not_procedure(ty: Ty) -> Self {
-        Self::WithoutRange(TypeErrorKind::NotProcedure { ty }, vec![])
+    pub fn not_multidimensional(name: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::NotMultidimensional { name }, vec![])
     }
 
-    pub fn procedure_not_called() -> Self {
-        Self::WithoutRange(TypeErrorKind::ProcedureNotCalled, vec![])
+    pub fn parameter_is_constant(name: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::ParameterIsConstant { name }, vec![])
     }
 
     pub fn not_in_class() -> Self {
@@ -257,6 +257,10 @@ impl QuasiTypeError {
 
     pub fn cannot_find_class(cls: String) -> Self {
         Self::WithoutRange(TypeErrorKind::CannotFindClass { cls }, vec![])
+    }
+
+    pub fn super_without_method(method: String, cls: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::SuperWithoutMethod { method, cls }, vec![])
     }
 
     pub fn cannot_find_label(label: String, routine: Option<String>) -> Self {
@@ -455,6 +459,12 @@ type_error_kinds! {
         on: SuperclassOf,
         reason: UnconfirmedReason,
     },
+    /// `##super()` binds to the superclass's version of the method at compile time; no
+    /// `%DispatchMethod` and no same-named property stands in.
+    #[code = "A7461"]
+    #[severity = Error]
+    #[message = "Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call"]
+    SuperWithoutMethod { method: String, cls: String },
     #[code = "A7604"]
     #[severity = Error]
     #[message = "Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>); `{label}()` would make it a function"]
@@ -600,14 +610,16 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "This condition is always {value}"]
     ConditionAlways { value: bool },
+    /// IRIS compiles `..X(subs)` for any property but, unless `X` is `MultiDimensional`, throws
+    /// `<OBJECT DISPATCH>` on reaching it, whatever `X`'s type.
     #[code = "A8496"]
     #[severity = Error]
-    #[message = "Expression is not a procedure; its type is {ty}"]
-    NotProcedure { ty: Ty },
-    #[code = "A3671"]
+    #[message = "Property '{name}' is not MultiDimensional, so it takes no subscripts"]
+    NotMultidimensional { name: String },
+    #[code = "A6319"]
     #[severity = Error]
-    #[message = "ObjectScript has no first-class methods; call it with ()"]
-    ProcedureNotCalled,
+    #[message = "Parameter '{name}' is a constant: it takes no arguments and can't be assigned"]
+    ParameterIsConstant { name: String },
     #[code = "A6705"]
     #[severity = Warning]
     #[message = "Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional."]

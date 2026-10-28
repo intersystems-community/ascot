@@ -57,32 +57,11 @@ impl<T> Deref for WithRange<T> {
 pub(crate) enum MemberNs {
     Parameter,
     Property,
-    HigherOrder,
+    Method,
     Index,
     Query,
     // Only reachable through the members they generate.
     Other,
-}
-
-// The members ObjectScript names directly -- the only ones a lookup is ever for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Visible {
-    // `..#X`
-    Parameter,
-    // `..X`: a property
-    Property,
-    // `..X(...)`: a method, else a property (which IRIS then requires to be multidimensional)
-    Method,
-}
-
-impl From<Visible> for MemberNs {
-    fn from(visible: Visible) -> Self {
-        match visible {
-            Visible::Parameter => Self::Parameter,
-            Visible::Property => Self::Property,
-            Visible::Method => Self::HigherOrder,
-        }
-    }
 }
 
 /// A class's members by name, one map per `MemberNs`, so a same-named pair within one is a
@@ -91,7 +70,7 @@ impl From<Visible> for MemberNs {
 pub(crate) struct Members {
     pub(crate) parameter: HashMap<String, WithRange<MemberDetails>>,
     pub(crate) property: HashMap<String, WithRange<MemberDetails>>,
-    pub(crate) higher_order: HashMap<String, WithRange<MemberDetails>>,
+    pub(crate) method: HashMap<String, WithRange<MemberDetails>>,
     pub(crate) index: HashMap<String, WithRange<MemberDetails>>,
     pub(crate) query: HashMap<String, WithRange<MemberDetails>>,
     /// The `MemberNs::Other` kinds, which nothing looks up by name, in source order.
@@ -106,7 +85,7 @@ impl Members {
         let map = match MemberNs::of(&member.kind) {
             MemberNs::Parameter => &mut self.parameter,
             MemberNs::Property => &mut self.property,
-            MemberNs::HigherOrder => &mut self.higher_order,
+            MemberNs::Method => &mut self.method,
             MemberNs::Index => &mut self.index,
             MemberNs::Query => &mut self.query,
             MemberNs::Other => return self.other.push(member),
@@ -123,7 +102,7 @@ impl Members {
         [
             &self.parameter,
             &self.property,
-            &self.higher_order,
+            &self.method,
             &self.index,
             &self.query,
         ]
@@ -142,14 +121,14 @@ impl Members {
 }
 
 impl MemberNs {
-    // A multidimensional property is a `Property` too: `Visible::Method` falls back to it, and
-    // IRIS compiles a same-named method beside it.
+    // A multidimensional property is a `Property` too: `..X(subs)` reaches it once no method is
+    // named `X`, and IRIS compiles a same-named method beside it.
     pub(crate) fn of(kind: &MemberKindSpecificDetails) -> Self {
         match kind {
             MemberKindSpecificDetails::Parameter { .. } => Self::Parameter,
             MemberKindSpecificDetails::Property { .. } => Self::Property,
             MemberKindSpecificDetails::MethodOrClassMethod(..)
-            | MemberKindSpecificDetails::ClientMethod => Self::HigherOrder,
+            | MemberKindSpecificDetails::ClientMethod => Self::Method,
             MemberKindSpecificDetails::Index { .. } => Self::Index,
             MemberKindSpecificDetails::Query => Self::Query,
             _ => Self::Other,
@@ -164,7 +143,7 @@ impl MemberNs {
             }
             bindings::MemberKind::Method(_)
             | bindings::MemberKind::ClassMethod(_)
-            | bindings::MemberKind::ClientMethod(_) => Self::HigherOrder,
+            | bindings::MemberKind::ClientMethod(_) => Self::Method,
             bindings::MemberKind::Index(_) => Self::Index,
             bindings::MemberKind::Query => Self::Query,
             _ => Self::Other,
@@ -195,7 +174,7 @@ pub(crate) struct ClassDetails {
     pub(crate) keywords_without_value: Vec<WithRange<String>>,
     // From this class's own `[PropertyClass = ...]` keyword -- each listed class's own
     // `Parameter`s become valid property type-parameters for every property in this class *and*
-    // its subclasses (see `check::env::WorkspaceEnv::property_class_names`, which walks
+    // its subclasses (see `check::env::WorkspaceEnv::property_classes`, which walks
     // `extends` to accumulate every ancestor's own list too).
     pub(crate) property_class_names: Vec<String>,
 }
@@ -572,17 +551,24 @@ fn type_param_names(type_params: &Option<cos::TypeParamList>) -> Vec<String> {
 }
 
 impl ClassDetails {
-    pub(crate) fn member(&self, ns: MemberNs, name: &str) -> Option<&WithRange<MemberDetails>> {
+    fn namespace(&self, ns: MemberNs) -> Option<&HashMap<String, WithRange<MemberDetails>>> {
         let members = &self.members;
-        match ns {
+        Some(match ns {
             MemberNs::Parameter => &members.parameter,
             MemberNs::Property => &members.property,
-            MemberNs::HigherOrder => &members.higher_order,
+            MemberNs::Method => &members.method,
             MemberNs::Index => &members.index,
             MemberNs::Query => &members.query,
             MemberNs::Other => return None,
-        }
-        .get(name)
+        })
+    }
+
+    pub(crate) fn member(&self, ns: MemberNs, name: &str) -> Option<&WithRange<MemberDetails>> {
+        self.namespace(ns)?.get(name)
+    }
+
+    pub(crate) fn names(&self, ns: MemberNs) -> impl Iterator<Item = &String> {
+        self.namespace(ns).into_iter().flat_map(HashMap::keys)
     }
 }
 
