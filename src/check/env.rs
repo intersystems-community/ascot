@@ -46,8 +46,8 @@ type Generated = (Arc<TyProcedure>, bool);
 // and the shape of what it holds.
 pub(crate) trait Namespace {
     type Ty: Instantiate + Default;
-    // Where its members are declared, in lookup order.
-    const NS: &'static [MemberNs];
+    // Where its members are declared.
+    const NS: MemberNs;
     // The type of a member a workspace class declares, and whether it's instance-only.
     fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(Self::Ty, bool)>;
     // Likewise for one IRIS reports, corrected by the mask.
@@ -119,7 +119,7 @@ impl Access for Indexed {
 
 impl Namespace for Parameters {
     type Ty = Ty;
-    const NS: &'static [MemberNs] = &[MemberNs::Parameter];
+    const NS: MemberNs = MemberNs::Parameter;
 
     fn declared(member: &WithRange<MemberDetails>, _: &str) -> Option<(Ty, bool)> {
         let MemberKindSpecificDetails::Parameter { ty, .. } = &member.kind else {
@@ -142,7 +142,7 @@ impl Namespace for Parameters {
 
 impl<A: Access> Namespace for Properties<A> {
     type Ty = PropertyTy;
-    const NS: &'static [MemberNs] = &[MemberNs::Property];
+    const NS: MemberNs = MemberNs::Property;
 
     fn declared(member: &WithRange<MemberDetails>, _: &str) -> Option<(PropertyTy, bool)> {
         let MemberKindSpecificDetails::Property {
@@ -221,7 +221,7 @@ impl<A: Access> Namespace for Properties<A> {
 
 impl Namespace for Methods {
     type Ty = TyProcedureOrAny;
-    const NS: &'static [MemberNs] = &[MemberNs::HigherOrder];
+    const NS: MemberNs = MemberNs::HigherOrder;
 
     fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(TyProcedureOrAny, bool)> {
         let MemberKindSpecificDetails::MethodOrClassMethod(m) = &member.kind else {
@@ -506,18 +506,18 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
 impl<'a> WorkspaceEnv<'a> {
     // The names in `N`'s namespace along `cls`'s chain -- all ObjectScript can refer to there.
     fn names<N: Namespace>(&self, cls: &str) -> Vec<String> {
-        let generated = N::NS.contains(&MemberNs::HigherOrder);
+        let generated = N::NS == MemberNs::HigherOrder;
         let mut names = Vec::new();
         self.walk::<()>(cls, true, &mut |cls, resolved| {
             match resolved {
                 Resolved::Workspace(_, details) => {
-                    names.extend(N::NS.iter().flat_map(|ns| details.names(*ns)).cloned());
+                    names.extend(details.names(N::NS).cloned());
                 }
                 Resolved::Iris(info) => names.extend(
                     info.iter()
                         .flat_map(|info| &info.members)
                         .filter(|m| {
-                            N::NS.contains(&MemberNs::of_info(&m.kind))
+                            MemberNs::of_info(&m.kind) == N::NS
                                 && !crate::mask::dropped(
                                     m.origin.as_deref().unwrap_or(cls),
                                     &m.name.content,
@@ -823,7 +823,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let mut suggestions =
                     crate::check::top_similar(&mem, names.iter().map(String::as_str), 5);
                 let mut has_get = false;
-                if N::NS.contains(&MemberNs::Property) {
+                if N::NS == MemberNs::Property {
                     // Every `%Get`-style accessor regardless of score: a misspelled property is
                     // often one, and a `%Get` means the class may take any name.
                     for name in self.names::<Methods>(obj.name()) {
@@ -875,7 +875,7 @@ impl<'a> WorkspaceEnv<'a> {
                 // Every generated member is a method, so only a method lookup consults them, and
                 // only once it's needed: building the table looks properties up itself.
                 let generated = || {
-                    let table = N::NS.contains(&MemberNs::HigherOrder);
+                    let table = N::NS == MemberNs::HigherOrder;
                     let (proc, is_instance_only) = table
                         .then(|| self.generated_members(cls, resolved))?
                         .get(mem)
@@ -916,7 +916,7 @@ impl<'a> WorkspaceEnv<'a> {
     ) -> Option<Found<N::Ty>> {
         match resolved {
             Resolved::Workspace(uri, details) => {
-                let member = N::NS.iter().find_map(|ns| details.member(*ns, mem))?;
+                let member = details.member(N::NS, mem)?;
                 let (mut ty, is_instance_only) = N::declared(member, uri)?;
                 // A member's declared type names are written relative to the declaring class.
                 N::class_names(&mut ty, |t| self.qualify_ty(t, &details.name.it));
@@ -935,9 +935,8 @@ impl<'a> WorkspaceEnv<'a> {
                     m.name.content.eq_ignore_ascii_case(mem)
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
                 };
-                let member = N::NS.iter().find_map(|ns| {
-                    (info.members.iter()).find(|m| named(m) && MemberNs::of_info(&m.kind) == *ns)
-                })?;
+                let member = (info.members.iter())
+                    .find(|m| named(m) && MemberNs::of_info(&m.kind) == N::NS)?;
                 iris_found::<N>(member.clone(), cls)
             }
             _ => None,
