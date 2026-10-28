@@ -1530,7 +1530,7 @@ mod tests {
         let uri = "Probe.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.Probe Extends %RegisteredObject {\nMethod Foo() {\n do ..SomeInheritedProp()\n quit\n}\n}\n".to_string(),
+            "Class Test.Probe Extends %RegisteredObject {\nMethod Foo() {\n write ..SomeInheritedProp\n quit\n}\n}\n".to_string(),
         );
         let diagnostics = workspace.diagnostics(uri);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");

@@ -99,10 +99,20 @@ impl Namespace for Properties {
     const NS: &'static [MemberNs] = &[MemberNs::Property];
 
     fn declared(member: &WithRange<MemberDetails>, _: &str) -> Option<(PropertyTy, bool)> {
-        let MemberKindSpecificDetails::Property { ty, element_ty, .. } = &member.kind else {
+        let MemberKindSpecificDetails::Property {
+            ty,
+            element_ty,
+            keywords,
+            ..
+        } = &member.kind
+        else {
             return None;
         };
+        let multidimensional = keywords
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case("MultiDimensional"));
         let ty = match (ty, element_ty) {
+            _ if multidimensional => PropertyTy::Multidimensional(ty.clone().unwrap_or_default()),
             (Some(Ty::OREF(cls)), Some(element)) => PropertyTy::Collection {
                 kind: if cls.name().ends_with("List") {
                     CollectionClass::List
@@ -121,6 +131,9 @@ impl Namespace for Properties {
         _: Option<&Correction>,
     ) -> Option<(PropertyTy, bool)> {
         let ty = match member.kind {
+            MemberKind::Property(info) if info.multidimensional => {
+                PropertyTy::Multidimensional(ty_from_declared(info.t).unwrap_or_default())
+            }
             MemberKind::Property(info) => match info.collection {
                 Some(collection) => PropertyTy::Collection {
                     kind: match collection {
@@ -142,14 +155,16 @@ impl Namespace for Properties {
         Some((ty, true))
     }
 
-    // Only `%DispatchGetProperty`'s return type matters.
+    // Only `%DispatchGetProperty`'s return type matters; a dispatched name takes any subscripts.
     fn dispatched(hook: Option<&TyProcedure>) -> PropertyTy {
-        PropertyTy::Value(hook.and_then(|hook| hook.out.clone()).unwrap_or_default())
+        PropertyTy::Multidimensional(hook.and_then(|hook| hook.out.clone()).unwrap_or_default())
     }
 
     fn class_names(ty: &mut PropertyTy, mut f: impl FnMut(&mut Ty)) {
         match ty {
-            PropertyTy::Value(ty) | PropertyTy::Collection { element: ty, .. } => f(ty),
+            PropertyTy::Value(ty)
+            | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Collection { element: ty, .. } => f(ty),
         }
     }
 }
@@ -158,7 +173,7 @@ impl Namespace for Properties {
 // IRIS requires to be multidimensional.
 pub(crate) enum Invoked {
     Method(TyProcedureOrAny),
-    Property { ty: Ty, multidimensional: bool },
+    Property(PropertyTy),
 }
 
 impl Invoked {
@@ -180,7 +195,7 @@ impl Instantiate for Invoked {
     fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
         match self {
             Invoked::Method(proc) => proc.instantiate(receiver, owner),
-            Invoked::Property { ty, .. } => ty.instantiate(receiver, owner),
+            Invoked::Property(ty) => ty.instantiate(receiver, owner),
         }
     }
 }
@@ -212,16 +227,9 @@ impl Namespace for Methods {
                 let proc = TyProcedureOrAny::Procedure(Arc::new(proc));
                 Some((Invoked::Method(proc), !m.is_class_method))
             }
-            MemberKindSpecificDetails::Property { keywords, .. } => {
-                let multidimensional = keywords
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case("MultiDimensional"));
+            MemberKindSpecificDetails::Property { .. } => {
                 let (ty, is_instance_only) = Properties::declared(member, uri)?;
-                let ty = Invoked::Property {
-                    ty: ty.to_ty(),
-                    multidimensional,
-                };
-                Some((ty, is_instance_only))
+                Some((Invoked::Property(ty), is_instance_only))
             }
             _ => None,
         }
@@ -236,20 +244,12 @@ impl Namespace for Methods {
             start: member.before,
             end: member.after,
         };
-        let multidimensional = match &member.kind {
-            MemberKind::Property(info) => info.multidimensional,
-            _ => false,
-        };
         let (m, is_instance_only) = match member.kind {
             MemberKind::Method(m) => (m, true),
             MemberKind::ClassMethod(m) => (m, false),
             MemberKind::Property(_) | MemberKind::Relationship(_) => {
                 let (ty, is_instance_only) = Properties::reported(member, None)?;
-                let ty = Invoked::Property {
-                    ty: ty.to_ty(),
-                    multidimensional,
-                };
-                return Some((ty, is_instance_only));
+                return Some((Invoked::Property(ty), is_instance_only));
             }
             _ => return None,
         };
@@ -275,7 +275,7 @@ impl Namespace for Methods {
                 }
             }
             Invoked::Method(TyProcedureOrAny::Any) => {}
-            Invoked::Property { ty, .. } => f(ty),
+            Invoked::Property(ty) => Properties::class_names(ty, f),
         }
     }
 }
@@ -296,17 +296,17 @@ impl<T> Member<T> {
 }
 
 // What `..X(...)` found, once it must be callable.
-fn callee(found: Member<Invoked>, range: bindings::Range) -> Result<Member<Callee>, TypeError> {
+fn callee(
+    found: Member<Invoked>,
+    name: &str,
+    range: bindings::Range,
+) -> Result<Member<Callee>, TypeError> {
     let ty = match found.ty {
         Invoked::Method(proc) => Callee::Method(proc),
-        Invoked::Property {
-            ty,
-            multidimensional: true,
-        } => Callee::Node(ty),
-        // A property of no known type may well be multidimensional.
-        Invoked::Property { ty: Ty::Any, .. } => Callee::default(),
-        Invoked::Property { ty, .. } => {
-            return Err(QuasiTypeError::not_procedure(ty).into_error(|| range));
+        Invoked::Property(PropertyTy::Multidimensional(ty)) => Callee::Node(ty),
+        Invoked::Property(_) => {
+            let err = QuasiTypeError::not_multidimensional(name.to_string());
+            return Err(err.into_error(|| range));
         }
     };
     Ok(Member {
@@ -1827,10 +1827,8 @@ impl<'a> CodeEnv<'a> {
         range: bindings::Range,
     ) -> Result<Member<Callee>, TypeError> {
         let hook = Some(method_hook(ty));
-        callee(
-            self.resolve_mem::<Methods>(ty, name, range, true, hook)?,
-            range,
-        )
+        let found = self.resolve_mem::<Methods>(ty, name.clone(), range, true, hook)?;
+        callee(found, &name, range)
     }
 
     fn resolve_mem<N: Namespace>(
@@ -1901,14 +1899,11 @@ impl<'a> CodeEnv<'a> {
             .to_string();
         let this = Ty::OREF(this);
         let hook = Some(method_hook(&this));
-        match callee(
-            self.resolve_mem::<Methods>(&this, mem, range, false, hook)?,
-            range,
-        )?
-        .ty
-        {
+        let found = self.resolve_mem::<Methods>(&this, mem.clone(), range, false, hook)?;
+        match callee(found, &mem, range)?.ty {
             Callee::Method(proc) => Ok(proc),
-            Callee::Node(ty) => Err(QuasiTypeError::not_procedure(ty).into_error(|| range)),
+            // A superclass property named like this method: nothing to check the call against.
+            Callee::Node(_) => Ok(TyProcedureOrAny::Any),
         }
     }
 

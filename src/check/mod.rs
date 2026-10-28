@@ -2526,10 +2526,9 @@ fn check_member<'a>(
             mem,
             env.parameter_of(&ty, name, range),
         )?)),
-        // `..#P(...)`: a parameter is a value, never a callee.
         (true, Some(_)) => {
-            let parameter = referenced(env, mem, env.parameter_of(&ty, name, range))?;
-            Err(QuasiTypeError::not_procedure(parameter))
+            referenced(env, mem, env.parameter_of(&ty, name.clone(), range))?;
+            Err(QuasiTypeError::parameter_is_constant(name))
         }
         (false, None) => {
             let property = env.property_of(&ty, name, range, PropertyAccess::Get);
@@ -2596,8 +2595,7 @@ fn referenced<T>(
     Ok(member.ty)
 }
 
-// `Set obj.X = v`, or `Set obj.X(subs) = v` for a node of a multidimensional property: the member
-// must exist; a parameter resolves too, though IRIS then rejects it.
+// `Set obj.X = v`, or `Set obj.X(subs) = v` for a node of a multidimensional property.
 fn check_set_member<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -2606,9 +2604,10 @@ fn check_set_member<'a>(
     subs: Option<&Range<MthArgList>>,
 ) -> Result<(), QuasiTypeError> {
     let range = env.range(mem);
+    let name = mem.id();
     if mem.is_parameter() {
-        referenced(env, mem, env.parameter_of(&obj, mem.id(), range))?;
-        return Ok(());
+        referenced(env, mem, env.parameter_of(&obj, name.clone(), range))?;
+        return Err(QuasiTypeError::parameter_is_constant(name));
     }
     let access = match subs {
         Some(subs) => {
@@ -2617,7 +2616,10 @@ fn check_set_member<'a>(
         }
         None => PropertyAccess::Set,
     };
-    referenced(env, mem, env.property_of(&obj, mem.id(), range, access))?;
+    let property = referenced(env, mem, env.property_of(&obj, name.clone(), range, access))?;
+    if subs.is_some() && !matches!(property, PropertyTy::Multidimensional(_)) {
+        return Err(QuasiTypeError::not_multidimensional(name));
+    }
     Ok(())
 }
 

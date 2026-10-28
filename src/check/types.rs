@@ -577,6 +577,8 @@ pub struct Member<T> {
 pub enum PropertyTy {
     Value(Ty),
     Collection { kind: CollectionClass, element: Ty },
+    // `Property X [ MultiDimensional ]`: `..X(subs)` addresses a node typed like the property.
+    Multidimensional(Ty),
 }
 
 impl Default for Callee {
@@ -594,7 +596,7 @@ impl Default for PropertyTy {
 impl PropertyTy {
     pub fn to_ty(&self) -> Ty {
         match self {
-            PropertyTy::Value(ty) => ty.clone(),
+            PropertyTy::Value(ty) | PropertyTy::Multidimensional(ty) => ty.clone(),
             PropertyTy::Collection { kind, .. } => kind.class(),
         }
     }
@@ -1053,9 +1055,9 @@ impl Instantiate for TyProcedureOrAny {
 impl Instantiate for PropertyTy {
     fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
         match self {
-            PropertyTy::Value(ty) | PropertyTy::Collection { element: ty, .. } => {
-                ty.instantiate(receiver, owner)
-            }
+            PropertyTy::Value(ty)
+            | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Collection { element: ty, .. } => ty.instantiate(receiver, owner),
         }
     }
 }

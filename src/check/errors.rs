@@ -146,8 +146,12 @@ impl QuasiTypeError {
         )
     }
 
-    pub fn not_procedure(ty: Ty) -> Self {
-        Self::WithoutRange(TypeErrorKind::NotProcedure { ty }, vec![])
+    pub fn not_multidimensional(name: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::NotMultidimensional { name }, vec![])
+    }
+
+    pub fn parameter_is_constant(name: String) -> Self {
+        Self::WithoutRange(TypeErrorKind::ParameterIsConstant { name }, vec![])
     }
 
     pub fn not_in_class() -> Self {
@@ -592,10 +596,16 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "This condition is always {value}"]
     ConditionAlways { value: bool },
-    #[code = "A8496"]
+    /// IRIS compiles `..X(subs)` for any property but, unless `X` is `MultiDimensional`, throws
+    /// `<OBJECT DISPATCH>` on reaching it, whatever `X`'s type.
+    #[code = "A2648"]
     #[severity = Error]
-    #[message = "Expression is not a procedure; its type is {ty}"]
-    NotProcedure { ty: Ty },
+    #[message = "Property '{name}' is not MultiDimensional, so it takes no subscripts"]
+    NotMultidimensional { name: String },
+    #[code = "A6319"]
+    #[severity = Error]
+    #[message = "Parameter '{name}' is a constant: it takes no arguments and can't be assigned"]
+    ParameterIsConstant { name: String },
     #[code = "A6705"]
     #[severity = Warning]
     #[message = "Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional."]
