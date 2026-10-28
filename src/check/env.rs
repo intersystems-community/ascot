@@ -359,7 +359,7 @@ fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<F
 // A class as a check run sees it; `None` from `resolve` means IRIS has none by that name.
 enum Class {
     Workspace(String, Arc<crate::ClassDetails>),
-    Iris(bindings::ClassInfo),
+    Iris(Arc<bindings::ClassInfo>),
     // One nobody can see: no IRIS, an IRIS lookup that failed (with its reason), or a workspace
     // file that doesn't parse. Taken as present, with whatever members anyone asks of it.
     Unknown(Option<String>),
@@ -525,7 +525,7 @@ impl<'a> WorkspaceEnv<'a> {
         (self.ancestry(cls))
             .flat_map(|(_, resolved)| match resolved {
                 Some(Class::Workspace(_, details)) => details.property_class_names.clone(),
-                Some(Class::Iris(info)) => info.property_class_names,
+                Some(Class::Iris(info)) => info.property_class_names.clone(),
                 Some(Class::Unknown(_)) | None => vec![],
             })
             .collect()
@@ -955,7 +955,7 @@ impl<'a> WorkspaceEnv<'a> {
                 Some(Class::Workspace(_, details)) => {
                     details.include_names.iter().map(|i| i.it.clone()).collect()
                 }
-                Some(Class::Iris(info)) => info.includes,
+                Some(Class::Iris(info)) => info.includes.clone(),
                 Some(Class::Unknown(_)) | None => vec![],
             })
             .collect()
@@ -1006,9 +1006,18 @@ impl<'a> WorkspaceEnv<'a> {
         let Some(iris) = self.workspace.iris.as_ref() else {
             return Some(Class::Unknown(None));
         };
+        // Once per check run: IRIS's answer is large, and a chain is walked many times over.
+        if let Some(known) = self.iris_classes.borrow().get(cls) {
+            return known.clone().map(Class::Iris);
+        }
         match iris.get_cls(cls) {
-            Ok(Some(info)) => Some(Class::Iris(info)),
-            Ok(None) => None,
+            Ok(info) => {
+                let info = info.map(Arc::new);
+                self.iris_classes
+                    .borrow_mut()
+                    .insert(cls.to_string(), info.clone());
+                info.map(Class::Iris)
+            }
             Err(reason) => Some(Class::Unknown(Some(reason))),
         }
     }
@@ -1064,7 +1073,7 @@ impl<'a> WorkspaceEnv<'a> {
                     line: 0,
                     character: 0,
                 });
-                Some(bindings::Location::new(info.uri?, zero))
+                Some(bindings::Location::new(info.uri.clone()?, zero))
             }
             Class::Unknown(_) => None,
         }
@@ -1143,10 +1152,20 @@ impl<'a> WorkspaceEnv<'a> {
         names: &[String],
     ) -> (MacroDefinitions, Vec<crate::macro_expand::FailedInclude>) {
         let (definitions, failed, include_names) = self.workspace.resolve_class_includes(names);
+        self.touch_includes(include_names);
+        (definitions, failed)
+    }
+
+    pub(crate) fn implicit_class_definitions(&self) -> MacroDefinitions {
+        let (definitions, include_names) = self.workspace.implicit_class_definitions();
+        self.touch_includes(include_names);
+        definitions
+    }
+
+    fn touch_includes(&self, include_names: HashSet<String>) {
         self.touched
             .borrow_mut()
             .extend(include_names.into_iter().map(|name| (DocKind::Inc, name)));
-        (definitions, failed)
     }
 
     pub(crate) fn expand_method_body(
@@ -1279,6 +1298,7 @@ impl<'a> WorkspaceEnv<'a> {
             references: RefCell::new(Vec::new()),
             soft_diagnostics: RefCell::new(Vec::new()),
             generated: RefCell::new(HashMap::new()),
+            iris_classes: RefCell::new(HashMap::new()),
             suppress_soft_diagnostics: Cell::new(false),
         }
     }
@@ -1402,6 +1422,8 @@ pub struct WorkspaceEnv<'a> {
     references: RefCell<Vec<(bindings::Range, bindings::Location)>>,
     soft_diagnostics: RefCell<Vec<bindings::Diagnostic>>,
     generated: RefCell<HashMap<String, Rc<HashMap<String, Generated>>>>,
+    // IRIS's description of each class asked about, or `None` for one it hasn't got.
+    iris_classes: RefCell<HashMap<String, Option<Arc<bindings::ClassInfo>>>>,
     // Set during a loop's throwaway priming pass (see `Flow::with_loop`) — its findings reflect
     // pre-loop bindings only, not real, so every soft diagnostic raised meanwhile is dropped.
     suppress_soft_diagnostics: Cell<bool>,

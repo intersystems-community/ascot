@@ -183,6 +183,10 @@ pub struct WorkspaceStruct {
     // %occErrors, resolved on first use: the error names a compile-time macro such as `$$$ERROR`
     // accepts in its arguments without any `Include`. Dropped whenever an include file changes.
     pub(crate) error_names: RefCell<Option<MacroDefinitions>>,
+    // Includes fetched from IRIS, parsed once; `None` when IRIS has no such include.
+    pub(crate) iris_includes: RefCell<HashMap<String, Option<macro_expand::Include>>>,
+    // `CLASS_IMPLICIT_INCLUDES` expanded once, since every class gets the same result.
+    pub(crate) implicit_definitions: RefCell<Option<(MacroDefinitions, HashSet<String>)>>,
 }
 
 /// What the checker asks about code outside the workspace. An `Err` says why a lookup couldn't be
@@ -221,6 +225,7 @@ impl WorkspaceStruct {
         };
         if kind == DocKind::Inc {
             self.error_names.take();
+            self.implicit_definitions.take();
         }
         let entry = match kind {
             DocKind::Cls => match ClassDefinitionHeader::parse_prefix(&text) {
@@ -272,6 +277,7 @@ impl WorkspaceStruct {
     fn remove_uri(&mut self, uri: &str) -> Vec<String> {
         if DocKind::from_uri(uri) == Some(DocKind::Inc) {
             self.error_names.take();
+            self.implicit_definitions.take();
         }
         let mut affected = self.invalidate(uri);
         if let Some(Ok(cell)) = self.doc_cache.remove(uri) {
@@ -761,6 +767,8 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         iris,
         style: style.as_ref().map(style::KeywordStyles::new),
         error_names: RefCell::new(None),
+        iris_includes: RefCell::new(HashMap::new()),
+        implicit_definitions: RefCell::new(None),
     }
 }
 
