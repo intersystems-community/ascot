@@ -3530,11 +3530,7 @@ pub(crate) fn check_cls(
     }
     // Available to every class without an explicit `Include` (see `CLASS_IMPLICIT_INCLUDES`) --
     // resolved silently (no diagnostic on failure, unlike an explicit `Include`).
-    let (mut macro_definitions, _) =
-        env.base
-            .resolve_class_includes(&crate::macro_expand::implicit_includes(
-                crate::macro_expand::CLASS_IMPLICIT_INCLUDES,
-            ));
+    let mut macro_definitions = env.base.implicit_class_definitions();
     // An `Include` is inherited: a subclass sees every include file of its superclasses too.
     let (inherited_definitions, _) = env
         .base
