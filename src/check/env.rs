@@ -864,77 +864,65 @@ impl<'a> WorkspaceEnv<'a> {
         range: bindings::Range,
     ) -> Result<Option<Member<N::Ty>>, FindError> {
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
-        let cls = receiver.name.as_str();
-        // Past a class nobody can see, the member may be anything: taken on trust, with a hint.
-        let unverified = |cls: &str, reason: Option<String>| {
-            let err = match reason {
-                Some(reason) => {
-                    TypeError::iris_lookup_failed(DocKind::Cls, cls.to_string(), reason, range)
-                }
-                None => {
-                    let iris = self.workspace.iris.is_some();
-                    TypeError::unconfirmed_member(
-                        cls.to_string(),
-                        mem.to_string(),
-                        !own,
-                        iris,
-                        range,
-                    )
+        // A missing superclass is reported where it is named; the receiver's class is for here.
+        if own && let Err(Unresolved::Missing) = self.resolve(&receiver.name) {
+            return Err(FindError::NoSuchClass(receiver.name.clone()));
+        }
+        let found = self.walk(&receiver.name, own, &mut |cls, resolved| {
+            let found = match resolved {
+                Err(Unresolved::Missing) => return ControlFlow::Continue(false),
+                // Past a class nobody can see, the member may be anything: taken on trust, with
+                // a hint -- except what every object class has.
+                Err(Unresolved::Unknown(reason)) => match registered_object_member::<N>(cls, mem) {
+                    Some(found) => found,
+                    None => {
+                        let err = match reason {
+                            Some(reason) => TypeError::iris_lookup_failed(
+                                DocKind::Cls,
+                                cls.to_string(),
+                                reason.clone(),
+                                range,
+                            ),
+                            None => TypeError::unconfirmed_member(
+                                cls.to_string(),
+                                mem.to_string(),
+                                !own,
+                                self.workspace.iris.is_some(),
+                                range,
+                            ),
+                        };
+                        self.add_soft_diagnostic(err.into());
+                        return ControlFlow::Break(Ok(Some(Member::undeclared(N::Ty::default()))));
+                    }
+                },
+                Ok(_) => {
+                    // Every generated member is a method, so only a method lookup consults them,
+                    // and only once it's needed: building the table looks properties up itself.
+                    let generated = || {
+                        let table = (N::NS == MemberNs::Method)
+                            .then(|| self.generated_members(cls, resolved))?;
+                        let (proc, is_instance_only) = table.get(mem).cloned()?;
+                        let proc = N::method(TyProcedureOrAny::Procedure(proc))?;
+                        Some(Found {
+                            member: Member::undeclared(proc),
+                            is_instance_only,
+                            origin: cls.to_string(),
+                        })
+                    };
+                    match self.declared_in::<N>(cls, resolved, mem).or_else(generated) {
+                        Some(found) => found,
+                        None => return ControlFlow::Continue(true),
+                    }
                 }
             };
-            self.add_soft_diagnostic(err.into());
-            Ok(Some(Member::undeclared(N::Ty::default())))
-        };
-        // `##super` from a class nobody can see has no superclasses to walk.
-        if !own && let Err(Unresolved::Unknown(reason)) = self.resolve(cls) {
-            return unverified(cls, reason);
-        }
-        let mut no_class = false;
-        let found = self.walk(cls, own, &mut |cls, resolved| match resolved {
-            Err(Unresolved::Missing) => {
-                no_class |= cls == receiver.name;
-                ControlFlow::Continue(false)
+            if found.is_instance_only && !obj.is_ins() {
+                return ControlFlow::Break(Err(FindError::InstanceOnly(mem.to_string())));
             }
-            Err(Unresolved::Unknown(reason)) => {
-                ControlFlow::Break(match registered_object_member::<N>(cls, mem) {
-                    Some(found) => Ok(found),
-                    None => Err((cls.to_string(), reason.clone())),
-                })
-            }
-            _ => {
-                // Every generated member is a method, so only a method lookup consults them, and
-                // only once it's needed: building the table looks properties up itself.
-                let generated = || {
-                    let table = N::NS == MemberNs::Method;
-                    let (proc, is_instance_only) = table
-                        .then(|| self.generated_members(cls, resolved))?
-                        .get(mem)
-                        .cloned()?;
-                    Some(Found {
-                        member: Member::undeclared(N::method(TyProcedureOrAny::Procedure(proc))?),
-                        is_instance_only,
-                        origin: cls.to_string(),
-                    })
-                };
-                match self.declared_in::<N>(cls, resolved, mem).or_else(generated) {
-                    Some(found) => ControlFlow::Break(Ok(found)),
-                    None => ControlFlow::Continue(true),
-                }
-            }
+            let mut member = found.member;
+            member.ty.instantiate(receiver, &found.origin);
+            ControlFlow::Break(Ok(Some(member)))
         });
-        match found {
-            Some(Ok(found)) => {
-                if found.is_instance_only && !obj.is_ins() {
-                    return Err(FindError::InstanceOnly(mem.to_string()));
-                }
-                let mut member = found.member;
-                member.ty.instantiate(receiver, &found.origin);
-                Ok(Some(member))
-            }
-            Some(Err((unknown, reason))) => unverified(&unknown, reason),
-            None if no_class => Err(FindError::NoSuchClass(cls.to_string())),
-            None => Ok(None),
-        }
+        found.unwrap_or(Ok(None))
     }
 
     // `mem` as `cls` itself declares it, in the workspace or as IRIS reports it.
