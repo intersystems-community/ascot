@@ -353,60 +353,13 @@ fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<F
     })
 }
 
-// A class as a check run sees it.
+// A class as a check run sees it; `None` from `resolve` means IRIS has none by that name.
 enum Class {
     Workspace(String, Arc<crate::ClassDetails>),
     Iris(bindings::ClassInfo),
-}
-
-// Why it can't be seen: IRIS has none by that name, or nobody can say -- no IRIS, an IRIS
-// lookup that failed (with its reason), or a workspace file that doesn't parse.
-enum Unresolved {
-    Missing,
+    // One nobody can see: no IRIS, an IRIS lookup that failed (with its reason), or a workspace
+    // file that doesn't parse. Taken as present, with whatever members anyone asks of it.
     Unknown(Option<String>),
-}
-
-impl Unresolved {
-    // The hint for a class taken on trust.
-    fn unconfirmed(self, cls: &str, iris: bool, range: bindings::Range) -> TypeError {
-        match self {
-            Unresolved::Unknown(Some(reason)) => {
-                TypeError::iris_lookup_failed(DocKind::Cls, cls.to_string(), reason, range)
-            }
-            _ => TypeError::unconfirmed_class(cls.to_string(), iris, range),
-        }
-    }
-}
-
-// Past a class nobody can see, the methods every object class gets from `%SystemBase`/
-// `%RegisteredObject` are taken as present and untyped -- unless `cls` is another hierarchy root.
-fn registered_object_member<N: Namespace>(cls: &str, mem: &str) -> Option<Found<N::Ty>> {
-    if !REGISTERED_OBJECT_MEMBERS.contains(&mem)
-        || ["%Library.DataType", "%Library.FunctionalIndex"].contains(&cls)
-    {
-        return None;
-    }
-    let proc = if mem == "%New" {
-        TyProcedureOrAny::Procedure(generated_procedure(vec![], true, Some(Ty::This)))
-    } else {
-        TyProcedureOrAny::Any
-    };
-    Some(Found {
-        member: Member::undeclared(N::method(proc)?),
-        is_instance_only: false,
-        origin: cls.to_string(),
-    })
-}
-
-fn new_from_on_new(on_new: &TyProcedure) -> Arc<TyProcedure> {
-    Arc::new(TyProcedure {
-        normal_args: on_new.normal_args.clone(),
-        variadic_arg: on_new.variadic_arg.clone(),
-        out: Some(Ty::This),
-        procedure_block: Some(vec![]),
-        uri: on_new.uri.clone(),
-        declared_at: on_new.declared_at,
-    })
 }
 
 // `Query Q`'s `QFunc` (its result set) and `QExecute`/`QFetch`/... family; the query's own
@@ -538,10 +491,10 @@ impl<'a> WorkspaceEnv<'a> {
     // The names in `N`'s namespace along `cls`'s chain -- all ObjectScript can refer to there.
     fn names<N: Namespace>(&self, cls: &str) -> Vec<String> {
         let mut names = Vec::new();
-        for (cls, resolved) in self.ancestry(cls, true) {
+        for (cls, resolved) in self.ancestry(cls) {
             match &resolved {
-                Ok(Class::Workspace(_, details)) => names.extend(details.names(N::NS).cloned()),
-                Ok(Class::Iris(info)) => names.extend(
+                Some(Class::Workspace(_, details)) => names.extend(details.names(N::NS).cloned()),
+                Some(Class::Iris(info)) => names.extend(
                     (info.members.iter())
                         .filter(|m| MemberNs::of_info(&m.kind) == N::NS)
                         .filter(|m| {
@@ -552,7 +505,7 @@ impl<'a> WorkspaceEnv<'a> {
                         })
                         .map(|m| m.name.content.clone()),
                 ),
-                Err(_) => continue,
+                Some(Class::Unknown(_)) | None => continue,
             }
             if N::NS == MemberNs::Method {
                 names.extend(self.generated_members(&cls, &resolved).keys().cloned());
@@ -566,11 +519,11 @@ impl<'a> WorkspaceEnv<'a> {
     // https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class_propertyclass,
     // "Effect on Subclasses").
     pub(crate) fn property_classes(&self, cls: &str) -> Vec<String> {
-        (self.ancestry(cls, true))
+        (self.ancestry(cls))
             .flat_map(|(_, resolved)| match resolved {
-                Ok(Class::Workspace(_, details)) => details.property_class_names.clone(),
-                Ok(Class::Iris(info)) => info.property_class_names,
-                Err(_) => vec![],
+                Some(Class::Workspace(_, details)) => details.property_class_names.clone(),
+                Some(Class::Iris(info)) => info.property_class_names,
+                Some(Class::Unknown(_)) | None => vec![],
             })
             .collect()
     }
@@ -580,7 +533,7 @@ impl<'a> WorkspaceEnv<'a> {
     fn generated_members(
         &self,
         cls: &str,
-        resolved: &Result<Class, Unresolved>,
+        resolved: &Option<Class>,
     ) -> Rc<HashMap<String, Generated>> {
         if let Some(built) = self.generated.borrow().get(cls) {
             return built.clone();
@@ -595,11 +548,21 @@ impl<'a> WorkspaceEnv<'a> {
         let new = |on_new: Option<Found<TyProcedureOrAny>>| match on_new
             .and_then(|f| f.member.ty.procedure().cloned())
         {
-            Some(on_new) => vec![("%New".to_string(), (new_from_on_new(&on_new), false))],
+            Some(on_new) => {
+                let new = Arc::new(TyProcedure {
+                    normal_args: on_new.normal_args.clone(),
+                    variadic_arg: on_new.variadic_arg.clone(),
+                    out: Some(Ty::This),
+                    procedure_block: Some(vec![]),
+                    uri: on_new.uri.clone(),
+                    declared_at: on_new.declared_at,
+                });
+                vec![("%New".to_string(), (new, false))]
+            }
             None => vec![],
         };
         match resolved {
-            Ok(Class::Workspace(_, details)) => {
+            Some(Class::Workspace(_, details)) => {
                 for (name, property) in &details.members.property {
                     if let MemberKindSpecificDetails::Property { ty, .. } = &property.kind {
                         add(name, self.property_methods(ty.clone().unwrap_or_default()));
@@ -618,7 +581,7 @@ impl<'a> WorkspaceEnv<'a> {
                     new(self.declared_in::<Methods>(cls, resolved, "%OnNew")),
                 );
             }
-            Ok(Class::Iris(info)) => {
+            Some(Class::Iris(info)) => {
                 let zero = bindings::Range::point(bindings::Position {
                     line: 0,
                     character: 0,
@@ -699,9 +662,9 @@ impl<'a> WorkspaceEnv<'a> {
     fn class_methods(&self, cls: &str) -> (HashMap<String, Generated>, bool) {
         let mut methods: HashMap<String, Generated> = HashMap::new();
         let mut complete = true;
-        for (cls, resolved) in self.ancestry(cls, true) {
+        for (cls, resolved) in self.ancestry(cls) {
             match &resolved {
-                Ok(Class::Workspace(_, details)) => {
+                Some(Class::Workspace(_, details)) => {
                     for (name, member) in &details.members.method {
                         if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
                             && method.is_class_method
@@ -712,7 +675,7 @@ impl<'a> WorkspaceEnv<'a> {
                         }
                     }
                 }
-                Ok(Class::Iris(info)) => {
+                Some(Class::Iris(info)) => {
                     for member in &info.members {
                         if matches!(member.kind, MemberKind::ClassMethod(_))
                             && let Some(found) = iris_found::<Methods>(member.clone(), &cls)
@@ -724,7 +687,7 @@ impl<'a> WorkspaceEnv<'a> {
                         }
                     }
                 }
-                Err(_) => complete = false,
+                Some(Class::Unknown(_)) | None => complete = false,
             }
         }
         (methods, complete)
@@ -852,19 +815,39 @@ impl<'a> WorkspaceEnv<'a> {
     ) -> Result<Option<Member<N::Ty>>, FindError> {
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
         // A missing superclass is reported where it is named; the receiver's class is for here.
-        if own && let Err(Unresolved::Missing) = self.resolve(&receiver.name) {
+        if own && self.resolve(&receiver.name).is_none() {
             return Err(FindError::NoSuchClass(receiver.name.clone()));
         }
         let found = self
-            .ancestry(&receiver.name, own)
+            .ancestry(&receiver.name)
+            .skip(usize::from(!own))
             .find_map(|(cls, resolved)| {
                 let found = match &resolved {
-                    Err(Unresolved::Missing) => return None,
+                    None => return None,
                     // Past a class nobody can see, the member may be anything: taken on trust, with
                     // a hint -- except what every object class has.
-                    Err(Unresolved::Unknown(reason)) => {
-                        match registered_object_member::<N>(&cls, mem) {
-                            Some(found) => found,
+                    Some(Class::Unknown(reason)) => {
+                        // Past a class nobody can see, the methods every object class gets from
+                        // `%SystemBase`/`%RegisteredObject` are taken as present and untyped --
+                        // unless `cls` is another hierarchy root.
+                        let registered = REGISTERED_OBJECT_MEMBERS.contains(&mem)
+                            && !["%Library.DataType", "%Library.FunctionalIndex"]
+                                .contains(&cls.as_str());
+                        let proc = if mem == "%New" {
+                            TyProcedureOrAny::Procedure(generated_procedure(
+                                vec![],
+                                true,
+                                Some(Ty::This),
+                            ))
+                        } else {
+                            TyProcedureOrAny::Any
+                        };
+                        match registered.then(|| N::method(proc)).flatten() {
+                            Some(ty) => Found {
+                                member: Member::undeclared(ty),
+                                is_instance_only: false,
+                                origin: cls.clone(),
+                            },
                             None => {
                                 let err = match reason {
                                     Some(reason) => TypeError::iris_lookup_failed(
@@ -886,7 +869,7 @@ impl<'a> WorkspaceEnv<'a> {
                             }
                         }
                     }
-                    Ok(_) => {
+                    Some(_) => {
                         // Every generated member is a method, so only a method lookup consults them,
                         // and only once it's needed: building the table looks properties up itself.
                         let generated = || {
@@ -918,15 +901,22 @@ impl<'a> WorkspaceEnv<'a> {
     fn declared_in<N: Namespace>(
         &self,
         cls: &str,
-        resolved: &Result<Class, Unresolved>,
+        resolved: &Option<Class>,
         mem: &str,
     ) -> Option<Found<N::Ty>> {
         match resolved {
-            Ok(Class::Workspace(uri, details)) => {
+            Some(Class::Workspace(uri, details)) => {
                 let member = details.member(N::NS, mem)?;
                 let (mut ty, is_instance_only) = N::declared(member, uri)?;
                 // A member's declared type names are written relative to the declaring class.
-                N::class_names(&mut ty, |t| self.qualify_ty(t, &details.name.it));
+                N::class_names(&mut ty, |t| {
+                    if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = t {
+                        c.name = self.qualify_class_name(&c.name, Some(&details.name.it));
+                        for arg in c.generics.values_mut() {
+                            *arg = self.qualify_class_name(arg, Some(&details.name.it));
+                        }
+                    }
+                });
                 let location = bindings::Location::new(uri.to_string(), member.range);
                 Some(Found {
                     member: Member {
@@ -937,7 +927,7 @@ impl<'a> WorkspaceEnv<'a> {
                     origin: details.name.it.clone(),
                 })
             }
-            Ok(Class::Iris(info)) => {
+            Some(Class::Iris(info)) => {
                 let named = |m: &&bindings::MemberInfo| {
                     m.name.content.eq_ignore_ascii_case(mem)
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
@@ -946,7 +936,7 @@ impl<'a> WorkspaceEnv<'a> {
                     .find(|m| named(m) && MemberNs::of_info(&m.kind) == N::NS)?;
                 iris_found::<N>(member.clone(), cls)
             }
-            _ => None,
+            Some(Class::Unknown(_)) | None => None,
         }
     }
 
@@ -956,13 +946,13 @@ impl<'a> WorkspaceEnv<'a> {
         &self,
         cls: &crate::details::ClassDetails,
     ) -> Vec<String> {
-        (self.ancestry(&cls.name.it, false))
+        (self.ancestry(&cls.name.it).skip(1))
             .flat_map(|(_, resolved)| match resolved {
-                Ok(Class::Workspace(_, details)) => {
+                Some(Class::Workspace(_, details)) => {
                     details.include_names.iter().map(|i| i.it.clone()).collect()
                 }
-                Ok(Class::Iris(info)) => info.includes,
-                Err(_) => vec![],
+                Some(Class::Iris(info)) => info.includes,
+                Some(Class::Unknown(_)) | None => vec![],
             })
             .collect()
     }
@@ -994,80 +984,36 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     pub(crate) fn class_exists(&self, cls: &str) -> bool {
-        self.resolve(cls).is_ok()
+        self.resolve(cls).is_some()
     }
 
     // Whether IRIS says there's no such class; `false` when it couldn't be asked.
     pub(crate) fn class_absent(&self, cls: &str) -> bool {
-        matches!(self.resolve(cls), Err(Unresolved::Missing))
+        self.resolve(cls).is_none()
     }
 
-    fn qualified_extends(&self, cls: &str, details: &crate::ClassDetails) -> Vec<String> {
-        details
-            .extends
-            .iter()
-            .map(|sup| self.qualify_class_name(sup, Some(cls)))
-            .collect()
-    }
-
-    // `cls`'s direct superclasses in precedence order: `Extends (A, B)` takes A's definition over
-    // B's, or B's over A's under `[ Inheritance = right ]`.
-    fn supers(&self, cls: &str, details: &crate::ClassDetails) -> Vec<String> {
-        let mut supers = self.qualified_extends(cls, details);
-        if details.inheritance_right {
-            supers.reverse();
-        }
-        supers
-    }
-
-    fn resolve(&self, cls: &str) -> Result<Class, Unresolved> {
+    fn resolve(&self, cls: &str) -> Option<Class> {
         if let Some(uri) = self.resolve_cls_uri(cls) {
-            return match self.workspace.cls_details(&uri) {
-                Ok(details) => Ok(Class::Workspace(uri, details)),
-                Err(_) => Err(Unresolved::Unknown(None)),
-            };
+            return Some(match self.workspace.cls_details(&uri) {
+                Ok(details) => Class::Workspace(uri, details),
+                Err(_) => Class::Unknown(None),
+            });
         }
         let Some(iris) = self.workspace.iris.as_ref() else {
-            return Err(Unresolved::Unknown(None));
+            return Some(Class::Unknown(None));
         };
         match iris.get_cls(cls) {
-            Ok(Some(info)) => Ok(Class::Iris(info)),
-            Ok(None) => Err(Unresolved::Missing),
-            Err(reason) => Err(Unresolved::Unknown(Some(reason))),
+            Ok(Some(info)) => Some(Class::Iris(info)),
+            Ok(None) => None,
+            Err(reason) => Some(Class::Unknown(Some(reason))),
         }
     }
 
-    // `cls`'s direct superclasses in precedence order, as far as `resolved` tells.
-    fn supers_of(&self, cls: &str, resolved: &Result<Class, Unresolved>) -> Vec<String> {
-        match resolved {
-            Ok(Class::Workspace(_, details)) => self.supers(cls, details),
-            Ok(Class::Iris(info)) => {
-                let mut supers = info.extends.clone();
-                if info.inheritance_right {
-                    supers.reverse();
-                }
-                supers.extend(info.storage.clone());
-                supers.iter_mut().for_each(normalize_class_name);
-                supers
-            }
-            _ => vec![],
-        }
-    }
-
-    // `cls` (unless `!own`) and its ancestors, nearest first in IRIS's precedence order and each
-    // once, resolved as they come so a search stops as soon as it can.
-    fn ancestry(
-        &self,
-        cls: &str,
-        own: bool,
-    ) -> impl Iterator<Item = (String, Result<Class, Unresolved>)> + '_ {
+    // `cls` and its ancestors, nearest first in IRIS's precedence order and each once, resolved
+    // as they come so a search stops as soon as it can.
+    fn ancestry(&self, cls: &str) -> impl Iterator<Item = (String, Option<Class>)> + '_ {
         let mut seen = HashSet::new();
         let mut pending = vec![cls.to_string()];
-        if !own {
-            seen.insert(cls.to_string());
-            pending = self.supers_of(cls, &self.resolve(cls));
-            pending.reverse();
-        }
         std::iter::from_fn(move || {
             loop {
                 let cls = pending.pop()?;
@@ -1075,24 +1021,37 @@ impl<'a> WorkspaceEnv<'a> {
                     continue;
                 }
                 let resolved = self.resolve(&cls);
-                pending.extend(self.supers_of(&cls, &resolved).into_iter().rev());
+                // The direct superclasses in precedence order, as far as `resolved` tells.
+                let supers = match &resolved {
+                    Some(Class::Workspace(_, details)) => {
+                        let mut supers: Vec<String> = (details.extends.iter())
+                            .map(|sup| self.qualify_class_name(sup, Some(&cls)))
+                            .collect();
+                        if details.inheritance_right {
+                            supers.reverse();
+                        }
+                        supers
+                    }
+                    Some(Class::Iris(info)) => {
+                        let mut supers = info.extends.clone();
+                        if info.inheritance_right {
+                            supers.reverse();
+                        }
+                        supers.extend(info.storage.clone());
+                        supers.iter_mut().for_each(normalize_class_name);
+                        supers
+                    }
+                    Some(Class::Unknown(_)) | None => vec![],
+                };
+                pending.extend(supers.into_iter().rev());
                 return Some((cls, resolved));
             }
         })
     }
 
-    fn qualify_ty(&self, t: &mut Ty, context: &str) {
-        if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = t {
-            c.name = self.qualify_class_name(&c.name, Some(context));
-            for arg in c.generics.values_mut() {
-                *arg = self.qualify_class_name(arg, Some(context));
-            }
-        }
-    }
-
     // Where the class `name` is declared, for go-to-definition.
     pub fn class_location(&self, name: &str) -> Option<bindings::Location> {
-        match self.resolve(name).ok()? {
+        match self.resolve(name)? {
             Class::Workspace(uri, details) => {
                 Some(bindings::Location::new(uri, details.name.range))
             }
@@ -1103,6 +1062,7 @@ impl<'a> WorkspaceEnv<'a> {
                 });
                 Some(bindings::Location::new(info.uri?, zero))
             }
+            Class::Unknown(_) => None,
         }
     }
 
@@ -1127,21 +1087,21 @@ impl<'a> WorkspaceEnv<'a> {
     pub(crate) fn is_datatype(&self, cls: &str) -> Option<bool> {
         let mut unknown = false;
         let yes = self
-            .ancestry(cls, true)
+            .ancestry(cls)
             .find_map(|(cls, resolved)| match resolved {
                 _ if cls == "%Library.DataType" => Some(true),
                 // Never a datatype, even unresolved, and IRIS lets nothing mix it with one.
                 _ if cls == "%Library.RegisteredObject" => Some(false),
-                Ok(Class::Workspace(_, details)) => details.is_datatype.then_some(true),
+                Some(Class::Workspace(_, details)) => details.is_datatype.then_some(true),
                 // Outside the workspace, IRIS's compiled ClassType is known.
-                Ok(Class::Iris(info)) => match info.is_datatype {
+                Some(Class::Iris(info)) => match info.is_datatype {
                     Some(is_datatype) => is_datatype.then_some(true),
                     None => {
                         unknown = true;
                         None
                     }
                 },
-                Err(_) => {
+                Some(Class::Unknown(_)) | None => {
                     unknown = true;
                     None
                 }
@@ -1157,10 +1117,16 @@ impl<'a> WorkspaceEnv<'a> {
         if cls.starts_with('%') {
             return;
         }
-        if let Err(unresolved) = self.resolve(cls) {
-            let iris = self.workspace.iris.is_some();
-            self.add_soft_diagnostic(unresolved.unconfirmed(cls, iris, range).into());
-        }
+        let hint = match self.resolve(cls) {
+            Some(Class::Workspace(..) | Class::Iris(_)) => return,
+            Some(Class::Unknown(Some(reason))) => {
+                TypeError::iris_lookup_failed(DocKind::Cls, cls.to_string(), reason, range)
+            }
+            Some(Class::Unknown(None)) | None => {
+                TypeError::unconfirmed_class(cls.to_string(), self.workspace.iris.is_some(), range)
+            }
+        };
+        self.add_soft_diagnostic(hint.into());
     }
 
     // Where the include file `name` is declared, for go-to-definition on an `Include`.
@@ -1298,7 +1264,7 @@ impl<'a> WorkspaceEnv<'a> {
     // `cls` and its ancestors, nearest first. Not IRIS's exact MRO, but any
     // shared ancestor is a sound upper bound for merging.
     fn ancestors(&self, cls: &str) -> Vec<String> {
-        self.ancestry(cls, true).map(|(cls, _)| cls).collect()
+        self.ancestry(cls).map(|(cls, _)| cls).collect()
     }
 
     pub fn new(workspace: &'a WorkspaceStruct) -> Self {
