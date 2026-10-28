@@ -572,12 +572,6 @@ pub enum PropertyTy {
     Multidimensional(Ty),
 }
 
-impl Default for Callee {
-    fn default() -> Self {
-        Callee::Method(TyProcedureOrAny::Any)
-    }
-}
-
 impl Default for PropertyTy {
     fn default() -> Self {
         PropertyTy::Value(Ty::Any)
@@ -589,22 +583,6 @@ impl PropertyTy {
         match self {
             PropertyTy::Value(ty) | PropertyTy::Multidimensional(ty) => ty.clone(),
             PropertyTy::Collection { kind, .. } => kind.class(),
-        }
-    }
-}
-
-// What `..X(...)` reaches: a method, else a property, which IRIS then requires to be
-// multidimensional, the arguments subscripting a node typed like the property.
-pub enum Callee {
-    Method(TyProcedureOrAny),
-    Property(PropertyTy),
-}
-
-impl Callee {
-    pub fn procedure(&self) -> Option<&Arc<TyProcedure>> {
-        match self {
-            Callee::Method(TyProcedureOrAny::Procedure(proc)) => Some(proc),
-            _ => None,
         }
     }
 }
@@ -1044,19 +1022,19 @@ impl Instantiate for TyProcedure {
     }
 }
 
-impl Instantiate for TyProcedureOrAny {
-    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
-        if let TyProcedureOrAny::Procedure(proc) = self {
-            Arc::make_mut(proc).instantiate(receiver, owner);
+impl TyProcedureOrAny {
+    pub fn procedure(&self) -> Option<&Arc<TyProcedure>> {
+        match self {
+            TyProcedureOrAny::Procedure(proc) => Some(proc),
+            TyProcedureOrAny::Any => None,
         }
     }
 }
 
-impl Instantiate for Callee {
+impl Instantiate for TyProcedureOrAny {
     fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
-        match self {
-            Callee::Method(proc) => proc.instantiate(receiver, owner),
-            Callee::Property(ty) => ty.instantiate(receiver, owner),
+        if let TyProcedureOrAny::Procedure(proc) = self {
+            Arc::make_mut(proc).instantiate(receiver, owner);
         }
     }
 }

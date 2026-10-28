@@ -174,7 +174,7 @@ pub(crate) struct ClassDetails {
     pub(crate) keywords_without_value: Vec<WithRange<String>>,
     // From this class's own `[PropertyClass = ...]` keyword -- each listed class's own
     // `Parameter`s become valid property type-parameters for every property in this class *and*
-    // its subclasses (see `check::env::WorkspaceEnv::property_class_names`, which walks
+    // its subclasses (see `check::env::WorkspaceEnv::property_classes`, which walks
     // `extends` to accumulate every ancestor's own list too).
     pub(crate) property_class_names: Vec<String>,
 }

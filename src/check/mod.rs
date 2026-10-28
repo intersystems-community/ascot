@@ -2528,18 +2528,28 @@ fn check_member<'a>(
             let property = env.resolve_mem::<Properties<Read>>(&ty, name, range, true);
             Ok(Some(referenced(env, mem, property)?.to_ty()))
         }
-        (false, Some(args)) => {
-            let method = env.resolve_mem::<Methods>(&ty, name.clone(), range, true);
-            match referenced(env, mem, method)? {
-                Callee::Method(proc) => check_call(env, flow, proc, args.items.iter(), range),
-                // `..Prop(subs)`: a multidimensional property's node, typed like the property.
-                Callee::Property(PropertyTy::Multidimensional(ty)) => {
-                    builtins::check_args_any(env, flow, args.items.iter())?;
-                    Ok(Some(ty))
-                }
-                Callee::Property(_) => Err(QuasiTypeError::not_multidimensional(name)),
+        // A method anywhere in the chain before a property anywhere, as IRIS resolves it.
+        (false, Some(args)) => match env.resolve_mem::<Methods>(&ty, name.clone(), range, true) {
+            Ok(method) => {
+                let method = referenced(env, mem, Ok(method))?;
+                check_call(env, flow, method, args.items.iter(), range)
             }
-        }
+            // `..Prop(subs)`: a property, which IRIS requires to be multidimensional, its node
+            // typed like the property; a `%DispatchMethod` takes the name when nothing else does.
+            Err(miss) if matches!(miss.kind, TypeErrorKind::CannotFindMember { .. }) => {
+                let property =
+                    env.resolve_mem::<Properties<Called>>(&ty, name.clone(), range, true);
+                match referenced(env, mem, property) {
+                    Ok(PropertyTy::Multidimensional(ty)) => {
+                        builtins::check_args_any(env, flow, args.items.iter())?;
+                        Ok(Some(ty))
+                    }
+                    Ok(_) => Err(QuasiTypeError::not_multidimensional(name)),
+                    Err(_) => Err(miss.into()),
+                }
+            }
+            Err(err) => Err(err.into()),
+        },
     }
 }
 
@@ -3586,8 +3596,8 @@ fn check_property_or_parameter_declaration(
                 };
                 // A type-param can also come from a `[PropertyClass = ...]` on this class or an
                 // ancestor (e.g. %JSON.Adaptor lists %JSON.PropertyParameters, making
-                // `%JSONFIELDNAME` valid everywhere) -- see `WorkspaceEnv::property_class_names`.
-                let property_classes = env.base.property_class_names(class_name);
+                // `%JSONFIELDNAME` valid everywhere) -- see `WorkspaceEnv::property_classes`.
+                let property_classes = env.base.property_classes(class_name);
                 let candidate_classes: Vec<&str> = type_class
                     .as_deref()
                     .into_iter()

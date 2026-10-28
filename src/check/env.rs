@@ -75,27 +75,46 @@ pub(crate) struct Parameters;
 pub(crate) struct Properties<A>(PhantomData<A>);
 pub(crate) struct Methods;
 
-// How `..X` is used, which decides the `%Dispatch*Property` hook a missing property falls back to.
+// How `..X` is used, which decides the `%Dispatch*` hook a missing property falls back to.
 pub(crate) trait Access {
-    const HOOK: Option<&'static str>;
+    fn hook(obj: &ClsOrIns) -> Option<&'static str>;
 }
 pub(crate) struct Read;
 pub(crate) struct Assign;
 // `Set ..X(subs) = v`, a node of a multidimensional property.
 pub(crate) struct AssignNode;
+// `..X(subs)` once no method is named `X`: a node, or whatever `%DispatchMethod` makes of it.
+pub(crate) struct Called;
 // An index key: IRIS wants a declared property, hook or not.
 pub(crate) struct Indexed;
 impl Access for Read {
-    const HOOK: Option<&'static str> = Some("%DispatchGetProperty");
+    fn hook(_: &ClsOrIns) -> Option<&'static str> {
+        Some("%DispatchGetProperty")
+    }
 }
 impl Access for Assign {
-    const HOOK: Option<&'static str> = Some("%DispatchSetProperty");
+    fn hook(_: &ClsOrIns) -> Option<&'static str> {
+        Some("%DispatchSetProperty")
+    }
 }
 impl Access for AssignNode {
-    const HOOK: Option<&'static str> = Some("%DispatchSetMultidimProperty");
+    fn hook(_: &ClsOrIns) -> Option<&'static str> {
+        Some("%DispatchSetMultidimProperty")
+    }
+}
+impl Access for Called {
+    fn hook(obj: &ClsOrIns) -> Option<&'static str> {
+        Some(if obj.is_ins() {
+            "%DispatchMethod"
+        } else {
+            "%DispatchClassMethod"
+        })
+    }
 }
 impl Access for Indexed {
-    const HOOK: Option<&'static str> = None;
+    fn hook(_: &ClsOrIns) -> Option<&'static str> {
+        None
+    }
 }
 
 impl Namespace for Parameters {
@@ -182,8 +201,8 @@ impl<A: Access> Namespace for Properties<A> {
         Some((ty, true))
     }
 
-    fn hook(_: &ClsOrIns) -> Option<&'static str> {
-        A::HOOK
+    fn hook(obj: &ClsOrIns) -> Option<&'static str> {
+        A::hook(obj)
     }
 
     // Only `%DispatchGetProperty`'s return type matters; a dispatched name takes any subscripts.
@@ -201,43 +220,39 @@ impl<A: Access> Namespace for Properties<A> {
 }
 
 impl Namespace for Methods {
-    type Ty = Callee;
-    const NS: &'static [MemberNs] = &[MemberNs::HigherOrder, MemberNs::Property];
+    type Ty = TyProcedureOrAny;
+    const NS: &'static [MemberNs] = &[MemberNs::HigherOrder];
 
-    fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(Callee, bool)> {
-        match &member.kind {
-            MemberKindSpecificDetails::MethodOrClassMethod(m) => {
-                let proc = TyProcedure {
-                    normal_args: m
-                        .normal_args
-                        .iter()
-                        .map(|arg| arg.it.clone().with_declared_at(arg.range))
-                        .collect(),
-                    variadic_arg: m.variadic_arg.as_ref().map(|arg| arg.it.clone()),
-                    out: m.out.it.clone(),
-                    procedure_block: Some(
-                        m.procedure_block
-                            .as_ref()
-                            .map_or(vec![], |x| x.iter().map(|x| x.to_string()).collect()),
-                    ),
-                    uri: Some(uri.to_string()),
-                    declared_at: Some(member.range),
-                };
-                let proc = TyProcedureOrAny::Procedure(Arc::new(proc));
-                Some((Callee::Method(proc), !m.is_class_method))
-            }
-            MemberKindSpecificDetails::Property { .. } => {
-                let (ty, is_instance_only) = Properties::<Read>::declared(member, uri)?;
-                Some((Callee::Property(ty), is_instance_only))
-            }
-            _ => None,
-        }
+    fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(TyProcedureOrAny, bool)> {
+        let MemberKindSpecificDetails::MethodOrClassMethod(m) = &member.kind else {
+            return None;
+        };
+        let proc = TyProcedure {
+            normal_args: m
+                .normal_args
+                .iter()
+                .map(|arg| arg.it.clone().with_declared_at(arg.range))
+                .collect(),
+            variadic_arg: m.variadic_arg.as_ref().map(|arg| arg.it.clone()),
+            out: m.out.it.clone(),
+            procedure_block: Some(
+                m.procedure_block
+                    .as_ref()
+                    .map_or(vec![], |x| x.iter().map(|x| x.to_string()).collect()),
+            ),
+            uri: Some(uri.to_string()),
+            declared_at: Some(member.range),
+        };
+        Some((
+            TyProcedureOrAny::Procedure(Arc::new(proc)),
+            !m.is_class_method,
+        ))
     }
 
     fn reported(
         member: bindings::MemberInfo,
         correction: Option<&Correction>,
-    ) -> Option<(Callee, bool)> {
+    ) -> Option<(TyProcedureOrAny, bool)> {
         let uri = member.uri.clone();
         let declared_at = bindings::Range {
             start: member.before,
@@ -246,10 +261,6 @@ impl Namespace for Methods {
         let (m, is_instance_only) = match member.kind {
             MemberKind::Method(m) => (m, true),
             MemberKind::ClassMethod(m) => (m, false),
-            MemberKind::Property(_) | MemberKind::Relationship(_) => {
-                let (ty, is_instance_only) = Properties::<Read>::reported(member, None)?;
-                return Some((Callee::Property(ty), is_instance_only));
-            }
             _ => return None,
         };
         let mut proc = TyProcedure::from(m);
@@ -258,31 +269,21 @@ impl Namespace for Methods {
         if let Some(correction) = correction {
             correction.apply(&mut proc);
         }
-        let proc = TyProcedureOrAny::Procedure(Arc::new(proc));
-        Some((Callee::Method(proc), is_instance_only))
+        Some((
+            TyProcedureOrAny::Procedure(Arc::new(proc)),
+            is_instance_only,
+        ))
     }
 
-    fn method(proc: TyProcedureOrAny) -> Option<Callee> {
-        Some(Callee::Method(proc))
+    fn method(proc: TyProcedureOrAny) -> Option<TyProcedureOrAny> {
+        Some(proc)
     }
 
-    fn hook(obj: &ClsOrIns) -> Option<&'static str> {
-        Some(if obj.is_ins() {
-            "%DispatchMethod"
-        } else {
-            "%DispatchClassMethod"
-        })
-    }
-
-    fn class_names(ty: &mut Callee, mut f: impl FnMut(&mut Ty)) {
-        match ty {
-            Callee::Method(TyProcedureOrAny::Procedure(proc)) => {
-                if matches!(proc.out, Some(Ty::OREF(_))) {
-                    f(Arc::make_mut(proc).out.as_mut().unwrap());
-                }
-            }
-            Callee::Method(TyProcedureOrAny::Any) => {}
-            Callee::Property(ty) => Properties::<Read>::class_names(ty, f),
+    fn class_names(ty: &mut TyProcedureOrAny, mut f: impl FnMut(&mut Ty)) {
+        if let TyProcedureOrAny::Procedure(proc) = ty
+            && matches!(proc.out, Some(Ty::OREF(_)))
+        {
+            f(Arc::make_mut(proc).out.as_mut().unwrap());
         }
     }
 }
@@ -538,7 +539,7 @@ impl<'a> WorkspaceEnv<'a> {
     // own `Parameter`s are valid property type-parameters throughout `cls`'s whole subtree (see
     // https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class_propertyclass,
     // "Effect on Subclasses").
-    pub(crate) fn property_class_names(&self, cls: &str) -> Vec<String> {
+    pub(crate) fn property_classes(&self, cls: &str) -> Vec<String> {
         let mut classes = Vec::new();
         self.walk::<()>(cls, true, &mut |_, resolved| {
             match resolved {
@@ -568,7 +569,7 @@ impl<'a> WorkspaceEnv<'a> {
             }
         };
         // `%New` takes the class's own `%OnNew`'s arguments, which the dictionary doesn't record.
-        let new = |on_new: Option<Found<Callee>>| match on_new
+        let new = |on_new: Option<Found<TyProcedureOrAny>>| match on_new
             .and_then(|f| f.member.ty.procedure().cloned())
         {
             Some(on_new) => vec![("%New".to_string(), (new_from_on_new(&on_new), false))],
@@ -1777,13 +1778,13 @@ impl<'a> CodeEnv<'a> {
             .ok_or_else(QuasiTypeError::not_in_class)
             .map_err(|err| err.into_error(|| range))?
             .to_string();
-        match self
-            .resolve_mem::<Methods>(&Ty::OREF(this), mem, range, false)?
-            .ty
-        {
-            Callee::Method(proc) => Ok(proc),
-            // A superclass property named like this method: nothing to check the call against.
-            Callee::Property(_) => Ok(TyProcedureOrAny::Any),
+        let this = Ty::OREF(this);
+        match self.resolve_mem::<Methods>(&this, mem.clone(), range, false) {
+            // No superclass method of the name: `%DispatchMethod` there may still take the call.
+            Err(err) if matches!(err.kind, TypeErrorKind::CannotFindMember { .. }) => self
+                .resolve_mem::<Properties<Called>>(&this, mem, range, false)
+                .map(|_| TyProcedureOrAny::Any),
+            method => method.map(|method| method.ty),
         }
     }
 
