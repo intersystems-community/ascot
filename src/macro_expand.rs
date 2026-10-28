@@ -476,7 +476,7 @@ impl SourceMap {
 }
 
 // An include's uri, full text, and un-substituted macro units.
-type Include = (String, String, Vec<Range<MacroedUnit>>);
+pub(crate) type Include = Arc<(String, String, Vec<Range<MacroedUnit>>)>;
 
 // An `Include` that didn't resolve, with why IRIS couldn't be asked for it, when that's why.
 pub(crate) type FailedInclude = (String, Option<String>);
@@ -501,21 +501,25 @@ impl WorkspaceStruct {
             let Some(text) = self.doc_text(&uri) else {
                 return Ok(None);
             };
-            return Ok(Some((uri, text, parsed.macroed_units.clone())));
+            return Ok(Some(Arc::new((uri, text, parsed.macroed_units.clone()))));
+        }
+        if let Some(include) = self.iris_includes.borrow().get(name) {
+            return Ok(include.clone());
         }
         let Some(iris) = self.iris.as_ref() else {
             return Ok(None);
         };
-        let Some(routine) = iris.get_inc(name)? else {
-            return Ok(None);
-        };
-        let Ok(parsed) = RoutineWithMacro::parse(&routine.text) else {
-            return Ok(None);
-        };
-        let uri = routine
-            .uri
-            .unwrap_or_else(|| format!("iris-include:///{name}.inc"));
-        Ok(Some((uri, routine.text, parsed.macroed_units)))
+        let include = iris.get_inc(name)?.and_then(|routine| {
+            let parsed = RoutineWithMacro::parse(&routine.text).ok()?;
+            let uri = routine
+                .uri
+                .unwrap_or_else(|| format!("iris-include:///{name}.inc"));
+            Some(Arc::new((uri, routine.text, parsed.macroed_units)))
+        });
+        self.iris_includes
+            .borrow_mut()
+            .insert(name.to_string(), include.clone());
+        Ok(include)
     }
 
     fn expand_rtn_helper(
@@ -606,16 +610,16 @@ impl WorkspaceStruct {
                             match self.resolve_include(&included_name.print()) {
                                 // IRIS processes a repeated `#include` once; this also ends
                                 // include cycles.
-                                Ok(Some((inc_uri, ..)))
-                                    if dones.included.contains_key(&inc_uri) => {}
-                                Ok(Some((inc_uri, inc_text, inc_units))) => {
-                                    dones.note_included_file(inc_uri.clone(), &inc_text);
+                                Ok(Some(include)) if dones.included.contains_key(&include.0) => {}
+                                Ok(Some(include)) => {
+                                    let (inc_uri, inc_text, inc_units) = &*include;
+                                    dones.note_included_file(inc_uri.clone(), inc_text);
                                     let items = inc_units
-                                        .into_iter()
+                                        .iter()
                                         .map(|item| {
                                             let inc_range = item.start..item.end;
                                             (
-                                                Cow::Owned(item.into_inner()),
+                                                Cow::Owned(item.deref().clone()),
                                                 origin
                                                     .for_included_file(inc_uri.clone(), inc_range),
                                                 true,
@@ -1038,9 +1042,10 @@ impl WorkspaceStruct {
         for name in names {
             include_names.insert(name.clone());
             match self.resolve_include(name) {
-                Ok(Some((inc_uri, inc_text, inc_units))) => {
+                Ok(Some(include)) => {
+                    let (inc_uri, inc_text, inc_units) = &*include;
                     let mut dones = DoneList::new();
-                    dones.note_included_file(inc_uri.clone(), &inc_text);
+                    dones.note_included_file(inc_uri.clone(), inc_text);
                     let mut todos = TodoList::new(
                         inc_units
                             .iter()
@@ -1060,6 +1065,17 @@ impl WorkspaceStruct {
             }
         }
         (definitions, failed, include_names)
+    }
+
+    pub(crate) fn implicit_class_definitions(&self) -> (MacroDefinitions, HashSet<String>) {
+        self.implicit_definitions
+            .borrow_mut()
+            .get_or_insert_with(|| {
+                let (definitions, _, names) =
+                    self.resolve_class_includes(&implicit_includes(CLASS_IMPLICIT_INCLUDES));
+                (definitions, names)
+            })
+            .clone()
     }
 
     // `header` is pushed verbatim, unexpanded, ahead of the expanded `body` -- like
