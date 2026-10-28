@@ -850,8 +850,10 @@ impl<'a> WorkspaceEnv<'a> {
         }
     }
 
-    // `lookup` without the "did you mean" for a miss, for probes that discard the error -- and
-    // that building the generated-member table makes, so suggestions can't ask for that table.
+    // Where IRIS finds `mem` on `obj`: each class along the chain in precedence order, its own
+    // declared members then its generated ones, so the first match is the one IRIS compiles in.
+    // `None` past a class nobody can see, since whatever it declares would shadow the rest;
+    // `own = false` starts at the superclasses, for `##super`.
     fn find<N: Namespace>(
         &self,
         obj: &ClsOrIns,
