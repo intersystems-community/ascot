@@ -1,5 +1,5 @@
 use crate::bindings::ArgMode;
-use crate::check::types::{HOTy, NormalArg, Ty, TyProcedure, VariadicArg, ty_from_mask};
+use crate::check::types::{NormalArg, Ty, TyProcedure, VariadicArg, ty_from_mask};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
@@ -72,11 +72,7 @@ pub(crate) fn correction(cls: &str, member: &str) -> Option<&'static Correction>
 }
 
 impl Correction {
-    pub(crate) fn apply(&self, ty: &mut HOTy) {
-        let HOTy::Procedure(proc) = ty else {
-            return;
-        };
-        let proc = Arc::make_mut(proc);
+    pub(crate) fn apply(&self, proc: &mut TyProcedure) {
         if let Some(returns) = &self.returns {
             proc.out = ty_from_mask(Some(returns.clone()));
         }

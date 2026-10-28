@@ -467,19 +467,6 @@ pub enum Ty {
     Param(String),
 }
 
-// A member's resolved type, before it's known whether it's about to be called. ObjectScript has
-// no first-class functions, so a `Procedure` is only ever valid as the callee of a call — using
-// it any other way (assigning it, member-accessing it) must error at the point it's coerced to a
-// plain `Ty` via `to_ty`, not later.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HOTy {
-    Value(Ty),
-    Procedure(Arc<TyProcedure>),
-    // A `list Of X` / `array Of X` property. Collections don't nest, so this lives here rather
-    // than in `Ty`; forced into a `Ty` it is the collection class.
-    Collection { kind: CollectionClass, element: Ty },
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CollectionClass {
     List,
@@ -499,44 +486,6 @@ impl CollectionClass {
             CollectionClass::List => "%Integer",
             CollectionClass::Array => "%String",
         })
-    }
-}
-
-impl HOTy {
-    pub fn to_ty(&self) -> Result<Ty, QuasiTypeError> {
-        match self {
-            HOTy::Value(ty) => Ok(ty.clone()),
-            HOTy::Collection { kind, .. } => Ok(kind.class()),
-            HOTy::Procedure(_) => Err(QuasiTypeError::procedure_not_called()),
-        }
-    }
-
-    pub fn as_procedure(&self) -> Result<TyProcedureOrAny, QuasiTypeError> {
-        match self {
-            HOTy::Procedure(v) => Ok(TyProcedureOrAny::Procedure(v.clone())),
-            HOTy::Value(Ty::Any) => Ok(TyProcedureOrAny::Any),
-            HOTy::Value(ty) => Err(QuasiTypeError::not_procedure(ty.clone())),
-            HOTy::Collection { kind, .. } => Err(QuasiTypeError::not_procedure(kind.class())),
-        }
-    }
-}
-
-impl From<Ty> for HOTy {
-    fn from(ty: Ty) -> Self {
-        Self::Value(ty)
-    }
-}
-
-impl std::fmt::Display for HOTy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HOTy::Value(ty) => ty.fmt(f),
-            HOTy::Procedure(proc) => proc.fmt(f),
-            HOTy::Collection { kind, element } => match kind {
-                CollectionClass::List => write!(f, "list Of {element}"),
-                CollectionClass::Array => write!(f, "array Of {element}"),
-            },
-        }
     }
 }
 
@@ -607,13 +556,35 @@ impl ClsOrIns {
     }
 }
 
-// Which of IRIS's dynamic-dispatch methods (if any) a failed member lookup should fall back to
-// -- see https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GOOP_dynamic_dispatch
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum AccessKind {
-    Get,
-    Set,
-    Call,
+// A member as a lookup found it, with where it's declared when a workspace class declares it.
+pub struct Member<T> {
+    pub ty: T,
+    pub location: Option<bindings::Location>,
+}
+
+// What a property holds: a value, or a `list Of X` / `array Of X` collection. Collections don't
+// nest, so this lives here rather than in `Ty`; forced into a `Ty` it is the collection class.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PropertyTy {
+    Value(Ty),
+    Collection { kind: CollectionClass, element: Ty },
+    // `Property X [ MultiDimensional ]`: `..X(subs)` addresses a node typed like the property.
+    Multidimensional(Ty),
+}
+
+impl Default for PropertyTy {
+    fn default() -> Self {
+        PropertyTy::Value(Ty::Any)
+    }
+}
+
+impl PropertyTy {
+    pub fn to_ty(&self) -> Ty {
+        match self {
+            PropertyTy::Value(ty) | PropertyTy::Multidimensional(ty) => ty.clone(),
+            PropertyTy::Collection { kind, .. } => kind.class(),
+        }
+    }
 }
 
 impl std::fmt::Display for ClsOrIns {
@@ -1054,13 +1025,29 @@ impl Instantiate for TyProcedure {
     }
 }
 
-impl Instantiate for HOTy {
+impl TyProcedureOrAny {
+    pub fn procedure(&self) -> Option<&Arc<TyProcedure>> {
+        match self {
+            TyProcedureOrAny::Procedure(proc) => Some(proc),
+            TyProcedureOrAny::Any => None,
+        }
+    }
+}
+
+impl Instantiate for TyProcedureOrAny {
+    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
+        if let TyProcedureOrAny::Procedure(proc) = self {
+            Arc::make_mut(proc).instantiate(receiver, owner);
+        }
+    }
+}
+
+impl Instantiate for PropertyTy {
     fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
         match self {
-            HOTy::Value(ty) | HOTy::Collection { element: ty, .. } => {
-                ty.instantiate(receiver, owner)
-            }
-            HOTy::Procedure(proc) => Arc::make_mut(proc).instantiate(receiver, owner),
+            PropertyTy::Value(ty)
+            | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Collection { element: ty, .. } => ty.instantiate(receiver, owner),
         }
     }
 }
@@ -1169,15 +1156,13 @@ mod tests {
         receiver
             .generics
             .insert("ELEMENTTYPE".to_string(), "Demo.Child".to_string());
-        let mut element = HOTy::Value(ty_from_mask(Some("..#ELEMENTTYPE".to_string())).unwrap());
+        let mut element = ty_from_mask(Some("..#ELEMENTTYPE".to_string())).unwrap();
         element.instantiate(&receiver, "%Library.RelationshipObject");
-        assert!(
-            matches!(element, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "Demo.Child")
-        );
-        let mut this = HOTy::Value(ty_from_mask(Some("This".to_string())).unwrap());
+        assert!(matches!(element, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "Demo.Child"));
+        let mut this = ty_from_mask(Some("This".to_string())).unwrap();
         this.instantiate(&receiver, "%Library.RelationshipObject");
         assert!(
-            matches!(this, HOTy::Value(Ty::OREF(ClsOrIns::Ins(c))) if c.name == "%Library.RelationshipObject")
+            matches!(this, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "%Library.RelationshipObject")
         );
     }
 }
