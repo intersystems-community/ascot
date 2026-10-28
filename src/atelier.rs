@@ -842,6 +842,19 @@ fn sources(
     Ok(found)
 }
 
+// Every request without a session cookie opens a CSP session, which holds a license slot until
+// the web application's timeout. The agent keeps the cookie, so there's one session; this ends it.
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for RawAtelier {
+    fn drop(&mut self) {
+        if let Ok(agent) = self.agent() {
+            let _ = agent
+                .get(&format!("{}/?IRISLogout=end", self.api_root))
+                .call();
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl Atelier for RawAtelier {
     fn query(&self, sql: &str, params: &[&str]) -> Result<String, String> {
@@ -1084,27 +1097,86 @@ mod tests {
     // An HTTP server answering each request with the first of `routes` whose path suffix
     // matches the request's path (`("", ...)` matches anything).
     fn stub_server(routes: &'static [(&str, &str, &str)]) -> String {
+        recording_stub_server(routes).0
+    }
+
+    // `stub_server` that also sets a session cookie, and records each request as its first line
+    // plus the cookie it carried, if any.
+    fn recording_stub_server(
+        routes: &'static [(&str, &str, &str)],
+    ) -> (String, std::sync::Arc<Mutex<Vec<String>>>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://user:pass@{}", listener.local_addr().unwrap());
+        let requests = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let log = requests.clone();
         std::thread::spawn(move || {
             for mut stream in listener.incoming().flatten() {
+                // The whole request, so a POST's body isn't still in flight when the response
+                // closes the connection.
+                let mut bytes = Vec::new();
                 let mut buf = [0; 4096];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                let request = String::from_utf8_lossy(&buf[..n]);
+                while let Ok(n) = stream.read(&mut buf) {
+                    bytes.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&bytes);
+                    let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                        continue;
+                    };
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if n == 0 || body.len() >= length {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&bytes);
                 let path = request.split_whitespace().nth(1).unwrap_or("");
+                let cookie = request
+                    .lines()
+                    .find_map(|line| line.strip_prefix("cookie: "))
+                    .unwrap_or("");
+                log.lock().unwrap().push(format!(
+                    "{} {path} [{cookie}]",
+                    request.split_whitespace().next().unwrap_or("")
+                ));
                 let (_, status, body) = routes
                     .iter()
                     .find(|(suffix, ..)| path.ends_with(suffix))
                     .unwrap();
                 let _ = write!(
                     stream,
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nSet-Cookie: CSPSESSIONID-SP-1-UP-api-atelier-=abc123; path=/api/atelier/\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
             }
         });
-        url
+        (url, requests)
+    }
+
+    #[test]
+    fn one_session_is_kept_and_ended() {
+        let (url, requests) =
+            recording_stub_server(&[("", "200 OK", r#"{"result":{"content":[]}}"#)]);
+        {
+            let raw = RawAtelier::connect(&url, "USER").unwrap();
+            let _ = raw.query("SELECT 1", &[]);
+            let _ = raw.get_doc("X.inc");
+        }
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 4, "{requests:?}");
+        assert!(requests[0].ends_with(" []"), "{requests:?}");
+        for request in &requests[1..] {
+            assert!(
+                request.contains(" [CSPSESSIONID-SP-1-UP-api-atelier-=abc123"),
+                "{requests:?}"
+            );
+        }
+        assert!(
+            requests[3].starts_with("GET /api/atelier/?IRISLogout=end"),
+            "{requests:?}"
+        );
     }
 
     #[test]
