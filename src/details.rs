@@ -272,6 +272,7 @@ pub struct RoutineElementDetails {
     pub normal_args: Vec<WithRange<NormalArg>>,
     pub variadic_arg: Option<WithRange<VariadicArg>>,
     pub kind: RoutineElementKind,
+    pub formal_list: bool,
 }
 
 impl RoutineElementDetails {
@@ -296,6 +297,7 @@ impl RoutineElementDetails {
                 .map(|arg| arg.it.clone().with_declared_at(arg.range)),
             out: Some(Ty::Any),
             procedure_block: public_list,
+            formal_list: self.formal_list,
             uri: uri.map(str::to_string),
             declared_at: uri.is_some().then_some(self.name.range),
         }
@@ -374,6 +376,7 @@ fn subroutine_kind(olc: &OLC, subroutine: &cos::Subroutine) -> Option<RoutineEle
         kind: RoutineElementKind::Subroutine,
         normal_args,
         variadic_arg,
+        formal_list: header.params.is_some(),
     })
 }
 
@@ -389,6 +392,7 @@ fn procedure_kind(olc: &OLC, procedure: &cos::Procedure) -> Option<RoutineElemen
         },
         normal_args,
         variadic_arg,
+        formal_list: header.params.is_some(),
     })
 }
 

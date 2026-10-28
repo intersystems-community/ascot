@@ -924,6 +924,9 @@ pub struct TyProcedure {
     pub variadic_arg: Option<VariadicArg>,
     pub out: Option<Ty>,
     pub procedure_block: Option<Vec<String>>,
+    // False for a routine label with no `(...)` at all: `Do` and `Goto` reach it, `$$` can't (IRIS
+    // raises <PARAMETER>). Labels read from IRIS don't say, so they count as true.
+    pub formal_list: bool,
     // Shared by every parameter's `declared_at`. Only populated for legacy routine labels so far.
     pub uri: Option<String>,
     // Where the procedure itself (not a parameter) is declared — e.g. a routine label's own
@@ -1104,6 +1107,7 @@ impl TyProcedure {
             }),
             out: ty_from_declared(t),
             procedure_block,
+            formal_list: true,
             uri: None,
             declared_at: None,
         }
@@ -1119,6 +1123,7 @@ impl TyProcedure {
             declared_at,
         } = label;
         Self {
+            formal_list: true,
             out: ty_from_declared(t.clone()).or(Some(Ty::Any)),
             uri,
             declared_at,
