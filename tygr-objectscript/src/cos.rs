@@ -5085,6 +5085,8 @@ pub enum FunctionCall {
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-1"), SGap>,
         program: Option<More<ArgOf<Expr>>>,
+        // Undocumented, but IRIS takes them.
+        extra: Vec<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
     ZFm2 {
@@ -5358,28 +5360,30 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
         max: 1,
         ret: "%String",
     },
+    // `$ZDCHAR(n1, n2, ...)` and the three below encode each argument, like `$CHAR`; the
+    // documentation shows one.
     SimpleFunction {
         names: &["ZDChar", "ZDC"],
         min: 1,
-        max: 1,
+        max: usize::MAX,
         ret: "%String",
     },
     SimpleFunction {
         names: &["ZLChar", "ZLC"],
         min: 1,
-        max: 1,
+        max: usize::MAX,
         ret: "%String",
     },
     SimpleFunction {
         names: &["ZQChar", "ZQC"],
         min: 1,
-        max: 1,
+        max: usize::MAX,
         ret: "%String",
     },
     SimpleFunction {
         names: &["ZWChar", "ZWC"],
         min: 1,
-        max: 1,
+        max: usize::MAX,
         ret: "%String",
     },
     SimpleFunction {
@@ -5607,7 +5611,7 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
     SimpleFunction {
         names: &["WLength", "WL"],
         min: 1,
-        max: 1,
+        max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
@@ -5715,7 +5719,7 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
     SimpleFunction {
         names: &["ZPosition"],
         min: 2,
-        max: 2,
+        max: 3,
         ret: "%Integer",
     },
     SimpleFunction {
@@ -5745,12 +5749,12 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
     SimpleFunction {
         names: &["ZWidth"],
         min: 1,
-        max: 1,
+        max: 2,
         ret: "%Integer",
     },
     SimpleFunction {
         names: &["ZZenkaku"],
-        min: 2,
+        min: 1,
         max: 3,
         ret: "%String",
     },

@@ -631,10 +631,9 @@ fn label_details(
 }
 
 // A method body or routine procedure block, with its own labels (`Set $ZT="Trap"` handlers,
-// `Goto` targets, `Do`ne subroutines), checked the way a routine's labels are: each with returns
-// of its own, falling through into one another. Whether one returns for the body depends on how
-// it is reached, which isn't tracked. `is_body` is false for a control-flow block (`If {...}`),
-// which a `Goto` may leave.
+// `Goto` targets, `Do`ne subroutines), checked the way a routine's labels are, falling through
+// into one another. A `Goto` target returns for the body; a `Do`ne one for its caller. `is_body`
+// is false for a control-flow block (`If {...}`), which a `Goto` may leave.
 fn check_block_body<'a>(
     body: &cos::ProcedureBody,
     env: &CodeEnv<'a>,
@@ -1051,6 +1050,12 @@ impl CheckCommandInner for cos::Command {
                                     let label = lor.label.print();
                                     if env.goto_leaves_block(&label) {
                                         return Err(QuasiTypeError::goto_out_of_block(label));
+                                    }
+                                    // A nested label reached by Goto returns for the body.
+                                    if let Some(entry) = env.label_entry(&label)
+                                        && entry.nested
+                                    {
+                                        flow.share_output(&entry.output);
                                     }
                                 }
                                 let _ = check_legacy_label_call(env, flow, location, &None, false)?;
@@ -2576,6 +2581,11 @@ fn check_member<'a>(
                 let property =
                     env.resolve_mem::<Properties<Called>>(&ty, name.clone(), range, true);
                 match referenced(env, mem, property) {
+                    Ok(PropertyTy::Multidimensional(_))
+                        if args.items.iter().all(|a| a.is_none()) =>
+                    {
+                        Err(QuasiTypeError::node_without_subscripts(name))
+                    }
                     Ok(PropertyTy::Multidimensional(ty)) => {
                         builtins::check_args_any(env, flow, args.items.iter())?;
                         Ok(Some(ty))
@@ -2662,8 +2672,15 @@ fn check_set_member<'a>(
         None => env.resolve_mem::<Properties<Assign>>(&obj, name.clone(), range, true),
     };
     let property = referenced(env, mem, property)?;
-    if subs.is_some() && !matches!(property, PropertyTy::Multidimensional(_)) {
-        return Err(QuasiTypeError::not_multidimensional(name));
+    match (subs, property) {
+        (Some(_), PropertyTy::Multidimensional(_)) => {}
+        (Some(_), _) => return Err(QuasiTypeError::not_multidimensional(name)),
+        (None, _) => {}
+    }
+    if let Some(subs) = subs
+        && subs.items.iter().all(|a| a.is_none())
+    {
+        return Err(QuasiTypeError::node_without_subscripts(name));
     }
     Ok(())
 }
