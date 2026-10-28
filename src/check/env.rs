@@ -248,33 +248,11 @@ impl Namespace for Methods {
     }
 }
 
-// Why `lookup` has no member to give, with what its message needs.
-enum LookupError {
-    Absent {
-        cls: String,
-        mem: String,
-        suggestions: Vec<String>,
-        has_get: bool,
-    },
+// Why `find` has no member to give.
+enum Miss {
+    Absent,
     NoSuchClass(String),
-    InstanceOnly(String),
-}
-
-impl From<LookupError> for QuasiTypeError {
-    fn from(err: LookupError) -> Self {
-        match err {
-            LookupError::Absent {
-                cls,
-                mem,
-                suggestions,
-                has_get,
-            } => QuasiTypeError::cannot_find_member(cls, mem, suggestions, has_get),
-            LookupError::NoSuchClass(cls) => QuasiTypeError::cannot_find_class(cls),
-            LookupError::InstanceOnly(mem) => {
-                QuasiTypeError::access_instance_only_member_from_class_context(mem)
-            }
-        }
-    }
+    InstanceOnly,
 }
 
 impl<T> Member<T> {
@@ -335,36 +313,6 @@ enum Resolved {
     Workspace(String, Arc<crate::ClassDetails>),
     Iris(Option<bindings::ClassInfo>),
     Unknown,
-}
-
-// `mem` among `info`'s own members; `%New` takes the class's `%OnNew`'s arguments.
-fn iris_member<N: Namespace>(
-    info: &bindings::ClassInfo,
-    cls: &str,
-    mem: &str,
-) -> Option<Found<N::Ty>> {
-    if mem.eq_ignore_ascii_case("%New")
-        && let Some(on_new) = info.members.iter().find(|m| m.name.content == "%OnNew")
-        && let Some(on_new) = iris_found::<Methods>(on_new.clone(), cls)
-        && let Some(proc) = on_new.member.ty.procedure()
-        && let Some(ty) = N::method(TyProcedureOrAny::Procedure(new_from_on_new(proc)))
-    {
-        return Some(Found {
-            member: Member::untyped(ty),
-            is_instance_only: false,
-            origin: on_new.origin,
-        });
-    }
-    let named = |m: &&bindings::MemberInfo| {
-        m.name.content.eq_ignore_ascii_case(mem)
-            || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
-    };
-    let found = N::NS.iter().find_map(|ns| {
-        info.members
-            .iter()
-            .find(|m| named(m) && MemberNs::of_info(&m.kind) == *ns)
-    })?;
-    iris_found::<N>(found.clone(), cls)
 }
 
 // Past a class nobody can see, the methods every object class gets from `%SystemBase`/
@@ -596,7 +544,7 @@ impl<'a> WorkspaceEnv<'a> {
             None => vec![],
         };
         match resolved {
-            Resolved::Workspace(uri, details) => {
+            Resolved::Workspace(_, details) => {
                 for (name, property) in &details.members.property {
                     if let MemberKindSpecificDetails::Property { ty, .. } = &property.kind {
                         add(name, self.property_methods(ty.clone().unwrap_or_default()));
@@ -612,7 +560,7 @@ impl<'a> WorkspaceEnv<'a> {
                 }
                 add(
                     "",
-                    new(self.declared_member::<Methods>(uri, details, "%OnNew")),
+                    new(self.declared_in::<Methods>(cls, resolved, "%OnNew")),
                 );
             }
             Resolved::Iris(Some(info)) => {
@@ -638,7 +586,7 @@ impl<'a> WorkspaceEnv<'a> {
                             add(name, self.index_methods(cls, &keys));
                         }
                         MemberKind::Query => add(name, query_methods()),
-                        MemberKind::Method(_) if name == "%OnNew" => {
+                        MemberKind::Method(_) | MemberKind::ClassMethod(_) if name == "%OnNew" => {
                             add("", new(iris_found::<Methods>(member.clone(), cls)));
                         }
                         _ => {}
@@ -697,11 +645,11 @@ impl<'a> WorkspaceEnv<'a> {
         let mut methods: HashMap<String, Generated> = HashMap::new();
         let mut complete = true;
         self.walk::<()>(cls, true, &mut |cls, resolved| match resolved {
-            Resolved::Workspace(uri, details) => {
+            Resolved::Workspace(_, details) => {
                 for (name, member) in &details.members.higher_order {
                     if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
                         && method.is_class_method
-                        && let Some(found) = self.declared_member::<Methods>(uri, details, name)
+                        && let Some(found) = self.declared_in::<Methods>(cls, resolved, name)
                         && let Some(proc) = found.member.ty.procedure()
                     {
                         methods.entry(name.clone()).or_insert((proc.clone(), false));
@@ -840,25 +788,24 @@ impl<'a> WorkspaceEnv<'a> {
         let Ty::OREF(obj) = ty else {
             return Ok(Member::untyped(N::Ty::default()));
         };
-        let found = match (self.lookup::<N>(obj, &mem, own), hook) {
+        let at = |err: QuasiTypeError| err.into_error(|| range);
+        let found = match (self.find::<N>(obj, &mem, own), hook) {
             // Dynamic dispatch: a class overriding the hook takes any member name.
-            (Err(absent @ LookupError::Absent { .. }), Some(hook)) => {
-                match self.find::<Methods>(obj, hook, own) {
-                    Err(LookupError::Absent { .. }) => Err(absent),
-                    hook => hook.map(|hook| {
-                        hook.map(|hook| {
-                            Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref)))
-                        })
-                    }),
-                }
-            }
+            (Err(Miss::Absent), Some(hook)) => match self.find::<Methods>(obj, hook, own) {
+                Err(Miss::Absent) => Err(Miss::Absent),
+                hook => hook.map(|hook| {
+                    hook.map(|hook| {
+                        Member::untyped(N::dispatched(hook.ty.procedure().map(Arc::as_ref)))
+                    })
+                }),
+            },
             (found, _) => found,
         };
-        match found.map_err(|err| QuasiTypeError::from(err).into_error(|| range))? {
-            Some(member) => Ok(member),
+        match found {
+            Ok(Some(member)) => Ok(member),
             // The chain reached a class nobody can see before any had the member, so it may be
             // anything: taken on trust, with a hint.
-            None => {
+            Ok(None) => {
                 let err = self
                     .lookup_failed(obj.name(), true, range)
                     .unwrap_or_else(|| {
@@ -873,21 +820,7 @@ impl<'a> WorkspaceEnv<'a> {
                 self.add_soft_diagnostic(err.into());
                 Ok(Member::untyped(N::Ty::default()))
             }
-        }
-    }
-
-    // Where IRIS finds `mem` on `obj`: own declared members, then generated ones, then each direct
-    // superclass in precedence order the same way -- IRIS's order, so the first match is the one
-    // it compiles in; no implicit root. `own = false` starts at the superclasses, for `##super`.
-    // The walk ends at a class nobody can see, since whatever it declares would shadow the rest.
-    fn lookup<N: Namespace>(
-        &self,
-        obj: &ClsOrIns,
-        mem: &str,
-        own: bool,
-    ) -> Result<Option<Member<N::Ty>>, LookupError> {
-        self.find::<N>(obj, mem, own).map_err(|err| match err {
-            LookupError::Absent { cls, mem, .. } => {
+            Err(Miss::Absent) => {
                 let names = self.names::<N>(obj.name());
                 let mut suggestions =
                     crate::check::top_similar(&mem, names.iter().map(String::as_str), 5);
@@ -904,15 +837,19 @@ impl<'a> WorkspaceEnv<'a> {
                         }
                     }
                 }
-                LookupError::Absent {
+                let cls = obj.to_string();
+                Err(at(QuasiTypeError::cannot_find_member(
                     cls,
                     mem,
                     suggestions,
                     has_get,
-                }
+                )))
             }
-            err => err,
-        })
+            Err(Miss::NoSuchClass(cls)) => Err(at(QuasiTypeError::cannot_find_class(cls))),
+            Err(Miss::InstanceOnly) => Err(at(
+                QuasiTypeError::access_instance_only_member_from_class_context(mem),
+            )),
+        }
     }
 
     // `lookup` without the "did you mean" for a miss, for probes that discard the error -- and
@@ -922,7 +859,7 @@ impl<'a> WorkspaceEnv<'a> {
         obj: &ClsOrIns,
         mem: &str,
         own: bool,
-    ) -> Result<Option<Member<N::Ty>>, LookupError> {
+    ) -> Result<Option<Member<N::Ty>>, Miss> {
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
         let cls = receiver.name.as_str();
         // `##super` from a class nobody can see has no superclasses to walk.
@@ -930,78 +867,83 @@ impl<'a> WorkspaceEnv<'a> {
             return Ok(None);
         }
         let mut no_class = false;
-        let found = self.walk(cls, own, &mut |cls, resolved| {
-            let declared = match resolved {
-                Resolved::Workspace(uri, details) => self.declared_member::<N>(uri, details, mem),
-                Resolved::Iris(Some(info)) => iris_member::<N>(info, cls, mem),
-                Resolved::Iris(None) => {
-                    no_class |= cls == receiver.name;
-                    return ControlFlow::Continue(false);
+        let found = self.walk(cls, own, &mut |cls, resolved| match resolved {
+            Resolved::Iris(None) => {
+                no_class |= cls == receiver.name;
+                ControlFlow::Continue(false)
+            }
+            Resolved::Unknown => ControlFlow::Break(registered_object_member::<N>(cls, mem)),
+            _ => {
+                // Every generated member is a method, so only a method lookup consults them, and
+                // only once it's needed: building the table looks properties up itself.
+                let generated = || {
+                    let table = N::NS.contains(&MemberNs::HigherOrder);
+                    let (proc, is_instance_only) = table
+                        .then(|| self.generated_members(cls, resolved))?
+                        .get(mem)
+                        .cloned()?;
+                    Some(Found {
+                        member: Member::untyped(N::method(TyProcedureOrAny::Procedure(proc))?),
+                        is_instance_only,
+                        origin: cls.to_string(),
+                    })
+                };
+                match self.declared_in::<N>(cls, resolved, mem).or_else(generated) {
+                    Some(found) => ControlFlow::Break(Some(found)),
+                    None => ControlFlow::Continue(true),
                 }
-                Resolved::Unknown => {
-                    return ControlFlow::Break(Ok(registered_object_member::<N>(cls, mem)));
-                }
-            };
-            // Every generated member is a method, so only a method lookup consults them, and only
-            // once it's needed: building the table looks properties up itself.
-            let found = declared.or_else(|| {
-                let generated = N::NS.contains(&MemberNs::HigherOrder);
-                let (proc, is_instance_only) = generated
-                    .then(|| self.generated_members(cls, resolved))?
-                    .get(mem)
-                    .cloned()?;
-                Some(Found {
-                    member: Member::untyped(N::method(TyProcedureOrAny::Procedure(proc))?),
-                    is_instance_only,
-                    origin: cls.to_string(),
-                })
-            });
-            match found {
-                Some(found) => ControlFlow::Break(Ok(Some(found))),
-                None => ControlFlow::Continue(true),
             }
         });
         match found {
-            Some(found) => found.and_then(|found| {
-                let Some(found) = found else {
-                    return Ok(None);
-                };
+            Some(Some(found)) => {
                 if found.is_instance_only && !obj.is_ins() {
-                    return Err(LookupError::InstanceOnly(mem.to_string()));
+                    return Err(Miss::InstanceOnly);
                 }
                 let mut member = found.member;
                 member.ty.instantiate(receiver, &found.origin);
                 Ok(Some(member))
-            }),
-            None if no_class => Err(LookupError::NoSuchClass(cls.to_string())),
-            None => Err(LookupError::Absent {
-                cls: obj.to_string(),
-                mem: mem.to_string(),
-                suggestions: vec![],
-                has_get: false,
-            }),
+            }
+            Some(None) => Ok(None),
+            None if no_class => Err(Miss::NoSuchClass(cls.to_string())),
+            None => Err(Miss::Absent),
         }
     }
 
-    // `mem` as `cls` itself declares it.
-    fn declared_member<N: Namespace>(
+    // `mem` as `cls` itself declares it, in the workspace or as IRIS reports it.
+    fn declared_in<N: Namespace>(
         &self,
-        uri: &str,
-        details: &crate::ClassDetails,
+        cls: &str,
+        resolved: &Resolved,
         mem: &str,
     ) -> Option<Found<N::Ty>> {
-        let member = N::NS.iter().find_map(|ns| details.member(*ns, mem))?;
-        let (mut ty, is_instance_only) = N::declared(member, uri)?;
-        // A member's declared type names are written relative to the declaring class.
-        N::class_names(&mut ty, |t| self.qualify_ty(t, &details.name.it));
-        Some(Found {
-            member: Member {
-                ty,
-                location: Some(bindings::Location::new(uri.to_string(), member.range)),
-            },
-            is_instance_only,
-            origin: details.name.it.clone(),
-        })
+        match resolved {
+            Resolved::Workspace(uri, details) => {
+                let member = N::NS.iter().find_map(|ns| details.member(*ns, mem))?;
+                let (mut ty, is_instance_only) = N::declared(member, uri)?;
+                // A member's declared type names are written relative to the declaring class.
+                N::class_names(&mut ty, |t| self.qualify_ty(t, &details.name.it));
+                let location = bindings::Location::new(uri.to_string(), member.range);
+                Some(Found {
+                    member: Member {
+                        ty,
+                        location: Some(location),
+                    },
+                    is_instance_only,
+                    origin: details.name.it.clone(),
+                })
+            }
+            Resolved::Iris(Some(info)) => {
+                let named = |m: &&bindings::MemberInfo| {
+                    m.name.content.eq_ignore_ascii_case(mem)
+                        || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
+                };
+                let member = N::NS.iter().find_map(|ns| {
+                    (info.members.iter()).find(|m| named(m) && MemberNs::of_info(&m.kind) == *ns)
+                })?;
+                iris_found::<N>(member.clone(), cls)
+            }
+            _ => None,
+        }
     }
 
     // Every `Include` declared by a superclass of `cls`, open in this workspace or reached
