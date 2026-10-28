@@ -2995,7 +2995,7 @@ impl CheckExprInner for AtomicExpr {
                 args,
                 env.range(label),
             )?
-            .ok_or_else(QuasiTypeError::procedure_call_returns_nothing)?
+            .ok_or_else(QuasiTypeError::undefined)?
             .into()),
             AtomicExpr::LegacyCOM { .. } => Err(QuasiTypeError::unimplemented(
                 "Legacy COM binding ('_obj!sub')".to_string(),

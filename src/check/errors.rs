@@ -158,10 +158,6 @@ impl QuasiTypeError {
         Self::WithoutRange(TypeErrorKind::NotInClass, vec![])
     }
 
-    pub fn procedure_call_returns_nothing() -> Self {
-        Self::WithoutRange(TypeErrorKind::ProcedureCallReturnsNothing, vec![])
-    }
-
     pub fn require_private_variable(name: String) -> Self {
         Self::WithoutRange(TypeErrorKind::RequirePrivateVariable { name }, vec![])
     }
@@ -533,7 +529,7 @@ type_error_kinds! {
     #[message = "Variable '{name}' is already NEW'd; this NEW resets it to undefined, discarding its current value — `Kill {name}` says that explicitly"]
     RedundantNew { name: String },
     #[code = "A6866"]
-    #[severity = Warning]
+    #[severity = Error]
     #[message = "'{name}' is already NEW'd here — every local variable is implicitly NEW'd on entry to a procedure block"]
     NewInProcedureBlock { name: String },
     #[code = "A5573"]
@@ -698,10 +694,6 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Not in a class context"]
     NotInClass,
-    #[code = "A7244"]
-    #[severity = Error]
-    #[message = "Procedure call returns nothing"]
-    ProcedureCallReturnsNothing,
     #[code = "A4025"]
     #[severity = Error]
     #[message = "The procedure call requires the private variable '{name}' to be public"]
