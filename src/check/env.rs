@@ -295,8 +295,8 @@ enum FindError {
 }
 
 impl From<FindError> for QuasiTypeError {
-    fn from(miss: FindError) -> Self {
-        match miss {
+    fn from(err: FindError) -> Self {
+        match err {
             FindError::NoSuchClass(cls) => QuasiTypeError::cannot_find_class(cls),
             FindError::InstanceOnly(mem) => {
                 QuasiTypeError::access_instance_only_member_from_class_context(mem)
@@ -819,7 +819,7 @@ impl<'a> WorkspaceEnv<'a> {
         let Ty::OREF(obj) = ty else {
             return Ok(Member::untyped(N::Ty::default()));
         };
-        let at = |miss: FindError| QuasiTypeError::from(miss).into_error(|| range);
+        let at = |err: FindError| QuasiTypeError::from(err).into_error(|| range);
         let mut found = self.find::<N>(obj, &mem, own, range).map_err(at)?;
         // Dynamic dispatch: a class overriding the hook takes any member name no class has.
         if found.is_none()
