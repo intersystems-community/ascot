@@ -353,8 +353,6 @@ enum Unresolved {
     Unknown(Option<String>),
 }
 
-type Resolved = Result<Class, Unresolved>;
-
 impl Unresolved {
     // The hint for a class taken on trust.
     fn unconfirmed(self, cls: &str, iris: bool, range: bindings::Range) -> TypeError {
@@ -576,7 +574,11 @@ impl<'a> WorkspaceEnv<'a> {
 
     // The methods IRIS generates for `cls`'s own properties, indices and queries, built on the
     // first miss among the declared ones. Over-approximates: what IRIS emits is generator-dependent.
-    fn generated_members(&self, cls: &str, resolved: &Resolved) -> Rc<HashMap<String, Generated>> {
+    fn generated_members(
+        &self,
+        cls: &str,
+        resolved: &Result<Class, Unresolved>,
+    ) -> Rc<HashMap<String, Generated>> {
         if let Some(built) = self.generated.borrow().get(cls) {
             return built.clone();
         }
@@ -937,7 +939,7 @@ impl<'a> WorkspaceEnv<'a> {
     fn declared_in<N: Namespace>(
         &self,
         cls: &str,
-        resolved: &Resolved,
+        resolved: &Result<Class, Unresolved>,
         mem: &str,
     ) -> Option<Found<N::Ty>> {
         match resolved {
@@ -1042,7 +1044,7 @@ impl<'a> WorkspaceEnv<'a> {
         supers
     }
 
-    fn resolve(&self, cls: &str) -> Resolved {
+    fn resolve(&self, cls: &str) -> Result<Class, Unresolved> {
         if let Some(uri) = self.resolve_cls_uri(cls) {
             return match self.workspace.cls_details(&uri) {
                 Ok(details) => Ok(Class::Workspace(uri, details)),
@@ -1060,7 +1062,7 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     // `cls`'s direct superclasses in precedence order, as far as `resolved` tells.
-    fn supers_of(&self, cls: &str, resolved: &Resolved) -> Vec<String> {
+    fn supers_of(&self, cls: &str, resolved: &Result<Class, Unresolved>) -> Vec<String> {
         match resolved {
             Ok(Class::Workspace(_, details)) => self.supers(cls, details),
             Ok(Class::Iris(info)) => {
@@ -1082,7 +1084,7 @@ impl<'a> WorkspaceEnv<'a> {
         &self,
         cls: &str,
         own: bool,
-        visit: &mut impl FnMut(&str, &Resolved) -> ControlFlow<T, bool>,
+        visit: &mut impl FnMut(&str, &Result<Class, Unresolved>) -> ControlFlow<T, bool>,
     ) -> Option<T> {
         let mut seen = HashSet::new();
         if own {
@@ -1097,7 +1099,7 @@ impl<'a> WorkspaceEnv<'a> {
     fn walk_in<T>(
         &self,
         cls: &str,
-        visit: &mut impl FnMut(&str, &Resolved) -> ControlFlow<T, bool>,
+        visit: &mut impl FnMut(&str, &Result<Class, Unresolved>) -> ControlFlow<T, bool>,
         seen: &mut HashSet<String>,
     ) -> Option<T> {
         if !seen.insert(cls.to_string()) {
