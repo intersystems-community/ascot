@@ -689,14 +689,10 @@ impl<'a> Flow<'a> {
         if is_percent_variable(&name) {
             return Ok(());
         }
-        // Every local in a procedure block is already implicitly `New`'d on entry (see
-        // `Binding::undeclared`), so an explicit `New` there is a no-op — except a by-ref/
-        // `Output`/`Public` binding (`new` starts `false`) or a by-value parameter (legitimately
-        // re-`New`'d to discard the caller's argument), which the checks below still exempt.
+        // IRIS refuses to `New` a private variable in a procedure block (#1038), parameters
+        // included; only a `PublicList` variable may be.
         if self.shared.procedure_block {
-            if !self.shared.known_names.contains(&name)
-                && self.lookup(name.clone())?.new == Some(true)
-            {
+            if self.lookup(name.clone())?.private {
                 self.add_soft_diagnostic(QuasiTypeError::WithRange(
                     TypeError::new_in_procedure_block(name.clone(), range),
                 ));

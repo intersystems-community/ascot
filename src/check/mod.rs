@@ -392,11 +392,13 @@ impl MethodDetails {
         if let Some(cos::MethodLanguage::Python(..)) = language {
             return Ok(());
         }
+        let body_macros = cls.body_macros.borrow().clone();
         let (expanded, source_map, definitions) = match env.base.expand_method_body(
             env.uri(),
             &self.header_text,
             self.body.it.as_str(),
             &cls.macro_definitions,
+            &body_macros,
         ) {
             Ok(result) => result,
             Err(diagnostic) => {
@@ -404,6 +406,21 @@ impl MethodDetails {
                 return Ok(());
             }
         };
+        {
+            let mut body_macros = cls.body_macros.borrow_mut();
+            for (macro_name, definition) in &definitions {
+                if !cls.macro_definitions.contains_key(macro_name)
+                    && !body_macros.definitions.contains_key(macro_name)
+                {
+                    body_macros
+                        .definitions
+                        .insert(macro_name.clone(), definition.clone());
+                    body_macros
+                        .methods
+                        .insert(macro_name.clone(), name.to_string());
+                }
+            }
+        }
         let expanded_olc = OLC::new(&expanded);
         let method_env = DocumentEnv::new(env.base, &expanded_olc, env.uri());
         let header_len = self.header_text.len();
@@ -3462,7 +3479,10 @@ pub(crate) fn check_cls(
             Location::new(env.uri().to_string(), kept.range),
         )));
     }
-    for member in cls.members.in_order() {
+    // In name order, as IRIS compiles them: a method body's `#define` reaches the methods after it.
+    let mut members = cls.members.in_order();
+    members.sort_by(|a, b| a.name.it.cmp(&b.name.it));
+    for member in members {
         if let MemberKindSpecificDetails::Index { on_properties } = &member.kind {
             for key in on_properties.iter().flatten() {
                 if env
