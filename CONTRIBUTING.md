@@ -30,6 +30,13 @@ ASCOT_TEST_IRIS=http://_SYSTEM:SYS@localhost:52773 cargo test --test iris
 (cd bindings/js && ASCOT_TEST_IRIS=http://_SYSTEM:SYS@localhost:52773 npm test)
 ```
 
+### Diagnostics
+
+A private corpus of annotated ObjectScript pins what ascot reports on every file, hints and
+all. It is not run in CI: unit tests are the only check a PR gets, so a PR that changes what
+is reported should say so in its description, and the maintainer runs the corpus against it
+and before every release.
+
 ### npm package
 
 The JS bindings in `bindings/js/` are published as
