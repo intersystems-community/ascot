@@ -26,9 +26,9 @@ use crate::{
 };
 
 // What IRIS makes available without an explicit include (verified by compiling probes on an
-// IRIS instance): a class gets the whole %systemInclude closure (%occInclude, %msql, %cspInclude, ...)
-// plus %occErrors; a routine gets nothing.
-pub(crate) const CLASS_IMPLICIT_INCLUDES: &[&str] = &["%systemInclude", "%occErrors"];
+// IRIS instance): a class, even one with no superclass, gets the whole %systemInclude closure
+// (%occInclude, %msql, %cspInclude, ...) but not %occErrors; a routine gets nothing.
+pub(crate) const CLASS_IMPLICIT_INCLUDES: &[&str] = &["%systemInclude"];
 pub(crate) const ROUTINE_IMPLICIT_INCLUDES: &[&str] = &[];
 
 pub(crate) fn implicit_includes(names: &[&str]) -> Vec<String> {
@@ -55,6 +55,14 @@ impl MacroDefinition {
 }
 
 pub(crate) type MacroDefinitions = HashMap<String, MacroDefinition>;
+
+// What the method bodies compiled so far `#define`d, and in which method: IRIS compiles methods
+// in name order and keeps each body's definitions for the ones after it.
+#[derive(Clone, Default)]
+pub(crate) struct BodyMacros {
+    pub(crate) definitions: MacroDefinitions,
+    pub(crate) methods: HashMap<String, String>,
+}
 
 // Where a span of expanded text came from. `uri: None` means the top-level file passed to
 // `expand_rtn`. `parent`, if set, is the `#include` directive that pulled `uri`'s text in, so
@@ -659,6 +667,24 @@ impl WorkspaceStruct {
                     MacroRedex::DDD(ddd) => {
                         dones.note_invocation(&origin);
                         let MacroCallStruct { name, args } = ddd.deref();
+                        let compile_time = definitions
+                            .get(&name.print())
+                            .is_some_and(|def| def.is_compile_time());
+                        if let Some(method) = dones.body_macros.get(&name.print()).cloned()
+                            && definitions.contains_key(&name.print())
+                        {
+                            dones.note_unresolved(
+                                move |name, range| {
+                                    crate::check::TypeError::macro_from_method_body(
+                                        name,
+                                        method.clone(),
+                                        range,
+                                    )
+                                },
+                                name.print(),
+                                &origin,
+                            );
+                        }
                         let substituted = match definitions.get(&name.print()) {
                             Some(_) if origin.depth >= MAX_MACRO_DEPTH => {
                                 dones.note_unresolved(
@@ -785,8 +811,11 @@ impl WorkspaceStruct {
                                             let piece =
                                                 origin.with_range(base + done..base + span.start);
                                             dones.push(&text[done..span.start], &piece, true);
-                                            let expanded =
-                                                self.expand_text(definitions, &text[span.clone()])?;
+                                            let expanded = self.expand_arg(
+                                                definitions,
+                                                &text[span.clone()],
+                                                compile_time,
+                                            )?;
                                             let exact = expanded == text[span.clone()];
                                             let piece = origin
                                                 .with_range(base + span.start..base + span.end);
@@ -799,8 +828,11 @@ impl WorkspaceStruct {
                                     } else {
                                         let mut arg_texts = Vec::with_capacity(args.items.len());
                                         for arg in args.items.iter() {
-                                            arg_texts
-                                                .push(self.expand_text(definitions, &arg.print())?);
+                                            arg_texts.push(self.expand_arg(
+                                                definitions,
+                                                &arg.print(),
+                                                compile_time,
+                                            )?);
                                         }
                                         dones.push(
                                             &format!(
@@ -838,6 +870,43 @@ impl WorkspaceStruct {
     // Expands `text` in isolation -- e.g. one `#if` condition, or one argument to a call that
     // otherwise didn't resolve as a `#define`d macro (see `MacroRedex::DDD`). Always terminates:
     // it only ever recurses on strictly smaller, nested argument text.
+    // An argument of a compile-time macro (`$$$ERROR(...)`): IRIS resolves the error names in it
+    // against %occErrors whether or not the file includes it, so those count as defined here.
+    fn expand_arg(
+        &self,
+        definitions: &mut MacroDefinitions,
+        text: &str,
+        compile_time: bool,
+    ) -> Result<String, tygr::Error> {
+        if !compile_time || !text.contains("$$$") {
+            return self.expand_text(definitions, text);
+        }
+        if self.error_names.borrow().is_none() {
+            let (names, _, _) = self.resolve_class_includes(&["%occErrors".to_string()]);
+            *self.error_names.borrow_mut() = Some(names);
+        }
+        let error_names = self.error_names.borrow();
+        let error_names = error_names.as_ref().unwrap();
+        let mut added = Vec::new();
+        for rest in text.split("$$$").skip(1) {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if let Some(def) = error_names.get(&name)
+                && !definitions.contains_key(&name)
+            {
+                definitions.insert(name.clone(), def.clone());
+                added.push(name);
+            }
+        }
+        let expanded = self.expand_text(definitions, text);
+        for name in added {
+            definitions.remove(&name);
+        }
+        expanded
+    }
+
     fn expand_text(
         &self,
         definitions: &mut MacroDefinitions,
@@ -1001,10 +1070,13 @@ impl WorkspaceStruct {
         header: &str,
         body: &str,
         base_definitions: &MacroDefinitions,
+        body_macros: &BodyMacros,
     ) -> Result<(String, SourceMap, MacroDefinitions), Diagnostic> {
         let mut dones = DoneList::new();
+        dones.body_macros = body_macros.methods.clone();
         // The body's own `#define`s land here too, for `check::mod` to recognize.
         let mut definitions = base_definitions.clone();
+        definitions.extend(body_macros.definitions.clone());
         // Tokenized together so every offset, including a macro argument's, is relative to the
         // same text; the header itself is copied verbatim (a `{$$$X}` parameter default must not
         // change its length, or the body would be cut at the wrong offset).
@@ -1165,6 +1237,8 @@ struct DoneList {
     unresolved: Vec<(UnresolvedError, String, Origin)>,
     include_directives: Vec<(std::ops::Range<usize>, String)>,
     include_names: HashSet<String>,
+    // Macros `#define`d in an earlier method's body, by the method's name: usable, but warned.
+    body_macros: HashMap<String, String>,
 }
 
 impl DoneList {
@@ -1177,6 +1251,7 @@ impl DoneList {
             unresolved: Vec::new(),
             include_directives: Vec::new(),
             include_names: HashSet::new(),
+            body_macros: HashMap::new(),
         }
     }
 

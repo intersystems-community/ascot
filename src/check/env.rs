@@ -242,6 +242,7 @@ impl Namespace for Methods {
                     .as_ref()
                     .map_or(vec![], |x| x.iter().map(|x| x.to_string()).collect()),
             ),
+            formal_list: true,
             uri: Some(uri.to_string()),
             declared_at: Some(member.range),
         };
@@ -324,6 +325,7 @@ fn generated_procedure(
         variadic_arg: variadic.then(|| VariadicArg::new(ArgMode::Default, "args".into(), None)),
         out,
         procedure_block: Some(vec![]),
+        formal_list: true,
         uri: None,
         declared_at: None,
     })
@@ -554,6 +556,7 @@ impl<'a> WorkspaceEnv<'a> {
                     variadic_arg: on_new.variadic_arg.clone(),
                     out: Some(Ty::This),
                     procedure_block: Some(vec![]),
+                    formal_list: true,
                     uri: on_new.uri.clone(),
                     declared_at: on_new.declared_at,
                 });
@@ -1151,9 +1154,10 @@ impl<'a> WorkspaceEnv<'a> {
         header: &str,
         body: &str,
         base_definitions: &MacroDefinitions,
+        body_macros: &crate::macro_expand::BodyMacros,
     ) -> Result<(String, SourceMap, MacroDefinitions), bindings::Diagnostic> {
         self.workspace
-            .expand_method_body(uri, header, body, base_definitions)
+            .expand_method_body(uri, header, body, base_definitions, body_macros)
     }
 
     // A workspace-wide routine's label -> signature map, for a cross-routine label call
@@ -1407,6 +1411,7 @@ pub struct ClassDocument<'a> {
     pub language: Option<&'a MethodLanguage>,
     pub mode: Option<&'a CodeMode>,
     pub macro_definitions: MacroDefinitions,
+    pub body_macros: RefCell<crate::macro_expand::BodyMacros>,
 }
 
 impl<'a> ClassDocument<'a> {
@@ -1421,6 +1426,7 @@ impl<'a> ClassDocument<'a> {
             language,
             mode,
             macro_definitions,
+            body_macros: Default::default(),
         }
     }
 }
@@ -1521,21 +1527,15 @@ pub struct LabelEntry {
     // The label after this one, which it runs into when it falls off its end. `None` for the
     // last, or when a procedure block follows.
     pub next: Option<String>,
-    // What its returns are held to. Set up front for a label in a method or procedure block (the
-    // body's own); for a routine-level label, set by the label before it when that one falls
-    // through, else it gets its own when checked.
+    // What its returns are held to: set by the label before it when that one falls through, else
+    // its own when checked. How a nested label is reached (`Do`, `Goto`, an error trap) decides
+    // whether it returns for its block, which isn't tracked, so nothing is assumed.
     #[allow(clippy::type_complexity)]
     pub output: OnceCell<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
 }
 
-// `labels` in source order, each flagged when it's a procedure block. `output` is the enclosing
-// body's, for labels nested in one.
-#[allow(clippy::type_complexity)]
-pub(crate) fn scoped_labels(
-    uri: &str,
-    labels: &[(&RoutineElementDetails, bool)],
-    output: Option<Rc<RefCell<Option<WithRange<Option<Ty>>>>>>,
-) -> ScopedLabels {
+// `labels` in source order, each flagged when it's a procedure block.
+pub(crate) fn scoped_labels(uri: &str, labels: &[(&RoutineElementDetails, bool)]) -> ScopedLabels {
     labels
         .iter()
         .enumerate()
@@ -1548,7 +1548,7 @@ pub(crate) fn scoped_labels(
                 proc: Arc::new(details.to_ty_procedure(Some(uri))),
                 outside_block: false,
                 next,
-                output: output.clone().map_or_else(OnceCell::new, OnceCell::from),
+                output: OnceCell::new(),
             };
             (details.name.it.clone(), entry)
         })

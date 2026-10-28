@@ -145,6 +145,7 @@ pub(crate) fn label(routine: &str, label: &str) -> Option<Arc<TyProcedure>> {
         variadic_arg,
         out: ty_from_mask(sig.returns.clone()).or(Some(Ty::Any)),
         procedure_block: sig.publics.clone(),
+        formal_list: true,
         uri: None,
         declared_at: None,
     }))

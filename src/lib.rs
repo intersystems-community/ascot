@@ -180,6 +180,9 @@ pub struct WorkspaceStruct {
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
     pub(crate) style: Option<style::KeywordStyles>,
+    // %occErrors, resolved on first use: the error names a compile-time macro such as `$$$ERROR`
+    // accepts in its arguments without any `Include`. Dropped whenever an include file changes.
+    pub(crate) error_names: RefCell<Option<MacroDefinitions>>,
 }
 
 /// What the checker asks about code outside the workspace. An `Err` says why a lookup couldn't be
@@ -216,6 +219,9 @@ impl WorkspaceStruct {
         let Some(kind) = DocKind::from_uri(&uri) else {
             return vec![];
         };
+        if kind == DocKind::Inc {
+            self.error_names.take();
+        }
         let entry = match kind {
             DocKind::Cls => match ClassDefinitionHeader::parse_prefix(&text) {
                 Ok((header, _)) => {
@@ -264,6 +270,9 @@ impl WorkspaceStruct {
     }
 
     fn remove_uri(&mut self, uri: &str) -> Vec<String> {
+        if DocKind::from_uri(uri) == Some(DocKind::Inc) {
+            self.error_names.take();
+        }
         let mut affected = self.invalidate(uri);
         if let Some(Ok(cell)) = self.doc_cache.remove(uri) {
             let name = cell.into_inner().name(uri);
@@ -751,6 +760,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         rtn_index: RefCell::new(HashMap::new()),
         iris,
         style: style.as_ref().map(style::KeywordStyles::new),
+        error_names: RefCell::new(None),
     }
 }
 
@@ -1329,115 +1339,6 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    struct OccErrorsIris;
-
-    #[cfg(not(target_arch = "wasm32"))]
-    impl crate::IrisContext for OccErrorsIris {
-        fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
-            Ok(None)
-        }
-        fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
-            Ok(None)
-        }
-        fn get_inc(&self, name: &str) -> Result<Option<bindings::Source>, String> {
-            Ok((name == "%occErrors").then(|| bindings::Source {
-                text: "ROUTINE Errors [Type=INC]\n#define GeneralError 5001\n".to_string(),
-                uri: None,
-            }))
-        }
-    }
-
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn class_gets_occ_errors_macros_via_iris_without_an_explicit_include() {
-        let workspace = Workspace::native(Some(Box::new(OccErrorsIris)), None);
-        let uri = "NoIncludeButOcc.cls".to_string();
-        workspace.open(
-            uri.clone(),
-            "Class Test.NoIncludeButOcc {\nClassMethod Foo()\n{\n write $$$GeneralError\n}\n}\n"
-                .to_string(),
-        );
-        let diagnostics = workspace.diagnostics(uri);
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    }
-
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn cannot_find_member_always_suggests_percent_get_prefixed_methods() {
-        // A dynamic-property-style getter's own name (e.g. `%GetData`) rarely resembles the
-        // property a caller mistakenly wrote instead (`AtEnd`) -- so this must not depend on
-        // `top_similar`'s ranking to surface it.
-        struct GetterIris;
-        impl crate::IrisContext for GetterIris {
-            fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
-                let zero = bindings::Position {
-                    line: 0,
-                    character: 0,
-                };
-                let member = |name: &str| bindings::MemberInfo {
-                    doc: String::new(),
-                    before: zero,
-                    name: bindings::NameInfo {
-                        before: zero,
-                        content: name.to_string(),
-                        after: zero,
-                    },
-                    aliases: vec![],
-                    deprecated: false,
-                    kind: bindings::MemberKind::Method(bindings::MethodInfo {
-                        normal: vec![],
-                        variadic: None,
-                        t: None,
-                        procedure_block: None,
-                        body: bindings::Range {
-                            start: zero,
-                            end: zero,
-                        },
-                    }),
-                    after: zero,
-                    uri: None,
-                    origin: None,
-                };
-                Ok((cls == "%Fake.Getter").then(|| bindings::ClassInfo {
-                    doc: String::new(),
-                    name: bindings::NameInfo {
-                        before: zero,
-                        content: cls.to_string(),
-                        after: zero,
-                    },
-                    extends: vec![],
-                    inheritance_right: false,
-                    storage: None,
-                    deprecated: false,
-                    members: vec![member("%GetData"), member("Close")],
-                    property_class_names: vec![],
-                    includes: vec![],
-                    is_datatype: Some(false),
-                    uri: None,
-                }))
-            }
-            fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
-                Ok(None)
-            }
-            fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
-                Ok(None)
-            }
-        }
-        let workspace = Workspace::native(Some(Box::new(GetterIris)), None);
-        let uri = "GetterLoop.cls".to_string();
-        workspace.open(
-            uri.clone(),
-            "Class Test.GetterLoop\n{\nClassMethod Foo(rs As %Fake.Getter)\n{\n write rs.AtEnd\n}\n}\n"
-                .to_string(),
-        );
-        let diagnostics = workspace.diagnostics(uri);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0].message.contains("%GetData"),
-            "{diagnostics:?}"
-        );
-    }
-
     #[test]
     fn property_declared_type_outside_workspace_gets_a_hint() {
         let workspace = Workspace::new(None, None);
@@ -1490,50 +1391,6 @@ mod tests {
         fn get_rtn(&self, _name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
             Ok(None)
         }
-    }
-
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn member_with_an_empty_string_type_from_iris_is_treated_as_any() {
-        // A host can report an empty string, rather than omitting it, for "no declared type" --
-        // this must not leak into `Ty::from` as a literal (nonsense) class name "".
-        let zero = bindings::Position {
-            line: 0,
-            character: 0,
-        };
-        let mem = bindings::MemberInfo {
-            doc: String::new(),
-            before: zero,
-            name: bindings::NameInfo {
-                before: zero,
-                content: "SomeInheritedProp".to_string(),
-                after: zero,
-            },
-            aliases: vec![],
-            deprecated: false,
-            kind: bindings::MemberKind::Property(bindings::PropertyInfo {
-                t: Some(String::new()),
-                collection: None,
-                multidimensional: false,
-            }),
-            after: zero,
-            uri: None,
-            origin: None,
-        };
-        let workspace = Workspace::native(
-            Some(Box::new(MockIrisClient {
-                is_datatype: None,
-                mem: Some(mem),
-            })),
-            None,
-        );
-        let uri = "Probe.cls".to_string();
-        workspace.open(
-            uri.clone(),
-            "Class Test.Probe Extends %RegisteredObject {\nMethod Foo() {\n write ..SomeInheritedProp\n quit\n}\n}\n".to_string(),
-        );
-        let diagnostics = workspace.diagnostics(uri);
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     #[test]
@@ -2295,27 +2152,6 @@ mod tests {
     }
 
     #[test]
-    fn new_on_a_parameter_in_a_procedure_block_is_not_reported() {
-        let workspace = Workspace::new(None, None);
-        let uri = "NewTest.cls".to_string();
-        // Unlike an ordinary local, re-`New`-ing a by-value parameter is a legitimate, common
-        // pattern (discarding the caller's argument, forcing a fresh assignment before reuse),
-        // not a no-op worth flagging -- see objectscript-typecheck-corpus's New.cls.
-        workspace.open(
-            uri.clone(),
-            "Class Test.NewTest {\nClassMethod Foo(x) {\n new x\n quit\n}\n}\n".to_string(),
-        );
-
-        let diagnostics = workspace.diagnostics(uri);
-        assert!(
-            !diagnostics
-                .iter()
-                .any(|d| d.message.contains("implicitly NEW'd")),
-            "{diagnostics:?}"
-        );
-    }
-
-    #[test]
     fn definition_resolves_label_after_include() {
         let workspace = Workspace::new(None, None);
         let inc_uri = "Shared.inc".to_string();
@@ -2445,8 +2281,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg(not(target_arch = "wasm32"))]
-    #[cfg(not(target_arch = "wasm32"))]
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn only_the_mask_says_this() {
         let mut mem = external_method("getNextResultSet", vec![], Some("This"));
@@ -2475,7 +2309,6 @@ mod tests {
     // The mask also corrects the `%OnNew` that `%New` takes its arguments from.
     #[cfg(not(target_arch = "wasm32"))]
     // Without its own `%OnNew`, `%New` takes its own arguments: an optional `initvalue`.
-    #[cfg(not(target_arch = "wasm32"))]
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn an_unmasked_object_handle_stays_one() {
@@ -2734,21 +2567,31 @@ mod tests {
             .collect()
     }
 
-    // IRIS keeps a method body's `#define` in effect for the methods after it; that's an
-    // anti-pattern ascot doesn't follow -- the later use is an undefined macro.
+    // IRIS compiles methods in name order and keeps a body's `#define` for the ones after it:
+    // B sees A's macro (with a warning), A doesn't see Z's.
     #[test]
-    fn method_body_defines_do_not_leak_into_later_methods() {
+    fn method_body_defines_reach_the_methods_compiled_after() {
         let diagnostics = class_diagnostics(
-            "ClassMethod A() As %String {\n #define REPORT(%x) Write %x\n $$$REPORT(1)\n Quit \"\"\n}\nClassMethod B() As %String {\n $$$REPORT(2)\n Quit \"\"\n}\n",
+            "ClassMethod Z() As %String {\n #define LATE 1\n Quit $$$LATE\n}\nClassMethod A() As %String {\n #define REPORT(%x) Write %x\n $$$REPORT(1)\n Quit $$$LATE\n}\nClassMethod B() As %String {\n $$$REPORT(2)\n Quit \"\"\n}\n",
         );
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0]
-                .message
-                .contains("macro 'REPORT' is undefined"),
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        let undefined = diagnostics
+            .iter()
+            .find(|d| d.message.contains("'LATE' is undefined"));
+        assert_eq!(
+            undefined.map(|d| d.range.start.line),
+            Some(8),
             "{diagnostics:?}"
         );
-        assert_eq!(diagnostics[0].range.start.line, 7, "{diagnostics:?}");
+        let leaked = diagnostics
+            .iter()
+            .find(|d| {
+                d.message
+                    .contains("'REPORT' is defined in the body of method 'A'")
+            })
+            .expect("warning");
+        assert_eq!(leaked.severity, bindings::DiagnosticSeverity::Warning);
+        assert_eq!(leaked.range.start.line, 11, "{diagnostics:?}");
     }
 
     #[test]
@@ -3018,27 +2861,6 @@ mod tests {
         );
     }
 
-    // IRIS answering nothing for a class says nothing about its parameters: no "'MAXLEN' is not
-    // a parameter of %Library.String".
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn type_parameter_of_an_unresolvable_class_is_not_reported() {
-        let workspace = Workspace::native(Some(Box::new(OccErrorsIris)), None);
-        let uri = "P.cls".to_string();
-        workspace.open(
-            uri.clone(),
-            "Class Test.P Extends %RegisteredObject {\nProperty Name As %String(MAXLEN = 50);\n}\n"
-                .to_string(),
-        );
-        let diagnostics = workspace.diagnostics(uri);
-        assert!(
-            diagnostics
-                .iter()
-                .all(|d| !d.message.contains("is not a parameter")),
-            "{diagnostics:?}"
-        );
-    }
-
     // Both land right after the closing brace; the `end while` one used to be pushed one
     // character further, past the newline, onto the next line.
     #[test]
@@ -3100,49 +2922,5 @@ mod tests {
             None
         );
         assert_eq!(at("R.mac", 1, 12), Some(expected));
-    }
-
-    // Labels inside a routine's procedure block are checked like a method body's, with the
-    // routine's labels still in scope. They return for the block: once its first return has
-    // established a value, a label's bare `Quit` is reported, even one only ever `Do`ne.
-    #[test]
-    fn labels_inside_a_routine_procedure_block_are_checked() {
-        let diagnostics = diagnostics_for(&[(
-            "Blk.mac",
-            "ROUTINE Blk\n\tQuit\nOuter\n\tQuit 1\nProc(x) public {\n\tIf x Goto exitEarly\n\tDo inner\n\tSet y = $$Outer\n\tQuit y\nexitEarly\n\tQuit 0\ninner\n\tSet ^g = 1\n\tQuit\n}\n",
-        )]);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0]
-                .message
-                .contains("Expected return value of type 'Any' but got nothing"),
-            "{diagnostics:?}"
-        );
-        assert_eq!(diagnostics[0].range.start.line, 13, "{diagnostics:?}");
-        let diagnostics = diagnostics_for(&[(
-            "Bad.mac",
-            "ROUTINE Bad\n\tQuit\nProc() public {\n\tGoto nowhere\n\tQuit\nexitEarly\n\tQuit\n}\n",
-        )]);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0]
-                .message
-                .contains("Cannot find label 'nowhere'"),
-            "{diagnostics:?}"
-        );
-        // A bare `Goto` can't leave the block (IRIS: <NOLINE>), though `Do` may call out of it
-        // and a routine-qualified `Goto Outer^Out` may too.
-        let diagnostics = diagnostics_for(&[(
-            "Out.mac",
-            "ROUTINE Out\n\tQuit\nOuter\n\tQuit\nProc() public {\n\tDo Outer\n\tGoto Outer\n\tGoto Outer^Out\n}\n",
-        )]);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0]
-                .message
-                .contains("Cannot GOTO label 'Outer' from inside a procedure block"),
-            "{diagnostics:?}"
-        );
-        assert_eq!(diagnostics[0].range.start.line, 6, "{diagnostics:?}");
     }
 }

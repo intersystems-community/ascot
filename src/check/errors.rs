@@ -465,6 +465,10 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call"]
     SuperWithoutMethod { method: String, cls: String },
+    #[code = "A7604"]
+    #[severity = Error]
+    #[message = "Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>); `{label}()` would make it a function"]
+    LabelNotAFunction { label: String },
     #[code = "A6851"]
     #[severity = Error]
     #[message = "Cannot find label '{label}' in {routine}"]
@@ -540,7 +544,7 @@ type_error_kinds! {
     RedundantNew { name: String },
     #[code = "A6866"]
     #[severity = Error]
-    #[message = "'{name}' is already NEW'd here — every local variable is implicitly NEW'd on entry to a procedure block"]
+    #[message = "Cannot NEW the private variable '{name}' in a procedure block, where every local variable is already NEW'd on entry"]
     NewInProcedureBlock { name: String },
     #[code = "A5573"]
     #[severity = Warning]
@@ -714,6 +718,10 @@ type_error_kinds! {
     #[severity = Information]
     #[message = "Type checking not implemented for '{what}'"]
     Unimplemented { what: String },
+    #[code = "A3904"]
+    #[severity = Warning]
+    #[message = "The macro '{name}' is defined in the body of method '{method}'; IRIS keeps it for the methods compiled after it (alphabetically), but it belongs in an include file or at class level"]
+    MacroFromMethodBody { name: String, method: String },
     #[code = "A2797"]
     #[severity = Error]
     #[message = "The macro '{name}' is undefined{suggestions}"]
@@ -1178,6 +1186,18 @@ impl TypeError {
                 message: "Previous NEW".into(),
             }],
         )
+    }
+
+    pub fn macro_from_method_body(name: String, method: String, range: Range) -> Self {
+        Self::new(
+            TypeErrorKind::MacroFromMethodBody { name, method },
+            range,
+            vec![],
+        )
+    }
+
+    pub fn label_not_a_function(label: String, range: Range) -> Self {
+        Self::new(TypeErrorKind::LabelNotAFunction { label }, range, vec![])
     }
 
     pub fn new_in_procedure_block(name: String, range: Range) -> Self {
