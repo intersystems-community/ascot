@@ -479,6 +479,11 @@ interface exported {
         open: func(uri: string, text: string) -> list<string>;
         // Returns the uris now stale.
         close: func(uri: string) -> list<string>;
+        // Replaces the server everything outside the workspace resolves through; returns every
+        // uri, since all analysis built on the old one is stale.
+        set-env: func(env: option<env>) -> list<string>;
+        // Replaces the keyword style; returns every uri, since every check applied the old one.
+        set-style: func(style: option<style>) -> list<string>;
         diagnostics: func(uri: string) -> list<diagnostic>;
         inlay-hint: func(uri: string, range: range) -> list<inlay-hint>;
         definition: func(uri: string, position: position) -> option<location>;
