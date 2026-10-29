@@ -861,9 +861,9 @@ impl<'a> WorkspaceEnv<'a> {
                                         range,
                                     ),
                                     None => TypeError::unconfirmed_member(
-                                        cls.clone(),
+                                        receiver.name.clone(),
                                         mem.to_string(),
-                                        !own,
+                                        cls != receiver.name,
                                         self.workspace.iris.is_some(),
                                         range,
                                     ),
