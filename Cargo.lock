@@ -75,7 +75,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "ascot"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "base64",
  "clap",
@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "tygr-objectscript"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "either",
  "tygr",
