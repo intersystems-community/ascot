@@ -80,7 +80,7 @@ jobs:
           pattern: '*-apple-darwin'
       - name: Merge and package
         run: |
-          lipo -create -output $BIN *-apple-darwin/$BIN
+          lipo -create -output $BIN *-apple-darwin/target/*/release/$BIN
           chmod +x $BIN  # artifacts don't keep permissions
           tar czf "$BIN-cli-universal-apple-darwin.tar.gz" "$BIN"
       - uses: actions/upload-artifact@v7
