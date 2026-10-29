@@ -91,6 +91,8 @@ as in the Language Server Protocol.
 | ----------------------------------------------- | ----------------------------------------------------- |
 | `open(uri, text)`                               | uris whose analysis is now stale                      |
 | `close(uri)`                                    | uris whose analysis is now stale                      |
+| `setEnv(iris?)`                                 | every uri: a new server stales all analysis           |
+| `setStyle(style?)`                              | every uri: a new style stales every check             |
 | `diagnostics(uri)`                              | `Diagnostic[]`                                        |
 | `inlayHint(uri, range)`                         | `InlayHint[]`                                         |
 | `definition(uri, position)`                     | `Location \| undefined`                               |

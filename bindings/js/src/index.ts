@@ -23,9 +23,14 @@ type RawWorkspace = InstanceType<Root["exported"]["Workspace"]>;
 /** Every method of the wasm `Workspace`, as `createWorkspace` hands it out: all async, since
  * `serialize` below queues each call behind the previous one. */
 export type Workspace = {
-	[K in keyof RawWorkspace]: RawWorkspace[K] extends (...args: infer A) => infer R
+	[K in Exclude<keyof RawWorkspace, "setEnv">]: RawWorkspace[K] extends (
+		...args: infer A
+	) => infer R
 		? (...args: A) => Promise<Awaited<R>>
 		: RawWorkspace[K];
+} & {
+	/** Replaces the server; every uri comes back stale. Takes what `createWorkspace` takes. */
+	setEnv(iris?: IrisContext | Atelier): Promise<string[]>;
 };
 
 /** What ascot asks about code outside the workspace. A failed lookup throws; ascot then takes
@@ -82,6 +87,7 @@ function serialize(instance: RawWorkspace): Workspace {
 			const value = Reflect.get(target, prop, receiver);
 			if (typeof value !== "function") return value;
 			return async (...args: unknown[]) => {
+				if (prop === "setEnv") args = [envOf(args[0] as IrisContext | Atelier | undefined)];
 				const prev = tail;
 				let release!: () => void;
 				tail = new Promise<void>((resolve) => (release = resolve));
@@ -102,11 +108,13 @@ export async function createWorkspace(
 	style?: Style,
 ): Promise<Workspace> {
 	const root = await wasm;
-	const env =
-		iris instanceof Atelier
-			? { tag: "atelier" as const, val: new FailingAtelier(iris) }
-			: iris && { tag: "context" as const, val: new FailingContext(iris) };
-	return serialize(new root.exported.Workspace(env, style));
+	return serialize(new root.exported.Workspace(envOf(iris), style));
+}
+
+function envOf(iris?: IrisContext | Atelier) {
+	return iris instanceof Atelier
+		? { tag: "atelier" as const, val: new FailingAtelier(iris) }
+		: iris && { tag: "context" as const, val: new FailingContext(iris) };
 }
 
 // jco rethrows a thrown `Error` to the caller, and hands ascot only a thrown `{ payload }` as the

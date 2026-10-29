@@ -336,18 +336,28 @@ impl WorkspaceStruct {
             if !seen.contains(&(kind, cell.borrow().name(uri))) {
                 continue;
             }
-            // A routine's expansion inlines its `#include`s, so every dependent's own expansion
-            // needs dropping too, not just its check -- unlike a class's own parse (unaffected
-            // by anything but its own edit) or a `.inc`'s tier B (never stale as a *dependent*
-            // at all, since substitution happens in whoever includes it, not here).
-            if kind == DocKind::Rtn {
-                cell.borrow_mut().details = None;
-            } else if let Some(Ok(DocDetails::Cls(_, check))) = &mut cell.borrow_mut().details {
-                *check = None;
-            }
+            drop_derived(cell, kind == DocKind::Rtn);
             affected.push(uri.clone());
         }
         affected
+    }
+
+    // Everything built on the server is stale once it changes: checks, routine expansions (they
+    // inline server includes) and the include caches. A style change stales only the checks.
+    fn forget(&self, server: bool) -> Vec<String> {
+        if server {
+            self.error_names.take();
+            self.implicit_definitions.take();
+            self.iris_includes.borrow_mut().clear();
+        }
+        self.doc_cache
+            .iter()
+            .filter_map(|(uri, entry)| {
+                let expansion = server && DocKind::from_uri(uri) == Some(DocKind::Rtn);
+                drop_derived(entry.as_ref().ok()?, expansion);
+                Some(uri.clone())
+            })
+            .collect()
     }
 
     fn record_deps(&self, uri: &str, mut deps: HashSet<Name>) {
@@ -756,6 +766,35 @@ pub(crate) fn routine_info(text: &str, uri: Option<String>) -> bindings::Routine
     bindings::RoutineInfo { labels, uri }
 }
 
+// Drops what `cell` built on other documents: its check, and with `expansion` its expansion too
+// (a routine's inlines its `#include`s) -- never a class's own parse, which only its own edit
+// changes, nor an `.inc`'s, which is substituted in whoever includes it, not here.
+fn drop_derived(cell: &RefCell<DocCache>, expansion: bool) {
+    let mut cache = cell.borrow_mut();
+    let details = &mut cache.details;
+    match details {
+        Some(Ok(DocDetails::Rtn(..))) if expansion => *details = None,
+        Some(Ok(DocDetails::Rtn(_, check) | DocDetails::Cls(_, check))) => *check = None,
+        _ => {}
+    }
+}
+
+fn iris_handle(env: Option<bindings::Env>) -> Option<IrisHandle> {
+    #[cfg(target_arch = "wasm32")]
+    return env.map(|env| -> IrisHandle {
+        match env {
+            bindings::Env::Context(context) => Box::new(context),
+            bindings::Env::Atelier(atelier) => Box::new(AtelierContext::from(atelier)),
+        }
+    });
+    // Never carries a real connection natively -- use `native` for that.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = env;
+        None
+    }
+}
+
 fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> WorkspaceStruct {
     WorkspaceStruct {
         doc_cache: HashMap::new(),
@@ -783,20 +822,10 @@ impl Workspace {
 impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn new(env: Option<bindings::Env>, style: Option<Style>) -> Self {
-        #[cfg(target_arch = "wasm32")]
-        let iris = env.map(|env| -> IrisHandle {
-            match env {
-                bindings::Env::Context(context) => Box::new(context),
-                bindings::Env::Atelier(atelier) => Box::new(AtelierContext::from(atelier)),
-            }
-        });
-        #[cfg(not(target_arch = "wasm32"))]
-        let iris: Option<IrisHandle> = {
-            // Never carries a real connection natively -- use `native` for that.
-            let _ = env;
-            None
-        };
-        Workspace(RefCell::new(build_workspace_struct(iris, style)))
+        Workspace(RefCell::new(build_workspace_struct(
+            iris_handle(env),
+            style,
+        )))
     }
 
     #[allow(async_fn_in_trait)]
@@ -807,6 +836,20 @@ impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn close(&self, uri: String) -> Vec<String> {
         self.borrow_mut().remove_uri(&uri)
+    }
+
+    #[allow(async_fn_in_trait)]
+    fn set_env(&self, env: Option<bindings::Env>) -> Vec<String> {
+        let mut this = self.borrow_mut();
+        this.iris = iris_handle(env);
+        this.forget(true)
+    }
+
+    #[allow(async_fn_in_trait)]
+    fn set_style(&self, style: Option<Style>) -> Vec<String> {
+        let mut this = self.borrow_mut();
+        this.style = style.as_ref().map(style::KeywordStyles::new);
+        this.forget(false)
     }
 
     #[allow(async_fn_in_trait)]
@@ -1344,6 +1387,27 @@ mod tests {
         assert!(affected.contains(&sub_uri), "{affected:?}");
         let diagnostics = workspace.diagnostics(sub_uri.clone());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn set_env_forgets_what_the_old_server_said() {
+        let iris = MockIrisClient {
+            is_datatype: None,
+            mem: None,
+        };
+        let workspace = Workspace::native(Some(Box::new(iris)), None);
+        let uri = "Owner.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Owner Extends %RegisteredObject {\nProperty P As App.NotOpen;\n}\n"
+                .to_string(),
+        );
+        assert!(workspace.diagnostics(uri.clone()).is_empty());
+        assert_eq!(workspace.set_env(None), std::slice::from_ref(&uri));
+        let diagnostics = workspace.diagnostics(uri);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(diagnostics[0].message.contains("App.NotOpen"));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2384,6 +2448,25 @@ mod tests {
             .collect();
         messages.sort();
         messages
+    }
+
+    #[test]
+    fn set_style_rechecks_every_document_against_the_new_style() {
+        let style = style::parse(r#"{"command": {"form": "Long", "case": "Pascal"}}"#).unwrap();
+        let workspace = Workspace::new(None, None);
+        let uri = "Style.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE Style\nf(x)\n s y=x\n Quit y\n".to_string(),
+        );
+        assert!(style_messages(&workspace, &uri).is_empty());
+        assert_eq!(workspace.set_style(Some(style)), std::slice::from_ref(&uri));
+        assert_eq!(
+            style_messages(&workspace, &uri),
+            ["2:1 Command keyword `s` should be written `Set`"]
+        );
+        assert_eq!(workspace.set_style(None), std::slice::from_ref(&uri));
+        assert!(style_messages(&workspace, &uri).is_empty());
     }
 
     #[test]
