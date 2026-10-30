@@ -605,16 +605,19 @@ fn check_block_body<'a>(
     flow: &mut Flow<'a>,
     is_body: bool,
 ) -> Result<(), TypeError> {
-    let details: Vec<_> = body
+    let subroutines: Vec<_> = body
         .subroutines
         .iter()
         .flat_map(|subs| subs.items.iter())
-        .filter_map(|sub| label_details(env, sub))
+        .filter_map(|sub| Some((sub, label_details(env, sub)?)))
         .collect();
     let is_procedure = is_body && flow.is_procedure_block();
     let labels = env::scoped_labels(
         env.uri(),
-        &details.iter().map(|d| (d, false)).collect::<Vec<_>>(),
+        &subroutines
+            .iter()
+            .map(|(_, d)| (d, false))
+            .collect::<Vec<_>>(),
     );
     let nested;
     let env = if is_body || !labels.is_empty() {
@@ -624,20 +627,17 @@ fn check_block_body<'a>(
         env
     };
     body.main.check(env, flow)?;
-    let subroutines: Vec<_> = body
-        .subroutines
-        .iter()
-        .flat_map(|subs| subs.items.iter())
-        .collect();
-    if subroutines.is_empty() {
+    if body.subroutines.is_none() {
         return Ok(());
     }
-    let first = details.first().and_then(|d| env.label_entry(&d.name.it));
+    let first = subroutines
+        .first()
+        .and_then(|(_, d)| env.label_entry(&d.name.it));
     flow.tail_call(first.map(|first| &first.output), flow.range())?;
     // The labels read the body's variables from their own flows, so the deferred
     // "never read"/"never assigned" reports for the main body can't be trusted.
     flow.mark_incomplete();
-    for (sub, details) in subroutines.iter().zip(&details) {
+    for (sub, details) in &subroutines {
         // Each label is checked on its own: one's hard error doesn't hide the next one's.
         if let Err(err) = check_label_body(env, details, sub) {
             env.add_soft_diagnostic(err.into());
