@@ -1012,6 +1012,14 @@ impl bindings::GuestWorkspace for Workspace {
                 end: name.after,
             }
         }
+        fn symbol_in(uri: &str, symbol: bindings::SymbolInfo) -> bindings::WorkspaceSymbol {
+            bindings::WorkspaceSymbol {
+                name: symbol.name,
+                kind: symbol.kind,
+                deprecated: symbol.deprecated,
+                location: bindings::Location::new(uri.to_string(), symbol.selection_range),
+            }
+        }
         let cls_symbols =
             self.query_cls(query.clone())
                 .into_iter()
@@ -1045,27 +1053,9 @@ impl bindings::GuestWorkspace for Workspace {
                 let Some(symbol) = this.routine_symbol(&uri) else {
                     return vec![];
                 };
-                let rtn_symbol = bindings::WorkspaceSymbol {
-                    name: symbol.root.name,
-                    kind: symbol.root.kind,
-                    deprecated: symbol.root.deprecated,
-                    location: bindings::Location::new(uri.clone(), symbol.root.selection_range),
-                };
-                std::iter::once(rtn_symbol)
-                    .chain(
-                        symbol
-                            .members
-                            .into_iter()
-                            .map(|member| bindings::WorkspaceSymbol {
-                                name: member.name,
-                                kind: member.kind,
-                                deprecated: member.deprecated,
-                                location: bindings::Location::new(
-                                    uri.clone(),
-                                    member.selection_range,
-                                ),
-                            }),
-                    )
+                std::iter::once(symbol.root)
+                    .chain(symbol.members)
+                    .map(|symbol| symbol_in(&uri, symbol))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
