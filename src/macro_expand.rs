@@ -91,10 +91,8 @@ impl Origin {
 
     fn with_range(&self, range: std::ops::Range<usize>) -> Self {
         Origin {
-            uri: self.uri.clone(),
             range,
-            parent: self.parent.clone(),
-            depth: self.depth,
+            ..self.clone()
         }
     }
 
@@ -573,26 +571,14 @@ impl WorkspaceStruct {
                 MacroedUnit::Redex(unit) => match unit {
                     MacroRedex::H(HMacro { command, input }) => match command.deref() {
                         HMacroCommand::Define { name, args, .. } => {
-                            definitions.insert(
-                                name.print(),
-                                MacroDefinition {
-                                    params: args.as_ref().map(|args| {
-                                        args.items.iter().map(|arg| arg.print()).collect()
-                                    }),
-                                    literal_args: false,
-                                    body: import_macro_input(input),
-                                },
-                            );
+                            let params = args
+                                .as_ref()
+                                .map(|args| args.items.iter().map(|arg| arg.print()).collect());
+                            define(definitions, name, params, false, input);
                         }
                         HMacroCommand::Def1arg { name, arg, .. } => {
-                            definitions.insert(
-                                name.print(),
-                                MacroDefinition {
-                                    params: arg.as_ref().map(|arg| vec![arg.deref().print()]),
-                                    literal_args: true,
-                                    body: import_macro_input(input),
-                                },
-                            );
+                            let params = arg.as_ref().map(|arg| vec![arg.deref().print()]);
+                            define(definitions, name, params, true, input);
                         }
                         HMacroCommand::Include(included_name) => {
                             let included_name = included_name.deref();
@@ -631,8 +617,7 @@ impl WorkspaceStruct {
                                 }
                             }
                         }
-                        HMacroCommand::Noshow(..) => (),
-                        HMacroCommand::Show(..) => (),
+                        HMacroCommand::Noshow(..) | HMacroCommand::Show(..) => (),
                         HMacroCommand::If(..) => {
                             self.resolve_if(
                                 definitions,
@@ -849,21 +834,12 @@ impl WorkspaceStruct {
                         }
                     }
                     MacroRedex::Lit(_, text, _) => dones.push(&text.print(), &origin, precise),
-                    MacroRedex::Embedded(block) => dones.push(&block.print(), &origin, precise),
                     MacroRedex::LC(..) => (),
                     unit => dones.push(&unit.print(), &origin, precise),
                 },
             }
         }
         Ok(())
-    }
-
-    fn expand_condition(
-        &self,
-        definitions: &mut MacroDefinitions,
-        input: &cos::MacroInput,
-    ) -> Result<String, tygr::Error> {
-        self.expand_text(definitions, &import_macro_input(input))
     }
 
     // Expands `text` in isolation -- e.g. one `#if` condition, or one argument to a call that
@@ -931,7 +907,7 @@ impl WorkspaceStruct {
         origin: Origin,
         precise: bool,
     ) -> Result<(), tygr::Error> {
-        let expanded = self.expand_condition(definitions, &condition)?;
+        let expanded = self.expand_text(definitions, &import_macro_input(&condition))?;
         // `#if 0 /* Maintenance */` -- a trailing comment is common and not part of the test.
         let end = ["/*", "//", ";"]
             .iter()
@@ -967,7 +943,7 @@ impl WorkspaceStruct {
                 while !matches!(end, BranchEnd::EndIf) {
                     end = skip_branch(todos);
                 }
-                todos.restore(branch);
+                todos.push_items(branch);
                 Ok(())
             }
             Some(false) => match skip_branch(todos) {
@@ -1378,10 +1354,9 @@ type TodoItem<'a> = (Cow<'a, MacroedUnit>, Origin, bool);
 struct TodoList<'a>(Vec<TodoItem<'a>>);
 
 impl<'a> TodoList<'a> {
-    fn new(items: Vec<TodoItem<'a>>) -> Self {
-        let mut list = Self(Vec::new());
-        list.restore(items);
-        list
+    fn new(mut items: Vec<TodoItem<'a>>) -> Self {
+        items.reverse();
+        Self(items)
     }
 
     fn pop(&mut self) -> Option<TodoItem<'a>> {
@@ -1401,11 +1376,6 @@ impl<'a> TodoList<'a> {
 
     fn push_items(&mut self, items: Vec<TodoItem<'a>>) {
         self.0.extend(items.into_iter().rev());
-    }
-
-    fn restore(&mut self, mut items: Vec<TodoItem<'a>>) {
-        items.reverse();
-        self.0.extend(items);
     }
 }
 
@@ -1463,6 +1433,25 @@ fn take_branch<'a>(todos: &mut TodoList<'a>) -> (Vec<TodoItem<'a>>, BranchEnd) {
     let mut taken = Vec::new();
     let end = scan_branch(todos, |item| taken.push(item));
     (taken, end)
+}
+
+// `#define name(params) input` / `#def1arg name(param) input`, into `definitions`.
+fn define(
+    definitions: &mut MacroDefinitions,
+    name: &cos::MacroName,
+    params: Option<Vec<String>>,
+    literal_args: bool,
+    input: &cos::MacroInput,
+) {
+    let body = import_macro_input(input);
+    definitions.insert(
+        name.print(),
+        MacroDefinition {
+            params,
+            literal_args,
+            body,
+        },
+    );
 }
 
 // The macro name an `#ifdef`/`#ifndef`/`#undef` names: its first word.
