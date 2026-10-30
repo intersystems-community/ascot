@@ -146,22 +146,6 @@ impl AtelierContext {
             .map_err(|err| format!("query answered with other than rows: {err}"))
     }
 
-    // The rows of `sql("Description")`. The Atelier query API fails the whole query, with a
-    // "Parsing error" exception, over a text value that merely starts with `{` (e.g. a
-    // `/// {$$$CPFSave+...}` parameter comment); that one is retried without descriptions.
-    fn rows_with_description(
-        &self,
-        sql: impl Fn(&str) -> String,
-        params: &[&str],
-    ) -> Result<Vec<Value>, String> {
-        match self.rows(&sql("Description"), params) {
-            Err(err) if err.contains("Parsing error") => {
-                self.rows(&sql("'' AS Description"), params)
-            }
-            rows => rows,
-        }
-    }
-
     // The first of `docs` that exists, cached under the whole candidate list.
     fn fetch_routine(&self, docs: &[String]) -> Result<Option<Source>, String> {
         self.routine_cache
@@ -226,13 +210,11 @@ fn class_infos(
     filter: &str,
     params: &[&str],
 ) -> Result<HashMap<String, ClassInfo>, String> {
-    let sql = |description: &str| {
-        format!(
-            "SELECT Name, {description}, Super, Inheritance, PropertyClass, IncludeCode, ClassType, Deprecated \
-             FROM %Dictionary.CompiledClass WHERE Name {filter}"
-        )
-    };
-    let rows = conn.rows_with_description(sql, params)?;
+    let sql = format!(
+        "SELECT Name, Description, Super, Inheritance, PropertyClass, IncludeCode, ClassType, \
+         Deprecated FROM %Dictionary.CompiledClass WHERE Name {filter}"
+    );
+    let rows = conn.rows(&sql, params)?;
     if rows.is_empty() {
         return Ok(HashMap::new());
     }
@@ -385,25 +367,22 @@ fn all_mem_rows(
     filter: &str,
     params: &[&str],
 ) -> Result<Vec<MemberRow>, String> {
-    let declared = |description: &str| {
-        format!(
-            "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, {description}, \
+    let declared = format!(
+        "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, Description, \
              FormalSpec, ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS \
              Relationship, NULL AS Cardinality, ClassMethod, Deprecated, Origin FROM \
              %Dictionary.CompiledMethod WHERE Parent {filter} AND Origin = Parent UNION ALL SELECT \
-             Parent, Name, Aliases, 'property' AS MemberType, {description}, NULL AS FormalSpec, \
+             Parent, Name, Aliases, 'property' AS MemberType, Description, NULL AS FormalSpec, \
              Type AS ReturnType, Collection, MultiDimensional, Relationship, Cardinality, 0 AS \
              ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledProperty WHERE Parent \
              {filter} AND Origin = Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, \
-             'parameter' AS MemberType, {description}, NULL AS FormalSpec, Type AS ReturnType, \
+             'parameter' AS MemberType, Description, NULL AS FormalSpec, Type AS ReturnType, \
              NULL AS Collection, 0 AS MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 \
              AS ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledParameter WHERE Parent \
              {filter} AND Origin = Parent"
-        )
-    };
-    let generating = |description: &str| {
-        format!(
-            "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, {description}, \
+    );
+    let generating = format!(
+        "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, Description, \
              Properties AS FormalSpec, NULL AS ReturnType, NULL AS Collection, 0 AS \
              MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
              Deprecated, Origin, Abstract AS IndexAbstract, Condition AS IndexCondition, \
@@ -412,26 +391,25 @@ fn all_mem_rows(
              IndexPrimaryKey, ShardKey AS IndexShardKey, SqlName AS IndexSqlName, Type AS \
              IndexType, _Unique AS IndexUnique FROM %Dictionary.CompiledIndex WHERE Parent \
              {filter} AND Origin = Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, 'query' \
-             AS MemberType, {description}, FormalSpec, Type AS ReturnType, NULL AS Collection, 0 \
+             AS MemberType, Description, FormalSpec, Type AS ReturnType, NULL AS Collection, 0 \
              AS MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
              Deprecated, Origin, 0 AS IndexAbstract, NULL AS IndexCondition, NULL AS \
              IndexCoshardWith, NULL AS IndexData, 0 AS IndexDeferred, 0 AS IndexExtent, 0 AS \
              IndexIdKey, 0 AS IndexInternal, 0 AS IndexPrimaryKey, 0 AS IndexShardKey, NULL AS \
              IndexSqlName, NULL AS IndexType, 0 AS IndexUnique FROM %Dictionary.CompiledQuery \
              WHERE Parent {filter} AND Origin = Parent"
-        )
-    };
-    let mut rows = member_rows(conn, declared, &[params, params, params].concat())?;
-    rows.extend(member_rows(conn, generating, &[params, params].concat())?);
+    );
+    let mut rows = member_rows(conn, &declared, &[params, params, params].concat())?;
+    rows.extend(member_rows(conn, &generating, &[params, params].concat())?);
     Ok(rows)
 }
 
 fn member_rows(
     conn: &AtelierContext,
-    sql: impl Fn(&str) -> String,
+    sql: &str,
     params: &[&str],
 ) -> Result<Vec<MemberRow>, String> {
-    conn.rows_with_description(sql, params).map(|rows| {
+    conn.rows(sql, params).map(|rows| {
         rows.into_iter()
             .filter_map(|row| serde_json::from_value(row).ok())
             .collect()
