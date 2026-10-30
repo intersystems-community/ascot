@@ -281,7 +281,12 @@ impl CheckExprInner for cos::FunctionCall {
                         delimitor,
                     },
                 ..
-            } => check_length(env, flow, expression.deref(), arg(delimitor)),
+            } => check_read_args(
+                env,
+                flow,
+                [Some(expression.deref()), arg(delimitor)],
+                "%Integer",
+            ),
             FunctionCall::Simple(call) => check_simple_function(env, flow, call),
             FunctionCall::Generic(_) => unreachable!("never converts"),
             FunctionCall::Unknown(call) => {
@@ -475,7 +480,7 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::BitCount {
                 args: BitCountArgs { bits, value },
                 ..
-            } => check_bitcount(env, flow, bits.deref(), arg(value)),
+            } => check_read_args(env, flow, [Some(bits.deref()), arg(value)], "%Integer"),
             FunctionCall::BitFind {
                 args:
                     BitFindArgs {
@@ -485,13 +490,16 @@ impl CheckExprInner for cos::FunctionCall {
                         direction,
                     },
                 ..
-            } => check_bitfind(
+            } => check_read_args(
                 env,
                 flow,
-                bits.deref(),
-                value.deref().deref(),
-                arg(position),
-                arg(direction),
+                [
+                    Some(bits.deref()),
+                    Some(value.deref().deref()),
+                    arg(position),
+                    arg(direction),
+                ],
+                "%Integer",
             ),
             FunctionCall::BitLogic { expr, length, .. } => {
                 check_bitlogic(env, flow, expr.deref(), arg(length))
@@ -506,31 +514,39 @@ impl CheckExprInner for cos::FunctionCall {
                         begin,
                     },
                 ..
-            } => check_change(
+            } => check_read_args(
                 env,
                 flow,
-                string.deref(),
-                target.deref().deref(),
-                replacement.deref().deref(),
-                arg(occurrences),
-                arg(begin),
+                [
+                    Some(string.deref()),
+                    Some(target.deref().deref()),
+                    Some(replacement.deref().deref()),
+                    arg(occurrences),
+                    arg(begin),
+                ],
+                "%String",
             ),
             FunctionCall::Char {
                 args: CharArgs { first, rest },
                 ..
-            } => check_char(env, flow, first.deref(), each_arg(rest)),
+            } => check_read_args(
+                env,
+                flow,
+                once(Some(first.deref())).chain(each_arg(rest).map(Some)),
+                "%String",
+            ),
             FunctionCall::ClassName {
                 args: ClassNameArgs { oref },
                 ..
-            } => check_classname(env, flow, oref.as_deref()),
+            } => check_read_args(env, flow, [oref.as_deref()], "%String"),
             FunctionCall::Decimal {
                 args: DecimalArgs { num, digits },
                 ..
-            } => check_decimal(env, flow, num.deref(), arg(digits)),
+            } => check_read_args(env, flow, [Some(num.deref()), arg(digits)], "%Decimal"),
             FunctionCall::Double {
                 args: DoubleArgs { num },
                 ..
-            } => check_double(env, flow, num.deref()),
+            } => check_read_args(env, flow, [Some(num.deref())], "%Double"),
             FunctionCall::Extract(c) => check_extract_call(env, flow, c),
             FunctionCall::FNumber {
                 args:
@@ -972,9 +988,12 @@ fn check_bit_call<'a>(
     flow: &mut Flow<'a>,
     c: &BitCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    let _ = c.bits.to_ty(env, flow)?;
-    let _ = c.position.deref().to_ty(env, flow)?;
-    Ok(Ty::from("%Integer").into())
+    check_read_args(
+        env,
+        flow,
+        [Some(c.bits.deref()), Some(c.position.deref().deref())],
+        "%Integer",
+    )
 }
 
 fn check_piece_call<'a>(
@@ -1001,11 +1020,12 @@ fn check_mv_call<'a>(
     flow: &mut Flow<'a>,
     c: &cos::MVCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    let _ = c.record.deref().to_ty(env, flow)?;
-    for arg in &c.rest {
-        arg.deref().deref().to_ty(env, flow)?;
-    }
-    Ok(Ty::from("%String").into())
+    check_read_args(
+        env,
+        flow,
+        once(Some(c.record.deref())).chain(each_arg(&c.rest).map(Some)),
+        "%String",
+    )
 }
 
 impl CheckExprInner for PositionArg {
@@ -1123,38 +1143,6 @@ fn check_property_call<'a>(
         c.property.deref().deref(),
         each_arg(&c.indexes),
     )
-}
-
-fn check_bitcount<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    bits: &Range<Expr>,
-    value: Option<&Range<Expr>>,
-) -> Result<PowerTy, QuasiTypeError> {
-    let _ = bits.to_ty(env, flow)?;
-    if let Some(value) = value {
-        let _ = value.to_ty(env, flow)?;
-    }
-    Ok(Ty::from("%Integer").into())
-}
-
-fn check_bitfind<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    bits: &Range<Expr>,
-    value: &Range<Expr>,
-    position: Option<&Range<Expr>>,
-    direction: Option<&Range<Expr>>,
-) -> Result<PowerTy, QuasiTypeError> {
-    let _ = bits.to_ty(env, flow)?;
-    let _ = value.to_ty(env, flow)?;
-    if let Some(position) = position {
-        let _ = position.to_ty(env, flow)?;
-    }
-    if let Some(direction) = direction {
-        let _ = direction.to_ty(env, flow)?;
-    }
-    Ok(Ty::from("%Integer").into())
 }
 
 fn check_bitlogic<'a>(
@@ -1349,73 +1337,6 @@ fn check_increment<'a>(
         flow.handle_set(local, Ty::from("%Integer").into(), env.range(counter))?;
     }
     Ok(Ty::from("%Integer").into())
-}
-
-fn check_change<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    string: &Range<Expr>,
-    target: &Range<Expr>,
-    replacement: &Range<Expr>,
-    occurrences: Option<&Range<Expr>>,
-    begin: Option<&Range<Expr>>,
-) -> Result<PowerTy, QuasiTypeError> {
-    let _ = string.to_ty(env, flow)?;
-    let _ = target.to_ty(env, flow)?;
-    let _ = replacement.to_ty(env, flow)?;
-    if let Some(occurrences) = occurrences {
-        let _ = occurrences.to_ty(env, flow)?;
-    }
-    if let Some(begin) = begin {
-        let _ = begin.to_ty(env, flow)?;
-    }
-    Ok(Ty::from("%String").into())
-}
-
-fn check_char<'a, 'b>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    first: &Range<Expr>,
-    rest: impl Iterator<Item = &'b Range<Expr>>,
-) -> Result<PowerTy, QuasiTypeError> {
-    let _ = first.to_ty(env, flow)?;
-    for arg in rest {
-        let _ = arg.to_ty(env, flow)?;
-    }
-    Ok(Ty::from("%String").into())
-}
-
-fn check_classname<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    oref: Option<&Range<Expr>>,
-) -> Result<PowerTy, QuasiTypeError> {
-    if let Some(oref) = oref {
-        let _ = oref.to_ty(env, flow)?;
-    }
-    Ok(Ty::from("%String").into())
-}
-
-fn check_decimal<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    num: &Range<Expr>,
-    digits: Option<&Range<Expr>>,
-) -> Result<PowerTy, QuasiTypeError> {
-    let _ = num.to_ty(env, flow)?;
-    if let Some(digits) = digits {
-        let _ = digits.to_ty(env, flow)?;
-    }
-    Ok(Ty::from("%Decimal").into())
-}
-
-fn check_double<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    num: &Range<Expr>,
-) -> Result<PowerTy, QuasiTypeError> {
-    let _ = num.to_ty(env, flow)?;
-    Ok(Ty::from("%Double").into())
 }
 
 impl CheckCommandInner for Option<Expr> {
@@ -1773,19 +1694,6 @@ fn check_fnumber_format(format: &str) -> Result<(), String> {
         seen.push(code);
     }
     Ok(())
-}
-
-fn check_length<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    expression: &Range<Expr>,
-    delimitor: Option<&Range<Expr>>,
-) -> Result<PowerTy, QuasiTypeError> {
-    let _ = expression.to_ty(env, flow)?;
-    if let Some(delimitor) = delimitor {
-        let _ = delimitor.to_ty(env, flow)?;
-    };
-    Ok(Ty::from("%Integer").into())
 }
 
 fn check_data<'a>(
