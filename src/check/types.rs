@@ -42,10 +42,30 @@ pub enum Const {
     String(String),
 }
 impl Const {
-    pub fn as_integer(&self) -> u32 {
+    // The number a value is, when it is a non-negative integer. A string's is its leading numeric
+    // prefix, as in ObjectScript: `"3abc"` is 3, `"abc"` and `" 1"` are 0. A negative, decimal or
+    // exponent prefix has no place in a `u32`, so it is `None`: not folded rather than wrong.
+    pub fn as_integer(&self) -> Option<u32> {
         match self {
-            Const::Integer(u32) => *u32,
-            Const::String(s) => str::parse(s).unwrap_or(0),
+            Const::Integer(n) => Some(*n),
+            Const::String(s) => match numeric_prefix(s) {
+                "" => Some(0),
+                prefix => prefix.trim_start_matches('+').parse().ok(),
+            },
+        }
+    }
+
+    // Whether a value tests true: nonzero, a string by its numeric prefix.
+    pub fn truthy(&self) -> bool {
+        match self {
+            Const::Integer(n) => *n != 0,
+            Const::String(s) => {
+                let mantissa = numeric_prefix(s)
+                    .split(['E', 'e'])
+                    .next()
+                    .unwrap_or_default();
+                mantissa.bytes().any(|b| (b'1'..=b'9').contains(&b))
+            }
         }
     }
 
@@ -55,6 +75,42 @@ impl Const {
             Const::String(s) => s.clone(),
         }
     }
+}
+
+// The numeric literal a string starts with, as ObjectScript reads it: signs, digits, a fraction,
+// an exponent; empty when there is none (a leading space included).
+fn numeric_prefix(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let digits = |mut i: usize| {
+        while bytes.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        i
+    };
+    let signs = |mut i: usize| {
+        while matches!(bytes.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        i
+    };
+    let start = signs(0);
+    let mut end = digits(start);
+    if bytes.get(end) == Some(&b'.') {
+        let fraction = digits(end + 1);
+        if fraction > end + 1 || end > start {
+            end = fraction;
+        }
+    }
+    if end == start || (end == start + 1 && bytes[start] == b'.') {
+        return "";
+    }
+    if matches!(bytes.get(end), Some(b'E' | b'e')) {
+        let exponent = digits(signs(end + 1));
+        if exponent > signs(end + 1) {
+            end = exponent;
+        }
+    }
+    &s[..end]
 }
 
 impl From<bool> for Const {
@@ -121,7 +177,7 @@ impl Term {
 
     // An evaluation that overflows or divides by zero is no constraint at all, so it keeps `val`.
     fn filter(&self, val: &Const) -> bool {
-        self.eval(val).is_none_or(|c| c.as_integer() != 0)
+        self.eval(val).is_none_or(|c| c.truthy())
     }
 
     fn exact(&self) -> bool {
@@ -143,23 +199,28 @@ impl Term {
         Some(match self {
             Term::Target => val.clone(),
             Term::Const(c) => c.clone(),
-            Term::Neg(term) => (term.eval(val)?.as_integer() == 0).into(),
+            Term::Neg(term) => (!term.eval(val)?.truthy()).into(),
             Term::Infix { l, o, r } => {
                 let l = l.eval(val)?;
                 let r = r.eval(val)?;
                 match o {
-                    TermOp::Eq => (l.as_string() == r.as_string()).into(),
-                    TermOp::Ne => (l.as_string() != r.as_string()).into(),
-                    TermOp::Le | TermOp::Ng => (l.as_integer() <= r.as_integer()).into(),
-                    TermOp::Lt => (l.as_integer() < r.as_integer()).into(),
-                    TermOp::Ge | TermOp::Nl => (l.as_integer() >= r.as_integer()).into(),
-                    TermOp::Gt => (l.as_integer() > r.as_integer()).into(),
-                    TermOp::Add => l.as_integer().checked_add(r.as_integer())?.into(),
-                    TermOp::Sub => l.as_integer().checked_sub(r.as_integer())?.into(),
-                    TermOp::Pow => l.as_integer().checked_pow(r.as_integer())?.into(),
-                    TermOp::Mul => l.as_integer().checked_mul(r.as_integer())?.into(),
-                    TermOp::IntDiv => l.as_integer().checked_div(r.as_integer())?.into(),
-                    TermOp::Mod => l.as_integer().checked_rem(r.as_integer())?.into(),
+                    TermOp::Eq => return Some((l.as_string() == r.as_string()).into()),
+                    TermOp::Ne => return Some((l.as_string() != r.as_string()).into()),
+                    _ => {}
+                }
+                let (l, r) = (l.as_integer()?, r.as_integer()?);
+                match o {
+                    TermOp::Eq | TermOp::Ne => unreachable!(),
+                    TermOp::Le | TermOp::Ng => (l <= r).into(),
+                    TermOp::Lt => (l < r).into(),
+                    TermOp::Ge | TermOp::Nl => (l >= r).into(),
+                    TermOp::Gt => (l > r).into(),
+                    TermOp::Add => l.checked_add(r)?.into(),
+                    TermOp::Sub => l.checked_sub(r)?.into(),
+                    TermOp::Pow => l.checked_pow(r)?.into(),
+                    TermOp::Mul => l.checked_mul(r)?.into(),
+                    TermOp::IntDiv => l.checked_div(r)?.into(),
+                    TermOp::Mod => l.checked_rem(r)?.into(),
                 }
             }
         })
@@ -1103,6 +1164,25 @@ impl TyProcedure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_string_is_the_number_it_starts_with() {
+        let string = |s: &str| Const::String(s.to_string());
+        assert_eq!(string("3abc").as_integer(), Some(3));
+        assert_eq!(string("+2").as_integer(), Some(2));
+        assert_eq!(string("abc").as_integer(), Some(0));
+        assert_eq!(string(" 1").as_integer(), Some(0));
+        assert_eq!(string("00").as_integer(), Some(0));
+        for undecided in ["-3x", ".5x", "1.5", "1E2x", "3."] {
+            assert_eq!(string(undecided).as_integer(), None, "{undecided}");
+        }
+        for truthy in ["3abc", "1.5", ".5x", "1E2x", "-3x", "+2"] {
+            assert!(string(truthy).truthy(), "{truthy}");
+        }
+        for falsy in ["abc", " 1", "", "0x", "-0", "00", "0E5", "."] {
+            assert!(!string(falsy).truthy(), "{falsy}");
+        }
+    }
 
     #[test]
     fn a_value_type_is_instantiated_too() {

@@ -500,13 +500,13 @@ impl<'a> Flow<'a> {
             // can still widen (e.g. `Const("")` reassigned in the body), so killing a branch
             // now would wrongly cut the priming walk short.
             PowerTy::Const(c) if !self.shared.env.soft_diagnostics_suppressed() => {
-                self.settle(c.as_integer() > 0, report)
+                self.settle(c.truthy(), report)
             }
             PowerTy::Union(fst, snd, rst) if !self.shared.env.soft_diagnostics_suppressed() => {
                 let cases: HashSet<bool> = once(fst)
                     .chain(once(snd))
                     .chain(rst.iter())
-                    .map(|c| c.as_integer() > 0)
+                    .map(Const::truthy)
                     .collect();
                 match Vec::from_iter(cases)[..] {
                     [always] => self.settle(always, report),

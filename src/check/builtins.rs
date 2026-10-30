@@ -736,7 +736,7 @@ impl CheckExprInner for cos::FunctionCall {
                 let mut exhaustive = false;
                 for b in std::iter::once(first.deref()).chain(each_arg(rest)) {
                     if let PowerTy::Const(c) = (&b.e1).to_power_ty(env, flow)? {
-                        exhaustive |= c.as_integer() != 0;
+                        exhaustive |= c.truthy();
                     }
                     let _ = (&b.e2).to_ty(env, flow)?;
                 }
