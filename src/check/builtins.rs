@@ -335,13 +335,6 @@ impl CheckExprInner for cos::FunctionCall {
                 }
                 Ok(Ty::from("%String").into())
             }
-            FunctionCall::ZP {
-                args: ZPArgs { variable },
-                ..
-            } => {
-                let _ = variable.to_maybe_ty(env, flow)?;
-                Ok(PowerTy::from("%DataType"))
-            }
             // Internal storage handle -- opaque, like `$ZUTIL`'s catch-all return.
             FunctionCall::ZObjRef {
                 args: ZObjRefArgs { oref },
@@ -666,7 +659,16 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::Method {
                 args:
                     MethodArgs {
-                        instance,
+                        instance: classname,
+                        method,
+                        args,
+                    },
+                ..
+            }
+            | FunctionCall::ClassMethod {
+                args:
+                    ClassMethodArgs {
+                        classname,
                         method,
                         args,
                     },
@@ -674,7 +676,7 @@ impl CheckExprInner for cos::FunctionCall {
             } => Ok(check_classmethod(
                 env,
                 flow,
-                instance.deref(),
+                classname.deref(),
                 method.deref().deref(),
                 each_arg(args),
             )?
@@ -819,22 +821,6 @@ impl CheckExprInner for cos::FunctionCall {
                 std::iter::once(Some(code.deref())).chain(each_arg(params).map(Some)),
                 "%String",
             ),
-            FunctionCall::ClassMethod {
-                args:
-                    ClassMethodArgs {
-                        classname,
-                        method,
-                        args,
-                    },
-                ..
-            } => Ok(check_classmethod(
-                env,
-                flow,
-                classname.deref(),
-                method.deref().deref(),
-                each_arg(args),
-            )?
-            .into()),
             FunctionCall::Compile {
                 args:
                     CompileArgs {
@@ -864,6 +850,10 @@ impl CheckExprInner for cos::FunctionCall {
             }
             | FunctionCall::Next {
                 args: NextArgs { variable },
+                ..
+            }
+            | FunctionCall::ZP {
+                args: ZPArgs { variable },
                 ..
             } => {
                 let _ = variable.to_maybe_ty(env, flow)?;
