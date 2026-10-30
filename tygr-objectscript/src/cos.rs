@@ -2445,19 +2445,16 @@ pub struct Index {
 }
 
 impl Index {
-    // The keys this index is defined `On`, in order; empty without an `On` clause.
-    pub fn on_properties(&self) -> Vec<&IndexProperty> {
-        let Some(on_clause) = &self.on_clause else {
-            return vec![];
-        };
-        match &on_clause.properties {
+    // The keys this index is defined `On`, in order; `None` without an `On` clause.
+    pub fn on_properties(&self) -> Option<Vec<&IndexProperty>> {
+        Some(match &self.on_clause.as_ref()?.properties {
             IndexPropertyList::Single(property) => vec![property],
             IndexPropertyList::Multiple(properties) => properties
                 .first
                 .iter()
                 .chain(properties.rest.iter().map(|(_, property)| property))
                 .collect(),
-        }
+        })
     }
 }
 
@@ -2489,6 +2486,13 @@ pub struct IndexProperty {
     pub name: Range<ClassMemberName>,
     pub kind: Option<IndexPropertyKind>,
     as_collation: Option<AsCollation>,
+}
+
+impl IndexProperty {
+    // The `As collation`, as written.
+    pub fn collation(&self) -> Option<String> {
+        self.as_collation.as_ref().map(|c| c.collation.print())
+    }
 }
 
 #[derive(Grammar)]

@@ -3382,9 +3382,14 @@ pub(crate) fn check_cls(
     let mut members = cls.members.in_order();
     members.sort_by(|a, b| a.name.it.cmp(&b.name.it));
     for member in members {
-        if let MemberKindSpecificDetails::Index { on_properties } = &member.kind {
+        if let MemberKindSpecificDetails::Index(index) = &member.kind {
             let this = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.name.it.clone())));
-            for key in on_properties.iter().flatten() {
+            let plain_keys = index
+                .on
+                .iter()
+                .flatten()
+                .filter(|key| key.subscript.is_none());
+            for key in plain_keys.map(|key| &key.property) {
                 let key_range = key.range;
                 match env.base.resolve_mem::<Properties<Indexed>>(
                     &this,
