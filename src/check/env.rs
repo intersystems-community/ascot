@@ -575,8 +575,14 @@ impl<'a> WorkspaceEnv<'a> {
                     }
                 }
                 for (name, index) in &details.members.index {
-                    if let MemberKindSpecificDetails::Index { on_properties } = &index.kind {
-                        add(name, self.index_methods(cls, on_properties));
+                    if let MemberKindSpecificDetails::Index {
+                        on_properties,
+                        unique,
+                    } = &index.kind
+                        && !on_properties.contains(&None)
+                    {
+                        let keys: Vec<_> = on_properties.iter().flatten().cloned().collect();
+                        add(name, self.index_methods(cls, &keys, *unique));
                     }
                 }
                 for name in details.members.query.keys() {
@@ -603,11 +609,11 @@ impl<'a> WorkspaceEnv<'a> {
                             };
                             add(name, self.property_methods(ty));
                         }
-                        MemberKind::Index(index) => {
+                        MemberKind::Index(index) if !index.collection => {
                             let keys: Vec<_> = (index.properties.iter())
-                                .map(|key| Some(WithRange::new(key.clone(), zero)))
+                                .map(|key| WithRange::new(key.clone(), zero))
                                 .collect();
-                            add(name, self.index_methods(cls, &keys));
+                            add(name, self.index_methods(cls, &keys, index.unique));
                         }
                         MemberKind::Query => add(name, query_methods()),
                         MemberKind::Method(_) | MemberKind::ClassMethod(_) if name == "%OnNew" => {
@@ -701,22 +707,24 @@ impl<'a> WorkspaceEnv<'a> {
 
     // `Index AB On (A, B)` generates `ABOpen(aVal As <A>, bVal As <B>, concurrency, ByRef sc)`,
     // `ABExists` and `ABDelete`; `Open` returns the class it is called on, not `cls`.
+    // The accessors IRIS generates for an index, as measured: `Exists` for every index, `Open` and
+    // `Delete` only for a unique one, nothing for one subscripted on a collection (not called).
     fn index_methods(
         &self,
         cls: &str,
-        on_properties: &[Option<WithRange<String>>],
+        on_properties: &[WithRange<String>],
+        unique: bool,
     ) -> Vec<(String, Generated)> {
         let cls = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
         let keys: Vec<NormalArg> = on_properties
             .iter()
-            .map(|property| {
+            .map(|p| {
                 // Quietly: `check_cls` resolves the key itself, hint and all.
                 let was_suppressed = self.suppress_soft_diagnostics();
-                let found = property.as_ref().and_then(|p| {
-                    self.find::<Properties<Read>>(&cls, &p.it, true, p.range)
-                        .ok()
-                        .flatten()
-                });
+                let found = self
+                    .find::<Properties<Read>>(&cls, &p.it, true, p.range)
+                    .ok()
+                    .flatten();
                 self.restore_soft_diagnostics(was_suppressed);
                 let ty = match found.map(|found| found.ty) {
                     Some(PropertyTy::Value(ty)) => ty,
@@ -733,7 +741,12 @@ impl<'a> WorkspaceEnv<'a> {
                 default.map(str::to_string),
             )
         };
-        [
+        let exists = (
+            "Exists",
+            vec![arg("id", ArgMode::Output, "%String", None)],
+            Ty::from("%Boolean"),
+        );
+        let open_and_delete = [
             (
                 "Open",
                 vec![
@@ -743,25 +756,21 @@ impl<'a> WorkspaceEnv<'a> {
                 Ty::This,
             ),
             (
-                "Exists",
-                vec![arg("id", ArgMode::Output, "%String", None)],
-                Ty::from("%Boolean"),
-            ),
-            (
                 "Delete",
                 vec![arg("concurrency", ArgMode::Default, "%Integer", Some("-1"))],
                 Ty::from("%Status"),
             ),
-        ]
-        .into_iter()
-        .map(|(suffix, extra, out)| {
-            let args = keys.iter().cloned().chain(extra).collect();
-            (
-                suffix.to_string(),
-                (generated_procedure(args, false, Some(out)), false),
-            )
-        })
-        .collect()
+        ];
+        std::iter::once(exists)
+            .chain(unique.then_some(open_and_delete).into_iter().flatten())
+            .map(|(suffix, extra, out)| {
+                let args = keys.iter().cloned().chain(extra).collect();
+                (
+                    suffix.to_string(),
+                    (generated_procedure(args, false, Some(out)), false),
+                )
+            })
+            .collect()
     }
 
     // IRIS keeps the three namespaces apart by syntax: `..#X` is a parameter, `..X(...)` a method

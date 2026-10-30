@@ -199,12 +199,17 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                 })
             }
             MemberKindSpecificDetails::ForeignKey => MemberKind::ForeignKey,
-            MemberKindSpecificDetails::Index { on_properties } => MemberKind::Index(IndexInfo {
+            MemberKindSpecificDetails::Index {
+                on_properties,
+                unique,
+            } => MemberKind::Index(IndexInfo {
                 properties: on_properties
                     .iter()
                     .flatten()
                     .map(|k| k.it.clone())
                     .collect(),
+                collection: on_properties.contains(&None),
+                unique: *unique,
             }),
             MemberKindSpecificDetails::Projection => MemberKind::Projection,
             MemberKindSpecificDetails::Trigger => MemberKind::Trigger,

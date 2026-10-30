@@ -31,7 +31,7 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisContext>,
     Ok(Box::new(declarations))
 }
 
-pub(crate) const DECLARATIONS_VERSION: u32 = 3;
+pub(crate) const DECLARATIONS_VERSION: u32 = 4;
 
 /// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
 /// argument to its answer. A class holds only its own members; ascot walks its superclasses.

@@ -3382,7 +3382,7 @@ pub(crate) fn check_cls(
     let mut members = cls.members.in_order();
     members.sort_by(|a, b| a.name.it.cmp(&b.name.it));
     for member in members {
-        if let MemberKindSpecificDetails::Index { on_properties } = &member.kind {
+        if let MemberKindSpecificDetails::Index { on_properties, .. } = &member.kind {
             let this = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.name.it.clone())));
             for key in on_properties.iter().flatten() {
                 let key_range = key.range;

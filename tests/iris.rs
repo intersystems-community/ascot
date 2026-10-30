@@ -68,7 +68,7 @@ fn inherited_and_generated_members_resolve_through_the_walk() {
     let uri = "P.cls".to_string();
     workspace.open(
         uri.clone(),
-        "Class Probe.P Extends %Persistent\n{\nProperty Name As %String;\nIndex ByName On Name;\nClassMethod T() As %Status\n{\n Set u = ##class(Security.Users).%OpenId(\"x\")\n Write u.Name, u.NameLowerCaseIndexExists(\"x\"), ##class(Security.Users).DetailFunc()\n Set p = ..ByNameOpen(\"n\")\n Write p.NameGet(), p.%Id(), ##class(Security.Users).%Exists(\"x\")\n Do p.Nope()\n Quit p.%Save()\n}\n}\n".to_string(),
+        "Class Probe.P Extends %Persistent\n{\nProperty Name As %String;\nIndex ByName On Name [ Unique ];\nClassMethod T() As %Status\n{\n Set u = ##class(Security.Users).%OpenId(\"x\")\n Write u.Name, u.NameLowerCaseIndexExists(\"x\"), ##class(Security.Users).DetailFunc()\n Set p = ..ByNameOpen(\"n\")\n Write p.NameGet(), p.%Id(), ##class(Security.Users).%Exists(\"x\")\n Do p.Nope()\n Quit p.%Save()\n}\n}\n".to_string(),
     );
     let diagnostics = workspace.diagnostics(uri);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");

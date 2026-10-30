@@ -258,6 +258,8 @@ pub enum MemberKindSpecificDetails {
         // One per `On` key, in order; `None` for a `(KEYS)`/`(ELEMENTS)` collection subscript,
         // which isn't typed yet.
         on_properties: Vec<Option<WithRange<String>>>,
+        // `Unique`, `PrimaryKey` or `IdKey`.
+        unique: bool,
     },
     Projection,
     Trigger,
@@ -734,6 +736,12 @@ fn process_member(
                     .into_iter()
                     .map(|key| key.kind.is_none().then(|| with_range_name(&key.name, olc)))
                     .collect(),
+                unique: ["Unique", "PrimaryKey", "IdKey"].iter().any(|keyword| {
+                    index
+                        .keywords
+                        .as_ref()
+                        .is_some_and(|k| k.get(keyword).is_some())
+                }),
             },
         ),
         cos::Member::Method(method) => {

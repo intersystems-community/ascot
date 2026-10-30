@@ -96,8 +96,12 @@ interface common {
     }
 
     record index-info {
-        // The `On` keys, by property name.
+        // The `On` keys, by property name; a `(KEYS)`/`(ELEMENTS)` collection subscript is left out.
         properties: list<string>,
+        // Whether a key is a collection subscript: IRIS generates no accessor methods then.
+        collection: bool,
+        // `Unique`, `PrimaryKey` or `IdKey`: IRIS generates Open and Delete besides Exists.
+        unique: bool,
     }
 
     record member-info {

@@ -312,6 +312,9 @@ struct MemberRow {
     deprecated: Value,
     #[serde(default, deserialize_with = "empty_string_as_none")]
     origin: Option<String>,
+    // An index's `Unique`, `PrimaryKey` or `IdKey`.
+    #[serde(default)]
+    index_unique: Value,
 }
 
 fn empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -358,12 +361,13 @@ fn all_mem_rows(
             "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, {description}, \
              Properties AS FormalSpec, NULL AS ReturnType, NULL AS Collection, 0 AS \
              MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
-             Deprecated, Origin FROM %Dictionary.CompiledIndex WHERE Parent {filter} AND Origin = \
-             Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, 'query' AS MemberType, \
+             Deprecated, Origin, CASE WHEN _Unique = 1 OR PrimaryKey = 1 OR IdKey = 1 THEN 1 ELSE \
+             0 END AS IndexUnique FROM %Dictionary.CompiledIndex WHERE Parent {filter} AND Origin \
+             = Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, 'query' AS MemberType, \
              {description}, FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS \
              MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
-             Deprecated, Origin FROM %Dictionary.CompiledQuery WHERE Parent {filter} AND Origin = \
-             Parent"
+             Deprecated, Origin, 0 AS IndexUnique FROM %Dictionary.CompiledQuery WHERE Parent \
+             {filter} AND Origin = Parent"
         )
     };
     let mut rows = member_rows(conn, declared, &[params, params, params].concat())?;
@@ -461,13 +465,19 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
             t: row.return_type.clone(),
             v: None,
         }),
-        // `Properties` is `Name,Age`; a collection key is `Tags(ELEMENTS)`.
-        "index" => MemberKind::Index(IndexInfo {
-            properties: split_classes(row.formal_spec.as_deref().unwrap_or(""))
-                .into_iter()
-                .filter(|key| !key.contains('('))
-                .collect(),
-        }),
+        // `Properties` is `Name,Age`, a collated key `Name:Exact`, a collection key `Tags(ELEMENTS)`.
+        "index" => {
+            let keys = split_classes(row.formal_spec.as_deref().unwrap_or(""));
+            MemberKind::Index(IndexInfo {
+                properties: keys
+                    .iter()
+                    .filter(|key| !key.contains('('))
+                    .map(|key| key.split(':').next().unwrap_or(key).to_string())
+                    .collect(),
+                collection: keys.iter().any(|key| key.contains('(')),
+                unique: is_truthy(&row.index_unique),
+            })
+        }
         "query" => MemberKind::Query,
         _ => {
             let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
@@ -940,6 +950,7 @@ mod tests {
             serde_json::json!({"parent": "A.B", "Name": "M", "MemberType": "method", "Description": "", "FormalSpec": "x:%String", "ReturnType": "%Status", "ClassMethod": 1, "Deprecated": 0}),
             serde_json::json!({"Parent": "A.B", "Name": "", "MemberType": "method", "Description": "", "FormalSpec": "", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0}),
             serde_json::json!({"parent": "A.C", "Name": "ByP", "MemberType": "index", "Description": "", "FormalSpec": "P,Tags(ELEMENTS)", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0}),
+            serde_json::json!({"parent": "A.C", "Name": "ByExactP", "MemberType": "index", "Description": "", "FormalSpec": "P:Exact", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0, "IndexUnique": 1}),
         ]
         .into_iter()
         .map(|row| serde_json::from_value(row).unwrap())
@@ -961,9 +972,14 @@ mod tests {
         assert!(c.inheritance_right && !b.inheritance_right);
         assert_eq!(c.members[0].name.content, "P");
         assert!(
-            matches!(&c.members[1].kind, MemberKind::Index(index) if index.properties == ["P"]),
+            matches!(&c.members[1].kind, MemberKind::Index(index) if index.properties == ["P"] && index.collection && !index.unique),
             "{:?}",
             c.members[1].kind
+        );
+        assert!(
+            matches!(&c.members[2].kind, MemberKind::Index(index) if index.properties == ["P"] && !index.collection && index.unique),
+            "{:?}",
+            c.members[2].kind
         );
     }
 
