@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 
-use either::Either::{Left, Right};
+use either::Either::{self, Left, Right};
 use tygr::{Grammar, IntoInner, OLC, Prefix, Range, StringOf};
 
 use crate::bindings::{self, ArgMode};
@@ -24,6 +24,46 @@ use crate::cos::{self, AllowMacro, CodeMode, KeywordList, MethodLanguage};
 pub struct WithRange<T> {
     pub it: T,
     pub range: bindings::Range,
+}
+
+// Offsets into a text as line/character positions: the text's own `OLC`, or an environment that
+// shifts them (a method body checked at an offset into its class).
+pub trait Positions {
+    fn offset_to_line_character(&self, offset: usize) -> (usize, usize);
+    fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize;
+
+    fn position(&self, offset: usize) -> bindings::Position {
+        bindings::Position::from(self.offset_to_line_character(offset))
+    }
+
+    // The inverse of `position`.
+    fn offset(&self, position: bindings::Position) -> usize {
+        self.line_character_to_offset((position.line as usize, position.character as usize))
+    }
+
+    fn range<T>(&self, ranged: &Range<T>) -> bindings::Range {
+        bindings::Range {
+            start: self.position(ranged.start),
+            end: self.position(ranged.end),
+        }
+    }
+
+    fn with_range<T>(&self, ranged: Range<T>) -> WithRange<T> {
+        WithRange {
+            range: self.range(&ranged),
+            it: ranged.into_inner(),
+        }
+    }
+}
+
+impl Positions for OLC {
+    fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
+        OLC::offset_to_line_character(self, offset)
+    }
+
+    fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize {
+        OLC::line_character_to_offset(self, line_character)
+    }
 }
 
 impl<T> WithRange<T> {
@@ -283,11 +323,10 @@ impl RoutineElementDetails {
     }
 }
 
-fn import_args(
-    olc: &OLC,
-    params: &Option<cos::SpaceThen<cos::ParameterList>>,
-) -> (Vec<WithRange<NormalArg>>, Option<WithRange<VariadicArg>>) {
-    let mut args = params
+type Args = (Vec<WithRange<NormalArg>>, Option<WithRange<VariadicArg>>);
+
+fn import_args(pos: &impl Positions, params: &Option<cos::SpaceThen<cos::ParameterList>>) -> Args {
+    let args = params
         .iter()
         .flat_map(|x| &***x)
         .flat_map(|x| x.items.iter())
@@ -298,37 +337,33 @@ fn import_args(
                 ArgMode::Default
             };
             let name = entry.param.deref().print();
+            let at = entry.param.as_ref();
             if entry.expand.is_some() {
-                Right(with_range(
-                    entry
-                        .param
-                        .as_ref()
-                        .map(|_| VariadicArg::new(mode, name, None)),
-                    olc,
-                ))
+                Right(pos.with_range(at.map(|_| VariadicArg::new(mode, name, None))))
             } else {
                 let default = entry.default.as_deref().map(|default| default.print());
-                Left(with_range(
-                    entry
-                        .param
-                        .as_ref()
-                        .map(|_| NormalArg::new(mode, name, None, default)),
-                    olc,
-                ))
+                Left(pos.with_range(at.map(|_| NormalArg::new(mode, name, None, default))))
             }
         })
-        .collect::<Vec<_>>();
-    let variadic_arg = if args.last().is_some_and(|arg| arg.is_right()) {
-        args.pop().and_then(|arg| arg.right())
+        .collect();
+    split_args(args)
+}
+
+// A variadic parameter can only come last.
+fn split_args(mut args: Vec<Either<WithRange<NormalArg>, WithRange<VariadicArg>>>) -> Args {
+    let variadic_arg = if args.last().is_some_and(Either::is_right) {
+        args.pop().and_then(Either::right)
     } else {
         None
     };
-    let normal_args = args.into_iter().filter_map(|arg| arg.left()).collect();
-    (normal_args, variadic_arg)
+    (
+        args.into_iter().filter_map(Either::left).collect(),
+        variadic_arg,
+    )
 }
 
 fn public_list(
-    olc: &OLC,
+    pos: &impl Positions,
     publics: &Option<Prefix<StringOf<cos::IsWhitespace>, AllowMacro<cos::PublicVarList>>>,
 ) -> Vec<WithRange<String>> {
     publics
@@ -339,72 +374,71 @@ fn public_list(
         })
         .flat_map(|x| x.items.iter())
         .filter_map(|x| match x.deref() {
-            AllowMacro::Plain(name) => Some(with_range(x.as_ref().map(|_| name.print()), olc)),
+            AllowMacro::Plain(name) => Some(pos.with_range(x.as_ref().map(|_| name.print()))),
             AllowMacro::Macro(..) => None,
         })
         .collect()
 }
 
-fn subroutine_kind(olc: &OLC, subroutine: &cos::Subroutine) -> Option<RoutineElementDetails> {
+fn element(
+    pos: &impl Positions,
+    label: &Range<cos::Label>,
+    params: &Option<cos::SpaceThen<cos::ParameterList>>,
+    kind: RoutineElementKind,
+) -> RoutineElementDetails {
+    let (normal_args, variadic_arg) = import_args(pos, params);
+    RoutineElementDetails {
+        name: with_range_name(label, pos),
+        kind,
+        normal_args,
+        variadic_arg,
+        formal_list: params.is_some(),
+    }
+}
+
+pub(crate) fn subroutine_kind(
+    pos: &impl Positions,
+    subroutine: &cos::Subroutine,
+) -> Option<RoutineElementDetails> {
     let AllowMacro::Plain(header) = &subroutine.header else {
         return None;
     };
-    let (normal_args, variadic_arg) = import_args(olc, &header.params);
-    Some(RoutineElementDetails {
-        name: with_range(header.label.as_ref().map(Grammar::print), olc),
-        kind: RoutineElementKind::Subroutine,
-        normal_args,
-        variadic_arg,
-        formal_list: header.params.is_some(),
-    })
+    Some(element(
+        pos,
+        &header.label,
+        &header.params,
+        RoutineElementKind::Subroutine,
+    ))
 }
 
-fn procedure_kind(olc: &OLC, procedure: &cos::Procedure) -> Option<RoutineElementDetails> {
+fn procedure_kind(
+    pos: &impl Positions,
+    procedure: &cos::Procedure,
+) -> Option<RoutineElementDetails> {
     let AllowMacro::Plain(header) = procedure.header.deref() else {
         return None;
     };
-    let (normal_args, variadic_arg) = import_args(olc, &header.params);
-    Some(RoutineElementDetails {
-        name: with_range(header.label.as_ref().map(Grammar::print), olc),
-        kind: RoutineElementKind::Procedure {
-            public_list: public_list(olc, &header.publics),
-        },
-        normal_args,
-        variadic_arg,
-        formal_list: header.params.is_some(),
-    })
+    let kind = RoutineElementKind::Procedure {
+        public_list: public_list(pos, &header.publics),
+    };
+    Some(element(pos, &header.label, &header.params, kind))
 }
 
 pub fn routine_element_kind(
-    olc: &OLC,
+    pos: &impl Positions,
     element: &cos::RoutineElement,
 ) -> Option<RoutineElementDetails> {
     match element {
-        cos::RoutineElement::Subroutine(subroutine) => subroutine_kind(olc, subroutine),
-        cos::RoutineElement::Procedure(procedure) => procedure_kind(olc, procedure),
+        cos::RoutineElement::Subroutine(subroutine) => subroutine_kind(pos, subroutine),
+        cos::RoutineElement::Procedure(procedure) => procedure_kind(pos, procedure),
     }
 }
 
-fn with_range<T>(ranged: Range<T>, olc: &OLC) -> WithRange<T> {
-    let range = bindings::Range {
-        start: bindings::Position::from(olc.offset_to_line_character(ranged.start)),
-        end: bindings::Position::from(olc.offset_to_line_character(ranged.end)),
-    };
-    WithRange {
-        it: ranged.into_inner(),
-        range,
-    }
-}
-
-pub(crate) fn with_range_name<T: Grammar>(ranged: &Range<T>, olc: &OLC) -> WithRange<String> {
-    with_range(ranged.as_ref().map(|x| x.print()), olc)
-}
-
-fn range<T>(x: &Range<T>, olc: &OLC) -> bindings::Range {
-    bindings::Range {
-        start: bindings::Position::from(olc.offset_to_line_character(x.start)),
-        end: bindings::Position::from(olc.offset_to_line_character(x.end)),
-    }
+pub(crate) fn with_range_name<T: Grammar>(
+    ranged: &Range<T>,
+    pos: &impl Positions,
+) -> WithRange<String> {
+    pos.with_range(ranged.as_ref().map(|x| x.print()))
 }
 
 fn extract_document_comments(doc: &str) -> String {
@@ -435,11 +469,7 @@ fn procedure_block(keywords: &Option<KeywordList>) -> Option<bool> {
 }
 
 fn is_datatype(keywords: &Option<KeywordList>) -> bool {
-    keywords
-        .as_ref()
-        .and_then(|keywords| keywords.get("ClassType"))
-        .and_then(|entry| entry.value())
-        .is_some_and(|value| value.print().eq_ignore_ascii_case("datatype"))
+    keyword_value(keywords, "ClassType").is_some_and(|value| value.eq_ignore_ascii_case("datatype"))
 }
 
 // A `[PropertyClass = ...]` value is either one class name or a parenthesized, comma-separated
@@ -458,16 +488,19 @@ fn class_list_text(value: &str) -> Vec<String> {
         .collect()
 }
 
-// A method's `[ PublicList = (a, b) ]`, each name at the keyword's own range.
-fn public_list_keyword(keywords: &Option<KeywordList>, olc: &OLC) -> Vec<WithRange<String>> {
-    let entry = keywords
+fn entries(keywords: &Option<KeywordList>) -> impl Iterator<Item = &cos::KeywordEntryWithSpace> {
+    keywords
         .iter()
         .flat_map(|keywords| keywords.entries.iter())
         .flat_map(|entries| entries.items.iter())
-        .find(|entry| {
-            matches!(&****entry, cos::KeywordEntry::Assign { keyword, .. }
+}
+
+// A method's `[ PublicList = (a, b) ]`, each name at the keyword's own range.
+fn public_list_keyword(keywords: &Option<KeywordList>, olc: &OLC) -> Vec<WithRange<String>> {
+    let entry = entries(keywords).find(|entry| {
+        matches!(&****entry, cos::KeywordEntry::Assign { keyword, .. }
                 if keyword.print().eq_ignore_ascii_case("PublicList"))
-        });
+    });
     let (Some(entry), Some(value)) = (entry, keyword_value(keywords, "PublicList")) else {
         return vec![];
     };
@@ -476,35 +509,28 @@ fn public_list_keyword(keywords: &Option<KeywordList>, olc: &OLC) -> Vec<WithRan
         .split(',')
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .map(|name| WithRange::new(name.to_string(), range(entry, olc)))
+        .map(|name| WithRange::new(name.to_string(), olc.range(entry)))
         .collect()
 }
 
 fn keyword_value(keywords: &Option<KeywordList>, name: &str) -> Option<String> {
-    keywords
-        .iter()
-        .flat_map(|keywords| keywords.entries.iter())
-        .flat_map(|entries| entries.items.iter())
-        .find_map(|entry| match &***entry {
-            cos::KeywordEntry::Assign { keyword, value, .. }
-                if keyword.print().eq_ignore_ascii_case(name) =>
-            {
-                Some(
-                    value
-                        .as_ref()
-                        .map(|value| value.print())
-                        .unwrap_or_default(),
-                )
-            }
-            _ => None,
-        })
+    entries(keywords).find_map(|entry| match &***entry {
+        cos::KeywordEntry::Assign { keyword, value, .. }
+            if keyword.print().eq_ignore_ascii_case(name) =>
+        {
+            Some(
+                value
+                    .as_ref()
+                    .map(|value| value.print())
+                    .unwrap_or_default(),
+            )
+        }
+        _ => None,
+    })
 }
 
 fn bare_keyword_names(keywords: &Option<KeywordList>) -> Vec<String> {
-    keywords
-        .iter()
-        .flat_map(|keywords| keywords.entries.iter())
-        .flat_map(|entries| entries.items.iter())
+    entries(keywords)
         .filter_map(|entry| match &***entry {
             cos::KeywordEntry::Assign {
                 keyword,
@@ -518,10 +544,7 @@ fn bare_keyword_names(keywords: &Option<KeywordList>) -> Vec<String> {
 }
 
 fn keyword_names(keywords: &Option<KeywordList>) -> Vec<String> {
-    keywords
-        .iter()
-        .flat_map(|keywords| keywords.entries.iter())
-        .flat_map(|entries| entries.items.iter())
+    entries(keywords)
         .map(|entry| {
             match &***entry {
                 cos::KeywordEntry::Assign { keyword, .. } => keyword,
@@ -616,19 +639,15 @@ impl TryFrom<&str> for ClassDetails {
                 .files
                 .classes()
                 .into_iter()
-                .map(|c| WithRange::new(c.print(), range(c, &olc)))
+                .map(|c| WithRange::new(c.print(), olc.range(c)))
                 .collect()
         });
         let include_range = cls
             .include
             .as_ref()
-            .map(|include| range(&include.files, &olc));
+            .map(|include| olc.range(&include.files));
         let deprecated = is_deprecated(&cls.keyword_list);
-        let keywords_without_value = cls
-            .keyword_list
-            .iter()
-            .flat_map(|keywords| keywords.entries.iter())
-            .flat_map(|entries| entries.items.iter())
+        let keywords_without_value = entries(&cls.keyword_list)
             .filter_map(|entry| match &***entry {
                 cos::KeywordEntry::Assign {
                     keyword,
@@ -638,7 +657,7 @@ impl TryFrom<&str> for ClassDetails {
                     // The keyword leads its entry.
                     let keyword = keyword.print();
                     let at = Range::new(entry.start, (), entry.start + keyword.len());
-                    Some(WithRange::new(keyword, range(&at, &olc)))
+                    Some(WithRange::new(keyword, olc.range(&at)))
                 }
                 _ => None,
             })
@@ -647,46 +666,18 @@ impl TryFrom<&str> for ClassDetails {
         let is_datatype = is_datatype(&cls.keyword_list);
         let inheritance_right = keyword_value(&cls.keyword_list, "Inheritance")
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("right"));
-        let language = cls
-            .keyword_list
-            .as_ref()
-            .and_then(|keywords| keywords.get("Language"))
-            .and_then(|entry| match entry {
-                cos::KeywordEntry::Assign { value, .. } => {
-                    MethodLanguage::parse(&value.print()).ok()
-                }
-                _ => None,
-            });
-        let mode = cls
-            .keyword_list
-            .as_ref()
-            .and_then(|keywords| keywords.get("CodeMode"))
-            .and_then(|entry| match entry {
-                cos::KeywordEntry::Assign { value, .. } => CodeMode::parse(&value.print()).ok(),
-                _ => None,
-            });
-        let property_class_names = cls
-            .keyword_list
-            .as_ref()
-            .and_then(|keywords| keywords.get("PropertyClass"))
-            .map(|entry| match entry {
-                cos::KeywordEntry::Assign { value, .. } => class_list_text(&value.print()),
-                _ => vec![],
-            })
-            .unwrap_or_default();
+        let language = keyword_value(&cls.keyword_list, "Language")
+            .and_then(|value| MethodLanguage::parse(&value).ok());
+        let mode = keyword_value(&cls.keyword_list, "CodeMode")
+            .and_then(|value| CodeMode::parse(&value).ok());
+        let property_class_names = keyword_value(&cls.keyword_list, "PropertyClass")
+            .map_or_else(Vec::new, |value| class_list_text(&value));
         let mut members = Members::default();
         for (before_member, member) in cls.member_list.members.into_item_sep() {
             let doc = extract_document_comments(before_member.0.as_str());
-            let range = range(&member, &olc);
-            let member_start = member.start;
-            let (name, deprecated, kind) = process_member(
-                &olc,
-                src,
-                member_start,
-                deprecated,
-                member,
-                class_procedure_block,
-            );
+            let range = olc.range(&member);
+            let (name, deprecated, kind) =
+                process_member(&olc, src, deprecated, member, class_procedure_block);
             members.insert(WithRange {
                 it: MemberDetails {
                     name,
@@ -719,12 +710,12 @@ impl TryFrom<&str> for ClassDetails {
 fn process_member(
     olc: &OLC,
     src: &str,
-    member_start: usize,
     deprecated: bool,
     member: Range<cos::Member>,
     class_procedure_block: bool,
 ) -> (WithRange<String>, bool, MemberKindSpecificDetails) {
-    let (member_name, deprecated, kind) = match member.into_inner() {
+    let member_start = member.start;
+    match member.into_inner() {
         cos::Member::ForeignKey(fk) => (
             with_range_name(&fk.name, olc),
             deprecated || is_deprecated(&fk.keywords),
@@ -790,7 +781,7 @@ fn process_member(
                 keywords,
                 ..
             } => (
-                with_range(name.0.as_ref().map(|_| name.name()), olc),
+                olc.with_range(name.0.as_ref().map(|_| name.name())),
                 deprecated || is_deprecated(&keywords),
                 MemberKindSpecificDetails::Property {
                     ty: as_type.as_deref().map(Ty::from),
@@ -806,7 +797,7 @@ fn process_member(
                 keywords,
                 ..
             } => (
-                with_range(name.0.as_ref().map(|_| name.name()), olc),
+                olc.with_range(name.0.as_ref().map(|_| name.name())),
                 deprecated || is_deprecated(&keywords),
                 MemberKindSpecificDetails::Property {
                     // A `many`/`children` relationship is the collection of the related objects.
@@ -846,8 +837,7 @@ fn process_member(
             deprecated,
             MemberKindSpecificDetails::XData,
         ),
-    };
-    (member_name, deprecated, kind)
+    }
 }
 
 fn method_kind(
@@ -862,45 +852,28 @@ fn method_kind(
     // `normal_args`/`out` stay ranged against the class's whole-document `olc`, like any other
     // member -- other methods' call-site diagnostics reference these same ranges directly.
     let header_text = &src[header_start..body_start];
-    let mut args = method
+    let args = method
         .formal_spec
         .iter()
         .flat_map(|spec| spec.formals().into_iter())
         .map(|formal| {
             if formal.variadic.is_none() {
-                Left(with_range(formal.as_ref().map(NormalArg::from), olc))
+                Left(olc.with_range(formal.as_ref().map(NormalArg::from)))
             } else {
-                Right(with_range(formal.as_ref().map(VariadicArg::from), olc))
+                Right(olc.with_range(formal.as_ref().map(VariadicArg::from)))
             }
         })
-        .collect::<Vec<_>>();
-    let variadic_arg = if args.last().is_some_and(|arg| arg.is_right()) {
-        args.pop().and_then(|arg| arg.right())
-    } else {
-        None
-    };
-    let normal_args = args.into_iter().filter_map(|arg| arg.left()).collect();
+        .collect();
+    let (normal_args, variadic_arg) = split_args(args);
     let out = method
         .return_type
         .as_ref()
         .map(|x| x.as_deref().map(Ty::from));
-    let out = with_range(out, olc);
-    let language = method
-        .keywords
-        .as_ref()
-        .and_then(|keywords| keywords.get("Language"))
-        .and_then(|entry| match entry {
-            cos::KeywordEntry::Assign { value, .. } => MethodLanguage::parse(&value.print()).ok(),
-            _ => None,
-        });
-    let mode = method
-        .keywords
-        .as_ref()
-        .and_then(|keywords| keywords.get("CodeMode"))
-        .and_then(|entry| match entry {
-            cos::KeywordEntry::Assign { value, .. } => CodeMode::parse(&value.print()).ok(),
-            _ => None,
-        });
+    let out = olc.with_range(out);
+    let language = keyword_value(&method.keywords, "Language")
+        .and_then(|value| MethodLanguage::parse(&value).ok());
+    let mode =
+        keyword_value(&method.keywords, "CodeMode").and_then(|value| CodeMode::parse(&value).ok());
     let procedure_block = procedure_block(&method.keywords)
         .unwrap_or(class_procedure_block)
         .then(|| public_list_keyword(&method.keywords, olc));
@@ -910,7 +883,7 @@ fn method_kind(
         .and_then(|keywords| keywords.get("Abstract"))
         .is_some_and(|entry| !matches!(entry, cos::KeywordEntry::Not { .. }));
     let raw_body = method.body.into_inner().into_inner();
-    let body = with_range(raw_body, olc).map(|x| x.print());
+    let body = olc.with_range(raw_body).map(|x| x.print());
     MemberKindSpecificDetails::MethodOrClassMethod(Box::new(MethodDetails {
         is_class_method,
         normal_args,
