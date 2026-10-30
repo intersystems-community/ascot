@@ -19,7 +19,7 @@ use tygr::{Grammar, IntoInner, OLC, Range};
 use tygr_objectscript::cos::{HMacro, MacroArg, MacroCallStruct, MacroedUnit};
 
 use crate::{
-    DocDetails, WorkspaceStruct,
+    DocDetails, DocKind, WorkspaceStruct,
     bindings::{self, Diagnostic, Location, Position},
     cos::{self, HMacroCommand, MacroRedex, Routine, RoutineWithMacro},
     tygr_error_to_diagnostics,
@@ -482,17 +482,12 @@ pub(crate) type Include = Arc<(String, String, Vec<Range<MacroedUnit>>)>;
 pub(crate) type FailedInclude = (String, Option<String>);
 
 impl WorkspaceStruct {
-    // Keeps `inc_index` in sync with `uri`'s latest tier-A header name — dropping the old
-    // name's entry first, in case it changed.
     // Resolves an `#include name`: an already-open `.inc` document first, then (if connected)
     // by fetching it from the server -- covers a system or shared include that isn't part of
     // the local editor workspace. Returns its uri (the host's own if it offered one, else a
     // synthetic placeholder just for origin-tracking), full text, and un-substituted macro units.
     fn resolve_include(&self, name: &str) -> Result<Option<Include>, String> {
-        if let Some(uri) = {
-            let this = &self;
-            this.inc_index.borrow().get(name).cloned()
-        } {
+        if let Some(uri) = self.resolve_uri(DocKind::Inc, name) {
             // `uri`'s own tier B -- just its header and un-substituted macro units, computed
             // and cached (via `ensure_details`) the moment it's first `#include`d.
             let Ok(DocDetails::Inc(parsed)) = self.ensure_details(&uri) else {
@@ -1277,12 +1272,7 @@ impl DoneList {
 
     fn note_lookup_failed(&mut self, name: String, reason: String, origin: &Origin) {
         let make = move |name, range| {
-            crate::check::TypeError::iris_lookup_failed(
-                crate::DocKind::Inc,
-                name,
-                reason.clone(),
-                range,
-            )
+            crate::check::TypeError::iris_lookup_failed(DocKind::Inc, name, reason.clone(), range)
         };
         self.note_unresolved(make, name, origin);
     }

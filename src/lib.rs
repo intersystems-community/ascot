@@ -174,7 +174,7 @@ pub struct WorkspaceStruct {
     // lookup once a class has been opened. A rename or removal is fixed up against `doc_cache`'s
     // own (old) entry directly, rather than keeping a uri -> name reverse index just for that.
     class_index: RefCell<HashMap<String, String>>,
-    // Same idea as `class_index`, but for `.inc` header names — see `resolve_inc_uri`.
+    // Same idea as `class_index`, but for `.inc` header names — see `resolve_uri`.
     inc_index: RefCell<HashMap<String, String>>,
     // Same idea as `class_index`, but for `ROUTINE` header names — see `resolve_rtn_uri`.
     rtn_index: RefCell<HashMap<String, String>>,
@@ -224,8 +224,7 @@ impl WorkspaceStruct {
             return vec![];
         };
         if kind == DocKind::Inc {
-            self.error_names.take();
-            self.implicit_definitions.take();
+            self.forget_include_definitions();
         }
         let name = match kind {
             DocKind::Cls => ClassDefinitionHeader::parse_prefix(&text)
@@ -265,8 +264,7 @@ impl WorkspaceStruct {
 
     fn remove_uri(&mut self, uri: &str) -> Vec<String> {
         if DocKind::from_uri(uri) == Some(DocKind::Inc) {
-            self.error_names.take();
-            self.implicit_definitions.take();
+            self.forget_include_definitions();
         }
         let mut affected = self.invalidate(uri);
         if let Some(Ok(cell)) = self.doc_cache.remove(uri) {
@@ -331,12 +329,16 @@ impl WorkspaceStruct {
         affected
     }
 
+    fn forget_include_definitions(&self) {
+        self.error_names.take();
+        self.implicit_definitions.take();
+    }
+
     // Everything built on the server is stale once it changes: checks, routine expansions (they
     // inline server includes) and the include caches. A style change stales only the checks.
     fn forget(&self, server: bool) -> Vec<String> {
         if server {
-            self.error_names.take();
-            self.implicit_definitions.take();
+            self.forget_include_definitions();
             self.iris_includes.borrow_mut().clear();
         }
         self.doc_cache
@@ -377,7 +379,7 @@ impl WorkspaceStruct {
     // The include file `name` (a `ROUTINE name [Type=INC]` header) open in the workspace, at
     // its header name. An include fetched from IRIS has no document to point at.
     pub(crate) fn inc_definition(&self, name: &str) -> Option<Location> {
-        let uri = self.inc_index.borrow().get(name).cloned()?;
+        let uri = self.resolve_uri(DocKind::Inc, name)?;
         let range = self.doc_cache.get(&uri)?.as_ref().ok()?.borrow().name.range;
         Some(Location::new(uri, range))
     }
@@ -400,6 +402,12 @@ impl WorkspaceStruct {
             DocKind::Rtn => &self.rtn_index,
             DocKind::Inc => &self.inc_index,
         }
+    }
+
+    // The open document of `kind` declaring `name`: a plain O(1) lookup, since `index_name` fills
+    // the index the moment a document opens -- `None` just means no open document has that name.
+    pub(crate) fn resolve_uri(&self, kind: DocKind, name: &str) -> Option<String> {
+        self.index_for(kind).borrow().get(name).cloned()
     }
 
     // Makes `uri` the owner of `name` (dropping its claim on `old_name`, if renamed). Returns
@@ -468,10 +476,8 @@ impl WorkspaceStruct {
         WorkspaceEnv::new(self)
     }
 
-    // `class_index` is populated for every open class immediately (see `insert`), so this is
-    // always a plain O(1) lookup -- `None` just means no open class has that name.
     pub(crate) fn resolve_cls_uri(&self, name: &str) -> Option<String> {
-        self.class_index.borrow().get(name).cloned()
+        self.resolve_uri(DocKind::Cls, name)
     }
 
     pub(crate) fn rtn_details(&self, uri: &str) -> Result<Arc<RtnDetails>, Diagnostic> {
@@ -531,10 +537,8 @@ impl WorkspaceStruct {
         details
     }
 
-    // `rtn_index` is populated for every open routine immediately (see `insert`), so this is
-    // always a plain O(1) lookup, same shape as `resolve_cls_uri`.
     pub(crate) fn resolve_rtn_uri(&self, name: &str) -> Option<String> {
-        self.rtn_index.borrow().get(name).cloned()
+        self.resolve_uri(DocKind::Rtn, name)
     }
 
     // Every open document of `kind` whose header name starts with `prefix`. Tier A alone decides
