@@ -211,12 +211,8 @@ fn class_infos(
     params: &[&str],
 ) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = format!(
-        "SELECT Name, Description, Super, IncludeCode, Abstract, ClassType, ClientDataType, \
-         ClientName, CompileAfter, DdlAllowed, DependsOn, Deprecated, Final, GeneratedBy, Hidden, \
-         Inheritance, _Language, LegacyInstanceContext, NoExtent, OdbcType, Owner, \
-         ProcedureBlock, PropertyClass, ServerOnly, Sharded, SoapBindingStyle, SoapBodyUse, \
-         SqlCategory, SqlRowIdName, SqlRowIdPrivate, SqlTableName, StorageStrategy, System, \
-         ViewQuery FROM %Dictionary.CompiledClass WHERE Name {filter}"
+        "SELECT Name, Description, Super, IncludeCode, ClassType, Deprecated, Inheritance, \
+         _Language, ProcedureBlock, PropertyClass FROM %Dictionary.CompiledClass WHERE Name {filter}"
     );
     let rows = conn.rows(&sql, params)?;
     if rows.is_empty() {
@@ -262,12 +258,6 @@ fn assemble(
             if cls.is_empty() {
                 return None;
             }
-            let flag = |key: &str| row.get(key).is_some_and(is_truthy);
-            let text = |key: &str| {
-                Some(str_field(key))
-                    .filter(|v| !v.is_empty())
-                    .map(str::to_string)
-            };
             let info = ClassInfo {
                 doc: str_field("Description").to_string(),
                 name: NameInfo {
@@ -281,38 +271,12 @@ fn assemble(
                 include: split_classes(str_field("IncludeCode")),
                 // The Atelier REST API has no uri scheme of its own to offer here.
                 uri: None,
-                abstract_: flag("Abstract"),
                 class_type: parsed::<cos::ClassType, _>(str_field("ClassType")),
-                client_data_type: parsed::<cos::ClientDataType, _>(str_field("ClientDataType")),
-                client_name: text("ClientName"),
-                compile_after: split_classes(str_field("CompileAfter")),
-                ddl_allowed: flag("DdlAllowed"),
-                depends_on: split_classes(str_field("DependsOn")),
-                deprecated: flag("Deprecated"),
-                final_: flag("Final"),
-                generated_by: text("GeneratedBy"),
-                hidden: flag("Hidden"),
+                deprecated: row.get("Deprecated").is_some_and(is_truthy),
                 inheritance: parsed::<cos::Inheritance, _>(str_field("Inheritance")),
                 language: parsed::<cos::MethodLanguage, _>(str_field("_Language")),
-                legacy_instance_context: flag("LegacyInstanceContext"),
-                no_extent: flag("NoExtent"),
-                odbc_type: parsed::<cos::OdbcType, _>(str_field("OdbcType")),
-                owner: text("Owner"),
                 procedure_block: row.get("ProcedureBlock").map(is_truthy),
                 property_class: split_classes(str_field("PropertyClass")),
-                server_only: flag("ServerOnly"),
-                sharded: flag("Sharded"),
-                soap_binding_style: parsed::<cos::SoapBindingStyle, _>(str_field(
-                    "SoapBindingStyle",
-                )),
-                soap_body_use: parsed::<cos::SoapBodyUse, _>(str_field("SoapBodyUse")),
-                sql_category: parsed::<cos::SqlCategory, _>(str_field("SqlCategory")),
-                sql_row_id_name: text("SqlRowIdName"),
-                sql_row_id_private: flag("SqlRowIdPrivate"),
-                sql_table_name: text("SqlTableName"),
-                storage_strategy: text("StorageStrategy"),
-                system: str_field("System").parse().ok(),
-                view_query: text("ViewQuery"),
             };
             Some((cls, info))
         })

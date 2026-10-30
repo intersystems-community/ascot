@@ -47,7 +47,6 @@ pub mod check;
 mod details;
 #[cfg(not(target_arch = "wasm32"))]
 mod iris;
-mod keywords;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lsp;
 mod macro_expand;
@@ -2026,41 +2025,31 @@ mod tests {
     #[test]
     fn a_class_declaration_is_read_whole() {
         let details = ClassDetails::try_from(
-            "/// Doc\nClass T.K Extends (%Persistent, %XML.Adaptor) [ Abstract, ClassType = persistent, ClientName = TK, CompileAfter = (A.B, C.D), DdlAllowed, DependsOn = E.F, Deprecated, Final, Hidden, Inheritance = right, Language = tsql, Not NoExtent, OdbcType = INTEGER, Owner = _SYSTEM, ProcedureBlock = 0, PropertyClass = (P.Q, R.S), SqlCategory = STRING, SqlRowIdName = RID, SqlRowIdPrivate, SqlTableName = T_K, StorageStrategy = Default, System = 3, Bogus, ClassType = persistent ]\n{\n}\n",
+            "/// Doc\nClass T.K Extends (%Persistent, %XML.Adaptor) [ Abstract, ClassType = persistent, ClientName = TK, CompileAfter = (A.B, C.D), DdlAllowed, Deprecated, Final, Inheritance = right, Language = tsql, Not NoExtent, Owner = _SYSTEM, ProcedureBlock = 0, PropertyClass = (P.Q, R.S), SqlTableName = T_K, System = 3, Bogus, ClassType = Persistent, Inheritance = middle, CompileAfter = , Finalfoo ]\n{\n}\n",
         )
         .unwrap();
         let k = &details.keywords;
-        assert!(
-            k.abstract_
-                && k.ddl_allowed
-                && k.deprecated
-                && k.final_
-                && k.hidden
-                && k.sql_row_id_private
-        );
-        assert!(!k.no_extent && !k.sharded && !k.server_only);
+        assert!(k.deprecated);
         assert_eq!(k.class_type, Some(bindings::ClassType::Persistent));
-        assert_eq!(k.client_name.as_deref(), Some("TK"));
-        assert_eq!(k.compile_after, ["A.B", "C.D"]);
-        assert_eq!(k.depends_on, ["E.F"]);
         assert_eq!(k.inheritance, Some(bindings::Inheritance::Right));
         assert_eq!(k.language, Some(bindings::Language::Tsql));
-        assert_eq!(k.odbc_type, Some(bindings::OdbcType::Integer));
-        assert_eq!(k.owner.as_deref(), Some("_SYSTEM"));
         assert_eq!(k.procedure_block, Some(false));
         assert_eq!(k.property_class, ["P.Q", "R.S"]);
-        assert_eq!(k.sql_category, Some(bindings::SqlCategory::String));
-        assert_eq!(k.sql_row_id_name.as_deref(), Some("RID"));
-        assert_eq!(k.sql_table_name.as_deref(), Some("T_K"));
-        assert_eq!(k.storage_strategy.as_deref(), Some("Default"));
-        assert_eq!(k.system, Some(3));
-        assert_eq!(k.client_data_type, None);
         let issues: Vec<_> = details
             .keyword_issues
             .iter()
-            .map(|issue| format!("{:?} {}", issue.it.why, issue.it.keyword))
+            .map(|issue| (issue.it.entry.as_str(), issue.it.without_value))
             .collect();
-        assert_eq!(issues, ["Unknown Bogus"]);
+        assert_eq!(
+            issues,
+            [
+                ("Bogus", false),
+                ("ClassType = Persistent", false),
+                ("Inheritance = middle", false),
+                ("CompileAfter = ", true),
+                ("Finalfoo", false),
+            ]
+        );
     }
 
     #[test]

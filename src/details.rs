@@ -19,7 +19,6 @@ use tygr::{Grammar, IntoInner, OLC, Prefix, Range, StringOf};
 use crate::bindings::{self, ArgMode};
 use crate::check::types::{NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty};
 use crate::cos::{self, AllowMacro, CodeMode, KeywordList, MethodLanguage};
-use crate::keywords::{self, ClassKeywords, class_list_text};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct WithRange<T> {
@@ -203,14 +202,43 @@ pub(crate) struct ClassDetails {
     // The `Import` packages, for resolving unqualified class names in this class.
     pub(crate) imports: Vec<String>,
     pub(crate) keywords: ClassKeywords,
-    // What in the keyword list didn't fit a class keyword; `check_cls` reports it.
-    pub(crate) keyword_issues: Vec<WithRange<keywords::Issue>>,
+    // What in the keyword list is no class keyword as written; `check_cls` reports it.
+    pub(crate) keyword_issues: Vec<WithRange<KeywordIssue>>,
     pub(crate) members: Members,
     pub(crate) include_names: Vec<WithRange<String>>,
     // The `Include (...)` clause's own span, for pointing a "cannot find include" diagnostic at
     // it instead of at the class's declaration -- `None` only when there's no `Include` at all,
     // in which case `include_names` is also empty and this is never read.
     pub(crate) include_range: Option<bindings::Range>,
+}
+
+// The class keywords the checker reads; the rest of the list is parsed and dropped.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ClassKeywords {
+    pub(crate) class_type: Option<bindings::ClassType>,
+    pub(crate) deprecated: bool,
+    pub(crate) inheritance: Option<bindings::Inheritance>,
+    pub(crate) language: Option<bindings::Language>,
+    pub(crate) procedure_block: Option<bool>,
+    pub(crate) property_class: Vec<String>,
+}
+
+// A keyword list entry that is no keyword of its declaration as written.
+pub(crate) struct KeywordIssue {
+    pub(crate) entry: String,
+    pub(crate) keyword: String,
+    // `Name = ` with nothing after, as in IRIS's own exports.
+    pub(crate) without_value: bool,
+}
+
+impl From<&cos::KeywordEntry> for KeywordIssue {
+    fn from(entry: &cos::KeywordEntry) -> Self {
+        Self {
+            entry: entry.print(),
+            keyword: entry.keyword().print(),
+            without_value: matches!(entry, cos::KeywordEntry::Assign { value: None, .. }),
+        }
+    }
 }
 
 pub struct MemberDetails {
@@ -476,7 +504,11 @@ fn is_deprecated(keywords: &Option<KeywordList>) -> bool {
 // A boolean keyword: `Not X`/`X = 0` turn it off, `X`/`X = 1` on. `None` when unspecified -- a
 // method's `ProcedureBlock` then follows its class, a class's defaults to on.
 fn keyword_flag(keywords: &Option<KeywordList>, name: &str) -> Option<bool> {
-    keywords.as_ref()?.get(name)?.flag().ok()
+    Some(match keywords.as_ref()?.get(name)? {
+        cos::KeywordEntry::Not { .. } => false,
+        cos::KeywordEntry::Assign { value, .. } => value.print().trim() != "0",
+        cos::KeywordEntry::Flag(_) => true,
+    })
 }
 
 // An index's `[ Type = ... ]`, as the grammar and `%Dictionary.CompiledIndex` spell it; `None` for
@@ -490,6 +522,21 @@ pub(crate) fn index_type(text: &str) -> Option<bindings::IndexType> {
         "key" => bindings::IndexType::Key,
         _ => return None,
     })
+}
+
+// A `(a, b)` or single-item list value.
+fn class_list_text(value: &str) -> Vec<String> {
+    let value = value.trim();
+    let value = value
+        .strip_prefix('(')
+        .and_then(|v| v.strip_suffix(')'))
+        .unwrap_or(value);
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn entries(keywords: &Option<KeywordList>) -> impl Iterator<Item = &cos::KeywordEntryWithSpace> {
@@ -647,7 +694,26 @@ impl TryFrom<&str> for ClassDetails {
             .include
             .as_ref()
             .map(|include| olc.range(&include.files));
-        let (keywords, keyword_issues) = ClassKeywords::read(&cls.keyword_list, &olc);
+        let mut keywords = ClassKeywords::default();
+        let mut keyword_issues = Vec::new();
+        for entry in cls.keyword_list.iter().flat_map(KeywordList::items) {
+            use cos::ClassKeyword::*;
+            match &***entry {
+                Left(ClassType(v)) => keywords.class_type = Some((&v.value).into()),
+                Left(Deprecated(flag)) => keywords.deprecated = flag.is_set(),
+                Left(Inheritance(v)) => keywords.inheritance = Some((&v.value).into()),
+                Left(Language(v)) => keywords.language = Some((&v.value).into()),
+                Left(ProcedureBlock(flag)) => keywords.procedure_block = Some(flag.is_set()),
+                Left(PropertyClass(v)) => {
+                    keywords.property_class = v.value.classes().iter().map(|c| c.print()).collect()
+                }
+                Left(_) => {}
+                Right(entry) => {
+                    let range = olc.range(&entry.keyword().0);
+                    keyword_issues.push(WithRange::new(KeywordIssue::from(entry), range));
+                }
+            }
+        }
         let class_procedure_block = keywords.procedure_block.unwrap_or(true);
         let mut members = Members::default();
         for (before_member, member) in cls.member_list.members.into_item_sep() {

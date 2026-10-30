@@ -3288,22 +3288,18 @@ pub(crate) fn check_rtn(
 
 // What IRIS does with a class keyword it can't place: refuse the class for a bad `ClassType`,
 // silently drop anything else.
-fn class_keyword_issue(issue: &WithRange<crate::keywords::Issue>) -> TypeError {
-    let keyword = issue.it.keyword.clone();
-    match &issue.it.why {
-        cos::KeywordIssue::Unknown => TypeError::unrecognized_class_keyword(keyword, issue.range),
-        cos::KeywordIssue::NoValue => TypeError::class_keyword_without_value(keyword, issue.range),
-        cos::KeywordIssue::BadValue { value, expected } => {
-            let strict = keyword.eq_ignore_ascii_case("ClassType");
-            TypeError::bad_keyword_value(
-                keyword,
-                value.clone(),
-                expected.clone(),
-                strict,
-                issue.range,
-            )
-        }
+fn class_keyword_issue(issue: &WithRange<details::KeywordIssue>) -> TypeError {
+    let details::KeywordIssue {
+        entry,
+        keyword,
+        without_value,
+    } = &issue.it;
+    if *without_value {
+        return TypeError::class_keyword_without_value(keyword.clone(), issue.range);
     }
+    let expected = cos::keyword_bnf::<cos::ClassKeyword>(keyword);
+    let strict = keyword.eq_ignore_ascii_case("ClassType");
+    TypeError::unrecognized_class_keyword(entry.clone(), expected, strict, issue.range)
 }
 
 pub(crate) fn check_cls(

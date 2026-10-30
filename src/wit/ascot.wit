@@ -145,35 +145,15 @@ interface common {
 
     enum class-type { datatype, dynamic, index, literal, persistent, serial, %stream, view }
 
-    enum client-data-type {
-        bigint, binary, binary-stream, boolean, character-stream, currency, date, decimal, double,
-        fdate, ftimestamp, handle, integer, %list, long-varchar, numeric, status, time, timestamp,
-        varchar,
-    }
-
-    enum odbc-type {
-        bigint, bit, date, double, integer, long-varbinary, long-varchar, numeric, result-set,
-        smallint, struct, time, timestamp, tinyint, varbinary, varchar,
-    }
-
-    enum sql-category {
-        date, double, fmdate, fmtimestamp, integer, mvdate, name, numeric, %string, time, timestamp,
-    }
-
     // `[ Inheritance = right ]`: a member several superclasses define comes from the rightmost
     // `extends` entry rather than the leftmost.
     enum inheritance { left, right }
 
     enum language { objectscript, python, tsql, ispl, javascript }
 
-    enum soap-binding-style { document, rpc }
-
-    enum soap-body-use { literal, encoded }
-
-    // A class as declared: its header, its own members, and every class keyword
-    // (https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class), a
-    // flag false and a value absent when not given. From IRIS the keywords are the compiled ones,
-    // defaults filled in.
+    // A class as declared: its header, its own members, and the class keywords ascot reads
+    // (https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class),
+    // absent when not given. From IRIS the keywords are the compiled ones, defaults filled in.
     record class-info {
         doc: string,
         name: name-info,
@@ -188,39 +168,16 @@ interface common {
         %include: list<string>,
         // A uri the host understands (e.g. `isfs://`), handed back for go-to-definition and hover.
         uri: option<string>,
-        abstract: bool,
         class-type: option<class-type>,
-        client-data-type: option<client-data-type>,
-        client-name: option<string>,
-        compile-after: list<string>,
-        ddl-allowed: bool,
-        depends-on: list<string>,
         deprecated: bool,
-        final: bool,
-        generated-by: option<string>,
-        hidden: bool,
         inheritance: option<inheritance>,
+        // The language of its methods unless they say otherwise; ObjectScript when absent.
         language: option<language>,
-        legacy-instance-context: bool,
-        no-extent: bool,
-        odbc-type: option<odbc-type>,
-        owner: option<string>,
         // Whether each ObjectScript method is a procedure block unless it says otherwise; on by
         // default.
         procedure-block: option<bool>,
         // Its own (not inherited) `[ PropertyClass = ... ]` classes.
         property-class: list<string>,
-        server-only: bool,
-        sharded: bool,
-        soap-binding-style: option<soap-binding-style>,
-        soap-body-use: option<soap-body-use>,
-        sql-category: option<sql-category>,
-        sql-row-id-name: option<string>,
-        sql-row-id-private: bool,
-        sql-table-name: option<string>,
-        storage-strategy: option<string>,
-        system: option<u32>,
-        view-query: option<string>,
     }
 
     record label-info {

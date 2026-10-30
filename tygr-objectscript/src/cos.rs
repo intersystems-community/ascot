@@ -2293,10 +2293,10 @@ impl<Entry: Grammar> KeywordList<Entry> {
     }
 }
 
-impl<Entry: Grammar + AsRef<KeywordEntry>> KeywordList<Entry> {
+impl KeywordList {
     pub fn get(&self, key: &str) -> Option<&KeywordEntry> {
         self.items()
-            .map(|entry| AsRef::<KeywordEntry>::as_ref(&***entry))
+            .map(|entry| &***entry)
             .find(|entry| entry.keyword().print().eq_ignore_ascii_case(key))
     }
 }
@@ -2307,6 +2307,11 @@ pub struct CommaWithSpace(Raw<(StringEq!(","), Space)>);
 
 // Ranged so a diagnostic about one keyword (`[ CompileAfter = , ... ]`) can point at it.
 pub type KeywordEntryWithSpace<Entry = KeywordEntry> = Range<Suffix<Entry, Space>>;
+
+/// An entry read as one of the declaration's keywords `K`, or kept as written when it is none.
+/// IRIS parses any entry here; what it does with one it doesn't know is the checker's to report,
+/// against `K`'s BNF (see `keyword_bnf`).
+pub type FailableKeyword<K> = Either<K, KeywordEntry>;
 
 #[derive(Grammar)]
 pub enum KeywordEntry {
@@ -2338,138 +2343,105 @@ impl KeywordEntry {
             _ => None,
         }
     }
-
-    // A flag's setting: `X` and `X = 1` on, `Not X` and `X = 0` off. IRIS takes any value but
-    // `0` as on, `Abstract = banana` included.
-    pub fn flag(&self) -> Result<bool, KeywordIssue> {
-        Ok(match self {
-            KeywordEntry::Flag(_) => true,
-            KeywordEntry::Not { .. } => false,
-            KeywordEntry::Assign {
-                value: Some(value), ..
-            } => value.print().trim() != "0",
-            KeywordEntry::Assign { value: None, .. } => return Err(KeywordIssue::NoValue),
-        })
-    }
-
-    // The value read as a `Shape`, or why it isn't one.
-    pub fn value_as<Shape: GrammarRule>(&self) -> Result<Shape, KeywordIssue> {
-        let value = self.value().ok_or(KeywordIssue::NoValue)?.print();
-        let value = value.trim();
-        Shape::parse(value).map_err(|_| KeywordIssue::BadValue {
-            value: value.to_string(),
-            expected: bnf_def::<Shape>(),
-        })
-    }
 }
 
-impl AsRef<KeywordEntry> for KeywordEntry {
-    fn as_ref(&self) -> &KeywordEntry {
-        self
-    }
+// Where a keyword's name or value ends: before anything but another name character, so that
+// `Final` doesn't match the start of `FinalFoo`, nor `persistent` of `persistentfoo`.
+#[derive(Grammar)]
+#[grammar(hidden)]
+pub struct KeywordEnd(NotFollowedBy<CharOf<IsKeywordValue>>);
+
+/// A flag keyword: `Name` and `Name = 1` set it, `Not Name` and `Name = 0` clear it.
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum Flag<Name> {
+    Not {
+        not: Raw<(StringEqCI!("Not"), Space1)>,
+        name: Name,
+        end: KeywordEnd,
+    },
+    Set {
+        name: Name,
+        end: KeywordEnd,
+        value: Option<(Raw<(Space, StringEq!("="), Space)>, FlagValue, KeywordEnd)>,
+        // `Abstract = banana` is no flag: fail here rather than leave `= banana` behind.
+        no_assign: NoAssign,
+    },
 }
-
-// A grammar's definition as BNF (`"left"i | "right"i`), to say what a value should have been.
-fn bnf_def<G: GrammarRule>() -> String {
-    let mut def = String::new();
-    G::to_bnf_def().format(&mut def).unwrap();
-    def
-}
-
-/// Why a keyword list entry isn't one of its declaration's keywords.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum KeywordIssue {
-    /// No keyword of the declaration's kind has this name.
-    Unknown,
-    /// A keyword that takes a value, written without one: `Language`, `Not Language`,
-    /// `CompileAfter = ,`.
-    NoValue,
-    /// A value outside the keyword's shape, whose BNF is `expected`.
-    BadValue { value: String, expected: String },
-}
-
-/// The keywords one kind of declaration takes, each read from an entry by name with its value in
-/// the keyword's own shape. `declaration_keywords!` defines them.
-pub trait DeclarationKeyword: Sized + 'static {
-    /// Every keyword's spelling, in the reference's order.
-    const NAMES: &'static [&'static str];
-    fn read(entry: &KeywordEntry) -> Result<Self, KeywordIssue>;
-}
-
-/// A keyword list entry as written and read as a `K` -- or why it is none. The reading can't fail
-/// the parse: IRIS parses any entry here, what it does with one it doesn't know is the checker's
-/// to report.
-pub struct Typed<K: DeclarationKeyword> {
-    pub entry: KeywordEntry,
-    pub keyword: Result<K, KeywordIssue>,
-}
-
-impl<K: DeclarationKeyword> AsRef<KeywordEntry> for Typed<K> {
-    fn as_ref(&self) -> &KeywordEntry {
-        &self.entry
-    }
-}
-
-impl<K: DeclarationKeyword> Grammar for Typed<K> {
-    type First = <KeywordEntry as Grammar>::First;
-
-    fn parse_at(input: &str, pos: usize, state: State) -> Option<(Self, usize)> {
-        let (entry, end) = KeywordEntry::parse_at(input, pos, state)?;
-        let keyword = K::read(&entry);
-        Some((Typed { entry, keyword }, end))
-    }
-
-    fn scan_at(input: &str, pos: usize, state: State) -> Option<usize> {
-        KeywordEntry::scan_at(input, pos, state)
-    }
-
-    fn print_to(&self, buf: &mut String) {
-        self.entry.print_to(buf)
-    }
-
-    fn to_bnf() -> bnf::Expr {
-        KeywordEntry::to_bnf()
-    }
-
-    fn fail_at(pos: usize, state: State) -> bool {
-        KeywordEntry::fail_at(pos, state)
-    }
-}
-
-/// Defines the keywords of one kind of declaration as an enum. A bare name is a flag
-/// (`Abstract`, `Not Abstract`, `Abstract = 0`) carried as its `bool`; `Name = Shape` takes a
-/// value, parsed as the `Shape` grammar and carried as is. The names, reading an entry and the
-/// BNF a misfit value is reported against all follow from that one list.
-macro_rules! declaration_keywords {
-    ($(#[$meta:meta])* $vis:vis enum $kind:ident { $($name:ident $(= $shape:ty)?),* $(,)? }) => {
-        $(#[$meta])*
-        $vis enum $kind {
-            $($name(declaration_keywords!(@payload $($shape)?)),)*
-        }
-
-        impl DeclarationKeyword for $kind {
-            const NAMES: &'static [&'static str] = &[$(stringify!($name)),*];
-
-            fn read(entry: &KeywordEntry) -> Result<Self, KeywordIssue> {
-                let name = entry.keyword().print();
-                $(if name.eq_ignore_ascii_case(stringify!($name)) {
-                    return declaration_keywords!(@read entry, Self::$name $(, $shape)?);
-                })*
-                Err(KeywordIssue::Unknown)
-            }
-        }
-    };
-    (@payload) => { bool };
-    (@payload $shape:ty) => { $shape };
-    (@read $entry:ident, $variant:path) => { $entry.flag().map($variant) };
-    (@read $entry:ident, $variant:path, $shape:ty) => { $entry.value_as::<$shape>().map($variant) };
-}
-
-// The values of the choice keywords below, spelled as IRIS accepts them: `ClassType` only in
-// lowercase, the rest in any case. Longer spellings first where one starts another (`Timestamp`,
-// `Time`): a choice takes the first alternative that matches, and a value must match whole.
 
 #[derive(Grammar)]
+#[grammar(hidden)]
+pub struct NoAssign(NotFollowedBy<Raw<(Space, StringEq!("="))>>);
+
+impl<Name: Grammar> Flag<Name> {
+    pub fn is_set(&self) -> bool {
+        match self {
+            Flag::Not { .. } => false,
+            Flag::Set { value, .. } => !matches!(value, Some((_, FlagValue::Off(_), _))),
+        }
+    }
+}
+
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum FlagValue {
+    Off(StringEq!("0")),
+    On(StringEq!("1")),
+}
+
+/// A keyword taking a value of the shape `Value`: `Name = value`.
+#[derive(Grammar)]
+#[grammar(inline)]
+pub struct Valued<Name, Value> {
+    name: Name,
+    end: KeywordEnd,
+    eq: Raw<(Space, StringEq!("="), Space)>,
+    pub value: Value,
+    after: KeywordEnd,
+}
+
+/// What a `K` keyword list entry may be, as BNF: the alternatives spelling `name`, or every one
+/// when none does.
+pub fn keyword_bnf<K: GrammarRule>(name: &str) -> String {
+    let mut def = String::new();
+    K::to_bnf_def().format(&mut def).unwrap();
+    let needle = format!("\"{name}\"").to_ascii_lowercase();
+    let named: Vec<&str> = top_level_alternatives(&def)
+        .filter(|alternative| alternative.to_ascii_lowercase().contains(&needle))
+        .collect();
+    if named.is_empty() {
+        def
+    } else {
+        named.join(" | ")
+    }
+}
+
+// The `a | b | c` of a BNF definition, split outside quotes and brackets.
+fn top_level_alternatives(def: &str) -> impl Iterator<Item = &str> {
+    let mut depth = 0i32;
+    let mut quoted = false;
+    let mut start = 0;
+    let mut alternatives = Vec::new();
+    for (i, ch) in def.char_indices() {
+        match ch {
+            '"' => quoted = !quoted,
+            '(' | '[' | '{' if !quoted => depth += 1,
+            ')' | ']' | '}' if !quoted => depth -= 1,
+            '|' if !quoted && depth == 0 => {
+                alternatives.push(def[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    alternatives.push(def[start..].trim());
+    alternatives.into_iter()
+}
+
+// Spelled as IRIS accepts them: `ClassType` in lowercase only, the rest in any case.
+
+#[derive(Grammar)]
+#[grammar(inline)]
 pub enum ClassType {
     Datatype(StringEq!("datatype")),
     Dynamic(StringEq!("dynamic")),
@@ -2482,116 +2454,46 @@ pub enum ClassType {
 }
 
 #[derive(Grammar)]
-pub enum ClientDataType {
-    Bigint(StringEqCI!("BIGINT")),
-    BinaryStream(StringEqCI!("BINARYSTREAM")),
-    Binary(StringEqCI!("BINARY")),
-    Boolean(StringEqCI!("BOOLEAN")),
-    CharacterStream(StringEqCI!("CHARACTERSTREAM")),
-    Currency(StringEqCI!("CURRENCY")),
-    Date(StringEqCI!("DATE")),
-    Decimal(StringEqCI!("DECIMAL")),
-    Double(StringEqCI!("DOUBLE")),
-    Fdate(StringEqCI!("FDATE")),
-    Ftimestamp(StringEqCI!("FTIMESTAMP")),
-    Handle(StringEqCI!("HANDLE")),
-    Integer(StringEqCI!("INTEGER")),
-    List(StringEqCI!("LIST")),
-    LongVarchar(StringEqCI!("LONGVARCHAR")),
-    Numeric(StringEqCI!("NUMERIC")),
-    Status(StringEqCI!("STATUS")),
-    Timestamp(StringEqCI!("TIMESTAMP")),
-    Time(StringEqCI!("TIME")),
-    Varchar(StringEqCI!("VARCHAR")),
-}
-
-#[derive(Grammar)]
-pub enum OdbcType {
-    Bigint(StringEqCI!("BIGINT")),
-    Bit(StringEqCI!("BIT")),
-    Date(StringEqCI!("DATE")),
-    Double(StringEqCI!("DOUBLE")),
-    Integer(StringEqCI!("INTEGER")),
-    LongVarbinary(StringEqCI!("LONGVARBINARY")),
-    LongVarchar(StringEqCI!("LONGVARCHAR")),
-    Numeric(StringEqCI!("NUMERIC")),
-    ResultSet(StringEqCI!("RESULTSET")),
-    Smallint(StringEqCI!("SMALLINT")),
-    Struct(StringEqCI!("STRUCT")),
-    Timestamp(StringEqCI!("TIMESTAMP")),
-    Time(StringEqCI!("TIME")),
-    Tinyint(StringEqCI!("TINYINT")),
-    Varbinary(StringEqCI!("VARBINARY")),
-    Varchar(StringEqCI!("VARCHAR")),
-}
-
-#[derive(Grammar)]
-pub enum SqlCategory {
-    Date(StringEqCI!("DATE")),
-    Double(StringEqCI!("DOUBLE")),
-    Fmdate(StringEqCI!("FMDATE")),
-    Fmtimestamp(StringEqCI!("FMTIMESTAMP")),
-    Integer(StringEqCI!("INTEGER")),
-    Mvdate(StringEqCI!("MVDATE")),
-    Name(StringEqCI!("NAME")),
-    Numeric(StringEqCI!("NUMERIC")),
-    String(StringEqCI!("STRING")),
-    Timestamp(StringEqCI!("TIMESTAMP")),
-    Time(StringEqCI!("TIME")),
-}
-
-#[derive(Grammar)]
+#[grammar(inline)]
 pub enum Inheritance {
     Left(StringEqCI!("left")),
     Right(StringEqCI!("right")),
 }
 
+/// A class's keywords (`https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class`):
+/// a value the checker reads has its own shape, any other is taken as written.
 #[derive(Grammar)]
-pub enum SoapBindingStyle {
-    Document(StringEqCI!("document")),
-    Rpc(StringEqCI!("rpc")),
-}
-
-#[derive(Grammar)]
-pub enum SoapBodyUse {
-    Literal(StringEqCI!("literal")),
-    Encoded(StringEqCI!("encoded")),
-}
-
-declaration_keywords! {
-    /// A class's keywords (`https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class`).
-    pub enum ClassKeyword {
-        Abstract,
-        ClassType = ClassType,
-        ClientDataType = ClientDataType,
-        ClientName = KeywordValue,
-        CompileAfter = ClassList,
-        DdlAllowed,
-        DependsOn = ClassList,
-        Deprecated,
-        Final,
-        GeneratedBy = KeywordValue,
-        Hidden,
-        Inheritance = Inheritance,
-        Language = MethodLanguage,
-        LegacyInstanceContext,
-        NoExtent,
-        OdbcType = OdbcType,
-        Owner = KeywordValue,
-        ProcedureBlock,
-        PropertyClass = ClassList,
-        ServerOnly,
-        Sharded,
-        SoapBindingStyle = SoapBindingStyle,
-        SoapBodyUse = SoapBodyUse,
-        SqlCategory = SqlCategory,
-        SqlRowIdName = KeywordValue,
-        SqlRowIdPrivate,
-        SqlTableName = KeywordValue,
-        StorageStrategy = KeywordValue,
-        System = Digits,
-        ViewQuery = KeywordValue,
-    }
+pub enum ClassKeyword {
+    Abstract(Flag<StringEqCI!("Abstract")>),
+    ClassType(Valued<StringEqCI!("ClassType"), ClassType>),
+    ClientDataType(Valued<StringEqCI!("ClientDataType"), KeywordValue>),
+    ClientName(Valued<StringEqCI!("ClientName"), KeywordValue>),
+    CompileAfter(Valued<StringEqCI!("CompileAfter"), KeywordValue>),
+    DdlAllowed(Flag<StringEqCI!("DdlAllowed")>),
+    DependsOn(Valued<StringEqCI!("DependsOn"), KeywordValue>),
+    Deprecated(Flag<StringEqCI!("Deprecated")>),
+    Final(Flag<StringEqCI!("Final")>),
+    GeneratedBy(Valued<StringEqCI!("GeneratedBy"), KeywordValue>),
+    Hidden(Flag<StringEqCI!("Hidden")>),
+    Inheritance(Valued<StringEqCI!("Inheritance"), Inheritance>),
+    Language(Valued<StringEqCI!("Language"), MethodLanguage>),
+    LegacyInstanceContext(Flag<StringEqCI!("LegacyInstanceContext")>),
+    NoExtent(Flag<StringEqCI!("NoExtent")>),
+    OdbcType(Valued<StringEqCI!("OdbcType"), KeywordValue>),
+    Owner(Valued<StringEqCI!("Owner"), KeywordValue>),
+    ProcedureBlock(Flag<StringEqCI!("ProcedureBlock")>),
+    PropertyClass(Valued<StringEqCI!("PropertyClass"), ClassList>),
+    ServerOnly(Flag<StringEqCI!("ServerOnly")>),
+    Sharded(Flag<StringEqCI!("Sharded")>),
+    SoapBindingStyle(Valued<StringEqCI!("SoapBindingStyle"), KeywordValue>),
+    SoapBodyUse(Valued<StringEqCI!("SoapBodyUse"), KeywordValue>),
+    SqlCategory(Valued<StringEqCI!("SqlCategory"), KeywordValue>),
+    SqlRowIdName(Valued<StringEqCI!("SqlRowIdName"), KeywordValue>),
+    SqlRowIdPrivate(Flag<StringEqCI!("SqlRowIdPrivate")>),
+    SqlTableName(Valued<StringEqCI!("SqlTableName"), KeywordValue>),
+    StorageStrategy(Valued<StringEqCI!("StorageStrategy"), KeywordValue>),
+    System(Valued<StringEqCI!("System"), KeywordValue>),
+    ViewQuery(Valued<StringEqCI!("ViewQuery"), KeywordValue>),
 }
 
 #[derive(Grammar)]
@@ -3260,7 +3162,7 @@ pub struct ClassDefinitionHeader {
 pub struct ClassDefinition {
     header: ClassDefinitionHeader,
     pub extends: Option<Extends>,
-    pub keyword_list: Option<KeywordList<Typed<ClassKeyword>>>,
+    pub keyword_list: Option<KeywordList<FailableKeyword<ClassKeyword>>>,
     pub member_list: MemberList,
     pub gap_end: ImportIncludeGap,
 }

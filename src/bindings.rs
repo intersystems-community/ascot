@@ -39,7 +39,7 @@ use std::ops::Deref;
 pub use wit_bind::*;
 
 use crate::{
-    bindings, check,
+    bindings, check, cos,
     details::{self, MethodDetails, WithRange},
 };
 
@@ -289,85 +289,70 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
             // `exported.workspace.query-cls` already returns this class's real uri as its own
             // tuple element -- redundant to repeat it here.
             uri: None,
-            abstract_: k.abstract_,
             class_type: k.class_type,
-            client_data_type: k.client_data_type,
-            client_name: k.client_name.clone(),
-            compile_after: k.compile_after.clone(),
-            ddl_allowed: k.ddl_allowed,
-            depends_on: k.depends_on.clone(),
             deprecated: k.deprecated,
-            final_: k.final_,
-            generated_by: k.generated_by.clone(),
-            hidden: k.hidden,
             inheritance: k.inheritance,
             language: k.language,
-            legacy_instance_context: k.legacy_instance_context,
-            no_extent: k.no_extent,
-            odbc_type: k.odbc_type,
-            owner: k.owner.clone(),
             procedure_block: k.procedure_block,
             property_class: k.property_class.clone(),
-            server_only: k.server_only,
-            sharded: k.sharded,
-            soap_binding_style: k.soap_binding_style,
-            soap_body_use: k.soap_body_use,
-            sql_category: k.sql_category,
-            sql_row_id_name: k.sql_row_id_name.clone(),
-            sql_row_id_private: k.sql_row_id_private,
-            sql_table_name: k.sql_table_name.clone(),
-            storage_strategy: k.storage_strategy.clone(),
-            system: k.system,
-            view_query: k.view_query.clone(),
         }
     }
 }
 
-// A class with nothing declared, for a test's host to build on.
 impl Default for wit_bind::ClassInfo {
     fn default() -> Self {
         Self {
             doc: String::new(),
-            name: wit_bind::NameInfo {
-                before: wit_bind::Position::default(),
+            name: NameInfo {
+                before: Position {
+                    line: 0,
+                    character: 0,
+                },
                 content: String::new(),
-                after: wit_bind::Position::default(),
+                after: Position {
+                    line: 0,
+                    character: 0,
+                },
             },
             extends: vec![],
             storage: None,
             members: vec![],
             include: vec![],
             uri: None,
-            abstract_: false,
             class_type: None,
-            client_data_type: None,
-            client_name: None,
-            compile_after: vec![],
-            ddl_allowed: false,
-            depends_on: vec![],
             deprecated: false,
-            final_: false,
-            generated_by: None,
-            hidden: false,
             inheritance: None,
             language: None,
-            legacy_instance_context: false,
-            no_extent: false,
-            odbc_type: None,
-            owner: None,
             procedure_block: None,
             property_class: vec![],
-            server_only: false,
-            sharded: false,
-            soap_binding_style: None,
-            soap_body_use: None,
-            sql_category: None,
-            sql_row_id_name: None,
-            sql_row_id_private: false,
-            sql_table_name: None,
-            storage_strategy: None,
-            system: None,
-            view_query: None,
+        }
+    }
+}
+
+// The grammar's spellings to the host's enums, variant for variant.
+macro_rules! same_variants {
+    ($($t:ident { $($v:ident),* $(,)? })*) => {$(
+        impl From<&cos::$t> for $t {
+            fn from(value: &cos::$t) -> Self {
+                match value { $(cos::$t::$v(_) => Self::$v,)* }
+            }
+        }
+    )*};
+}
+
+same_variants! {
+    ClassType { Datatype, Dynamic, Index, Literal, Persistent, Serial, Stream, View }
+    Inheritance { Left, Right }
+}
+
+impl From<&cos::MethodLanguage> for Language {
+    fn from(language: &cos::MethodLanguage) -> Self {
+        match language {
+            cos::MethodLanguage::ObjectScript(_) => Self::Objectscript,
+            cos::MethodLanguage::Python(_) => Self::Python,
+            cos::MethodLanguage::TSQL(_) => Self::Tsql,
+            cos::MethodLanguage::ISPL(_) => Self::Ispl,
+            cos::MethodLanguage::JavaScript(_) => Self::Javascript,
         }
     }
 }

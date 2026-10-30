@@ -526,21 +526,16 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Class keyword '{keyword}' has no value"]
     ClassKeywordWithoutValue { keyword: String },
-    /// IRIS compiles a class whose keyword list names something it doesn't know, and silently drops it.
+    /// An entry IRIS compiles past and drops: not a class keyword, or a value outside one's shape.
     #[code = "A6203"]
     #[severity = Warning]
-    #[message = "'{keyword}' is not a class keyword, so IRIS ignores it; available: {available}"]
-    UnrecognizedClassKeyword { keyword: String, available: Available },
-    /// A value outside a keyword's shape that IRIS refuses to compile (`ClassType`).
+    #[message = "'{entry}' is not a class keyword IRIS honors, so it is ignored; expected {expected}"]
+    UnrecognizedClassKeyword { entry: String, expected: String },
+    /// A `ClassType` IRIS refuses to compile.
     #[code = "A7718"]
     #[severity = Error]
-    #[message = "'{value}' is not a value of '{keyword}'; expected {expected}"]
-    InvalidKeywordValue { keyword: String, value: String, expected: String },
-    /// A value outside a keyword's shape that IRIS compiles and silently ignores.
-    #[code = "A5917"]
-    #[severity = Warning]
-    #[message = "'{value}' is not a value of '{keyword}', so IRIS ignores it; expected {expected}"]
-    IgnoredKeywordValue { keyword: String, value: String, expected: String },
+    #[message = "'{entry}' is not a class keyword IRIS accepts; expected {expected}"]
+    InvalidClassKeyword { entry: String, expected: String },
     #[code = "A9322"]
     #[severity = Error]
     #[message = "'{keyword}' is not a recognized property keyword; available: {available}"]
@@ -1201,36 +1196,16 @@ impl TypeError {
         Self::at(TypeErrorKind::NewInProcedureBlock { name }, range)
     }
 
-    pub fn unrecognized_class_keyword(keyword: String, range: Range) -> Self {
-        use crate::cos::{ClassKeyword, DeclarationKeyword};
-        Self::at(
-            TypeErrorKind::UnrecognizedClassKeyword {
-                keyword,
-                available: Available(ClassKeyword::NAMES),
-            },
-            range,
-        )
-    }
-
-    pub fn bad_keyword_value(
-        keyword: String,
-        value: String,
+    pub fn unrecognized_class_keyword(
+        entry: String,
         expected: String,
         strict: bool,
         range: Range,
     ) -> Self {
         let kind = if strict {
-            TypeErrorKind::InvalidKeywordValue {
-                keyword,
-                value,
-                expected,
-            }
+            TypeErrorKind::InvalidClassKeyword { entry, expected }
         } else {
-            TypeErrorKind::IgnoredKeywordValue {
-                keyword,
-                value,
-                expected,
-            }
+            TypeErrorKind::UnrecognizedClassKeyword { entry, expected }
         };
         Self::at(kind, range)
     }
