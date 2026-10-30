@@ -47,6 +47,7 @@ pub mod check;
 mod details;
 #[cfg(not(target_arch = "wasm32"))]
 mod iris;
+mod keywords;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lsp;
 mod macro_expand;
@@ -966,7 +967,7 @@ impl bindings::GuestWorkspace for Workspace {
                     root: bindings::SymbolInfo {
                         name: details.name.to_string(),
                         kind: bindings::SymbolKind::Class,
-                        deprecated: details.deprecated,
+                        deprecated: details.keywords.deprecated,
                         range: full_range(&text),
                         selection_range: details.name.range,
                     },
@@ -1380,15 +1381,12 @@ mod tests {
                     content: String::new(),
                     after: zero,
                 },
-                extends: vec![],
-                inheritance_right: false,
-                storage: None,
-                deprecated: false,
                 members: self.mem.clone().into_iter().collect(),
-                property_class_names: vec![],
-                includes: vec![],
-                is_datatype: self.is_datatype,
-                uri: None,
+                class_type: self
+                    .is_datatype
+                    .filter(|yes| *yes)
+                    .map(|_| bindings::ClassType::Datatype),
+                ..Default::default()
             }))
         }
         fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
@@ -1918,15 +1916,8 @@ mod tests {
                         content: cls.to_string(),
                         after: zero,
                     },
-                    extends: vec![],
-                    inheritance_right: false,
-                    storage: None,
-                    deprecated: false,
-                    members: vec![],
-                    property_class_names: vec![],
-                    includes: vec![],
-                    is_datatype: Some(false),
                     uri: Some("mock:///External.cls".to_string()),
+                    ..Default::default()
                 }))
             }
             fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
@@ -2030,6 +2021,46 @@ mod tests {
                 (Error, "Too many arguments".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn a_class_declaration_is_read_whole() {
+        let details = ClassDetails::try_from(
+            "/// Doc\nClass T.K Extends (%Persistent, %XML.Adaptor) [ Abstract, ClassType = persistent, ClientName = TK, CompileAfter = (A.B, C.D), DdlAllowed, DependsOn = E.F, Deprecated, Final, Hidden, Inheritance = right, Language = tsql, Not NoExtent, OdbcType = INTEGER, Owner = _SYSTEM, ProcedureBlock = 0, PropertyClass = (P.Q, R.S), SqlCategory = STRING, SqlRowIdName = RID, SqlRowIdPrivate, SqlTableName = T_K, StorageStrategy = Default, System = 3, Bogus, ClassType = persistent ]\n{\n}\n",
+        )
+        .unwrap();
+        let k = &details.keywords;
+        assert!(
+            k.abstract_
+                && k.ddl_allowed
+                && k.deprecated
+                && k.final_
+                && k.hidden
+                && k.sql_row_id_private
+        );
+        assert!(!k.no_extent && !k.sharded && !k.server_only);
+        assert_eq!(k.class_type, Some(bindings::ClassType::Persistent));
+        assert_eq!(k.client_name.as_deref(), Some("TK"));
+        assert_eq!(k.compile_after, ["A.B", "C.D"]);
+        assert_eq!(k.depends_on, ["E.F"]);
+        assert_eq!(k.inheritance, Some(bindings::Inheritance::Right));
+        assert_eq!(k.language, Some(bindings::Language::Tsql));
+        assert_eq!(k.odbc_type, Some(bindings::OdbcType::Integer));
+        assert_eq!(k.owner.as_deref(), Some("_SYSTEM"));
+        assert_eq!(k.procedure_block, Some(false));
+        assert_eq!(k.property_class, ["P.Q", "R.S"]);
+        assert_eq!(k.sql_category, Some(bindings::SqlCategory::String));
+        assert_eq!(k.sql_row_id_name.as_deref(), Some("RID"));
+        assert_eq!(k.sql_table_name.as_deref(), Some("T_K"));
+        assert_eq!(k.storage_strategy.as_deref(), Some("Default"));
+        assert_eq!(k.system, Some(3));
+        assert_eq!(k.client_data_type, None);
+        let issues: Vec<_> = details
+            .keyword_issues
+            .iter()
+            .map(|issue| format!("{:?} {}", issue.it.why, issue.it.keyword))
+            .collect();
+        assert_eq!(issues, ["Unknown Bogus"]);
     }
 
     #[test]

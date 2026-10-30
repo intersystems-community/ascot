@@ -349,11 +349,15 @@ impl MethodDetails {
     }
 
     fn check(&self, name: &str, env: &DocumentEnv, cls: &ClassDocument) -> Result<(), TypeError> {
-        let language = self.language.as_ref().or(cls.language);
-        let mode = self.mode.as_ref().or(cls.mode);
+        let language = self
+            .language
+            .as_ref()
+            .map(bindings::Language::from)
+            .or(cls.language);
+        let mode = self.mode.as_ref();
         // The body isn't ObjectScript, so argument-usage tracking (e.g. "assigned but never
         // read") doesn't apply — nothing below this ever sees the body to mark anything read.
-        if let Some(cos::MethodLanguage::Python(..)) = language {
+        if language == Some(bindings::Language::Python) {
             return Ok(());
         }
         let body_macros = cls.body_macros.borrow().clone();
@@ -503,7 +507,7 @@ impl<T: CheckCommandInner> CheckCommand for Range<T> {
 }
 
 struct MethodBody<'a> {
-    language: Option<&'a cos::MethodLanguage>,
+    language: Option<bindings::Language>,
     mode: Option<&'a cos::CodeMode>,
     body: WithRange<&'a String>,
 }
@@ -512,7 +516,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
         match (&self.language, &self.mode, &self.body) {
             (
-                Option::None | Option::Some(cos::MethodLanguage::ObjectScript(..)),
+                Option::None | Option::Some(bindings::Language::Objectscript),
                 Option::None | Option::Some(cos::CodeMode::Code(..)),
                 body,
             ) => {
@@ -521,7 +525,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 check_block_body(&body, env, flow, true)
             }
             (
-                Option::None | Option::Some(cos::MethodLanguage::ObjectScript(..)),
+                Option::None | Option::Some(bindings::Language::Objectscript),
                 Option::Some(cos::CodeMode::Expression(..)),
                 body,
             ) => {
@@ -3282,14 +3286,33 @@ pub(crate) fn check_rtn(
     diagnostics
 }
 
+// What IRIS does with a class keyword it can't place: refuse the class for a bad `ClassType`,
+// silently drop anything else.
+fn class_keyword_issue(issue: &WithRange<crate::keywords::Issue>) -> TypeError {
+    let keyword = issue.it.keyword.clone();
+    match &issue.it.why {
+        cos::KeywordIssue::Unknown => TypeError::unrecognized_class_keyword(keyword, issue.range),
+        cos::KeywordIssue::NoValue => TypeError::class_keyword_without_value(keyword, issue.range),
+        cos::KeywordIssue::BadValue { value, expected } => {
+            let strict = keyword.eq_ignore_ascii_case("ClassType");
+            TypeError::bad_keyword_value(
+                keyword,
+                value.clone(),
+                expected.clone(),
+                strict,
+                issue.range,
+            )
+        }
+    }
+}
+
 pub(crate) fn check_cls(
     env: &DocumentEnv,
     cls: &details::ClassDetails,
 ) -> Vec<bindings::Diagnostic> {
     let mut diagnostics = Vec::new();
-    for keyword in &cls.keywords_without_value {
-        diagnostics
-            .push(TypeError::class_keyword_without_value(keyword.it.clone(), keyword.range).into());
+    for issue in &cls.keyword_issues {
+        diagnostics.push(class_keyword_issue(issue).into());
     }
     // Available to every class without an explicit `Include` (see `CLASS_IMPLICIT_INCLUDES`) --
     // resolved silently (no diagnostic on failure, unlike an explicit `Include`).
@@ -3322,8 +3345,7 @@ pub(crate) fn check_cls(
     }
     let doc = ClassDocument::new(
         cls.name.it.to_string().into(),
-        cls.language.as_ref(),
-        cls.mode.as_ref(),
+        cls.keywords.language,
         macro_definitions,
     );
     for member in &cls.members.duplicates {

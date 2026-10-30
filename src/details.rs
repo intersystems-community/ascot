@@ -19,6 +19,7 @@ use tygr::{Grammar, IntoInner, OLC, Prefix, Range, StringOf};
 use crate::bindings::{self, ArgMode};
 use crate::check::types::{NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty};
 use crate::cos::{self, AllowMacro, CodeMode, KeywordList, MethodLanguage};
+use crate::keywords::{self, ClassKeywords, class_list_text};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct WithRange<T> {
@@ -201,26 +202,15 @@ pub(crate) struct ClassDetails {
     pub(crate) extends: Vec<String>,
     // The `Import` packages, for resolving unqualified class names in this class.
     pub(crate) imports: Vec<String>,
-    pub(crate) deprecated: bool,
-    pub(crate) is_datatype: bool,
-    // `[ Inheritance = right ]`: a member several superclasses define comes from the rightmost
-    // `Extends` entry rather than the leftmost.
-    pub(crate) inheritance_right: bool,
-    pub(crate) language: Option<MethodLanguage>,
-    pub(crate) mode: Option<CodeMode>,
+    pub(crate) keywords: ClassKeywords,
+    // What in the keyword list didn't fit a class keyword; `check_cls` reports it.
+    pub(crate) keyword_issues: Vec<WithRange<keywords::Issue>>,
     pub(crate) members: Members,
     pub(crate) include_names: Vec<WithRange<String>>,
     // The `Include (...)` clause's own span, for pointing a "cannot find include" diagnostic at
     // it instead of at the class's declaration -- `None` only when there's no `Include` at all,
     // in which case `include_names` is also empty and this is never read.
     pub(crate) include_range: Option<bindings::Range>,
-    // `[ CompileAfter = , ... ]`: parsed, reported by `check_cls`.
-    pub(crate) keywords_without_value: Vec<WithRange<String>>,
-    // From this class's own `[PropertyClass = ...]` keyword -- each listed class's own
-    // `Parameter`s become valid property type-parameters for every property in this class *and*
-    // its subclasses (see `check::env::WorkspaceEnv::property_classes`, which walks
-    // `extends` to accumulate every ancestor's own list too).
-    pub(crate) property_class_names: Vec<String>,
 }
 
 pub struct MemberDetails {
@@ -486,11 +476,7 @@ fn is_deprecated(keywords: &Option<KeywordList>) -> bool {
 // A boolean keyword: `Not X`/`X = 0` turn it off, `X`/`X = 1` on. `None` when unspecified -- a
 // method's `ProcedureBlock` then follows its class, a class's defaults to on.
 fn keyword_flag(keywords: &Option<KeywordList>, name: &str) -> Option<bool> {
-    Some(match keywords.as_ref()?.get(name)? {
-        cos::KeywordEntry::Not { .. } => false,
-        cos::KeywordEntry::Assign { value, .. } => value.print().trim() != "0",
-        cos::KeywordEntry::Flag(_) => true,
-    })
+    keywords.as_ref()?.get(name)?.flag().ok()
 }
 
 // An index's `[ Type = ... ]`, as the grammar and `%Dictionary.CompiledIndex` spell it; `None` for
@@ -506,31 +492,8 @@ pub(crate) fn index_type(text: &str) -> Option<bindings::IndexType> {
     })
 }
 
-fn is_datatype(keywords: &Option<KeywordList>) -> bool {
-    keyword_value(keywords, "ClassType").is_some_and(|value| value.eq_ignore_ascii_case("datatype"))
-}
-
-// A `[PropertyClass = ...]` value is either one class name or a parenthesized, comma-separated
-// list of them.
-fn class_list_text(value: &str) -> Vec<String> {
-    let value = value.trim();
-    let value = value
-        .strip_prefix('(')
-        .and_then(|v| v.strip_suffix(')'))
-        .unwrap_or(value);
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
 fn entries(keywords: &Option<KeywordList>) -> impl Iterator<Item = &cos::KeywordEntryWithSpace> {
-    keywords
-        .iter()
-        .flat_map(|keywords| keywords.entries.iter())
-        .flat_map(|entries| entries.items.iter())
+    keywords.iter().flat_map(KeywordList::items)
 }
 
 // A method's `[ PublicList = (a, b) ]`, each name at the keyword's own range.
@@ -684,39 +647,19 @@ impl TryFrom<&str> for ClassDetails {
             .include
             .as_ref()
             .map(|include| olc.range(&include.files));
-        let deprecated = is_deprecated(&cls.keyword_list);
-        let keywords_without_value = entries(&cls.keyword_list)
-            .filter_map(|entry| match &***entry {
-                cos::KeywordEntry::Assign {
-                    keyword,
-                    value: None,
-                    ..
-                } => {
-                    // The keyword leads its entry.
-                    let keyword = keyword.print();
-                    let at = Range::new(entry.start, (), entry.start + keyword.len());
-                    Some(WithRange::new(keyword, olc.range(&at)))
-                }
-                _ => None,
-            })
-            .collect();
-        let class_procedure_block =
-            keyword_flag(&cls.keyword_list, "ProcedureBlock").unwrap_or(true);
-        let is_datatype = is_datatype(&cls.keyword_list);
-        let inheritance_right = keyword_value(&cls.keyword_list, "Inheritance")
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("right"));
-        let language = keyword_value(&cls.keyword_list, "Language")
-            .and_then(|value| MethodLanguage::parse(&value).ok());
-        let mode = keyword_value(&cls.keyword_list, "CodeMode")
-            .and_then(|value| CodeMode::parse(&value).ok());
-        let property_class_names = keyword_value(&cls.keyword_list, "PropertyClass")
-            .map_or_else(Vec::new, |value| class_list_text(&value));
+        let (keywords, keyword_issues) = ClassKeywords::read(&cls.keyword_list, &olc);
+        let class_procedure_block = keywords.procedure_block.unwrap_or(true);
         let mut members = Members::default();
         for (before_member, member) in cls.member_list.members.into_item_sep() {
             let doc = extract_document_comments(before_member.0.as_str());
             let range = olc.range(&member);
-            let (name, deprecated, kind) =
-                process_member(&olc, src, deprecated, member, class_procedure_block);
+            let (name, deprecated, kind) = process_member(
+                &olc,
+                src,
+                keywords.deprecated,
+                member,
+                class_procedure_block,
+            );
             members.insert(WithRange {
                 it: MemberDetails {
                     name,
@@ -731,17 +674,12 @@ impl TryFrom<&str> for ClassDetails {
             doc,
             name,
             extends,
-            deprecated,
-            is_datatype,
-            inheritance_right,
-            language,
-            mode,
+            keywords,
+            keyword_issues,
             members,
             include_names,
             imports,
-            keywords_without_value,
             include_range,
-            property_class_names,
         })
     }
 }

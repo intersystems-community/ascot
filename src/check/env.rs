@@ -25,7 +25,6 @@ use crate::bindings::{ArgMode, InlayHint, MemberKind};
 use crate::check::errors::*;
 use crate::check::flow::OutputCell;
 use crate::check::types::*;
-use crate::cos::{CodeMode, MethodLanguage};
 pub use crate::details::Positions;
 use crate::details::{
     MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
@@ -547,8 +546,8 @@ impl<'a> WorkspaceEnv<'a> {
     pub(crate) fn property_classes(&self, cls: &str) -> Vec<String> {
         (self.ancestry(cls))
             .flat_map(|(_, resolved)| match resolved {
-                Some(Class::Workspace(_, details)) => details.property_class_names.clone(),
-                Some(Class::Iris(info)) => info.property_class_names.clone(),
+                Some(Class::Workspace(_, details)) => details.keywords.property_class.clone(),
+                Some(Class::Iris(info)) => info.property_class.clone(),
                 Some(Class::Unknown(_)) | None => vec![],
             })
             .collect()
@@ -996,7 +995,7 @@ impl<'a> WorkspaceEnv<'a> {
                 Some(Class::Workspace(_, details)) => {
                     details.include_names.iter().map(|i| i.it.clone()).collect()
                 }
-                Some(Class::Iris(info)) => info.includes.clone(),
+                Some(Class::Iris(info)) => info.include.clone(),
                 Some(Class::Unknown(_)) | None => vec![],
             })
             .collect()
@@ -1076,14 +1075,14 @@ impl<'a> WorkspaceEnv<'a> {
                         let mut supers: Vec<String> = (details.extends.iter())
                             .map(|sup| self.qualify_class_name(sup, Some(&cls)))
                             .collect();
-                        if details.inheritance_right {
+                        if details.keywords.inheritance == Some(bindings::Inheritance::Right) {
                             supers.reverse();
                         }
                         supers
                     }
                     Some(Class::Iris(info)) => {
                         let mut supers = info.extends.clone();
-                        if info.inheritance_right {
+                        if info.inheritance == Some(bindings::Inheritance::Right) {
                             supers.reverse();
                         }
                         supers.extend(info.storage.clone());
@@ -1140,15 +1139,13 @@ impl<'a> WorkspaceEnv<'a> {
                 _ if cls == "%Library.DataType" => Some(true),
                 // Never a datatype, even unresolved, and IRIS lets nothing mix it with one.
                 _ if cls == "%Library.RegisteredObject" => Some(false),
-                Some(Class::Workspace(_, details)) => details.is_datatype.then_some(true),
+                Some(Class::Workspace(_, details)) => (details.keywords.class_type
+                    == Some(bindings::ClassType::Datatype))
+                .then_some(true),
                 // Outside the workspace, IRIS's compiled ClassType is known.
-                Some(Class::Iris(info)) => match info.is_datatype {
-                    Some(is_datatype) => is_datatype.then_some(true),
-                    None => {
-                        unknown = true;
-                        None
-                    }
-                },
+                Some(Class::Iris(info)) => {
+                    (info.class_type == Some(bindings::ClassType::Datatype)).then_some(true)
+                }
                 Some(Class::Unknown(_)) | None => {
                     unknown = true;
                     None
@@ -1460,25 +1457,23 @@ pub struct WorkspaceEnv<'a> {
     suppress_soft_diagnostics: Cell<bool>,
 }
 
-pub struct ClassDocument<'a> {
+pub struct ClassDocument {
     pub class: ClassTy,
-    pub language: Option<&'a MethodLanguage>,
-    pub mode: Option<&'a CodeMode>,
+    // `[ Language = ... ]`: what its methods are written in unless they say otherwise.
+    pub language: Option<bindings::Language>,
     pub macro_definitions: MacroDefinitions,
     pub body_macros: RefCell<crate::macro_expand::BodyMacros>,
 }
 
-impl<'a> ClassDocument<'a> {
+impl ClassDocument {
     pub fn new(
         class: ClassTy,
-        language: Option<&'a MethodLanguage>,
-        mode: Option<&'a CodeMode>,
+        language: Option<bindings::Language>,
         macro_definitions: MacroDefinitions,
     ) -> Self {
         Self {
             class,
             language,
-            mode,
             macro_definitions,
             body_macros: Default::default(),
         }
