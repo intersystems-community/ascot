@@ -100,42 +100,37 @@ impl<T: CheckExprInner + Grammar> CheckExpr for Range<&T> {
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
     ) -> Result<Range<PowerTy>, TypeError> {
-        flow.with_range(env.range(&self), |flow| {
-            match self.deref().to_power_ty(env, flow) {
-                Ok(ty) => Ok(self.as_ref().map(|_| ty)),
-                Err(err) => Err(err
-                    .with_expr_text(|| self.print())
-                    .into_error(|| env.range(&self))),
-            }
-        })
+        let ty = check_ranged(&self, env, flow, T::to_power_ty)?;
+        Ok(self.map(|_| ty))
     }
 
     fn to_power_ty<'a>(self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<PowerTy, TypeError> {
-        flow.with_range(env.range(&self), |flow| {
-            self.deref().to_power_ty(env, flow).map_err(|err| {
-                err.with_expr_text(|| self.print())
-                    .into_error(|| env.range(&self))
-            })
-        })
+        check_ranged(&self, env, flow, T::to_power_ty)
     }
 
     fn to_maybe_ty<'a>(self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<MaybeTy, TypeError> {
-        flow.with_range(env.range(&self), |flow| {
-            self.deref().to_maybe_ty(env, flow).map_err(|err| {
-                err.with_expr_text(|| self.print())
-                    .into_error(|| env.range(&self))
-            })
-        })
+        check_ranged(&self, env, flow, T::to_maybe_ty)
     }
 
     fn to_ty<'a>(self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<Ty, TypeError> {
-        flow.with_range(env.range(&self), |flow| {
-            self.deref().to_ty(env, flow).map_err(|err| {
-                err.with_expr_text(|| self.print())
-                    .into_error(|| env.range(&self))
-            })
-        })
+        check_ranged(&self, env, flow, T::to_ty)
     }
+}
+
+// Runs `check` on the node with `flow` positioned on it, placing (and texting) whatever it fails
+// with there.
+fn check_ranged<'a, T: Grammar, R>(
+    expr: &Range<&T>,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    check: impl FnOnce(&T, &CodeEnv<'a>, &mut Flow<'a>) -> Result<R, QuasiTypeError>,
+) -> Result<R, TypeError> {
+    flow.with_range(env.range(expr), |flow| {
+        check(expr, env, flow).map_err(|err| {
+            err.with_expr_text(|| expr.print())
+                .into_error(|| env.range(expr))
+        })
+    })
 }
 
 use crate::{
@@ -293,18 +288,16 @@ fn relocate_method_error(
     err
 }
 
-// Only `source` (this method's own call site) is relocated -- `target` is always an already
-// resolved, final declaration location.
-fn relocate_method_references(
-    references: Vec<(bindings::Range, Location)>,
+// Only the range (this method's own call site or expression) is relocated -- a reference's
+// target is always an already resolved, final declaration location.
+fn relocate_method_ranged<T>(
+    entries: Vec<(bindings::Range, T)>,
     source_map: &SourceMap,
     shifter: &Shifter,
-) -> Vec<(bindings::Range, Location)> {
-    references
+) -> Vec<(bindings::Range, T)> {
+    entries
         .into_iter()
-        .filter_map(|(source, target)| {
-            Some((try_relocate_range(source, source_map, shifter)?, target))
-        })
+        .filter_map(|(range, it)| Some((try_relocate_range(range, source_map, shifter)?, it)))
         .collect()
 }
 
@@ -321,17 +314,6 @@ fn relocate_method_hints(
                 ..hint
             })
         })
-        .collect()
-}
-
-fn relocate_method_hover_types(
-    hover_types: Vec<(bindings::Range, String)>,
-    source_map: &SourceMap,
-    shifter: &Shifter,
-) -> Vec<(bindings::Range, String)> {
-    hover_types
-        .into_iter()
-        .filter_map(|(range, ty)| Some((try_relocate_range(range, source_map, shifter)?, ty)))
         .collect()
 }
 
@@ -375,15 +357,9 @@ impl CheckMember for Range<&cos::Parameter> {
 
 impl MethodDetails {
     fn args(&self) -> Vec<WithRange<NormalArg>> {
-        let mut args = self.normal_args.clone();
-        if let Some(arg) = &self.variadic_arg {
-            args.push(arg.as_ref().map(NormalArg::from));
-        }
-        args
+        inputs_of(&self.normal_args, &self.variadic_arg)
     }
-}
 
-impl MethodDetails {
     fn check(&self, name: &str, env: &DocumentEnv, cls: &ClassDocument) -> Result<(), TypeError> {
         let language = self.language.as_ref().or(cls.language);
         let mode = self.mode.as_ref().or(cls.mode);
@@ -487,23 +463,23 @@ impl MethodDetails {
         ) {
             env.base.add_soft_diagnostic(diagnostic);
         }
-        for (source, target) in relocate_method_references(
+        for (source, target) in relocate_method_ranged(
             env.base.references_since(references_mark),
             &source_map,
             &shifter,
         ) {
             env.base.reference(source, target);
         }
-        for hint in
-            relocate_method_hints(method_env.inlay_hints.into_inner(), &source_map, &shifter)
-        {
-            env.inlay_hints.borrow_mut().push(hint);
-        }
-        for entry in
-            relocate_method_hover_types(method_env.hover_types.into_inner(), &source_map, &shifter)
-        {
-            env.hover_types.borrow_mut().push(entry);
-        }
+        env.inlay_hints.borrow_mut().extend(relocate_method_hints(
+            method_env.inlay_hints.into_inner(),
+            &source_map,
+            &shifter,
+        ));
+        env.hover_types.borrow_mut().extend(relocate_method_ranged(
+            method_env.hover_types.into_inner(),
+            &source_map,
+            &shifter,
+        ));
         let creates =
             result.map_err(|err| relocate_method_error(err, &source_map, env.uri(), &shifter))?;
         if let Some(hint) = creates_hint(self.body.range.start, creates) {
@@ -550,15 +526,8 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 Option::None | Option::Some(cos::CodeMode::Code(..)),
                 body,
             ) => {
-                let body = <cos::ProcedureBody>::parse(body).map_err(|err| {
-                    TypeError::invalid_syntax(
-                        bindings::Range {
-                            start: env.position(err.pos()),
-                            end: env.position(err.pos() + 1),
-                        },
-                        err,
-                    )
-                })?;
+                let body =
+                    <cos::ProcedureBody>::parse(body).map_err(|err| syntax_error(env, err))?;
                 check_block_body(&body, env, flow, true)
             }
             (
@@ -567,15 +536,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 body,
             ) => {
                 let body_expr = <cos::ExprEntry>::parse(body)
-                    .map_err(|err| {
-                        TypeError::invalid_syntax(
-                            bindings::Range {
-                                start: env.position(err.pos()),
-                                end: env.position(err.pos() + 1),
-                            },
-                            err,
-                        )
-                    })?
+                    .map_err(|err| syntax_error(env, err))?
                     .into_inner();
                 let body_type = body_expr.to_power_ty(env, flow)?;
                 body_type
@@ -587,6 +548,10 @@ impl<'b> CheckCommand for MethodBody<'b> {
             _ => flow.handle_void(),
         }
     }
+}
+
+fn syntax_error(env: &CodeEnv<'_>, err: tygr::Error) -> TypeError {
+    TypeError::invalid_syntax(env.span(err.pos(), err.pos() + 1), err)
 }
 
 fn label_details(
@@ -640,16 +605,19 @@ fn check_block_body<'a>(
     flow: &mut Flow<'a>,
     is_body: bool,
 ) -> Result<(), TypeError> {
-    let details: Vec<_> = body
+    let subroutines: Vec<_> = body
         .subroutines
         .iter()
         .flat_map(|subs| subs.items.iter())
-        .filter_map(|sub| label_details(env, sub))
+        .filter_map(|sub| Some((sub, label_details(env, sub)?)))
         .collect();
     let is_procedure = is_body && flow.is_procedure_block();
     let labels = env::scoped_labels(
         env.uri(),
-        &details.iter().map(|d| (d, false)).collect::<Vec<_>>(),
+        &subroutines
+            .iter()
+            .map(|(_, d)| (d, false))
+            .collect::<Vec<_>>(),
     );
     let nested;
     let env = if is_body || !labels.is_empty() {
@@ -659,20 +627,17 @@ fn check_block_body<'a>(
         env
     };
     body.main.check(env, flow)?;
-    let subroutines: Vec<_> = body
-        .subroutines
-        .iter()
-        .flat_map(|subs| subs.items.iter())
-        .collect();
-    if subroutines.is_empty() {
+    if body.subroutines.is_none() {
         return Ok(());
     }
-    let first = details.first().and_then(|d| env.label_entry(&d.name.it));
-    flow.tail_call(first.map(|first| &first.output), flow.current_range())?;
+    let first = subroutines
+        .first()
+        .and_then(|(_, d)| env.label_entry(&d.name.it));
+    flow.tail_call(first.map(|first| &first.output), flow.range())?;
     // The labels read the body's variables from their own flows, so the deferred
     // "never read"/"never assigned" reports for the main body can't be trusted.
     flow.mark_incomplete();
-    for (sub, details) in subroutines.iter().zip(&details) {
+    for (sub, details) in &subroutines {
         // Each label is checked on its own: one's hard error doesn't hide the next one's.
         if let Err(err) = check_label_body(env, details, sub) {
             env.add_soft_diagnostic(err.into());
@@ -755,45 +720,35 @@ impl CheckCommandInner for cos::EntryRefAndArgs {
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
     ) -> Result<(), QuasiTypeError> {
-        match self {
+        let mut diverges = false;
+        let ret = match self {
             EntryRefAndArgs::Expression(expr_call) => match expr_call {
                 cos::MethodOrFuncCallExpr::Method { obj, mem, args } => {
                     let ty = base_property(obj, env, flow)?;
-                    let diverges =
-                        matches!(&ty, PropertyTy::Value(ty) if never_returns(ty, &mem.id()));
-                    let ret = check_member_of(ty, mem.deref(), Some(args), env, flow)?;
-                    warn_if_discarding_status_or_boolean(flow, ret.as_ref());
-                    if diverges {
-                        flow.handle_throw()?;
-                    }
-                    Ok(())
+                    diverges = matches!(&ty, PropertyTy::Value(ty) if never_returns(ty, &mem.id()));
+                    check_member_of(ty, mem.deref(), Some(args), env, flow)?
                 }
                 cos::MethodOrFuncCallExpr::SelfMethod { member, args } => {
                     let obj = Ty::OREF(env.this()?);
-                    let ret = check_member(obj, member.deref(), Some(args), env, flow)?;
-                    warn_if_discarding_status_or_boolean(flow, ret.as_ref());
-                    Ok(())
+                    check_member(obj, member.deref(), Some(args), env, flow)?
                 }
                 cos::MethodOrFuncCallExpr::Super(sup) => {
-                    let ret = check_super_call(env, flow, &sup.prefixed)?;
-                    warn_if_discarding_status_or_boolean(flow, ret.as_ref());
-                    Ok(())
+                    check_super_call(env, flow, &sup.prefixed)?
                 }
-                cos::MethodOrFuncCallExpr::Function(call) => {
-                    let ret = match call.to_maybe_ty(env, flow)? {
-                        MaybeTy::Maybe(ty) | MaybeTy::Plain(ty) => Some(ty),
-                        MaybeTy::Undefined => None,
-                    };
-                    warn_if_discarding_status_or_boolean(flow, ret.as_ref());
-                    Ok(())
-                }
+                cos::MethodOrFuncCallExpr::Function(call) => match call.to_maybe_ty(env, flow)? {
+                    MaybeTy::Maybe(ty) | MaybeTy::Plain(ty) => Some(ty),
+                    MaybeTy::Undefined => None,
+                },
             },
             EntryRefAndArgs::Legacy { proc, args } => {
-                let ret = check_legacy_label_call(env, flow, proc, args, false)?;
-                warn_if_discarding_status_or_boolean(flow, ret.as_ref());
-                Ok(())
+                check_legacy_label_call(env, flow, proc, args, false)?
             }
+        };
+        warn_if_discarding_status_or_boolean(flow, ret.as_ref());
+        if diverges {
+            flow.handle_throw()?;
         }
+        Ok(())
     }
 }
 
@@ -1003,8 +958,7 @@ impl CheckCommandInner for cos::Command {
             }) => {
                 let mut branch = flow.split();
                 if let Some(cos::IfBranches { thn, .. }) = branches {
-                    let result = thn.check(env, &mut branch);
-                    check_branch(env, &mut branch, result);
+                    check_branch(env, &mut branch, thn);
                 }
                 flow.merge(branch)
             }
@@ -1084,19 +1038,21 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::Quit(cos::QuitCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    let exp_ty = match exp.deref() {
-                        Some(exp) => Some(exit_value(exp, env, flow)?),
-                        None => None,
-                    };
+                    let exp_ty = exp
+                        .deref()
+                        .as_ref()
+                        .map(|e| exit_value(e, env, flow))
+                        .transpose()?;
                     flow.handle_quit(env.with_range(exp.as_ref().map(|_| exp_ty)))
                 })
             }
             cos::Command::Return(cos::ReturnCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    let ty = match exp.deref() {
-                        Some(exp) => Some(exit_value(exp, env, flow)?),
-                        None => None,
-                    };
+                    let ty = exp
+                        .deref()
+                        .as_ref()
+                        .map(|e| exit_value(e, env, flow))
+                        .transpose()?;
                     Ok(flow.handle_return(env.with_range(exp.as_ref().map(|_| ty)))?)
                 })
             }
@@ -1226,15 +1182,9 @@ impl CheckCommandInner for cos::Command {
                 b2,
                 ..
             }) => check_try(env, flow, b1.deref(), catch_target.as_ref(), b2),
-            cos::Command::Throw(cos::ThrowCommand { pc, e, .. }) => {
-                check_pc(pc, env, flow, |flow| {
-                    if let Some(e) = e {
-                        e.to_ty(env, flow)?;
-                    }
-                    flow.handle_throw()
-                })
-            }
-            cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. }) => {
+            cos::Command::Throw(cos::ThrowCommand { pc, e: exp, .. })
+            | cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. })
+            | cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
                     if let Some(exp) = exp {
                         exp.to_ty(env, flow)?;
@@ -1314,9 +1264,9 @@ impl CheckCommandInner for cos::Command {
                     Ok(())
                 })
             }
-            cos::Command::Lock(cos::LockCommand { .. }) => Ok(()),
-            cos::Command::Hang(cos::HangCommand { .. }) => Ok(()),
-            cos::Command::Job(cos::JobCommand { .. }) => Ok(()),
+            cos::Command::Lock(cos::LockCommand { .. })
+            | cos::Command::Hang(cos::HangCommand { .. })
+            | cos::Command::Job(cos::JobCommand { .. }) => Ok(()),
             // The transaction level isn't tracked: it depends on the run-time conditions around
             // each `TSTART`/`TCOMMIT`, and a flow-insensitive count only produced false alarms.
             cos::Command::TStart(cos::TStartCommand { pc, .. })
@@ -1410,14 +1360,6 @@ impl CheckCommandInner for cos::Command {
             cos::Command::JS(cos::JSCommand { content, .. }) => {
                 check_embedded_expressions(flow, &content.print())
             }
-            cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
-                check_pc(pc, env, flow, |flow| {
-                    if let Some(exp) = exp {
-                        exp.to_ty(env, flow)?;
-                    }
-                    flow.handle_throw()
-                })
-            }
             cos::Command::ElseIf(..) => Err(QuasiTypeError::unimplemented(
                 "Stand-alone ElseIf Command".to_string(),
             )),
@@ -1488,8 +1430,8 @@ fn exit_value<'a>(
 // paths. Downgraded to a soft diagnostic; the branch carries on with its bindings as of the
 // failure -- treating it as dead made everything after an `if` whose every branch failed
 // "unreachable".
-fn check_branch(env: &CodeEnv<'_>, flow: &mut Flow<'_>, result: Result<(), TypeError>) {
-    if let Err(err) = result {
+fn check_branch<'a>(env: &CodeEnv<'a>, flow: &mut Flow<'a>, block: &Range<cos::Block>) {
+    if let Err(err) = block.check(env, flow) {
         env.add_soft_diagnostic(err.into());
         flow.mark_incomplete();
     }
@@ -1502,40 +1444,25 @@ fn check_if<'a>(
     branches: &Option<cos::IfBranches>,
 ) -> Result<(), QuasiTypeError> {
     // todo: I am not sure the range here is accurate
-    let mut if_false = check_and(
-        cnds.first.as_ref().map(|x| x.deref()),
-        &cnds.remaining,
-        env,
-        flow,
-        true,
-    )?;
+    let mut if_false = check_and(&cnds.first, &cnds.remaining, env, flow, true)?;
     let mut others = vec![];
     match branches {
         None => {
             others.push(if_false);
         }
         Some(cos::IfBranches { thn, eifs, els }) => {
-            let result = thn.check(env, flow);
-            check_branch(env, flow, result);
+            check_branch(env, flow, thn);
             let mut flow = if_false;
             for eif in eifs {
-                if_false = check_and(
-                    eif.cnds.first.as_ref().map(|x| x.deref()),
-                    &eif.cnds.remaining,
-                    env,
-                    &mut flow,
-                    true,
-                )?;
-                let result = eif.thn.check(env, &mut flow);
-                check_branch(env, &mut flow, result);
+                if_false = check_and(&eif.cnds.first, &eif.cnds.remaining, env, &mut flow, true)?;
+                check_branch(env, &mut flow, &eif.thn);
                 others.push(flow);
                 flow = if_false;
             }
             if let Some(els) = els.as_deref()
                 && let Some(els) = els.body.as_ref()
             {
-                let result = els.check(env, &mut flow);
-                check_branch(env, &mut flow, result);
+                check_branch(env, &mut flow, els);
             }
             others.push(flow);
         }
@@ -1582,13 +1509,7 @@ fn check_while<'a>(
     // the last pass found it false.
     let if_false = std::cell::RefCell::new(None);
     flow.with_loop(range, false, false, env, |flow| {
-        let exit = check_and(
-            cnds.first.as_ref().map(|x| x.deref()),
-            &cnds.remaining,
-            env,
-            flow,
-            false,
-        )?;
+        let exit = check_and(&cnds.first, &cnds.remaining, env, flow, false)?;
         if_false.replace(Some(exit));
         block.check(env, flow)
     })?;
@@ -1607,25 +1528,10 @@ fn check_do_while<'a>(
 ) -> Result<(), QuasiTypeError> {
     flow.with_loop(range, false, false, env, |flow| block.check(env, flow))?;
     // See `check_while`: prime with a throwaway evaluation before the real one below.
-    let was_suppressed = flow.suppress_diagnostics();
-    let result = env.with_hints_suppressed(|| {
-        check_and(
-            cnds.first.as_ref().map(|x| x.deref()),
-            &cnds.remaining,
-            env,
-            flow,
-            false,
-        )
-    });
-    flow.restore_diagnostics(was_suppressed);
-    result?;
-    let if_false = check_and(
-        cnds.first.as_ref().map(|x| x.deref()),
-        &cnds.remaining,
-        env,
-        flow,
-        false,
-    )?;
+    flow.primed(env, |flow| {
+        check_and(&cnds.first, &cnds.remaining, env, flow, false)
+    })?;
+    let if_false = check_and(&cnds.first, &cnds.remaining, env, flow, false)?;
     flow.merge(if_false)
 }
 
@@ -1659,11 +1565,7 @@ fn check_for<'a>(
                 flow.handle_set(local, declared.into(), range)?
             }
             flow.with_loop(range, optional, infinite, env, |flow| {
-                if let Some(block) = block {
-                    block.check(env, flow)
-                } else {
-                    Ok(())
-                }
+                block.map_or(Ok(()), |block| block.check(env, flow))
             })
         }
         None => {
@@ -1727,12 +1629,13 @@ fn check_for_specs<'a, T>(
 
 #[allow(clippy::type_complexity)]
 fn check_and<'a, T: Grammar>(
-    first: Range<&GenericExpr<T>>,
+    first: &Range<impl Deref<Target = GenericExpr<T>>>,
     remaining: &[Prefix<LGapXLGap<StringEq!(",")>, Range<Expr>>],
     env: &CodeEnv<'a>,
     if_true: &mut Flow<'a>,
     report_always: bool,
 ) -> Result<Flow<'a>, TypeError> {
+    let first = first.as_ref().map(Deref::deref);
     let mut if_false = split_on_conjunction(first, env, if_true, report_always)?;
     for cnd in remaining.iter() {
         let flow =
@@ -1841,7 +1744,7 @@ fn check_embedded_expressions(flow: &mut Flow<'_>, text: &str) -> Result<(), Qua
                 let prefixed = i > 0 && matches!(code[i - 1], b'.' | b'$' | b'#' | b'^');
                 let name = std::str::from_utf8(&code[i..j]).unwrap_or_default();
                 if !prefixed && !flow::is_percent_variable(name) {
-                    flow.note_read(name)?;
+                    flow.read(name)?;
                 }
                 i = j;
                 continue;
@@ -2419,12 +2322,7 @@ impl<T> CheckExprInner for ExprOps<T> {
                         .into());
                     }
                 }
-                let ty = check_member_of(ty, &op.mem, op.args.as_ref(), env, flow)?;
-                if let Some(ty) = ty {
-                    Ok(ty.into())
-                } else {
-                    Err(QuasiTypeError::undefined())
-                }
+                defined(check_member_of(ty, &op.mem, op.args.as_ref(), env, flow)?)
             }
         }
     }
@@ -2599,6 +2497,11 @@ fn check_member<'a>(
     }
 }
 
+// What a call or member access yields as a value -- nothing, for a procedure.
+fn defined(ty: Option<Ty>) -> Result<PowerTy, QuasiTypeError> {
+    ty.map(PowerTy::from).ok_or_else(QuasiTypeError::undefined)
+}
+
 impl CheckExprInner for cos::GetTarget {
     fn to_power_ty<'a>(
         &self,
@@ -2609,17 +2512,13 @@ impl CheckExprInner for cos::GetTarget {
             cos::GetTarget::Var(var) => var.to_power_ty(env, flow),
             cos::GetTarget::Member { member, args } => {
                 let obj = Ty::OREF(env.this()?);
-                check_member(obj, member.deref(), args.as_ref(), env, flow)?
-                    .map(PowerTy::from)
-                    .ok_or_else(QuasiTypeError::undefined)
+                defined(check_member(obj, member.deref(), args.as_ref(), env, flow)?)
             }
             cos::GetTarget::Indirection(ind) => Ok(ind.to_power_ty(env, flow)?),
             cos::GetTarget::Fun(call) => call.to_power_ty(env, flow),
             cos::GetTarget::Sub { base, op } => {
                 let base = base_property(base, env, flow)?;
-                check_member_of(base, &op.mem, op.args.as_ref(), env, flow)?
-                    .map(PowerTy::from)
-                    .ok_or_else(QuasiTypeError::undefined)
+                defined(check_member_of(base, &op.mem, op.args.as_ref(), env, flow)?)
             }
         }
     }
@@ -2694,10 +2593,8 @@ fn check_param_arg<'a>(
 ) -> Result<(), QuasiTypeError> {
     {
         let arg_text = match arg.deref() {
-            Some(arg) => match arg {
-                cos::MthArg::ByRef { target, .. } => target.print(),
-                cos::MthArg::Expr { expr, .. } => expr.print(),
-            },
+            Some(cos::MthArg::ByRef { target, .. }) => target.print(),
+            Some(cos::MthArg::Expr { expr, .. }) => expr.print(),
             None => "".to_string(),
         };
         if !arg_text.starts_with(&par.name) {
@@ -2723,20 +2620,23 @@ fn check_param_arg<'a>(
     }
     // A mode mismatch compiles (the caller's `.` alone decides by-reference; `ByRef`/`Output`
     // document intent), so it's reported softly and the rest of the call is still checked.
-    match (&par.mode, arg.deref()) {
-        (_, Some(cos::MthArg::Expr { expr, expand })) => {
+    let mode_mismatch = |flow: &Flow<'a>, given| {
+        flow.add_soft_diagnostic(QuasiTypeError::WithRange(
+            TypeError::mismatch_argument_mode(
+                par.name.clone(),
+                par.mode,
+                given,
+                env.range(arg),
+                declared_at.clone(),
+            ),
+        ));
+    };
+    match arg.deref() {
+        Some(cos::MthArg::Expr { expr, expand }) => {
             // A value where `ByRef`/`Output` is declared: the callee's changes never reach the
             // caller.
             if par.mode != ArgMode::Default {
-                flow.add_soft_diagnostic(QuasiTypeError::WithRange(
-                    TypeError::mismatch_argument_mode(
-                        par.name.clone(),
-                        par.mode,
-                        ArgMode::Default,
-                        env.range(arg),
-                        declared_at.clone(),
-                    ),
-                ));
+                mode_mismatch(flow, ArgMode::Default);
             }
             let target = par.ty.clone().unwrap_or_default();
             let source = expr.to_power_ty(env, flow)?;
@@ -2749,17 +2649,9 @@ fn check_param_arg<'a>(
             env.assert_value_compatible(&source, &target)
                 .map_err(|err| err.assign(par.name))?;
         }
-        (_, Some(cos::MthArg::ByRef { target, .. })) => {
+        Some(cos::MthArg::ByRef { target, .. }) => {
             if par.mode == ArgMode::Default {
-                flow.add_soft_diagnostic(QuasiTypeError::WithRange(
-                    TypeError::mismatch_argument_mode(
-                        par.name.clone(),
-                        ArgMode::Default,
-                        ArgMode::ByRef,
-                        env.range(arg),
-                        declared_at.clone(),
-                    ),
-                ));
+                mode_mismatch(flow, ArgMode::ByRef);
             }
             let source = PowerTy::from(par.ty.clone().unwrap_or_default());
             match target.as_variable() {
@@ -2775,7 +2667,7 @@ fn check_param_arg<'a>(
                 None => check_merge_target(target, source, env.range(arg), env, flow)?,
             }
         }
-        (_, None) => {
+        None => {
             if par.required() {
                 return Err(QuasiTypeError::too_few_arguments(par.name, declared_at));
             }
@@ -2871,16 +2763,7 @@ impl CheckExprInner for MacroCallStruct {
     ) -> Result<PowerTy, QuasiTypeError> {
         // Anything reaching here survived expansion: a compile-time macro (see
         // `MacroDefinition::is_compile_time`), whose value is simply unknown, or an undefined one.
-        let name = self.name.print();
-        if env.is_defined_macro(&name) {
-            self.check_args(env, flow)?;
-            Ok(Ty::Any.into())
-        } else {
-            Err(QuasiTypeError::undefined_macro(
-                name.clone(),
-                similar_macro_names(&name, env.known_macro_names()),
-            ))
-        }
+        self.check_as_command(env, flow).map(|()| Ty::Any.into())
     }
 }
 
@@ -3074,25 +2957,19 @@ impl CheckExprInner for AtomicExpr {
             }
             AtomicExpr::Member { member, args } => {
                 let obj = Ty::OREF(env.this()?);
-                match check_member(obj, member.deref(), args.as_ref(), env, flow)? {
-                    Some(ty) => Ok(ty.into()),
-                    None => Err(QuasiTypeError::undefined()),
-                }
+                defined(check_member(obj, member.deref(), args.as_ref(), env, flow)?)
             }
             AtomicExpr::BeginQuoteEndQuote(..) => Ok(PowerTy::from("%String")),
             AtomicExpr::Indirection(x) => Ok(x.to_power_ty(env, flow)?),
             AtomicExpr::FunctionCall(call) => call.to_power_ty(env, flow),
             AtomicExpr::QuoteString { .. } => Ok(Ty::from("%String").into()),
-            AtomicExpr::Super(sup) => match check_super_call(env, flow, &sup.prefixed)? {
-                Some(ty) => Ok(ty.into()),
-                None => Err(QuasiTypeError::undefined()),
-            },
+            AtomicExpr::Super(sup) => defined(check_super_call(env, flow, &sup.prefixed)?),
             AtomicExpr::CallSubroutine {
                 label,
                 routine,
                 args,
                 ..
-            } => Ok(check_label_call(
+            } => defined(check_label_call(
                 env,
                 flow,
                 label.deref().as_ref(),
@@ -3101,9 +2978,7 @@ impl CheckExprInner for AtomicExpr {
                 args,
                 env.range(label),
                 true,
-            )?
-            .ok_or_else(QuasiTypeError::undefined)?
-            .into()),
+            )?),
             AtomicExpr::LegacyCOM { .. } => Err(QuasiTypeError::unimplemented(
                 "Legacy COM binding ('_obj!sub')".to_string(),
             )),
@@ -3126,16 +3001,12 @@ fn check_label_call<'a>(
     extrinsic: bool,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     let label = label
-        .map(|label| check_label(env, flow, label))
+        .map(|label| plain_name(env, flow, label))
         .transpose()?
         .flatten();
-    let offset = if let Some(offset) = offset {
-        Some(offset.to_ty(env, flow)?)
-    } else {
-        None
-    };
+    let offset = offset.map(|offset| offset.to_ty(env, flow)).transpose()?;
     let routine = routine
-        .map(|routine| check_routine(env, flow, routine))
+        .map(|routine| plain_name(env, flow, &routine.name))
         .transpose()?
         .flatten();
     call_label(env, flow, label, offset, routine, args, range, extrinsic)
@@ -3187,34 +3058,19 @@ fn call_label<'a>(
     )
 }
 
-// `None` for an indirect label — we can't know its name statically, so `resolve_label` falls
-// back to `Any` the same way it does for a label that's merely absent.
-fn check_label<'a>(
+// A label or routine name — `None` for an indirect one, which we can't know statically, so
+// `resolve_label` falls back to `Any` the same way it does for a label that's merely absent. A
+// routine's `extension` (an explicit `.mac`/`.int` qualifier) doesn't need checking on its own —
+// any routine reference at all already makes `resolve_label` fall back to `Any`.
+fn plain_name<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    label: &Range<AllowIndirection<Label>>,
+    name: &AllowIndirection<impl Grammar>,
 ) -> Result<Option<String>, QuasiTypeError> {
-    match label.deref() {
-        AllowIndirection::Plain(label) => Ok(Some(label.print())),
+    match name {
+        AllowIndirection::Plain(name) => Ok(Some(name.print())),
         AllowIndirection::Indirection(indirection) => {
             let _ = indirection.to_ty(env, flow)?;
-            Ok(None)
-        }
-    }
-}
-
-// `None` for an indirect routine name, same reasoning as `check_label`. `extension` (an explicit
-// `.mac`/`.int` qualifier) doesn't need checking on its own — any routine reference at all
-// already makes `resolve_label` fall back to `Any`, regardless of extension.
-fn check_routine<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    routine: &ExtendedRoutineReference,
-) -> Result<Option<String>, QuasiTypeError> {
-    match &routine.name {
-        AllowIndirection::Plain(name) => Ok(Some(name.print())),
-        AllowIndirection::Indirection(indir) => {
-            let _ = indir.to_ty(env, flow)?;
             Ok(None)
         }
     }
@@ -3610,6 +3466,10 @@ pub(crate) fn check_cls(
     diagnostics
 }
 
+fn contains_ci(words: &[&str], word: &str) -> bool {
+    words.iter().any(|k| k.eq_ignore_ascii_case(word))
+}
+
 fn check_property_or_parameter_declaration(
     env: &DocumentEnv,
     class_name: &str,
@@ -3625,10 +3485,7 @@ fn check_property_or_parameter_declaration(
             type_param_names,
         } => {
             for keyword in bare_keywords {
-                if PROPERTY_KEYWORDS_WITH_VALUE
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(keyword))
-                {
+                if contains_ci(PROPERTY_KEYWORDS_WITH_VALUE, keyword) {
                     diagnostics.push(
                         TypeError::property_keyword_without_value(keyword.clone(), member.range)
                             .into(),
@@ -3640,10 +3497,7 @@ fn check_property_or_parameter_declaration(
                 env.base.check_declared_class_exists(&name, member.range);
             }
             for keyword in keywords {
-                if !PROPERTY_KEYWORDS
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(keyword))
-                {
+                if !contains_ci(PROPERTY_KEYWORDS, keyword) {
                     diagnostics.push(
                         TypeError::unrecognized_property_keyword(keyword.clone(), member.range)
                             .into(),
@@ -3666,9 +3520,7 @@ fn check_property_or_parameter_declaration(
                     .chain(property_classes.iter().map(String::as_str))
                     .collect();
                 for name in type_param_names {
-                    let is_property_keyword = PROPERTY_KEYWORDS
-                        .iter()
-                        .any(|k| k.eq_ignore_ascii_case(name));
+                    let is_property_keyword = contains_ci(PROPERTY_KEYWORDS, name);
                     // Probed quietly: a candidate nobody can see resolves the parameter on trust,
                     // and offline that is every system type class.
                     let was_suppressed = env.base.suppress_soft_diagnostics();
@@ -3727,19 +3579,14 @@ fn check_property_or_parameter_declaration(
             as_type, keywords, ..
         } => {
             if let Some(meta_type) = as_type
-                && !PARAMETER_TYPE_KEYWORDS
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(meta_type))
+                && !contains_ci(PARAMETER_TYPE_KEYWORDS, meta_type)
             {
                 diagnostics.push(
                     TypeError::unrecognized_parameter_type(meta_type.clone(), member.range).into(),
                 );
             }
             for keyword in keywords {
-                if !PARAMETER_KEYWORDS
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(keyword))
-                {
+                if !contains_ci(PARAMETER_KEYWORDS, keyword) {
                     diagnostics.push(
                         TypeError::unrecognized_parameter_keyword(keyword.clone(), member.range)
                             .into(),
