@@ -150,17 +150,14 @@ impl<A: Access> Namespace for Properties<A> {
         let MemberKindSpecificDetails::Property {
             ty,
             element_ty,
-            keywords,
+            multidimensional,
             ..
         } = &member.kind
         else {
             return None;
         };
-        let multidimensional = keywords
-            .iter()
-            .any(|k| k.eq_ignore_ascii_case("MultiDimensional"));
         let ty = match (ty, element_ty) {
-            _ if multidimensional => PropertyTy::Multidimensional(ty.clone().unwrap_or_default()),
+            _ if *multidimensional => PropertyTy::Multidimensional(ty.clone().unwrap_or_default()),
             (Some(Ty::OREF(cls)), Some(element)) => PropertyTy::Collection {
                 kind: if cls.name().ends_with("List") {
                     CollectionClass::List

@@ -526,7 +526,8 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
             type_: row
                 .index_type
                 .as_deref()
-                .and_then(crate::details::index_type),
+                .and_then(|t| cos::IndexType::parse(t.trim()).ok())
+                .and_then(|t| crate::details::index_type(&t)),
             unique: is_truthy(&row.index_unique),
         }),
         "query" => MemberKind::Query,

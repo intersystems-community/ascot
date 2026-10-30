@@ -349,11 +349,7 @@ impl MethodDetails {
     }
 
     fn check(&self, name: &str, env: &DocumentEnv, cls: &ClassDocument) -> Result<(), TypeError> {
-        let language = self
-            .language
-            .as_ref()
-            .map(bindings::Language::from)
-            .or(cls.language);
+        let language = self.language.or(cls.language);
         let mode = self.mode.as_ref();
         // The body isn't ObjectScript, so argument-usage tracking (e.g. "assigned but never
         // read") doesn't apply — nothing below this ever sees the body to mark anything read.
@@ -3383,6 +3379,9 @@ pub(crate) fn check_cls(
                 }
             }
         }
+        for issue in &member.keyword_issues {
+            diagnostics.push(member_keyword_issue(member, issue).into());
+        }
         check_property_or_parameter_declaration(env, &cls.name.it, member, &mut diagnostics);
         // A missing `Include` (already reported once above) commonly leaves some macro
         // unexpanded in a way that breaks a method body's parse -- don't also raise the
@@ -3400,6 +3399,39 @@ fn contains_ci(words: &[&str], word: &str) -> bool {
     words.iter().any(|k| k.eq_ignore_ascii_case(word))
 }
 
+// IRIS refuses a class over a member keyword it can't place (#5559), whatever the member.
+fn member_keyword_issue(
+    member: &MemberDetails,
+    issue: &WithRange<details::KeywordIssue>,
+) -> TypeError {
+    use MemberKindSpecificDetails::*;
+    let name = &issue.it.keyword;
+    let (kind, expected) = match &member.kind {
+        MethodOrClassMethod(_) | ClientMethod => {
+            ("a method", cos::keyword_bnf::<cos::MethodKeyword>(name))
+        }
+        Property { .. } => ("a property", cos::keyword_bnf::<cos::PropertyKeyword>(name)),
+        Parameter { .. } => (
+            "a parameter",
+            cos::keyword_bnf::<cos::ParameterKeyword>(name),
+        ),
+        Index(_) => ("an index", cos::keyword_bnf::<cos::IndexKeyword>(name)),
+        Query => ("a query", cos::keyword_bnf::<cos::QueryKeyword>(name)),
+        Trigger => ("a trigger", cos::keyword_bnf::<cos::TriggerKeyword>(name)),
+        ForeignKey => (
+            "a foreign key",
+            cos::keyword_bnf::<cos::ForeignKeyKeyword>(name),
+        ),
+        XData => ("an XData", cos::keyword_bnf::<cos::XDataKeyword>(name)),
+        Projection => (
+            "a projection",
+            cos::keyword_bnf::<cos::ProjectionKeyword>(name),
+        ),
+        Storage => unreachable!("a storage definition's keyword list isn't read"),
+    };
+    TypeError::unrecognized_member_keyword(kind, issue.it.entry.clone(), expected, issue.range)
+}
+
 fn check_property_or_parameter_declaration(
     env: &DocumentEnv,
     class_name: &str,
@@ -3410,29 +3442,12 @@ fn check_property_or_parameter_declaration(
         MemberKindSpecificDetails::Property {
             ty,
             element_ty,
-            keywords,
-            bare_keywords,
             type_param_names,
+            ..
         } => {
-            for keyword in bare_keywords {
-                if contains_ci(PROPERTY_KEYWORDS_WITH_VALUE, keyword) {
-                    diagnostics.push(
-                        TypeError::property_keyword_without_value(keyword.clone(), member.range)
-                            .into(),
-                    );
-                }
-            }
             if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = ty {
                 let name = env.base.qualify_class_name(&cty.name, Some(class_name));
                 env.base.check_declared_class_exists(&name, member.range);
-            }
-            for keyword in keywords {
-                if !contains_ci(PROPERTY_KEYWORDS, keyword) {
-                    diagnostics.push(
-                        TypeError::unrecognized_property_keyword(keyword.clone(), member.range)
-                            .into(),
-                    );
-                }
             }
             if !type_param_names.is_empty() {
                 // For `list Of X(...)` / `array Of X(...)` the parameters are the element's.
@@ -3450,7 +3465,7 @@ fn check_property_or_parameter_declaration(
                     .chain(property_classes.iter().map(String::as_str))
                     .collect();
                 for name in type_param_names {
-                    let is_property_keyword = contains_ci(PROPERTY_KEYWORDS, name);
+                    let is_property_keyword = cos::is_keyword::<cos::PropertyKeyword>(name);
                     // Probed quietly: a candidate nobody can see resolves the parameter on trust,
                     // and offline that is every system type class.
                     let was_suppressed = env.base.suppress_soft_diagnostics();
@@ -3505,23 +3520,13 @@ fn check_property_or_parameter_declaration(
                 }
             }
         }
-        MemberKindSpecificDetails::Parameter {
-            as_type, keywords, ..
-        } => {
+        MemberKindSpecificDetails::Parameter { as_type, .. } => {
             if let Some(meta_type) = as_type
                 && !contains_ci(PARAMETER_TYPE_KEYWORDS, meta_type)
             {
                 diagnostics.push(
                     TypeError::unrecognized_parameter_type(meta_type.clone(), member.range).into(),
                 );
-            }
-            for keyword in keywords {
-                if !contains_ci(PARAMETER_KEYWORDS, keyword) {
-                    diagnostics.push(
-                        TypeError::unrecognized_parameter_keyword(keyword.clone(), member.range)
-                            .into(),
-                    );
-                }
             }
         }
         _ => {}

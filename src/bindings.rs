@@ -198,12 +198,10 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
             MemberKindSpecificDetails::Property {
                 ty,
                 element_ty,
-                keywords,
+                multidimensional,
                 ..
             } => {
-                let multidimensional = keywords
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case("MultiDimensional"));
+                let multidimensional = *multidimensional;
                 MemberKind::Property(match (ty, element_ty) {
                     (Some(ty), Some(element)) => wit_bind::PropertyInfo {
                         t: Some(element.to_string()),
