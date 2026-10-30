@@ -132,14 +132,12 @@ impl<'a> Flow<'a> {
         self.shared.incomplete.set(true);
     }
 
-    // Brackets a throwaway priming pass: returns the previous suppression state, to be restored
-    // afterward via `restore_diagnostics`.
-    pub(crate) fn suppress_diagnostics(&self) -> bool {
-        self.shared.env.suppress_soft_diagnostics()
-    }
-
-    pub(crate) fn restore_diagnostics(&self, was_suppressed: bool) {
+    // Runs `f` as a throwaway priming pass: nothing it reports or hints survives.
+    pub(crate) fn primed<T>(&mut self, env: &CodeEnv, f: impl FnOnce(&mut Self) -> T) -> T {
+        let was_suppressed = self.shared.env.suppress_soft_diagnostics();
+        let result = env.with_hints_suppressed(|| f(self));
         self.shared.env.restore_soft_diagnostics(was_suppressed);
+        result
     }
 
     // A label, held to `output` (see `LabelEntry::output`). Returns what it creates.
@@ -152,10 +150,6 @@ impl<'a> Flow<'a> {
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
     ) -> Result<Vec<String>, TypeError> {
         Self::run(uri, env, range, args, None, output, handler, false)
-    }
-
-    pub(crate) fn current_range(&self) -> bindings::Range {
-        self.current_range
     }
 
     pub(crate) fn is_procedure_block(&self) -> bool {
@@ -395,10 +389,7 @@ impl<'a> Flow<'a> {
         before: &Self,
         handler: impl Fn(&mut Self) -> Result<(), TypeError>,
     ) -> Result<(), QuasiTypeError> {
-        let was_suppressed = self.suppress_diagnostics();
-        let result = env.with_hints_suppressed(|| handler(self));
-        self.restore_diagnostics(was_suppressed);
-        result?;
+        self.primed(env, &handler)?;
         // Run the body a second time, starting with union of all continue and the before
         for bindings in self.loop_context.take().unwrap().continues {
             self.merge_bindings(Some(bindings)).with_range(|| range)?;
@@ -759,10 +750,6 @@ impl<'a> Flow<'a> {
             .collect())
     }
 
-    pub(crate) fn note_read(&mut self, name: &str) -> Result<(), QuasiTypeError> {
-        self.read(name)
-    }
-
     pub(crate) fn has_binding(&mut self, name: &str) -> Result<bool, QuasiTypeError> {
         Ok(self.bindings()?.bindings.contains_key(name))
     }
@@ -925,7 +912,7 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
-    fn read(&mut self, name: &str) -> Result<(), QuasiTypeError> {
+    pub(crate) fn read(&mut self, name: &str) -> Result<(), QuasiTypeError> {
         let binding = self.lookup(name.to_string())?;
         for pending in std::mem::take(&mut binding.assigned_at) {
             if let Some(read) = self.shared.reading_list.borrow_mut().get_mut(&Written {

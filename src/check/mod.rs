@@ -668,7 +668,7 @@ fn check_block_body<'a>(
         return Ok(());
     }
     let first = details.first().and_then(|d| env.label_entry(&d.name.it));
-    flow.tail_call(first.map(|first| &first.output), flow.current_range())?;
+    flow.tail_call(first.map(|first| &first.output), flow.range())?;
     // The labels read the body's variables from their own flows, so the deferred
     // "never read"/"never assigned" reports for the main body can't be trusted.
     flow.mark_incomplete();
@@ -1607,8 +1607,7 @@ fn check_do_while<'a>(
 ) -> Result<(), QuasiTypeError> {
     flow.with_loop(range, false, false, env, |flow| block.check(env, flow))?;
     // See `check_while`: prime with a throwaway evaluation before the real one below.
-    let was_suppressed = flow.suppress_diagnostics();
-    let result = env.with_hints_suppressed(|| {
+    flow.primed(env, |flow| {
         check_and(
             cnds.first.as_ref().map(|x| x.deref()),
             &cnds.remaining,
@@ -1616,9 +1615,7 @@ fn check_do_while<'a>(
             flow,
             false,
         )
-    });
-    flow.restore_diagnostics(was_suppressed);
-    result?;
+    })?;
     let if_false = check_and(
         cnds.first.as_ref().map(|x| x.deref()),
         &cnds.remaining,
@@ -1841,7 +1838,7 @@ fn check_embedded_expressions(flow: &mut Flow<'_>, text: &str) -> Result<(), Qua
                 let prefixed = i > 0 && matches!(code[i - 1], b'.' | b'$' | b'#' | b'^');
                 let name = std::str::from_utf8(&code[i..j]).unwrap_or_default();
                 if !prefixed && !flow::is_percent_variable(name) {
-                    flow.note_read(name)?;
+                    flow.read(name)?;
                 }
                 i = j;
                 continue;
