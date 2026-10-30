@@ -416,20 +416,10 @@ impl std::fmt::Display for PowerTy {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "\"{}\":", name)?;
-                    if let Some(ty) = ty {
-                        write!(f, "{}", ty)?;
-                    } else {
-                        write!(f, "<UNDEFINED>")?;
-                    }
+                    write!(f, "\"{}\":{}", name, MaybeTy::from(ty.clone()))?;
                 }
                 if let Some(ty) = default {
-                    write!(f, ", :")?;
-                    if let Some(ty) = ty {
-                        write!(f, "{}", ty)?;
-                    } else {
-                        write!(f, "<UNDEFINED>")?;
-                    }
+                    write!(f, ", :{}", MaybeTy::from(ty.clone()))?;
                 }
                 write!(f, ")")
             }
