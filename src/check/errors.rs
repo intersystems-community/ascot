@@ -458,6 +458,12 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Include file '{name}' is not defined in the current workspace"]
     CannotFindInclude { name: String },
+    /// An `#if` whose condition isn't a literal `1` or `0` once its macros are expanded. IRIS
+    /// evaluates any expression at compile time; ascot doesn't, and goes on with the first branch.
+    #[code = "A5540"]
+    #[severity = Hint]
+    #[message = "Cannot decide `#if {condition}`{expansion} at compile time, so its first branch is assumed"]
+    UndecidedIf { condition: String, expansion: Expansion },
     /// A lookup the IRIS context couldn't answer, so what it looked for is taken on trust.
     #[code = "A4471"]
     #[severity = Hint]
@@ -900,6 +906,19 @@ impl std::fmt::Display for Detail {
     }
 }
 
+/// What an `#if` condition's macros expanded to, when that differs from what was written.
+#[derive(Debug)]
+pub struct Expansion(pub Option<String>);
+
+impl std::fmt::Display for Expansion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(text) => write!(f, " (`{text}`)"),
+            None => Ok(()),
+        }
+    }
+}
+
 /// A syntax error, in the grammar's own words where it has some.
 #[derive(Debug)]
 pub struct SyntaxErrorText(pub tygr::Error);
@@ -1010,6 +1029,16 @@ impl TypeError {
 
     pub fn cannot_find_include(name: String, range: Range) -> Self {
         Self::at(TypeErrorKind::CannotFindInclude { name }, range)
+    }
+
+    pub fn undecided_if(condition: String, expansion: Option<String>, range: Range) -> Self {
+        Self::at(
+            TypeErrorKind::UndecidedIf {
+                condition,
+                expansion: Expansion(expansion),
+            },
+            range,
+        )
     }
 
     pub fn iris_lookup_failed(
