@@ -174,7 +174,7 @@ pub struct WorkspaceStruct {
     // lookup once a class has been opened. A rename or removal is fixed up against `doc_cache`'s
     // own (old) entry directly, rather than keeping a uri -> name reverse index just for that.
     class_index: RefCell<HashMap<String, String>>,
-    // Same idea as `class_index`, but for `.inc` header names — see `resolve_inc_uri`.
+    // Same idea as `class_index`, but for `.inc` header names — see `resolve_uri`.
     inc_index: RefCell<HashMap<String, String>>,
     // Same idea as `class_index`, but for `ROUTINE` header names — see `resolve_rtn_uri`.
     rtn_index: RefCell<HashMap<String, String>>,
@@ -224,36 +224,24 @@ impl WorkspaceStruct {
             return vec![];
         };
         if kind == DocKind::Inc {
-            self.error_names.take();
-            self.implicit_definitions.take();
+            self.forget_include_definitions();
         }
-        let entry = match kind {
-            DocKind::Cls => match ClassDefinitionHeader::parse_prefix(&text) {
-                Ok((header, _)) => {
-                    let name = with_range_name(&header.name, &OLC::new(&text));
-                    Ok(DocCache {
-                        name,
-                        text,
-                        details: None,
-                    })
-                }
-                Err(err) => Err(tygr_error_to_diagnostics(err, &text)),
-            },
+        let name = match kind {
+            DocKind::Cls => ClassDefinitionHeader::parse_prefix(&text)
+                .map(|(header, _)| with_range_name(&header.name, &OLC::new(&text))),
             // `.mac`/`.int`/`.inc` all share the same `ROUTINE Name [Type=...]` header grammar --
             // which of the two this is only matters once something asks for tier B (see
             // `ensure_details`), not here.
-            DocKind::Inc | DocKind::Rtn => match cos::RoutineHeader::parse_prefix(&text) {
-                Ok((header, _)) => {
-                    let name = with_range_name(&header.name, &OLC::new(&text));
-                    Ok(DocCache {
-                        name,
-                        text,
-                        details: None,
-                    })
-                }
-                Err(err) => Err(tygr_error_to_diagnostics(err, &text)),
-            },
+            DocKind::Inc | DocKind::Rtn => cos::RoutineHeader::parse_prefix(&text)
+                .map(|(header, _)| with_range_name(&header.name, &OLC::new(&text))),
         };
+        let entry = name
+            .map_err(|err| tygr_error_to_diagnostics(err, &text))
+            .map(|name| DocCache {
+                name,
+                text,
+                details: None,
+            });
         let new_name = entry.as_ref().ok().map(|doc| doc.name(&uri));
         // `insert` hands back whatever was there before, so `index_name` below can fix up a
         // stale forward-index entry on a rename without a separate lookup.
@@ -276,8 +264,7 @@ impl WorkspaceStruct {
 
     fn remove_uri(&mut self, uri: &str) -> Vec<String> {
         if DocKind::from_uri(uri) == Some(DocKind::Inc) {
-            self.error_names.take();
-            self.implicit_definitions.take();
+            self.forget_include_definitions();
         }
         let mut affected = self.invalidate(uri);
         if let Some(Ok(cell)) = self.doc_cache.remove(uri) {
@@ -342,12 +329,16 @@ impl WorkspaceStruct {
         affected
     }
 
+    fn forget_include_definitions(&self) {
+        self.error_names.take();
+        self.implicit_definitions.take();
+    }
+
     // Everything built on the server is stale once it changes: checks, routine expansions (they
     // inline server includes) and the include caches. A style change stales only the checks.
     fn forget(&self, server: bool) -> Vec<String> {
         if server {
-            self.error_names.take();
-            self.implicit_definitions.take();
+            self.forget_include_definitions();
             self.iris_includes.borrow_mut().clear();
         }
         self.doc_cache
@@ -388,7 +379,7 @@ impl WorkspaceStruct {
     // The include file `name` (a `ROUTINE name [Type=INC]` header) open in the workspace, at
     // its header name. An include fetched from IRIS has no document to point at.
     pub(crate) fn inc_definition(&self, name: &str) -> Option<Location> {
-        let uri = self.inc_index.borrow().get(name).cloned()?;
+        let uri = self.resolve_uri(DocKind::Inc, name)?;
         let range = self.doc_cache.get(&uri)?.as_ref().ok()?.borrow().name.range;
         Some(Location::new(uri, range))
     }
@@ -411,6 +402,12 @@ impl WorkspaceStruct {
             DocKind::Rtn => &self.rtn_index,
             DocKind::Inc => &self.inc_index,
         }
+    }
+
+    // The open document of `kind` declaring `name`: a plain O(1) lookup, since `index_name` fills
+    // the index the moment a document opens -- `None` just means no open document has that name.
+    pub(crate) fn resolve_uri(&self, kind: DocKind, name: &str) -> Option<String> {
+        self.index_for(kind).borrow().get(name).cloned()
     }
 
     // Makes `uri` the owner of `name` (dropping its claim on `old_name`, if renamed). Returns
@@ -436,49 +433,40 @@ impl WorkspaceStruct {
         affected
     }
 
+    // The other documents of `kind` (`uri` aside) declaring `name`. `index_for(kind)` only ever
+    // remembers one owner per name (whichever claimed it last), so it can't answer this -- scan
+    // `doc_cache`'s own tier-A names instead, same O(workspace) cost as a reverse index would be.
+    fn others_named(&self, kind: DocKind, uri: &str, name: &str) -> impl Iterator<Item = String> {
+        self.doc_cache.iter().filter_map(move |(other, entry)| {
+            let cell = entry.as_ref().ok()?;
+            (other != uri
+                && DocKind::from_uri(other) == Some(kind)
+                && cell.borrow().name(other) == name)
+                .then(|| other.clone())
+        })
+    }
+
     // Drops `uri`'s claim on `name`, handing it to another document of that kind still declaring
     // it, if any. Every such document's cached analysis (a duplicate-class error naming `uri`,
     // say) is stale, so they're all returned for rechecking.
     fn unindex(&self, kind: DocKind, uri: &str, name: &str) -> Vec<String> {
-        let others: Vec<String> = self
-            .doc_cache
-            .iter()
-            .filter_map(|(other, entry)| {
-                let cell = entry.as_ref().ok()?;
-                (other != uri
-                    && DocKind::from_uri(other) == Some(kind)
-                    && cell.borrow().name(other) == name)
-                    .then(|| other.clone())
-            })
-            .collect();
         let index = self.index_for(kind);
         if index.borrow().get(name).is_some_and(|owner| owner == uri) {
             index.borrow_mut().remove(name);
-            if let Some(successor) = others.iter().min() {
-                index
-                    .borrow_mut()
-                    .insert(name.to_string(), successor.clone());
+            if let Some(successor) = self.others_named(kind, uri, name).min() {
+                index.borrow_mut().insert(name.to_string(), successor);
             }
         }
         self.invalidate_name(&(kind, name.to_string()))
     }
 
-    // `class_index` only ever remembers one owner per name (whichever claimed it last), so it
-    // can't answer "does any *other* uri also have this name" -- scan `doc_cache`'s own tier-A
-    // names instead, same O(workspace) cost as the reverse index this replaced would have been.
     fn duplicate_class_name_diagnostic(
         &self,
         uri: &str,
         name: &str,
         range: bindings::Range,
     ) -> Option<Diagnostic> {
-        let other_uri = self.doc_cache.iter().find_map(|(other_uri, entry)| {
-            let cell = entry.as_ref().ok()?;
-            (other_uri != uri
-                && DocKind::from_uri(other_uri) == Some(DocKind::Cls)
-                && cell.borrow().name(other_uri) == name)
-                .then(|| other_uri.clone())
-        })?;
+        let other_uri = self.others_named(DocKind::Cls, uri, name).next()?;
         let other_range = self.cls_details(&other_uri).ok()?.name.range;
         let other = Location::new(other_uri, other_range);
         Some(check::TypeError::duplicate_class_name(range, name.to_string(), other).into())
@@ -488,10 +476,8 @@ impl WorkspaceStruct {
         WorkspaceEnv::new(self)
     }
 
-    // `class_index` is populated for every open class immediately (see `insert`), so this is
-    // always a plain O(1) lookup -- `None` just means no open class has that name.
     pub(crate) fn resolve_cls_uri(&self, name: &str) -> Option<String> {
-        self.class_index.borrow().get(name).cloned()
+        self.resolve_uri(DocKind::Cls, name)
     }
 
     pub(crate) fn rtn_details(&self, uri: &str) -> Result<Arc<RtnDetails>, Diagnostic> {
@@ -551,10 +537,21 @@ impl WorkspaceStruct {
         details
     }
 
-    // `rtn_index` is populated for every open routine immediately (see `insert`), so this is
-    // always a plain O(1) lookup, same shape as `resolve_cls_uri`.
     pub(crate) fn resolve_rtn_uri(&self, name: &str) -> Option<String> {
-        self.rtn_index.borrow().get(name).cloned()
+        self.resolve_uri(DocKind::Rtn, name)
+    }
+
+    // Every open document of `kind` whose header name starts with `prefix`. Tier A alone decides
+    // the matches, so only they pay for a full (tier B) parse.
+    fn uris_with_prefix(&self, kind: DocKind, prefix: &str) -> Vec<String> {
+        self.doc_cache
+            .iter()
+            .filter_map(|(uri, entry)| {
+                let doc = entry.as_ref().ok()?.borrow();
+                (DocKind::from_uri(uri) == Some(kind) && doc.name.it.starts_with(prefix))
+                    .then(|| uri.clone())
+            })
+            .collect()
     }
 
     // The routine declared in `uri` and its labels, as a `textDocument/documentSymbol` outline.
@@ -562,22 +559,8 @@ impl WorkspaceStruct {
         let rtn = self.rtn_details(uri).ok()?;
         let text = self.doc_text(uri)?;
         let olc = &rtn.map.expanded_olc;
-        let (end_line, end_character) = OLC::new(&text).offset_to_line_character(text.len());
-        let full_range = bindings::Range {
-            start: Position {
-                line: 0,
-                character: 0,
-            },
-            end: Position {
-                line: end_line as u32,
-                character: end_character as u32,
-            },
-        };
         let header_range = bindings::Range {
-            start: Position {
-                line: 0,
-                character: 0,
-            },
+            start: Position::default(),
             end: Position {
                 line: 0,
                 character: text.lines().next().unwrap_or_default().len() as u32,
@@ -605,7 +588,7 @@ impl WorkspaceStruct {
                 name: rtn.routine.header.name.print(),
                 kind: bindings::SymbolKind::Module,
                 deprecated: false,
-                range: full_range,
+                range: full_range(&text),
                 selection_range: header_range,
             },
             members,
@@ -953,18 +936,7 @@ impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn query_cls(&self, query: String) -> Vec<(String, bindings::ClassInfo)> {
         let this = self.borrow();
-        // Tier A alone (name only) decides which classes match -- only matches pay for a full
-        // (tier B) parse to build their `ClassInfo` below.
-        let candidates: Vec<String> = this
-            .doc_cache
-            .iter()
-            .filter_map(|(uri, entry)| {
-                let doc = entry.as_ref().ok()?.borrow();
-                (DocKind::from_uri(uri) == Some(DocKind::Cls) && doc.name.it.starts_with(&query))
-                    .then(|| uri.clone())
-            })
-            .collect();
-        candidates
+        this.uris_with_prefix(DocKind::Cls, &query)
             .into_iter()
             .filter_map(|uri| {
                 let details = this.cls_details(&uri).ok()?;
@@ -1003,24 +975,12 @@ impl bindings::GuestWorkspace for Workspace {
             DocKind::Cls => {
                 let details = this.cls_details(&uri).ok()?;
                 let text = this.doc_text(&uri)?;
-                let (end_line, end_character) =
-                    OLC::new(&text).offset_to_line_character(text.len());
-                let full_range = bindings::Range {
-                    start: Position {
-                        line: 0,
-                        character: 0,
-                    },
-                    end: Position {
-                        line: end_line as u32,
-                        character: end_character as u32,
-                    },
-                };
                 Some(bindings::DocumentSymbol {
                     root: bindings::SymbolInfo {
                         name: details.name.to_string(),
                         kind: bindings::SymbolKind::Class,
                         deprecated: details.deprecated,
-                        range: full_range,
+                        range: full_range(&text),
                         selection_range: details.name.range,
                     },
                     members: details
@@ -1046,14 +1006,22 @@ impl bindings::GuestWorkspace for Workspace {
 
     // Classes and members, and routines and labels, across the workspace whose name starts with
     // `query`, as a `workspace/symbol` result. Tier A alone decides which classes/routines match
-    // (see `query_cls` and the routine filter below); only matches pay for the full (tier B)
-    // parse needed to list their members/labels.
+    // (see `uris_with_prefix`); only matches pay for the full (tier B) parse needed to list
+    // their members/labels.
     #[allow(async_fn_in_trait)]
     fn workspace_symbol(&self, query: String) -> Vec<bindings::WorkspaceSymbol> {
         fn name_range(name: &NameInfo) -> bindings::Range {
             bindings::Range {
                 start: name.before,
                 end: name.after,
+            }
+        }
+        fn symbol_in(uri: &str, symbol: bindings::SymbolInfo) -> bindings::WorkspaceSymbol {
+            bindings::WorkspaceSymbol {
+                name: symbol.name,
+                kind: symbol.kind,
+                deprecated: symbol.deprecated,
+                location: bindings::Location::new(uri.to_string(), symbol.selection_range),
             }
         }
         let cls_symbols =
@@ -1082,42 +1050,16 @@ impl bindings::GuestWorkspace for Workspace {
                 });
 
         let this = self.borrow();
-        let candidates: Vec<String> = this
-            .doc_cache
-            .iter()
-            .filter_map(|(uri, entry)| {
-                let doc = entry.as_ref().ok()?.borrow();
-                (DocKind::from_uri(uri) == Some(DocKind::Rtn) && doc.name.it.starts_with(&query))
-                    .then(|| uri.clone())
-            })
-            .collect();
-        let rtn_symbols = candidates
+        let rtn_symbols = this
+            .uris_with_prefix(DocKind::Rtn, &query)
             .into_iter()
             .flat_map(|uri| {
                 let Some(symbol) = this.routine_symbol(&uri) else {
                     return vec![];
                 };
-                let rtn_symbol = bindings::WorkspaceSymbol {
-                    name: symbol.root.name,
-                    kind: symbol.root.kind,
-                    deprecated: symbol.root.deprecated,
-                    location: bindings::Location::new(uri.clone(), symbol.root.selection_range),
-                };
-                std::iter::once(rtn_symbol)
-                    .chain(
-                        symbol
-                            .members
-                            .into_iter()
-                            .map(|member| bindings::WorkspaceSymbol {
-                                name: member.name,
-                                kind: member.kind,
-                                deprecated: member.deprecated,
-                                location: bindings::Location::new(
-                                    uri.clone(),
-                                    member.selection_range,
-                                ),
-                            }),
-                    )
+                std::iter::once(symbol.root)
+                    .chain(symbol.members)
+                    .map(|symbol| symbol_in(&uri, symbol))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -1202,6 +1144,13 @@ fn include_names(map: &SourceMap) -> HashSet<Name> {
         .collect()
 }
 
+fn full_range(text: &str) -> bindings::Range {
+    bindings::Range {
+        start: Position::default(),
+        end: Position::from(OLC::new(text).offset_to_line_character(text.len())),
+    }
+}
+
 fn position_in_range(position: Position, range: bindings::Range) -> bool {
     fn le(a: Position, b: Position) -> bool {
         (a.line, a.character) <= (b.line, b.character)
@@ -1210,13 +1159,10 @@ fn position_in_range(position: Position, range: bindings::Range) -> bool {
 }
 
 pub(crate) fn tygr_error_to_diagnostics(e: cos::Error, src: &str) -> Diagnostic {
-    let (line, character) = OLC::new(src).offset_to_line_character(e.pos());
-    let line = line as u32;
-    let character = character as u32;
-    let start = bindings::Position { line, character };
-    let end = bindings::Position {
-        line,
-        character: character + 1,
+    let start = Position::from(OLC::new(src).offset_to_line_character(e.pos()));
+    let end = Position {
+        character: start.character + 1,
+        ..start
     };
     check::TypeError::document_syntax_error(bindings::Range { start, end }, e).into()
 }
