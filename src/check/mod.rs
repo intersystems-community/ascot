@@ -1861,9 +1861,9 @@ impl TypeUnclear for AtomicExpr {
             | AtomicExpr::BeginQuoteEndQuote(..) => false,
             AtomicExpr::CallSubroutine { .. }
             | AtomicExpr::FunctionCall(..)
-            | AtomicExpr::Super(..) => true,
+            | AtomicExpr::Super(..)
+            | AtomicExpr::Indirection(..) => true,
             AtomicExpr::Member { args, .. } => args.is_some(),
-            AtomicExpr::Indirection(..) => true,
         }
     }
 }
@@ -2071,26 +2071,13 @@ impl TryFrom<&cos::Operator> for TermOp {
             cos::Operator::Gt(..) => Ok(Self::Gt),
             cos::Operator::Ng(..) => Ok(Self::Ng),
             cos::Operator::Nl(..) => Ok(Self::Nl),
-            cos::Operator::LO(..) => Err(()),
-            cos::Operator::LA(..) => Err(()),
-            cos::Operator::And(..) => Err(()),
-            cos::Operator::NAnd(..) => Err(()),
-            cos::Operator::Or(..) => Err(()),
-            cos::Operator::NOr(..) => Err(()),
             cos::Operator::Add(..) => Ok(Self::Add),
             cos::Operator::Sub(..) => Ok(Self::Sub),
             cos::Operator::Pow(..) => Ok(Self::Pow),
             cos::Operator::Mul(..) => Ok(Self::Mul),
-            cos::Operator::Div(..) => Err(()),
             cos::Operator::IntDiv(..) => Ok(Self::IntDiv),
             cos::Operator::Mod(..) => Ok(Self::Mod),
-            cos::Operator::Concat(..) => Err(()),
-            cos::Operator::Contains(..) => Err(()),
-            cos::Operator::NotContains(..) => Err(()),
-            cos::Operator::SortsAfter(..) => Err(()),
-            cos::Operator::Follows(..) => Err(()),
-            cos::Operator::NotSortsAfter(..) => Err(()),
-            cos::Operator::NotFollows(..) => Err(()),
+            _ => Err(()),
         }
     }
 }
@@ -2149,35 +2136,16 @@ fn check_infix<'a, X>(
             }
             let lhs = ranged_quasi_ty_to_ty(env, lhs, lhs_text)?;
             let rhs = ranged_quasi_ty_to_ty(env, rhs, Some(&|| rhs_node.print()))?;
-            match op {
-                cos::Operator::Eq(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::Ne(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::Le(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::Lt(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::Ge(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::Gt(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::Ng(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::Nl(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::LO(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::LA(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::And(..) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::NAnd(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::Or(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::NOr(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::Add(_) | cos::Operator::Sub(_) => Ok(env.merge_ty(lhs, rhs).into()),
-                cos::Operator::Pow(_) => Ok(PowerTy::from("%DataType")),
-                cos::Operator::Mul(_) => Ok(PowerTy::from("%DataType")),
-                cos::Operator::Div(..) => Ok(PowerTy::from("%DataType")),
-                cos::Operator::IntDiv(_) => Ok(PowerTy::from("%Integer")),
-                cos::Operator::Mod(..) => Ok(PowerTy::from("%Integer")),
-                cos::Operator::Concat(_) => Ok(PowerTy::from("%String")),
-                cos::Operator::Contains(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::NotContains(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::SortsAfter(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::Follows(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::NotSortsAfter(_) => Ok(PowerTy::from("%Boolean")),
-                cos::Operator::NotFollows(_) => Ok(PowerTy::from("%Boolean")),
-            }
+            Ok(match op {
+                cos::Operator::Add(_) | cos::Operator::Sub(_) => env.merge_ty(lhs, rhs).into(),
+                cos::Operator::Pow(_) | cos::Operator::Mul(_) | cos::Operator::Div(..) => {
+                    PowerTy::from("%DataType")
+                }
+                cos::Operator::IntDiv(_) | cos::Operator::Mod(..) => PowerTy::from("%Integer"),
+                cos::Operator::Concat(_) => PowerTy::from("%String"),
+                // Every comparison and logical operator.
+                _ => PowerTy::from("%Boolean"),
+            })
         }
     }
 }
@@ -2198,18 +2166,13 @@ impl<T> CheckExprInner for cos::OpsExpr<T> {
             OpsExpr::Base(expr) => expr.to_power_ty(env, flow),
             OpsExpr::Prefixed { op, remaining } => {
                 let ty = remaining.as_ref().to_power_ty(env, flow)?;
-                Ok(check_prefix(op, ty, env, flow)?)
+                Ok(check_prefix(op, ty, env)?)
             }
         }
     }
 }
 
-fn check_prefix<'a>(
-    op: &PrefixOperator,
-    ty: PowerTy,
-    env: &CodeEnv<'a>,
-    _flow: &mut Flow<'a>,
-) -> Result<PowerTy, TypeError> {
+fn check_prefix(op: &PrefixOperator, ty: PowerTy, env: &CodeEnv) -> Result<PowerTy, TypeError> {
     match ty {
         PowerTy::Const(c) => Ok(match op {
             cos::PrefixOperator::Not(_) => PowerTy::Const((c.as_integer() == 0).into()),
@@ -2232,8 +2195,7 @@ fn check_prefix<'a>(
             let _ = ty.to_ty(env);
             match op {
                 cos::PrefixOperator::Not(_) => Ok(PowerTy::from("%Boolean")),
-                cos::PrefixOperator::Minus(_) => Ok(ty),
-                cos::PrefixOperator::Plus(_) => Ok(ty),
+                cos::PrefixOperator::Minus(_) | cos::PrefixOperator::Plus(_) => Ok(ty),
             }
         }
     }
@@ -2519,14 +2481,13 @@ fn check_set_member<'a>(
         None => env.resolve_mem::<Properties<Assign>>(&obj, name.clone(), range, true),
     };
     let property = referenced(env, mem, property)?;
-    match (subs, property) {
-        (Some(_), PropertyTy::Multidimensional(_)) => {}
-        (Some(_), _) => return Err(QuasiTypeError::not_multidimensional(name)),
-        (None, _) => {}
+    let Some(subs) = subs else {
+        return Ok(());
+    };
+    if !matches!(property, PropertyTy::Multidimensional(_)) {
+        return Err(QuasiTypeError::not_multidimensional(name));
     }
-    if let Some(subs) = subs
-        && subs.items.iter().all(|a| a.is_none())
-    {
+    if subs.items.iter().all(|a| a.is_none()) {
         return Err(QuasiTypeError::node_without_subscripts(name));
     }
     Ok(())
@@ -3069,14 +3030,10 @@ impl CheckCommandInner for cos::DAOElem {
             cos::DAOElem::DAO(dao) => {
                 let _ = dao.to_ty(env, flow)?;
             }
-            cos::DAOElem::True(_) => (),
-            cos::DAOElem::False(_) => (),
-            cos::DAOElem::Null(_) => (),
-            cos::DAOElem::Str(_) => (),
-            cos::DAOElem::Num(..) => (),
             cos::DAOElem::OS { content, .. } => {
                 let _ = content.to_ty(env, flow)?;
             }
+            _ => (),
         }
         Ok(())
     }

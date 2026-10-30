@@ -223,8 +223,7 @@ impl MaybeTy {
     pub(crate) fn maybe_defined(&self) -> Option<&Ty> {
         match self {
             MaybeTy::Undefined => None,
-            MaybeTy::Maybe(ty) => Some(ty),
-            MaybeTy::Plain(ty) => Some(ty),
+            MaybeTy::Maybe(ty) | MaybeTy::Plain(ty) => Some(ty),
         }
     }
 }
@@ -323,7 +322,7 @@ impl PowerTy {
     pub fn to_maybe_ty(&self, env: &WorkspaceEnv) -> MaybeTy {
         match self {
             PowerTy::Plain(ty) => ty.clone(),
-            PowerTy::Term { .. } => MaybeTy::Plain(Ty::from("%DataType")),
+            PowerTy::Term { .. } | PowerTy::Union(..) => MaybeTy::Plain(Ty::from("%DataType")),
             PowerTy::Case { cases, default, .. } => {
                 let mut default = default.clone().map(MaybeTy::from);
                 for (_, ty) in cases {
@@ -338,7 +337,6 @@ impl PowerTy {
             }
             PowerTy::Const(Const::Integer(_)) => MaybeTy::Plain(Ty::from("%Integer")),
             PowerTy::Const(Const::String(..)) => MaybeTy::Plain(Ty::from("%String")),
-            PowerTy::Union(..) => MaybeTy::Plain(Ty::from("%DataType")),
             PowerTy::Never => MaybeTy::Plain(Ty::Any),
         }
     }
@@ -518,8 +516,7 @@ pub enum ClsOrIns {
 impl ClsOrIns {
     pub fn name(&self) -> &str {
         match self {
-            ClsOrIns::Ins(name) => &name.name,
-            ClsOrIns::Cls(name) => &name.name,
+            ClsOrIns::Ins(name) | ClsOrIns::Cls(name) => &name.name,
         }
     }
 
@@ -835,15 +832,8 @@ impl VariadicArg {
 
 impl From<&Formal> for VariadicArg {
     fn from(formal: &Formal) -> Self {
-        Self::new(
-            formal
-                .call_type
-                .as_deref()
-                .map(ArgMode::from)
-                .unwrap_or_default(),
-            formal.name.print(),
-            formal.as_type.as_deref().map(Ty::from),
-        )
+        let NormalArg { mode, name, ty, .. } = NormalArg::from(formal);
+        Self::new(mode, name, ty)
     }
 }
 

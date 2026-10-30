@@ -16,6 +16,7 @@ use crate::details::WithRange;
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::collections::{BTreeSet, HashSet};
+use std::iter::once;
 use std::rc::Rc;
 
 use super::errors::IntoTypeError;
@@ -463,6 +464,21 @@ impl<'a> Flow<'a> {
         }
     }
 
+    // The condition is always `value`, so one branch is dead: the false one if it's true, else
+    // this one.
+    fn settle(&mut self, value: bool, report: bool) -> Flow<'a> {
+        let mut false_branch = self.split();
+        if report {
+            self.add_soft_diagnostic(QuasiTypeError::condition_always(value));
+        }
+        if value {
+            false_branch.bindings = None;
+        } else {
+            self.bindings = None;
+        }
+        false_branch
+    }
+
     // `report`: raise `condition_always` on a statically true/false condition. Off for a
     // loop's own condition (`while 1 { ... quit }` is an idiom, not a mistake); still on for
     // an `If`.
@@ -484,38 +500,18 @@ impl<'a> Flow<'a> {
             // can still widen (e.g. `Const("")` reassigned in the body), so killing a branch
             // now would wrongly cut the priming walk short.
             PowerTy::Const(c) if !self.shared.env.soft_diagnostics_suppressed() => {
-                let mut false_branch = self.split();
-                let cases = c.as_integer() > 0;
-                if report {
-                    self.add_soft_diagnostic(QuasiTypeError::condition_always(cases));
-                }
-                if cases {
-                    false_branch.bindings = None;
-                } else {
-                    self.bindings = None;
-                }
-                false_branch
+                self.settle(c.as_integer() > 0, report)
             }
             PowerTy::Union(fst, snd, rst) if !self.shared.env.soft_diagnostics_suppressed() => {
-                let mut false_branch = self.split();
-                let mut cases = HashSet::new();
-                cases.insert(fst.as_integer() > 0);
-                cases.insert(snd.as_integer() > 0);
-                for rst in rst {
-                    cases.insert(rst.as_integer() > 0);
+                let cases: HashSet<bool> = once(fst)
+                    .chain(once(snd))
+                    .chain(rst.iter())
+                    .map(|c| c.as_integer() > 0)
+                    .collect();
+                match Vec::from_iter(cases)[..] {
+                    [always] => self.settle(always, report),
+                    _ => self.split(),
                 }
-                if cases.len() == 1 {
-                    let cases = *cases.iter().next().unwrap();
-                    if report {
-                        self.add_soft_diagnostic(QuasiTypeError::condition_always(cases));
-                    }
-                    if cases {
-                        false_branch.bindings = None;
-                    } else {
-                        self.bindings = None;
-                    }
-                }
-                false_branch
             }
             _ => self.split(),
         }

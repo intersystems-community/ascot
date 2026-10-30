@@ -585,9 +585,9 @@ fn keyword_names(keywords: &Option<KeywordList>) -> Vec<String> {
     entries(keywords)
         .map(|entry| {
             match &***entry {
-                cos::KeywordEntry::Assign { keyword, .. } => keyword,
-                cos::KeywordEntry::Not { keyword, .. } => keyword,
-                cos::KeywordEntry::Flag(keyword) => keyword,
+                cos::KeywordEntry::Assign { keyword, .. }
+                | cos::KeywordEntry::Not { keyword, .. }
+                | cos::KeywordEntry::Flag(keyword) => keyword,
             }
             .print()
         })
