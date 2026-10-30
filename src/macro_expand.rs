@@ -554,7 +554,7 @@ impl WorkspaceStruct {
         while let Some((unit, origin, precise)) = todos.pop() {
             match unit.as_ref() {
                 MacroedUnit::Plain(unit) => dones.push_plain(&unit.print(), &origin, precise),
-                MacroedUnit::Redex(unit) => match unit {
+                MacroedUnit::Redex(redex) => match redex {
                     MacroRedex::H(HMacro { command, input }) => match command.deref() {
                         HMacroCommand::Define { name, args, .. } => {
                             let params = args
@@ -605,29 +605,14 @@ impl WorkspaceStruct {
                         }
                         HMacroCommand::Noshow(..) | HMacroCommand::Show(..) => (),
                         HMacroCommand::If(..) => {
-                            self.resolve_if(
-                                definitions,
-                                todos,
-                                dones,
-                                input.clone(),
-                                unit.print(),
-                                origin,
-                                precise,
-                            )?;
+                            self.resolve_if(definitions, todos, dones, (unit, origin, precise))?;
                         }
                         HMacroCommand::IfDef(..) | HMacroCommand::IfNDef(..) => {
                             let defined = definitions.contains_key(&macro_name_in(input));
                             let keep =
                                 defined == matches!(command.deref(), HMacroCommand::IfDef(..));
-                            self.resolve_branch(
-                                definitions,
-                                todos,
-                                dones,
-                                Some(keep),
-                                unit.print(),
-                                origin,
-                                precise,
-                            )?;
+                            let item = (unit, origin, precise);
+                            self.resolve_branch(definitions, todos, dones, Some(keep), item)?;
                         }
                         HMacroCommand::Undef(..) => {
                             definitions.remove(&macro_name_in(input));
@@ -880,20 +865,19 @@ impl WorkspaceStruct {
         Ok(dones.text)
     }
 
-    // Resolves one `#if`/`#elseif` branch by its condition: "1" keeps it, "0" drops it, and
-    // anything else is unresolved (see `resolve_branch`).
-    #[allow(clippy::too_many_arguments)]
+    // Resolves the `#if`/`#elseif` `item` by its condition: "1" keeps its branch, "0" drops it,
+    // and anything else is unresolved (see `resolve_branch`).
     fn resolve_if(
         &self,
         definitions: &mut MacroDefinitions,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
-        condition: cos::MacroInput,
-        printed: String,
-        origin: Origin,
-        precise: bool,
+        item: TodoItem<'_>,
     ) -> Result<(), tygr::Error> {
-        let expanded = self.expand_text(definitions, &import_macro_input(&condition))?;
+        let MacroedUnit::Redex(MacroRedex::H(HMacro { input, .. })) = item.0.as_ref() else {
+            unreachable!("resolve_if is only handed an #if or #elseif");
+        };
+        let expanded = self.expand_text(definitions, &import_macro_input(input))?;
         // `#if 0 /* Maintenance */` -- a trailing comment is common and not part of the test.
         let end = ["/*", "//", ";"]
             .iter()
@@ -905,23 +889,20 @@ impl WorkspaceStruct {
             "0" => Some(false),
             _ => None,
         };
-        self.resolve_branch(definitions, todos, dones, decided, printed, origin, precise)
+        self.resolve_branch(definitions, todos, dones, decided, item)
     }
 
     // Keeps a decided-true branch (discarding the rest of the chain via take_branch+skip_branch),
     // drops a decided-false one and tries the closing `#elseif` in turn, and leaves an undecided
     // one alone -- the directive prints unexpanded and `todos` is left untouched, so the rest of
     // the chain is also left unresolved rather than discarded.
-    #[allow(clippy::too_many_arguments)]
     fn resolve_branch(
         &self,
         definitions: &mut MacroDefinitions,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
         decided: Option<bool>,
-        printed: String,
-        origin: Origin,
-        precise: bool,
+        item: TodoItem<'_>,
     ) -> Result<(), tygr::Error> {
         match decided {
             Some(true) => {
@@ -934,23 +915,11 @@ impl WorkspaceStruct {
             }
             Some(false) => match skip_branch(todos) {
                 BranchEnd::EndIf | BranchEnd::Else => Ok(()),
-                BranchEnd::Elseif {
-                    condition,
-                    printed,
-                    origin,
-                    precise,
-                } => self.resolve_if(
-                    definitions,
-                    todos,
-                    dones,
-                    condition,
-                    printed,
-                    origin,
-                    precise,
-                ),
+                BranchEnd::Elseif(elseif) => self.resolve_if(definitions, todos, dones, *elseif),
             },
             None => {
-                dones.push(&printed, &origin, precise);
+                let (unit, origin, precise) = item;
+                dones.push(&unit.print(), &origin, precise);
                 Ok(())
             }
         }
@@ -1346,38 +1315,27 @@ fn precise_items<'a>(
 }
 
 // What closes a decided-false `#if`/`#elseif` branch, as found by `skip_branch`.
-enum BranchEnd {
+enum BranchEnd<'a> {
     EndIf,
     // Its body is left in `todos` to flow normally.
     Else,
-    Elseif {
-        condition: cos::MacroInput,
-        printed: String,
-        origin: Origin,
-        precise: bool,
-    },
+    // The directive itself, for `resolve_if`; boxed, being far larger than the other ends.
+    Elseif(Box<TodoItem<'a>>),
 }
 
 // Scans a branch's body, feeding each unit to `keep`, until finding what closes it. A `level`
 // counter tells a nested `#if`'s own terminator apart from the one closing this branch.
-fn scan_branch<'a>(todos: &mut TodoList<'a>, mut keep: impl FnMut(TodoItem<'a>)) -> BranchEnd {
+fn scan_branch<'a>(todos: &mut TodoList<'a>, mut keep: impl FnMut(TodoItem<'a>)) -> BranchEnd<'a> {
     let mut level = 0usize;
     while let Some(item) = todos.pop() {
-        let MacroedUnit::Redex(MacroRedex::H(HMacro { command, input })) = item.0.as_ref() else {
+        let MacroedUnit::Redex(MacroRedex::H(HMacro { command, .. })) = item.0.as_ref() else {
             keep(item);
             continue;
         };
         match command.deref() {
             HMacroCommand::EndIf(..) if level == 0 => return BranchEnd::EndIf,
             HMacroCommand::Else(..) if level == 0 => return BranchEnd::Else,
-            HMacroCommand::Elseif(..) if level == 0 => {
-                return BranchEnd::Elseif {
-                    condition: input.clone(),
-                    printed: item.0.print(),
-                    origin: item.1,
-                    precise: item.2,
-                };
-            }
+            HMacroCommand::Elseif(..) if level == 0 => return BranchEnd::Elseif(Box::new(item)),
             // Only `#endif` closes a nested `#if` — an `#elseif`/`#else` at level > 0 is just
             // one of *its* own branches, not a terminator, so it doesn't reduce the level.
             HMacroCommand::If(..) | HMacroCommand::IfDef(..) | HMacroCommand::IfNDef(..) => {
@@ -1391,11 +1349,11 @@ fn scan_branch<'a>(todos: &mut TodoList<'a>, mut keep: impl FnMut(TodoItem<'a>))
     BranchEnd::EndIf
 }
 
-fn skip_branch(todos: &mut TodoList<'_>) -> BranchEnd {
+fn skip_branch<'a>(todos: &mut TodoList<'a>) -> BranchEnd<'a> {
     scan_branch(todos, |_| {})
 }
 
-fn take_branch<'a>(todos: &mut TodoList<'a>) -> (Vec<TodoItem<'a>>, BranchEnd) {
+fn take_branch<'a>(todos: &mut TodoList<'a>) -> (Vec<TodoItem<'a>>, BranchEnd<'a>) {
     let mut taken = Vec::new();
     let end = scan_branch(todos, |item| taken.push(item));
     (taken, end)
