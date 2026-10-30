@@ -543,15 +543,7 @@ impl WorkspaceStruct {
             }
             return Ok((Routine::parse(&dones.text)?, definitions));
         }
-        let mut todos = TodoList::new(
-            macroed_units
-                .iter()
-                .map(|x| {
-                    let origin = Origin::top_level(x.start..x.end);
-                    (Cow::Borrowed(x.deref()), origin, true)
-                })
-                .collect(),
-        );
+        let mut todos = TodoList::new(precise_items(&macroed_units, Origin::top_level));
         self.expand_units(&mut definitions, &mut todos, dones)?;
         Ok((Routine::parse(&dones.text)?, definitions))
     }
@@ -1017,16 +1009,9 @@ impl WorkspaceStruct {
                     let (inc_uri, inc_text, inc_units) = &*include;
                     let mut dones = DoneList::new();
                     dones.note_included_file(inc_uri.clone(), inc_text);
-                    let mut todos = TodoList::new(
-                        inc_units
-                            .iter()
-                            .map(|x| {
-                                let origin = Origin::top_level(0..0)
-                                    .for_included_file(inc_uri.clone(), x.start..x.end);
-                                (Cow::Borrowed(x.deref()), origin, true)
-                            })
-                            .collect(),
-                    );
+                    let mut todos = TodoList::new(precise_items(inc_units, |range| {
+                        Origin::top_level(0..0).for_included_file(inc_uri.clone(), range)
+                    }));
                     let _ = self.expand_units(&mut definitions, &mut todos, &mut dones);
                     // Whatever the include itself included: an edit there changes this class too.
                     include_names.extend(dones.include_names);
@@ -1075,18 +1060,7 @@ impl WorkspaceStruct {
             for x in in_header {
                 dones.push(&x.print(), &Origin::top_level(x.start..x.end), true);
             }
-            let mut todos = TodoList::new(
-                in_body
-                    .into_iter()
-                    .map(|x| {
-                        (
-                            Cow::Borrowed(x.deref()),
-                            Origin::top_level(x.start..x.end),
-                            true,
-                        )
-                    })
-                    .collect(),
-            );
+            let mut todos = TodoList::new(precise_items(in_body, Origin::top_level));
             self.expand_units(&mut definitions, &mut todos, &mut dones)
         })();
         let map = dones.into_source_map(&text);
@@ -1377,6 +1351,17 @@ impl<'a> TodoList<'a> {
     fn push_items(&mut self, items: Vec<TodoItem<'a>>) {
         self.0.extend(items.into_iter().rev());
     }
+}
+
+// Each of `units` as a precise item, at the origin `origin_at` makes of its source range.
+fn precise_items<'a>(
+    units: impl IntoIterator<Item = &'a Range<MacroedUnit>>,
+    origin_at: impl Fn(std::ops::Range<usize>) -> Origin,
+) -> Vec<TodoItem<'a>> {
+    units
+        .into_iter()
+        .map(|x| (Cow::Borrowed(x.deref()), origin_at(x.start..x.end), true))
+        .collect()
 }
 
 // What closes a decided-false `#if`/`#elseif` branch, as found by `skip_branch`.
