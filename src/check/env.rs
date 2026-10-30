@@ -342,6 +342,27 @@ fn location(member: &bindings::MemberInfo) -> Option<bindings::Location> {
         .map(|uri| bindings::Location::new(uri, range))
 }
 
+// The `IDKEY` index IRIS gives a persistent class that declares no id key: no `On` clause, so
+// its accessors take the id.
+fn default_id_key() -> bindings::IndexInfo {
+    bindings::IndexInfo {
+        on: None,
+        abstract_: false,
+        condition: None,
+        coshard_with: None,
+        data: vec![],
+        deferred: false,
+        extent: false,
+        id_key: true,
+        internal: false,
+        primary_key: false,
+        shard_key: false,
+        sql_name: None,
+        type_: Some(bindings::IndexType::Key),
+        unique: false,
+    }
+}
+
 // An IRIS-reported member of `cls`, typed and masked by its declaring class.
 fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<Found<N::Ty>> {
     let origin = member.origin.clone().unwrap_or_else(|| cls.to_string());
@@ -578,6 +599,13 @@ impl<'a> WorkspaceEnv<'a> {
                     if let MemberKindSpecificDetails::Index(index) = &index.kind {
                         add(name, self.index_methods(cls, &index.into()));
                     }
+                }
+                // A persistent class without an id key of its own gets IRIS's `IDKEY` on the id.
+                let declares_id_key = details.members.index.values().any(|index| {
+                    matches!(&index.kind, MemberKindSpecificDetails::Index(index) if index.id_key)
+                });
+                if !declares_id_key && self.is_persistent(cls) {
+                    add("IDKEY", self.index_methods(cls, &default_id_key()));
                 }
                 for name in details.members.query.keys() {
                     add(name, query_methods());
@@ -1297,6 +1325,11 @@ impl<'a> WorkspaceEnv<'a> {
     // shared ancestor is a sound upper bound for merging.
     fn ancestors(&self, cls: &str) -> Vec<String> {
         self.ancestry(cls).map(|(cls, _)| cls).collect()
+    }
+
+    fn is_persistent(&self, cls: &str) -> bool {
+        self.ancestry(cls)
+            .any(|(cls, _)| matches!(cls.as_str(), "%Library.Persistent" | "%Persistent"))
     }
 
     pub fn new(workspace: &'a WorkspaceStruct) -> Self {
