@@ -750,45 +750,35 @@ impl CheckCommandInner for cos::EntryRefAndArgs {
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
     ) -> Result<(), QuasiTypeError> {
-        match self {
+        let mut diverges = false;
+        let ret = match self {
             EntryRefAndArgs::Expression(expr_call) => match expr_call {
                 cos::MethodOrFuncCallExpr::Method { obj, mem, args } => {
                     let ty = base_property(obj, env, flow)?;
-                    let diverges =
-                        matches!(&ty, PropertyTy::Value(ty) if never_returns(ty, &mem.id()));
-                    let ret = check_member_of(ty, mem.deref(), Some(args), env, flow)?;
-                    warn_if_discarding_status_or_boolean(flow, ret.as_ref());
-                    if diverges {
-                        flow.handle_throw()?;
-                    }
-                    Ok(())
+                    diverges = matches!(&ty, PropertyTy::Value(ty) if never_returns(ty, &mem.id()));
+                    check_member_of(ty, mem.deref(), Some(args), env, flow)?
                 }
                 cos::MethodOrFuncCallExpr::SelfMethod { member, args } => {
                     let obj = Ty::OREF(env.this()?);
-                    let ret = check_member(obj, member.deref(), Some(args), env, flow)?;
-                    warn_if_discarding_status_or_boolean(flow, ret.as_ref());
-                    Ok(())
+                    check_member(obj, member.deref(), Some(args), env, flow)?
                 }
                 cos::MethodOrFuncCallExpr::Super(sup) => {
-                    let ret = check_super_call(env, flow, &sup.prefixed)?;
-                    warn_if_discarding_status_or_boolean(flow, ret.as_ref());
-                    Ok(())
+                    check_super_call(env, flow, &sup.prefixed)?
                 }
-                cos::MethodOrFuncCallExpr::Function(call) => {
-                    let ret = match call.to_maybe_ty(env, flow)? {
-                        MaybeTy::Maybe(ty) | MaybeTy::Plain(ty) => Some(ty),
-                        MaybeTy::Undefined => None,
-                    };
-                    warn_if_discarding_status_or_boolean(flow, ret.as_ref());
-                    Ok(())
-                }
+                cos::MethodOrFuncCallExpr::Function(call) => match call.to_maybe_ty(env, flow)? {
+                    MaybeTy::Maybe(ty) | MaybeTy::Plain(ty) => Some(ty),
+                    MaybeTy::Undefined => None,
+                },
             },
             EntryRefAndArgs::Legacy { proc, args } => {
-                let ret = check_legacy_label_call(env, flow, proc, args, false)?;
-                warn_if_discarding_status_or_boolean(flow, ret.as_ref());
-                Ok(())
+                check_legacy_label_call(env, flow, proc, args, false)?
             }
+        };
+        warn_if_discarding_status_or_boolean(flow, ret.as_ref());
+        if diverges {
+            flow.handle_throw()?;
         }
+        Ok(())
     }
 }
 
@@ -1222,15 +1212,9 @@ impl CheckCommandInner for cos::Command {
                 b2,
                 ..
             }) => check_try(env, flow, b1.deref(), catch_target.as_ref(), b2),
-            cos::Command::Throw(cos::ThrowCommand { pc, e, .. }) => {
-                check_pc(pc, env, flow, |flow| {
-                    if let Some(e) = e {
-                        e.to_ty(env, flow)?;
-                    }
-                    flow.handle_throw()
-                })
-            }
-            cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. }) => {
+            cos::Command::Throw(cos::ThrowCommand { pc, e: exp, .. })
+            | cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. })
+            | cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
                     if let Some(exp) = exp {
                         exp.to_ty(env, flow)?;
@@ -1310,9 +1294,9 @@ impl CheckCommandInner for cos::Command {
                     Ok(())
                 })
             }
-            cos::Command::Lock(cos::LockCommand { .. }) => Ok(()),
-            cos::Command::Hang(cos::HangCommand { .. }) => Ok(()),
-            cos::Command::Job(cos::JobCommand { .. }) => Ok(()),
+            cos::Command::Lock(cos::LockCommand { .. })
+            | cos::Command::Hang(cos::HangCommand { .. })
+            | cos::Command::Job(cos::JobCommand { .. }) => Ok(()),
             // The transaction level isn't tracked: it depends on the run-time conditions around
             // each `TSTART`/`TCOMMIT`, and a flow-insensitive count only produced false alarms.
             cos::Command::TStart(cos::TStartCommand { pc, .. })
@@ -1405,14 +1389,6 @@ impl CheckCommandInner for cos::Command {
             cos::Command::HTML(_, html, _) => check_embedded_expressions(flow, &html.print()),
             cos::Command::JS(cos::JSCommand { content, .. }) => {
                 check_embedded_expressions(flow, &content.print())
-            }
-            cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
-                check_pc(pc, env, flow, |flow| {
-                    if let Some(exp) = exp {
-                        exp.to_ty(env, flow)?;
-                    }
-                    flow.handle_throw()
-                })
             }
             cos::Command::ElseIf(..) => Err(QuasiTypeError::unimplemented(
                 "Stand-alone ElseIf Command".to_string(),
@@ -2674,20 +2650,23 @@ fn check_param_arg<'a>(
     }
     // A mode mismatch compiles (the caller's `.` alone decides by-reference; `ByRef`/`Output`
     // document intent), so it's reported softly and the rest of the call is still checked.
-    match (&par.mode, arg.deref()) {
-        (_, Some(cos::MthArg::Expr { expr, expand })) => {
+    let mode_mismatch = |flow: &Flow<'a>, given| {
+        flow.add_soft_diagnostic(QuasiTypeError::WithRange(
+            TypeError::mismatch_argument_mode(
+                par.name.clone(),
+                par.mode,
+                given,
+                env.range(arg),
+                declared_at.clone(),
+            ),
+        ));
+    };
+    match arg.deref() {
+        Some(cos::MthArg::Expr { expr, expand }) => {
             // A value where `ByRef`/`Output` is declared: the callee's changes never reach the
             // caller.
             if par.mode != ArgMode::Default {
-                flow.add_soft_diagnostic(QuasiTypeError::WithRange(
-                    TypeError::mismatch_argument_mode(
-                        par.name.clone(),
-                        par.mode,
-                        ArgMode::Default,
-                        env.range(arg),
-                        declared_at.clone(),
-                    ),
-                ));
+                mode_mismatch(flow, ArgMode::Default);
             }
             let target = par.ty.clone().unwrap_or_default();
             let source = expr.to_power_ty(env, flow)?;
@@ -2700,17 +2679,9 @@ fn check_param_arg<'a>(
             env.assert_value_compatible(&source, &target)
                 .map_err(|err| err.assign(par.name))?;
         }
-        (_, Some(cos::MthArg::ByRef { target, .. })) => {
+        Some(cos::MthArg::ByRef { target, .. }) => {
             if par.mode == ArgMode::Default {
-                flow.add_soft_diagnostic(QuasiTypeError::WithRange(
-                    TypeError::mismatch_argument_mode(
-                        par.name.clone(),
-                        ArgMode::Default,
-                        ArgMode::ByRef,
-                        env.range(arg),
-                        declared_at.clone(),
-                    ),
-                ));
+                mode_mismatch(flow, ArgMode::ByRef);
             }
             let source = PowerTy::from(par.ty.clone().unwrap_or_default());
             match target.as_variable() {
@@ -2726,7 +2697,7 @@ fn check_param_arg<'a>(
                 None => check_merge_target(target, source, env.range(arg), env, flow)?,
             }
         }
-        (_, None) => {
+        None => {
             if par.required() {
                 return Err(QuasiTypeError::too_few_arguments(par.name, declared_at));
             }
@@ -3060,12 +3031,12 @@ fn check_label_call<'a>(
     extrinsic: bool,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     let label = label
-        .map(|label| check_label(env, flow, label))
+        .map(|label| plain_name(env, flow, label))
         .transpose()?
         .flatten();
     let offset = offset.map(|offset| offset.to_ty(env, flow)).transpose()?;
     let routine = routine
-        .map(|routine| check_routine(env, flow, routine))
+        .map(|routine| plain_name(env, flow, &routine.name))
         .transpose()?
         .flatten();
     call_label(env, flow, label, offset, routine, args, range, extrinsic)
@@ -3117,34 +3088,19 @@ fn call_label<'a>(
     )
 }
 
-// `None` for an indirect label — we can't know its name statically, so `resolve_label` falls
-// back to `Any` the same way it does for a label that's merely absent.
-fn check_label<'a>(
+// A label or routine name — `None` for an indirect one, which we can't know statically, so
+// `resolve_label` falls back to `Any` the same way it does for a label that's merely absent. A
+// routine's `extension` (an explicit `.mac`/`.int` qualifier) doesn't need checking on its own —
+// any routine reference at all already makes `resolve_label` fall back to `Any`.
+fn plain_name<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    label: &Range<AllowIndirection<Label>>,
+    name: &AllowIndirection<impl Grammar>,
 ) -> Result<Option<String>, QuasiTypeError> {
-    match label.deref() {
-        AllowIndirection::Plain(label) => Ok(Some(label.print())),
+    match name {
+        AllowIndirection::Plain(name) => Ok(Some(name.print())),
         AllowIndirection::Indirection(indirection) => {
             let _ = indirection.to_ty(env, flow)?;
-            Ok(None)
-        }
-    }
-}
-
-// `None` for an indirect routine name, same reasoning as `check_label`. `extension` (an explicit
-// `.mac`/`.int` qualifier) doesn't need checking on its own — any routine reference at all
-// already makes `resolve_label` fall back to `Any`, regardless of extension.
-fn check_routine<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    routine: &ExtendedRoutineReference,
-) -> Result<Option<String>, QuasiTypeError> {
-    match &routine.name {
-        AllowIndirection::Plain(name) => Ok(Some(name.print())),
-        AllowIndirection::Indirection(indir) => {
-            let _ = indir.to_ty(env, flow)?;
             Ok(None)
         }
     }
@@ -3540,6 +3496,10 @@ pub(crate) fn check_cls(
     diagnostics
 }
 
+fn contains_ci(words: &[&str], word: &str) -> bool {
+    words.iter().any(|k| k.eq_ignore_ascii_case(word))
+}
+
 fn check_property_or_parameter_declaration(
     env: &DocumentEnv,
     class_name: &str,
@@ -3555,10 +3515,7 @@ fn check_property_or_parameter_declaration(
             type_param_names,
         } => {
             for keyword in bare_keywords {
-                if PROPERTY_KEYWORDS_WITH_VALUE
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(keyword))
-                {
+                if contains_ci(PROPERTY_KEYWORDS_WITH_VALUE, keyword) {
                     diagnostics.push(
                         TypeError::property_keyword_without_value(keyword.clone(), member.range)
                             .into(),
@@ -3570,10 +3527,7 @@ fn check_property_or_parameter_declaration(
                 env.base.check_declared_class_exists(&name, member.range);
             }
             for keyword in keywords {
-                if !PROPERTY_KEYWORDS
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(keyword))
-                {
+                if !contains_ci(PROPERTY_KEYWORDS, keyword) {
                     diagnostics.push(
                         TypeError::unrecognized_property_keyword(keyword.clone(), member.range)
                             .into(),
@@ -3596,9 +3550,7 @@ fn check_property_or_parameter_declaration(
                     .chain(property_classes.iter().map(String::as_str))
                     .collect();
                 for name in type_param_names {
-                    let is_property_keyword = PROPERTY_KEYWORDS
-                        .iter()
-                        .any(|k| k.eq_ignore_ascii_case(name));
+                    let is_property_keyword = contains_ci(PROPERTY_KEYWORDS, name);
                     // Probed quietly: a candidate nobody can see resolves the parameter on trust,
                     // and offline that is every system type class.
                     let was_suppressed = env.base.suppress_soft_diagnostics();
@@ -3657,19 +3609,14 @@ fn check_property_or_parameter_declaration(
             as_type, keywords, ..
         } => {
             if let Some(meta_type) = as_type
-                && !PARAMETER_TYPE_KEYWORDS
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(meta_type))
+                && !contains_ci(PARAMETER_TYPE_KEYWORDS, meta_type)
             {
                 diagnostics.push(
                     TypeError::unrecognized_parameter_type(meta_type.clone(), member.range).into(),
                 );
             }
             for keyword in keywords {
-                if !PARAMETER_KEYWORDS
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case(keyword))
-                {
+                if !contains_ci(PARAMETER_KEYWORDS, keyword) {
                     diagnostics.push(
                         TypeError::unrecognized_parameter_keyword(keyword.clone(), member.range)
                             .into(),
