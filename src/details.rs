@@ -173,7 +173,7 @@ impl MemberNs {
             MemberKindSpecificDetails::Property { .. } => Self::Property,
             MemberKindSpecificDetails::MethodOrClassMethod(..)
             | MemberKindSpecificDetails::ClientMethod => Self::Method,
-            MemberKindSpecificDetails::Index { .. } => Self::Index,
+            MemberKindSpecificDetails::Index(_) => Self::Index,
             MemberKindSpecificDetails::Query => Self::Query,
             _ => Self::Other,
         }
@@ -230,6 +230,31 @@ pub struct MemberDetails {
     pub kind: MemberKindSpecificDetails,
 }
 
+// `Index name On keys [ keywords ]`, as declared: `bindings::IndexInfo` with the keys' ranges.
+pub struct IndexDetails {
+    // `None` without an `On` clause.
+    pub on: Option<Vec<IndexKey>>,
+    pub abstract_: bool,
+    pub condition: Option<String>,
+    pub coshard_with: Option<String>,
+    pub data: Vec<String>,
+    pub deferred: bool,
+    pub extent: bool,
+    pub id_key: bool,
+    pub internal: bool,
+    pub primary_key: bool,
+    pub shard_key: bool,
+    pub sql_name: Option<String>,
+    pub type_: Option<bindings::IndexType>,
+    pub unique: bool,
+}
+
+pub struct IndexKey {
+    pub property: WithRange<String>,
+    pub subscript: Option<bindings::IndexSubscript>,
+    pub collation: Option<String>,
+}
+
 pub enum MemberKindSpecificDetails {
     MethodOrClassMethod(Box<MethodDetails>),
     Property {
@@ -254,11 +279,7 @@ pub enum MemberKindSpecificDetails {
     },
     ClientMethod,
     ForeignKey,
-    Index {
-        // One per `On` key, in order; `None` for a `(KEYS)`/`(ELEMENTS)` collection subscript,
-        // which isn't typed yet.
-        on_properties: Vec<Option<WithRange<String>>>,
-    },
+    Index(IndexDetails),
     Projection,
     Trigger,
     XData,
@@ -462,13 +483,26 @@ fn is_deprecated(keywords: &Option<KeywordList>) -> bool {
     }
 }
 
-// `ProcedureBlock`, at class or method level: `Not ProcedureBlock`/`ProcedureBlock = 0` turn it
-// off. `None` when unspecified -- a method then follows its class, a class defaults to on.
-fn procedure_block(keywords: &Option<KeywordList>) -> Option<bool> {
-    Some(match keywords.as_ref()?.get("ProcedureBlock")? {
+// A boolean keyword: `Not X`/`X = 0` turn it off, `X`/`X = 1` on. `None` when unspecified -- a
+// method's `ProcedureBlock` then follows its class, a class's defaults to on.
+fn keyword_flag(keywords: &Option<KeywordList>, name: &str) -> Option<bool> {
+    Some(match keywords.as_ref()?.get(name)? {
         cos::KeywordEntry::Not { .. } => false,
         cos::KeywordEntry::Assign { value, .. } => value.print().trim() != "0",
         cos::KeywordEntry::Flag(_) => true,
+    })
+}
+
+// An index's `[ Type = ... ]`, as the grammar and `%Dictionary.CompiledIndex` spell it; `None` for
+// a standard index (`index`, or unspecified).
+pub(crate) fn index_type(text: &str) -> Option<bindings::IndexType> {
+    Some(match text.trim().to_ascii_lowercase().as_str() {
+        "bitmap" => bindings::IndexType::Bitmap,
+        "bitslice" => bindings::IndexType::Bitslice,
+        "collatedkey" => bindings::IndexType::CollatedKey,
+        "columnar" => bindings::IndexType::Columnar,
+        "key" => bindings::IndexType::Key,
+        _ => return None,
     })
 }
 
@@ -666,7 +700,8 @@ impl TryFrom<&str> for ClassDetails {
                 _ => None,
             })
             .collect();
-        let class_procedure_block = procedure_block(&cls.keyword_list).unwrap_or(true);
+        let class_procedure_block =
+            keyword_flag(&cls.keyword_list, "ProcedureBlock").unwrap_or(true);
         let is_datatype = is_datatype(&cls.keyword_list);
         let inheritance_right = keyword_value(&cls.keyword_list, "Inheritance")
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("right"));
@@ -725,17 +760,53 @@ fn process_member(
             deprecated || is_deprecated(&fk.keywords),
             MemberKindSpecificDetails::ForeignKey,
         ),
-        cos::Member::Index(index) => (
-            with_range_name(&index.name, olc),
-            deprecated || is_deprecated(&index.keywords),
-            MemberKindSpecificDetails::Index {
-                on_properties: index
-                    .on_properties()
-                    .into_iter()
-                    .map(|key| key.kind.is_none().then(|| with_range_name(&key.name, olc)))
-                    .collect(),
-            },
-        ),
+        cos::Member::Index(index) => {
+            let flag = |name| keyword_flag(&index.keywords, name).unwrap_or(false);
+            let value = |name| keyword_value(&index.keywords, name);
+            (
+                with_range_name(&index.name, olc),
+                deprecated || is_deprecated(&index.keywords),
+                MemberKindSpecificDetails::Index(IndexDetails {
+                    on: index.on_properties().map(|keys| {
+                        keys.into_iter()
+                            .map(|key| IndexKey {
+                                property: with_range_name(&key.name, olc),
+                                subscript: key.kind.as_ref().map(|kind| match kind {
+                                    cos::IndexPropertyKind::Keys(_) => {
+                                        bindings::IndexSubscript::Keys
+                                    }
+                                    cos::IndexPropertyKind::Elements(_) => {
+                                        bindings::IndexSubscript::Elements
+                                    }
+                                }),
+                                collation: key.collation(),
+                            })
+                            .collect()
+                    }),
+                    abstract_: flag("Abstract"),
+                    condition: value("Condition").map(|condition| {
+                        let condition = condition.trim();
+                        condition
+                            .strip_prefix('{')
+                            .and_then(|c| c.strip_suffix('}'))
+                            .unwrap_or(condition)
+                            .trim()
+                            .to_string()
+                    }),
+                    coshard_with: value("CoshardWith"),
+                    data: value("Data").map_or_else(Vec::new, |data| class_list_text(&data)),
+                    deferred: flag("Deferred"),
+                    extent: flag("Extent"),
+                    id_key: flag("IdKey"),
+                    internal: flag("Internal"),
+                    primary_key: flag("PrimaryKey"),
+                    shard_key: flag("ShardKey"),
+                    sql_name: value("SqlName"),
+                    type_: value("Type").and_then(|t| index_type(&t)),
+                    unique: flag("Unique"),
+                }),
+            )
+        }
         cos::Member::Method(method) => {
             let name = with_range_name(&method.name, olc);
             let deprecated = deprecated || is_deprecated(&method.keywords);
@@ -878,7 +949,7 @@ fn method_kind(
         .and_then(|value| MethodLanguage::parse(&value).ok());
     let mode =
         keyword_value(&method.keywords, "CodeMode").and_then(|value| CodeMode::parse(&value).ok());
-    let procedure_block = procedure_block(&method.keywords)
+    let procedure_block = keyword_flag(&method.keywords, "ProcedureBlock")
         .unwrap_or(class_procedure_block)
         .then(|| public_list_keyword(&method.keywords, olc));
     let is_abstract = method

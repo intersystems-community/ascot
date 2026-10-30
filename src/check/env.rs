@@ -342,6 +342,27 @@ fn location(member: &bindings::MemberInfo) -> Option<bindings::Location> {
         .map(|uri| bindings::Location::new(uri, range))
 }
 
+// The `IDKEY` index IRIS gives a persistent class that declares no id key: no `On` clause, so
+// its accessors take the id.
+fn default_id_key() -> bindings::IndexInfo {
+    bindings::IndexInfo {
+        on: None,
+        abstract_: false,
+        condition: None,
+        coshard_with: None,
+        data: vec![],
+        deferred: false,
+        extent: false,
+        id_key: true,
+        internal: false,
+        primary_key: false,
+        shard_key: false,
+        sql_name: None,
+        type_: Some(bindings::IndexType::Key),
+        unique: false,
+    }
+}
+
 // An IRIS-reported member of `cls`, typed and masked by its declaring class.
 fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<Found<N::Ty>> {
     let origin = member.origin.clone().unwrap_or_else(|| cls.to_string());
@@ -575,9 +596,16 @@ impl<'a> WorkspaceEnv<'a> {
                     }
                 }
                 for (name, index) in &details.members.index {
-                    if let MemberKindSpecificDetails::Index { on_properties } = &index.kind {
-                        add(name, self.index_methods(cls, on_properties));
+                    if let MemberKindSpecificDetails::Index(index) = &index.kind {
+                        add(name, self.index_methods(cls, &index.into()));
                     }
+                }
+                // A persistent class without an id key of its own gets IRIS's `IDKEY` on the id.
+                let declares_id_key = details.members.index.values().any(|index| {
+                    matches!(&index.kind, MemberKindSpecificDetails::Index(index) if index.id_key)
+                });
+                if !declares_id_key && self.is_persistent(cls) {
+                    add("IDKEY", self.index_methods(cls, &default_id_key()));
                 }
                 for name in details.members.query.keys() {
                     add(name, query_methods());
@@ -588,10 +616,6 @@ impl<'a> WorkspaceEnv<'a> {
                 );
             }
             Some(Class::Iris(info)) => {
-                let zero = bindings::Range::point(bindings::Position {
-                    line: 0,
-                    character: 0,
-                });
                 for member in &info.members {
                     let name = member.name.content.as_str();
                     match &member.kind {
@@ -603,12 +627,7 @@ impl<'a> WorkspaceEnv<'a> {
                             };
                             add(name, self.property_methods(ty));
                         }
-                        MemberKind::Index(index) => {
-                            let keys: Vec<_> = (index.properties.iter())
-                                .map(|key| Some(WithRange::new(key.clone(), zero)))
-                                .collect();
-                            add(name, self.index_methods(cls, &keys));
-                        }
+                        MemberKind::Index(index) => add(name, self.index_methods(cls, index)),
                         MemberKind::Query => add(name, query_methods()),
                         MemberKind::Method(_) | MemberKind::ClassMethod(_) if name == "%OnNew" => {
                             add("", new(iris_found::<Methods>(member.clone(), cls)));
@@ -699,69 +718,89 @@ impl<'a> WorkspaceEnv<'a> {
         (methods, complete)
     }
 
-    // `Index AB On (A, B)` generates `ABOpen(aVal As <A>, bVal As <B>, concurrency, ByRef sc)`,
-    // `ABExists` and `ABDelete`; `Open` returns the class it is called on, not `cls`.
-    fn index_methods(
-        &self,
-        cls: &str,
-        on_properties: &[Option<WithRange<String>>],
-    ) -> Vec<(String, Generated)> {
-        let cls = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
-        let keys: Vec<NormalArg> = on_properties
+    // The accessors IRIS generates for an index, as measured: nothing for a bitmap or an index
+    // subscripted on a collection; `Exists(keys..., Output id)` for any other with keys, or for an
+    // id key, whose one argument is the id; `Open(keys..., concurrency, ByRef sc)` and
+    // `Delete(keys..., concurrency)` too when it is unique, a primary key or the id key. `Open`
+    // returns the class it is called on, not `cls`.
+    fn index_methods(&self, cls: &str, index: &bindings::IndexInfo) -> Vec<(String, Generated)> {
+        let keys = index.on.as_deref().unwrap_or_default();
+        if index.type_ == Some(bindings::IndexType::Bitmap)
+            || keys.iter().any(|key| key.subscript.is_some())
+            || (keys.is_empty() && !index.id_key)
+        {
+            return vec![];
+        }
+        let arg = |name: &str, mode, ty: Ty, default: Option<&str>| {
+            NormalArg::new(mode, name.into(), Some(ty), default.map(str::to_string))
+        };
+        let this = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
+        let mut args: Vec<NormalArg> = keys
             .iter()
-            .map(|property| {
+            .map(|key| {
                 // Quietly: `check_cls` resolves the key itself, hint and all.
                 let was_suppressed = self.suppress_soft_diagnostics();
-                let found = property.as_ref().and_then(|p| {
-                    self.find::<Properties<Read>>(&cls, &p.it, true, p.range)
-                        .ok()
-                        .flatten()
-                });
+                let found = self
+                    .find::<Properties<Read>>(
+                        &this,
+                        &key.property,
+                        true,
+                        bindings::Range::default(),
+                    )
+                    .ok()
+                    .flatten();
                 self.restore_soft_diagnostics(was_suppressed);
                 let ty = match found.map(|found| found.ty) {
                     Some(PropertyTy::Value(ty)) => ty,
                     _ => Ty::Any,
                 };
-                NormalArg::new(ArgMode::Default, "value".into(), Some(ty), None)
+                arg("value", ArgMode::Default, ty, None)
             })
             .collect();
-        let arg = |name: &str, mode, ty: &str, default: Option<&str>| {
-            NormalArg::new(
-                mode,
-                name.into(),
-                Some(Ty::from(ty)),
-                default.map(str::to_string),
-            )
-        };
-        [
+        if keys.is_empty() {
+            args.push(arg("id", ArgMode::Default, Ty::from("%String"), None));
+        }
+        let exists = (
+            "Exists",
+            vec![arg("id", ArgMode::Output, Ty::from("%String"), None)],
+            Ty::from("%Boolean"),
+        );
+        let open_and_delete = [
             (
                 "Open",
                 vec![
-                    arg("concurrency", ArgMode::Default, "%Integer", Some("-1")),
-                    arg("sc", ArgMode::ByRef, "%Status", Some("$$$OK")),
+                    arg(
+                        "concurrency",
+                        ArgMode::Default,
+                        Ty::from("%Integer"),
+                        Some("-1"),
+                    ),
+                    arg("sc", ArgMode::ByRef, Ty::from("%Status"), Some("$$$OK")),
                 ],
                 Ty::This,
             ),
             (
-                "Exists",
-                vec![arg("id", ArgMode::Output, "%String", None)],
-                Ty::from("%Boolean"),
-            ),
-            (
                 "Delete",
-                vec![arg("concurrency", ArgMode::Default, "%Integer", Some("-1"))],
+                vec![arg(
+                    "concurrency",
+                    ArgMode::Default,
+                    Ty::from("%Integer"),
+                    Some("-1"),
+                )],
                 Ty::from("%Status"),
             ),
-        ]
-        .into_iter()
-        .map(|(suffix, extra, out)| {
-            let args = keys.iter().cloned().chain(extra).collect();
-            (
-                suffix.to_string(),
-                (generated_procedure(args, false, Some(out)), false),
-            )
-        })
-        .collect()
+        ];
+        let unique = index.unique || index.primary_key || index.id_key;
+        std::iter::once(exists)
+            .chain(unique.then_some(open_and_delete).into_iter().flatten())
+            .map(|(suffix, extra, out)| {
+                let args = args.iter().cloned().chain(extra).collect();
+                (
+                    suffix.to_string(),
+                    (generated_procedure(args, false, Some(out)), false),
+                )
+            })
+            .collect()
     }
 
     // IRIS keeps the three namespaces apart by syntax: `..#X` is a parameter, `..X(...)` a method
@@ -1286,6 +1325,11 @@ impl<'a> WorkspaceEnv<'a> {
     // shared ancestor is a sound upper bound for merging.
     fn ancestors(&self, cls: &str) -> Vec<String> {
         self.ancestry(cls).map(|(cls, _)| cls).collect()
+    }
+
+    fn is_persistent(&self, cls: &str) -> bool {
+        self.ancestry(cls)
+            .any(|(cls, _)| matches!(cls.as_str(), "%Library.Persistent" | "%Persistent"))
     }
 
     pub fn new(workspace: &'a WorkspaceStruct) -> Self {

@@ -95,9 +95,39 @@ interface common {
         client-method(method-info),
     }
 
+    enum index-subscript { keys, elements }
+
+    // The `[ Type = ... ]` keyword; absent for a standard index. `key` is deprecated, but the
+    // id key IRIS gives every persistent class has it.
+    enum index-type { bitmap, bitslice, collated-key, columnar, key }
+
+    // One `On` key: `property`, `property(KEYS)` or `property(ELEMENTS)`, each optionally `As collation`.
+    record index-key {
+        property: string,
+        subscript: option<index-subscript>,
+        collation: option<string>,
+    }
+
+    // `Index name On keys [ keywords ]`: the `On` clause when there is one, then every keyword
+    // (https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_index),
+    // as declared: a flag is false and a value absent when the keyword is not given.
     record index-info {
-        // The `On` keys, by property name.
-        properties: list<string>,
+        on: option<list<index-key>>,
+        abstract: bool,
+        // The expression, without its braces.
+        condition: option<string>,
+        coshard-with: option<string>,
+        // The properties whose values the index also stores.
+        data: list<string>,
+        deferred: bool,
+        extent: bool,
+        id-key: bool,
+        internal: bool,
+        primary-key: bool,
+        shard-key: bool,
+        sql-name: option<string>,
+        %type: option<index-type>,
+        unique: bool,
     }
 
     record member-info {

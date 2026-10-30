@@ -2061,6 +2061,46 @@ mod tests {
     }
 
     #[test]
+    fn an_index_declaration_is_read_whole() {
+        let details = ClassDetails::try_from(
+            "Class T.I Extends %Persistent\n{\nProperty Name As %String;\nProperty Age As %Integer;\nProperty Tags As list Of %String;\nIndex Full On (Name As Exact, Tags(ELEMENTS)) [ Data = (Name, Age), Condition = {Age > 5}, SqlName = FULL_IDX, Internal, Unique, Type = bitslice ];\nIndex Ext [ Extent ];\n}\n",
+        )
+        .unwrap();
+        let bindings::MemberKind::Index(full) =
+            bindings::MemberInfo::from(details.member(details::MemberNs::Index, "Full").unwrap())
+                .kind
+        else {
+            panic!()
+        };
+        let key = |property: &str, subscript, collation: Option<&str>| bindings::IndexKey {
+            property: property.to_string(),
+            subscript,
+            collation: collation.map(str::to_string),
+        };
+        assert_eq!(
+            full.on.as_deref(),
+            Some(
+                &[
+                    key("Name", None, Some("Exact")),
+                    key("Tags", Some(bindings::IndexSubscript::Elements), None),
+                ][..]
+            )
+        );
+        assert_eq!(full.data, ["Name", "Age"]);
+        assert_eq!(full.condition.as_deref(), Some("Age > 5"));
+        assert_eq!(full.sql_name.as_deref(), Some("FULL_IDX"));
+        assert_eq!(full.type_, Some(bindings::IndexType::Bitslice));
+        assert!(full.internal && full.unique && !full.primary_key && !full.id_key && !full.extent);
+        let bindings::MemberKind::Index(ext) =
+            bindings::MemberInfo::from(details.member(details::MemberNs::Index, "Ext").unwrap())
+                .kind
+        else {
+            panic!()
+        };
+        assert!(ext.on.is_none() && ext.extent && ext.type_.is_none() && ext.data.is_empty());
+    }
+
+    #[test]
     fn an_undecidable_if_is_a_hint_and_takes_its_first_branch() {
         let diagnostics = diagnostics_for(&[(
             "If.mac",

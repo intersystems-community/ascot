@@ -51,7 +51,7 @@ fn a_class_has_only_its_own_members_plus_its_storage_class() {
             .collect::<Vec<_>>()
     );
     assert!(cls.members.iter().any(|m| {
-        matches!(&m.kind, MemberKind::Index(index) if index.properties == ["NameLowerCase"])
+        matches!(&m.kind, MemberKind::Index(index) if index.on.as_deref().is_some_and(|keys| keys.len() == 1 && keys[0].property == "NameLowerCase"))
     }));
     assert!(
         cls.members
@@ -68,7 +68,7 @@ fn inherited_and_generated_members_resolve_through_the_walk() {
     let uri = "P.cls".to_string();
     workspace.open(
         uri.clone(),
-        "Class Probe.P Extends %Persistent\n{\nProperty Name As %String;\nIndex ByName On Name;\nClassMethod T() As %Status\n{\n Set u = ##class(Security.Users).%OpenId(\"x\")\n Write u.Name, u.NameLowerCaseIndexExists(\"x\"), ##class(Security.Users).DetailFunc()\n Set p = ..ByNameOpen(\"n\")\n Write p.NameGet(), p.%Id(), ##class(Security.Users).%Exists(\"x\")\n Do p.Nope()\n Quit p.%Save()\n}\n}\n".to_string(),
+        "Class Probe.P Extends %Persistent\n{\nProperty Name As %String;\nIndex ByName On Name [ Unique ];\nClassMethod T() As %Status\n{\n Set u = ##class(Security.Users).%OpenId(\"x\")\n Write u.Name, u.NameLowerCaseIndexExists(\"x\"), ##class(Security.Users).DetailFunc()\n Set p = ..ByNameOpen(\"n\")\n Write p.NameGet(), p.%Id(), ##class(Security.Users).%Exists(\"x\")\n Do p.Nope()\n Quit p.%Save()\n}\n}\n".to_string(),
     );
     let diagnostics = workspace.diagnostics(uri);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
