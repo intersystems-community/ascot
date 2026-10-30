@@ -973,7 +973,7 @@ impl TypeError {
     }
 
     pub fn too_many_arguments(range: Range) -> Self {
-        Self::new(TypeErrorKind::TooManyArguments, range, vec![])
+        QuasiTypeError::too_many_arguments().into_error(|| range)
     }
 
     // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
@@ -1034,12 +1034,7 @@ impl TypeError {
         reason: String,
         range: Range,
     ) -> Self {
-        let lookup = IrisLookup { kind, name };
-        Self::new(
-            TypeErrorKind::IrisLookupFailed { lookup, reason },
-            range,
-            vec![],
-        )
+        QuasiTypeError::iris_lookup_failed(kind, name, reason).into_error(|| range)
     }
 
     pub fn macro_expansion_too_deep(name: String, range: Range) -> Self {
@@ -1093,7 +1088,7 @@ impl TypeError {
     }
 
     pub fn unimplemented(msg: String, range: Range) -> Self {
-        Self::new(TypeErrorKind::Unimplemented { what: msg }, range, vec![])
+        QuasiTypeError::unimplemented(msg).into_error(|| range)
     }
 
     pub fn invalid_syntax(range: Range, err: tygr::Error) -> Self {
@@ -1103,10 +1098,6 @@ impl TypeError {
             },
             range,
         )
-    }
-
-    pub fn continue_not_in_loop(range: Range) -> TypeError {
-        Self::new(TypeErrorKind::ContinueNotInLoop, range, vec![])
     }
 
     pub fn unread_assignment(name: String, range: Range) -> TypeError {
