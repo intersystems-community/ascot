@@ -1003,8 +1003,7 @@ impl CheckCommandInner for cos::Command {
             }) => {
                 let mut branch = flow.split();
                 if let Some(cos::IfBranches { thn, .. }) = branches {
-                    let result = thn.check(env, &mut branch);
-                    check_branch(env, &mut branch, result);
+                    check_branch(env, &mut branch, thn);
                 }
                 flow.merge(branch)
             }
@@ -1488,8 +1487,8 @@ fn exit_value<'a>(
 // paths. Downgraded to a soft diagnostic; the branch carries on with its bindings as of the
 // failure -- treating it as dead made everything after an `if` whose every branch failed
 // "unreachable".
-fn check_branch(env: &CodeEnv<'_>, flow: &mut Flow<'_>, result: Result<(), TypeError>) {
-    if let Err(err) = result {
+fn check_branch<'a>(env: &CodeEnv<'a>, flow: &mut Flow<'a>, block: &Range<cos::Block>) {
+    if let Err(err) = block.check(env, flow) {
         env.add_soft_diagnostic(err.into());
         flow.mark_incomplete();
     }
@@ -1502,40 +1501,25 @@ fn check_if<'a>(
     branches: &Option<cos::IfBranches>,
 ) -> Result<(), QuasiTypeError> {
     // todo: I am not sure the range here is accurate
-    let mut if_false = check_and(
-        cnds.first.as_ref().map(|x| x.deref()),
-        &cnds.remaining,
-        env,
-        flow,
-        true,
-    )?;
+    let mut if_false = check_and(&cnds.first, &cnds.remaining, env, flow, true)?;
     let mut others = vec![];
     match branches {
         None => {
             others.push(if_false);
         }
         Some(cos::IfBranches { thn, eifs, els }) => {
-            let result = thn.check(env, flow);
-            check_branch(env, flow, result);
+            check_branch(env, flow, thn);
             let mut flow = if_false;
             for eif in eifs {
-                if_false = check_and(
-                    eif.cnds.first.as_ref().map(|x| x.deref()),
-                    &eif.cnds.remaining,
-                    env,
-                    &mut flow,
-                    true,
-                )?;
-                let result = eif.thn.check(env, &mut flow);
-                check_branch(env, &mut flow, result);
+                if_false = check_and(&eif.cnds.first, &eif.cnds.remaining, env, &mut flow, true)?;
+                check_branch(env, &mut flow, &eif.thn);
                 others.push(flow);
                 flow = if_false;
             }
             if let Some(els) = els.as_deref()
                 && let Some(els) = els.body.as_ref()
             {
-                let result = els.check(env, &mut flow);
-                check_branch(env, &mut flow, result);
+                check_branch(env, &mut flow, els);
             }
             others.push(flow);
         }
@@ -1582,13 +1566,7 @@ fn check_while<'a>(
     // the last pass found it false.
     let if_false = std::cell::RefCell::new(None);
     flow.with_loop(range, false, false, env, |flow| {
-        let exit = check_and(
-            cnds.first.as_ref().map(|x| x.deref()),
-            &cnds.remaining,
-            env,
-            flow,
-            false,
-        )?;
+        let exit = check_and(&cnds.first, &cnds.remaining, env, flow, false)?;
         if_false.replace(Some(exit));
         block.check(env, flow)
     })?;
@@ -1608,21 +1586,9 @@ fn check_do_while<'a>(
     flow.with_loop(range, false, false, env, |flow| block.check(env, flow))?;
     // See `check_while`: prime with a throwaway evaluation before the real one below.
     flow.primed(env, |flow| {
-        check_and(
-            cnds.first.as_ref().map(|x| x.deref()),
-            &cnds.remaining,
-            env,
-            flow,
-            false,
-        )
+        check_and(&cnds.first, &cnds.remaining, env, flow, false)
     })?;
-    let if_false = check_and(
-        cnds.first.as_ref().map(|x| x.deref()),
-        &cnds.remaining,
-        env,
-        flow,
-        false,
-    )?;
+    let if_false = check_and(&cnds.first, &cnds.remaining, env, flow, false)?;
     flow.merge(if_false)
 }
 
@@ -1724,12 +1690,13 @@ fn check_for_specs<'a, T>(
 
 #[allow(clippy::type_complexity)]
 fn check_and<'a, T: Grammar>(
-    first: Range<&GenericExpr<T>>,
+    first: &Range<impl Deref<Target = GenericExpr<T>>>,
     remaining: &[Prefix<LGapXLGap<StringEq!(",")>, Range<Expr>>],
     env: &CodeEnv<'a>,
     if_true: &mut Flow<'a>,
     report_always: bool,
 ) -> Result<Flow<'a>, TypeError> {
+    let first = first.as_ref().map(Deref::deref);
     let mut if_false = split_on_conjunction(first, env, if_true, report_always)?;
     for cnd in remaining.iter() {
         let flow =
