@@ -1301,6 +1301,21 @@ fn check_property<'a, 'b>(
     Ok(PowerTy::from(Ty::Any))
 }
 
+// `$INCREMENT`/`$DATA`'s target: the flow-tracked local, or the opaque type of anything else.
+fn target_as_local<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    target: &Range<GetTarget>,
+) -> Result<Either<Local, PowerTy>, QuasiTypeError> {
+    match target.deref() {
+        GetTarget::Var(var) => var.as_local(env, flow),
+        other => {
+            let _ = other.to_power_ty(env, flow)?;
+            Ok(Right(Ty::Any.into()))
+        }
+    }
+}
+
 fn check_increment<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1310,14 +1325,7 @@ fn check_increment<'a>(
     if let Some(amount) = amount {
         let _ = amount.to_ty(env, flow)?;
     }
-    let local = match counter.deref() {
-        GetTarget::Var(var) => var.as_local(env, flow)?,
-        other => {
-            let _ = other.to_power_ty(env, flow)?;
-            Right(Ty::Any.into())
-        }
-    };
-    if let Left(local) = local {
+    if let Left(local) = target_as_local(env, flow, counter)? {
         // $INCREMENT reads the counter's current value before writing the incremented one.
         flow.handle_get(local.clone())?;
         flow.handle_set(local, Ty::from("%Integer").into(), env.range(counter))?;
@@ -1708,14 +1716,7 @@ fn check_data<'a>(
     variable: &Range<GetTarget>,
     target: Option<&Range<Variable>>,
 ) -> Result<PowerTy, QuasiTypeError> {
-    let local = match variable.deref() {
-        GetTarget::Var(var) => var.as_local(env, flow)?,
-        other => {
-            let _ = other.to_power_ty(env, flow)?;
-            Right(Ty::Any.into())
-        }
-    };
-    let variable = match local {
+    let variable = match target_as_local(env, flow, variable)? {
         Left(local) if local.subs.is_empty() => local,
         // Individual subscripts aren't tracked, so a subscripted local is as opaque as a glvn --
         // though still a read of the variable.
