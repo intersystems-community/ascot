@@ -100,42 +100,37 @@ impl<T: CheckExprInner + Grammar> CheckExpr for Range<&T> {
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
     ) -> Result<Range<PowerTy>, TypeError> {
-        flow.with_range(env.range(&self), |flow| {
-            match self.deref().to_power_ty(env, flow) {
-                Ok(ty) => Ok(self.as_ref().map(|_| ty)),
-                Err(err) => Err(err
-                    .with_expr_text(|| self.print())
-                    .into_error(|| env.range(&self))),
-            }
-        })
+        let ty = check_ranged(&self, env, flow, T::to_power_ty)?;
+        Ok(self.map(|_| ty))
     }
 
     fn to_power_ty<'a>(self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<PowerTy, TypeError> {
-        flow.with_range(env.range(&self), |flow| {
-            self.deref().to_power_ty(env, flow).map_err(|err| {
-                err.with_expr_text(|| self.print())
-                    .into_error(|| env.range(&self))
-            })
-        })
+        check_ranged(&self, env, flow, T::to_power_ty)
     }
 
     fn to_maybe_ty<'a>(self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<MaybeTy, TypeError> {
-        flow.with_range(env.range(&self), |flow| {
-            self.deref().to_maybe_ty(env, flow).map_err(|err| {
-                err.with_expr_text(|| self.print())
-                    .into_error(|| env.range(&self))
-            })
-        })
+        check_ranged(&self, env, flow, T::to_maybe_ty)
     }
 
     fn to_ty<'a>(self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<Ty, TypeError> {
-        flow.with_range(env.range(&self), |flow| {
-            self.deref().to_ty(env, flow).map_err(|err| {
-                err.with_expr_text(|| self.print())
-                    .into_error(|| env.range(&self))
-            })
-        })
+        check_ranged(&self, env, flow, T::to_ty)
     }
+}
+
+// Runs `check` on the node with `flow` positioned on it, placing (and texting) whatever it fails
+// with there.
+fn check_ranged<'a, T: Grammar, R>(
+    expr: &Range<&T>,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    check: impl FnOnce(&T, &CodeEnv<'a>, &mut Flow<'a>) -> Result<R, QuasiTypeError>,
+) -> Result<R, TypeError> {
+    flow.with_range(env.range(expr), |flow| {
+        check(expr, env, flow).map_err(|err| {
+            err.with_expr_text(|| expr.print())
+                .into_error(|| env.range(expr))
+        })
+    })
 }
 
 use crate::{
@@ -1083,19 +1078,21 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::Quit(cos::QuitCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    let exp_ty = match exp.deref() {
-                        Some(exp) => Some(exit_value(exp, env, flow)?),
-                        None => None,
-                    };
+                    let exp_ty = exp
+                        .deref()
+                        .as_ref()
+                        .map(|e| exit_value(e, env, flow))
+                        .transpose()?;
                     flow.handle_quit(env.with_range(exp.as_ref().map(|_| exp_ty)))
                 })
             }
             cos::Command::Return(cos::ReturnCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    let ty = match exp.deref() {
-                        Some(exp) => Some(exit_value(exp, env, flow)?),
-                        None => None,
-                    };
+                    let ty = exp
+                        .deref()
+                        .as_ref()
+                        .map(|e| exit_value(e, env, flow))
+                        .transpose()?;
                     Ok(flow.handle_return(env.with_range(exp.as_ref().map(|_| ty)))?)
                 })
             }
@@ -1622,11 +1619,7 @@ fn check_for<'a>(
                 flow.handle_set(local, declared.into(), range)?
             }
             flow.with_loop(range, optional, infinite, env, |flow| {
-                if let Some(block) = block {
-                    block.check(env, flow)
-                } else {
-                    Ok(())
-                }
+                block.map_or(Ok(()), |block| block.check(env, flow))
             })
         }
         None => {
@@ -2383,12 +2376,7 @@ impl<T> CheckExprInner for ExprOps<T> {
                         .into());
                     }
                 }
-                let ty = check_member_of(ty, &op.mem, op.args.as_ref(), env, flow)?;
-                if let Some(ty) = ty {
-                    Ok(ty.into())
-                } else {
-                    Err(QuasiTypeError::undefined())
-                }
+                defined(check_member_of(ty, &op.mem, op.args.as_ref(), env, flow)?)
             }
         }
     }
@@ -2563,6 +2551,11 @@ fn check_member<'a>(
     }
 }
 
+// What a call or member access yields as a value -- nothing, for a procedure.
+fn defined(ty: Option<Ty>) -> Result<PowerTy, QuasiTypeError> {
+    ty.map(PowerTy::from).ok_or_else(QuasiTypeError::undefined)
+}
+
 impl CheckExprInner for cos::GetTarget {
     fn to_power_ty<'a>(
         &self,
@@ -2573,17 +2566,13 @@ impl CheckExprInner for cos::GetTarget {
             cos::GetTarget::Var(var) => var.to_power_ty(env, flow),
             cos::GetTarget::Member { member, args } => {
                 let obj = Ty::OREF(env.this()?);
-                check_member(obj, member.deref(), args.as_ref(), env, flow)?
-                    .map(PowerTy::from)
-                    .ok_or_else(QuasiTypeError::undefined)
+                defined(check_member(obj, member.deref(), args.as_ref(), env, flow)?)
             }
             cos::GetTarget::Indirection(ind) => Ok(ind.to_power_ty(env, flow)?),
             cos::GetTarget::Fun(call) => call.to_power_ty(env, flow),
             cos::GetTarget::Sub { base, op } => {
                 let base = base_property(base, env, flow)?;
-                check_member_of(base, &op.mem, op.args.as_ref(), env, flow)?
-                    .map(PowerTy::from)
-                    .ok_or_else(QuasiTypeError::undefined)
+                defined(check_member_of(base, &op.mem, op.args.as_ref(), env, flow)?)
             }
         }
     }
@@ -2658,10 +2647,8 @@ fn check_param_arg<'a>(
 ) -> Result<(), QuasiTypeError> {
     {
         let arg_text = match arg.deref() {
-            Some(arg) => match arg {
-                cos::MthArg::ByRef { target, .. } => target.print(),
-                cos::MthArg::Expr { expr, .. } => expr.print(),
-            },
+            Some(cos::MthArg::ByRef { target, .. }) => target.print(),
+            Some(cos::MthArg::Expr { expr, .. }) => expr.print(),
             None => "".to_string(),
         };
         if !arg_text.starts_with(&par.name) {
@@ -2835,16 +2822,7 @@ impl CheckExprInner for MacroCallStruct {
     ) -> Result<PowerTy, QuasiTypeError> {
         // Anything reaching here survived expansion: a compile-time macro (see
         // `MacroDefinition::is_compile_time`), whose value is simply unknown, or an undefined one.
-        let name = self.name.print();
-        if env.is_defined_macro(&name) {
-            self.check_args(env, flow)?;
-            Ok(Ty::Any.into())
-        } else {
-            Err(QuasiTypeError::undefined_macro(
-                name.clone(),
-                similar_macro_names(&name, env.known_macro_names()),
-            ))
-        }
+        self.check_as_command(env, flow).map(|()| Ty::Any.into())
     }
 }
 
@@ -3038,25 +3016,19 @@ impl CheckExprInner for AtomicExpr {
             }
             AtomicExpr::Member { member, args } => {
                 let obj = Ty::OREF(env.this()?);
-                match check_member(obj, member.deref(), args.as_ref(), env, flow)? {
-                    Some(ty) => Ok(ty.into()),
-                    None => Err(QuasiTypeError::undefined()),
-                }
+                defined(check_member(obj, member.deref(), args.as_ref(), env, flow)?)
             }
             AtomicExpr::BeginQuoteEndQuote(..) => Ok(PowerTy::from("%String")),
             AtomicExpr::Indirection(x) => Ok(x.to_power_ty(env, flow)?),
             AtomicExpr::FunctionCall(call) => call.to_power_ty(env, flow),
             AtomicExpr::QuoteString { .. } => Ok(Ty::from("%String").into()),
-            AtomicExpr::Super(sup) => match check_super_call(env, flow, &sup.prefixed)? {
-                Some(ty) => Ok(ty.into()),
-                None => Err(QuasiTypeError::undefined()),
-            },
+            AtomicExpr::Super(sup) => defined(check_super_call(env, flow, &sup.prefixed)?),
             AtomicExpr::CallSubroutine {
                 label,
                 routine,
                 args,
                 ..
-            } => Ok(check_label_call(
+            } => defined(check_label_call(
                 env,
                 flow,
                 label.deref().as_ref(),
@@ -3065,9 +3037,7 @@ impl CheckExprInner for AtomicExpr {
                 args,
                 env.range(label),
                 true,
-            )?
-            .ok_or_else(QuasiTypeError::undefined)?
-            .into()),
+            )?),
             AtomicExpr::LegacyCOM { .. } => Err(QuasiTypeError::unimplemented(
                 "Legacy COM binding ('_obj!sub')".to_string(),
             )),
@@ -3093,11 +3063,7 @@ fn check_label_call<'a>(
         .map(|label| check_label(env, flow, label))
         .transpose()?
         .flatten();
-    let offset = if let Some(offset) = offset {
-        Some(offset.to_ty(env, flow)?)
-    } else {
-        None
-    };
+    let offset = offset.map(|offset| offset.to_ty(env, flow)).transpose()?;
     let routine = routine
         .map(|routine| check_routine(env, flow, routine))
         .transpose()?
