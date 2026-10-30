@@ -288,18 +288,16 @@ fn relocate_method_error(
     err
 }
 
-// Only `source` (this method's own call site) is relocated -- `target` is always an already
-// resolved, final declaration location.
-fn relocate_method_references(
-    references: Vec<(bindings::Range, Location)>,
+// Only the range (this method's own call site or expression) is relocated -- a reference's
+// target is always an already resolved, final declaration location.
+fn relocate_method_ranged<T>(
+    entries: Vec<(bindings::Range, T)>,
     source_map: &SourceMap,
     shifter: &Shifter,
-) -> Vec<(bindings::Range, Location)> {
-    references
+) -> Vec<(bindings::Range, T)> {
+    entries
         .into_iter()
-        .filter_map(|(source, target)| {
-            Some((try_relocate_range(source, source_map, shifter)?, target))
-        })
+        .filter_map(|(range, it)| Some((try_relocate_range(range, source_map, shifter)?, it)))
         .collect()
 }
 
@@ -316,17 +314,6 @@ fn relocate_method_hints(
                 ..hint
             })
         })
-        .collect()
-}
-
-fn relocate_method_hover_types(
-    hover_types: Vec<(bindings::Range, String)>,
-    source_map: &SourceMap,
-    shifter: &Shifter,
-) -> Vec<(bindings::Range, String)> {
-    hover_types
-        .into_iter()
-        .filter_map(|(range, ty)| Some((try_relocate_range(range, source_map, shifter)?, ty)))
         .collect()
 }
 
@@ -370,15 +357,9 @@ impl CheckMember for Range<&cos::Parameter> {
 
 impl MethodDetails {
     fn args(&self) -> Vec<WithRange<NormalArg>> {
-        let mut args = self.normal_args.clone();
-        if let Some(arg) = &self.variadic_arg {
-            args.push(arg.as_ref().map(NormalArg::from));
-        }
-        args
+        inputs_of(&self.normal_args, &self.variadic_arg)
     }
-}
 
-impl MethodDetails {
     fn check(&self, name: &str, env: &DocumentEnv, cls: &ClassDocument) -> Result<(), TypeError> {
         let language = self.language.as_ref().or(cls.language);
         let mode = self.mode.as_ref().or(cls.mode);
@@ -482,23 +463,23 @@ impl MethodDetails {
         ) {
             env.base.add_soft_diagnostic(diagnostic);
         }
-        for (source, target) in relocate_method_references(
+        for (source, target) in relocate_method_ranged(
             env.base.references_since(references_mark),
             &source_map,
             &shifter,
         ) {
             env.base.reference(source, target);
         }
-        for hint in
-            relocate_method_hints(method_env.inlay_hints.into_inner(), &source_map, &shifter)
-        {
-            env.inlay_hints.borrow_mut().push(hint);
-        }
-        for entry in
-            relocate_method_hover_types(method_env.hover_types.into_inner(), &source_map, &shifter)
-        {
-            env.hover_types.borrow_mut().push(entry);
-        }
+        env.inlay_hints.borrow_mut().extend(relocate_method_hints(
+            method_env.inlay_hints.into_inner(),
+            &source_map,
+            &shifter,
+        ));
+        env.hover_types.borrow_mut().extend(relocate_method_ranged(
+            method_env.hover_types.into_inner(),
+            &source_map,
+            &shifter,
+        ));
         let creates =
             result.map_err(|err| relocate_method_error(err, &source_map, env.uri(), &shifter))?;
         if let Some(hint) = creates_hint(self.body.range.start, creates) {
@@ -545,15 +526,8 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 Option::None | Option::Some(cos::CodeMode::Code(..)),
                 body,
             ) => {
-                let body = <cos::ProcedureBody>::parse(body).map_err(|err| {
-                    TypeError::invalid_syntax(
-                        bindings::Range {
-                            start: env.position(err.pos()),
-                            end: env.position(err.pos() + 1),
-                        },
-                        err,
-                    )
-                })?;
+                let body =
+                    <cos::ProcedureBody>::parse(body).map_err(|err| syntax_error(env, err))?;
                 check_block_body(&body, env, flow, true)
             }
             (
@@ -562,15 +536,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 body,
             ) => {
                 let body_expr = <cos::ExprEntry>::parse(body)
-                    .map_err(|err| {
-                        TypeError::invalid_syntax(
-                            bindings::Range {
-                                start: env.position(err.pos()),
-                                end: env.position(err.pos() + 1),
-                            },
-                            err,
-                        )
-                    })?
+                    .map_err(|err| syntax_error(env, err))?
                     .into_inner();
                 let body_type = body_expr.to_power_ty(env, flow)?;
                 body_type
@@ -582,6 +548,10 @@ impl<'b> CheckCommand for MethodBody<'b> {
             _ => flow.handle_void(),
         }
     }
+}
+
+fn syntax_error(env: &CodeEnv<'_>, err: tygr::Error) -> TypeError {
+    TypeError::invalid_syntax(env.span(err.pos(), err.pos() + 1), err)
 }
 
 fn label_details(
