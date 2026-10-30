@@ -108,14 +108,7 @@ mod tests {
                 after: zero,
             },
             extends: vec!["%RegisteredObject".to_string()],
-            inheritance_right: false,
-            storage: None,
-            deprecated: false,
-            members: vec![],
-            property_class_names: vec![],
-            includes: vec![],
-            is_datatype: Some(false),
-            uri: None,
+            ..Default::default()
         }
     }
 

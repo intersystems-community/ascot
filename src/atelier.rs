@@ -28,7 +28,7 @@ use crate::bindings::{
     MemberInfo, MemberKind, MethodInfo, NameInfo, NormalArg, ParameterInfo, Position, PropertyInfo,
     Range, RelationshipInfo, RoutineInfo, Source, VariadicArg,
 };
-use crate::cos::{LocalVariableName, OSString, Space, Type};
+use crate::cos::{self, LocalVariableName, OSString, Space, Type};
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 #[cfg(not(target_arch = "wasm32"))]
@@ -211,8 +211,12 @@ fn class_infos(
     params: &[&str],
 ) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = format!(
-        "SELECT Name, Description, Super, Inheritance, PropertyClass, IncludeCode, ClassType, \
-         Deprecated FROM %Dictionary.CompiledClass WHERE Name {filter}"
+        "SELECT Name, Description, Super, IncludeCode, Abstract, ClassType, ClientDataType, \
+         ClientName, CompileAfter, DdlAllowed, DependsOn, Deprecated, Final, GeneratedBy, Hidden, \
+         Inheritance, _Language, LegacyInstanceContext, NoExtent, OdbcType, Owner, \
+         ProcedureBlock, PropertyClass, ServerOnly, Sharded, SoapBindingStyle, SoapBodyUse, \
+         SqlCategory, SqlRowIdName, SqlRowIdPrivate, SqlTableName, StorageStrategy, System, \
+         ViewQuery FROM %Dictionary.CompiledClass WHERE Name {filter}"
     );
     let rows = conn.rows(&sql, params)?;
     if rows.is_empty() {
@@ -258,6 +262,12 @@ fn assemble(
             if cls.is_empty() {
                 return None;
             }
+            let flag = |key: &str| row.get(key).is_some_and(is_truthy);
+            let text = |key: &str| {
+                Some(str_field(key))
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string)
+            };
             let info = ClassInfo {
                 doc: str_field("Description").to_string(),
                 name: NameInfo {
@@ -266,19 +276,54 @@ fn assemble(
                     after: zero,
                 },
                 extends: split_classes(str_field("Super")),
-                inheritance_right: str_field("Inheritance") == "right",
                 storage: storages.get(&cls).cloned(),
-                deprecated: is_truthy(&row.get("Deprecated").cloned().unwrap_or(Value::Null)),
                 members: members.remove(&cls).unwrap_or_default(),
-                property_class_names: split_classes(str_field("PropertyClass")),
-                includes: split_classes(str_field("IncludeCode")),
-                is_datatype: Some(str_field("ClassType") == "datatype"),
+                include: split_classes(str_field("IncludeCode")),
                 // The Atelier REST API has no uri scheme of its own to offer here.
                 uri: None,
+                abstract_: flag("Abstract"),
+                class_type: parsed::<cos::ClassType, _>(str_field("ClassType")),
+                client_data_type: parsed::<cos::ClientDataType, _>(str_field("ClientDataType")),
+                client_name: text("ClientName"),
+                compile_after: split_classes(str_field("CompileAfter")),
+                ddl_allowed: flag("DdlAllowed"),
+                depends_on: split_classes(str_field("DependsOn")),
+                deprecated: flag("Deprecated"),
+                final_: flag("Final"),
+                generated_by: text("GeneratedBy"),
+                hidden: flag("Hidden"),
+                inheritance: parsed::<cos::Inheritance, _>(str_field("Inheritance")),
+                language: parsed::<cos::MethodLanguage, _>(str_field("_Language")),
+                legacy_instance_context: flag("LegacyInstanceContext"),
+                no_extent: flag("NoExtent"),
+                odbc_type: parsed::<cos::OdbcType, _>(str_field("OdbcType")),
+                owner: text("Owner"),
+                procedure_block: row.get("ProcedureBlock").map(is_truthy),
+                property_class: split_classes(str_field("PropertyClass")),
+                server_only: flag("ServerOnly"),
+                sharded: flag("Sharded"),
+                soap_binding_style: parsed::<cos::SoapBindingStyle, _>(str_field(
+                    "SoapBindingStyle",
+                )),
+                soap_body_use: parsed::<cos::SoapBodyUse, _>(str_field("SoapBodyUse")),
+                sql_category: parsed::<cos::SqlCategory, _>(str_field("SqlCategory")),
+                sql_row_id_name: text("SqlRowIdName"),
+                sql_row_id_private: flag("SqlRowIdPrivate"),
+                sql_table_name: text("SqlTableName"),
+                storage_strategy: text("StorageStrategy"),
+                system: str_field("System").parse().ok(),
+                view_query: text("ViewQuery"),
             };
             Some((cls, info))
         })
         .collect()
+}
+
+// A compiled keyword value, read by the grammar's spelling of it into the host's enum.
+fn parsed<Spelling: Grammar, T: for<'a> From<&'a Spelling>>(text: &str) -> Option<T> {
+    Spelling::parse(text.trim())
+        .ok()
+        .map(|spelling| T::from(&spelling))
 }
 
 // Uniform row shape across the member tables `all_mem_rows` unions together. IRIS
@@ -1004,14 +1049,15 @@ mod tests {
         assert_eq!(b.extends, vec!["%RegisteredObject"]);
         assert_eq!(b.storage.as_deref(), Some("%Storage.Persistent"));
         assert!(classes["A.C"].storage.is_none());
-        assert_eq!(b.is_datatype, Some(false));
+        assert_eq!(b.class_type, None);
         assert_eq!(b.members.len(), 1, "the nameless row is dropped");
         assert_eq!(b.members[0].name.content, "M");
         assert!(matches!(b.members[0].kind, MemberKind::ClassMethod(_)));
         let c = &classes["A.C"];
         assert!(c.deprecated);
-        assert_eq!(c.is_datatype, Some(true));
-        assert!(c.inheritance_right && !b.inheritance_right);
+        assert_eq!(c.class_type, Some(crate::bindings::ClassType::Datatype));
+        assert_eq!(c.inheritance, Some(crate::bindings::Inheritance::Right));
+        assert_eq!(b.inheritance, None);
         assert_eq!(c.members[0].name.content, "P");
         let key = |property: &str, subscript, collation: Option<&str>| IndexKey {
             property: property.to_string(),
