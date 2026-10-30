@@ -2061,6 +2061,21 @@ mod tests {
     }
 
     #[test]
+    fn an_undecidable_if_is_a_hint_and_takes_its_first_branch() {
+        let diagnostics = diagnostics_for(&[(
+            "If.mac",
+            "ROUTINE If\n#define MODE \"OUTPUT\"\nMain()\n\t#if $$$MODE=\"OUTPUT\" ; which\n\tSet x = 1\n\t#else\n\tQuit\n\t#endif\n\tWrite x\n\tQuit\n",
+        )]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(
+            diagnostics[0].message,
+            "Cannot decide `#if $$$MODE=\"OUTPUT\"` (`\"OUTPUT\"=\"OUTPUT\"`) at compile time, so its first branch is assumed"
+        );
+        assert_eq!(diagnostics[0].range.start.line, 3, "{diagnostics:?}");
+    }
+
+    #[test]
     fn a_failed_iris_lookup_is_a_hint_about_why() {
         struct DeadIris;
         impl crate::IrisContext for DeadIris {

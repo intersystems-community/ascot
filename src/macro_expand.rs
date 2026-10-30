@@ -600,8 +600,7 @@ impl WorkspaceStruct {
                             let defined = definitions.contains_key(&macro_name_in(input));
                             let keep =
                                 defined == matches!(command.deref(), HMacroCommand::IfDef(..));
-                            let item = (unit, origin, precise);
-                            self.resolve_branch(definitions, todos, dones, Some(keep), item)?;
+                            self.resolve_branch(definitions, todos, dones, keep)?;
                         }
                         HMacroCommand::Undef(..) => {
                             definitions.remove(&macro_name_in(input));
@@ -866,51 +865,56 @@ impl WorkspaceStruct {
         let MacroedUnit::Redex(MacroRedex::H(HMacro { input, .. })) = item.0.as_ref() else {
             unreachable!("resolve_if is only handed an #if or #elseif");
         };
-        let expanded = self.expand_text(definitions, &import_macro_input(input))?;
         // `#if 0 /* Maintenance */` -- a trailing comment is common and not part of the test.
-        let end = ["/*", "//", ";"]
-            .iter()
-            .filter_map(|marker| expanded.find(marker))
-            .min()
-            .unwrap_or(expanded.len());
-        let decided = match expanded[..end].trim() {
-            "1" => Some(true),
-            "0" => Some(false),
-            _ => None,
+        fn condition(text: &str) -> &str {
+            let end = ["/*", "//", ";"]
+                .iter()
+                .filter_map(|marker| text.find(marker))
+                .min()
+                .unwrap_or(text.len());
+            text[..end].trim()
+        }
+        let written = import_macro_input(input);
+        let expanded = self.expand_text(definitions, &written)?;
+        let (written, expanded) = (condition(&written), condition(&expanded));
+        let decided = match expanded {
+            "1" => true,
+            "0" => false,
+            _ => {
+                let expansion = (expanded != written).then(|| expanded.to_string());
+                dones.note_unresolved(
+                    move |written, range| {
+                        crate::check::TypeError::undecided_if(written, expansion.clone(), range)
+                    },
+                    written.to_string(),
+                    &item.1,
+                );
+                true
+            }
         };
-        self.resolve_branch(definitions, todos, dones, decided, item)
+        self.resolve_branch(definitions, todos, dones, decided)
     }
 
-    // Keeps a decided-true branch (discarding the rest of the chain via take_branch+skip_branch),
-    // drops a decided-false one and tries the closing `#elseif` in turn, and leaves an undecided
-    // one alone -- the directive prints unexpanded and `todos` is left untouched, so the rest of
-    // the chain is also left unresolved rather than discarded.
+    // Keeps a taken branch (discarding the rest of the chain via take_branch+skip_branch); drops
+    // a dropped one and tries the closing `#elseif` in turn.
     fn resolve_branch(
         &self,
         definitions: &mut MacroDefinitions,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
-        decided: Option<bool>,
-        item: TodoItem<'_>,
+        taken: bool,
     ) -> Result<(), tygr::Error> {
-        match decided {
-            Some(true) => {
-                let (branch, mut end) = take_branch(todos);
-                while !matches!(end, BranchEnd::EndIf) {
-                    end = skip_branch(todos);
-                }
-                todos.push_items(branch);
-                Ok(())
+        if taken {
+            let (branch, mut end) = take_branch(todos);
+            while !matches!(end, BranchEnd::EndIf) {
+                end = skip_branch(todos);
             }
-            Some(false) => match skip_branch(todos) {
-                BranchEnd::EndIf | BranchEnd::Else => Ok(()),
-                BranchEnd::Elseif(elseif) => self.resolve_if(definitions, todos, dones, *elseif),
-            },
-            None => {
-                let (unit, origin, precise) = item;
-                dones.push(&unit.print(), &origin, precise);
-                Ok(())
-            }
+            todos.push_items(branch);
+            return Ok(());
+        }
+        match skip_branch(todos) {
+            BranchEnd::EndIf | BranchEnd::Else => Ok(()),
+            BranchEnd::Elseif(elseif) => self.resolve_if(definitions, todos, dones, *elseif),
         }
     }
 
