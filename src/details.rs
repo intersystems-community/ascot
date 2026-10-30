@@ -940,7 +940,7 @@ fn method_kind(
         match entry.into_inner().into_inner() {
             Left(Language(v)) => language = Some((&v.value).into()),
             Left(CodeMode(v)) => mode = Some(v.value),
-            Left(ProcedureBlock(flag)) => procedure_block = Some(flag.is_set()),
+            Left(ProcedureBlock(v)) => procedure_block = Some(v.value.is_set()),
             // Each name at the keyword's own range.
             Left(PublicList(v)) => {
                 public_list = class_list_text(&v.value.print())

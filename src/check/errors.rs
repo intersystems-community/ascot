@@ -522,16 +522,17 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Class keyword '{keyword}' has no value"]
     ClassKeywordWithoutValue { keyword: String },
-    /// An entry IRIS compiles past and drops: not a class keyword, or a value outside one's shape.
+    /// An entry IRIS compiles past: not a class keyword, or a value outside one's shape, which it
+    /// drops -- or, on a flag, takes as the bare flag.
     #[code = "A6203"]
     #[severity = Warning]
-    #[message = "'{entry}' is not a class keyword IRIS honors, so it is ignored; expected {expected}"]
-    UnrecognizedClassKeyword { entry: String, expected: String },
+    #[message = "'{entry}' is not a class keyword as written, though IRIS compiles it"]
+    UnrecognizedClassKeyword { entry: String },
     /// A `ClassType` IRIS refuses to compile.
     #[code = "A7718"]
     #[severity = Error]
-    #[message = "'{entry}' is not a class keyword IRIS accepts; expected {expected}"]
-    InvalidClassKeyword { entry: String, expected: String },
+    #[message = "'{entry}' is not a class keyword IRIS accepts"]
+    InvalidClassKeyword { entry: String },
     #[code = "A2357"]
     #[severity = Error]
     #[message = "'{name}' is not a parameter of {class}{hint}"]
@@ -544,8 +545,8 @@ type_error_kinds! {
     /// not a keyword of that kind of member, or a value outside the keyword's shape.
     #[code = "A9322"]
     #[severity = Error]
-    #[message = "'{entry}' is not {kind} keyword IRIS accepts; expected {expected}"]
-    UnrecognizedMemberKeyword { kind: &'static str, entry: String, expected: String },
+    #[message = "'{entry}' is not {kind} keyword IRIS accepts"]
+    UnrecognizedMemberKeyword { kind: &'static str, entry: String },
     #[code = "A8317"]
     #[severity = Warning]
     #[message = "'{meta_type}' is not a recognized parameter type; available: {available}"]
@@ -1183,16 +1184,11 @@ impl TypeError {
         Self::at(TypeErrorKind::NewInProcedureBlock { name }, range)
     }
 
-    pub fn unrecognized_class_keyword(
-        entry: String,
-        expected: String,
-        strict: bool,
-        range: Range,
-    ) -> Self {
+    pub fn unrecognized_class_keyword(entry: String, strict: bool, range: Range) -> Self {
         let kind = if strict {
-            TypeErrorKind::InvalidClassKeyword { entry, expected }
+            TypeErrorKind::InvalidClassKeyword { entry }
         } else {
-            TypeErrorKind::UnrecognizedClassKeyword { entry, expected }
+            TypeErrorKind::UnrecognizedClassKeyword { entry }
         };
         Self::at(kind, range)
     }
@@ -1218,18 +1214,9 @@ impl TypeError {
         )
     }
 
-    pub fn unrecognized_member_keyword(
-        kind: &'static str,
-        entry: String,
-        expected: String,
-        range: Range,
-    ) -> Self {
+    pub fn unrecognized_member_keyword(kind: &'static str, entry: String, range: Range) -> Self {
         Self::at(
-            TypeErrorKind::UnrecognizedMemberKeyword {
-                kind,
-                entry,
-                expected,
-            },
+            TypeErrorKind::UnrecognizedMemberKeyword { kind, entry },
             range,
         )
     }

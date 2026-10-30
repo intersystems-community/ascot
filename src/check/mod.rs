@@ -3293,9 +3293,8 @@ fn class_keyword_issue(issue: &WithRange<details::KeywordIssue>) -> TypeError {
     if *without_value {
         return TypeError::class_keyword_without_value(keyword.clone(), issue.range);
     }
-    let expected = cos::keyword_bnf::<cos::ClassKeyword>(keyword);
     let strict = keyword.eq_ignore_ascii_case("ClassType");
-    TypeError::unrecognized_class_keyword(entry.clone(), expected, strict, issue.range)
+    TypeError::unrecognized_class_keyword(entry.clone(), strict, issue.range)
 }
 
 pub(crate) fn check_cls(
@@ -3405,31 +3404,19 @@ fn member_keyword_issue(
     issue: &WithRange<details::KeywordIssue>,
 ) -> TypeError {
     use MemberKindSpecificDetails::*;
-    let name = &issue.it.keyword;
-    let (kind, expected) = match &member.kind {
-        MethodOrClassMethod(_) | ClientMethod => {
-            ("a method", cos::keyword_bnf::<cos::MethodKeyword>(name))
-        }
-        Property { .. } => ("a property", cos::keyword_bnf::<cos::PropertyKeyword>(name)),
-        Parameter { .. } => (
-            "a parameter",
-            cos::keyword_bnf::<cos::ParameterKeyword>(name),
-        ),
-        Index(_) => ("an index", cos::keyword_bnf::<cos::IndexKeyword>(name)),
-        Query => ("a query", cos::keyword_bnf::<cos::QueryKeyword>(name)),
-        Trigger => ("a trigger", cos::keyword_bnf::<cos::TriggerKeyword>(name)),
-        ForeignKey => (
-            "a foreign key",
-            cos::keyword_bnf::<cos::ForeignKeyKeyword>(name),
-        ),
-        XData => ("an XData", cos::keyword_bnf::<cos::XDataKeyword>(name)),
-        Projection => (
-            "a projection",
-            cos::keyword_bnf::<cos::ProjectionKeyword>(name),
-        ),
+    let kind = match &member.kind {
+        MethodOrClassMethod(_) | ClientMethod => "a method",
+        Property { .. } => "a property",
+        Parameter { .. } => "a parameter",
+        Index(_) => "an index",
+        Query => "a query",
+        Trigger => "a trigger",
+        ForeignKey => "a foreign key",
+        XData => "an XData",
+        Projection => "a projection",
         Storage => unreachable!("a storage definition's keyword list isn't read"),
     };
-    TypeError::unrecognized_member_keyword(kind, issue.it.entry.clone(), expected, issue.range)
+    TypeError::unrecognized_member_keyword(kind, issue.it.entry.clone(), issue.range)
 }
 
 fn check_property_or_parameter_declaration(
@@ -3465,7 +3452,10 @@ fn check_property_or_parameter_declaration(
                     .chain(property_classes.iter().map(String::as_str))
                     .collect();
                 for name in type_param_names {
-                    let is_property_keyword = cos::is_keyword::<cos::PropertyKeyword>(name);
+                    // Spelled like a property keyword, flag or valued (`= 1` fits every value
+                    // shape but Cardinality's).
+                    let is_property_keyword = cos::PropertyKeyword::parse(name).is_ok()
+                        || cos::PropertyKeyword::parse(&format!("{name} = 1")).is_ok();
                     // Probed quietly: a candidate nobody can see resolves the parameter on trust,
                     // and offline that is every system type class.
                     let was_suppressed = env.base.suppress_soft_diagnostics();

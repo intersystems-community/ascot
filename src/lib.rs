@@ -2025,7 +2025,7 @@ mod tests {
     #[test]
     fn a_class_declaration_is_read_whole() {
         let details = ClassDetails::try_from(
-            "/// Doc\nClass T.K Extends (%Persistent, %XML.Adaptor) [ Abstract, ClassType = persistent, ClientName = TK, CompileAfter = (A.B, C.D), DdlAllowed, Deprecated, Final, Inheritance = right, Language = tsql, Not NoExtent, Owner = _SYSTEM, ProcedureBlock = 0, PropertyClass = (P.Q, R.S), SqlTableName = T_K, System = 3, Bogus, ClassType = Persistent, Inheritance = middle, CompileAfter = , Finalfoo ]\n{\n}\n",
+            "/// Doc\nClass T.K Extends (%Persistent, %XML.Adaptor) [ Abstract, ClassType = persistent, ClientName = TK, CompileAfter = (A.B, C.D), DdlAllowed, Deprecated, Final, Inheritance = right, Language = tsql, Not NoExtent, Owner = _SYSTEM, Not ProcedureBlock, PropertyClass = (P.Q, R.S), SqlTableName = T_K, System = 3, Bogus, ClassType = Persistent, Inheritance = middle, CompileAfter = , Finalfoo, Abstract = 0 ]\n{\n}\n",
         )
         .unwrap();
         let k = &details.keywords;
@@ -2048,6 +2048,7 @@ mod tests {
                 ("Inheritance = middle", false),
                 ("CompileAfter = ", true),
                 ("Finalfoo", false),
+                ("Abstract = 0", false),
             ]
         );
     }
