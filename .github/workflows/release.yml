@@ -5,7 +5,6 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-*'
-  # Builds without releasing, to time or debug the build jobs.
   workflow_dispatch:
 
 permissions:
@@ -41,7 +40,7 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
-      - name: Exclude the build from Defender's real-time scanning
+      - name: Keep Defender off the build
         if: runner.os == 'Windows'
         run: Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE", "$env:USERPROFILE\.cargo"
 
@@ -49,17 +48,16 @@ jobs:
         shell: bash
         run: cargo build --release --bin $BIN --target ${{ matrix.target }}
 
-      # The two Apple binaries go unpackaged, for `universal` to merge.
       - name: Package binary
-        if: ${{ !endsWith(matrix.target, '-apple-darwin') }}
         shell: bash
         run: |
           name="$BIN-cli-${{ matrix.target }}"
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            7z a "$name.zip" "./target/${{ matrix.target }}/release/$BIN.exe"
-          else
-            tar czf "$name.tar.gz" -C "target/${{ matrix.target }}/release" "$BIN"
-          fi
+          cd "target/${{ matrix.target }}/release"
+          case ${{ matrix.target }} in
+            *-apple-darwin) cp $BIN "$GITHUB_WORKSPACE" ;;  # `universal` merges the two
+            *-windows-*) 7z a "$GITHUB_WORKSPACE/$name.zip" $BIN.exe ;;
+            *) tar czf "$GITHUB_WORKSPACE/$name.tar.gz" $BIN ;;
+          esac
 
       - uses: actions/upload-artifact@v7
         with:
@@ -67,10 +65,9 @@ jobs:
           path: |
             *.tar.gz
             *.zip
-            target/*-apple-darwin/release/${{ env.BIN }}
+            ${{ env.BIN }}
           if-no-files-found: error
 
-  # Each Apple architecture builds on its own runner above; this merges the two.
   universal:
     needs: build
     runs-on: macos-latest
@@ -80,7 +77,7 @@ jobs:
           pattern: '*-apple-darwin'
       - name: Merge and package
         run: |
-          lipo -create -output $BIN *-apple-darwin/target/*/release/$BIN
+          lipo -create -output $BIN *-apple-darwin/$BIN
           chmod +x $BIN  # artifacts don't keep permissions
           tar czf "$BIN-cli-universal-apple-darwin.tar.gz" "$BIN"
       - uses: actions/upload-artifact@v7
