@@ -2212,9 +2212,11 @@ fn check_prefix<'a>(
 ) -> Result<PowerTy, TypeError> {
     match ty {
         PowerTy::Const(c) => Ok(match op {
-            cos::PrefixOperator::Not(_) => PowerTy::Const((c.as_integer() == 0).into()),
+            cos::PrefixOperator::Not(_) => PowerTy::Const((!c.truthy()).into()),
             cos::PrefixOperator::Minus(_) => PowerTy::from("%DataType"),
-            cos::PrefixOperator::Plus(_) => PowerTy::Const(c.as_integer().into()),
+            cos::PrefixOperator::Plus(_) => c
+                .as_integer()
+                .map_or(PowerTy::from("%DataType"), |n| PowerTy::Const(n.into())),
         }),
         PowerTy::Term { target, term } if matches!(op, cos::PrefixOperator::Not(_)) => {
             Ok(PowerTy::Term {

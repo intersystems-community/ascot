@@ -485,7 +485,7 @@ impl<'a> Flow<'a> {
             // now would wrongly cut the priming walk short.
             PowerTy::Const(c) if !self.shared.env.soft_diagnostics_suppressed() => {
                 let mut false_branch = self.split();
-                let cases = c.as_integer() > 0;
+                let cases = c.truthy();
                 if report {
                     self.add_soft_diagnostic(QuasiTypeError::condition_always(cases));
                 }
@@ -499,10 +499,10 @@ impl<'a> Flow<'a> {
             PowerTy::Union(fst, snd, rst) if !self.shared.env.soft_diagnostics_suppressed() => {
                 let mut false_branch = self.split();
                 let mut cases = HashSet::new();
-                cases.insert(fst.as_integer() > 0);
-                cases.insert(snd.as_integer() > 0);
+                cases.insert(fst.truthy());
+                cases.insert(snd.truthy());
                 for rst in rst {
-                    cases.insert(rst.as_integer() > 0);
+                    cases.insert(rst.truthy());
                 }
                 if cases.len() == 1 {
                     let cases = *cases.iter().next().unwrap();
