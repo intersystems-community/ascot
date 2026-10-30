@@ -247,6 +247,24 @@ where
     arg.as_deref().and_then(|w| w.deref().as_ref())
 }
 
+// A trailing argument that may be omitted (`$FN(x)`): the expression, if given.
+fn arg<'b, M, W, T>(arg: &'b Option<M>) -> Option<&'b Range<T>>
+where
+    M: Deref<Target = W>,
+    W: Deref<Target = Range<T>> + 'b,
+{
+    arg.as_deref().map(|w| w.deref())
+}
+
+// The expressions of a repeated argument (`$FN(x, y, ...)`).
+fn each_arg<'b, M, W, T: 'b>(args: &'b [M]) -> impl Iterator<Item = &'b Range<T>>
+where
+    M: Deref<Target = W>,
+    W: Deref<Target = Range<T>> + 'b,
+{
+    args.iter().map(|m| m.deref().deref())
+}
+
 impl CheckExprInner for cos::FunctionCall {
     fn to_power_ty<'a>(
         &self,
@@ -263,12 +281,7 @@ impl CheckExprInner for cos::FunctionCall {
                         delimitor,
                     },
                 ..
-            } => check_length(
-                env,
-                flow,
-                expression.deref(),
-                delimitor.as_deref().map(|v| &**v),
-            ),
+            } => check_length(env, flow, expression.deref(), arg(delimitor)),
             FunctionCall::Simple(call) => check_simple_function(env, flow, call),
             FunctionCall::Generic(_) => unreachable!("never converts"),
             FunctionCall::Unknown(call) => {
@@ -289,7 +302,7 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::Data {
                 args: DataArgs { variable, target },
                 ..
-            } => check_data(env, flow, variable.deref(), target.as_deref().map(|v| &**v)),
+            } => check_data(env, flow, variable.deref(), arg(target)),
             FunctionCall::Order {
                 args:
                     OrderArgs {
@@ -298,22 +311,11 @@ impl CheckExprInner for cos::FunctionCall {
                         target,
                     },
                 ..
-            } => check_order(
-                env,
-                flow,
-                variable.deref(),
-                direction.as_deref().map(|v| &**v),
-                target.as_deref().map(|v| &**v),
-            ),
+            } => check_order(env, flow, variable.deref(), arg(direction), arg(target)),
             FunctionCall::Get {
                 args: GetArgs { variable, default },
                 ..
-            } => check_get(
-                env,
-                flow,
-                variable.deref(),
-                default.as_deref().map(|v| &**v),
-            ),
+            } => check_get(env, flow, variable.deref(), arg(default)),
             FunctionCall::DText(dtext) => {
                 match &dtext.arg {
                     cos::DTextArg::Label(AllowIndirection::Plain(label)) => {
@@ -391,7 +393,7 @@ impl CheckExprInner for cos::FunctionCall {
             }
             FunctionCall::ZFm1 { program, extra, .. } => {
                 if !extra.is_empty() {
-                    check_read_args(env, flow, extra.iter().map(|v| Some(&***v)), "%Integer")?;
+                    check_read_args(env, flow, each_arg(extra).map(Some), "%Integer")?;
                     let given = 2 + extra.len();
                     flow.add_soft_diagnostic(QuasiTypeError::undocumented_argument(
                         "ZF(-1)".to_string(),
@@ -399,10 +401,10 @@ impl CheckExprInner for cos::FunctionCall {
                         given,
                     ));
                 }
-                check_read_args(env, flow, [program.as_deref().map(|v| &**v)], "%Integer")
+                check_read_args(env, flow, [arg(program)], "%Integer")
             }
             FunctionCall::ZFm2 { program, .. } => {
-                check_read_args(env, flow, [program.as_deref().map(|v| &**v)], "%Integer")
+                check_read_args(env, flow, [arg(program)], "%Integer")
             }
             FunctionCall::ZFm100 {
                 flags,
@@ -412,18 +414,15 @@ impl CheckExprInner for cos::FunctionCall {
             } => {
                 let _ = flags.to_ty(env, flow)?;
                 let _ = program.to_ty(env, flow)?;
-                check_args_any(env, flow, args.iter().map(|v| &***v))?;
+                check_args_any(env, flow, each_arg(args))?;
                 Ok(Ty::from("%Integer").into())
             }
             FunctionCall::ZFm3 { dll, args, .. } => {
-                if args
-                    .iter()
-                    .any(|arg| matches!(&****arg, Some(cos::MthArg::ByRef { .. })))
-                {
+                if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
                     return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
                 }
                 let _ = dll.to_ty(env, flow)?;
-                Ok(check_args_any(env, flow, args.iter().map(|v| &***v))?.into())
+                Ok(check_args_any(env, flow, each_arg(args))?.into())
             }
             FunctionCall::ZFm4 {
                 n, third, fourth, ..
@@ -433,7 +432,7 @@ impl CheckExprInner for cos::FunctionCall {
                 [
                     Some(n.deref().deref()),
                     Some(third.deref().deref()),
-                    fourth.as_deref().map(|v| &**v),
+                    arg(fourth),
                 ],
                 "%Integer",
             ),
@@ -445,13 +444,13 @@ impl CheckExprInner for cos::FunctionCall {
             } => {
                 let _ = dll_id.to_ty(env, flow)?;
                 let _ = func_id.to_ty(env, flow)?;
-                Ok(check_args_any(env, flow, args.iter().map(|v| &***v))?.into())
+                Ok(check_args_any(env, flow, each_arg(args))?.into())
             }
             FunctionCall::ZFm6 {
                 dll_index, args, ..
             } => {
                 let _ = dll_index.to_ty(env, flow)?;
-                Ok(check_args_any(env, flow, args.iter().map(|v| &***v))?.into())
+                Ok(check_args_any(env, flow, each_arg(args))?.into())
             }
             FunctionCall::ZU { args, .. } => check_zu_args(env, flow, args),
             FunctionCall::Case {
@@ -476,7 +475,7 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::BitCount {
                 args: BitCountArgs { bits, value },
                 ..
-            } => check_bitcount(env, flow, bits.deref(), value.as_deref().map(|v| &**v)),
+            } => check_bitcount(env, flow, bits.deref(), arg(value)),
             FunctionCall::BitFind {
                 args:
                     BitFindArgs {
@@ -491,11 +490,11 @@ impl CheckExprInner for cos::FunctionCall {
                 flow,
                 bits.deref(),
                 value.deref().deref(),
-                position.as_deref().map(|v| &**v),
-                direction.as_deref().map(|v| &**v),
+                arg(position),
+                arg(direction),
             ),
             FunctionCall::BitLogic { expr, length, .. } => {
-                check_bitlogic(env, flow, expr.deref(), length.as_deref().map(|v| &**v))
+                check_bitlogic(env, flow, expr.deref(), arg(length))
             }
             FunctionCall::Change {
                 args:
@@ -513,13 +512,13 @@ impl CheckExprInner for cos::FunctionCall {
                 string.deref(),
                 target.deref().deref(),
                 replacement.deref().deref(),
-                occurrences.as_deref().map(|v| &**v),
-                begin.as_deref().map(|v| &**v),
+                arg(occurrences),
+                arg(begin),
             ),
             FunctionCall::Char {
                 args: CharArgs { first, rest },
                 ..
-            } => check_char(env, flow, first.deref(), rest.iter().map(|v| &***v)),
+            } => check_char(env, flow, first.deref(), each_arg(rest)),
             FunctionCall::ClassName {
                 args: ClassNameArgs { oref },
                 ..
@@ -527,7 +526,7 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::Decimal {
                 args: DecimalArgs { num, digits },
                 ..
-            } => check_decimal(env, flow, num.deref(), digits.as_deref().map(|v| &**v)),
+            } => check_decimal(env, flow, num.deref(), arg(digits)),
             FunctionCall::Double {
                 args: DoubleArgs { num },
                 ..
@@ -562,7 +561,7 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::Increment {
                 args: IncrementArgs { counter, amount },
                 ..
-            } => check_increment(env, flow, counter.deref(), amount.as_deref().map(|v| &**v)),
+            } => check_increment(env, flow, counter.deref(), arg(amount)),
             FunctionCall::IsObject {
                 args: IsObjectArgs { expr },
                 ..
@@ -573,7 +572,7 @@ impl CheckExprInner for cos::FunctionCall {
                 args: ListBuildArgs { first, rest },
                 ..
             }) => {
-                for arg in once(first.deref()).chain(rest.iter().map(|v| &***v)) {
+                for arg in once(first.deref()).chain(each_arg(rest)) {
                     arg.check(env, flow)?;
                 }
                 Ok(Ty::from("%List").into())
@@ -587,13 +586,8 @@ impl CheckExprInner for cos::FunctionCall {
                     },
                 ..
             } => {
-                check_read_args(
-                    env,
-                    flow,
-                    [Some(list.deref()), position.as_deref().map(|v| &**v)],
-                    "%Boolean",
-                )?;
-                check_out_var(env, flow, var.as_deref().map(|v| &**v), "%String")?;
+                check_read_args(env, flow, [Some(list.deref()), arg(position)], "%Boolean")?;
+                check_out_var(env, flow, arg(var), "%String")?;
                 Ok(Ty::from("%Boolean").into())
             }
             FunctionCall::ListGet(c) => check_listget_call(env, flow, c),
@@ -619,7 +613,7 @@ impl CheckExprInner for cos::FunctionCall {
             } => {
                 let _ = list.deref().to_ty(env, flow)?;
                 let _ = position.deref().deref().to_ty(env, flow)?;
-                for v in std::iter::once(value.deref().deref()).chain(rest.iter().map(|v| &***v)) {
+                for v in std::iter::once(value.deref().deref()).chain(each_arg(rest)) {
                     if let Some(cond) = &v.cond {
                         let _ = cond.deref().to_ty(env, flow)?;
                     }
@@ -644,12 +638,12 @@ impl CheckExprInner for cos::FunctionCall {
                     [
                         Some(string.deref()),
                         Some(regexp.deref().deref()),
-                        start.as_deref().map(|v| &**v),
+                        arg(start),
                     ],
                     "%Integer",
                 )?;
-                check_out_var(env, flow, end.as_deref().map(|v| &**v), "%Integer")?;
-                check_out_var(env, flow, val.as_deref().map(|v| &**v), "%String")?;
+                check_out_var(env, flow, arg(end), "%Integer")?;
+                check_out_var(env, flow, arg(val), "%String")?;
                 Ok(Ty::from("%Integer").into())
             }
             FunctionCall::MV(c) => check_mv_call(env, flow, c),
@@ -666,7 +660,7 @@ impl CheckExprInner for cos::FunctionCall {
                 flow,
                 instance.deref(),
                 method.deref().deref(),
-                args.iter().map(|v| &***v),
+                each_arg(args),
             )?
             .into()),
             FunctionCall::Name {
@@ -675,7 +669,7 @@ impl CheckExprInner for cos::FunctionCall {
             } => {
                 require_public(env, flow, variable.deref(), "$NAME")?;
                 let _ = variable.deref().to_ty(env, flow)?;
-                check_read_args(env, flow, [integer.as_deref().map(|v| &**v)], "%String")
+                check_read_args(env, flow, [arg(integer)], "%String")
             }
             FunctionCall::Parameter {
                 args: ParameterArgs { class, parameter },
@@ -689,11 +683,7 @@ impl CheckExprInner for cos::FunctionCall {
                 args: PrefetchOffArgs { first, second },
                 ..
             } => {
-                for g in first
-                    .as_deref()
-                    .into_iter()
-                    .chain(second.as_deref().map(|v| &**v))
-                {
+                for g in first.as_deref().into_iter().chain(arg(second)) {
                     check_global_ref(env, flow, g)?;
                 }
                 Ok(Ty::from("%String").into())
@@ -702,7 +692,7 @@ impl CheckExprInner for cos::FunctionCall {
                 args: PrefetchOnArgs { gref, gref2 },
                 ..
             } => {
-                for g in std::iter::once(gref.deref()).chain(gref2.as_deref().map(|v| &**v)) {
+                for g in std::iter::once(gref.deref()).chain(arg(gref2)) {
                     if let AllowIndirection::Plain(g) = g.deref() {
                         check_global_ref(env, flow, g)?;
                     }
@@ -721,10 +711,10 @@ impl CheckExprInner for cos::FunctionCall {
             } => {
                 require_public(env, flow, reference.deref(), "$QUERY")?;
                 let _ = reference.deref().to_ty(env, flow)?;
-                if let Some(direction) = direction.as_deref().map(|v| &**v) {
+                if let Some(direction) = arg(direction) {
                     let _ = direction.to_ty(env, flow)?;
                 }
-                check_out_var(env, flow, target.as_deref().map(|v| &**v), "%String")?;
+                check_out_var(env, flow, arg(target), "%String")?;
                 Ok(Ty::from("%String").into())
             }
             FunctionCall::Select {
@@ -732,7 +722,7 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => {
                 let mut exhaustive = false;
-                for b in std::iter::once(first.deref()).chain(rest.iter().map(|v| &***v)) {
+                for b in std::iter::once(first.deref()).chain(each_arg(rest)) {
                     if let PowerTy::Const(c) = (&b.e1).to_power_ty(env, flow)? {
                         exhaustive |= c.as_integer() != 0;
                     }
@@ -762,7 +752,7 @@ impl CheckExprInner for cos::FunctionCall {
                 if let Some(Some(g)) = first.as_deref().map(|f| f.deref()) {
                     check_global_ref(env, flow, g)?;
                 }
-                check_read_args(env, flow, [dosort.as_deref().map(|v| &**v)], "%Integer")
+                check_read_args(env, flow, [arg(dosort)], "%Integer")
             }
             FunctionCall::Vector(c) => check_vector_call(env, flow, c),
             FunctionCall::VectorDefined {
@@ -780,7 +770,7 @@ impl CheckExprInner for cos::FunctionCall {
                     [Some(vector.deref()), Some(position.deref().deref())],
                     "%Boolean",
                 )?;
-                check_out_var(env, flow, value.as_deref().map(|v| &**v), "%String")?;
+                check_out_var(env, flow, arg(value), "%String")?;
                 Ok(Ty::from("%Boolean").into())
             }
             FunctionCall::VectorOp {
@@ -791,7 +781,7 @@ impl CheckExprInner for cos::FunctionCall {
                 flow,
                 [Some(op.deref()), Some(first.deref().deref())]
                     .into_iter()
-                    .chain(rest.iter().map(|v| Some(&***v))),
+                    .chain(each_arg(rest).map(Some)),
                 "%String",
             ),
             FunctionCall::WChar {
@@ -800,7 +790,7 @@ impl CheckExprInner for cos::FunctionCall {
             } => check_read_args(
                 env,
                 flow,
-                std::iter::once(Some(first.deref())).chain(rest.iter().map(|v| Some(&***v))),
+                std::iter::once(Some(first.deref())).chain(each_arg(rest).map(Some)),
                 "%String",
             ),
             FunctionCall::WExtract(c) => check_wextract_call(env, flow, c),
@@ -810,7 +800,7 @@ impl CheckExprInner for cos::FunctionCall {
             } => check_read_args(
                 env,
                 flow,
-                std::iter::once(Some(code.deref())).chain(params.iter().map(|v| Some(&***v))),
+                std::iter::once(Some(code.deref())).chain(each_arg(params).map(Some)),
                 "%String",
             ),
             FunctionCall::ClassMethod {
@@ -826,7 +816,7 @@ impl CheckExprInner for cos::FunctionCall {
                 flow,
                 classname.deref(),
                 method.deref().deref(),
-                args.iter().map(|v| &***v),
+                each_arg(args),
             )?
             .into()),
             FunctionCall::Compile {
@@ -847,10 +837,10 @@ impl CheckExprInner for cos::FunctionCall {
                 source.deref(),
                 qspec.deref().deref(),
                 errors.deref().deref(),
-                object.as_deref().map(|v| &**v),
-                arg5.as_deref().map(|v| &**v),
-                arg6.as_deref().map(|v| &**v),
-                rname.as_deref().map(|v| &**v),
+                arg(object),
+                arg(arg5),
+                arg(arg6),
+                arg(rname),
             ),
             FunctionCall::ZOrder {
                 args: ZOrderArgs { variable },
@@ -949,7 +939,7 @@ fn check_set_var_list<'a>(
     first: &SetVarArg,
     rest: &[Prefix<StringEq!(","), SetVarArg>],
 ) -> Result<(), QuasiTypeError> {
-    for arg in once(first.deref()).chain(rest.iter().map(|rest| rest.deref().deref())) {
+    for arg in once(first.deref()).chain(each_arg(rest)) {
         let range = env.range(arg);
         if let Some(arg) = arg.deref()
             && let Left(arg) = arg.as_local(env, flow)?
@@ -1095,7 +1085,7 @@ fn check_listget_call<'a>(
     check_read_args(
         env,
         flow,
-        [Some(c.list.deref()), c.default.as_deref().map(|v| &**v)],
+        [Some(c.list.deref()), arg(&c.default)],
         "%String",
     )?;
     if let Some(position) = opt_arg(&c.position) {
@@ -1115,7 +1105,7 @@ fn check_vector_call<'a>(
         [
             Some(c.vector.deref()),
             Some(c.position.deref().deref()),
-            c.third.as_deref().map(|v| &**v),
+            arg(&c.third),
         ],
         "%String",
     )
@@ -1131,7 +1121,7 @@ fn check_property_call<'a>(
         flow,
         c.instance.deref(),
         c.property.deref().deref(),
-        c.indexes.iter().map(|v| &***v),
+        each_arg(&c.indexes),
     )
 }
 
