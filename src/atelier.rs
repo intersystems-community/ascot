@@ -234,10 +234,7 @@ fn assemble(
                 .push(member_row_to_info(row));
         }
     }
-    let zero = Position {
-        line: 0,
-        character: 0,
-    };
+    let zero = Position::default();
     class_rows
         .into_iter()
         .filter_map(|row| {
@@ -394,10 +391,7 @@ fn member_row_to_info(row: MemberRow) -> MemberInfo {
     let name = row.name.clone();
     let aliases = split_aliases(row.aliases.as_deref());
     let origin = row.origin.clone();
-    let zero = Position {
-        line: 0,
-        character: 0,
-    };
+    let zero = Position::default();
     MemberInfo {
         doc: row.description.clone().unwrap_or_default(),
         before: zero,
@@ -469,19 +463,12 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
         "query" => MemberKind::Query,
         _ => {
             let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
-            let zero = Position {
-                line: 0,
-                character: 0,
-            };
             let info = MethodInfo {
                 normal,
                 variadic,
                 t: row.return_type.clone(),
                 procedure_block: None,
-                body: Range {
-                    start: zero,
-                    end: zero,
-                },
+                body: Range::default(),
             };
             if is_truthy(&row.class_method) {
                 MemberKind::ClassMethod(info)

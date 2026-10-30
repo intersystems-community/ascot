@@ -562,22 +562,8 @@ impl WorkspaceStruct {
         let rtn = self.rtn_details(uri).ok()?;
         let text = self.doc_text(uri)?;
         let olc = &rtn.map.expanded_olc;
-        let (end_line, end_character) = OLC::new(&text).offset_to_line_character(text.len());
-        let full_range = bindings::Range {
-            start: Position {
-                line: 0,
-                character: 0,
-            },
-            end: Position {
-                line: end_line as u32,
-                character: end_character as u32,
-            },
-        };
         let header_range = bindings::Range {
-            start: Position {
-                line: 0,
-                character: 0,
-            },
+            start: Position::default(),
             end: Position {
                 line: 0,
                 character: text.lines().next().unwrap_or_default().len() as u32,
@@ -605,7 +591,7 @@ impl WorkspaceStruct {
                 name: rtn.routine.header.name.print(),
                 kind: bindings::SymbolKind::Module,
                 deprecated: false,
-                range: full_range,
+                range: full_range(&text),
                 selection_range: header_range,
             },
             members,
@@ -1003,24 +989,12 @@ impl bindings::GuestWorkspace for Workspace {
             DocKind::Cls => {
                 let details = this.cls_details(&uri).ok()?;
                 let text = this.doc_text(&uri)?;
-                let (end_line, end_character) =
-                    OLC::new(&text).offset_to_line_character(text.len());
-                let full_range = bindings::Range {
-                    start: Position {
-                        line: 0,
-                        character: 0,
-                    },
-                    end: Position {
-                        line: end_line as u32,
-                        character: end_character as u32,
-                    },
-                };
                 Some(bindings::DocumentSymbol {
                     root: bindings::SymbolInfo {
                         name: details.name.to_string(),
                         kind: bindings::SymbolKind::Class,
                         deprecated: details.deprecated,
-                        range: full_range,
+                        range: full_range(&text),
                         selection_range: details.name.range,
                     },
                     members: details
@@ -1202,6 +1176,13 @@ fn include_names(map: &SourceMap) -> HashSet<Name> {
         .collect()
 }
 
+fn full_range(text: &str) -> bindings::Range {
+    bindings::Range {
+        start: Position::default(),
+        end: Position::from(OLC::new(text).offset_to_line_character(text.len())),
+    }
+}
+
 fn position_in_range(position: Position, range: bindings::Range) -> bool {
     fn le(a: Position, b: Position) -> bool {
         (a.line, a.character) <= (b.line, b.character)
@@ -1210,13 +1191,10 @@ fn position_in_range(position: Position, range: bindings::Range) -> bool {
 }
 
 pub(crate) fn tygr_error_to_diagnostics(e: cos::Error, src: &str) -> Diagnostic {
-    let (line, character) = OLC::new(src).offset_to_line_character(e.pos());
-    let line = line as u32;
-    let character = character as u32;
-    let start = bindings::Position { line, character };
-    let end = bindings::Position {
-        line,
-        character: character + 1,
+    let start = Position::from(OLC::new(src).offset_to_line_character(e.pos()));
+    let end = Position {
+        character: start.character + 1,
+        ..start
     };
     check::TypeError::document_syntax_error(bindings::Range { start, end }, e).into()
 }
