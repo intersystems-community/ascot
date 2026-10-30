@@ -987,12 +987,7 @@ fn check_piece_call<'a>(
     flow: &mut Flow<'a>,
     c: &PieceCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    if let Some(from) = &c.from {
-        let _ = from.to_ty(env, flow)?;
-    }
-    if let Some(to) = opt_arg(&c.to) {
-        let _ = to.to_ty(env, flow)?;
-    }
+    check_read_args(env, flow, [arg(&c.from), opt_arg(&c.to)], "%String")?;
     check_read_args(
         env,
         flow,
@@ -1034,13 +1029,7 @@ fn check_extract_call<'a>(
     c: &ExtractCall,
 ) -> Result<PowerTy, QuasiTypeError> {
     let _ = c.string.deref().to_ty(env, flow)?;
-    if let Some(from) = &c.from {
-        let _ = from.to_ty(env, flow)?;
-    }
-    if let Some(to) = opt_arg(&c.to) {
-        let _ = to.to_ty(env, flow)?;
-    }
-    Ok(PowerTy::from("%String"))
+    check_read_args(env, flow, [arg(&c.from), opt_arg(&c.to)], "%String")
 }
 
 fn check_wextract_call<'a>(
@@ -1049,13 +1038,7 @@ fn check_wextract_call<'a>(
     c: &WExtractCall,
 ) -> Result<PowerTy, QuasiTypeError> {
     let _ = c.string.deref().to_ty(env, flow)?;
-    if let Some(from) = &c.from {
-        let _ = from.to_ty(env, flow)?;
-    }
-    if let Some(to) = opt_arg(&c.to) {
-        let _ = to.to_ty(env, flow)?;
-    }
-    Ok(PowerTy::from("%String"))
+    check_read_args(env, flow, [arg(&c.from), opt_arg(&c.to)], "%String")
 }
 
 fn check_list_range_call<'a>(
@@ -1077,10 +1060,7 @@ fn check_list_plain_call<'a>(
     c: &ListPlainCall,
 ) -> Result<PowerTy, QuasiTypeError> {
     let _ = c.list.deref().to_ty(env, flow)?;
-    for arg in c.position.as_deref().into_iter().chain(c.end.as_deref()) {
-        let _ = arg.deref().to_ty(env, flow)?;
-    }
-    Ok(Ty::from("%String").into())
+    check_read_args(env, flow, [arg(&c.position), arg(&c.end)], "%String")
 }
 
 fn check_listget_call<'a>(
@@ -1094,10 +1074,7 @@ fn check_listget_call<'a>(
         [Some(c.list.deref()), arg(&c.default)],
         "%String",
     )?;
-    if let Some(position) = opt_arg(&c.position) {
-        let _ = position.to_ty(env, flow)?;
-    }
-    Ok(PowerTy::from("%String"))
+    check_read_args(env, flow, [opt_arg(&c.position)], "%String")
 }
 
 fn check_vector_call<'a>(
@@ -1220,10 +1197,10 @@ fn check_simple_function<'a>(
     Ok(Ty::from(function.ret).into())
 }
 
-fn check_read_args<'a, 'b>(
+fn check_read_args<'a, 'b, T: CheckExprInner + Grammar>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    args: impl IntoIterator<Item = Option<&'b Range<Expr>>>,
+    args: impl IntoIterator<Item = Option<&'b Range<T>>>,
     ret: &str,
 ) -> Result<PowerTy, QuasiTypeError> {
     for arg in args.into_iter().flatten() {
