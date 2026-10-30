@@ -27,230 +27,176 @@ impl QuasiTypeError {
     }
 
     pub fn unimplemented(msg: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::Unimplemented { what: msg }, vec![])
+        TypeErrorKind::Unimplemented { what: msg }.into()
     }
 
     pub fn undefined_macro(name: String, suggestions: Vec<String>) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::UndefinedMacro {
-                name,
-                suggestions: Suggestions(suggestions),
-            },
-            vec![],
-        )
+        TypeErrorKind::UndefinedMacro {
+            name,
+            suggestions: Suggestions(suggestions),
+        }
+        .into()
     }
 
     pub fn unreachable() -> Self {
-        Self::WithoutRange(TypeErrorKind::Unreachable, vec![])
+        TypeErrorKind::Unreachable.into()
     }
 
     pub(crate) fn condition_always(value: bool) -> Self {
-        Self::WithoutRange(TypeErrorKind::ConditionAlways { value }, vec![])
+        TypeErrorKind::ConditionAlways { value }.into()
     }
 
     pub(crate) fn return_nothing_for_x(wanted: Ty, declared_at: Location) -> Self {
         Self::WithoutRange(
             TypeErrorKind::ReturnNothingForX { wanted },
-            vec![DiagnosticRelatedInformation {
-                location: declared_at,
-                message: "A return type is declared.".into(),
-            }],
+            related(declared_at, "A return type is declared."),
         )
     }
 
     pub(crate) fn return_x_for_nothing(actual: Ty, declared_at: Location) -> Self {
         Self::WithoutRange(
             TypeErrorKind::ReturnXForNothing { actual },
-            vec![DiagnosticRelatedInformation {
-                location: declared_at,
-                message: "No return type is declared.".into(),
-            }],
+            related(declared_at, "No return type is declared."),
         )
     }
 
     pub(crate) fn quit_x_in_control(actual: Ty, location_of_control: Location) -> Self {
         Self::WithoutRange(
             TypeErrorKind::QuitXInControl { actual },
-            vec![DiagnosticRelatedInformation {
-                location: location_of_control,
-                message: "The control operation.".into(),
-            }],
+            related(location_of_control, "The control operation."),
         )
     }
 
     pub fn undefined() -> Self {
-        Self::WithoutRange(TypeErrorKind::Undefined { expr: Detail(None) }, vec![])
+        TypeErrorKind::Undefined { expr: Detail(None) }.into()
     }
 
     pub fn maybe_undefined(ty: Ty) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::MaybeUndefined {
-                ty,
-                expr: Detail(None),
-            },
-            vec![],
-        )
+        TypeErrorKind::MaybeUndefined {
+            ty,
+            expr: Detail(None),
+        }
+        .into()
     }
 
     // Fills in `Undefined`/`MaybeUndefined`'s expression text — the only two kinds that benefit
     // from echoing the source back, since every other kind already names what's wrong. Called
     // once, by the outermost ranged expression wrapping the failure (see `CheckExpr` in
     // `check::mod`), so the text always matches whatever the diagnostic's range highlights.
-    pub(crate) fn with_expr_text(self, text: impl FnOnce() -> String) -> Self {
-        match self {
-            Self::WithoutRange(
-                TypeErrorKind::Undefined { expr: Detail(None) },
-                related_information,
-            ) => Self::WithoutRange(
-                TypeErrorKind::Undefined {
-                    expr: Detail(Some(text())),
-                },
-                related_information,
-            ),
-            Self::WithoutRange(
-                TypeErrorKind::MaybeUndefined {
-                    ty,
-                    expr: Detail(None),
-                },
-                related_information,
-            ) => Self::WithoutRange(
-                TypeErrorKind::MaybeUndefined {
-                    ty,
-                    expr: Detail(Some(text())),
-                },
-                related_information,
-            ),
-            other => other,
+    pub(crate) fn with_expr_text(mut self, text: impl FnOnce() -> String) -> Self {
+        if let Self::WithoutRange(
+            TypeErrorKind::Undefined { expr } | TypeErrorKind::MaybeUndefined { expr, .. },
+            _,
+        ) = &mut self
+            && expr.0.is_none()
+        {
+            expr.0 = Some(text());
         }
+        self
     }
 
     pub fn type_incompatible(source: Ty, target: Ty) -> Self {
-        Self::WithoutRange(TypeErrorKind::TypeIncompatible { source, target }, vec![])
+        TypeErrorKind::TypeIncompatible { source, target }.into()
     }
 
     pub fn assign_incompatible(name: String, source: Ty, target: Ty) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::AssignIncompatible {
-                name,
-                source,
-                target,
-            },
-            vec![],
-        )
+        TypeErrorKind::AssignIncompatible {
+            name,
+            source,
+            target,
+        }
+        .into()
     }
 
     pub fn access_instance_only_member_from_class_context(name: String) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name },
-            vec![],
-        )
+        TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name }.into()
     }
 
     pub fn node_without_subscripts(name: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::NodeWithoutSubscripts { name }, vec![])
+        TypeErrorKind::NodeWithoutSubscripts { name }.into()
     }
 
     pub fn undocumented_argument(function: String, documented: usize, given: usize) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::UndocumentedArgument {
-                function,
-                documented,
-                given,
-            },
-            vec![],
-        )
+        TypeErrorKind::UndocumentedArgument {
+            function,
+            documented,
+            given,
+        }
+        .into()
     }
 
     pub fn not_multidimensional(name: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::NotMultidimensional { name }, vec![])
+        TypeErrorKind::NotMultidimensional { name }.into()
     }
 
     pub fn parameter_is_constant(name: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::ParameterIsConstant { name }, vec![])
+        TypeErrorKind::ParameterIsConstant { name }.into()
     }
 
     pub fn not_in_class() -> Self {
-        Self::WithoutRange(TypeErrorKind::NotInClass, vec![])
+        TypeErrorKind::NotInClass.into()
     }
 
     pub fn require_private_variable(name: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::RequirePrivateVariable { name }, vec![])
+        TypeErrorKind::RequirePrivateVariable { name }.into()
     }
 
     pub fn too_few_arguments(next_arg: String, declared_at: Option<Location>) -> Self {
-        let related_information = declared_at
-            .map(|location| {
-                vec![DiagnosticRelatedInformation {
-                    location,
-                    message: "Parameter declared here — add a default value to make it optional."
-                        .into(),
-                }]
-            })
-            .unwrap_or_default();
         Self::WithoutRange(
             TypeErrorKind::TooFewArguments { next_arg },
-            related_information,
+            declared_at
+                .map(|location| {
+                    related(
+                        location,
+                        "Parameter declared here — add a default value to make it optional.",
+                    )
+                })
+                .unwrap_or_default(),
         )
     }
 
     pub fn too_many_arguments() -> Self {
-        Self::WithoutRange(TypeErrorKind::TooManyArguments, vec![])
+        TypeErrorKind::TooManyArguments.into()
     }
 
     pub fn case_default_not_last() -> Self {
-        Self::WithoutRange(TypeErrorKind::CaseDefaultNotLast, vec![])
+        TypeErrorKind::CaseDefaultNotLast.into()
     }
 
     pub fn unknown_function(name: String, suggestions: Vec<String>) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::UnknownFunction {
-                name,
-                suggestions: Suggestions(suggestions),
-            },
-            vec![],
-        )
+        TypeErrorKind::UnknownFunction {
+            name,
+            suggestions: Suggestions(suggestions),
+        }
+        .into()
     }
 
     pub fn unknown_special_variable(name: String, suggestions: Vec<String>) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::UnknownSpecialVariable {
-                name,
-                suggestions: Suggestions(suggestions),
-            },
-            vec![],
-        )
+        TypeErrorKind::UnknownSpecialVariable {
+            name,
+            suggestions: Suggestions(suggestions),
+        }
+        .into()
     }
 
     pub fn invalid_macro_argument(msg: impl Into<String>) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::InvalidMacroArgument { reason: msg.into() },
-            vec![],
-        )
+        TypeErrorKind::InvalidMacroArgument { reason: msg.into() }.into()
     }
 
     pub fn invalid_zstrip_action(action: String, reason: &'static str) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::InvalidZStripAction { action, reason },
-            vec![],
-        )
+        TypeErrorKind::InvalidZStripAction { action, reason }.into()
     }
 
     pub fn number_implicitly_converted_to_string(value: String) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::NumberImplicitlyConvertedToString { value },
-            vec![],
-        )
+        TypeErrorKind::NumberImplicitlyConvertedToString { value }.into()
     }
 
     pub fn discarded_return_value(class: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::DiscardedReturnValue { class }, vec![])
+        TypeErrorKind::DiscardedReturnValue { class }.into()
     }
 
     pub fn invalid_fnumber_format(format: String, reason: String) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::InvalidFNumberFormat { format, reason },
-            vec![],
-        )
+        TypeErrorKind::InvalidFNumberFormat { format, reason }.into()
     }
 
     pub fn cannot_find_member(
@@ -259,80 +205,73 @@ impl QuasiTypeError {
         suggestions: Vec<String>,
         has_get: bool,
     ) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::CannotFindMember {
-                dynamic: DynamicGet(has_get.then(|| mem.clone())),
-                cls,
-                mem,
-                suggestions: Suggestions(suggestions),
-            },
-            vec![],
-        )
+        TypeErrorKind::CannotFindMember {
+            dynamic: DynamicGet(has_get.then(|| mem.clone())),
+            cls,
+            mem,
+            suggestions: Suggestions(suggestions),
+        }
+        .into()
     }
 
     pub fn cannot_find_class(cls: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::CannotFindClass { cls }, vec![])
+        TypeErrorKind::CannotFindClass { cls }.into()
     }
 
     pub fn super_without_method(method: String, cls: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::SuperWithoutMethod { method, cls }, vec![])
+        TypeErrorKind::SuperWithoutMethod { method, cls }.into()
     }
 
     pub fn cannot_find_label(label: String, routine: Option<String>) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::CannotFindLabel {
-                label,
-                routine: InRoutine(routine),
-            },
-            vec![],
-        )
+        TypeErrorKind::CannotFindLabel {
+            label,
+            routine: InRoutine(routine),
+        }
+        .into()
     }
 
     pub fn goto_out_of_block(label: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::GotoOutOfBlock { label }, vec![])
+        TypeErrorKind::GotoOutOfBlock { label }.into()
     }
 
     pub fn cannot_find_routine(routine: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::CannotFindRoutine { routine }, vec![])
+        TypeErrorKind::CannotFindRoutine { routine }.into()
     }
 
     pub fn routine_not_on_iris(routine: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::RoutineNotOnIris { routine }, vec![])
+        TypeErrorKind::RoutineNotOnIris { routine }.into()
     }
 
     pub fn private_variable_not_allowed(function: String, name: String) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::PrivateVariableNotAllowed { function, name },
-            vec![],
-        )
+        TypeErrorKind::PrivateVariableNotAllowed { function, name }.into()
     }
 
     pub fn by_ref_argument_not_allowed(function: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::ByRefArgumentNotAllowed { function }, vec![])
+        TypeErrorKind::ByRefArgumentNotAllowed { function }.into()
     }
 
     pub fn omitted_argument(function: String, position: usize) -> Self {
-        Self::WithoutRange(
-            TypeErrorKind::OmittedArgument { function, position },
-            vec![],
-        )
+        TypeErrorKind::OmittedArgument { function, position }.into()
     }
 
     pub fn set_vector_without_type() -> Self {
-        Self::WithoutRange(TypeErrorKind::SetVectorWithoutType, vec![])
+        TypeErrorKind::SetVectorWithoutType.into()
     }
 
     pub fn routine_without_source(routine: String) -> Self {
-        Self::WithoutRange(TypeErrorKind::RoutineWithoutSource { routine }, vec![])
+        TypeErrorKind::RoutineWithoutSource { routine }.into()
     }
 
     pub fn iris_lookup_failed(kind: crate::DocKind, name: String, reason: String) -> Self {
-        let lookup = IrisLookup { kind, name };
-        Self::WithoutRange(TypeErrorKind::IrisLookupFailed { lookup, reason }, vec![])
+        TypeErrorKind::IrisLookupFailed {
+            lookup: IrisLookup { kind, name },
+            reason,
+        }
+        .into()
     }
 
     pub fn continue_not_in_loop() -> Self {
-        Self::WithoutRange(TypeErrorKind::ContinueNotInLoop, vec![])
+        TypeErrorKind::ContinueNotInLoop.into()
     }
 
     pub(crate) fn inconsistent_declaration(
@@ -340,18 +279,22 @@ impl QuasiTypeError {
         ty1: Option<Ty>,
         ty2: Option<Ty>,
     ) -> QuasiTypeError {
-        Self::WithoutRange(
-            TypeErrorKind::InconsistentDeclaration {
-                name,
-                ty1: Declared(ty1),
-                ty2: Declared(ty2),
-            },
-            vec![],
-        )
+        TypeErrorKind::InconsistentDeclaration {
+            name,
+            ty1: Declared(ty1),
+            ty2: Declared(ty2),
+        }
+        .into()
     }
 
     pub(crate) fn mixed_precedence() -> QuasiTypeError {
-        Self::WithoutRange(TypeErrorKind::MixedPrecedence, vec![])
+        TypeErrorKind::MixedPrecedence.into()
+    }
+}
+
+impl From<TypeErrorKind> for QuasiTypeError {
+    fn from(kind: TypeErrorKind) -> Self {
+        Self::WithoutRange(kind, vec![])
     }
 }
 
@@ -359,6 +302,13 @@ impl From<TypeError> for QuasiTypeError {
     fn from(err: TypeError) -> Self {
         Self::WithRange(err)
     }
+}
+
+fn related(location: Location, message: &str) -> Vec<DiagnosticRelatedInformation> {
+    vec![DiagnosticRelatedInformation {
+        location,
+        message: message.into(),
+    }]
 }
 
 pub trait IntoTypeError<T> {
@@ -1002,19 +952,22 @@ impl TypeError {
         }
     }
 
+    fn at(kind: TypeErrorKind, range: Range) -> Self {
+        Self::new(kind, range, vec![])
+    }
+
     pub fn too_many_arguments(range: Range) -> Self {
-        Self::new(TypeErrorKind::TooManyArguments, range, vec![])
+        QuasiTypeError::too_many_arguments().into_error(|| range)
     }
 
     // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
     // yet to attach one lazily this early (during macro expansion).
     pub(crate) fn unconfirmed_class(cls: String, has_iris: bool, range: Range) -> Self {
-        Self::new(
+        Self::at(
             TypeErrorKind::UnconfirmedClass {
                 lookup: ClassLookup { cls, has_iris },
             },
             range,
-            vec![],
         )
     }
 
@@ -1025,41 +978,38 @@ impl TypeError {
         has_iris: bool,
         range: Range,
     ) -> Self {
-        let kind = TypeErrorKind::UnconfirmedMember {
-            cls,
-            mem,
-            on: SuperclassOf(superclass),
-            reason: UnconfirmedReason { has_iris },
-        };
-        Self::new(kind, range, vec![])
-    }
-
-    pub(crate) fn class_keyword_without_value(keyword: String, range: Range) -> Self {
-        Self::new(
-            TypeErrorKind::ClassKeywordWithoutValue { keyword },
+        Self::at(
+            TypeErrorKind::UnconfirmedMember {
+                cls,
+                mem,
+                on: SuperclassOf(superclass),
+                reason: UnconfirmedReason { has_iris },
+            },
             range,
-            vec![],
         )
     }
 
+    pub(crate) fn class_keyword_without_value(keyword: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::ClassKeywordWithoutValue { keyword }, range)
+    }
+
     pub(crate) fn duplicate_class_name(range: Range, name: String, other: Location) -> Self {
-        let kind = TypeErrorKind::DuplicateClassName {
-            name,
-            other_uri: other.uri.clone(),
-        };
-        let related = DiagnosticRelatedInformation {
-            location: other,
-            message: "Also declared here".into(),
-        };
-        Self::new(kind, range, vec![related])
+        Self::new(
+            TypeErrorKind::DuplicateClassName {
+                name,
+                other_uri: other.uri.clone(),
+            },
+            range,
+            related(other, "Also declared here"),
+        )
     }
 
     pub(crate) fn document_syntax_error(range: Range, err: tygr::Error) -> Self {
-        Self::new(TypeErrorKind::DocumentSyntaxError { err }, range, vec![])
+        Self::at(TypeErrorKind::DocumentSyntaxError { err }, range)
     }
 
     pub fn cannot_find_include(name: String, range: Range) -> Self {
-        Self::new(TypeErrorKind::CannotFindInclude { name }, range, vec![])
+        Self::at(TypeErrorKind::CannotFindInclude { name }, range)
     }
 
     pub fn iris_lookup_failed(
@@ -1068,39 +1018,31 @@ impl TypeError {
         reason: String,
         range: Range,
     ) -> Self {
-        let lookup = IrisLookup { kind, name };
-        Self::new(
-            TypeErrorKind::IrisLookupFailed { lookup, reason },
-            range,
-            vec![],
-        )
+        QuasiTypeError::iris_lookup_failed(kind, name, reason).into_error(|| range)
     }
 
     pub fn macro_expansion_too_deep(name: String, range: Range) -> Self {
-        Self::new(TypeErrorKind::MacroExpansionTooDeep { name }, range, vec![])
+        Self::at(TypeErrorKind::MacroExpansionTooDeep { name }, range)
     }
 
     pub fn macro_too_many_arguments(name: String, expected: usize, range: Range) -> Self {
-        Self::new(
+        Self::at(
             TypeErrorKind::MacroTooManyArguments { name, expected },
             range,
-            vec![],
         )
     }
 
     pub(crate) fn property_keyword_without_value(keyword: String, range: Range) -> Self {
-        Self::new(
+        Self::at(
             TypeErrorKind::PropertyKeywordWithoutValue { keyword },
             range,
-            vec![],
         )
     }
 
     pub fn macro_too_few_arguments(name: String, expected: usize, range: Range) -> Self {
-        Self::new(
+        Self::at(
             TypeErrorKind::MacroTooFewArguments { name, expected },
             range,
-            vec![],
         )
     }
 
@@ -1124,65 +1066,49 @@ impl TypeError {
             },
             range,
             declared_at
-                .map(|location| {
-                    vec![DiagnosticRelatedInformation {
-                        location,
-                        message: message.into(),
-                    }]
-                })
+                .map(|location| related(location, message))
                 .unwrap_or_default(),
         )
     }
 
     pub fn unimplemented(msg: String, range: Range) -> Self {
-        Self::new(TypeErrorKind::Unimplemented { what: msg }, range, vec![])
+        QuasiTypeError::unimplemented(msg).into_error(|| range)
     }
 
     pub fn invalid_syntax(range: Range, err: tygr::Error) -> Self {
-        Self::new(
+        Self::at(
             TypeErrorKind::InvalidSyntax {
                 err: SyntaxErrorText(err),
             },
             range,
-            vec![],
         )
     }
 
-    pub fn continue_not_in_loop(range: Range) -> TypeError {
-        Self::new(TypeErrorKind::ContinueNotInLoop, range, vec![])
-    }
-
     pub fn unread_assignment(name: String, range: Range) -> TypeError {
-        Self::new(TypeErrorKind::UnreadAssignment { name }, range, vec![])
+        Self::at(TypeErrorKind::UnreadAssignment { name }, range)
     }
 
     pub fn output_never_assigned(name: String, range: Range) -> TypeError {
-        Self::new(TypeErrorKind::OutputNeverAssigned { name }, range, vec![])
+        Self::at(TypeErrorKind::OutputNeverAssigned { name }, range)
     }
 
     pub fn duplicated_member_name(range: Range, name: String, previous: Location) -> Self {
         Self::new(
             TypeErrorKind::DuplicatedMemberName { name },
             range,
-            vec![DiagnosticRelatedInformation {
-                location: previous,
-                message: "Previous definition".into(),
-            }],
+            related(previous, "Previous definition"),
         )
     }
 
     pub fn missing_quit(range: Range) -> Self {
-        Self::new(TypeErrorKind::MissingQuit, range, vec![])
+        Self::at(TypeErrorKind::MissingQuit, range)
     }
 
     pub fn redeclare_variable(name: String, range: Range, previous: Location) -> Self {
         Self::new(
             TypeErrorKind::RedeclareVariable { name },
             range,
-            vec![DiagnosticRelatedInformation {
-                location: previous,
-                message: "Previous declaration".into(),
-            }],
+            related(previous, "Previous declaration"),
         )
     }
 
@@ -1192,14 +1118,13 @@ impl TypeError {
         expected: String,
         range: Range,
     ) -> Self {
-        Self::new(
+        Self::at(
             TypeErrorKind::KeywordStyle {
                 what,
                 found,
                 expected,
             },
             range,
-            vec![],
         )
     }
 
@@ -1207,37 +1132,29 @@ impl TypeError {
         Self::new(
             TypeErrorKind::RedundantNew { name },
             range,
-            vec![DiagnosticRelatedInformation {
-                location: previous,
-                message: "Previous NEW".into(),
-            }],
+            related(previous, "Previous NEW"),
         )
     }
 
     pub fn macro_from_method_body(name: String, method: String, range: Range) -> Self {
-        Self::new(
-            TypeErrorKind::MacroFromMethodBody { name, method },
-            range,
-            vec![],
-        )
+        Self::at(TypeErrorKind::MacroFromMethodBody { name, method }, range)
     }
 
     pub fn label_not_a_function(label: String, range: Range) -> Self {
-        Self::new(TypeErrorKind::LabelNotAFunction { label }, range, vec![])
+        Self::at(TypeErrorKind::LabelNotAFunction { label }, range)
     }
 
     pub fn new_in_procedure_block(name: String, range: Range) -> Self {
-        Self::new(TypeErrorKind::NewInProcedureBlock { name }, range, vec![])
+        Self::at(TypeErrorKind::NewInProcedureBlock { name }, range)
     }
 
     pub fn unrecognized_property_keyword(keyword: String, range: Range) -> Self {
-        Self::new(
+        Self::at(
             TypeErrorKind::UnrecognizedPropertyKeyword {
                 keyword,
                 available: Available(PROPERTY_KEYWORDS),
             },
             range,
-            vec![],
         )
     }
 
@@ -1248,7 +1165,7 @@ impl TypeError {
         suggestions: Vec<String>,
         range: Range,
     ) -> Self {
-        Self::new(
+        Self::at(
             TypeErrorKind::UnrecognizedTypeParam {
                 hint: if is_property_keyword {
                     TypeParamHint::PropertyKeyword(name.clone())
@@ -1259,29 +1176,26 @@ impl TypeError {
                 class,
             },
             range,
-            vec![],
         )
     }
 
     pub fn unrecognized_parameter_keyword(keyword: String, range: Range) -> Self {
-        Self::new(
+        Self::at(
             TypeErrorKind::UnrecognizedParameterKeyword {
                 keyword,
                 available: Available(PARAMETER_KEYWORDS),
             },
             range,
-            vec![],
         )
     }
 
     pub fn unrecognized_parameter_type(meta_type: String, range: Range) -> Self {
-        Self::new(
+        Self::at(
             TypeErrorKind::UnrecognizedParameterType {
                 meta_type,
                 available: Available(PARAMETER_TYPE_KEYWORDS),
             },
             range,
-            vec![],
         )
     }
 }

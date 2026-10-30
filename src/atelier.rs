@@ -43,17 +43,24 @@ impl<V: Clone> Cache<V> {
         Self(Mutex::new(HashMap::new()))
     }
 
-    fn get(&self, key: &str) -> Option<V> {
-        let entries = self.0.lock().unwrap();
-        let (at, value) = entries.get(key)?;
-        at.is_none_or(|at| at.elapsed() < CACHE_TTL)
-            .then(|| value.clone())
-    }
-
-    fn set(&self, key: String, value: V) {
+    fn get_or_try_insert(
+        &self,
+        key: &str,
+        compute: impl FnOnce() -> Result<V, String>,
+    ) -> Result<V, String> {
+        if let Some((at, value)) = self.0.lock().unwrap().get(key)
+            && at.is_none_or(|at| at.elapsed() < CACHE_TTL)
+        {
+            return Ok(value.clone());
+        }
+        let value = compute()?;
         // wasm32-unknown-unknown has no clock, so entries there never expire.
         let at = (!cfg!(target_arch = "wasm32")).then(Instant::now);
-        self.0.lock().unwrap().insert(key, (at, value));
+        self.0
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), (at, value.clone()));
+        Ok(value)
     }
 }
 
@@ -104,12 +111,9 @@ impl<A: Atelier + 'static> From<A> for AtelierContext {
 
 impl IrisContext for AtelierContext {
     fn get_cls(&self, cls: &str) -> Result<Option<ClassInfo>, String> {
-        if let Some(cached) = self.cls_cache.get(cls) {
-            return Ok(cached);
-        }
-        let result = class_infos(self, "= ?", &[cls])?.into_values().next();
-        self.cls_cache.set(cls.to_string(), result.clone());
-        Ok(result)
+        self.cls_cache.get_or_try_insert(cls, || {
+            Ok(class_infos(self, "= ?", &[cls])?.into_values().next())
+        })
     }
 
     fn get_inc(&self, name: &str) -> Result<Option<Source>, String> {
@@ -119,21 +123,19 @@ impl IrisContext for AtelierContext {
     // The `.int` first: it is the instance's own macro expansion of the `.mac`, so no expansion
     // (or include resolution) is needed on our side.
     fn get_rtn(&self, name: &str) -> Result<Option<RoutineInfo>, String> {
-        if let Some(cached) = self.rtn_cache.get(name) {
-            return Ok(cached);
-        }
-        let result = match self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")])? {
-            Some(source) => Some(crate::routine_info(&source.text, source.uri)),
-            // Without source, its OBJ says whether it exists.
-            None => routine_names(self, &format!("{name}.obj"))?
-                .contains(name)
-                .then_some(RoutineInfo {
-                    labels: None,
-                    uri: None,
-                }),
-        };
-        self.rtn_cache.set(name.to_string(), result.clone());
-        Ok(result)
+        self.rtn_cache.get_or_try_insert(name, || {
+            let source = self.fetch_routine(&[format!("{name}.int"), format!("{name}.mac")])?;
+            Ok(match source {
+                Some(source) => Some(crate::routine_info(&source.text, source.uri)),
+                // Without source, its OBJ says whether it exists.
+                None => routine_names(self, &format!("{name}.obj"))?
+                    .contains(name)
+                    .then_some(RoutineInfo {
+                        labels: None,
+                        uri: None,
+                    }),
+            })
+        })
     }
 }
 
@@ -144,22 +146,35 @@ impl AtelierContext {
             .map_err(|err| format!("query answered with other than rows: {err}"))
     }
 
+    // The rows of `sql("Description")`. The Atelier query API fails the whole query over a text
+    // value that merely starts with `{` (e.g. a `/// {$$$CPFSave+...}` parameter comment);
+    // retried without descriptions.
+    fn rows_with_description(
+        &self,
+        sql: impl Fn(&str) -> String,
+        params: &[&str],
+    ) -> Result<Vec<Value>, String> {
+        self.rows(&sql("Description"), params)
+            .or_else(|_| self.rows(&sql("'' AS Description"), params))
+    }
+
     // The first of `docs` that exists, cached under the whole candidate list.
     fn fetch_routine(&self, docs: &[String]) -> Result<Option<Source>, String> {
-        let key = docs.join("|");
-        if let Some(cached) = self.routine_cache.get(&key) {
-            return Ok(cached);
-        }
-        let mut result = None;
+        self.routine_cache
+            .get_or_try_insert(&docs.join("|"), || self.first_doc(docs))
+    }
+
+    // The first of `docs` that exists. The Atelier REST API has no uri scheme of its own to offer.
+    fn first_doc(
+        &self,
+        docs: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Option<Source>, String> {
         for doc in docs {
-            if let Some(text) = self.atelier.get_doc(doc)? {
-                // The Atelier REST API has no uri scheme of its own to offer here.
-                result = Some(Source { text, uri: None });
-                break;
+            if let Some(text) = self.atelier.get_doc(doc.as_ref())? {
+                return Ok(Some(Source { text, uri: None }));
             }
         }
-        self.routine_cache.set(key, result.clone());
-        Ok(result)
+        Ok(None)
     }
 }
 
@@ -196,10 +211,7 @@ fn class_infos(
              FROM %Dictionary.CompiledClass WHERE Name {filter}"
         )
     };
-    // Same `{`-leading-text failure mode `all_mem_rows` guards against.
-    let rows = conn
-        .rows(&sql("Description"), params)
-        .or_else(|_| conn.rows(&sql("'' AS Description"), params))?;
+    let rows = conn.rows_with_description(sql, params)?;
     if rows.is_empty() {
         return Ok(HashMap::new());
     }
@@ -234,10 +246,7 @@ fn assemble(
                 .push(member_row_to_info(row));
         }
     }
-    let zero = Position {
-        line: 0,
-        character: 0,
-    };
+    let zero = Position::default();
     class_rows
         .into_iter()
         .filter_map(|row| {
@@ -367,15 +376,11 @@ fn member_rows(
     sql: impl Fn(&str) -> String,
     params: &[&str],
 ) -> Result<Vec<MemberRow>, String> {
-    // The Atelier query API fails the whole query over a text value that merely starts with `{`
-    // (e.g. a `/// {$$$CPFSave+...}` parameter comment); retry without descriptions.
-    conn.rows(&sql("Description"), params)
-        .or_else(|_| conn.rows(&sql("'' AS Description"), params))
-        .map(|rows| {
-            rows.into_iter()
-                .filter_map(|row| serde_json::from_value(row).ok())
-                .collect()
-        })
+    conn.rows_with_description(sql, params).map(|rows| {
+        rows.into_iter()
+            .filter_map(|row| serde_json::from_value(row).ok())
+            .collect()
+    })
 }
 
 fn split_aliases(aliases: Option<&str>) -> Vec<String> {
@@ -394,10 +399,7 @@ fn member_row_to_info(row: MemberRow) -> MemberInfo {
     let name = row.name.clone();
     let aliases = split_aliases(row.aliases.as_deref());
     let origin = row.origin.clone();
-    let zero = Position {
-        line: 0,
-        character: 0,
-    };
+    let zero = Position::default();
     MemberInfo {
         doc: row.description.clone().unwrap_or_default(),
         before: zero,
@@ -469,19 +471,12 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
         "query" => MemberKind::Query,
         _ => {
             let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
-            let zero = Position {
-                line: 0,
-                character: 0,
-            };
             let info = MethodInfo {
                 normal,
                 variadic,
                 t: row.return_type.clone(),
                 procedure_block: None,
-                body: Range {
-                    start: zero,
-                    end: zero,
-                },
+                body: Range::default(),
             };
             if is_truthy(&row.class_method) {
                 MemberKind::ClassMethod(info)
@@ -832,11 +827,8 @@ fn sources(
 ) -> Result<Vec<(String, Source)>, String> {
     let mut found = vec![];
     for name in names {
-        for ext in exts {
-            if let Some(text) = ctx.atelier.get_doc(&format!("{name}.{ext}"))? {
-                found.push((name.clone(), Source { text, uri: None }));
-                break;
-            }
+        if let Some(source) = ctx.first_doc(exts.iter().map(|ext| format!("{name}.{ext}")))? {
+            found.push((name.clone(), source));
         }
     }
     Ok(found)

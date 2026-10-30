@@ -19,9 +19,10 @@ use tygr::{Grammar, IntoInner, OLC, Range};
 use tygr_objectscript::cos::{HMacro, MacroArg, MacroCallStruct, MacroedUnit};
 
 use crate::{
-    DocDetails, WorkspaceStruct,
+    DocDetails, DocKind, WorkspaceStruct,
     bindings::{self, Diagnostic, Location, Position},
     cos::{self, HMacroCommand, MacroRedex, Routine, RoutineWithMacro},
+    details::Positions,
     tygr_error_to_diagnostics,
 };
 
@@ -91,10 +92,8 @@ impl Origin {
 
     fn with_range(&self, range: std::ops::Range<usize>) -> Self {
         Origin {
-            uri: self.uri.clone(),
             range,
-            parent: self.parent.clone(),
-            depth: self.depth,
+            ..self.clone()
         }
     }
 
@@ -140,15 +139,9 @@ pub struct SourceMap {
 
 impl SourceMap {
     pub(crate) fn include_directives(&self) -> impl Iterator<Item = (bindings::Range, &str)> {
-        self.include_directives.iter().map(|(span, name)| {
-            (
-                bindings::Range {
-                    start: Position::from(self.source_olc.offset_to_line_character(span.start)),
-                    end: Position::from(self.source_olc.offset_to_line_character(span.end)),
-                },
-                name.as_str(),
-            )
-        })
+        self.include_directives
+            .iter()
+            .map(|(span, name)| (self.source_olc.span(span.start, span.end), name.as_str()))
     }
 
     // Every `#include` name this expansion asked for, resolved or not, nested ones included.
@@ -174,10 +167,7 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(position) {
             return None;
         }
-        let offset = self
-            .expanded_olc
-            .line_character_to_offset((position.line as usize, position.character as usize));
-        let (source_offset, _) = self.to_source_offset(offset)?;
+        let (source_offset, _) = self.to_source_offset(self.expanded_olc.offset(position))?;
         Some(Position::from(
             self.source_olc.offset_to_line_character(source_offset),
         ))
@@ -190,10 +180,7 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(range.end) {
             return None;
         }
-        let end = self
-            .expanded_olc
-            .line_character_to_offset((range.end.line as usize, range.end.character as usize));
-        let Some(last) = end.checked_sub(1) else {
+        let Some(last) = self.expanded_olc.offset(range.end).checked_sub(1) else {
             let start = self.relocate_position(range.start)?;
             return Some(bindings::Range { start, end: start });
         };
@@ -220,9 +207,7 @@ impl SourceMap {
         if position.line as usize >= self.source_lines {
             return None;
         }
-        let offset = self
-            .source_olc
-            .line_character_to_offset((position.line as usize, position.character as usize));
+        let offset = self.source_olc.offset(position);
         let idx = self
             .invocations
             .partition_point(|span| span.start <= offset)
@@ -332,10 +317,7 @@ impl SourceMap {
             None => &self.source_olc,
             Some(uri) => self.included.get(uri)?,
         };
-        Some(bindings::Range {
-            start: Position::from(olc.offset_to_line_character(range.start)),
-            end: Position::from(olc.offset_to_line_character(range.end)),
-        })
+        Some(olc.span(range.start, range.end))
     }
 
     // The fully macro-expanded text of the physical line containing `offset` — not just the
@@ -381,9 +363,7 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(position) {
             return None;
         }
-        let offset = self
-            .expanded_olc
-            .line_character_to_offset((position.line as usize, position.character as usize));
+        let offset = self.expanded_olc.offset(position);
         let idx = self.locate_idx(offset)?;
         if self.vec[idx].2 {
             return None;
@@ -408,12 +388,8 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(range.start) || !self.is_in_expanded_bounds(range.end) {
             return (*range, vec![]);
         }
-        let start = self
-            .expanded_olc
-            .line_character_to_offset((range.start.line as usize, range.start.character as usize));
-        let end = self
-            .expanded_olc
-            .line_character_to_offset((range.end.line as usize, range.end.character as usize));
+        let start = self.expanded_olc.offset(range.start);
+        let end = self.expanded_olc.offset(range.end);
         let chain = self.relocation_chain(start..end);
         let Some((top_uri, top_range)) = chain.first() else {
             return (*range, vec![]);
@@ -473,6 +449,11 @@ impl SourceMap {
             })
             .collect()
     }
+
+    fn relocate_error(&self, error: tygr::Error, uri: &str) -> Diagnostic {
+        let error = tygr_error_to_diagnostics(error, &self.expanded_text);
+        self.relocate_diagnostics(vec![error], uri).pop().unwrap()
+    }
 }
 
 // An include's uri, full text, and un-substituted macro units.
@@ -482,17 +463,12 @@ pub(crate) type Include = Arc<(String, String, Vec<Range<MacroedUnit>>)>;
 pub(crate) type FailedInclude = (String, Option<String>);
 
 impl WorkspaceStruct {
-    // Keeps `inc_index` in sync with `uri`'s latest tier-A header name — dropping the old
-    // name's entry first, in case it changed.
     // Resolves an `#include name`: an already-open `.inc` document first, then (if connected)
     // by fetching it from the server -- covers a system or shared include that isn't part of
     // the local editor workspace. Returns its uri (the host's own if it offered one, else a
     // synthetic placeholder just for origin-tracking), full text, and un-substituted macro units.
     fn resolve_include(&self, name: &str) -> Result<Option<Include>, String> {
-        if let Some(uri) = {
-            let this = &self;
-            this.inc_index.borrow().get(name).cloned()
-        } {
+        if let Some(uri) = self.resolve_uri(DocKind::Inc, name) {
             // `uri`'s own tier B -- just its header and un-substituted macro units, computed
             // and cached (via `ensure_details`) the moment it's first `#include`d.
             let Ok(DocDetails::Inc(parsed)) = self.ensure_details(&uri) else {
@@ -550,15 +526,7 @@ impl WorkspaceStruct {
             }
             return Ok((Routine::parse(&dones.text)?, definitions));
         }
-        let mut todos = TodoList::new(
-            macroed_units
-                .iter()
-                .map(|x| {
-                    let origin = Origin::top_level(x.start..x.end);
-                    (Cow::Borrowed(x.deref()), origin, true)
-                })
-                .collect(),
-        );
+        let mut todos = TodoList::new(precise_items(&macroed_units, Origin::top_level));
         self.expand_units(&mut definitions, &mut todos, dones)?;
         Ok((Routine::parse(&dones.text)?, definitions))
     }
@@ -575,29 +543,17 @@ impl WorkspaceStruct {
         while let Some((unit, origin, precise)) = todos.pop() {
             match unit.as_ref() {
                 MacroedUnit::Plain(unit) => dones.push_plain(&unit.print(), &origin, precise),
-                MacroedUnit::Redex(unit) => match unit {
+                MacroedUnit::Redex(redex) => match redex {
                     MacroRedex::H(HMacro { command, input }) => match command.deref() {
                         HMacroCommand::Define { name, args, .. } => {
-                            definitions.insert(
-                                name.print(),
-                                MacroDefinition {
-                                    params: args.as_ref().map(|args| {
-                                        args.items.iter().map(|arg| arg.print()).collect()
-                                    }),
-                                    literal_args: false,
-                                    body: import_macro_input(input),
-                                },
-                            );
+                            let params = args
+                                .as_ref()
+                                .map(|args| args.items.iter().map(|arg| arg.print()).collect());
+                            define(definitions, name, params, false, input);
                         }
                         HMacroCommand::Def1arg { name, arg, .. } => {
-                            definitions.insert(
-                                name.print(),
-                                MacroDefinition {
-                                    params: arg.as_ref().map(|arg| vec![arg.deref().print()]),
-                                    literal_args: true,
-                                    body: import_macro_input(input),
-                                },
-                            );
+                            let params = arg.as_ref().map(|arg| vec![arg.deref().print()]);
+                            define(definitions, name, params, true, input);
                         }
                         HMacroCommand::Include(included_name) => {
                             let included_name = included_name.deref();
@@ -636,32 +592,16 @@ impl WorkspaceStruct {
                                 }
                             }
                         }
-                        HMacroCommand::Noshow(..) => (),
-                        HMacroCommand::Show(..) => (),
+                        HMacroCommand::Noshow(..) | HMacroCommand::Show(..) => (),
                         HMacroCommand::If(..) => {
-                            self.resolve_if(
-                                definitions,
-                                todos,
-                                dones,
-                                input.clone(),
-                                unit.print(),
-                                origin,
-                                precise,
-                            )?;
+                            self.resolve_if(definitions, todos, dones, (unit, origin, precise))?;
                         }
                         HMacroCommand::IfDef(..) | HMacroCommand::IfNDef(..) => {
                             let defined = definitions.contains_key(&macro_name_in(input));
                             let keep =
                                 defined == matches!(command.deref(), HMacroCommand::IfDef(..));
-                            self.resolve_branch(
-                                definitions,
-                                todos,
-                                dones,
-                                Some(keep),
-                                unit.print(),
-                                origin,
-                                precise,
-                            )?;
+                            let item = (unit, origin, precise);
+                            self.resolve_branch(definitions, todos, dones, Some(keep), item)?;
                         }
                         HMacroCommand::Undef(..) => {
                             definitions.remove(&macro_name_in(input));
@@ -854,21 +794,12 @@ impl WorkspaceStruct {
                         }
                     }
                     MacroRedex::Lit(_, text, _) => dones.push(&text.print(), &origin, precise),
-                    MacroRedex::Embedded(block) => dones.push(&block.print(), &origin, precise),
                     MacroRedex::LC(..) => (),
                     unit => dones.push(&unit.print(), &origin, precise),
                 },
             }
         }
         Ok(())
-    }
-
-    fn expand_condition(
-        &self,
-        definitions: &mut MacroDefinitions,
-        input: &cos::MacroInput,
-    ) -> Result<String, tygr::Error> {
-        self.expand_text(definitions, &import_macro_input(input))
     }
 
     // Expands `text` in isolation -- e.g. one `#if` condition, or one argument to a call that
@@ -923,20 +854,19 @@ impl WorkspaceStruct {
         Ok(dones.text)
     }
 
-    // Resolves one `#if`/`#elseif` branch by its condition: "1" keeps it, "0" drops it, and
-    // anything else is unresolved (see `resolve_branch`).
-    #[allow(clippy::too_many_arguments)]
+    // Resolves the `#if`/`#elseif` `item` by its condition: "1" keeps its branch, "0" drops it,
+    // and anything else is unresolved (see `resolve_branch`).
     fn resolve_if(
         &self,
         definitions: &mut MacroDefinitions,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
-        condition: cos::MacroInput,
-        printed: String,
-        origin: Origin,
-        precise: bool,
+        item: TodoItem<'_>,
     ) -> Result<(), tygr::Error> {
-        let expanded = self.expand_condition(definitions, &condition)?;
+        let MacroedUnit::Redex(MacroRedex::H(HMacro { input, .. })) = item.0.as_ref() else {
+            unreachable!("resolve_if is only handed an #if or #elseif");
+        };
+        let expanded = self.expand_text(definitions, &import_macro_input(input))?;
         // `#if 0 /* Maintenance */` -- a trailing comment is common and not part of the test.
         let end = ["/*", "//", ";"]
             .iter()
@@ -948,23 +878,20 @@ impl WorkspaceStruct {
             "0" => Some(false),
             _ => None,
         };
-        self.resolve_branch(definitions, todos, dones, decided, printed, origin, precise)
+        self.resolve_branch(definitions, todos, dones, decided, item)
     }
 
     // Keeps a decided-true branch (discarding the rest of the chain via take_branch+skip_branch),
     // drops a decided-false one and tries the closing `#elseif` in turn, and leaves an undecided
     // one alone -- the directive prints unexpanded and `todos` is left untouched, so the rest of
     // the chain is also left unresolved rather than discarded.
-    #[allow(clippy::too_many_arguments)]
     fn resolve_branch(
         &self,
         definitions: &mut MacroDefinitions,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
         decided: Option<bool>,
-        printed: String,
-        origin: Origin,
-        precise: bool,
+        item: TodoItem<'_>,
     ) -> Result<(), tygr::Error> {
         match decided {
             Some(true) => {
@@ -972,28 +899,16 @@ impl WorkspaceStruct {
                 while !matches!(end, BranchEnd::EndIf) {
                     end = skip_branch(todos);
                 }
-                todos.restore(branch);
+                todos.push_items(branch);
                 Ok(())
             }
             Some(false) => match skip_branch(todos) {
                 BranchEnd::EndIf | BranchEnd::Else => Ok(()),
-                BranchEnd::Elseif {
-                    condition,
-                    printed,
-                    origin,
-                    precise,
-                } => self.resolve_if(
-                    definitions,
-                    todos,
-                    dones,
-                    condition,
-                    printed,
-                    origin,
-                    precise,
-                ),
+                BranchEnd::Elseif(elseif) => self.resolve_if(definitions, todos, dones, *elseif),
             },
             None => {
-                dones.push(&printed, &origin, precise);
+                let (unit, origin, precise) = item;
+                dones.push(&unit.print(), &origin, precise);
                 Ok(())
             }
         }
@@ -1024,10 +939,7 @@ impl WorkspaceStruct {
                     }));
                     Err(diagnostic)
                 }
-                None => {
-                    let error = tygr_error_to_diagnostics(error, &map.expanded_text);
-                    Err(map.relocate_diagnostics(vec![error], uri).pop().unwrap())
-                }
+                None => Err(map.relocate_error(error, uri)),
             },
         }
     }
@@ -1046,16 +958,9 @@ impl WorkspaceStruct {
                     let (inc_uri, inc_text, inc_units) = &*include;
                     let mut dones = DoneList::new();
                     dones.note_included_file(inc_uri.clone(), inc_text);
-                    let mut todos = TodoList::new(
-                        inc_units
-                            .iter()
-                            .map(|x| {
-                                let origin = Origin::top_level(0..0)
-                                    .for_included_file(inc_uri.clone(), x.start..x.end);
-                                (Cow::Borrowed(x.deref()), origin, true)
-                            })
-                            .collect(),
-                    );
+                    let mut todos = TodoList::new(precise_items(inc_units, |range| {
+                        Origin::top_level(0..0).for_included_file(inc_uri.clone(), range)
+                    }));
                     let _ = self.expand_units(&mut definitions, &mut todos, &mut dones);
                     // Whatever the include itself included: an edit there changes this class too.
                     include_names.extend(dones.include_names);
@@ -1104,18 +1009,7 @@ impl WorkspaceStruct {
             for x in in_header {
                 dones.push(&x.print(), &Origin::top_level(x.start..x.end), true);
             }
-            let mut todos = TodoList::new(
-                in_body
-                    .into_iter()
-                    .map(|x| {
-                        (
-                            Cow::Borrowed(x.deref()),
-                            Origin::top_level(x.start..x.end),
-                            true,
-                        )
-                    })
-                    .collect(),
-            );
+            let mut todos = TodoList::new(precise_items(in_body, Origin::top_level));
             self.expand_units(&mut definitions, &mut todos, &mut dones)
         })();
         let map = dones.into_source_map(&text);
@@ -1124,10 +1018,7 @@ impl WorkspaceStruct {
                 let expanded_text = map.expanded_text.clone();
                 Ok((expanded_text, map, definitions))
             }
-            Err(error) => {
-                let error = tygr_error_to_diagnostics(error, &map.expanded_text);
-                Err(map.relocate_diagnostics(vec![error], uri).pop().unwrap())
-            }
+            Err(error) => Err(map.relocate_error(error, uri)),
         }
     }
 }
@@ -1277,12 +1168,7 @@ impl DoneList {
 
     fn note_lookup_failed(&mut self, name: String, reason: String, origin: &Origin) {
         let make = move |name, range| {
-            crate::check::TypeError::iris_lookup_failed(
-                crate::DocKind::Inc,
-                name,
-                reason.clone(),
-                range,
-            )
+            crate::check::TypeError::iris_lookup_failed(DocKind::Inc, name, reason.clone(), range)
         };
         self.note_unresolved(make, name, origin);
     }
@@ -1349,36 +1235,29 @@ impl DoneList {
     }
 
     fn into_source_map(self, src: &str) -> SourceMap {
-        let source_olc = OLC::new(src);
         let mut invocations = self.invocations;
         invocations.sort_by_key(|span| span.start);
-        let unresolved = self
-            .unresolved
-            .into_iter()
-            .filter_map(|(make, name, origin)| {
-                let olc = match &origin.uri {
-                    None => &source_olc,
-                    Some(uri) => self.included.get(uri)?,
-                };
-                let range = bindings::Range {
-                    start: Position::from(olc.offset_to_line_character(origin.range.start)),
-                    end: Position::from(olc.offset_to_line_character(origin.range.end)),
-                };
-                Some(make(name, range).into())
-            })
-            .collect();
-        SourceMap {
+        let mut map = SourceMap {
             vec: self.map,
-            source_olc,
+            source_olc: OLC::new(src),
             source_lines: src.matches('\n').count() + 1,
             expanded_olc: OLC::new(&self.text),
             expanded_text: self.text,
             included: self.included,
             invocations,
-            unresolved,
+            unresolved: Vec::new(),
             include_directives: self.include_directives,
             include_names: self.include_names,
-        }
+        };
+        map.unresolved = self
+            .unresolved
+            .into_iter()
+            .filter_map(|(make, name, origin)| {
+                let range = map.range_in(&origin.uri, &origin.range)?;
+                Some(make(name, range).into())
+            })
+            .collect();
+        map
     }
 }
 
@@ -1388,10 +1267,9 @@ type TodoItem<'a> = (Cow<'a, MacroedUnit>, Origin, bool);
 struct TodoList<'a>(Vec<TodoItem<'a>>);
 
 impl<'a> TodoList<'a> {
-    fn new(items: Vec<TodoItem<'a>>) -> Self {
-        let mut list = Self(Vec::new());
-        list.restore(items);
-        list
+    fn new(mut items: Vec<TodoItem<'a>>) -> Self {
+        items.reverse();
+        Self(items)
     }
 
     fn pop(&mut self) -> Option<TodoItem<'a>> {
@@ -1412,46 +1290,40 @@ impl<'a> TodoList<'a> {
     fn push_items(&mut self, items: Vec<TodoItem<'a>>) {
         self.0.extend(items.into_iter().rev());
     }
+}
 
-    fn restore(&mut self, mut items: Vec<TodoItem<'a>>) {
-        items.reverse();
-        self.0.extend(items);
-    }
+fn precise_items<'a>(
+    units: impl IntoIterator<Item = &'a Range<MacroedUnit>>,
+    origin_at: impl Fn(std::ops::Range<usize>) -> Origin,
+) -> Vec<TodoItem<'a>> {
+    units
+        .into_iter()
+        .map(|x| (Cow::Borrowed(x.deref()), origin_at(x.start..x.end), true))
+        .collect()
 }
 
 // What closes a decided-false `#if`/`#elseif` branch, as found by `skip_branch`.
-enum BranchEnd {
+enum BranchEnd<'a> {
     EndIf,
     // Its body is left in `todos` to flow normally.
     Else,
-    Elseif {
-        condition: cos::MacroInput,
-        printed: String,
-        origin: Origin,
-        precise: bool,
-    },
+    // The directive itself, for `resolve_if`; boxed, being far larger than the other ends.
+    Elseif(Box<TodoItem<'a>>),
 }
 
 // Scans a branch's body, feeding each unit to `keep`, until finding what closes it. A `level`
 // counter tells a nested `#if`'s own terminator apart from the one closing this branch.
-fn scan_branch<'a>(todos: &mut TodoList<'a>, mut keep: impl FnMut(TodoItem<'a>)) -> BranchEnd {
+fn scan_branch<'a>(todos: &mut TodoList<'a>, mut keep: impl FnMut(TodoItem<'a>)) -> BranchEnd<'a> {
     let mut level = 0usize;
     while let Some(item) = todos.pop() {
-        let MacroedUnit::Redex(MacroRedex::H(HMacro { command, input })) = item.0.as_ref() else {
+        let MacroedUnit::Redex(MacroRedex::H(HMacro { command, .. })) = item.0.as_ref() else {
             keep(item);
             continue;
         };
         match command.deref() {
             HMacroCommand::EndIf(..) if level == 0 => return BranchEnd::EndIf,
             HMacroCommand::Else(..) if level == 0 => return BranchEnd::Else,
-            HMacroCommand::Elseif(..) if level == 0 => {
-                return BranchEnd::Elseif {
-                    condition: input.clone(),
-                    printed: item.0.print(),
-                    origin: item.1,
-                    precise: item.2,
-                };
-            }
+            HMacroCommand::Elseif(..) if level == 0 => return BranchEnd::Elseif(Box::new(item)),
             // Only `#endif` closes a nested `#if` — an `#elseif`/`#else` at level > 0 is just
             // one of *its* own branches, not a terminator, so it doesn't reduce the level.
             HMacroCommand::If(..) | HMacroCommand::IfDef(..) | HMacroCommand::IfNDef(..) => {
@@ -1465,14 +1337,32 @@ fn scan_branch<'a>(todos: &mut TodoList<'a>, mut keep: impl FnMut(TodoItem<'a>))
     BranchEnd::EndIf
 }
 
-fn skip_branch(todos: &mut TodoList<'_>) -> BranchEnd {
+fn skip_branch<'a>(todos: &mut TodoList<'a>) -> BranchEnd<'a> {
     scan_branch(todos, |_| {})
 }
 
-fn take_branch<'a>(todos: &mut TodoList<'a>) -> (Vec<TodoItem<'a>>, BranchEnd) {
+fn take_branch<'a>(todos: &mut TodoList<'a>) -> (Vec<TodoItem<'a>>, BranchEnd<'a>) {
     let mut taken = Vec::new();
     let end = scan_branch(todos, |item| taken.push(item));
     (taken, end)
+}
+
+fn define(
+    definitions: &mut MacroDefinitions,
+    name: &cos::MacroName,
+    params: Option<Vec<String>>,
+    literal_args: bool,
+    input: &cos::MacroInput,
+) {
+    let body = import_macro_input(input);
+    definitions.insert(
+        name.print(),
+        MacroDefinition {
+            params,
+            literal_args,
+            body,
+        },
+    );
 }
 
 // The macro name an `#ifdef`/`#ifndef`/`#undef` names: its first word.

@@ -19,13 +19,14 @@ use std::{
     ops::Deref,
 };
 
-use tygr::{IntoInner, OLC, Range};
+use tygr::OLC;
 
 use crate::bindings::{ArgMode, InlayHint, MemberKind};
 use crate::check::errors::*;
 use crate::check::flow::OutputCell;
 use crate::check::types::*;
 use crate::cos::{CodeMode, MethodLanguage};
+pub use crate::details::Positions;
 use crate::details::{
     MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
 };
@@ -257,19 +258,15 @@ impl Namespace for Methods {
         member: bindings::MemberInfo,
         correction: Option<&Correction>,
     ) -> Option<(TyProcedureOrAny, bool)> {
-        let uri = member.uri.clone();
-        let declared_at = bindings::Range {
-            start: member.before,
-            end: member.after,
-        };
+        let location = location(&member);
         let (m, is_instance_only) = match member.kind {
             MemberKind::Method(m) => (m, true),
             MemberKind::ClassMethod(m) => (m, false),
             _ => return None,
         };
         let mut proc = TyProcedure::from(m);
-        proc.uri = uri.clone();
-        proc.declared_at = uri.is_some().then_some(declared_at);
+        proc.uri = location.as_ref().map(|location| location.uri.clone());
+        proc.declared_at = location.map(|location| location.range);
         if let Some(correction) = correction {
             correction.apply(&mut proc);
         }
@@ -332,6 +329,19 @@ fn generated_procedure(
     })
 }
 
+// Where a host-reported member is declared: only known when the host could map it to a uri
+// (e.g. not a bare IRIS system class).
+fn location(member: &bindings::MemberInfo) -> Option<bindings::Location> {
+    let range = bindings::Range {
+        start: member.before,
+        end: member.after,
+    };
+    member
+        .uri
+        .clone()
+        .map(|uri| bindings::Location::new(uri, range))
+}
+
 // An IRIS-reported member of `cls`, typed and masked by its declaring class.
 fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<Found<N::Ty>> {
     let origin = member.origin.clone().unwrap_or_else(|| cls.to_string());
@@ -339,15 +349,7 @@ fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<F
         return None;
     }
     let correction = crate::mask::correction(&origin, &member.name.content);
-    // Only known when the host that answered this query could map the member to a uri
-    // (e.g. not a bare IRIS system class).
-    let location = member.uri.clone().map(|uri| {
-        let range = bindings::Range {
-            start: member.before,
-            end: member.after,
-        };
-        bindings::Location::new(uri, range)
-    });
+    let location = location(&member);
     let (ty, is_instance_only) = N::reported(member, correction)?;
     Some(Found {
         member: Member { ty, location },
@@ -974,7 +976,7 @@ impl<'a> WorkspaceEnv<'a> {
             if let Some((package, _)) = context.rsplit_once('.') {
                 candidates.push(format!("{package}.{name}"));
             }
-            if let Some(uri) = self.resolve_cls_uri(context)
+            if let Some(uri) = self.resolve_uri(DocKind::Cls, context)
                 && let Ok(details) = self.workspace.cls_details(&uri)
             {
                 candidates.extend(details.imports.iter().map(|p| format!("{p}.{name}")));
@@ -991,13 +993,8 @@ impl<'a> WorkspaceEnv<'a> {
         self.resolve(cls).is_some()
     }
 
-    // Whether IRIS says there's no such class; `false` when it couldn't be asked.
-    pub(crate) fn class_absent(&self, cls: &str) -> bool {
-        self.resolve(cls).is_none()
-    }
-
     fn resolve(&self, cls: &str) -> Option<Class> {
-        if let Some(uri) = self.resolve_cls_uri(cls) {
+        if let Some(uri) = self.resolve_uri(DocKind::Cls, cls) {
             return Some(match self.workspace.cls_details(&uri) {
                 Ok(details) => Class::Workspace(uri, details),
                 Err(_) => Class::Unknown(None),
@@ -1181,12 +1178,12 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     // A workspace-wide routine's label -> signature map, for a cross-routine label call
-    // (`Do Foo^OtherRoutine()`) -- same "resolve by name" shape as `resolve_cls_uri` for a
+    // (`Do Foo^OtherRoutine()`) -- same "resolve by name" shape as a
     // cross-class method call. Falls back to `IrisContext::get_rtn` when `name` isn't
     // open in the workspace. `Ok(None)` when the routine can't be parsed (a grammar gap), so its
     // labels are simply unknown; `Err` says why its labels are out of reach.
     pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Result<Option<Labels>, QuasiTypeError> {
-        if let Some(uri) = self.resolve_rtn_uri(name) {
+        if let Some(uri) = self.resolve_uri(DocKind::Rtn, name) {
             let rtn = self.workspace.rtn_details(&uri).ok();
             return Ok(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
         }
@@ -1307,18 +1304,9 @@ impl<'a> WorkspaceEnv<'a> {
         self.touched.borrow().clone()
     }
 
-    fn resolve_cls_uri(&self, cls: &str) -> Option<String> {
-        self.touched
-            .borrow_mut()
-            .insert((DocKind::Cls, cls.to_string()));
-        self.workspace.resolve_cls_uri(cls)
-    }
-
-    fn resolve_rtn_uri(&self, name: &str) -> Option<String> {
-        self.touched
-            .borrow_mut()
-            .insert((DocKind::Rtn, name.to_string()));
-        self.workspace.resolve_rtn_uri(name)
+    fn resolve_uri(&self, kind: DocKind, name: &str) -> Option<String> {
+        self.touched.borrow_mut().insert((kind, name.to_string()));
+        self.workspace.resolve_uri(kind, name)
     }
 
     pub fn reference(&self, source: bindings::Range, target: bindings::Location) {
@@ -1495,38 +1483,21 @@ impl<'a> DocumentEnv<'a> {
         }
     }
 
-    pub fn for_class_member(
+    pub fn for_member(
         &self,
         offset: usize,
         this: Option<&'a ClassTy>,
+        is_instance: bool,
         method_name: &'a str,
         macro_definitions: &'a MacroDefinitions,
     ) -> CodeEnv<'_> {
         CodeEnv {
             base: self,
-            is_instance: false,
+            is_instance,
             offset,
             this,
             labels: None,
             method_name: Some(method_name),
-            macro_definitions: Some(macro_definitions),
-        }
-    }
-
-    pub fn for_instance_member(
-        &self,
-        offset: usize,
-        this: Option<&'a ClassTy>,
-        method_name: &'a str,
-        macro_definitions: &'a MacroDefinitions,
-    ) -> CodeEnv<'_> {
-        CodeEnv {
-            base: self,
-            is_instance: true,
-            offset,
-            this,
-            method_name: Some(method_name),
-            labels: None,
             macro_definitions: Some(macro_definitions),
         }
     }
@@ -1597,6 +1568,7 @@ pub(crate) fn labels_of(olc: &OLC, routine: &cos::Routine, uri: Option<&str>) ->
         .collect()
 }
 
+#[derive(Clone)]
 pub struct CodeEnv<'a> {
     this: Option<&'a ClassTy>,
     base: &'a DocumentEnv<'a>,
@@ -1616,23 +1588,8 @@ impl<'a> CodeEnv<'a> {
         self.base.base.workspace.style.as_ref()
     }
 
-    pub(crate) fn span(&self, start: usize, end: usize) -> bindings::Range {
-        bindings::Range {
-            start: self.position(start),
-            end: self.position(end),
-        }
-    }
-
     pub(crate) fn soft_diagnostic(&self, err: TypeError) {
         self.base.base.add_soft_diagnostic(err.into())
-    }
-
-    pub(crate) fn class_exists(&self, cls: &str) -> bool {
-        self.base.base.class_exists(cls)
-    }
-
-    pub(crate) fn class_absent(&self, cls: &str) -> bool {
-        self.base.base.class_absent(cls)
     }
 
     pub(crate) fn qualify_class_name(&self, name: &str) -> String {
@@ -1665,13 +1622,8 @@ impl<'a> CodeEnv<'a> {
             (name, label)
         }));
         CodeEnv {
-            this: self.this,
-            base: self.base,
-            is_instance: self.is_instance,
-            offset: self.offset,
             labels: Some(Rc::new(labels)),
-            method_name: self.method_name,
-            macro_definitions: self.macro_definitions,
+            ..self.clone()
         }
     }
 
@@ -1806,44 +1758,17 @@ impl<'a> CodeEnv<'a> {
     }
 }
 
-pub trait Locator {
+pub trait Locator: Positions {
     fn uri(&self) -> &str;
-    fn offset_to_line_character(&self, offset: usize) -> (usize, usize);
-    fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize;
-
-    fn position(&self, offset: usize) -> bindings::Position {
-        let (line, character) = self.offset_to_line_character(offset);
-        bindings::Position {
-            line: line as u32,
-            character: character as u32,
-        }
-    }
-
-    // The inverse of `position`.
-    fn offset(&self, position: bindings::Position) -> usize {
-        self.line_character_to_offset((position.line as usize, position.character as usize))
-    }
-
-    fn range<T>(&self, ranged: &Range<T>) -> bindings::Range {
-        bindings::Range {
-            start: self.position(ranged.start),
-            end: self.position(ranged.end),
-        }
-    }
-
-    fn with_range<T>(&self, ranged: Range<T>) -> WithRange<T> {
-        WithRange {
-            range: self.range(&ranged),
-            it: ranged.into_inner(),
-        }
-    }
 }
 
 impl<'a> Locator for DocumentEnv<'a> {
     fn uri(&self) -> &str {
         self.uri
     }
+}
 
+impl<'a> Positions for DocumentEnv<'a> {
     fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
         self.olc.offset_to_line_character(offset)
     }
@@ -1857,7 +1782,10 @@ impl<'a> Locator for CodeEnv<'a> {
     fn uri(&self) -> &str {
         self.base.uri()
     }
+}
 
+// A method body's offsets, shifted to where the body sits in its class.
+impl<'a> Positions for CodeEnv<'a> {
     fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
         self.base.offset_to_line_character(offset + self.offset)
     }
