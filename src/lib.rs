@@ -436,49 +436,40 @@ impl WorkspaceStruct {
         affected
     }
 
+    // The other documents of `kind` (`uri` aside) declaring `name`. `index_for(kind)` only ever
+    // remembers one owner per name (whichever claimed it last), so it can't answer this -- scan
+    // `doc_cache`'s own tier-A names instead, same O(workspace) cost as a reverse index would be.
+    fn others_named(&self, kind: DocKind, uri: &str, name: &str) -> impl Iterator<Item = String> {
+        self.doc_cache.iter().filter_map(move |(other, entry)| {
+            let cell = entry.as_ref().ok()?;
+            (other != uri
+                && DocKind::from_uri(other) == Some(kind)
+                && cell.borrow().name(other) == name)
+                .then(|| other.clone())
+        })
+    }
+
     // Drops `uri`'s claim on `name`, handing it to another document of that kind still declaring
     // it, if any. Every such document's cached analysis (a duplicate-class error naming `uri`,
     // say) is stale, so they're all returned for rechecking.
     fn unindex(&self, kind: DocKind, uri: &str, name: &str) -> Vec<String> {
-        let others: Vec<String> = self
-            .doc_cache
-            .iter()
-            .filter_map(|(other, entry)| {
-                let cell = entry.as_ref().ok()?;
-                (other != uri
-                    && DocKind::from_uri(other) == Some(kind)
-                    && cell.borrow().name(other) == name)
-                    .then(|| other.clone())
-            })
-            .collect();
         let index = self.index_for(kind);
         if index.borrow().get(name).is_some_and(|owner| owner == uri) {
             index.borrow_mut().remove(name);
-            if let Some(successor) = others.iter().min() {
-                index
-                    .borrow_mut()
-                    .insert(name.to_string(), successor.clone());
+            if let Some(successor) = self.others_named(kind, uri, name).min() {
+                index.borrow_mut().insert(name.to_string(), successor);
             }
         }
         self.invalidate_name(&(kind, name.to_string()))
     }
 
-    // `class_index` only ever remembers one owner per name (whichever claimed it last), so it
-    // can't answer "does any *other* uri also have this name" -- scan `doc_cache`'s own tier-A
-    // names instead, same O(workspace) cost as the reverse index this replaced would have been.
     fn duplicate_class_name_diagnostic(
         &self,
         uri: &str,
         name: &str,
         range: bindings::Range,
     ) -> Option<Diagnostic> {
-        let other_uri = self.doc_cache.iter().find_map(|(other_uri, entry)| {
-            let cell = entry.as_ref().ok()?;
-            (other_uri != uri
-                && DocKind::from_uri(other_uri) == Some(DocKind::Cls)
-                && cell.borrow().name(other_uri) == name)
-                .then(|| other_uri.clone())
-        })?;
+        let other_uri = self.others_named(DocKind::Cls, uri, name).next()?;
         let other_range = self.cls_details(&other_uri).ok()?.name.range;
         let other = Location::new(other_uri, other_range);
         Some(check::TypeError::duplicate_class_name(range, name.to_string(), other).into())
@@ -555,6 +546,19 @@ impl WorkspaceStruct {
     // always a plain O(1) lookup, same shape as `resolve_cls_uri`.
     pub(crate) fn resolve_rtn_uri(&self, name: &str) -> Option<String> {
         self.rtn_index.borrow().get(name).cloned()
+    }
+
+    // Every open document of `kind` whose header name starts with `prefix`. Tier A alone decides
+    // the matches, so only they pay for a full (tier B) parse.
+    fn uris_with_prefix(&self, kind: DocKind, prefix: &str) -> Vec<String> {
+        self.doc_cache
+            .iter()
+            .filter_map(|(uri, entry)| {
+                let doc = entry.as_ref().ok()?.borrow();
+                (DocKind::from_uri(uri) == Some(kind) && doc.name.it.starts_with(prefix))
+                    .then(|| uri.clone())
+            })
+            .collect()
     }
 
     // The routine declared in `uri` and its labels, as a `textDocument/documentSymbol` outline.
@@ -939,18 +943,7 @@ impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn query_cls(&self, query: String) -> Vec<(String, bindings::ClassInfo)> {
         let this = self.borrow();
-        // Tier A alone (name only) decides which classes match -- only matches pay for a full
-        // (tier B) parse to build their `ClassInfo` below.
-        let candidates: Vec<String> = this
-            .doc_cache
-            .iter()
-            .filter_map(|(uri, entry)| {
-                let doc = entry.as_ref().ok()?.borrow();
-                (DocKind::from_uri(uri) == Some(DocKind::Cls) && doc.name.it.starts_with(&query))
-                    .then(|| uri.clone())
-            })
-            .collect();
-        candidates
+        this.uris_with_prefix(DocKind::Cls, &query)
             .into_iter()
             .filter_map(|uri| {
                 let details = this.cls_details(&uri).ok()?;
@@ -1020,8 +1013,8 @@ impl bindings::GuestWorkspace for Workspace {
 
     // Classes and members, and routines and labels, across the workspace whose name starts with
     // `query`, as a `workspace/symbol` result. Tier A alone decides which classes/routines match
-    // (see `query_cls` and the routine filter below); only matches pay for the full (tier B)
-    // parse needed to list their members/labels.
+    // (see `uris_with_prefix`); only matches pay for the full (tier B) parse needed to list
+    // their members/labels.
     #[allow(async_fn_in_trait)]
     fn workspace_symbol(&self, query: String) -> Vec<bindings::WorkspaceSymbol> {
         fn name_range(name: &NameInfo) -> bindings::Range {
@@ -1056,16 +1049,8 @@ impl bindings::GuestWorkspace for Workspace {
                 });
 
         let this = self.borrow();
-        let candidates: Vec<String> = this
-            .doc_cache
-            .iter()
-            .filter_map(|(uri, entry)| {
-                let doc = entry.as_ref().ok()?.borrow();
-                (DocKind::from_uri(uri) == Some(DocKind::Rtn) && doc.name.it.starts_with(&query))
-                    .then(|| uri.clone())
-            })
-            .collect();
-        let rtn_symbols = candidates
+        let rtn_symbols = this
+            .uris_with_prefix(DocKind::Rtn, &query)
             .into_iter()
             .flat_map(|uri| {
                 let Some(symbol) = this.routine_symbol(&uri) else {
