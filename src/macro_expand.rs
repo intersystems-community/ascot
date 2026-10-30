@@ -515,7 +515,7 @@ impl WorkspaceStruct {
         if header
             .type_spec
             .as_ref()
-            .is_some_and(|spec| spec.print().to_uppercase().contains("INT"))
+            .is_some_and(|spec| matches!(***spec, cos::RoutineType::Int(_)))
         {
             for unit in &macroed_units {
                 dones.push(

@@ -1169,12 +1169,21 @@ fn check_simple_function<'a>(
     for (i, arg) in call.args.items.iter().enumerate() {
         let Some(expr) = arg.deref() else { continue };
         let expr = Range::new(arg.start, expr, arg.end);
-        // `$ZCONVERT(s, mode, table, handle)`: the handle is state the call writes.
-        if function.names[0] == "ZConvert"
-            && i == 3
-            && let Some(variable) = expr.as_variable()
-            && let Left(local) = variable.as_local(env, flow)?
-        {
+        // `$ZCONVERT(s, mode, table, handle)`: the handle is state the call writes, and IRIS
+        // takes nothing but a plain local there (measured: a subscript, a global or a literal is
+        // a compile error).
+        if function.names[0] == "ZConvert" && i == 3 {
+            let local = expr
+                .as_variable()
+                .map(|v| v.as_local(env, flow))
+                .transpose()?;
+            let Some(Left(local)) = local.filter(|l| matches!(l, Left(l) if l.subs.is_empty()))
+            else {
+                return Err(QuasiTypeError::WithRange(TypeError::handle_not_a_local(
+                    "$ZCONVERT".into(),
+                    env.range(&expr),
+                )));
+            };
             flow.invalidate(local, Ty::from("%String").into())?;
             continue;
         }

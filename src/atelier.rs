@@ -146,16 +146,20 @@ impl AtelierContext {
             .map_err(|err| format!("query answered with other than rows: {err}"))
     }
 
-    // The rows of `sql("Description")`. The Atelier query API fails the whole query over a text
-    // value that merely starts with `{` (e.g. a `/// {$$$CPFSave+...}` parameter comment);
-    // retried without descriptions.
+    // The rows of `sql("Description")`. The Atelier query API fails the whole query, with a
+    // "Parsing error" exception, over a text value that merely starts with `{` (e.g. a
+    // `/// {$$$CPFSave+...}` parameter comment); that one is retried without descriptions.
     fn rows_with_description(
         &self,
         sql: impl Fn(&str) -> String,
         params: &[&str],
     ) -> Result<Vec<Value>, String> {
-        self.rows(&sql("Description"), params)
-            .or_else(|_| self.rows(&sql("'' AS Description"), params))
+        match self.rows(&sql("Description"), params) {
+            Err(err) if err.contains("Parsing error") => {
+                self.rows(&sql("'' AS Description"), params)
+            }
+            rows => rows,
+        }
     }
 
     // The first of `docs` that exists, cached under the whole candidate list.
