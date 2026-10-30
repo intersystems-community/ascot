@@ -22,6 +22,7 @@ use crate::{
     DocDetails, DocKind, WorkspaceStruct,
     bindings::{self, Diagnostic, Location, Position},
     cos::{self, HMacroCommand, MacroRedex, Routine, RoutineWithMacro},
+    details::Positions,
     tygr_error_to_diagnostics,
 };
 
@@ -116,17 +117,6 @@ impl Origin {
 // (expanded range, origin, exact?), sorted by expanded start so `locate` can bsearch.
 type SourceMapVec = Vec<(std::ops::Range<usize>, Origin, bool)>;
 
-fn offset_at(olc: &OLC, position: Position) -> usize {
-    olc.line_character_to_offset((position.line as usize, position.character as usize))
-}
-
-fn range_at(olc: &OLC, range: &std::ops::Range<usize>) -> bindings::Range {
-    bindings::Range {
-        start: Position::from(olc.offset_to_line_character(range.start)),
-        end: Position::from(olc.offset_to_line_character(range.end)),
-    }
-}
-
 // Maps expanded-text positions/ranges back to the original source, across any `#include`d files
 // that contributed to the expansion.
 pub struct SourceMap {
@@ -151,7 +141,7 @@ impl SourceMap {
     pub(crate) fn include_directives(&self) -> impl Iterator<Item = (bindings::Range, &str)> {
         self.include_directives
             .iter()
-            .map(|(span, name)| (range_at(&self.source_olc, span), name.as_str()))
+            .map(|(span, name)| (self.source_olc.span(span.start, span.end), name.as_str()))
     }
 
     // Every `#include` name this expansion asked for, resolved or not, nested ones included.
@@ -177,7 +167,7 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(position) {
             return None;
         }
-        let (source_offset, _) = self.to_source_offset(offset_at(&self.expanded_olc, position))?;
+        let (source_offset, _) = self.to_source_offset(self.expanded_olc.offset(position))?;
         Some(Position::from(
             self.source_olc.offset_to_line_character(source_offset),
         ))
@@ -190,7 +180,7 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(range.end) {
             return None;
         }
-        let Some(last) = offset_at(&self.expanded_olc, range.end).checked_sub(1) else {
+        let Some(last) = self.expanded_olc.offset(range.end).checked_sub(1) else {
             let start = self.relocate_position(range.start)?;
             return Some(bindings::Range { start, end: start });
         };
@@ -217,7 +207,7 @@ impl SourceMap {
         if position.line as usize >= self.source_lines {
             return None;
         }
-        let offset = offset_at(&self.source_olc, position);
+        let offset = self.source_olc.offset(position);
         let idx = self
             .invocations
             .partition_point(|span| span.start <= offset)
@@ -327,7 +317,7 @@ impl SourceMap {
             None => &self.source_olc,
             Some(uri) => self.included.get(uri)?,
         };
-        Some(range_at(olc, range))
+        Some(olc.span(range.start, range.end))
     }
 
     // The fully macro-expanded text of the physical line containing `offset` — not just the
@@ -373,7 +363,7 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(position) {
             return None;
         }
-        let offset = offset_at(&self.expanded_olc, position);
+        let offset = self.expanded_olc.offset(position);
         let idx = self.locate_idx(offset)?;
         if self.vec[idx].2 {
             return None;
@@ -398,8 +388,8 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(range.start) || !self.is_in_expanded_bounds(range.end) {
             return (*range, vec![]);
         }
-        let start = offset_at(&self.expanded_olc, range.start);
-        let end = offset_at(&self.expanded_olc, range.end);
+        let start = self.expanded_olc.offset(range.start);
+        let end = self.expanded_olc.offset(range.end);
         let chain = self.relocation_chain(start..end);
         let Some((top_uri, top_range)) = chain.first() else {
             return (*range, vec![]);

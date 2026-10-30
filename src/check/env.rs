@@ -976,7 +976,7 @@ impl<'a> WorkspaceEnv<'a> {
             if let Some((package, _)) = context.rsplit_once('.') {
                 candidates.push(format!("{package}.{name}"));
             }
-            if let Some(uri) = self.resolve_cls_uri(context)
+            if let Some(uri) = self.resolve_uri(DocKind::Cls, context)
                 && let Ok(details) = self.workspace.cls_details(&uri)
             {
                 candidates.extend(details.imports.iter().map(|p| format!("{p}.{name}")));
@@ -999,7 +999,7 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     fn resolve(&self, cls: &str) -> Option<Class> {
-        if let Some(uri) = self.resolve_cls_uri(cls) {
+        if let Some(uri) = self.resolve_uri(DocKind::Cls, cls) {
             return Some(match self.workspace.cls_details(&uri) {
                 Ok(details) => Class::Workspace(uri, details),
                 Err(_) => Class::Unknown(None),
@@ -1183,12 +1183,12 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     // A workspace-wide routine's label -> signature map, for a cross-routine label call
-    // (`Do Foo^OtherRoutine()`) -- same "resolve by name" shape as `resolve_cls_uri` for a
+    // (`Do Foo^OtherRoutine()`) -- same "resolve by name" shape as a
     // cross-class method call. Falls back to `IrisContext::get_rtn` when `name` isn't
     // open in the workspace. `Ok(None)` when the routine can't be parsed (a grammar gap), so its
     // labels are simply unknown; `Err` says why its labels are out of reach.
     pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Result<Option<Labels>, QuasiTypeError> {
-        if let Some(uri) = self.resolve_rtn_uri(name) {
+        if let Some(uri) = self.resolve_uri(DocKind::Rtn, name) {
             let rtn = self.workspace.rtn_details(&uri).ok();
             return Ok(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
         }
@@ -1309,18 +1309,9 @@ impl<'a> WorkspaceEnv<'a> {
         self.touched.borrow().clone()
     }
 
-    fn resolve_cls_uri(&self, cls: &str) -> Option<String> {
-        self.touched
-            .borrow_mut()
-            .insert((DocKind::Cls, cls.to_string()));
-        self.workspace.resolve_cls_uri(cls)
-    }
-
-    fn resolve_rtn_uri(&self, name: &str) -> Option<String> {
-        self.touched
-            .borrow_mut()
-            .insert((DocKind::Rtn, name.to_string()));
-        self.workspace.resolve_rtn_uri(name)
+    fn resolve_uri(&self, kind: DocKind, name: &str) -> Option<String> {
+        self.touched.borrow_mut().insert((kind, name.to_string()));
+        self.workspace.resolve_uri(kind, name)
     }
 
     pub fn reference(&self, source: bindings::Range, target: bindings::Location) {
@@ -1617,13 +1608,6 @@ pub struct CodeEnv<'a> {
 impl<'a> CodeEnv<'a> {
     pub(crate) fn keyword_styles(&self) -> Option<&crate::style::KeywordStyles> {
         self.base.base.workspace.style.as_ref()
-    }
-
-    pub(crate) fn span(&self, start: usize, end: usize) -> bindings::Range {
-        bindings::Range {
-            start: self.position(start),
-            end: self.position(end),
-        }
     }
 
     pub(crate) fn soft_diagnostic(&self, err: TypeError) {

@@ -41,11 +41,15 @@ pub trait Positions {
         self.line_character_to_offset((position.line as usize, position.character as usize))
     }
 
-    fn range<T>(&self, ranged: &Range<T>) -> bindings::Range {
+    fn span(&self, start: usize, end: usize) -> bindings::Range {
         bindings::Range {
-            start: self.position(ranged.start),
-            end: self.position(ranged.end),
+            start: self.position(start),
+            end: self.position(end),
         }
+    }
+
+    fn range<T>(&self, ranged: &Range<T>) -> bindings::Range {
+        self.span(ranged.start, ranged.end)
     }
 
     fn with_range<T>(&self, ranged: Range<T>) -> WithRange<T> {

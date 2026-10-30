@@ -170,13 +170,13 @@ pub struct WorkspaceStruct {
     // claims the name stales its dependents like any other change of owner (`invalidate_name`).
     depends_on: RefCell<HashMap<Name, HashSet<Name>>>,
     dependents: RefCell<HashMap<Name, HashSet<Name>>>,
-    // Name -> uri, populated as a byproduct of tier A — lets `resolve_cls_uri` be a plain O(1)
+    // Name -> uri, populated as a byproduct of tier A — lets `resolve_uri` be a plain O(1)
     // lookup once a class has been opened. A rename or removal is fixed up against `doc_cache`'s
     // own (old) entry directly, rather than keeping a uri -> name reverse index just for that.
     class_index: RefCell<HashMap<String, String>>,
     // Same idea as `class_index`, but for `.inc` header names — see `resolve_uri`.
     inc_index: RefCell<HashMap<String, String>>,
-    // Same idea as `class_index`, but for `ROUTINE` header names — see `resolve_rtn_uri`.
+    // Same idea as `class_index`, but for `ROUTINE` header names — see `resolve_uri`.
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
     pub(crate) style: Option<style::KeywordStyles>,
@@ -476,10 +476,6 @@ impl WorkspaceStruct {
         WorkspaceEnv::new(self)
     }
 
-    pub(crate) fn resolve_cls_uri(&self, name: &str) -> Option<String> {
-        self.resolve_uri(DocKind::Cls, name)
-    }
-
     pub(crate) fn rtn_details(&self, uri: &str) -> Result<Arc<RtnDetails>, Diagnostic> {
         match self.ensure_details(uri)? {
             DocDetails::Rtn(details, _) => Ok(details),
@@ -535,10 +531,6 @@ impl WorkspaceStruct {
             self.record_deps(uri, include_names(&rtn.map));
         }
         details
-    }
-
-    pub(crate) fn resolve_rtn_uri(&self, name: &str) -> Option<String> {
-        self.resolve_uri(DocKind::Rtn, name)
     }
 
     // Every open document of `kind` whose header name starts with `prefix`. Tier A alone decides
