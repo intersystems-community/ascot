@@ -354,15 +354,13 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => {
                 string.deref().to_ty(env, flow)?;
-                flow.with_range(env.range(action), |flow| {
-                    let action = action.to_power_ty(env, flow)?;
-                    if let Some(text) = const_as_string(&action, flow)
-                        && let Err(reason) = check_zstrip_action(&text)
-                    {
-                        return Err(QuasiTypeError::invalid_zstrip_action(text, reason));
-                    }
-                    action.to_ty(env)
-                })?;
+                check_code_arg(
+                    env,
+                    flow,
+                    action,
+                    check_zstrip_action,
+                    QuasiTypeError::invalid_zstrip_action,
+                )?;
                 if let Some(remchar) = remchar {
                     remchar.check(env, flow)?
                 }
@@ -552,15 +550,13 @@ impl CheckExprInner for cos::FunctionCall {
             } => {
                 let _ = num.deref().to_ty(env, flow)?;
                 if let Some(format) = opt_arg(format) {
-                    flow.with_range(env.range(format), |flow| {
-                        let format_ty = format.to_power_ty(env, flow)?;
-                        if let Some(text) = const_as_string(&format_ty, flow)
-                            && let Err(reason) = check_fnumber_format(&text)
-                        {
-                            return Err(QuasiTypeError::invalid_fnumber_format(text, reason));
-                        }
-                        format_ty.to_ty(env)
-                    })?;
+                    check_code_arg(
+                        env,
+                        flow,
+                        format,
+                        check_fnumber_format,
+                        QuasiTypeError::invalid_fnumber_format,
+                    )?;
                 }
                 if let Some(decimal) = decimal {
                     let _ = decimal.to_ty(env, flow)?;
@@ -1595,6 +1591,26 @@ fn const_as_string(power_ty: &PowerTy, flow: &Flow<'_>) -> Option<String> {
         ));
     }
     Some(c.as_string())
+}
+
+// An argument with its own little syntax (`$ZSTRIP`'s action, `$FNUMBER`'s format): a constant
+// is validated by `check`, and a failure reported through `invalid`.
+fn check_code_arg<'a, R>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    code: &Range<Expr>,
+    check: impl FnOnce(&str) -> Result<(), R>,
+    invalid: impl FnOnce(String, R) -> QuasiTypeError,
+) -> Result<Ty, QuasiTypeError> {
+    flow.with_range(env.range(code), |flow| {
+        let ty = code.to_power_ty(env, flow)?;
+        if let Some(text) = const_as_string(&ty, flow)
+            && let Err(reason) = check(&text)
+        {
+            return Err(invalid(text, reason));
+        }
+        ty.to_ty(env)
+    })
 }
 
 // `$ZSTRIP`'s `action` is an action code (`*`, or a subset of `<`/`>`/`=`) followed by zero or
