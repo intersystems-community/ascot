@@ -247,7 +247,6 @@ where
     arg.as_deref().and_then(|w| w.deref().as_ref())
 }
 
-// A trailing argument that may be omitted (`$FN(x)`): the expression, if given.
 fn arg<'b, M, W, T>(arg: &'b Option<M>) -> Option<&'b Range<T>>
 where
     M: Deref<Target = W>,
@@ -256,7 +255,6 @@ where
     arg.as_deref().map(|w| w.deref())
 }
 
-// The expressions of a repeated argument (`$FN(x, y, ...)`).
 fn each_arg<'b, M, W, T: 'b>(args: &'b [M]) -> impl Iterator<Item = &'b Range<T>>
 where
     M: Deref<Target = W>,
@@ -1278,7 +1276,6 @@ fn check_property<'a, 'b>(
     Ok(PowerTy::from(Ty::Any))
 }
 
-// `$INCREMENT`/`$DATA`'s target: the flow-tracked local, or the opaque type of anything else.
 fn target_as_local<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,

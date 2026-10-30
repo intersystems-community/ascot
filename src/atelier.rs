@@ -43,7 +43,6 @@ impl<V: Clone> Cache<V> {
         Self(Mutex::new(HashMap::new()))
     }
 
-    // The entry at `key`, computed (and kept) when there is none or it has expired.
     fn get_or_try_insert(
         &self,
         key: &str,

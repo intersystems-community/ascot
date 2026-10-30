@@ -394,15 +394,21 @@ impl std::fmt::Display for PowerTy {
                 cases,
                 default,
             } => {
+                fn show(ty: &Option<Ty>) -> &dyn std::fmt::Display {
+                    match ty {
+                        Some(ty) => ty,
+                        None => &"<UNDEFINED>",
+                    }
+                }
                 write!(f, "$CASE(%{}, ", target)?;
                 for (i, (name, ty)) in cases.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "\"{}\":{}", name, MaybeTy::from(ty.clone()))?;
+                    write!(f, "\"{}\":{}", name, show(ty))?;
                 }
                 if let Some(ty) = default {
-                    write!(f, ", :{}", MaybeTy::from(ty.clone()))?;
+                    write!(f, ", :{}", show(ty))?;
                 }
                 write!(f, ")")
             }

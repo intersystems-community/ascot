@@ -450,7 +450,6 @@ impl SourceMap {
             .collect()
     }
 
-    // A parse error in the expanded text, placed back in the source.
     fn relocate_error(&self, error: tygr::Error, uri: &str) -> Diagnostic {
         let error = tygr_error_to_diagnostics(error, &self.expanded_text);
         self.relocate_diagnostics(vec![error], uri).pop().unwrap()
@@ -1293,7 +1292,6 @@ impl<'a> TodoList<'a> {
     }
 }
 
-// Each of `units` as a precise item, at the origin `origin_at` makes of its source range.
 fn precise_items<'a>(
     units: impl IntoIterator<Item = &'a Range<MacroedUnit>>,
     origin_at: impl Fn(std::ops::Range<usize>) -> Origin,
@@ -1349,7 +1347,6 @@ fn take_branch<'a>(todos: &mut TodoList<'a>) -> (Vec<TodoItem<'a>>, BranchEnd<'a
     (taken, end)
 }
 
-// `#define name(params) input` / `#def1arg name(param) input`, into `definitions`.
 fn define(
     definitions: &mut MacroDefinitions,
     name: &cos::MacroName,

@@ -117,8 +117,6 @@ impl<T: CheckExprInner + Grammar> CheckExpr for Range<&T> {
     }
 }
 
-// Runs `check` on the node with `flow` positioned on it, placing (and texting) whatever it fails
-// with there.
 fn check_ranged<'a, T: Grammar, R>(
     expr: &Range<&T>,
     env: &CodeEnv<'a>,
@@ -164,13 +162,8 @@ struct Shifter<'a> {
 
 impl Shifter<'_> {
     fn position(&self, relative: bindings::Position) -> bindings::Position {
-        let offset = self
-            .body_olc
-            .line_character_to_offset((relative.line as usize, relative.character as usize));
-        bindings::Position::from(
-            self.doc_olc
-                .offset_to_line_character(offset + self.body_start_offset),
-        )
+        self.doc_olc
+            .position(self.body_olc.offset(relative) + self.body_start_offset)
     }
 
     fn range(&self, relative: bindings::Range) -> bindings::Range {
@@ -182,13 +175,8 @@ impl Shifter<'_> {
 
     // The inverse of `position`.
     fn unposition(&self, absolute: bindings::Position) -> bindings::Position {
-        let offset = self
-            .doc_olc
-            .line_character_to_offset((absolute.line as usize, absolute.character as usize));
-        bindings::Position::from(
-            self.body_olc
-                .offset_to_line_character(offset - self.body_start_offset),
-        )
+        self.body_olc
+            .position(self.doc_olc.offset(absolute) - self.body_start_offset)
     }
 
     fn unrange(&self, absolute: bindings::Range) -> bindings::Range {
@@ -2458,7 +2446,6 @@ fn check_member<'a>(
     }
 }
 
-// What a call or member access yields as a value -- nothing, for a procedure.
 fn defined(ty: Option<Ty>) -> Result<PowerTy, QuasiTypeError> {
     ty.map(PowerTy::from).ok_or_else(QuasiTypeError::undefined)
 }
