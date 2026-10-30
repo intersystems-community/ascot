@@ -227,33 +227,22 @@ impl WorkspaceStruct {
             self.error_names.take();
             self.implicit_definitions.take();
         }
-        let entry = match kind {
-            DocKind::Cls => match ClassDefinitionHeader::parse_prefix(&text) {
-                Ok((header, _)) => {
-                    let name = with_range_name(&header.name, &OLC::new(&text));
-                    Ok(DocCache {
-                        name,
-                        text,
-                        details: None,
-                    })
-                }
-                Err(err) => Err(tygr_error_to_diagnostics(err, &text)),
-            },
+        let name = match kind {
+            DocKind::Cls => ClassDefinitionHeader::parse_prefix(&text)
+                .map(|(header, _)| with_range_name(&header.name, &OLC::new(&text))),
             // `.mac`/`.int`/`.inc` all share the same `ROUTINE Name [Type=...]` header grammar --
             // which of the two this is only matters once something asks for tier B (see
             // `ensure_details`), not here.
-            DocKind::Inc | DocKind::Rtn => match cos::RoutineHeader::parse_prefix(&text) {
-                Ok((header, _)) => {
-                    let name = with_range_name(&header.name, &OLC::new(&text));
-                    Ok(DocCache {
-                        name,
-                        text,
-                        details: None,
-                    })
-                }
-                Err(err) => Err(tygr_error_to_diagnostics(err, &text)),
-            },
+            DocKind::Inc | DocKind::Rtn => cos::RoutineHeader::parse_prefix(&text)
+                .map(|(header, _)| with_range_name(&header.name, &OLC::new(&text))),
         };
+        let entry = name
+            .map_err(|err| tygr_error_to_diagnostics(err, &text))
+            .map(|name| DocCache {
+                name,
+                text,
+                details: None,
+            });
         let new_name = entry.as_ref().ok().map(|doc| doc.name(&uri));
         // `insert` hands back whatever was there before, so `index_name` below can fix up a
         // stale forward-index entry on a rename without a separate lookup.
