@@ -319,18 +319,16 @@ impl<'a> Flow<'a> {
                 },
             ))?;
         }
-        // Deferred until every split flow has run: still `false` means never read. The first in
-        // source order, so the report doesn't depend on hash order.
-        if !flow.shared.incomplete.get()
-            && let Some((w, _)) = flow
-                .shared
-                .reading_list
-                .borrow()
-                .iter()
-                .filter(|(_, read)| !**read)
-                .min_by_key(|(w, _)| (w.range.start.line, w.range.start.character))
-        {
-            flow.add_soft_diagnostic(TypeError::unread_assignment(w.name.clone(), w.range).into());
+        // Deferred until every split flow has run: still `false` means never read.
+        if !flow.shared.incomplete.get() {
+            let unread: Vec<(String, bindings::Range)> = {
+                let list = flow.shared.reading_list.borrow();
+                let unread = list.iter().filter(|(_, read)| !**read);
+                unread.map(|(w, _)| (w.name.clone(), w.range)).collect()
+            };
+            for (name, range) in unread {
+                flow.add_soft_diagnostic(TypeError::unread_assignment(name, range).into());
+            }
         }
         // Likewise deferred: an `Output` parameter absent from `output_written` was never
         // assigned on any path, so its caller gets an undefined value back.

@@ -386,6 +386,7 @@ impl CheckExprInner for cos::FunctionCall {
                 Ok(Ty::from("%String").into())
             }
             FunctionCall::ZFm1 { program, extra, .. } => {
+                let ty = check_read_args(env, flow, [arg(program)], "%Integer")?;
                 if !extra.is_empty() {
                     check_read_args(env, flow, each_arg(extra).map(Some), "%Integer")?;
                     let given = 2 + extra.len();
@@ -395,7 +396,7 @@ impl CheckExprInner for cos::FunctionCall {
                         given,
                     ));
                 }
-                check_read_args(env, flow, [arg(program)], "%Integer")
+                Ok(ty)
             }
             FunctionCall::ZFm2 { program, .. } => {
                 check_read_args(env, flow, [arg(program)], "%Integer")
@@ -985,13 +986,13 @@ fn check_piece_call<'a>(
     flow: &mut Flow<'a>,
     c: &PieceCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    check_read_args(env, flow, [arg(&c.from), opt_arg(&c.to)], "%String")?;
     check_read_args(
         env,
         flow,
         [Some(c.string.deref()), Some(c.delimiter.deref().deref())],
         "%String",
-    )
+    )?;
+    check_read_args(env, flow, [arg(&c.from), opt_arg(&c.to)], "%String")
 }
 
 fn check_mv_call<'a>(
@@ -1066,13 +1067,9 @@ fn check_listget_call<'a>(
     flow: &mut Flow<'a>,
     c: &ListGetCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    check_read_args(
-        env,
-        flow,
-        [Some(c.list.deref()), arg(&c.default)],
-        "%String",
-    )?;
-    check_read_args(env, flow, [opt_arg(&c.position)], "%String")
+    check_read_args(env, flow, [Some(c.list.deref())], "%String")?;
+    check_read_args(env, flow, [opt_arg(&c.position)], "%String")?;
+    check_read_args(env, flow, [arg(&c.default)], "%String")
 }
 
 fn check_vector_call<'a>(
