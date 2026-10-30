@@ -227,8 +227,6 @@ pub(crate) struct ClassKeywords {
 pub struct KeywordIssue {
     pub entry: String,
     pub keyword: String,
-    // `Name = ` with nothing after, as in IRIS's own exports.
-    pub without_value: bool,
 }
 
 impl From<&cos::KeywordEntry> for KeywordIssue {
@@ -236,7 +234,6 @@ impl From<&cos::KeywordEntry> for KeywordIssue {
         Self {
             entry: entry.print(),
             keyword: entry.keyword().print(),
-            without_value: matches!(entry, cos::KeywordEntry::Assign { value: None, .. }),
         }
     }
 }
@@ -940,7 +937,7 @@ fn method_kind(
         match entry.into_inner().into_inner() {
             Left(Language(v)) => language = Some((&v.value).into()),
             Left(CodeMode(v)) => mode = Some(v.value),
-            Left(ProcedureBlock(flag)) => procedure_block = Some(flag.is_set()),
+            Left(ProcedureBlock(v)) => procedure_block = Some(v.value.is_set()),
             // Each name at the keyword's own range.
             Left(PublicList(v)) => {
                 public_list = class_list_text(&v.value.print())

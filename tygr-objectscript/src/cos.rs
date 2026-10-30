@@ -2301,8 +2301,7 @@ pub struct CommaWithSpace(Raw<(StringEq!(","), Space)>);
 pub type KeywordEntryWithSpace<Entry = KeywordEntry> = Range<Suffix<Entry, Space>>;
 
 /// An entry read as one of the declaration's keywords `K`, or kept as written when it is none.
-/// IRIS parses any entry here; what it does with one it doesn't know is the checker's to report,
-/// against `K`'s BNF (see `keyword_bnf`).
+/// IRIS parses any entry here; what it does with one it doesn't know is the checker's to report.
 pub type FailableKeyword<K> = Either<K, KeywordEntry>;
 
 #[derive(Grammar)]
@@ -2336,7 +2335,8 @@ impl KeywordEntry {
 #[grammar(hidden)]
 pub struct KeywordEnd(NotFollowedBy<CharOf<IsKeywordValue>>);
 
-/// A flag keyword: `Name` and `Name = 1` set it, `Not Name` and `Name = 0` clear it.
+/// A flag keyword: `Name` sets it, `Not Name` clears it. `Name = 1` is no flag: IRIS refuses it on a
+/// member, and takes it on a class as a bare `Name` whatever the value.
 #[derive(Grammar)]
 #[grammar(inline)]
 pub enum Flag<Name> {
@@ -2348,30 +2348,33 @@ pub enum Flag<Name> {
     Set {
         name: Name,
         end: KeywordEnd,
-        value: Option<(Raw<(Space, StringEq!("="), Space)>, FlagValue, KeywordEnd)>,
-        // `Abstract = banana` is no flag: fail here rather than leave `= banana` behind.
+        // Fail at `Abstract = 1` rather than leave `= 1` behind.
         no_assign: NoAssign,
     },
+}
+
+impl<Name: Grammar> Flag<Name> {
+    pub fn is_set(&self) -> bool {
+        matches!(self, Flag::Set { .. })
+    }
 }
 
 #[derive(Grammar)]
 #[grammar(hidden)]
 pub struct NoAssign(NotFollowedBy<Raw<(Space, StringEq!("="))>>);
 
-impl<Name: Grammar> Flag<Name> {
-    pub fn is_set(&self) -> bool {
-        match self {
-            Flag::Not { .. } => false,
-            Flag::Set { value, .. } => !matches!(value, Some((_, FlagValue::Off(_), _))),
-        }
-    }
-}
-
+/// The `0` or `1` of `ProcedureBlock = 1` and `ServerOnly = 0`.
 #[derive(Grammar)]
 #[grammar(inline)]
-pub enum FlagValue {
+pub enum Bit {
     Off(StringEq!("0")),
     On(StringEq!("1")),
+}
+
+impl Bit {
+    pub fn is_set(&self) -> bool {
+        matches!(self, Bit::On(_))
+    }
 }
 
 /// A keyword taking a value of the shape `Value`: `Name = value`.
@@ -2383,59 +2386,6 @@ pub struct Valued<Name, Value> {
     eq: Raw<(Space, StringEq!("="), Space)>,
     pub value: Value,
     after: KeywordEnd,
-}
-
-/// What a `K` keyword list entry may be, as BNF: the alternatives spelling `name`, or every one
-/// when none does.
-pub fn keyword_bnf<K: GrammarRule>(name: &str) -> String {
-    let def = bnf_def::<K>();
-    let named: Vec<&str> = alternatives_spelling(&def, name).collect();
-    if named.is_empty() {
-        def
-    } else {
-        named.join(" | ")
-    }
-}
-
-/// Whether `name` spells one of `K`'s keywords.
-pub fn is_keyword<K: GrammarRule>(name: &str) -> bool {
-    alternatives_spelling(&bnf_def::<K>(), name)
-        .next()
-        .is_some()
-}
-
-fn bnf_def<K: GrammarRule>() -> String {
-    let mut def = String::new();
-    K::to_bnf_def().format(&mut def).unwrap();
-    def
-}
-
-fn alternatives_spelling<'a>(def: &'a str, name: &str) -> impl Iterator<Item = &'a str> {
-    let needle = format!("\"{name}\"").to_ascii_lowercase();
-    top_level_alternatives(def)
-        .filter(move |alternative| alternative.to_ascii_lowercase().contains(&needle))
-}
-
-// The `a | b | c` of a BNF definition, split outside quotes and brackets.
-fn top_level_alternatives(def: &str) -> impl Iterator<Item = &str> {
-    let mut depth = 0i32;
-    let mut quoted = false;
-    let mut start = 0;
-    let mut alternatives = Vec::new();
-    for (i, ch) in def.char_indices() {
-        match ch {
-            '"' => quoted = !quoted,
-            '(' | '[' | '{' if !quoted => depth += 1,
-            ')' | ']' | '}' if !quoted => depth -= 1,
-            '|' if !quoted && depth == 0 => {
-                alternatives.push(def[start..i].trim());
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    alternatives.push(def[start..].trim());
-    alternatives.into_iter()
 }
 
 // Spelled as IRIS accepts them: `ClassType` in lowercase only, the rest in any case.
@@ -2483,8 +2433,8 @@ pub enum ClassKeyword {
     Owner(Valued<StringEqCI!("Owner"), KeywordValue>),
     ProcedureBlock(Flag<StringEqCI!("ProcedureBlock")>),
     PropertyClass(Valued<StringEqCI!("PropertyClass"), ClassList>),
-    ServerOnly(Flag<StringEqCI!("ServerOnly")>),
-    Sharded(Flag<StringEqCI!("Sharded")>),
+    ServerOnly(Valued<StringEqCI!("ServerOnly"), Bit>),
+    Sharded(Valued<StringEqCI!("Sharded"), Bit>),
     SoapBindingStyle(Valued<StringEqCI!("SoapBindingStyle"), KeywordValue>),
     SoapBodyUse(Valued<StringEqCI!("SoapBodyUse"), KeywordValue>),
     SqlCategory(Valued<StringEqCI!("SqlCategory"), KeywordValue>),
@@ -2555,11 +2505,11 @@ pub enum MethodKeyword {
     NotInheritable(Flag<StringEqCI!("NotInheritable")>),
     PlaceAfter(Valued<StringEqCI!("PlaceAfter"), KeywordValue>),
     Private(Flag<StringEqCI!("Private")>),
-    ProcedureBlock(Flag<StringEqCI!("ProcedureBlock")>),
+    ProcedureBlock(Valued<StringEqCI!("ProcedureBlock"), Bit>),
     PublicList(Valued<StringEqCI!("PublicList"), KeywordValue>),
     Requires(Valued<StringEqCI!("Requires"), KeywordValue>),
     ReturnResultsets(Flag<StringEqCI!("ReturnResultsets")>),
-    ServerOnly(Flag<StringEqCI!("ServerOnly")>),
+    ServerOnly(Valued<StringEqCI!("ServerOnly"), Bit>),
     SoapAction(Valued<StringEqCI!("SoapAction"), KeywordValue>),
     SoapBindingStyle(Valued<StringEqCI!("SoapBindingStyle"), KeywordValue>),
     SoapBodyUse(Valued<StringEqCI!("SoapBodyUse"), KeywordValue>),
@@ -2603,7 +2553,7 @@ pub enum PropertyKeyword {
     Private(Flag<StringEqCI!("Private")>),
     ReadOnly(Flag<StringEqCI!("ReadOnly")>),
     Required(Flag<StringEqCI!("Required")>),
-    ServerOnly(Flag<StringEqCI!("ServerOnly")>),
+    ServerOnly(Valued<StringEqCI!("ServerOnly"), Bit>),
     SqlColumnNumber(Valued<StringEqCI!("SqlColumnNumber"), KeywordValue>),
     SqlComputeCode(Valued<StringEqCI!("SqlComputeCode"), KeywordValue>),
     SqlComputed(Flag<StringEqCI!("SqlComputed")>),
