@@ -844,18 +844,15 @@ impl From<&Formal> for VariadicArg {
 impl From<&VariadicArg> for NormalArg {
     fn from(arg: &VariadicArg) -> Self {
         // Variadic arguments default to the empty sequence.
-        let normal = Self {
+        Self {
             variadic: true,
+            declared_at: arg.declared_at,
             ..Self::new(
                 arg.mode,
                 arg.name.clone(),
                 arg.ty.clone(),
                 Some("\"\"".to_string()),
             )
-        };
-        match arg.declared_at {
-            Some(declared_at) => normal.with_declared_at(declared_at),
-            None => normal,
         }
     }
 }
@@ -1049,21 +1046,14 @@ impl TyProcedure {
         Self {
             normal_args: normal
                 .into_iter()
-                .map(|arg: bindings::NormalArg| {
-                    let normal =
-                        NormalArg::new(arg.mode, arg.name, ty_from_declared(arg.t), arg.default);
-                    match arg.declared_at {
-                        Some(declared_at) => normal.with_declared_at(declared_at),
-                        None => normal,
-                    }
+                .map(|arg: bindings::NormalArg| NormalArg {
+                    declared_at: arg.declared_at,
+                    ..NormalArg::new(arg.mode, arg.name, ty_from_declared(arg.t), arg.default)
                 })
                 .collect(),
-            variadic_arg: variadic.map(|v| {
-                let variadic = VariadicArg::new(v.mode, v.name, ty_from_declared(v.t));
-                match v.declared_at {
-                    Some(declared_at) => variadic.with_declared_at(declared_at),
-                    None => variadic,
-                }
+            variadic_arg: variadic.map(|v| VariadicArg {
+                declared_at: v.declared_at,
+                ..VariadicArg::new(v.mode, v.name, ty_from_declared(v.t))
             }),
             out: ty_from_declared(t),
             procedure_block,
@@ -1099,18 +1089,13 @@ impl TyProcedure {
                 .normal_args
                 .iter()
                 .map(|arg| bindings::NormalArg {
-                    mode: arg.mode,
-                    name: arg.name.clone(),
                     t: None,
-                    default: arg.default.clone(),
-                    declared_at: arg.declared_at,
+                    ..bindings::NormalArg::from(arg)
                 })
                 .collect(),
             variadic: self.variadic_arg.as_ref().map(|arg| bindings::VariadicArg {
-                mode: arg.mode,
-                name: arg.name.clone(),
                 t: None,
-                declared_at: arg.declared_at,
+                ..bindings::VariadicArg::from(arg)
             }),
             t: None,
             procedure_block: self.procedure_block.clone(),
