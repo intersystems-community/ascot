@@ -2,7 +2,7 @@
 //! path, with what type, and whether they have been read yet.
 //!
 //! `Flow` is forked at `If`/`Else`, loops, `Try`/`Catch` and `Quit`/`Return`, and the branches
-//! are merged back with `merge_all_bindings`. That merge is where "may be undefined", "assigned
+//! are merged back with `merge_bindings`. That merge is where "may be undefined", "assigned
 //! but never read" and "inconsistent declaration across branches" diagnostics come from. Driven
 //! by the command rules in `mod.rs`; produces `types.rs` values; reports through `errors.rs`.
 
@@ -40,7 +40,7 @@ struct Shared<'a> {
     // `None` is for subroutines and procedures only. It means that the output expectation
     // is unclear until the first return/quit command. Shared (the `Rc`) with the labels that
     // return for this body (see `check_block_body`).
-    output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
+    output: OutputCell,
     ty_var: RefCell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
     // Kept in declaration order for a deterministic diagnostic when more than one is never
@@ -148,7 +148,7 @@ impl<'a> Flow<'a> {
         env: &'a WorkspaceEnv,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
-        output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
+        output: OutputCell,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
     ) -> Result<Vec<String>, TypeError> {
         Self::run(uri, env, range, args, None, output, handler, false)
@@ -162,15 +162,14 @@ impl<'a> Flow<'a> {
         self.shared.procedure_block
     }
 
-    // Falling off the end of a body is a tail call of the label that follows it: that label
-    // returns for this body, and reads what it assigned (so the deferred "never read" reports
-    // can't be trusted). With nothing to run into, that's worth a word.
-    #[allow(clippy::type_complexity)]
     // `label` returns for this flow, so its returns are held to this flow's.
     pub(crate) fn share_output(&self, label: &OnceCell<OutputCell>) {
         let _ = label.set(self.shared.output.clone());
     }
 
+    // Falling off the end of a body is a tail call of the label that follows it: that label
+    // returns for this body, and reads what it assigned (so the deferred "never read" reports
+    // can't be trusted). With nothing to run into, that's worth a word.
     pub(crate) fn tail_call(
         &mut self,
         next: Option<&OnceCell<OutputCell>>,
@@ -223,7 +222,7 @@ impl<'a> Flow<'a> {
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
         public_list: ProcedureBlock,
-        output: Rc<RefCell<Option<WithRange<Option<Ty>>>>>,
+        output: OutputCell,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
         auto_return: bool,
     ) -> Result<Vec<String>, TypeError> {
@@ -380,13 +379,7 @@ impl<'a> Flow<'a> {
             range,
         } in quits.unwrap_or_default()
         {
-            merge_all_bindings(
-                &mut self.bindings,
-                Some(bindings),
-                self.shared.env,
-                self.shared.procedure_block,
-            )
-            .with_range(|| range)?;
+            self.merge_bindings(Some(bindings)).with_range(|| range)?;
         }
         if optional {
             self.merge(before)?;
@@ -408,32 +401,15 @@ impl<'a> Flow<'a> {
         result?;
         // Run the body a second time, starting with union of all continue and the before
         for bindings in self.loop_context.take().unwrap().continues {
-            merge_all_bindings(
-                &mut self.bindings,
-                Some(bindings),
-                self.shared.env,
-                self.shared.procedure_block,
-            )
-            .with_range(|| range)?;
+            self.merge_bindings(Some(bindings)).with_range(|| range)?;
         }
-        merge_all_bindings(
-            &mut self.bindings,
-            before.bindings.clone(),
-            self.shared.env,
-            self.shared.procedure_block,
-        )
-        .with_range(|| range)?;
+        self.merge_bindings(before.bindings.clone())
+            .with_range(|| range)?;
         self.loop_context = Some(LoopContext::new(range));
         handler(self)?;
         // A `Continue` heads back to the loop head just like falling off the end of the body.
-        for bindings in self.loop_context.as_mut().unwrap().continues.drain(..) {
-            merge_all_bindings(
-                &mut self.bindings,
-                Some(bindings),
-                self.shared.env,
-                self.shared.procedure_block,
-            )
-            .with_range(|| range)?;
+        for bindings in std::mem::take(&mut self.loop_context.as_mut().unwrap().continues) {
+            self.merge_bindings(Some(bindings)).with_range(|| range)?;
         }
         if infinite {
             self.bindings = None;
@@ -461,13 +437,7 @@ impl<'a> Flow<'a> {
             range,
         } in context.quits
         {
-            merge_all_bindings(
-                &mut self.bindings,
-                Some(bindings),
-                self.shared.env,
-                self.shared.procedure_block,
-            )
-            .with_range(|| range)?;
+            self.merge_bindings(Some(bindings)).with_range(|| range)?;
         }
         if !context.continues.is_empty() {
             match &mut self.loop_context {
@@ -558,13 +528,38 @@ impl<'a> Flow<'a> {
         }
     }
 
+    fn merge_bindings(&mut self, that: Option<Bindings>) -> Result<(), QuasiTypeError> {
+        let Some(this) = &mut self.bindings else {
+            self.bindings = that;
+            return Ok(());
+        };
+        let Some(mut that) = that else {
+            return Ok(());
+        };
+        let procedure_block = self.shared.procedure_block;
+        let all_names: HashSet<String> = this
+            .bindings
+            .keys()
+            .chain(that.bindings.keys())
+            .cloned()
+            .collect();
+        for name in all_names {
+            let this_binding = this
+                .bindings
+                .remove(&name)
+                .unwrap_or_else(|| Binding::undeclared(procedure_block));
+            let that_binding = that
+                .bindings
+                .remove(&name)
+                .unwrap_or_else(|| Binding::undeclared(procedure_block));
+            let merged = this_binding.merge(that_binding, self.shared.env, &name)?;
+            this.bindings.insert(name, merged);
+        }
+        Ok(())
+    }
+
     pub(crate) fn merge(&mut self, them: Self) -> Result<(), QuasiTypeError> {
-        merge_all_bindings(
-            &mut self.bindings,
-            them.bindings,
-            self.shared.env,
-            self.shared.procedure_block,
-        )?;
+        self.merge_bindings(them.bindings)?;
         match (&mut self.loop_context, them.loop_context) {
             (Some(mine), Some(theirs)) => {
                 mine.quits.extend(theirs.quits);
@@ -795,9 +790,10 @@ impl<'a> Flow<'a> {
         range: bindings::Range,
     ) -> Result<(), QuasiTypeError> {
         let Local { name, subs } = local;
+        let env = self.shared.env;
+        let binding = self.lookup(name.clone())?;
+        let new = binding.new;
         if subs.is_empty() {
-            let env = self.shared.env;
-            let binding = self.lookup(name.clone())?;
             let declared = binding
                 .declared
                 .as_ref()
@@ -809,13 +805,6 @@ impl<'a> Flow<'a> {
                 .map_err(|err| err.assign(name.clone()))?;
             binding.assigned = ty;
             binding.assigned_at = HashSet::from([range]);
-            let is_new = binding.new;
-            if self.shared.output_params.iter().any(|(n, _)| *n == name) {
-                self.shared.output_written.borrow_mut().insert(name.clone());
-            }
-            if is_new != Some(true) {
-                self.shared.creates.borrow_mut().insert(name.clone());
-            }
             // `or_insert`, not a blind `insert`: the only way this exact (name, range) pair is
             // set twice is the loop body being simulated twice (throwaway pass, then real) — if
             // the throwaway write was already marked read, that must survive the real pass
@@ -823,20 +812,27 @@ impl<'a> Flow<'a> {
             self.shared
                 .reading_list
                 .borrow_mut()
-                .entry(Written { name, range })
+                .entry(Written {
+                    name: name.clone(),
+                    range,
+                })
                 .or_insert(false);
-            Ok(())
         } else {
-            let binding = self.lookup(name.clone())?;
             binding.subscript_assigned = Some(());
-            let is_new = binding.new;
-            if self.shared.output_params.iter().any(|(n, _)| *n == name) {
-                self.shared.output_written.borrow_mut().insert(name.clone());
-            }
-            if is_new != Some(true) {
-                self.shared.creates.borrow_mut().insert(name);
-            }
-            Ok(())
+        }
+        self.note_write(&name, new);
+        Ok(())
+    }
+
+    fn note_write(&self, name: &str, new: Option<bool>) {
+        if self.shared.output_params.iter().any(|(n, _)| n == name) {
+            self.shared
+                .output_written
+                .borrow_mut()
+                .insert(name.to_string());
+        }
+        if new != Some(true) {
+            self.shared.creates.borrow_mut().insert(name.to_string());
         }
     }
 
@@ -876,19 +872,13 @@ impl<'a> Flow<'a> {
     // either way.
     pub(crate) fn invalidate(&mut self, local: Local, ty: PowerTy) -> Result<(), QuasiTypeError> {
         self.read(&local.name)?;
-        let name = local.name;
-        let binding = self.lookup(name.clone())?;
+        let binding = self.lookup(local.name.clone())?;
         binding.assigned = ty;
         binding.subscript_assigned = Some(());
-        let is_new = binding.new;
+        let new = binding.new;
         // Delegating one of our own `Output` params to a callee (`Do Other(.x)`) counts as
         // assigning it — the callee is trusted to write it, same as any other by-ref/output arg.
-        if self.shared.output_params.iter().any(|(n, _)| *n == name) {
-            self.shared.output_written.borrow_mut().insert(name.clone());
-        }
-        if is_new != Some(true) {
-            self.shared.creates.borrow_mut().insert(name);
-        }
+        self.note_write(&local.name, new);
         Ok(())
     }
 
@@ -1075,27 +1065,18 @@ pub struct Bindings {
 
 impl Bindings {
     pub fn publics(&self) -> Vec<String> {
-        self.bindings
-            .iter()
-            .filter_map(|(k, v)| {
-                if !v.private {
-                    Some(k.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect()
+        self.names_where(|binding| !binding.private)
     }
+
     pub fn olds(&self) -> Vec<String> {
+        self.names_where(|binding| binding.new != Some(true))
+    }
+
+    fn names_where(&self, keep: impl Fn(&Binding) -> bool) -> Vec<String> {
         self.bindings
             .iter()
-            .filter_map(|(k, v)| {
-                if v.new != Some(true) {
-                    Some(k.to_string())
-                } else {
-                    None
-                }
-            })
+            .filter(|(_, binding)| keep(binding))
+            .map(|(name, _)| name.clone())
             .collect()
     }
 
@@ -1107,43 +1088,6 @@ impl Bindings {
     fn refine_on_prop(&mut self, target: u32, term: &Term) {
         for binding in self.bindings.values_mut() {
             binding.assigned = binding.assigned.clone().refine_on_prop(target, term);
-        }
-    }
-}
-
-pub fn merge_all_bindings(
-    this: &mut Option<Bindings>,
-    that: Option<Bindings>,
-    env: &WorkspaceEnv,
-    procedure_block: bool,
-) -> Result<(), QuasiTypeError> {
-    match (this.as_mut(), that) {
-        (None, that) => {
-            *this = that;
-            Ok(())
-        }
-        (Some(_), None) => Ok(()),
-        (Some(this), Some(mut that)) => {
-            let mut all_names = HashSet::new();
-            for name in this.bindings.keys() {
-                all_names.insert(name.to_string());
-            }
-            for name in that.bindings.keys() {
-                all_names.insert(name.to_string());
-            }
-            for name in all_names {
-                let this_binding = this
-                    .bindings
-                    .remove(&name)
-                    .unwrap_or_else(|| Binding::undeclared(procedure_block));
-                let that_binding = that
-                    .bindings
-                    .remove(&name)
-                    .unwrap_or_else(|| Binding::undeclared(procedure_block));
-                let merged = this_binding.merge(that_binding, env, &name)?;
-                this.bindings.insert(name, merged);
-            }
-            Ok(())
         }
     }
 }
