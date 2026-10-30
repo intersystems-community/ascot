@@ -438,11 +438,13 @@ impl MethodDetails {
             self.procedure_block.clone(),
             local_out,
             |flow| {
-                let code_env = if self.is_class_method {
-                    method_env.for_class_member(header_len, Some(&cls.class), name, &definitions)
-                } else {
-                    method_env.for_instance_member(header_len, Some(&cls.class), name, &definitions)
-                };
+                let code_env = method_env.for_member(
+                    header_len,
+                    Some(&cls.class),
+                    !self.is_class_method,
+                    name,
+                    &definitions,
+                );
                 let body = MethodBody {
                     language,
                     mode,
@@ -554,47 +556,6 @@ fn syntax_error(env: &CodeEnv<'_>, err: tygr::Error) -> TypeError {
     TypeError::invalid_syntax(env.span(err.pos(), err.pos() + 1), err)
 }
 
-fn label_details(
-    env: &CodeEnv<'_>,
-    sub: &cos::Subroutine,
-) -> Option<details::RoutineElementDetails> {
-    let AllowMacro::Plain(header) = &sub.header else {
-        return None;
-    };
-    let mut normal_args = vec![];
-    let mut variadic_arg = None;
-    for entry in header
-        .params
-        .iter()
-        .flat_map(|x| &***x)
-        .flat_map(|x| x.items.iter())
-    {
-        let mode = if entry.by_ref.is_some() {
-            ArgMode::ByRef
-        } else {
-            ArgMode::Default
-        };
-        let name = entry.param.deref().print();
-        let range = env.range(&entry.param);
-        if entry.expand.is_some() {
-            variadic_arg = Some(WithRange::new(VariadicArg::new(mode, name, None), range));
-        } else {
-            let default = entry.default.as_deref().map(|default| default.print());
-            normal_args.push(WithRange::new(
-                NormalArg::new(mode, name, None, default),
-                range,
-            ));
-        }
-    }
-    Some(details::RoutineElementDetails {
-        name: WithRange::new(header.label.print(), env.range(&header.label)),
-        normal_args,
-        variadic_arg,
-        kind: details::RoutineElementKind::Subroutine,
-        formal_list: header.params.is_some(),
-    })
-}
-
 // A method body or routine procedure block, with its own labels (`Set $ZT="Trap"` handlers,
 // `Goto` targets, `Do`ne subroutines), checked the way a routine's labels are, falling through
 // into one another. A `Goto` target returns for the body; a `Do`ne one for its caller. `is_body`
@@ -609,7 +570,7 @@ fn check_block_body<'a>(
         .subroutines
         .iter()
         .flat_map(|subs| subs.items.iter())
-        .filter_map(|sub| Some((sub, label_details(env, sub)?)))
+        .filter_map(|sub| Some((sub, details::subroutine_kind(env, sub)?)))
         .collect();
     let is_procedure = is_body && flow.is_procedure_block();
     let labels = env::scoped_labels(
@@ -2950,7 +2911,7 @@ impl CheckExprInner for AtomicExpr {
             // is then accessed on it; only an IRIS connection can say so for sure.
             AtomicExpr::Class { cls, .. } => {
                 let name = env.qualify_class_name(&cls.deref().print());
-                if env.class_absent(&name) {
+                if !env.class_exists(&name) {
                     return Err(QuasiTypeError::cannot_find_class(name));
                 }
                 Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(ClassTy::from(name)))))

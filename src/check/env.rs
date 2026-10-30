@@ -993,11 +993,6 @@ impl<'a> WorkspaceEnv<'a> {
         self.resolve(cls).is_some()
     }
 
-    // Whether IRIS says there's no such class; `false` when it couldn't be asked.
-    pub(crate) fn class_absent(&self, cls: &str) -> bool {
-        self.resolve(cls).is_none()
-    }
-
     fn resolve(&self, cls: &str) -> Option<Class> {
         if let Some(uri) = self.resolve_uri(DocKind::Cls, cls) {
             return Some(match self.workspace.cls_details(&uri) {
@@ -1488,38 +1483,21 @@ impl<'a> DocumentEnv<'a> {
         }
     }
 
-    pub fn for_class_member(
+    pub fn for_member(
         &self,
         offset: usize,
         this: Option<&'a ClassTy>,
+        is_instance: bool,
         method_name: &'a str,
         macro_definitions: &'a MacroDefinitions,
     ) -> CodeEnv<'_> {
         CodeEnv {
             base: self,
-            is_instance: false,
+            is_instance,
             offset,
             this,
             labels: None,
             method_name: Some(method_name),
-            macro_definitions: Some(macro_definitions),
-        }
-    }
-
-    pub fn for_instance_member(
-        &self,
-        offset: usize,
-        this: Option<&'a ClassTy>,
-        method_name: &'a str,
-        macro_definitions: &'a MacroDefinitions,
-    ) -> CodeEnv<'_> {
-        CodeEnv {
-            base: self,
-            is_instance: true,
-            offset,
-            this,
-            method_name: Some(method_name),
-            labels: None,
             macro_definitions: Some(macro_definitions),
         }
     }
@@ -1612,14 +1590,6 @@ impl<'a> CodeEnv<'a> {
 
     pub(crate) fn soft_diagnostic(&self, err: TypeError) {
         self.base.base.add_soft_diagnostic(err.into())
-    }
-
-    pub(crate) fn class_exists(&self, cls: &str) -> bool {
-        self.base.base.class_exists(cls)
-    }
-
-    pub(crate) fn class_absent(&self, cls: &str) -> bool {
-        self.base.base.class_absent(cls)
     }
 
     pub(crate) fn qualify_class_name(&self, name: &str) -> String {
