@@ -83,32 +83,16 @@ impl QuasiTypeError {
     // from echoing the source back, since every other kind already names what's wrong. Called
     // once, by the outermost ranged expression wrapping the failure (see `CheckExpr` in
     // `check::mod`), so the text always matches whatever the diagnostic's range highlights.
-    pub(crate) fn with_expr_text(self, text: impl FnOnce() -> String) -> Self {
-        match self {
-            Self::WithoutRange(
-                TypeErrorKind::Undefined { expr: Detail(None) },
-                related_information,
-            ) => Self::WithoutRange(
-                TypeErrorKind::Undefined {
-                    expr: Detail(Some(text())),
-                },
-                related_information,
-            ),
-            Self::WithoutRange(
-                TypeErrorKind::MaybeUndefined {
-                    ty,
-                    expr: Detail(None),
-                },
-                related_information,
-            ) => Self::WithoutRange(
-                TypeErrorKind::MaybeUndefined {
-                    ty,
-                    expr: Detail(Some(text())),
-                },
-                related_information,
-            ),
-            other => other,
+    pub(crate) fn with_expr_text(mut self, text: impl FnOnce() -> String) -> Self {
+        if let Self::WithoutRange(
+            TypeErrorKind::Undefined { expr } | TypeErrorKind::MaybeUndefined { expr, .. },
+            _,
+        ) = &mut self
+            && expr.0.is_none()
+        {
+            expr.0 = Some(text());
         }
+        self
     }
 
     pub fn type_incompatible(source: Ty, target: Ty) -> Self {
