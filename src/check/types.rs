@@ -446,7 +446,7 @@ impl std::fmt::Display for PowerTy {
                     .join("")
             ),
             PowerTy::Term { target, term } => {
-                write!(f, "%DataType = {} where %? = %{})", term, target)
+                write!(f, "%DataType = {} where %? = %{}", term, target)
             }
             PowerTy::Case {
                 target,
@@ -1129,13 +1129,11 @@ impl TyProcedure {
             procedure_block,
             declared_at,
         } = label;
-        Self {
-            formal_list: true,
-            out: ty_from_declared(t.clone()).or(Some(Ty::Any)),
-            uri,
-            declared_at,
-            ..Self::declared(normal, variadic, t, procedure_block)
-        }
+        let mut label = Self::declared(normal, variadic, t, procedure_block);
+        label.out = label.out.or(Some(Ty::Any));
+        label.uri = uri;
+        label.declared_at = declared_at;
+        label
     }
 
     // Read from source, so untyped.

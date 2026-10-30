@@ -71,6 +71,7 @@ use std::{
     sync::Arc,
 };
 
+use details::Positions;
 use tygr::{Grammar, OLC};
 
 use crate::{
@@ -551,13 +552,7 @@ impl WorkspaceStruct {
         let rtn = self.rtn_details(uri).ok()?;
         let text = self.doc_text(uri)?;
         let olc = &rtn.map.expanded_olc;
-        let header_range = bindings::Range {
-            start: Position::default(),
-            end: Position {
-                line: 0,
-                character: text.lines().next().unwrap_or_default().len() as u32,
-            },
-        };
+        let header_range = olc.span(0, text.lines().next().unwrap_or_default().len());
         let members = rtn
             .routine
             .subroutines
