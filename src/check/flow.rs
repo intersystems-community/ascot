@@ -15,7 +15,7 @@ use crate::check::types::*;
 use crate::details::WithRange;
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;
 
 use super::errors::IntoTypeError;
@@ -318,14 +318,16 @@ impl<'a> Flow<'a> {
                 },
             ))?;
         }
-        // Deferred until every split flow has run: still `false` means never read.
+        // Deferred until every split flow has run: still `false` means never read. The first in
+        // source order, so the report doesn't depend on hash order.
         if !flow.shared.incomplete.get()
             && let Some((w, _)) = flow
                 .shared
                 .reading_list
                 .borrow()
                 .iter()
-                .find(|(_, read)| !**read)
+                .filter(|(_, read)| !**read)
+                .min_by_key(|(w, _)| (w.range.start.line, w.range.start.character))
         {
             flow.add_soft_diagnostic(TypeError::unread_assignment(w.name.clone(), w.range).into());
         }
@@ -528,7 +530,8 @@ impl<'a> Flow<'a> {
             return Ok(());
         };
         let procedure_block = self.shared.procedure_block;
-        let all_names: HashSet<String> = this
+        // Sorted, so which inconsistent declaration is reported first doesn't depend on hash order.
+        let all_names: BTreeSet<String> = this
             .bindings
             .keys()
             .chain(that.bindings.keys())
