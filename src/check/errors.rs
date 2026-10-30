@@ -493,6 +493,11 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Argument {position} of {function} can't be left empty"]
     OmittedArgument { function: String, position: usize },
+    /// The handle a conversion keeps its state in has to be a plain local variable.
+    #[code = "A4652"]
+    #[severity = Error]
+    #[message = "{function} takes only a plain local variable as its handle"]
+    HandleNotALocal { function: String },
     #[code = "A8820"]
     #[severity = Error]
     #[message = "SET $VECTOR needs its third argument, the type"]
@@ -1167,6 +1172,10 @@ impl TypeError {
 
     pub fn macro_from_method_body(name: String, method: String, range: Range) -> Self {
         Self::at(TypeErrorKind::MacroFromMethodBody { name, method }, range)
+    }
+
+    pub fn handle_not_a_local(function: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::HandleNotALocal { function }, range)
     }
 
     pub fn label_not_a_function(label: String, range: Range) -> Self {
