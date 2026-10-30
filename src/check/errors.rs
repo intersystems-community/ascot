@@ -502,10 +502,6 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "SET $VECTOR needs its third argument, the type"]
     SetVectorWithoutType,
-    #[code = "A6463"]
-    #[severity = Error]
-    #[message = "The property keyword '{keyword}' needs a value"]
-    PropertyKeywordWithoutValue { keyword: String },
     #[code = "A8914"]
     #[severity = Error]
     #[message = "Cannot reference instance-only member '{name}' in a class method"]
@@ -526,10 +522,17 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Class keyword '{keyword}' has no value"]
     ClassKeywordWithoutValue { keyword: String },
-    #[code = "A9322"]
+    /// An entry IRIS compiles past: not a class keyword, or a value outside one's shape, which it
+    /// drops -- or, on a flag, takes as the bare flag.
+    #[code = "A6203"]
+    #[severity = Warning]
+    #[message = "'{entry}' is not a class keyword as written, though IRIS compiles it"]
+    UnrecognizedClassKeyword { entry: String },
+    /// A `ClassType` IRIS refuses to compile.
+    #[code = "A7718"]
     #[severity = Error]
-    #[message = "'{keyword}' is not a recognized property keyword; available: {available}"]
-    UnrecognizedPropertyKeyword { keyword: String, available: Available },
+    #[message = "'{entry}' is not a class keyword IRIS accepts"]
+    InvalidClassKeyword { entry: String },
     #[code = "A2357"]
     #[severity = Error]
     #[message = "'{name}' is not a parameter of {class}{hint}"]
@@ -538,10 +541,12 @@ type_error_kinds! {
         class: String,
         hint: TypeParamHint,
     },
-    #[code = "A2174"]
+    /// IRIS refuses a class whose member has a keyword list entry it can't place (ERROR #5559):
+    /// not a keyword of that kind of member, or a value outside the keyword's shape.
+    #[code = "A9322"]
     #[severity = Error]
-    #[message = "'{keyword}' is not a recognized parameter keyword; available: {available}"]
-    UnrecognizedParameterKeyword { keyword: String, available: Available },
+    #[message = "'{entry}' is not {kind} keyword IRIS accepts"]
+    UnrecognizedMemberKeyword { kind: &'static str, entry: String },
     #[code = "A8317"]
     #[severity = Warning]
     #[message = "'{meta_type}' is not a recognized parameter type; available: {available}"]
@@ -1066,13 +1071,6 @@ impl TypeError {
         )
     }
 
-    pub(crate) fn property_keyword_without_value(keyword: String, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::PropertyKeywordWithoutValue { keyword },
-            range,
-        )
-    }
-
     pub fn macro_too_few_arguments(name: String, expected: usize, range: Range) -> Self {
         Self::at(
             TypeErrorKind::MacroTooFewArguments { name, expected },
@@ -1186,14 +1184,13 @@ impl TypeError {
         Self::at(TypeErrorKind::NewInProcedureBlock { name }, range)
     }
 
-    pub fn unrecognized_property_keyword(keyword: String, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::UnrecognizedPropertyKeyword {
-                keyword,
-                available: Available(PROPERTY_KEYWORDS),
-            },
-            range,
-        )
+    pub fn unrecognized_class_keyword(entry: String, strict: bool, range: Range) -> Self {
+        let kind = if strict {
+            TypeErrorKind::InvalidClassKeyword { entry }
+        } else {
+            TypeErrorKind::UnrecognizedClassKeyword { entry }
+        };
+        Self::at(kind, range)
     }
 
     pub fn unrecognized_type_param(
@@ -1217,12 +1214,9 @@ impl TypeError {
         )
     }
 
-    pub fn unrecognized_parameter_keyword(keyword: String, range: Range) -> Self {
+    pub fn unrecognized_member_keyword(kind: &'static str, entry: String, range: Range) -> Self {
         Self::at(
-            TypeErrorKind::UnrecognizedParameterKeyword {
-                keyword,
-                available: Available(PARAMETER_KEYWORDS),
-            },
+            TypeErrorKind::UnrecognizedMemberKeyword { kind, entry },
             range,
         )
     }

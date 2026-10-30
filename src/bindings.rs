@@ -39,7 +39,7 @@ use std::ops::Deref;
 pub use wit_bind::*;
 
 use crate::{
-    bindings, check,
+    bindings, check, cos,
     details::{self, MethodDetails, WithRange},
 };
 
@@ -198,12 +198,10 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
             MemberKindSpecificDetails::Property {
                 ty,
                 element_ty,
-                keywords,
+                multidimensional,
                 ..
             } => {
-                let multidimensional = keywords
-                    .iter()
-                    .any(|k| k.eq_ignore_ascii_case("MultiDimensional"));
+                let multidimensional = *multidimensional;
                 MemberKind::Property(match (ty, element_ty) {
                     (Some(ty), Some(element)) => wit_bind::PropertyInfo {
                         t: Some(element.to_string()),
@@ -273,25 +271,86 @@ impl From<&WithRange<details::MemberDetails>> for wit_bind::MemberInfo {
 
 impl From<&details::ClassDetails> for wit_bind::ClassInfo {
     fn from(details: &details::ClassDetails) -> Self {
+        let k = &details.keywords;
         Self {
             doc: details.doc.clone(),
             name: NameInfo::from(&details.name),
             extends: details.extends.clone(),
-            inheritance_right: details.inheritance_right,
             storage: None,
-            deprecated: details.deprecated,
             members: details
                 .members
                 .in_order()
                 .into_iter()
                 .map(wit_bind::MemberInfo::from)
                 .collect(),
-            property_class_names: details.property_class_names.clone(),
-            includes: details.include_names.iter().map(|i| i.it.clone()).collect(),
-            is_datatype: Some(details.is_datatype),
+            include: details.include_names.iter().map(|i| i.it.clone()).collect(),
             // `exported.workspace.query-cls` already returns this class's real uri as its own
             // tuple element -- redundant to repeat it here.
             uri: None,
+            class_type: k.class_type,
+            deprecated: k.deprecated,
+            inheritance: k.inheritance,
+            language: k.language,
+            procedure_block: k.procedure_block,
+            property_class: k.property_class.clone(),
+        }
+    }
+}
+
+impl Default for wit_bind::ClassInfo {
+    fn default() -> Self {
+        Self {
+            doc: String::new(),
+            name: NameInfo {
+                before: Position {
+                    line: 0,
+                    character: 0,
+                },
+                content: String::new(),
+                after: Position {
+                    line: 0,
+                    character: 0,
+                },
+            },
+            extends: vec![],
+            storage: None,
+            members: vec![],
+            include: vec![],
+            uri: None,
+            class_type: None,
+            deprecated: false,
+            inheritance: None,
+            language: None,
+            procedure_block: None,
+            property_class: vec![],
+        }
+    }
+}
+
+// The grammar's spellings to the host's enums, variant for variant.
+macro_rules! same_variants {
+    ($($t:ident { $($v:ident),* $(,)? })*) => {$(
+        impl From<&cos::$t> for $t {
+            fn from(value: &cos::$t) -> Self {
+                match value { $(cos::$t::$v(_) => Self::$v,)* }
+            }
+        }
+    )*};
+}
+
+same_variants! {
+    ClassType { Datatype, Dynamic, Index, Literal, Persistent, Serial, Stream, View }
+    Inheritance { Left, Right }
+}
+
+impl From<&cos::MethodLanguage> for Language {
+    fn from(language: &cos::MethodLanguage) -> Self {
+        match language {
+            cos::MethodLanguage::ObjectScript(_) => Self::Objectscript,
+            cos::MethodLanguage::Python(_) => Self::Python,
+            cos::MethodLanguage::TSQL(_) => Self::Tsql,
+            cos::MethodLanguage::ISPL(_) => Self::Ispl,
+            cos::MethodLanguage::JavaScript(_) => Self::Javascript,
         }
     }
 }

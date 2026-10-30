@@ -349,11 +349,11 @@ impl MethodDetails {
     }
 
     fn check(&self, name: &str, env: &DocumentEnv, cls: &ClassDocument) -> Result<(), TypeError> {
-        let language = self.language.as_ref().or(cls.language);
-        let mode = self.mode.as_ref().or(cls.mode);
+        let language = self.language.or(cls.language);
+        let mode = self.mode.as_ref();
         // The body isn't ObjectScript, so argument-usage tracking (e.g. "assigned but never
         // read") doesn't apply — nothing below this ever sees the body to mark anything read.
-        if let Some(cos::MethodLanguage::Python(..)) = language {
+        if language == Some(bindings::Language::Python) {
             return Ok(());
         }
         let body_macros = cls.body_macros.borrow().clone();
@@ -503,7 +503,7 @@ impl<T: CheckCommandInner> CheckCommand for Range<T> {
 }
 
 struct MethodBody<'a> {
-    language: Option<&'a cos::MethodLanguage>,
+    language: Option<bindings::Language>,
     mode: Option<&'a cos::CodeMode>,
     body: WithRange<&'a String>,
 }
@@ -512,7 +512,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
         match (&self.language, &self.mode, &self.body) {
             (
-                Option::None | Option::Some(cos::MethodLanguage::ObjectScript(..)),
+                Option::None | Option::Some(bindings::Language::Objectscript),
                 Option::None | Option::Some(cos::CodeMode::Code(..)),
                 body,
             ) => {
@@ -521,7 +521,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 check_block_body(&body, env, flow, true)
             }
             (
-                Option::None | Option::Some(cos::MethodLanguage::ObjectScript(..)),
+                Option::None | Option::Some(bindings::Language::Objectscript),
                 Option::Some(cos::CodeMode::Expression(..)),
                 body,
             ) => {
@@ -3282,14 +3282,28 @@ pub(crate) fn check_rtn(
     diagnostics
 }
 
+// What IRIS does with a class keyword it can't place: refuse the class for a bad `ClassType`,
+// silently drop anything else.
+fn class_keyword_issue(issue: &WithRange<details::KeywordIssue>) -> TypeError {
+    let details::KeywordIssue {
+        entry,
+        keyword,
+        without_value,
+    } = &issue.it;
+    if *without_value {
+        return TypeError::class_keyword_without_value(keyword.clone(), issue.range);
+    }
+    let strict = keyword.eq_ignore_ascii_case("ClassType");
+    TypeError::unrecognized_class_keyword(entry.clone(), strict, issue.range)
+}
+
 pub(crate) fn check_cls(
     env: &DocumentEnv,
     cls: &details::ClassDetails,
 ) -> Vec<bindings::Diagnostic> {
     let mut diagnostics = Vec::new();
-    for keyword in &cls.keywords_without_value {
-        diagnostics
-            .push(TypeError::class_keyword_without_value(keyword.it.clone(), keyword.range).into());
+    for issue in &cls.keyword_issues {
+        diagnostics.push(class_keyword_issue(issue).into());
     }
     // Available to every class without an explicit `Include` (see `CLASS_IMPLICIT_INCLUDES`) --
     // resolved silently (no diagnostic on failure, unlike an explicit `Include`).
@@ -3322,8 +3336,7 @@ pub(crate) fn check_cls(
     }
     let doc = ClassDocument::new(
         cls.name.it.to_string().into(),
-        cls.language.as_ref(),
-        cls.mode.as_ref(),
+        cls.keywords.language,
         macro_definitions,
     );
     for member in &cls.members.duplicates {
@@ -3365,6 +3378,9 @@ pub(crate) fn check_cls(
                 }
             }
         }
+        for issue in &member.keyword_issues {
+            diagnostics.push(member_keyword_issue(member, issue).into());
+        }
         check_property_or_parameter_declaration(env, &cls.name.it, member, &mut diagnostics);
         // A missing `Include` (already reported once above) commonly leaves some macro
         // unexpanded in a way that breaks a method body's parse -- don't also raise the
@@ -3382,6 +3398,27 @@ fn contains_ci(words: &[&str], word: &str) -> bool {
     words.iter().any(|k| k.eq_ignore_ascii_case(word))
 }
 
+// IRIS refuses a class over a member keyword it can't place (#5559), whatever the member.
+fn member_keyword_issue(
+    member: &MemberDetails,
+    issue: &WithRange<details::KeywordIssue>,
+) -> TypeError {
+    use MemberKindSpecificDetails::*;
+    let kind = match &member.kind {
+        MethodOrClassMethod(_) | ClientMethod => "a method",
+        Property { .. } => "a property",
+        Parameter { .. } => "a parameter",
+        Index(_) => "an index",
+        Query => "a query",
+        Trigger => "a trigger",
+        ForeignKey => "a foreign key",
+        XData => "an XData",
+        Projection => "a projection",
+        Storage => unreachable!("a storage definition's keyword list isn't read"),
+    };
+    TypeError::unrecognized_member_keyword(kind, issue.it.entry.clone(), issue.range)
+}
+
 fn check_property_or_parameter_declaration(
     env: &DocumentEnv,
     class_name: &str,
@@ -3392,29 +3429,12 @@ fn check_property_or_parameter_declaration(
         MemberKindSpecificDetails::Property {
             ty,
             element_ty,
-            keywords,
-            bare_keywords,
             type_param_names,
+            ..
         } => {
-            for keyword in bare_keywords {
-                if contains_ci(PROPERTY_KEYWORDS_WITH_VALUE, keyword) {
-                    diagnostics.push(
-                        TypeError::property_keyword_without_value(keyword.clone(), member.range)
-                            .into(),
-                    );
-                }
-            }
             if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = ty {
                 let name = env.base.qualify_class_name(&cty.name, Some(class_name));
                 env.base.check_declared_class_exists(&name, member.range);
-            }
-            for keyword in keywords {
-                if !contains_ci(PROPERTY_KEYWORDS, keyword) {
-                    diagnostics.push(
-                        TypeError::unrecognized_property_keyword(keyword.clone(), member.range)
-                            .into(),
-                    );
-                }
             }
             if !type_param_names.is_empty() {
                 // For `list Of X(...)` / `array Of X(...)` the parameters are the element's.
@@ -3432,7 +3452,10 @@ fn check_property_or_parameter_declaration(
                     .chain(property_classes.iter().map(String::as_str))
                     .collect();
                 for name in type_param_names {
-                    let is_property_keyword = contains_ci(PROPERTY_KEYWORDS, name);
+                    // Spelled like a property keyword, flag or valued (`= 1` fits every value
+                    // shape but Cardinality's).
+                    let is_property_keyword = cos::PropertyKeyword::parse(name).is_ok()
+                        || cos::PropertyKeyword::parse(&format!("{name} = 1")).is_ok();
                     // Probed quietly: a candidate nobody can see resolves the parameter on trust,
                     // and offline that is every system type class.
                     let was_suppressed = env.base.suppress_soft_diagnostics();
@@ -3487,23 +3510,13 @@ fn check_property_or_parameter_declaration(
                 }
             }
         }
-        MemberKindSpecificDetails::Parameter {
-            as_type, keywords, ..
-        } => {
+        MemberKindSpecificDetails::Parameter { as_type, .. } => {
             if let Some(meta_type) = as_type
                 && !contains_ci(PARAMETER_TYPE_KEYWORDS, meta_type)
             {
                 diagnostics.push(
                     TypeError::unrecognized_parameter_type(meta_type.clone(), member.range).into(),
                 );
-            }
-            for keyword in keywords {
-                if !contains_ci(PARAMETER_KEYWORDS, keyword) {
-                    diagnostics.push(
-                        TypeError::unrecognized_parameter_keyword(keyword.clone(), member.range)
-                            .into(),
-                    );
-                }
             }
         }
         _ => {}

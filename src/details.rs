@@ -18,7 +18,7 @@ use tygr::{Grammar, IntoInner, OLC, Prefix, Range, StringOf};
 
 use crate::bindings::{self, ArgMode};
 use crate::check::types::{NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty};
-use crate::cos::{self, AllowMacro, CodeMode, KeywordList, MethodLanguage};
+use crate::cos::{self, AllowMacro, FailableKeyword, HasMemberKeyword, KeywordList};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct WithRange<T> {
@@ -201,36 +201,57 @@ pub(crate) struct ClassDetails {
     pub(crate) extends: Vec<String>,
     // The `Import` packages, for resolving unqualified class names in this class.
     pub(crate) imports: Vec<String>,
-    pub(crate) deprecated: bool,
-    pub(crate) is_datatype: bool,
-    // `[ Inheritance = right ]`: a member several superclasses define comes from the rightmost
-    // `Extends` entry rather than the leftmost.
-    pub(crate) inheritance_right: bool,
-    pub(crate) language: Option<MethodLanguage>,
-    pub(crate) mode: Option<CodeMode>,
+    pub(crate) keywords: ClassKeywords,
+    // What in the keyword list is no class keyword as written; `check_cls` reports it.
+    pub(crate) keyword_issues: Vec<WithRange<KeywordIssue>>,
     pub(crate) members: Members,
     pub(crate) include_names: Vec<WithRange<String>>,
     // The `Include (...)` clause's own span, for pointing a "cannot find include" diagnostic at
     // it instead of at the class's declaration -- `None` only when there's no `Include` at all,
     // in which case `include_names` is also empty and this is never read.
     pub(crate) include_range: Option<bindings::Range>,
-    // `[ CompileAfter = , ... ]`: parsed, reported by `check_cls`.
-    pub(crate) keywords_without_value: Vec<WithRange<String>>,
-    // From this class's own `[PropertyClass = ...]` keyword -- each listed class's own
-    // `Parameter`s become valid property type-parameters for every property in this class *and*
-    // its subclasses (see `check::env::WorkspaceEnv::property_classes`, which walks
-    // `extends` to accumulate every ancestor's own list too).
-    pub(crate) property_class_names: Vec<String>,
+}
+
+// The class keywords the checker reads; the rest of the list is parsed and dropped.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ClassKeywords {
+    pub(crate) class_type: Option<bindings::ClassType>,
+    pub(crate) deprecated: bool,
+    pub(crate) inheritance: Option<bindings::Inheritance>,
+    pub(crate) language: Option<bindings::Language>,
+    pub(crate) procedure_block: Option<bool>,
+    pub(crate) property_class: Vec<String>,
+}
+
+// A keyword list entry that is no keyword of its declaration as written.
+pub struct KeywordIssue {
+    pub entry: String,
+    pub keyword: String,
+    // `Name = ` with nothing after, as in IRIS's own exports.
+    pub without_value: bool,
+}
+
+impl From<&cos::KeywordEntry> for KeywordIssue {
+    fn from(entry: &cos::KeywordEntry) -> Self {
+        Self {
+            entry: entry.print(),
+            keyword: entry.keyword().print(),
+            without_value: matches!(entry, cos::KeywordEntry::Assign { value: None, .. }),
+        }
+    }
 }
 
 pub struct MemberDetails {
     pub name: WithRange<String>,
     pub doc: String,
     pub deprecated: bool,
+    // What in its keyword list is no keyword of its kind as written; `check_cls` reports it.
+    pub keyword_issues: Vec<WithRange<KeywordIssue>>,
     pub kind: MemberKindSpecificDetails,
 }
 
 // `Index name On keys [ keywords ]`, as declared: `bindings::IndexInfo` with the keys' ranges.
+#[derive(Default)]
 pub struct IndexDetails {
     // `None` without an `On` clause.
     pub on: Option<Vec<IndexKey>>,
@@ -259,12 +280,10 @@ pub enum MemberKindSpecificDetails {
     MethodOrClassMethod(Box<MethodDetails>),
     Property {
         ty: Option<Ty>,
-        keywords: Vec<String>,
-        // Those of `keywords` written without `= value`.
-        bare_keywords: Vec<String>,
-        // Names from the type's own `(...)` parameter list -- e.g. %String's `MAXLEN` -- kept
-        // separately from `keywords` (the `[...]` list) since the two are easy to confuse (see
-        // `check::mod`'s cross-check against `PROPERTY_KEYWORDS`).
+        // `[ MultiDimensional ]`: `..X(subs)` addresses a node typed like the property.
+        multidimensional: bool,
+        // Names from the type's own `(...)` parameter list -- e.g. %String's `MAXLEN` -- easy to
+        // confuse with the `[...]` keywords (see `check::mod`'s hint when one is written there).
         type_param_names: Vec<String>,
         // For a collection property, the element class (see `element_ty`).
         element_ty: Option<Ty>,
@@ -275,7 +294,6 @@ pub enum MemberKindSpecificDetails {
         // Raw meta-type text (e.g. `"STRING"`), kept separately from `ty` since an unrecognized
         // meta-type maps `ty` to `Ty::Any`, indistinguishable from no declared type at all.
         as_type: Option<String>,
-        keywords: Vec<String>,
     },
     ClientMethod,
     ForeignKey,
@@ -292,7 +310,7 @@ pub struct MethodDetails {
     pub normal_args: Vec<WithRange<NormalArg>>,
     pub variadic_arg: Option<WithRange<VariadicArg>>,
     pub out: WithRange<Option<Ty>>,
-    pub language: Option<cos::MethodLanguage>,
+    pub language: Option<bindings::Language>,
     pub mode: Option<cos::CodeMode>,
     pub procedure_block: ProcedureBlock,
     pub is_abstract: bool,
@@ -476,42 +494,50 @@ fn extract_document_comments(doc: &str) -> String {
         .join("\n")
 }
 
-fn is_deprecated(keywords: &Option<KeywordList>) -> bool {
-    match keywords.as_ref() {
-        None => false,
-        Some(keywords) => keywords.get("Deprecated").is_some(),
-    }
+// The entries of a keyword list that are its declaration's keywords.
+fn typed<K: Grammar>(
+    keywords: Option<&KeywordList<FailableKeyword<K>>>,
+) -> impl Iterator<Item = &K> {
+    keywords
+        .into_iter()
+        .flat_map(KeywordList::items)
+        .filter_map(|entry| (***entry).as_ref().left())
 }
 
-// A boolean keyword: `Not X`/`X = 0` turn it off, `X`/`X = 1` on. `None` when unspecified -- a
-// method's `ProcedureBlock` then follows its class, a class's defaults to on.
-fn keyword_flag(keywords: &Option<KeywordList>, name: &str) -> Option<bool> {
-    Some(match keywords.as_ref()?.get(name)? {
-        cos::KeywordEntry::Not { .. } => false,
-        cos::KeywordEntry::Assign { value, .. } => value.print().trim() != "0",
-        cos::KeywordEntry::Flag(_) => true,
+// The entries that are no keyword of the declaration as written, at their name's range.
+fn keyword_issues_in<K: Grammar>(
+    keywords: Option<&KeywordList<FailableKeyword<K>>>,
+    olc: &OLC,
+) -> Vec<WithRange<KeywordIssue>> {
+    keywords
+        .into_iter()
+        .flat_map(KeywordList::items)
+        .filter_map(|entry| (***entry).as_ref().right())
+        .map(|entry| WithRange::new(KeywordIssue::from(entry), olc.range(&entry.keyword().0)))
+        .collect()
+}
+
+fn is_deprecated<K: Grammar + HasMemberKeyword>(
+    keywords: Option<&KeywordList<FailableKeyword<K>>>,
+) -> bool {
+    typed(keywords).any(|keyword| {
+        matches!(keyword.member(), Some(cos::MemberKeyword::Deprecated(flag)) if flag.is_set())
     })
 }
 
-// An index's `[ Type = ... ]`, as the grammar and `%Dictionary.CompiledIndex` spell it; `None` for
-// a standard index (`index`, or unspecified).
-pub(crate) fn index_type(text: &str) -> Option<bindings::IndexType> {
-    Some(match text.trim().to_ascii_lowercase().as_str() {
-        "bitmap" => bindings::IndexType::Bitmap,
-        "bitslice" => bindings::IndexType::Bitslice,
-        "collatedkey" => bindings::IndexType::CollatedKey,
-        "columnar" => bindings::IndexType::Columnar,
-        "key" => bindings::IndexType::Key,
-        _ => return None,
+// `None` for a standard index (`index`).
+pub(crate) fn index_type(type_: &cos::IndexType) -> Option<bindings::IndexType> {
+    Some(match type_ {
+        cos::IndexType::Bitmap(_) => bindings::IndexType::Bitmap,
+        cos::IndexType::Bitslice(_) => bindings::IndexType::Bitslice,
+        cos::IndexType::CollatedKey(_) => bindings::IndexType::CollatedKey,
+        cos::IndexType::Columnar(_) => bindings::IndexType::Columnar,
+        cos::IndexType::Key(_) => bindings::IndexType::Key,
+        cos::IndexType::Index(_) => return None,
     })
 }
 
-fn is_datatype(keywords: &Option<KeywordList>) -> bool {
-    keyword_value(keywords, "ClassType").is_some_and(|value| value.eq_ignore_ascii_case("datatype"))
-}
-
-// A `[PropertyClass = ...]` value is either one class name or a parenthesized, comma-separated
-// list of them.
+// A `(a, b)` or single-item list value.
 fn class_list_text(value: &str) -> Vec<String> {
     let value = value.trim();
     let value = value
@@ -523,74 +549,6 @@ fn class_list_text(value: &str) -> Vec<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-        .collect()
-}
-
-fn entries(keywords: &Option<KeywordList>) -> impl Iterator<Item = &cos::KeywordEntryWithSpace> {
-    keywords
-        .iter()
-        .flat_map(|keywords| keywords.entries.iter())
-        .flat_map(|entries| entries.items.iter())
-}
-
-// A method's `[ PublicList = (a, b) ]`, each name at the keyword's own range.
-fn public_list_keyword(keywords: &Option<KeywordList>, olc: &OLC) -> Vec<WithRange<String>> {
-    let entry = entries(keywords).find(|entry| {
-        matches!(&****entry, cos::KeywordEntry::Assign { keyword, .. }
-                if keyword.print().eq_ignore_ascii_case("PublicList"))
-    });
-    let (Some(entry), Some(value)) = (entry, keyword_value(keywords, "PublicList")) else {
-        return vec![];
-    };
-    value
-        .trim_matches(|c: char| c == '(' || c == ')' || c.is_whitespace())
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(|name| WithRange::new(name.to_string(), olc.range(entry)))
-        .collect()
-}
-
-fn keyword_value(keywords: &Option<KeywordList>, name: &str) -> Option<String> {
-    entries(keywords).find_map(|entry| match &***entry {
-        cos::KeywordEntry::Assign { keyword, value, .. }
-            if keyword.print().eq_ignore_ascii_case(name) =>
-        {
-            Some(
-                value
-                    .as_ref()
-                    .map(|value| value.print())
-                    .unwrap_or_default(),
-            )
-        }
-        _ => None,
-    })
-}
-
-fn bare_keyword_names(keywords: &Option<KeywordList>) -> Vec<String> {
-    entries(keywords)
-        .filter_map(|entry| match &***entry {
-            cos::KeywordEntry::Assign {
-                keyword,
-                value: None,
-                ..
-            }
-            | cos::KeywordEntry::Flag(keyword) => Some(keyword.print()),
-            _ => None,
-        })
-        .collect()
-}
-
-fn keyword_names(keywords: &Option<KeywordList>) -> Vec<String> {
-    entries(keywords)
-        .map(|entry| {
-            match &***entry {
-                cos::KeywordEntry::Assign { keyword, .. }
-                | cos::KeywordEntry::Not { keyword, .. }
-                | cos::KeywordEntry::Flag(keyword) => keyword,
-            }
-            .print()
-        })
         .collect()
 }
 
@@ -684,44 +642,40 @@ impl TryFrom<&str> for ClassDetails {
             .include
             .as_ref()
             .map(|include| olc.range(&include.files));
-        let deprecated = is_deprecated(&cls.keyword_list);
-        let keywords_without_value = entries(&cls.keyword_list)
-            .filter_map(|entry| match &***entry {
-                cos::KeywordEntry::Assign {
-                    keyword,
-                    value: None,
-                    ..
-                } => {
-                    // The keyword leads its entry.
-                    let keyword = keyword.print();
-                    let at = Range::new(entry.start, (), entry.start + keyword.len());
-                    Some(WithRange::new(keyword, olc.range(&at)))
+        let mut keywords = ClassKeywords::default();
+        for keyword in typed(cls.keyword_list.as_ref()) {
+            use cos::ClassKeyword::*;
+            match keyword {
+                ClassType(v) => keywords.class_type = Some((&v.value).into()),
+                Deprecated(flag) => keywords.deprecated = flag.is_set(),
+                Inheritance(v) => keywords.inheritance = Some((&v.value).into()),
+                Language(v) => keywords.language = Some((&v.value).into()),
+                ProcedureBlock(flag) => keywords.procedure_block = Some(flag.is_set()),
+                PropertyClass(v) => {
+                    keywords.property_class = v.value.classes().iter().map(|c| c.print()).collect()
                 }
-                _ => None,
-            })
-            .collect();
-        let class_procedure_block =
-            keyword_flag(&cls.keyword_list, "ProcedureBlock").unwrap_or(true);
-        let is_datatype = is_datatype(&cls.keyword_list);
-        let inheritance_right = keyword_value(&cls.keyword_list, "Inheritance")
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("right"));
-        let language = keyword_value(&cls.keyword_list, "Language")
-            .and_then(|value| MethodLanguage::parse(&value).ok());
-        let mode = keyword_value(&cls.keyword_list, "CodeMode")
-            .and_then(|value| CodeMode::parse(&value).ok());
-        let property_class_names = keyword_value(&cls.keyword_list, "PropertyClass")
-            .map_or_else(Vec::new, |value| class_list_text(&value));
+                _ => {}
+            }
+        }
+        let keyword_issues = keyword_issues_in(cls.keyword_list.as_ref(), &olc);
+        let class_procedure_block = keywords.procedure_block.unwrap_or(true);
         let mut members = Members::default();
         for (before_member, member) in cls.member_list.members.into_item_sep() {
             let doc = extract_document_comments(before_member.0.as_str());
             let range = olc.range(&member);
-            let (name, deprecated, kind) =
-                process_member(&olc, src, deprecated, member, class_procedure_block);
+            let (name, deprecated, keyword_issues, kind) = process_member(
+                &olc,
+                src,
+                keywords.deprecated,
+                member,
+                class_procedure_block,
+            );
             members.insert(WithRange {
                 it: MemberDetails {
                     name,
                     doc,
                     deprecated,
+                    keyword_issues,
                     kind,
                 },
                 range,
@@ -731,17 +685,12 @@ impl TryFrom<&str> for ClassDetails {
             doc,
             name,
             extends,
-            deprecated,
-            is_datatype,
-            inheritance_right,
-            language,
-            mode,
+            keywords,
+            keyword_issues,
             members,
             include_names,
             imports,
-            keywords_without_value,
             include_range,
-            property_class_names,
         })
     }
 }
@@ -752,69 +701,89 @@ fn process_member(
     deprecated: bool,
     member: Range<cos::Member>,
     class_procedure_block: bool,
-) -> (WithRange<String>, bool, MemberKindSpecificDetails) {
+) -> (
+    WithRange<String>,
+    bool,
+    Vec<WithRange<KeywordIssue>>,
+    MemberKindSpecificDetails,
+) {
     let member_start = member.start;
     match member.into_inner() {
         cos::Member::ForeignKey(fk) => (
             with_range_name(&fk.name, olc),
-            deprecated || is_deprecated(&fk.keywords),
+            deprecated || is_deprecated(fk.keywords.as_ref()),
+            keyword_issues_in(fk.keywords.as_ref(), olc),
             MemberKindSpecificDetails::ForeignKey,
         ),
         cos::Member::Index(index) => {
-            let flag = |name| keyword_flag(&index.keywords, name).unwrap_or(false);
-            let value = |name| keyword_value(&index.keywords, name);
+            let mut details = IndexDetails {
+                on: index.on_properties().map(|keys| {
+                    keys.into_iter()
+                        .map(|key| IndexKey {
+                            property: with_range_name(&key.name, olc),
+                            subscript: key.kind.as_ref().map(|kind| match kind {
+                                cos::IndexPropertyKind::Keys(_) => bindings::IndexSubscript::Keys,
+                                cos::IndexPropertyKind::Elements(_) => {
+                                    bindings::IndexSubscript::Elements
+                                }
+                            }),
+                            collation: key.collation(),
+                        })
+                        .collect()
+                }),
+                ..Default::default()
+            };
+            for keyword in typed(index.keywords.as_ref()) {
+                use cos::IndexKeyword::*;
+                match keyword {
+                    Member(cos::MemberKeyword::Internal(flag)) => details.internal = flag.is_set(),
+                    Member(_) => {}
+                    Abstract(flag) => details.abstract_ = flag.is_set(),
+                    Condition(v) => {
+                        let condition = v.value.print();
+                        let condition = condition.trim();
+                        details.condition = Some(
+                            condition
+                                .strip_prefix('{')
+                                .and_then(|c| c.strip_suffix('}'))
+                                .unwrap_or(condition)
+                                .trim()
+                                .to_string(),
+                        )
+                    }
+                    CoshardWith(v) => details.coshard_with = Some(v.value.print()),
+                    Data(v) => details.data = class_list_text(&v.value.print()),
+                    Deferred(flag) => details.deferred = flag.is_set(),
+                    Extent(flag) => details.extent = flag.is_set(),
+                    IdKey(flag) => details.id_key = flag.is_set(),
+                    PrimaryKey(flag) => details.primary_key = flag.is_set(),
+                    ShardKey(flag) => details.shard_key = flag.is_set(),
+                    SqlName(v) => details.sql_name = Some(v.value.print()),
+                    Type(v) => details.type_ = index_type(&v.value),
+                    Unique(flag) => details.unique = flag.is_set(),
+                }
+            }
             (
                 with_range_name(&index.name, olc),
-                deprecated || is_deprecated(&index.keywords),
-                MemberKindSpecificDetails::Index(IndexDetails {
-                    on: index.on_properties().map(|keys| {
-                        keys.into_iter()
-                            .map(|key| IndexKey {
-                                property: with_range_name(&key.name, olc),
-                                subscript: key.kind.as_ref().map(|kind| match kind {
-                                    cos::IndexPropertyKind::Keys(_) => {
-                                        bindings::IndexSubscript::Keys
-                                    }
-                                    cos::IndexPropertyKind::Elements(_) => {
-                                        bindings::IndexSubscript::Elements
-                                    }
-                                }),
-                                collation: key.collation(),
-                            })
-                            .collect()
-                    }),
-                    abstract_: flag("Abstract"),
-                    condition: value("Condition").map(|condition| {
-                        let condition = condition.trim();
-                        condition
-                            .strip_prefix('{')
-                            .and_then(|c| c.strip_suffix('}'))
-                            .unwrap_or(condition)
-                            .trim()
-                            .to_string()
-                    }),
-                    coshard_with: value("CoshardWith"),
-                    data: value("Data").map_or_else(Vec::new, |data| class_list_text(&data)),
-                    deferred: flag("Deferred"),
-                    extent: flag("Extent"),
-                    id_key: flag("IdKey"),
-                    internal: flag("Internal"),
-                    primary_key: flag("PrimaryKey"),
-                    shard_key: flag("ShardKey"),
-                    sql_name: value("SqlName"),
-                    type_: value("Type").and_then(|t| index_type(&t)),
-                    unique: flag("Unique"),
-                }),
+                deprecated || is_deprecated(index.keywords.as_ref()),
+                keyword_issues_in(index.keywords.as_ref(), olc),
+                MemberKindSpecificDetails::Index(details),
             )
         }
         cos::Member::Method(method) => {
             let name = with_range_name(&method.name, olc);
-            let deprecated = deprecated || is_deprecated(&method.keywords);
+            let deprecated = deprecated || is_deprecated(method.keywords.as_ref());
+            let keyword_issues = keyword_issues_in(method.keywords.as_ref(), olc);
             let is_class_method = match &method.keyword {
-                cos::MethodKeyword::Method(_) => false,
-                cos::MethodKeyword::ClassMethod(_) => true,
-                cos::MethodKeyword::ClientMethod(_) => {
-                    return (name, deprecated, MemberKindSpecificDetails::ClientMethod);
+                cos::MethodKind::Method(_) => false,
+                cos::MethodKind::ClassMethod(_) => true,
+                cos::MethodKind::ClientMethod(_) => {
+                    return (
+                        name,
+                        deprecated,
+                        keyword_issues,
+                        MemberKindSpecificDetails::ClientMethod,
+                    );
                 }
             };
             let kind = method_kind(
@@ -825,7 +794,7 @@ fn process_member(
                 is_class_method,
                 class_procedure_block,
             );
-            (name, deprecated, kind)
+            (name, deprecated, keyword_issues, kind)
         }
         cos::Member::Parameter(parameter) => {
             let name = with_range_name(&parameter.name, olc);
@@ -834,18 +803,19 @@ fn process_member(
             let default = parameter.default.as_ref().map(|v| v.deref().print());
             (
                 name,
-                deprecated || is_deprecated(&parameter.keywords),
+                deprecated || is_deprecated(parameter.keywords.as_ref()),
+                keyword_issues_in(parameter.keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Parameter {
                     ty,
                     default,
                     as_type,
-                    keywords: keyword_names(&parameter.keywords),
                 },
             )
         }
         cos::Member::Projection(projection) => (
             with_range_name(&projection.name, olc),
-            deprecated || is_deprecated(&projection.keywords),
+            deprecated || is_deprecated(projection.keywords.as_ref()),
+            keyword_issues_in(projection.keywords.as_ref(), olc),
             MemberKindSpecificDetails::Projection,
         ),
         cos::Member::Property(property) => match property {
@@ -857,12 +827,14 @@ fn process_member(
                 ..
             } => (
                 olc.with_range(name.0.as_ref().map(|_| name.name())),
-                deprecated || is_deprecated(&keywords),
+                deprecated || is_deprecated(keywords.as_ref()),
+                keyword_issues_in(keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Property {
                     ty: as_type.as_deref().map(Ty::from),
                     element_ty: as_type.as_deref().and_then(element_ty),
-                    keywords: keyword_names(&keywords),
-                    bare_keywords: bare_keyword_names(&keywords),
+                    multidimensional: typed(keywords.as_ref()).any(|keyword| {
+                        matches!(keyword, cos::PropertyKeyword::MultiDimensional(flag) if flag.is_set())
+                    }),
                     type_param_names: type_param_names(&type_params),
                 },
             ),
@@ -871,45 +843,53 @@ fn process_member(
                 as_type,
                 keywords,
                 ..
-            } => (
-                olc.with_range(name.0.as_ref().map(|_| name.name())),
-                deprecated || is_deprecated(&keywords),
-                MemberKindSpecificDetails::Property {
-                    // A `many`/`children` relationship is the collection of the related objects.
-                    ty: if keyword_value(&keywords, "Cardinality").is_some_and(|c| {
-                        c.eq_ignore_ascii_case("many") || c.eq_ignore_ascii_case("children")
-                    }) {
-                        Some(crate::check::types::relationship_object(
-                            as_type.as_deref().map(|t| t.class_name.print()),
-                        ))
-                    } else {
-                        as_type.as_deref().map(Ty::from)
+            } => {
+                // A `many`/`children` relationship is the collection of the related objects.
+                let is_collection = typed(keywords.as_ref()).any(|keyword| {
+                    matches!(keyword, cos::PropertyKeyword::Cardinality(cardinality)
+                        if matches!(cardinality.value, cos::Cardinality::Many(_) | cos::Cardinality::Children(_)))
+                });
+                (
+                    olc.with_range(name.0.as_ref().map(|_| name.name())),
+                    deprecated || is_deprecated(keywords.as_ref()),
+                    keyword_issues_in(keywords.as_ref(), olc),
+                    MemberKindSpecificDetails::Property {
+                        ty: if is_collection {
+                            Some(crate::check::types::relationship_object(
+                                as_type.as_deref().map(|t| t.class_name.print()),
+                            ))
+                        } else {
+                            as_type.as_deref().map(Ty::from)
+                        },
+                        element_ty: None,
+                        multidimensional: false,
+                        type_param_names: vec![],
                     },
-                    element_ty: None,
-                    keywords: keyword_names(&keywords),
-                    bare_keywords: bare_keyword_names(&keywords),
-                    type_param_names: vec![],
-                },
-            ),
+                )
+            }
         },
         cos::Member::Query(query) => (
             with_range_name(&query.name, olc),
-            deprecated,
+            deprecated || is_deprecated(query.keywords.as_ref()),
+            keyword_issues_in(query.keywords.as_ref(), olc),
             MemberKindSpecificDetails::Query,
         ),
         cos::Member::Storage(storage) => (
             with_range_name(&storage.name, olc),
             deprecated,
+            vec![],
             MemberKindSpecificDetails::Storage,
         ),
         cos::Member::Trigger(trigger) => (
             with_range_name(&trigger.name, olc),
-            deprecated,
+            deprecated || is_deprecated(trigger.keywords.as_ref()),
+            keyword_issues_in(trigger.keywords.as_ref(), olc),
             MemberKindSpecificDetails::Trigger,
         ),
         cos::Member::XData(xdata) => (
             with_range_name(xdata.name(), olc),
-            deprecated,
+            deprecated || is_deprecated(xdata.keywords()),
+            keyword_issues_in(xdata.keywords(), olc),
             MemberKindSpecificDetails::XData,
         ),
     }
@@ -919,7 +899,7 @@ fn method_kind(
     olc: &OLC,
     src: &str,
     header_start: usize,
-    method: cos::Method,
+    mut method: cos::Method,
     is_class_method: bool,
     class_procedure_block: bool,
 ) -> MemberKindSpecificDetails {
@@ -945,18 +925,36 @@ fn method_kind(
         .as_ref()
         .map(|x| x.as_deref().map(Ty::from));
     let out = olc.with_range(out);
-    let language = keyword_value(&method.keywords, "Language")
-        .and_then(|value| MethodLanguage::parse(&value).ok());
-    let mode =
-        keyword_value(&method.keywords, "CodeMode").and_then(|value| CodeMode::parse(&value).ok());
-    let procedure_block = keyword_flag(&method.keywords, "ProcedureBlock")
+    let mut language = None;
+    let mut mode = None;
+    let mut procedure_block = None;
+    let mut public_list = Vec::new();
+    let mut is_abstract = false;
+    let keywords = method.header.keywords.take().into_iter();
+    for entry in keywords
+        .flat_map(|list| list.entries)
+        .flat_map(|entries| entries.items)
+    {
+        use cos::MethodKeyword::*;
+        let range = olc.range(&entry);
+        match entry.into_inner().into_inner() {
+            Left(Language(v)) => language = Some((&v.value).into()),
+            Left(CodeMode(v)) => mode = Some(v.value),
+            Left(ProcedureBlock(v)) => procedure_block = Some(v.value.is_set()),
+            // Each name at the keyword's own range.
+            Left(PublicList(v)) => {
+                public_list = class_list_text(&v.value.print())
+                    .into_iter()
+                    .map(|name| WithRange::new(name, range))
+                    .collect()
+            }
+            Left(Abstract(flag)) => is_abstract = flag.is_set(),
+            _ => {}
+        }
+    }
+    let procedure_block = procedure_block
         .unwrap_or(class_procedure_block)
-        .then(|| public_list_keyword(&method.keywords, olc));
-    let is_abstract = method
-        .keywords
-        .as_ref()
-        .and_then(|keywords| keywords.get("Abstract"))
-        .is_some_and(|entry| !matches!(entry, cos::KeywordEntry::Not { .. }));
+        .then_some(public_list);
     let raw_body = method.body.into_inner().into_inner();
     let body = olc.with_range(raw_body).map(|x| x.print());
     MemberKindSpecificDetails::MethodOrClassMethod(Box::new(MethodDetails {

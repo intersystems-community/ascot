@@ -966,7 +966,7 @@ impl bindings::GuestWorkspace for Workspace {
                     root: bindings::SymbolInfo {
                         name: details.name.to_string(),
                         kind: bindings::SymbolKind::Class,
-                        deprecated: details.deprecated,
+                        deprecated: details.keywords.deprecated,
                         range: full_range(&text),
                         selection_range: details.name.range,
                     },
@@ -1380,15 +1380,12 @@ mod tests {
                     content: String::new(),
                     after: zero,
                 },
-                extends: vec![],
-                inheritance_right: false,
-                storage: None,
-                deprecated: false,
                 members: self.mem.clone().into_iter().collect(),
-                property_class_names: vec![],
-                includes: vec![],
-                is_datatype: self.is_datatype,
-                uri: None,
+                class_type: self
+                    .is_datatype
+                    .filter(|yes| *yes)
+                    .map(|_| bindings::ClassType::Datatype),
+                ..Default::default()
             }))
         }
         fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
@@ -1918,15 +1915,8 @@ mod tests {
                         content: cls.to_string(),
                         after: zero,
                     },
-                    extends: vec![],
-                    inheritance_right: false,
-                    storage: None,
-                    deprecated: false,
-                    members: vec![],
-                    property_class_names: vec![],
-                    includes: vec![],
-                    is_datatype: Some(false),
                     uri: Some("mock:///External.cls".to_string()),
+                    ..Default::default()
                 }))
             }
             fn get_inc(&self, _name: &str) -> Result<Option<bindings::Source>, String> {
@@ -2028,6 +2018,37 @@ mod tests {
                         .to_string()
                 ),
                 (Error, "Too many arguments".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_class_declaration_is_read_whole() {
+        let details = ClassDetails::try_from(
+            "/// Doc\nClass T.K Extends (%Persistent, %XML.Adaptor) [ Abstract, ClassType = persistent, ClientName = TK, CompileAfter = (A.B, C.D), DdlAllowed, Deprecated, Final, Inheritance = right, Language = tsql, Not NoExtent, Owner = _SYSTEM, Not ProcedureBlock, PropertyClass = (P.Q, R.S), SqlTableName = T_K, System = 3, Bogus, ClassType = Persistent, Inheritance = middle, CompileAfter = , Finalfoo, Abstract = 0 ]\n{\n}\n",
+        )
+        .unwrap();
+        let k = &details.keywords;
+        assert!(k.deprecated);
+        assert_eq!(k.class_type, Some(bindings::ClassType::Persistent));
+        assert_eq!(k.inheritance, Some(bindings::Inheritance::Right));
+        assert_eq!(k.language, Some(bindings::Language::Tsql));
+        assert_eq!(k.procedure_block, Some(false));
+        assert_eq!(k.property_class, ["P.Q", "R.S"]);
+        let issues: Vec<_> = details
+            .keyword_issues
+            .iter()
+            .map(|issue| (issue.it.entry.as_str(), issue.it.without_value))
+            .collect();
+        assert_eq!(
+            issues,
+            [
+                ("Bogus", false),
+                ("ClassType = Persistent", false),
+                ("Inheritance = middle", false),
+                ("CompileAfter = ", true),
+                ("Finalfoo", false),
+                ("Abstract = 0", false),
             ]
         );
     }
