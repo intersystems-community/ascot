@@ -43,6 +43,35 @@ use crate::{
     details::{self, MethodDetails, WithRange},
 };
 
+impl From<&details::IndexDetails> for wit_bind::IndexInfo {
+    fn from(index: &details::IndexDetails) -> Self {
+        Self {
+            on: index.on.as_ref().map(|keys| {
+                keys.iter()
+                    .map(|key| wit_bind::IndexKey {
+                        property: key.property.it.clone(),
+                        subscript: key.subscript,
+                        collation: key.collation.clone(),
+                    })
+                    .collect()
+            }),
+            abstract_: index.abstract_,
+            condition: index.condition.clone(),
+            coshard_with: index.coshard_with.clone(),
+            data: index.data.clone(),
+            deferred: index.deferred,
+            extent: index.extent,
+            id_key: index.id_key,
+            internal: index.internal,
+            primary_key: index.primary_key,
+            shard_key: index.shard_key,
+            sql_name: index.sql_name.clone(),
+            type_: index.type_,
+            unique: index.unique,
+        }
+    }
+}
+
 impl From<&WithRange<String>> for wit_bind::NameInfo {
     fn from(value: &WithRange<String>) -> Self {
         Self {
@@ -199,18 +228,7 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                 })
             }
             MemberKindSpecificDetails::ForeignKey => MemberKind::ForeignKey,
-            MemberKindSpecificDetails::Index {
-                on_properties,
-                unique,
-            } => MemberKind::Index(IndexInfo {
-                properties: on_properties
-                    .iter()
-                    .flatten()
-                    .map(|k| k.it.clone())
-                    .collect(),
-                collection: on_properties.contains(&None),
-                unique: *unique,
-            }),
+            MemberKindSpecificDetails::Index(index) => MemberKind::Index(index.into()),
             MemberKindSpecificDetails::Projection => MemberKind::Projection,
             MemberKindSpecificDetails::Trigger => MemberKind::Trigger,
             MemberKindSpecificDetails::XData => MemberKind::XData,

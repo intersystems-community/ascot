@@ -24,9 +24,9 @@ use {
 
 use crate::IrisContext;
 use crate::bindings::{
-    ArgMode, Cardinality, ClassInfo, CollectionKind, IndexInfo, MemberInfo, MemberKind, MethodInfo,
-    NameInfo, NormalArg, ParameterInfo, Position, PropertyInfo, Range, RelationshipInfo,
-    RoutineInfo, Source, VariadicArg,
+    ArgMode, Cardinality, ClassInfo, CollectionKind, IndexInfo, IndexKey, IndexSubscript,
+    MemberInfo, MemberKind, MethodInfo, NameInfo, NormalArg, ParameterInfo, Position, PropertyInfo,
+    Range, RelationshipInfo, RoutineInfo, Source, VariadicArg,
 };
 use crate::cos::{LocalVariableName, OSString, Space, Type};
 
@@ -190,6 +190,23 @@ fn routine_names(ctx: &AtelierContext, spec: &str) -> Result<BTreeSet<String>, S
         .collect())
 }
 
+fn index_key(key: &str) -> IndexKey {
+    let (key, collation) = match key.split_once(':') {
+        Some((key, collation)) => (key, Some(collation.to_string())),
+        None => (key, None),
+    };
+    let (property, subscript) = match key.strip_suffix(')').and_then(|k| k.split_once('(')) {
+        Some((property, "KEYS")) => (property, Some(IndexSubscript::Keys)),
+        Some((property, "ELEMENTS")) => (property, Some(IndexSubscript::Elements)),
+        _ => (key, None),
+    };
+    IndexKey {
+        property: property.to_string(),
+        subscript,
+        collation,
+    }
+}
+
 fn split_classes(s: &str) -> Vec<String> {
     s.split(',')
         .map(str::trim)
@@ -312,7 +329,31 @@ struct MemberRow {
     deprecated: Value,
     #[serde(default, deserialize_with = "empty_string_as_none")]
     origin: Option<String>,
-    // An index's `Unique`, `PrimaryKey` or `IdKey`.
+    // An index's keywords.
+    #[serde(default)]
+    index_abstract: Value,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    index_condition: Option<String>,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    index_coshard_with: Option<String>,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    index_data: Option<String>,
+    #[serde(default)]
+    index_deferred: Value,
+    #[serde(default)]
+    index_extent: Value,
+    #[serde(default)]
+    index_id_key: Value,
+    #[serde(default)]
+    index_internal: Value,
+    #[serde(default)]
+    index_primary_key: Value,
+    #[serde(default)]
+    index_shard_key: Value,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    index_sql_name: Option<String>,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    index_type: Option<String>,
     #[serde(default)]
     index_unique: Value,
 }
@@ -361,13 +402,19 @@ fn all_mem_rows(
             "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, {description}, \
              Properties AS FormalSpec, NULL AS ReturnType, NULL AS Collection, 0 AS \
              MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
-             Deprecated, Origin, CASE WHEN _Unique = 1 OR PrimaryKey = 1 OR IdKey = 1 THEN 1 ELSE \
-             0 END AS IndexUnique FROM %Dictionary.CompiledIndex WHERE Parent {filter} AND Origin \
-             = Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, 'query' AS MemberType, \
-             {description}, FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS \
-             MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
-             Deprecated, Origin, 0 AS IndexUnique FROM %Dictionary.CompiledQuery WHERE Parent \
-             {filter} AND Origin = Parent"
+             Deprecated, Origin, Abstract AS IndexAbstract, Condition AS IndexCondition, \
+             CoshardWith AS IndexCoshardWith, Data AS IndexData, _Deferred AS IndexDeferred, \
+             Extent AS IndexExtent, IdKey AS IndexIdKey, Internal AS IndexInternal, PrimaryKey AS \
+             IndexPrimaryKey, ShardKey AS IndexShardKey, SqlName AS IndexSqlName, Type AS \
+             IndexType, _Unique AS IndexUnique FROM %Dictionary.CompiledIndex WHERE Parent \
+             {filter} AND Origin = Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, 'query' \
+             AS MemberType, {description}, FormalSpec, Type AS ReturnType, NULL AS Collection, 0 \
+             AS MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
+             Deprecated, Origin, 0 AS IndexAbstract, NULL AS IndexCondition, NULL AS \
+             IndexCoshardWith, NULL AS IndexData, 0 AS IndexDeferred, 0 AS IndexExtent, 0 AS \
+             IndexIdKey, 0 AS IndexInternal, 0 AS IndexPrimaryKey, 0 AS IndexShardKey, NULL AS \
+             IndexSqlName, NULL AS IndexType, 0 AS IndexUnique FROM %Dictionary.CompiledQuery \
+             WHERE Parent {filter} AND Origin = Parent"
         )
     };
     let mut rows = member_rows(conn, declared, &[params, params, params].concat())?;
@@ -465,19 +512,32 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
             t: row.return_type.clone(),
             v: None,
         }),
-        // `Properties` is `Name,Age`, a collated key `Name:Exact`, a collection key `Tags(ELEMENTS)`.
-        "index" => {
-            let keys = split_classes(row.formal_spec.as_deref().unwrap_or(""));
-            MemberKind::Index(IndexInfo {
-                properties: keys
+        // `Properties` is `Name,Age`, a collated key `Name:Exact`, a collection key `Tags(ELEMENTS)`;
+        // empty without an `On` clause. The compiled `SqlName` defaults to the index's own name.
+        "index" => MemberKind::Index(IndexInfo {
+            on: row.formal_spec.as_deref().map(|keys| {
+                split_classes(keys)
                     .iter()
-                    .filter(|key| !key.contains('('))
-                    .map(|key| key.split(':').next().unwrap_or(key).to_string())
-                    .collect(),
-                collection: keys.iter().any(|key| key.contains('(')),
-                unique: is_truthy(&row.index_unique),
-            })
-        }
+                    .map(|key| index_key(key))
+                    .collect()
+            }),
+            abstract_: is_truthy(&row.index_abstract),
+            condition: row.index_condition.clone(),
+            coshard_with: row.index_coshard_with.clone(),
+            data: split_classes(row.index_data.as_deref().unwrap_or("")),
+            deferred: is_truthy(&row.index_deferred),
+            extent: is_truthy(&row.index_extent),
+            id_key: is_truthy(&row.index_id_key),
+            internal: is_truthy(&row.index_internal),
+            primary_key: is_truthy(&row.index_primary_key),
+            shard_key: is_truthy(&row.index_shard_key),
+            sql_name: row.index_sql_name.clone().filter(|name| *name != row.name),
+            type_: row
+                .index_type
+                .as_deref()
+                .and_then(crate::details::index_type),
+            unique: is_truthy(&row.index_unique),
+        }),
         "query" => MemberKind::Query,
         _ => {
             let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
@@ -950,7 +1010,7 @@ mod tests {
             serde_json::json!({"parent": "A.B", "Name": "M", "MemberType": "method", "Description": "", "FormalSpec": "x:%String", "ReturnType": "%Status", "ClassMethod": 1, "Deprecated": 0}),
             serde_json::json!({"Parent": "A.B", "Name": "", "MemberType": "method", "Description": "", "FormalSpec": "", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0}),
             serde_json::json!({"parent": "A.C", "Name": "ByP", "MemberType": "index", "Description": "", "FormalSpec": "P,Tags(ELEMENTS)", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0}),
-            serde_json::json!({"parent": "A.C", "Name": "ByExactP", "MemberType": "index", "Description": "", "FormalSpec": "P:Exact", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0, "IndexUnique": 1}),
+            serde_json::json!({"parent": "A.C", "Name": "ByExactP", "MemberType": "index", "Description": "", "FormalSpec": "P:Exact", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0, "IndexType": "index", "IndexUnique": true, "IndexData": "P,Q", "IndexSqlName": "ByExactP", "IndexCondition": "P > 1"}),
         ]
         .into_iter()
         .map(|row| serde_json::from_value(row).unwrap())
@@ -971,15 +1031,37 @@ mod tests {
         assert_eq!(c.is_datatype, Some(true));
         assert!(c.inheritance_right && !b.inheritance_right);
         assert_eq!(c.members[0].name.content, "P");
-        assert!(
-            matches!(&c.members[1].kind, MemberKind::Index(index) if index.properties == ["P"] && index.collection && !index.unique),
-            "{:?}",
-            c.members[1].kind
+        let key = |property: &str, subscript, collation: Option<&str>| IndexKey {
+            property: property.to_string(),
+            subscript,
+            collation: collation.map(str::to_string),
+        };
+        let MemberKind::Index(by_p) = &c.members[1].kind else {
+            panic!("{:?}", c.members[1].kind)
+        };
+        assert_eq!(
+            by_p.on.as_deref(),
+            Some(
+                &[
+                    key("P", None, None),
+                    key("Tags", Some(IndexSubscript::Elements), None)
+                ][..]
+            )
         );
+        assert!(!by_p.unique && by_p.type_.is_none());
+        let MemberKind::Index(by_exact_p) = &c.members[2].kind else {
+            panic!("{:?}", c.members[2].kind)
+        };
+        assert_eq!(
+            by_exact_p.on.as_deref(),
+            Some(&[key("P", None, Some("Exact"))][..])
+        );
+        assert!(by_exact_p.unique && by_exact_p.type_.is_none());
+        assert_eq!(by_exact_p.data, ["P", "Q"]);
+        assert_eq!(by_exact_p.condition.as_deref(), Some("P > 1"));
         assert!(
-            matches!(&c.members[2].kind, MemberKind::Index(index) if index.properties == ["P"] && !index.collection && index.unique),
-            "{:?}",
-            c.members[2].kind
+            by_exact_p.sql_name.is_none(),
+            "the default SqlName is the index's name"
         );
     }
 

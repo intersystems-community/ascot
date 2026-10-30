@@ -51,7 +51,7 @@ fn a_class_has_only_its_own_members_plus_its_storage_class() {
             .collect::<Vec<_>>()
     );
     assert!(cls.members.iter().any(|m| {
-        matches!(&m.kind, MemberKind::Index(index) if index.properties == ["NameLowerCase"])
+        matches!(&m.kind, MemberKind::Index(index) if index.on.as_deref().is_some_and(|keys| keys.len() == 1 && keys[0].property == "NameLowerCase"))
     }));
     assert!(
         cls.members

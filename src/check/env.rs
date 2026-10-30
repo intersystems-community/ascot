@@ -575,14 +575,8 @@ impl<'a> WorkspaceEnv<'a> {
                     }
                 }
                 for (name, index) in &details.members.index {
-                    if let MemberKindSpecificDetails::Index {
-                        on_properties,
-                        unique,
-                    } = &index.kind
-                        && !on_properties.contains(&None)
-                    {
-                        let keys: Vec<_> = on_properties.iter().flatten().cloned().collect();
-                        add(name, self.index_methods(cls, &keys, *unique));
+                    if let MemberKindSpecificDetails::Index(index) = &index.kind {
+                        add(name, self.index_methods(cls, &index.into()));
                     }
                 }
                 for name in details.members.query.keys() {
@@ -594,10 +588,6 @@ impl<'a> WorkspaceEnv<'a> {
                 );
             }
             Some(Class::Iris(info)) => {
-                let zero = bindings::Range::point(bindings::Position {
-                    line: 0,
-                    character: 0,
-                });
                 for member in &info.members {
                     let name = member.name.content.as_str();
                     match &member.kind {
@@ -609,12 +599,7 @@ impl<'a> WorkspaceEnv<'a> {
                             };
                             add(name, self.property_methods(ty));
                         }
-                        MemberKind::Index(index) if !index.collection => {
-                            let keys: Vec<_> = (index.properties.iter())
-                                .map(|key| WithRange::new(key.clone(), zero))
-                                .collect();
-                            add(name, self.index_methods(cls, &keys, index.unique));
-                        }
+                        MemberKind::Index(index) => add(name, self.index_methods(cls, index)),
                         MemberKind::Query => add(name, query_methods()),
                         MemberKind::Method(_) | MemberKind::ClassMethod(_) if name == "%OnNew" => {
                             add("", new(iris_found::<Methods>(member.clone(), cls)));
@@ -705,24 +690,35 @@ impl<'a> WorkspaceEnv<'a> {
         (methods, complete)
     }
 
-    // `Index AB On (A, B)` generates `ABOpen(aVal As <A>, bVal As <B>, concurrency, ByRef sc)`,
-    // `ABExists` and `ABDelete`; `Open` returns the class it is called on, not `cls`.
-    // The accessors IRIS generates for an index, as measured: `Exists` for every index, `Open` and
-    // `Delete` only for a unique one, nothing for one subscripted on a collection (not called).
-    fn index_methods(
-        &self,
-        cls: &str,
-        on_properties: &[WithRange<String>],
-        unique: bool,
-    ) -> Vec<(String, Generated)> {
-        let cls = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
-        let keys: Vec<NormalArg> = on_properties
+    // The accessors IRIS generates for an index, as measured: nothing for a bitmap or an index
+    // subscripted on a collection; `Exists(keys..., Output id)` for any other with keys, or for an
+    // id key, whose one argument is the id; `Open(keys..., concurrency, ByRef sc)` and
+    // `Delete(keys..., concurrency)` too when it is unique, a primary key or the id key. `Open`
+    // returns the class it is called on, not `cls`.
+    fn index_methods(&self, cls: &str, index: &bindings::IndexInfo) -> Vec<(String, Generated)> {
+        let keys = index.on.as_deref().unwrap_or_default();
+        if index.type_ == Some(bindings::IndexType::Bitmap)
+            || keys.iter().any(|key| key.subscript.is_some())
+            || (keys.is_empty() && !index.id_key)
+        {
+            return vec![];
+        }
+        let arg = |name: &str, mode, ty: Ty, default: Option<&str>| {
+            NormalArg::new(mode, name.into(), Some(ty), default.map(str::to_string))
+        };
+        let this = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
+        let mut args: Vec<NormalArg> = keys
             .iter()
-            .map(|p| {
+            .map(|key| {
                 // Quietly: `check_cls` resolves the key itself, hint and all.
                 let was_suppressed = self.suppress_soft_diagnostics();
                 let found = self
-                    .find::<Properties<Read>>(&cls, &p.it, true, p.range)
+                    .find::<Properties<Read>>(
+                        &this,
+                        &key.property,
+                        true,
+                        bindings::Range::default(),
+                    )
                     .ok()
                     .flatten();
                 self.restore_soft_diagnostics(was_suppressed);
@@ -730,41 +726,47 @@ impl<'a> WorkspaceEnv<'a> {
                     Some(PropertyTy::Value(ty)) => ty,
                     _ => Ty::Any,
                 };
-                NormalArg::new(ArgMode::Default, "value".into(), Some(ty), None)
+                arg("value", ArgMode::Default, ty, None)
             })
             .collect();
-        let arg = |name: &str, mode, ty: &str, default: Option<&str>| {
-            NormalArg::new(
-                mode,
-                name.into(),
-                Some(Ty::from(ty)),
-                default.map(str::to_string),
-            )
-        };
+        if keys.is_empty() {
+            args.push(arg("id", ArgMode::Default, Ty::from("%String"), None));
+        }
         let exists = (
             "Exists",
-            vec![arg("id", ArgMode::Output, "%String", None)],
+            vec![arg("id", ArgMode::Output, Ty::from("%String"), None)],
             Ty::from("%Boolean"),
         );
         let open_and_delete = [
             (
                 "Open",
                 vec![
-                    arg("concurrency", ArgMode::Default, "%Integer", Some("-1")),
-                    arg("sc", ArgMode::ByRef, "%Status", Some("$$$OK")),
+                    arg(
+                        "concurrency",
+                        ArgMode::Default,
+                        Ty::from("%Integer"),
+                        Some("-1"),
+                    ),
+                    arg("sc", ArgMode::ByRef, Ty::from("%Status"), Some("$$$OK")),
                 ],
                 Ty::This,
             ),
             (
                 "Delete",
-                vec![arg("concurrency", ArgMode::Default, "%Integer", Some("-1"))],
+                vec![arg(
+                    "concurrency",
+                    ArgMode::Default,
+                    Ty::from("%Integer"),
+                    Some("-1"),
+                )],
                 Ty::from("%Status"),
             ),
         ];
+        let unique = index.unique || index.primary_key || index.id_key;
         std::iter::once(exists)
             .chain(unique.then_some(open_and_delete).into_iter().flatten())
             .map(|(suffix, extra, out)| {
-                let args = keys.iter().cloned().chain(extra).collect();
+                let args = args.iter().cloned().chain(extra).collect();
                 (
                     suffix.to_string(),
                     (generated_procedure(args, false, Some(out)), false),
