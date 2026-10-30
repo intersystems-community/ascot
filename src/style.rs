@@ -78,16 +78,14 @@ impl KeywordStyle {
         let abbr = kw.abbr.map(|abbr| spell_abbr(kw.full, abbr));
         let base = match self.form {
             Some(KeywordForm::Long) => full,
-            Some(KeywordForm::Short) => abbr.unwrap_or(full),
             None if kw.text.eq_ignore_ascii_case(kw.full) => full,
-            None => abbr.unwrap_or(full),
+            Some(KeywordForm::Short) | None => abbr.unwrap_or(full),
         };
         let expected = match self.case {
             Some(KeywordCase::Lower) => base.to_ascii_lowercase(),
             Some(KeywordCase::Upper) => base.to_ascii_uppercase(),
-            Some(KeywordCase::Pascal) => base,
             None if kw.text.eq_ignore_ascii_case(&base) => return None,
-            None => base,
+            Some(KeywordCase::Pascal) | None => base,
         };
         (kw.text != expected).then_some(expected)
     }

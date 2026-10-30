@@ -594,10 +594,10 @@ impl WorkspaceStruct {
         let Some(Ok(cell)) = self.doc_cache.get(uri) else {
             return;
         };
-        match &mut cell.borrow_mut().details {
-            Some(Ok(DocDetails::Cls(_, check_slot))) => *check_slot = Some(check),
-            Some(Ok(DocDetails::Rtn(_, check_slot))) => *check_slot = Some(check),
-            _ => {}
+        if let Some(Ok(DocDetails::Cls(_, slot) | DocDetails::Rtn(_, slot))) =
+            &mut cell.borrow_mut().details
+        {
+            *slot = Some(check);
         }
     }
 
@@ -1096,7 +1096,7 @@ impl Workspace {
             }
         }
         Some(MemberInfo {
-            uri: Some(uri.clone()),
+            uri: Some(uri),
             ..MemberInfo::from(member)
         })
     }
@@ -1195,17 +1195,16 @@ impl Default for bindings::Range {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use crate::bindings::GuestWorkspace;
 
     use super::*;
 
-    #[test]
-    fn dependency_invalidation() {
+    // `Test.Sub` calls `Test.Base`'s `Foo`, each in its own document.
+    fn base_and_sub() -> (Workspace, String, String) {
         let workspace = Workspace::new(None, None);
-        let base_uri = "Base.cls".to_string();
-        let sub_uri = "Sub.cls".to_string();
+        let (base_uri, sub_uri) = ("Base.cls".to_string(), "Sub.cls".to_string());
         workspace.open(
             base_uri.clone(),
             "Class Test.Base {\nClassMethod Foo() {\n}\n}\n".to_string(),
@@ -1215,6 +1214,12 @@ mod tests {
             "Class Test.Sub {\nClassMethod Bar() {\n do ##class(Test.Base).Foo()\n}\n}\n"
                 .to_string(),
         );
+        (workspace, base_uri, sub_uri)
+    }
+
+    #[test]
+    fn dependency_invalidation() {
+        let (workspace, base_uri, sub_uri) = base_and_sub();
 
         let diagnostics = workspace.diagnostics(sub_uri.clone());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -1327,7 +1332,6 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn set_env_forgets_what_the_old_server_said() {
         let iris = MockIrisClient {
@@ -1348,7 +1352,6 @@ mod tests {
         assert!(diagnostics[0].message.contains("App.NotOpen"));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn property_declared_type_outside_workspace_gets_a_hint() {
         let workspace = Workspace::new(None, None);
@@ -1364,13 +1367,11 @@ mod tests {
         assert!(diagnostics[0].message.contains("App.NotOpen"));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     struct MockIrisClient {
         is_datatype: Option<bool>,
         mem: Option<bindings::MemberInfo>,
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     impl crate::IrisContext for MockIrisClient {
         fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
             let zero = bindings::Position {
@@ -1842,18 +1843,7 @@ mod tests {
 
     #[test]
     fn definition_resolves_member_reference() {
-        let workspace = Workspace::new(None, None);
-        let base_uri = "Base.cls".to_string();
-        let sub_uri = "Sub.cls".to_string();
-        workspace.open(
-            base_uri.clone(),
-            "Class Test.Base {\nClassMethod Foo() {\n}\n}\n".to_string(),
-        );
-        workspace.open(
-            sub_uri.clone(),
-            "Class Test.Sub {\nClassMethod Bar() {\n do ##class(Test.Base).Foo()\n}\n}\n"
-                .to_string(),
-        );
+        let (workspace, base_uri, sub_uri) = base_and_sub();
 
         let location = workspace
             .definition(
@@ -1901,18 +1891,7 @@ mod tests {
 
     #[test]
     fn definition_resolves_bare_class_reference() {
-        let workspace = Workspace::new(None, None);
-        let base_uri = "Base.cls".to_string();
-        let sub_uri = "Sub.cls".to_string();
-        workspace.open(
-            base_uri.clone(),
-            "Class Test.Base {\nClassMethod Foo() {\n}\n}\n".to_string(),
-        );
-        workspace.open(
-            sub_uri.clone(),
-            "Class Test.Sub {\nClassMethod Bar() {\n do ##class(Test.Base).Foo()\n}\n}\n"
-                .to_string(),
-        );
+        let (workspace, base_uri, sub_uri) = base_and_sub();
 
         // Position inside "Base", within the `##class(Test.Base)` literal itself.
         let location = workspace
@@ -1929,7 +1908,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn definition_resolves_a_class_reference_via_the_iris_hosts_own_uri() {
         struct ExternalClassIris;
         impl crate::IrisContext for ExternalClassIris {
@@ -2004,7 +1982,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn cross_routine_label_call_resolves_via_iris_when_not_in_the_workspace() {
         struct ExternalRoutineIris;
         impl crate::IrisContext for ExternalRoutineIris {
@@ -2319,7 +2296,6 @@ mod tests {
     }
 
     // The mock gives every class this one member, declared by `origin`.
-    #[cfg(not(target_arch = "wasm32"))]
     fn masked_iris(name: &str, origin: &str, args: Vec<bindings::NormalArg>) -> Workspace {
         let mut mem = external_method(name, args, Some("%Library.ObjectHandle"));
         mem.origin = Some(origin.to_string());
@@ -2337,15 +2313,11 @@ mod tests {
         )
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn errors_in(workspace: &Workspace, uri: &str, text: &str) -> Vec<bindings::Diagnostic> {
         workspace.open(uri.to_string(), text.to_string());
         without_hints(workspace.diagnostics(uri.to_string()))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[cfg(not(target_arch = "wasm32"))]
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn only_the_mask_says_this() {
         let mut mem = external_method("getNextResultSet", vec![], Some("This"));
@@ -2372,9 +2344,7 @@ mod tests {
     }
 
     // The mask also corrects the `%OnNew` that `%New` takes its arguments from.
-    #[cfg(not(target_arch = "wasm32"))]
     // Without its own `%OnNew`, `%New` takes its own arguments: an optional `initvalue`.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn an_unmasked_object_handle_stays_one() {
         let workspace = masked_iris("getNextResultSet", "%Library.SQLGatewayConnection", vec![]);
@@ -2392,7 +2362,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn external_method(
         name: &str,
         normal: Vec<bindings::NormalArg>,
@@ -2634,7 +2603,6 @@ mod tests {
         workspace.diagnostics(uri)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn diagnostics_for(files: &[(&str, &str)]) -> Vec<bindings::Diagnostic> {
         let workspace = Workspace::new(None, None);
         for (uri, text) in files {

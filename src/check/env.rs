@@ -1117,8 +1117,7 @@ impl<'a> WorkspaceEnv<'a> {
 
     pub fn can_assign_to(&self, source: &Ty, target: &Ty) -> bool {
         match (source, target) {
-            (_, Ty::Any) => true,
-            (Ty::Any, _) => true,
+            (_, Ty::Any) | (Ty::Any, _) => true,
             // Anything coerces to a datatype via IRIS's implicit conversion.
             (_, Ty::OREF(ClsOrIns::Ins(target)))
                 if self.is_datatype(&target.name).unwrap_or(true) =>
@@ -1416,10 +1415,10 @@ impl<'a> WorkspaceEnv<'a> {
 
     pub fn merge_maybe_ty(&self, lhs: MaybeTy, rhs: MaybeTy) -> MaybeTy {
         match (lhs, rhs) {
-            (MaybeTy::Undefined, MaybeTy::Plain(ty)) => MaybeTy::Maybe(ty),
-            (MaybeTy::Plain(ty), MaybeTy::Undefined) => MaybeTy::Maybe(ty),
-            (MaybeTy::Undefined, ty) => ty,
-            (ty, MaybeTy::Undefined) => ty,
+            (MaybeTy::Undefined, MaybeTy::Plain(ty)) | (MaybeTy::Plain(ty), MaybeTy::Undefined) => {
+                MaybeTy::Maybe(ty)
+            }
+            (MaybeTy::Undefined, ty) | (ty, MaybeTy::Undefined) => ty,
             (MaybeTy::Plain(x), MaybeTy::Plain(y)) => MaybeTy::Plain(self.merge_ty(x, y)),
             (MaybeTy::Maybe(x) | MaybeTy::Plain(x), MaybeTy::Maybe(y) | MaybeTy::Plain(y)) => {
                 MaybeTy::Maybe(self.merge_ty(x, y))
@@ -1773,8 +1772,7 @@ impl<'a> CodeEnv<'a> {
                         None => Err(QuasiTypeError::cannot_find_label(label, None)),
                     }
                 }
-                (Some(_), Some(_)) => Ok(TyProcedureOrAny::Any),
-                (None, _) => Ok(TyProcedureOrAny::Any),
+                _ => Ok(TyProcedureOrAny::Any),
             },
         }
     }
