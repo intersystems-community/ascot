@@ -99,33 +99,20 @@ impl Term {
         }
     }
 
-    pub fn eq(c: Const) -> Self {
-        Self::Infix {
-            l: Box::new(Self::Target),
-            o: TermOp::Eq,
-            r: Box::new(Self::Const(c)),
-        }
-    }
-
     pub fn negate(self) -> Self {
         match self {
             Term::Neg(term) => *term,
             Term::Infix {
                 l,
-                o: TermOp::Eq,
+                o: o @ (TermOp::Eq | TermOp::Ne),
                 r,
             } => Term::Infix {
                 l,
-                o: TermOp::Ne,
-                r,
-            },
-            Term::Infix {
-                l,
-                o: TermOp::Ne,
-                r,
-            } => Term::Infix {
-                l,
-                o: TermOp::Eq,
+                o: if o == TermOp::Eq {
+                    TermOp::Ne
+                } else {
+                    TermOp::Eq
+                },
                 r,
             },
             _ => Self::Neg(Box::new(self)),
@@ -230,11 +217,7 @@ impl MaybeTy {
     }
 
     pub(crate) fn maybe_undefined(&self) -> bool {
-        match self {
-            MaybeTy::Undefined => true,
-            MaybeTy::Maybe(..) => true,
-            MaybeTy::Plain(..) => false,
-        }
+        !matches!(self, MaybeTy::Plain(_))
     }
 
     pub(crate) fn maybe_defined(&self) -> Option<&Ty> {
