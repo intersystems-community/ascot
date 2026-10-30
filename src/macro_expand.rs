@@ -116,6 +116,17 @@ impl Origin {
 // (expanded range, origin, exact?), sorted by expanded start so `locate` can bsearch.
 type SourceMapVec = Vec<(std::ops::Range<usize>, Origin, bool)>;
 
+fn offset_at(olc: &OLC, position: Position) -> usize {
+    olc.line_character_to_offset((position.line as usize, position.character as usize))
+}
+
+fn range_at(olc: &OLC, range: &std::ops::Range<usize>) -> bindings::Range {
+    bindings::Range {
+        start: Position::from(olc.offset_to_line_character(range.start)),
+        end: Position::from(olc.offset_to_line_character(range.end)),
+    }
+}
+
 // Maps expanded-text positions/ranges back to the original source, across any `#include`d files
 // that contributed to the expansion.
 pub struct SourceMap {
@@ -138,15 +149,9 @@ pub struct SourceMap {
 
 impl SourceMap {
     pub(crate) fn include_directives(&self) -> impl Iterator<Item = (bindings::Range, &str)> {
-        self.include_directives.iter().map(|(span, name)| {
-            (
-                bindings::Range {
-                    start: Position::from(self.source_olc.offset_to_line_character(span.start)),
-                    end: Position::from(self.source_olc.offset_to_line_character(span.end)),
-                },
-                name.as_str(),
-            )
-        })
+        self.include_directives
+            .iter()
+            .map(|(span, name)| (range_at(&self.source_olc, span), name.as_str()))
     }
 
     // Every `#include` name this expansion asked for, resolved or not, nested ones included.
@@ -172,10 +177,7 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(position) {
             return None;
         }
-        let offset = self
-            .expanded_olc
-            .line_character_to_offset((position.line as usize, position.character as usize));
-        let (source_offset, _) = self.to_source_offset(offset)?;
+        let (source_offset, _) = self.to_source_offset(offset_at(&self.expanded_olc, position))?;
         Some(Position::from(
             self.source_olc.offset_to_line_character(source_offset),
         ))
@@ -188,10 +190,7 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(range.end) {
             return None;
         }
-        let end = self
-            .expanded_olc
-            .line_character_to_offset((range.end.line as usize, range.end.character as usize));
-        let Some(last) = end.checked_sub(1) else {
+        let Some(last) = offset_at(&self.expanded_olc, range.end).checked_sub(1) else {
             let start = self.relocate_position(range.start)?;
             return Some(bindings::Range { start, end: start });
         };
@@ -218,9 +217,7 @@ impl SourceMap {
         if position.line as usize >= self.source_lines {
             return None;
         }
-        let offset = self
-            .source_olc
-            .line_character_to_offset((position.line as usize, position.character as usize));
+        let offset = offset_at(&self.source_olc, position);
         let idx = self
             .invocations
             .partition_point(|span| span.start <= offset)
@@ -330,10 +327,7 @@ impl SourceMap {
             None => &self.source_olc,
             Some(uri) => self.included.get(uri)?,
         };
-        Some(bindings::Range {
-            start: Position::from(olc.offset_to_line_character(range.start)),
-            end: Position::from(olc.offset_to_line_character(range.end)),
-        })
+        Some(range_at(olc, range))
     }
 
     // The fully macro-expanded text of the physical line containing `offset` — not just the
@@ -379,9 +373,7 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(position) {
             return None;
         }
-        let offset = self
-            .expanded_olc
-            .line_character_to_offset((position.line as usize, position.character as usize));
+        let offset = offset_at(&self.expanded_olc, position);
         let idx = self.locate_idx(offset)?;
         if self.vec[idx].2 {
             return None;
@@ -406,12 +398,8 @@ impl SourceMap {
         if !self.is_in_expanded_bounds(range.start) || !self.is_in_expanded_bounds(range.end) {
             return (*range, vec![]);
         }
-        let start = self
-            .expanded_olc
-            .line_character_to_offset((range.start.line as usize, range.start.character as usize));
-        let end = self
-            .expanded_olc
-            .line_character_to_offset((range.end.line as usize, range.end.character as usize));
+        let start = offset_at(&self.expanded_olc, range.start);
+        let end = offset_at(&self.expanded_olc, range.end);
         let chain = self.relocation_chain(start..end);
         let Some((top_uri, top_range)) = chain.first() else {
             return (*range, vec![]);
@@ -470,6 +458,12 @@ impl SourceMap {
                 diagnostic
             })
             .collect()
+    }
+
+    // A parse error in the expanded text, placed back in the source.
+    fn relocate_error(&self, error: tygr::Error, uri: &str) -> Diagnostic {
+        let error = tygr_error_to_diagnostics(error, &self.expanded_text);
+        self.relocate_diagnostics(vec![error], uri).pop().unwrap()
     }
 }
 
@@ -987,10 +981,7 @@ impl WorkspaceStruct {
                     }));
                     Err(diagnostic)
                 }
-                None => {
-                    let error = tygr_error_to_diagnostics(error, &map.expanded_text);
-                    Err(map.relocate_diagnostics(vec![error], uri).pop().unwrap())
-                }
+                None => Err(map.relocate_error(error, uri)),
             },
         }
     }
@@ -1069,10 +1060,7 @@ impl WorkspaceStruct {
                 let expanded_text = map.expanded_text.clone();
                 Ok((expanded_text, map, definitions))
             }
-            Err(error) => {
-                let error = tygr_error_to_diagnostics(error, &map.expanded_text);
-                Err(map.relocate_diagnostics(vec![error], uri).pop().unwrap())
-            }
+            Err(error) => Err(map.relocate_error(error, uri)),
         }
     }
 }
@@ -1289,36 +1277,29 @@ impl DoneList {
     }
 
     fn into_source_map(self, src: &str) -> SourceMap {
-        let source_olc = OLC::new(src);
         let mut invocations = self.invocations;
         invocations.sort_by_key(|span| span.start);
-        let unresolved = self
-            .unresolved
-            .into_iter()
-            .filter_map(|(make, name, origin)| {
-                let olc = match &origin.uri {
-                    None => &source_olc,
-                    Some(uri) => self.included.get(uri)?,
-                };
-                let range = bindings::Range {
-                    start: Position::from(olc.offset_to_line_character(origin.range.start)),
-                    end: Position::from(olc.offset_to_line_character(origin.range.end)),
-                };
-                Some(make(name, range).into())
-            })
-            .collect();
-        SourceMap {
+        let mut map = SourceMap {
             vec: self.map,
-            source_olc,
+            source_olc: OLC::new(src),
             source_lines: src.matches('\n').count() + 1,
             expanded_olc: OLC::new(&self.text),
             expanded_text: self.text,
             included: self.included,
             invocations,
-            unresolved,
+            unresolved: Vec::new(),
             include_directives: self.include_directives,
             include_names: self.include_names,
-        }
+        };
+        map.unresolved = self
+            .unresolved
+            .into_iter()
+            .filter_map(|(make, name, origin)| {
+                let range = map.range_in(&origin.uri, &origin.range)?;
+                Some(make(name, range).into())
+            })
+            .collect();
+        map
     }
 }
 
