@@ -66,7 +66,7 @@ jobs:
         env:
           ASCOT_TEST_IRIS: http://_SYSTEM:SYS@localhost:52773
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Test the JavaScript binding
