@@ -96,6 +96,10 @@ ascot analyze <PATH>...
 Loads every `.cls`/`.mac`/`.int`/`.inc` file under each `PATH` into one
 workspace and prints diagnostics for all of them. Exits non-zero if any error
 or warning was found, or if a `PATH` doesn't exist.
+Both `analyze` commands also print JSON instead of text: `--format lsp` gives
+the LSP diagnostic records per file, as the language server publishes and the
+MCP `check` tool returns them, and `--format sarif` one SARIF 2.1.0 document
+for code scanning. The summary stays on stderr and the exit code is the same.
 
 ```sh
 ascot analyze-workspace <WORKSPACE-ROOT> <PATH>...

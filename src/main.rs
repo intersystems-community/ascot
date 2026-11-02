@@ -11,6 +11,7 @@ use ascot::bindings::GuestWorkspace;
 use ascot::bindings::Style;
 use ascot::cos;
 use ascot::cos::Routine;
+use ascot::mcp::{DiagnosticsResult, FileDiagnostics};
 use ascot::style;
 use std::collections::HashSet;
 use std::fs;
@@ -22,7 +23,7 @@ use std::time::Instant;
 use tygr::Grammar;
 
 use ascot::{DocKind, IrisContext, RawAtelier};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 /// A type checker and code intelligence engine for InterSystems ObjectScript.
 #[derive(Parser)]
@@ -49,6 +50,8 @@ enum Command {
         iris: IrisArgs,
         #[command(flatten)]
         style: StyleArgs,
+        #[command(flatten)]
+        output: OutputArgs,
         /// Files or directories to check
         #[arg(required = true)]
         paths: Vec<PathBuf>,
@@ -63,6 +66,8 @@ enum Command {
         iris: IrisArgs,
         #[command(flatten)]
         style: StyleArgs,
+        #[command(flatten)]
+        output: OutputArgs,
         /// The directory whose files are all loaded
         root: PathBuf,
         /// Files or directories under the root to check
@@ -110,6 +115,29 @@ enum Command {
 }
 
 #[derive(Args)]
+struct OutputArgs {
+    /// How to print the diagnostics
+    ///
+    /// - `text`: one line per diagnostic, for reading.
+    ///
+    /// - `lsp`: JSON, the diagnostics of each file as LSP `Diagnostic` objects, as the language
+    ///   server publishes them.
+    ///
+    /// - `sarif`: SARIF 2.1.0, for code scanning.
+    ///
+    /// The summary stays on stderr and the exit code is the same for all three.
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    format: Format,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Format {
+    Text,
+    Lsp,
+    Sarif,
+}
+
+#[derive(Args)]
 struct StyleArgs {
     /// A JSON file of style rules, such as how command keywords are spelled
     ///
@@ -135,14 +163,21 @@ struct IrisArgs {
 
 fn main() {
     match Cli::parse().command {
-        Command::Analyze { iris, style, paths } => analyze(
+        Command::Analyze {
+            iris,
+            style,
+            output,
+            paths,
+        } => analyze(
             paths.iter().map(PathBuf::as_path),
             iris.open(),
             style.load(),
+            output.format,
         ),
         Command::AnalyzeWorkspace {
             iris,
             style,
+            output,
             root,
             paths,
         } => analyze_workspace(
@@ -150,6 +185,7 @@ fn main() {
             paths.iter().map(PathBuf::as_path),
             iris.open(),
             style.load(),
+            output.format,
         ),
         Command::Parse { file } => scan_file(&file),
         Command::Declare {
@@ -317,6 +353,7 @@ fn analyze<'a>(
     roots: impl Iterator<Item = &'a Path>,
     iris: Option<Box<dyn IrisContext>>,
     style: Option<Style>,
+    format: Format,
 ) {
     let mut files = Vec::new();
     for root in roots {
@@ -331,7 +368,7 @@ fn analyze<'a>(
     let workspace = Workspace::native(iris, style);
     insert_files(&workspace, &files);
 
-    let count = report_diagnostics(&workspace, &files);
+    let count = report_diagnostics(&workspace, &files, format);
     eprintln!("{} diagnostic(s) across {} file(s)", count, files.len());
     // `exit` runs no destructors; dropping the workspace ends its IRIS session.
     drop(workspace);
@@ -347,6 +384,7 @@ fn analyze_workspace<'a>(
     paths: impl Iterator<Item = &'a Path>,
     iris: Option<Box<dyn IrisContext>>,
     style: Option<Style>,
+    format: Format,
 ) {
     let root = match fs::canonicalize(root) {
         Ok(root) => root,
@@ -389,7 +427,7 @@ fn analyze_workspace<'a>(
         under_root
     });
 
-    let count = report_diagnostics(&workspace, &diagnose_files);
+    let count = report_diagnostics(&workspace, &diagnose_files, format);
     eprintln!(
         "{} diagnostic(s) across {} file(s) (workspace: {} file(s))",
         count,
@@ -446,27 +484,45 @@ fn insert_files(workspace: &Workspace, files: &[PathBuf]) {
 
 // Prints every diagnostic, but only `Error`/`Warning` count toward the returned total (which
 // decides the exit code) -- a hint is worth seeing, not worth failing a build over.
-fn report_diagnostics(workspace: &Workspace, files: &[PathBuf]) -> usize {
-    let color = std::io::stdout().is_terminal();
-    let mut count = 0;
-    for file in files {
-        let uri = file.display().to_string();
-        for diagnostic in workspace.diagnostics(uri.clone()) {
-            use ascot::bindings::DiagnosticSeverity::*;
-            // Colored on a terminal; a plain severity prefix otherwise, for scripts.
-            let (on, off) = match (diagnostic.severity, color) {
-                (Error, true) => ("\x1b[31m", "\x1b[0m"),
-                (Warning, true) => ("\x1b[38;5;214m", "\x1b[0m"),
-                (Information | Hint, true) => ("\x1b[2m", "\x1b[0m"),
-                (Error, false) => ("error: ", ""),
-                (Warning, false) => ("warning: ", ""),
-                (Information | Hint, false) => ("hint: ", ""),
-            };
-            if matches!(diagnostic.severity, Error | Warning) {
-                count += 1;
+fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) -> usize {
+    use ascot::bindings::DiagnosticSeverity::*;
+    let files: Vec<FileDiagnostics> = files
+        .iter()
+        .map(|file| {
+            let uri = file.display().to_string();
+            let diagnostics = workspace.diagnostics(uri.clone());
+            FileDiagnostics { uri, diagnostics }
+        })
+        .collect();
+    let count = files
+        .iter()
+        .flat_map(|file| &file.diagnostics)
+        .filter(|diagnostic| matches!(diagnostic.severity, Error | Warning))
+        .count();
+    match format {
+        Format::Text => {
+            let color = std::io::stdout().is_terminal();
+            for file in &files {
+                for diagnostic in &file.diagnostics {
+                    // Colored on a terminal; a plain severity prefix otherwise, for scripts.
+                    let (on, off) = match (diagnostic.severity, color) {
+                        (Error, true) => ("\x1b[31m", "\x1b[0m"),
+                        (Warning, true) => ("\x1b[38;5;214m", "\x1b[0m"),
+                        (Information | Hint, true) => ("\x1b[2m", "\x1b[0m"),
+                        (Error, false) => ("error: ", ""),
+                        (Warning, false) => ("warning: ", ""),
+                        (Information | Hint, false) => ("hint: ", ""),
+                    };
+                    print!("{}{}{}{}", on, file.uri, diagnostic.describe(), off);
+                }
             }
-            print!("{}{}{}{}", on, uri, diagnostic.describe(), off);
         }
+        Format::Lsp => {
+            serde_json::to_writer_pretty(std::io::stdout(), &DiagnosticsResult { files })
+                .expect("writing to stdout");
+            println!();
+        }
+        Format::Sarif => println!("{}", files.into_iter().collect::<ascot::sarif::Log>()),
     }
     let _ = std::io::stdout().flush();
     count
