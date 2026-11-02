@@ -646,17 +646,12 @@ impl CheckCommand for cos::ProcedureBody {
 
 impl<Start> CheckCommand for cos::CommandLine<Start> {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        let mut commands = self.commands.iter().flat_map(|cmds| cmds.items.iter());
+        // A dotted line is the block of an argumentless `Do`, which isn't modeled (the hint is
+        // on the `Do`): skipped unanalyzed.
         if !self.periods.is_empty() {
-            return match commands.next() {
-                Some(command) => Err(TypeError::unimplemented(
-                    "Dotted block".into(),
-                    env.range(command),
-                )),
-                None => Ok(()),
-            };
+            return Ok(());
         }
-        for command in commands {
+        for command in self.commands.iter().flat_map(|cmds| cmds.items.iter()) {
             command.check(env, flow)?;
         }
         Ok(())
@@ -870,9 +865,14 @@ impl CheckCommandInner for cos::Command {
     ) -> Result<(), QuasiTypeError> {
         match self {
             cos::Command::Do(cos::DoCommand { pc, args, .. }) => {
-                let args = args
-                    .as_ref()
-                    .ok_or_else(|| QuasiTypeError::unimplemented("Do without arguments".into()))?;
+                // The current IRIS reference no longer describes an argumentless `Do` and its
+                // dotted block, so ascot doesn't model them: a hint, and checking goes on after.
+                let Some(args) = args.as_ref() else {
+                    flow.add_soft_diagnostic(QuasiTypeError::unimplemented(
+                        "Do without arguments and its dotted block".into(),
+                    ));
+                    return Ok(());
+                };
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.items.iter() {
                         check_pc(&arg.pc, env, flow, |flow| {
@@ -1309,12 +1309,20 @@ impl CheckCommandInner for cos::Command {
             cos::Command::JS(cos::JSCommand { content, .. }) => {
                 check_embedded_expressions(flow, &content.print())
             }
-            cos::Command::ElseIf(..) => Err(QuasiTypeError::unimplemented(
-                "Stand-alone ElseIf Command".to_string(),
-            )),
-            cos::Command::Else(..) => Err(QuasiTypeError::unimplemented(
-                "Stand-alone Else Command".to_string(),
-            )),
+            // An `Else` not following a line-level `If` is likewise undocumented and unmodeled:
+            // its line is skipped with a hint, and checking goes on.
+            cos::Command::ElseIf(..) => {
+                flow.add_soft_diagnostic(QuasiTypeError::unimplemented(
+                    "Stand-alone ElseIf Command".to_string(),
+                ));
+                Ok(())
+            }
+            cos::Command::Else(..) => {
+                flow.add_soft_diagnostic(QuasiTypeError::unimplemented(
+                    "Stand-alone Else Command".to_string(),
+                ));
+                Ok(())
+            }
             cos::Command::Halt(cos::HaltCommand { pc, .. }) => {
                 check_pc(pc, env, flow, |flow| Ok(flow.handle_void()?))
             }
