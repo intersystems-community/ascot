@@ -129,6 +129,13 @@ Starts the MCP server (stdio), exposing workspace analysis as tools an AI agent
 calls on demand. Any MCP client that can launch a stdio server works: the
 command is `ascot` (or its full path) and the single argument is `mcp`.
 
+The `insert` tool takes each document's text, since the server can't assume it
+shares a file system with the agent. When it does, start it with
+`ascot mcp --shared-fs`: `insert` then reads a `file://` uri given without
+`src` from disk, a single file or a whole directory of `.cls`/`.mac`/`.int`/`.inc`
+files, and inserting a directory again re-reads it and drops the files no longer
+there.
+
 The tools and their parameters are documented on
 [docs.rs](https://docs.rs/ascot/latest/ascot/mcp/struct.Server.html).
 To try them by hand, the [MCP Inspector](https://github.com/modelcontextprotocol/inspector)

@@ -7,7 +7,7 @@
 //! plugin (`bindings/claude-lsp-plugin`) launches. The InterSystems Language Server does not use
 //! it; it embeds the wasm build instead (see `bindings.rs`).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
@@ -59,7 +59,7 @@ pub fn run(
     // as literal text in the expansion). This only runs once, at startup — a file added to the
     // workspace afterward needs to be opened individually to be picked up.
     for root in workspace_roots(&params) {
-        open_directory(&workspace, &root);
+        workspace.open_directory(&root);
     }
 
     main_loop(&connection, &workspace)?;
@@ -100,26 +100,6 @@ fn workspace_key(uri: &Uri) -> String {
         .and_then(|path| url::Url::from_file_path(path).ok())
         .map(|url| url.to_string())
         .unwrap_or_else(|| uri.as_str().to_string())
-}
-
-fn open_directory(workspace: &Workspace, path: &Path) {
-    if path.is_dir() {
-        let Ok(entries) = std::fs::read_dir(path) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            open_directory(workspace, &entry.path());
-        }
-    } else if path
-        .extension()
-        .is_some_and(|ext| matches!(ext.to_str(), Some("cls" | "mac" | "int" | "inc")))
-        && let Ok(text) = std::fs::read_to_string(path)
-        // Keyed the same way `textDocument/didOpen` would key it, so later opening the same
-        // file from the editor updates this entry instead of creating a stale duplicate.
-        && let Ok(uri) = url::Url::from_file_path(path)
-    {
-        workspace.open(uri.to_string(), text);
-    }
 }
 
 fn main_loop(

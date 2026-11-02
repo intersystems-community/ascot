@@ -790,6 +790,41 @@ impl Workspace {
     pub fn native(iris: Option<Box<dyn IrisContext>>, style: Option<Style>) -> Self {
         Workspace(RefCell::new(build_workspace_struct(iris, style)))
     }
+
+    /// Opens `path` if it is a `.cls`/`.mac`/`.int`/`.inc` file, or every such file under it if it
+    /// is a directory, each keyed by its `file:` url. Returns the uris opened, and the uris whose
+    /// analysis is now stale.
+    pub fn open_directory(&self, path: &std::path::Path) -> (Vec<String>, Vec<String>) {
+        let (mut opened, mut affected) = (vec![], vec![]);
+        self.open_under(path, &mut opened, &mut affected);
+        (opened, affected)
+    }
+
+    fn open_under(
+        &self,
+        path: &std::path::Path,
+        opened: &mut Vec<String>,
+        affected: &mut Vec<String>,
+    ) {
+        if path.is_dir() {
+            for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+                self.open_under(&entry.path(), opened, affected);
+            }
+        } else if path
+            .extension()
+            .is_some_and(|ext| matches!(ext.to_str(), Some("cls" | "mac" | "int" | "inc")))
+            && let Ok(text) = std::fs::read_to_string(path)
+            && let Ok(uri) = url::Url::from_file_path(path)
+        {
+            affected.extend(bindings::GuestWorkspace::open(self, uri.to_string(), text));
+            opened.push(uri.to_string());
+        }
+    }
+
+    /// Every document's uri.
+    pub fn uris(&self) -> Vec<String> {
+        self.borrow().doc_cache.keys().cloned().collect()
+    }
 }
 
 impl bindings::GuestWorkspace for Workspace {
@@ -1328,6 +1363,23 @@ mod tests {
         assert!(affected.contains(&sub_uri), "{affected:?}");
         let diagnostics = workspace.diagnostics(sub_uri.clone());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn open_directory_keys_every_source_file_by_its_url() {
+        let dir = std::env::temp_dir().join(format!("ascot-open-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("pkg")).unwrap();
+        std::fs::write(dir.join("pkg/A.cls"), "Class Test.A {\n}\n").unwrap();
+        std::fs::write(dir.join("R.mac"), "ROUTINE R\n Quit\n").unwrap();
+        std::fs::write(dir.join("notes.txt"), "skipped").unwrap();
+        let workspace = Workspace::new(None, None);
+        let (mut opened, affected) = workspace.open_directory(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        opened.sort();
+        let url = |p: &str| url::Url::from_file_path(dir.join(p)).unwrap().to_string();
+        assert_eq!(opened, [url("R.mac"), url("pkg/A.cls")]);
+        assert_eq!(affected.len(), 2, "{affected:?}");
+        assert_eq!(workspace.uris().len(), 2);
     }
 
     #[test]
