@@ -15,6 +15,13 @@ Changes are proposed and discussed through issues and pull requests. Maintainers
 make the final decision on what is merged, favoring rough consensus among
 contributors.
 
+Scope follows the documentation. Ascot models the ObjectScript that the latest
+official IRIS reference specifies, legacy forms included while they remain
+documented. A construct the current reference no longer describes is not
+modeled: ascot reports hint A4043 (`Type checking not implemented for ...`),
+skips it, and keeps checking the code after it. Requests to model such a
+construct are declined.
+
 ## Contributions
 
 All changes reach `main` through a pull request — direct pushes are disabled.
