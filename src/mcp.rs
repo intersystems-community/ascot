@@ -51,9 +51,6 @@ pub struct CreateWorkspaceRequest {
     /// have every command keyword but `Do`'s written in full; `function` and `function_<name>` do
     /// the same for intrinsic functions. Applies to every document. The keys are documented at
     /// https://github.com/intersystems-community/ascot#style.
-    // Taken raw so `style::from_value` can reject unknown keys, which `Style` itself ignores, and
-    // described as a plain object: the full `Style` record is 195 keyword properties, which made
-    // this one parameter more than half of `tools/list`.
     #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
     pub style: Option<serde_json::Value>,
 }
