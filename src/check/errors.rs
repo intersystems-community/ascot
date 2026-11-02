@@ -1086,10 +1086,6 @@ impl TypeError {
         )
     }
 
-    pub fn unimplemented(msg: String, range: Range) -> Self {
-        QuasiTypeError::unimplemented(msg).into_error(|| range)
-    }
-
     pub fn invalid_syntax(range: Range, err: tygr::Error) -> Self {
         Self::at(
             TypeErrorKind::InvalidSyntax {

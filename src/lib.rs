@@ -1502,17 +1502,34 @@ mod tests {
         assert!(!hints.iter().any(|h| h.label.starts_with('[')), "{hints:?}");
     }
 
+    // An argumentless `Do` with its dotted block, and a stand-alone `Else`, get a hint and are
+    // skipped; the defect after each is still reported.
     #[test]
-    fn bare_do_without_arguments_is_unimplemented() {
-        let workspace = Workspace::new(None, None);
-        let uri = "BareDo.mac".to_string();
-        workspace.open(uri.clone(), "ROUTINE Test\n\tDo\n\tQuit\n".to_string());
-        let diagnostics = workspace.diagnostics(uri);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0].message.contains("not implemented"),
+    fn checking_continues_past_an_unmodeled_legacy_construct() {
+        let diagnostics = diagnostics_for(&[(
+            "Legacy.mac",
+            "ROUTINE Legacy\nDOTTED\n D\n . S X=1\n D MISSING\n Q\nTIMED\n L +^Legacy(1):5\n E  Q\n D MISSING\n Q\n",
+        )]);
+        let lines = |severity| -> Vec<u32> {
+            diagnostics
+                .iter()
+                .filter(|d| d.severity == severity)
+                .map(|d| d.range.start.line)
+                .collect()
+        };
+        assert_eq!(
+            lines(bindings::DiagnosticSeverity::Information),
+            [2, 8],
             "{diagnostics:?}"
         );
+        assert_eq!(
+            lines(bindings::DiagnosticSeverity::Error),
+            [4, 9],
+            "{diagnostics:?}"
+        );
+        assert!(diagnostics.iter().all(|d| {
+            d.severity != bindings::DiagnosticSeverity::Error || d.message.contains("MISSING")
+        }));
     }
 
     #[test]
