@@ -1,25 +1,20 @@
 version: 2
+multi-ecosystem-groups:
+  deps:
+    schedule:
+      interval: monthly
 updates:
   - package-ecosystem: cargo
     directory: /
-    schedule:
-      interval: monthly
-    groups:
-      cargo:
-        patterns: ["*"]
+    multi-ecosystem-group: deps
+    patterns: ["*"]
 
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: monthly
-    groups:
-      github-actions:
-        patterns: ["*"]
+    multi-ecosystem-group: deps
+    patterns: ["*"]
 
   - package-ecosystem: npm
     directory: /bindings/js
-    schedule:
-      interval: monthly
-    groups:
-      npm:
-        patterns: ["*"]
+    multi-ecosystem-group: deps
+    patterns: ["*"]
