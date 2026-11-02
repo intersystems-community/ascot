@@ -112,8 +112,16 @@ impl<T: CheckExprInner + Grammar> CheckExpr for Range<&T> {
         check_ranged(&self, env, flow, T::to_maybe_ty)
     }
 
+    // An undefined value is reported softly and read as `Any`, so the rest of the body is still
+    // checked.
     fn to_ty<'a>(self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<Ty, TypeError> {
-        check_ranged(&self, env, flow, T::to_ty)
+        match check_ranged(&self, env, flow, T::to_ty) {
+            Err(err) if matches!(err.kind, TypeErrorKind::Undefined { .. }) => {
+                env.soft_diagnostic(err);
+                Ok(Ty::Any)
+            }
+            ty => ty,
+        }
     }
 }
 
@@ -529,9 +537,10 @@ impl<'b> CheckCommand for MethodBody<'b> {
                     .map_err(|err| syntax_error(env, err))?
                     .into_inner();
                 let body_type = body_expr.to_power_ty(env, flow)?;
-                body_type
-                    .to_ty(env)
-                    .map_err(|err| err.into_error(|| body.range))?;
+                flow.with_range(body.range, |flow| {
+                    flow.value(&body_type, || body_expr.print())
+                })
+                .map_err(|err| err.into_error(|| body.range))?;
                 flow.handle_return(body.as_ref().map(|_| Some(body_type)))
             }
             // todo: check other kinds of ObjectScript methods
@@ -1372,7 +1381,7 @@ fn exit_value<'a>(
 ) -> Result<PowerTy, QuasiTypeError> {
     exp.to_power_ty(env, flow)
         .and_then(|ty| {
-            ty.to_ty(env)
+            flow.with_range(env.range(exp), |flow| flow.value(&ty, || exp.print()))
                 .map_err(|err| err.into_error(|| env.range(exp)))?;
             Ok(ty)
         })
@@ -1960,16 +1969,15 @@ trait CheckExpr: Sized {
 // `text`, when available, is the printed source of whichever single expression node `ty` came
 // from — `None` for a left operand that's itself the result of an earlier infix operation
 // rather than one node with its own literal text.
-fn ranged_quasi_ty_to_ty(
-    env: &CodeEnv<'_>,
+fn ranged_quasi_ty_to_ty<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
     ty: Range<PowerTy>,
     text: Option<&dyn Fn() -> String>,
 ) -> Result<Ty, TypeError> {
-    ty.to_ty(env)
-        .map_err(|err| match text {
-            Some(text) => err.with_expr_text(text),
-            None => err,
-        })
+    let text = || text.map_or_else(String::new, |text| text());
+    flow.with_range(env.range(&ty), |flow| flow.value(&ty, text))
+        .map_err(|err| err.with_expr_text(text))
         .with_range(|| env.range(&ty))
 }
 
@@ -2005,7 +2013,7 @@ impl<X: Grammar, Y> CheckExprInner for GenericExpr<X, Y> {
             if let (Some(prev), Some(class)) = (prev_class, class)
                 && prev < class
             {
-                return Err(QuasiTypeError::mixed_precedence());
+                flow.add_soft_diagnostic(QuasiTypeError::mixed_precedence());
             }
             prev_class = class;
             ty = Range::new(
@@ -2142,8 +2150,8 @@ fn check_infix<'a, X>(
                 }
                 _ => (),
             }
-            let lhs = ranged_quasi_ty_to_ty(env, lhs, lhs_text)?;
-            let rhs = ranged_quasi_ty_to_ty(env, rhs, Some(&|| rhs_node.print()))?;
+            let lhs = ranged_quasi_ty_to_ty(env, flow, lhs, lhs_text)?;
+            let rhs = ranged_quasi_ty_to_ty(env, flow, rhs, Some(&|| rhs_node.print()))?;
             Ok(match op {
                 cos::Operator::Add(_) | cos::Operator::Sub(_) => env.merge_ty(lhs, rhs).into(),
                 cos::Operator::Pow(_) | cos::Operator::Mul(_) | cos::Operator::Div(..) => {
@@ -2564,7 +2572,7 @@ fn check_param_arg<'a>(
             if expand.is_some() {
                 return Ok(());
             }
-            source.to_ty(env)?;
+            flow.with_range(env.range(arg), |flow| flow.value(&source, || expr.print()))?;
             env.assert_value_compatible(&source, &target)
                 .map_err(|err| err.assign(par.name))?;
         }
@@ -2588,7 +2596,7 @@ fn check_param_arg<'a>(
         }
         None => {
             if par.required() {
-                return Err(QuasiTypeError::too_few_arguments(par.name, declared_at));
+                flow.add_soft_diagnostic(QuasiTypeError::too_few_arguments(par.name, declared_at));
             }
         }
     }
@@ -2618,14 +2626,16 @@ fn check_call<'a, 'b>(
             }
             // todo: add inlay hints
             let mut count = 0;
-            for (i, arg) in args.into_iter().enumerate() {
+            for (i, &arg) in args.iter().enumerate() {
                 count += 1;
                 let par = if let Some(par) = base.get_arg(i) {
                     par
                 } else if arg.is_none() {
                     continue;
                 } else {
-                    return Err(TypeError::too_many_arguments(env.range(arg)).into());
+                    flow.add_soft_diagnostic(TypeError::too_many_arguments(env.range(arg)).into());
+                    builtins::check_args_any(env, flow, args[i..].iter().copied())?;
+                    break;
                 };
                 let declared_at = Option::zip(base.uri.clone(), par.declared_at)
                     .map(|(uri, range)| bindings::Location::new(uri, range));
@@ -2647,7 +2657,10 @@ fn check_call<'a, 'b>(
                 {
                     let declared_at = Option::zip(base.uri.clone(), par.declared_at)
                         .map(|(uri, range)| bindings::Location::new(uri, range));
-                    return Err(QuasiTypeError::too_few_arguments(par.name, declared_at));
+                    flow.add_soft_diagnostic(QuasiTypeError::too_few_arguments(
+                        par.name,
+                        declared_at,
+                    ));
                 }
             }
             match &base.procedure_block {
@@ -2946,7 +2959,8 @@ fn call_label<'a>(
     let proc = match env.resolve_label(label.clone(), offset, routine) {
         Err(
             err @ QuasiTypeError::WithoutRange(
-                TypeErrorKind::CannotFindRoutine { .. }
+                TypeErrorKind::CannotFindLabel { .. }
+                | TypeErrorKind::CannotFindRoutine { .. }
                 | TypeErrorKind::RoutineNotOnIris { .. }
                 | TypeErrorKind::RoutineWithoutSource { .. }
                 | TypeErrorKind::IrisLookupFailed { .. },

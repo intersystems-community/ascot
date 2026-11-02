@@ -269,7 +269,7 @@ pub enum MaybeTy {
 impl MaybeTy {
     // Consumes `self` on purpose: converting to `Ty` moves the inner value out instead of cloning it.
     #[allow(clippy::wrong_self_convention)]
-    fn to_ty(self) -> Result<Ty, QuasiTypeError> {
+    pub(crate) fn to_ty(self) -> Result<Ty, QuasiTypeError> {
         match self {
             MaybeTy::Undefined => Err(QuasiTypeError::undefined()),
             MaybeTy::Maybe(ty) => Err(QuasiTypeError::maybe_undefined(ty)),

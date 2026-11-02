@@ -129,6 +129,22 @@ impl<'a> Flow<'a> {
             .add_soft_diagnostic(err.into_error(|| self.current_range).into());
     }
 
+    // `ty` read as a value (`text` is its source): an undefined one is reported softly and read
+    // as `Any`, so the rest of the body is still checked.
+    pub(crate) fn value(
+        &self,
+        ty: &PowerTy,
+        text: impl FnOnce() -> String,
+    ) -> Result<Ty, QuasiTypeError> {
+        match ty.to_maybe_ty(self.shared.env) {
+            MaybeTy::Undefined => {
+                self.add_soft_diagnostic(QuasiTypeError::undefined().with_expr_text(text));
+                Ok(Ty::Any)
+            }
+            maybe => maybe.to_ty(),
+        }
+    }
+
     pub(crate) fn mark_incomplete(&self) {
         self.shared.incomplete.set(true);
     }
@@ -775,6 +791,13 @@ impl<'a> Flow<'a> {
     ) -> Result<(), QuasiTypeError> {
         let Local { name, subs } = local;
         let env = self.shared.env;
+        let ty = match ty.to_maybe_ty(env).maybe_defined() {
+            Some(_) => ty,
+            None => {
+                self.add_soft_diagnostic(QuasiTypeError::undefined());
+                PowerTy::plain(Ty::Any)
+            }
+        };
         let binding = self.lookup(name.clone())?;
         let new = binding.new;
         if subs.is_empty() {
@@ -782,9 +805,6 @@ impl<'a> Flow<'a> {
                 .declared
                 .as_ref()
                 .map_or(&Ty::Any, |declared| &declared.it);
-            ty.to_maybe_ty(env)
-                .maybe_defined()
-                .ok_or(QuasiTypeError::undefined())?;
             env.assert_value_compatible(&ty, declared)
                 .map_err(|err| err.assign(name.clone()))?;
             binding.assigned = ty;

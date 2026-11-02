@@ -300,7 +300,8 @@ impl CheckExprInner for cos::FunctionCall {
                         .flat_map(|f| f.names.iter().copied()),
                 );
                 let suggestions = crate::check::top_similar(&name, names, 5);
-                Err(QuasiTypeError::unknown_function(name, suggestions))
+                flow.add_soft_diagnostic(QuasiTypeError::unknown_function(name, suggestions));
+                Ok(PowerTy::plain(Ty::Any))
             }
             FunctionCall::Data {
                 args: DataArgs { variable, target },
