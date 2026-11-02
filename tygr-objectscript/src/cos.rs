@@ -1385,19 +1385,25 @@ pub enum ForSpec {
 pub enum WriteArg {
     Expr(Range<Expr>),
     Fmts(Vec1<WriteFChar>),
-    Dev { sym: StringEq!("*-"), val: Expr },
-    Char { sym: StringEq!("*"), val: Expr },
+    Dev {
+        sym: StringEq!("*-"),
+        val: Range<Expr>,
+    },
+    Char {
+        sym: StringEq!("*"),
+        val: Range<Expr>,
+    },
 }
 
 #[derive(Grammar)]
 pub enum WriteFChar {
     NewLine(StringEq!("!")),
     FormFeed(StringEq!("#")),
-    Tab(StringEq!("?"), Expr),
+    Tab(StringEq!("?"), Range<Expr>),
     Mnemonic {
         slash: StringEq!("/"),
         name: LocalVariableName,
-        params: Option<ParenList<Expr, StringEq!(",")>>,
+        params: Option<ParenList<Range<Expr>, StringEq!(",")>>,
     },
 }
 
