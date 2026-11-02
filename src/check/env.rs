@@ -1484,6 +1484,8 @@ pub struct DocumentEnv<'a> {
     pub inlay_hints: RefCell<Vec<bindings::InlayHint>>,
     pub hover_types: RefCell<Vec<(bindings::Range, String)>>,
     suppress_hints: Cell<bool>,
+    // How the text `olc` indexes was expanded from the document, when it was.
+    source_map: Option<&'a SourceMap>,
 }
 
 impl<'a> DocumentEnv<'a> {
@@ -1495,7 +1497,13 @@ impl<'a> DocumentEnv<'a> {
             inlay_hints: RefCell::new(vec![]),
             hover_types: RefCell::new(vec![]),
             suppress_hints: Cell::new(false),
+            source_map: None,
         }
+    }
+
+    pub fn with_source_map(mut self, source_map: &'a SourceMap) -> Self {
+        self.source_map = Some(source_map);
+        self
     }
 
     pub fn olc(&self) -> &'a OLC {
@@ -1681,6 +1689,17 @@ impl<'a> CodeEnv<'a> {
             .into_iter()
             .flatten()
             .map(|(k, _)| k.as_str())
+    }
+}
+
+impl<'a> CodeEnv<'a> {
+    // Whether `node` is text a macro expanded to (or an include supplied), rather than text the
+    // document spells out.
+    pub(crate) fn is_expanded<T>(&self, node: &tygr::Range<T>) -> bool {
+        self.base.source_map.is_some_and(|map| {
+            map.to_source_offset(node.start + self.offset)
+                .is_none_or(|(_, precise)| !precise)
+        })
     }
 }
 

@@ -21,6 +21,7 @@ mod errors;
 mod flow;
 mod similar;
 pub mod types;
+mod zutil;
 
 pub(crate) use similar::top_similar;
 
@@ -394,7 +395,8 @@ impl MethodDetails {
             }
         }
         let expanded_olc = OLC::new(&expanded);
-        let method_env = DocumentEnv::new(env.base, &expanded_olc, env.uri());
+        let method_env =
+            DocumentEnv::new(env.base, &expanded_olc, env.uri()).with_source_map(&source_map);
         let header_len = self.header_text.len();
         let shifter = Shifter {
             body_olc: OLC::new(&format!("{}{}", self.header_text, self.body.it)),

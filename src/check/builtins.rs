@@ -448,7 +448,7 @@ impl CheckExprInner for cos::FunctionCall {
                 let _ = dll_index.to_ty(env, flow)?;
                 Ok(check_args_any(env, flow, each_arg(args))?.into())
             }
-            FunctionCall::ZU { args, .. } => check_zu_args(env, flow, args),
+            FunctionCall::ZU { kw, args } => check_zu_args(env, flow, kw, args),
             FunctionCall::Case {
                 args: CaseArgs { target, arms },
                 ..
@@ -1365,11 +1365,36 @@ pub(super) fn check_args_any<'a, 'b>(
 
 /// Check `$ZUTIL`/`$ZU`: validate every argument and return `Any`, since these
 /// legacy utility callouts are variadic and their return types are not modeled.
+// Every `$ZUTIL` function is legacy: the replacement list names what to use instead, and a call
+// it doesn't cover is undocumented. Both are judged from the leading literal arguments.
 fn check_zu_args<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
+    kw: &Range<cos::FnZUtil>,
     args: &FunArgList,
 ) -> Result<PowerTy, QuasiTypeError> {
+    let literals: Vec<u32> = args
+        .items
+        .iter()
+        .map_while(|arg| match arg.deref() {
+            Some(cos::FunArg::Normal { expr, .. }) => expr.print().trim().parse().ok(),
+            _ => None,
+        })
+        .collect();
+    // Not for a `$ZU` a macro expanded to, such as the system macros IRIS itself defines over it.
+    if let Some(&first) = literals.first()
+        && !env.is_expanded(kw)
+    {
+        let count = args.items.len();
+        let err = match super::zutil::lookup(&literals, count) {
+            Some(legacy) => {
+                let call = legacy.args.iter().map(u32::to_string).collect::<Vec<_>>();
+                QuasiTypeError::legacy_zutil(format!("$ZU({})", call.join(",")), legacy.replacement)
+            }
+            None => QuasiTypeError::undocumented_zutil(format!("$ZU({first})")),
+        };
+        env.add_soft_diagnostic(err.into_error(|| env.range(kw)).into());
+    }
     for arg in args.items.iter() {
         let Some(fun_arg) = arg.deref() else { continue };
         match fun_arg {
