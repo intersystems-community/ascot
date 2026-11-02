@@ -60,10 +60,10 @@ npx jco transpile "$COMPONENT" \
 echo "stripping dead fetch fallback ..."
 perl -0pi -e 's{^\s*if \(!getCoreModule\) getCoreModule = .*fetchCompile.*$}{    if (!getCoreModule) throw new Error("getCoreModule is required");}m' "$GEN/ascot.js"
 
-# The core wasm modules are read via fs at runtime (not bundled as JS), so they live in
-# lib/ alongside the original ascot.wasm rather than in the generated dir.
-echo "moving core wasm to lib/ ..."
-mv "$GEN"/*.core*.wasm lib/
+# The wasm modules are read via fs at runtime (not bundled as JS), so they live in lib/
+# alongside the original ascot.wasm rather than in the generated dir.
+echo "moving wasm modules to lib/ ..."
+mv "$GEN"/*.wasm lib/
 
 echo "compiling TypeScript wrapper ..."
 npx tsc -p tsconfig.json
