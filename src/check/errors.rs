@@ -671,7 +671,7 @@ type_error_kinds! {
     QuitXInControl { actual: Ty },
     #[code = "A5579"]
     #[severity = Warning]
-    #[message = "The parameter '{name}' is declared as {wanted} parameter but got {actual} argument"]
+    #[message = "Passing {actual} argument to '{name}', {wanted} parameter"]
     MismatchArgumentAndArgumentMode {
         name: String,
         wanted: ArgMode,
@@ -1068,10 +1068,15 @@ impl TypeError {
         range: Range,
         declared_at: Option<Location>,
     ) -> Self {
+        // The call works as written (the caller's `.` decides); the annotation is what lets the
+        // checker follow the variable, so ask for it without sending anyone after the `.`.
         let message = if wanted == ArgMode::Default && actual == ArgMode::ByRef {
-            "Parameter declared here — add `&` (routine label) or `ByRef` (method) to declare it by-ref."
+            format!(
+                "Parameter declared here. If the `.` in the call is intended, add `&{name}` for a \
+                 label or `ByRef`/`Output` for a method."
+            )
         } else {
-            "Parameter declared here."
+            "Parameter declared here.".to_string()
         };
         Self::new(
             TypeErrorKind::MismatchArgumentAndArgumentMode {
@@ -1081,7 +1086,7 @@ impl TypeError {
             },
             range,
             declared_at
-                .map(|location| related(location, message))
+                .map(|location| related(location, &message))
                 .unwrap_or_default(),
         )
     }
