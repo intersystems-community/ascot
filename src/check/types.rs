@@ -697,66 +697,6 @@ impl From<&str> for Ty {
     }
 }
 
-// Recognized bracketed `[ ... ]` keywords, matched case-insensitively. Sourced from
-// https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_property and
-// KEY=ROBJ_parameter.
-pub const PROPERTY_KEYWORDS: &[&str] = &[
-    "ALIASES",
-    "CALCULATED",
-    "CARDINALITY",
-    "CLIENTNAME",
-    "COLLECTION",
-    "COMPUTELOCALONLY",
-    "DEFERRED",
-    "DEPRECATED",
-    "FINAL",
-    "IDENTITY",
-    "INITIALEXPRESSION",
-    "INTERNAL",
-    "INVERSE",
-    "MULTIDIMENSIONAL",
-    "ONDELETE",
-    "PRIVATE",
-    "READONLY",
-    "REQUIRED",
-    "SERVERONLY",
-    "SQLCOLUMNNUMBER",
-    "SQLCOMPUTECODE",
-    "SQLCOMPUTED",
-    "SQLCOMPUTEONCHANGE",
-    "SQLFIELDNAME",
-    "SQLLISTDELIMITER",
-    "SQLLISTTYPE",
-    "TRANSIENT",
-];
-
-// The property keywords that aren't `%Boolean`, so take `= value`.
-pub const PROPERTY_KEYWORDS_WITH_VALUE: &[&str] = &[
-    "ALIASES",
-    "CARDINALITY",
-    "CLIENTNAME",
-    "COLLECTION",
-    "INITIALEXPRESSION",
-    "INVERSE",
-    "ONDELETE",
-    "SERVERONLY",
-    "SQLCOLUMNNUMBER",
-    "SQLCOMPUTECODE",
-    "SQLCOMPUTEONCHANGE",
-    "SQLFIELDNAME",
-    "SQLLISTDELIMITER",
-    "SQLLISTTYPE",
-];
-
-pub const PARAMETER_KEYWORDS: &[&str] = &[
-    "ABSTRACT",
-    "CONSTRAINT",
-    "DEPRECATED",
-    "FINAL",
-    "FLAGS",
-    "INTERNAL",
-];
-
 impl From<&Type> for Ty {
     fn from(value: &Type) -> Self {
         Self::from(value.class_name.print())

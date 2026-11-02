@@ -502,10 +502,6 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "SET $VECTOR needs its third argument, the type"]
     SetVectorWithoutType,
-    #[code = "A6463"]
-    #[severity = Error]
-    #[message = "The property keyword '{keyword}' needs a value"]
-    PropertyKeywordWithoutValue { keyword: String },
     #[code = "A8914"]
     #[severity = Error]
     #[message = "Cannot reference instance-only member '{name}' in a class method"]
@@ -522,14 +518,10 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot NEW the private variable '{name}' in a procedure block, where every local variable is already NEW'd on entry"]
     NewInProcedureBlock { name: String },
-    #[code = "A5573"]
+    #[code = "A6203"]
     #[severity = Warning]
-    #[message = "Class keyword '{keyword}' has no value"]
-    ClassKeywordWithoutValue { keyword: String },
-    #[code = "A9322"]
-    #[severity = Error]
-    #[message = "'{keyword}' is not a recognized property keyword; available: {available}"]
-    UnrecognizedPropertyKeyword { keyword: String, available: Available },
+    #[message = "'{entry}' is not a class keyword as written, though IRIS compiles it"]
+    UnrecognizedClassKeyword { entry: String },
     #[code = "A2357"]
     #[severity = Error]
     #[message = "'{name}' is not a parameter of {class}{hint}"]
@@ -538,10 +530,10 @@ type_error_kinds! {
         class: String,
         hint: TypeParamHint,
     },
-    #[code = "A2174"]
+    #[code = "A9322"]
     #[severity = Error]
-    #[message = "'{keyword}' is not a recognized parameter keyword; available: {available}"]
-    UnrecognizedParameterKeyword { keyword: String, available: Available },
+    #[message = "'{entry}' is not {kind} keyword IRIS accepts"]
+    UnrecognizedKeyword { kind: &'static str, entry: String },
     #[code = "A8317"]
     #[severity = Warning]
     #[message = "'{meta_type}' is not a recognized parameter type; available: {available}"]
@@ -1013,10 +1005,6 @@ impl TypeError {
         )
     }
 
-    pub(crate) fn class_keyword_without_value(keyword: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::ClassKeywordWithoutValue { keyword }, range)
-    }
-
     pub(crate) fn duplicate_class_name(range: Range, name: String, other: Location) -> Self {
         Self::new(
             TypeErrorKind::DuplicateClassName {
@@ -1062,13 +1050,6 @@ impl TypeError {
     pub fn macro_too_many_arguments(name: String, expected: usize, range: Range) -> Self {
         Self::at(
             TypeErrorKind::MacroTooManyArguments { name, expected },
-            range,
-        )
-    }
-
-    pub(crate) fn property_keyword_without_value(keyword: String, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::PropertyKeywordWithoutValue { keyword },
             range,
         )
     }
@@ -1186,14 +1167,8 @@ impl TypeError {
         Self::at(TypeErrorKind::NewInProcedureBlock { name }, range)
     }
 
-    pub fn unrecognized_property_keyword(keyword: String, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::UnrecognizedPropertyKeyword {
-                keyword,
-                available: Available(PROPERTY_KEYWORDS),
-            },
-            range,
-        )
+    pub fn unrecognized_class_keyword(entry: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::UnrecognizedClassKeyword { entry }, range)
     }
 
     pub fn unrecognized_type_param(
@@ -1217,14 +1192,8 @@ impl TypeError {
         )
     }
 
-    pub fn unrecognized_parameter_keyword(keyword: String, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::UnrecognizedParameterKeyword {
-                keyword,
-                available: Available(PARAMETER_KEYWORDS),
-            },
-            range,
-        )
+    pub fn unrecognized_keyword(kind: &'static str, entry: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::UnrecognizedKeyword { kind, entry }, range)
     }
 
     pub fn unrecognized_parameter_type(meta_type: String, range: Range) -> Self {

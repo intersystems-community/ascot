@@ -143,28 +143,41 @@ interface common {
         origin: option<string>,
     }
 
+    enum class-type { datatype, dynamic, index, literal, persistent, serial, %stream, view }
+
+    // `[ Inheritance = right ]`: a member several superclasses define comes from the rightmost
+    // `extends` entry rather than the leftmost.
+    enum inheritance { left, right }
+
+    enum language { objectscript, python, tsql, ispl, javascript }
+
+    // A class as declared: its header, its own members, and the class keywords ascot reads
+    // (https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class),
+    // absent when not given. From IRIS the keywords are the compiled ones, defaults filled in.
     record class-info {
         doc: string,
         name: name-info,
         extends: list<string>,
-        // `[ Inheritance = right ]`: a member several superclasses define comes from the rightmost
-        // `extends` entry rather than the leftmost.
-        inheritance-right: bool,
         // The storage class a persistent class also inherits from (`%Storage.Persistent`), named by
         // its storage definition rather than `extends`.
         storage: option<string>,
-        deprecated: bool,
         // Its own members only; ascot reaches the inherited ones through `extends` and `storage`,
         // and synthesizes the generated ones.
         members: list<member-info>,
-        // Its own (not inherited) `[PropertyClass = ...]` classes.
-        property-class-names: list<string>,
         // Its own (not inherited) `Include` files; ascot unions them up `extends`.
-        includes: list<string>,
-        // `none` when unknown.
-        is-datatype: option<bool>,
+        %include: list<string>,
         // A uri the host understands (e.g. `isfs://`), handed back for go-to-definition and hover.
         uri: option<string>,
+        class-type: option<class-type>,
+        deprecated: bool,
+        inheritance: option<inheritance>,
+        // The language of its methods unless they say otherwise; ObjectScript when absent.
+        language: option<language>,
+        // Whether each ObjectScript method is a procedure block unless it says otherwise; on by
+        // default.
+        procedure-block: option<bool>,
+        // Its own (not inherited) `[ PropertyClass = ... ]` classes.
+        property-class: list<string>,
     }
 
     record label-info {
