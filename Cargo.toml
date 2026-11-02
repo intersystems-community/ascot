@@ -19,7 +19,7 @@ tygr = "0.6.0"
 tygr-objectscript = { version = "0.4.3", path = "tygr-objectscript" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.149"
-wit-bindgen = "0.62.0"
+wit-bindgen = "0.63.0"
 schemars = "1.2.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
