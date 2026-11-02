@@ -49,9 +49,9 @@ pub struct CreateWorkspaceRequest {
     pub iris_namespace: Option<String>,
     /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
     /// have every command keyword but `Do`'s written in full; `function` and `function_<name>` do
-    /// the same for intrinsic functions. Applies to every document.
-    // Taken raw so `style::from_value` can reject unknown keys, which `Style` itself ignores.
-    #[schemars(with = "Option<crate::bindings::Style>")]
+    /// the same for intrinsic functions. Applies to every document. The keys are documented at
+    /// https://github.com/intersystems-community/ascot#style.
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
     pub style: Option<serde_json::Value>,
 }
 
