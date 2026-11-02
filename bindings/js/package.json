@@ -22,7 +22,7 @@
   "files": [
     "dist",
     "generated",
-    "lib/*.core*.wasm"
+    "lib/*.wasm"
   ],
   "engines": {
     "node": ">=24"
