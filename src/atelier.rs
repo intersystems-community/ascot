@@ -28,7 +28,7 @@ use crate::bindings::{
     MemberInfo, MemberKind, MethodInfo, NameInfo, NormalArg, ParameterInfo, Position, PropertyInfo,
     Range, RelationshipInfo, RoutineInfo, Source, VariadicArg,
 };
-use crate::cos::{LocalVariableName, OSString, Space, Type};
+use crate::cos::{self, LocalVariableName, OSString, Space, Type};
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 #[cfg(not(target_arch = "wasm32"))]
@@ -211,8 +211,8 @@ fn class_infos(
     params: &[&str],
 ) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = format!(
-        "SELECT Name, Description, Super, Inheritance, PropertyClass, IncludeCode, ClassType, \
-         Deprecated FROM %Dictionary.CompiledClass WHERE Name {filter}"
+        "SELECT Name, Description, Super, IncludeCode, ClassType, Deprecated, Inheritance, \
+         _Language, ProcedureBlock, PropertyClass FROM %Dictionary.CompiledClass WHERE Name {filter}"
     );
     let rows = conn.rows(&sql, params)?;
     if rows.is_empty() {
@@ -266,19 +266,28 @@ fn assemble(
                     after: zero,
                 },
                 extends: split_classes(str_field("Super")),
-                inheritance_right: str_field("Inheritance") == "right",
                 storage: storages.get(&cls).cloned(),
-                deprecated: is_truthy(&row.get("Deprecated").cloned().unwrap_or(Value::Null)),
                 members: members.remove(&cls).unwrap_or_default(),
-                property_class_names: split_classes(str_field("PropertyClass")),
-                includes: split_classes(str_field("IncludeCode")),
-                is_datatype: Some(str_field("ClassType") == "datatype"),
+                include: split_classes(str_field("IncludeCode")),
                 // The Atelier REST API has no uri scheme of its own to offer here.
                 uri: None,
+                class_type: parsed::<cos::ClassType, _>(str_field("ClassType")),
+                deprecated: row.get("Deprecated").is_some_and(is_truthy),
+                inheritance: parsed::<cos::Inheritance, _>(str_field("Inheritance")),
+                language: parsed::<cos::MethodLanguage, _>(str_field("_Language")),
+                procedure_block: row.get("ProcedureBlock").map(is_truthy),
+                property_class: split_classes(str_field("PropertyClass")),
             };
             Some((cls, info))
         })
         .collect()
+}
+
+// A compiled keyword value, read by the grammar's spelling of it into the host's enum.
+fn parsed<Spelling: Grammar, T: for<'a> From<&'a Spelling>>(text: &str) -> Option<T> {
+    Spelling::parse(text.trim())
+        .ok()
+        .map(|spelling| T::from(&spelling))
 }
 
 // Uniform row shape across the member tables `all_mem_rows` unions together. IRIS
@@ -517,7 +526,8 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
             type_: row
                 .index_type
                 .as_deref()
-                .and_then(crate::details::index_type),
+                .and_then(|t| cos::IndexType::parse(t.trim()).ok())
+                .and_then(|t| crate::details::index_type(&t)),
             unique: is_truthy(&row.index_unique),
         }),
         "query" => MemberKind::Query,
@@ -1004,14 +1014,15 @@ mod tests {
         assert_eq!(b.extends, vec!["%RegisteredObject"]);
         assert_eq!(b.storage.as_deref(), Some("%Storage.Persistent"));
         assert!(classes["A.C"].storage.is_none());
-        assert_eq!(b.is_datatype, Some(false));
+        assert_eq!(b.class_type, None);
         assert_eq!(b.members.len(), 1, "the nameless row is dropped");
         assert_eq!(b.members[0].name.content, "M");
         assert!(matches!(b.members[0].kind, MemberKind::ClassMethod(_)));
         let c = &classes["A.C"];
         assert!(c.deprecated);
-        assert_eq!(c.is_datatype, Some(true));
-        assert!(c.inheritance_right && !b.inheritance_right);
+        assert_eq!(c.class_type, Some(crate::bindings::ClassType::Datatype));
+        assert_eq!(c.inheritance, Some(crate::bindings::Inheritance::Right));
+        assert_eq!(b.inheritance, None);
         assert_eq!(c.members[0].name.content, "P");
         let key = |property: &str, subscript, collation: Option<&str>| IndexKey {
             property: property.to_string(),
