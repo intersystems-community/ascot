@@ -113,13 +113,18 @@ impl<T: CheckExprInner + Grammar> CheckExpr for Range<&T> {
         check_ranged(&self, env, flow, T::to_maybe_ty)
     }
 
-    // An undefined value is reported softly and read as `Any`, so the rest of the body is still
-    // checked.
+    // A value undefined or possibly undefined is reported softly and read as `Any` or as its
+    // type, so the rest of the body is still checked.
     fn to_ty<'a>(self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<Ty, TypeError> {
         match check_ranged(&self, env, flow, T::to_ty) {
-            Err(err) if matches!(err.kind, TypeErrorKind::Undefined { .. }) => {
+            Err(err) => {
+                let ty = match &err.kind {
+                    TypeErrorKind::Undefined { .. } => Ty::Any,
+                    TypeErrorKind::MaybeUndefined { ty, .. } => ty.clone(),
+                    _ => return Err(err),
+                };
                 env.soft_diagnostic(err);
-                Ok(Ty::Any)
+                Ok(ty)
             }
             ty => ty,
         }
@@ -142,7 +147,7 @@ fn check_ranged<'a, T: Grammar, R>(
 
 use crate::{
     SourceMap,
-    bindings::{self, ArgMode, Diagnostic, DiagnosticRelatedInformation, InlayHint, Location},
+    bindings::{self, Diagnostic, DiagnosticRelatedInformation, InlayHint, Location, RefMode},
     cos::{self, *},
     details::{self, MemberDetails, MemberKindSpecificDetails, MethodDetails, WithRange},
 };
@@ -453,6 +458,7 @@ impl MethodDetails {
                 }
                 body.check(&code_env, flow)
             },
+            true,
             true,
         );
         for diagnostic in relocate_method_diagnostics(
@@ -1750,7 +1756,7 @@ fn check_embedded_sql(flow: &mut Flow<'_>, sql: &str) -> Result<(), QuasiTypeErr
             } else if into && !is_object {
                 flow.handle_set(Local::bare(name), Ty::Any.into(), flow.range())?;
             } else {
-                flow.handle_get(Local::bare(name))?;
+                flow.handle_ref(Local::bare(name))?;
             }
             i = end;
             continue;
@@ -1940,8 +1946,17 @@ fn check_target<'a>(
             check_set_member(env, flow, obj, member.deref(), args.as_ref())?;
         }
         SetTarget::Var(variable) => {
-            let _ = variable.to_maybe_ty(env, flow)?;
-            return Ok(variable.as_local(env, flow)?.left());
+            return match variable.as_local(env, flow)? {
+                // Overwriting counts as reading the old value, but doesn't need it.
+                Left(local) => {
+                    flow.handle_get(local.clone())?;
+                    Ok(Some(local))
+                }
+                Right(_) => {
+                    let _ = variable.to_maybe_ty(env, flow)?;
+                    Ok(None)
+                }
+            };
         }
         SetTarget::Fun(fun) => builtins::check_settarget_fun(fun, env, flow)?,
         SetTarget::Indirection(indirection) => {
@@ -2327,24 +2342,17 @@ fn collection_method(
         variadic: false,
     };
     let (normal_args, out) = match name {
-        "GetAt" | "RemoveAt" => (vec![arg("key", key, ArgMode::Default)], element),
-        "GetNext" | "GetPrevious" => (vec![arg("key", key, ArgMode::ByRef)], element),
+        "GetAt" | "RemoveAt" => (vec![arg("key", key, None)], element),
+        "GetNext" | "GetPrevious" => (vec![arg("key", key, Some(RefMode::ByRef))], element),
         "SetAt" => (
-            vec![
-                arg("element", element, ArgMode::Default),
-                arg("key", key, ArgMode::Default),
-            ],
+            vec![arg("element", element, None), arg("key", key, None)],
             Ty::from("%Status"),
         ),
-        "Insert" if kind == CollectionClass::List => (
-            vec![arg("element", element, ArgMode::Default)],
-            Ty::from("%Status"),
-        ),
+        "Insert" if kind == CollectionClass::List => {
+            (vec![arg("element", element, None)], Ty::from("%Status"))
+        }
         "InsertAt" if kind == CollectionClass::List => (
-            vec![
-                arg("element", element, ArgMode::Default),
-                arg("key", key, ArgMode::Default),
-            ],
+            vec![arg("element", element, None), arg("key", key, None)],
             Ty::from("%Status"),
         ),
         "Count" => (vec![], Ty::from("%Integer")),
@@ -2529,11 +2537,7 @@ fn check_param_arg<'a>(
             None => "".to_string(),
         };
         if !arg_text.starts_with(&par.name) {
-            let prefix = if par.mode == ArgMode::Default {
-                ""
-            } else {
-                "."
-            };
+            let prefix = if par.mode.is_none() { "" } else { "." };
             let (label, padding_right) = if let Some(default) = par.default.as_ref()
                 && arg.is_none()
             {
@@ -2566,8 +2570,8 @@ fn check_param_arg<'a>(
         Some(cos::MthArg::Expr { expr, expand }) => {
             // A value where `ByRef`/`Output` is declared: the callee's changes never reach the
             // caller.
-            if par.mode != ArgMode::Default {
-                mode_mismatch(flow, ArgMode::Default);
+            if par.mode.is_some() {
+                mode_mismatch(flow, None);
             }
             let target = par.ty.clone().unwrap_or_default();
             let source = expr.to_power_ty(env, flow)?;
@@ -2581,8 +2585,8 @@ fn check_param_arg<'a>(
                 .map_err(|err| err.assign(par.name))?;
         }
         Some(cos::MthArg::ByRef { target, .. }) => {
-            if par.mode == ArgMode::Default {
-                mode_mismatch(flow, ArgMode::ByRef);
+            if par.mode.is_none() {
+                mode_mismatch(flow, Some(RefMode::ByRef));
             }
             let source = PowerTy::from(par.ty.clone().unwrap_or_default());
             // The callee may read the prior value before writing, so `invalidate` — not a
@@ -2793,7 +2797,7 @@ impl CheckExprInner for Variable {
         flow: &mut Flow<'a>,
     ) -> Result<PowerTy, QuasiTypeError> {
         match self.as_local(env, flow)? {
-            Left(local) => flow.handle_get(local),
+            Left(local) => flow.handle_ref(local),
             Right(ty) => Ok(ty),
         }
     }
@@ -3277,6 +3281,7 @@ fn check_procedure(
         env.with_range(this.header.as_ref().map(|_| None)),
         |flow| check_block_body(&this.body, env, flow, true),
         true,
+        false,
     )?;
     if let Some(hint) = creates_hint(details.name.range.end, creates) {
         env.hint(hint);

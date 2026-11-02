@@ -16,7 +16,7 @@ use std::ops::Deref;
 use either::Either::{self, Left, Right};
 use tygr::{Grammar, IntoInner, OLC, Prefix, Range, StringOf};
 
-use crate::bindings::{self, ArgMode};
+use crate::bindings::{self, RefMode};
 use crate::check::types::{NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty};
 use crate::cos::{self, AllowMacro, FailableKeyword, HasMemberKeyword, KeywordList};
 
@@ -371,11 +371,7 @@ fn import_args(pos: &impl Positions, params: &Option<cos::SpaceThen<cos::Paramet
         .flat_map(|x| &***x)
         .flat_map(|x| x.items.iter())
         .map(|entry| {
-            let mode = if entry.by_ref.is_some() {
-                ArgMode::ByRef
-            } else {
-                ArgMode::Default
-            };
+            let mode = entry.by_ref.is_some().then_some(RefMode::ByRef);
             let name = entry.param.deref().print();
             let at = entry.param.as_ref();
             if entry.expand.is_some() {

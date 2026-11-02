@@ -21,7 +21,7 @@ use std::{
 
 use tygr::OLC;
 
-use crate::bindings::{ArgMode, InlayHint, MemberKind};
+use crate::bindings::{InlayHint, MemberKind, RefMode};
 use crate::check::errors::*;
 use crate::check::flow::OutputCell;
 use crate::check::types::*;
@@ -316,7 +316,7 @@ fn generated_procedure(
 ) -> Arc<TyProcedure> {
     Arc::new(TyProcedure {
         normal_args,
-        variadic_arg: variadic.then(|| VariadicArg::new(ArgMode::Default, "args".into(), None)),
+        variadic_arg: variadic.then(|| VariadicArg::new(None, "args".into(), None)),
         out,
         procedure_block: Some(vec![]),
         formal_list: true,
@@ -434,9 +434,9 @@ impl Shape {
         let one = |mode, name: &str, ty| vec![NormalArg::new(mode, name.into(), Some(ty), None)];
         let args = match arg {
             Arg::None => vec![],
-            Arg::Value => one(ArgMode::Default, "value", prop.clone()),
-            Arg::Id => one(ArgMode::Default, "id", Ty::from("%String")),
-            Arg::Concurrency => one(ArgMode::Output, "concurrency", Ty::from("%Integer")),
+            Arg::Value => one(None, "value", prop.clone()),
+            Arg::Id => one(None, "id", Ty::from("%String")),
+            Arg::Concurrency => one(Some(RefMode::Output), "concurrency", Ty::from("%Integer")),
         };
         let out = match out {
             Out::Prop => prop.clone(),
@@ -750,39 +750,34 @@ impl<'a> WorkspaceEnv<'a> {
                     Some(PropertyTy::Value(ty)) => ty,
                     _ => Ty::Any,
                 };
-                arg("value", ArgMode::Default, ty, None)
+                arg("value", None, ty, None)
             })
             .collect();
         if keys.is_empty() {
-            args.push(arg("id", ArgMode::Default, Ty::from("%String"), None));
+            args.push(arg("id", None, Ty::from("%String"), None));
         }
         let exists = (
             "Exists",
-            vec![arg("id", ArgMode::Output, Ty::from("%String"), None)],
+            vec![arg("id", Some(RefMode::Output), Ty::from("%String"), None)],
             Ty::from("%Boolean"),
         );
         let open_and_delete = [
             (
                 "Open",
                 vec![
+                    arg("concurrency", None, Ty::from("%Integer"), Some("-1")),
                     arg(
-                        "concurrency",
-                        ArgMode::Default,
-                        Ty::from("%Integer"),
-                        Some("-1"),
+                        "sc",
+                        Some(RefMode::ByRef),
+                        Ty::from("%Status"),
+                        Some("$$$OK"),
                     ),
-                    arg("sc", ArgMode::ByRef, Ty::from("%Status"), Some("$$$OK")),
                 ],
                 Ty::This,
             ),
             (
                 "Delete",
-                vec![arg(
-                    "concurrency",
-                    ArgMode::Default,
-                    Ty::from("%Integer"),
-                    Some("-1"),
-                )],
+                vec![arg("concurrency", None, Ty::from("%Integer"), Some("-1"))],
                 Ty::from("%Status"),
             ),
         ];

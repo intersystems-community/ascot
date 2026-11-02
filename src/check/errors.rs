@@ -6,7 +6,7 @@
 //! editing this file.
 
 use crate::{
-    bindings::{ArgMode, DiagnosticRelatedInformation, DiagnosticSeverity, Location, Range},
+    bindings::{DiagnosticRelatedInformation, DiagnosticSeverity, Location, Range, RefMode},
     check::types::*,
 };
 
@@ -568,6 +568,14 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Output parameter '{name}' is never assigned; its caller will get an undefined value"]
     OutputNeverAssigned { name: String },
+    #[code = "A7762"]
+    #[severity = Hint]
+    #[message = "'{name}' is never read before it is assigned; `Output` fits better than `ByRef`"]
+    ByRefNeverRead { name: String },
+    #[code = "A7781"]
+    #[severity = Hint]
+    #[message = "'{name}' is read before it is assigned; `ByRef` fits better than `Output`"]
+    OutputReadFirst { name: String },
     #[code = "A8892"]
     #[severity = Error]
     #[message = "Variable '{name}' is {ty1} in one branch but {ty2} in another"]
@@ -702,8 +710,8 @@ type_error_kinds! {
     #[message = "Passing {actual} argument to '{name}', {wanted} parameter"]
     MismatchArgumentAndArgumentMode {
         name: String,
-        wanted: ArgMode,
-        actual: ArgMode,
+        wanted: Mode,
+        actual: Mode,
     },
     #[code = "A6826"]
     #[severity = Warning]
@@ -849,6 +857,19 @@ impl std::fmt::Display for IrisLookup {
 /// `%Get`'s suggestion for a member, if the class has dynamic properties.
 #[derive(Debug)]
 pub struct DynamicGet(pub Option<String>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mode(pub Option<RefMode>);
+
+impl std::fmt::Display for Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            None => "a normal",
+            Some(RefMode::Output) => "an output",
+            Some(RefMode::ByRef) => "a by-ref",
+        })
+    }
+}
 
 impl std::fmt::Display for DynamicGet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1104,14 +1125,14 @@ impl TypeError {
 
     pub fn mismatch_argument_mode(
         name: String,
-        wanted: ArgMode,
-        actual: ArgMode,
+        wanted: Option<RefMode>,
+        actual: Option<RefMode>,
         range: Range,
         declared_at: Option<Location>,
     ) -> Self {
         // The call works as written (the caller's `.` decides); the annotation is what lets the
         // checker follow the variable, so ask for it without sending anyone after the `.`.
-        let message = if wanted == ArgMode::Default && actual == ArgMode::ByRef {
+        let message = if wanted.is_none() && actual == Some(RefMode::ByRef) {
             format!(
                 "Parameter declared here. If the `.` in the call is intended, add `&{name}` for a \
                  label or `ByRef`/`Output` for a method."
@@ -1122,8 +1143,8 @@ impl TypeError {
         Self::new(
             TypeErrorKind::MismatchArgumentAndArgumentMode {
                 name,
-                wanted,
-                actual,
+                wanted: Mode(wanted),
+                actual: Mode(actual),
             },
             range,
             declared_at
@@ -1147,6 +1168,14 @@ impl TypeError {
 
     pub fn output_never_assigned(name: String, range: Range) -> TypeError {
         Self::at(TypeErrorKind::OutputNeverAssigned { name }, range)
+    }
+
+    pub fn by_ref_never_read(name: String, range: Range) -> TypeError {
+        Self::at(TypeErrorKind::ByRefNeverRead { name }, range)
+    }
+
+    pub fn output_read_first(name: String, range: Range) -> TypeError {
+        Self::at(TypeErrorKind::OutputReadFirst { name }, range)
     }
 
     pub fn duplicated_member_name(range: Range, name: String, previous: Location) -> Self {
