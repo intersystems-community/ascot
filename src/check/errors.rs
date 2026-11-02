@@ -438,6 +438,10 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot find label '{label}' in {routine}"]
     CannotFindLabel { label: String, routine: InRoutine },
+    #[code = "A5213"]
+    #[severity = Hint]
+    #[message = "The label is confirmed, but not where its offset lands: the call is checked as untyped and the offset is not checked"]
+    LabelOffset,
     #[code = "A1073"]
     #[severity = Error]
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
@@ -1161,6 +1165,10 @@ impl TypeError {
 
     pub fn new_in_procedure_block(name: String, range: Range) -> Self {
         Self::at(TypeErrorKind::NewInProcedureBlock { name }, range)
+    }
+
+    pub fn label_offset(range: Range) -> Self {
+        Self::at(TypeErrorKind::LabelOffset, range)
     }
 
     pub fn unrecognized_class_keyword(entry: String, range: Range) -> Self {

@@ -1727,14 +1727,13 @@ impl<'a> CodeEnv<'a> {
     pub(crate) fn resolve_label(
         &self,
         label: Option<String>,
-        offset: Option<Ty>,
         routine: Option<String>,
     ) -> Result<TyProcedureOrAny, QuasiTypeError> {
         match routine {
             // `label^routine`: resolved against that routine's own labels -- in the workspace,
             // or via IRIS (see `resolve_rtn_labels`).
-            Some(routine) => match (label, offset) {
-                (Some(label), None) => match self.resolve_rtn_labels(&routine) {
+            Some(routine) => match label {
+                Some(label) => match self.resolve_rtn_labels(&routine) {
                     Err(
                         err @ QuasiTypeError::WithoutRange(
                             TypeErrorKind::RoutineWithoutSource { .. }
@@ -1752,19 +1751,17 @@ impl<'a> CodeEnv<'a> {
                         None => Ok(TyProcedureOrAny::Any),
                     },
                 },
-                (_, _) => self
+                None => self
                     .resolve_rtn_labels(&routine)
                     .map(|_| TyProcedureOrAny::Any),
             },
             // No explicit routine: the current one.
-            None => match (label, offset) {
-                (Some(label), None) => {
-                    match self.labels.as_ref().and_then(|labels| labels.get(&label)) {
-                        Some(label) => Ok(TyProcedureOrAny::Procedure(label.proc.clone())),
-                        None => Err(QuasiTypeError::cannot_find_label(label, None)),
-                    }
-                }
-                _ => Ok(TyProcedureOrAny::Any),
+            None => match label {
+                Some(label) => match self.labels.as_ref().and_then(|labels| labels.get(&label)) {
+                    Some(label) => Ok(TyProcedureOrAny::Procedure(label.proc.clone())),
+                    None => Err(QuasiTypeError::cannot_find_label(label, None)),
+                },
+                None => Ok(TyProcedureOrAny::Any),
             },
         }
     }
