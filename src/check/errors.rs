@@ -163,6 +163,18 @@ impl QuasiTypeError {
         TypeErrorKind::CaseDefaultNotLast.into()
     }
 
+    pub fn legacy_zutil(call: String, replacement: Option<&str>) -> Self {
+        TypeErrorKind::LegacyZUtil {
+            call,
+            replacement: Replacement(replacement.map(str::to_string)),
+        }
+        .into()
+    }
+
+    pub fn undocumented_zutil(call: String) -> Self {
+        TypeErrorKind::UndocumentedZUtil { call }.into()
+    }
+
     pub fn unknown_function(name: String, suggestions: Vec<String>) -> Self {
         TypeErrorKind::UnknownFunction {
             name,
@@ -599,6 +611,16 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "${function} is documented to take at most {documented} argument(s), but was given {given}; IRIS tolerates the extra"]
     UndocumentedArgument { function: String, documented: usize, given: usize },
+    /// IRIS still runs the call; the replacement is from the `$ZUTIL` replacement list.
+    #[code = "A4418"]
+    #[severity = Warning]
+    #[message = "{call} {replacement}"]
+    LegacyZUtil { call: String, replacement: Replacement },
+    /// Nothing in the `$ZUTIL` replacement list covers this call, and IRIS documents no `$ZUTIL` function.
+    #[code = "A5847"]
+    #[severity = Hint]
+    #[message = "{call} is not documented for IRIS; $ZUTIL was superseded by class methods and special variables"]
+    UndocumentedZUtil { call: String },
     #[code = "A6319"]
     #[severity = Error]
     #[message = "Parameter '{name}' is a constant: it takes no arguments and can't be assigned"]
@@ -764,6 +786,19 @@ pub struct Available(pub &'static [&'static str]);
 impl std::fmt::Display for Available {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0.join(", "))
+    }
+}
+
+/// What replaces a legacy `$ZUTIL` function, if anything.
+#[derive(Debug)]
+pub struct Replacement(pub Option<String>);
+
+impl std::fmt::Display for Replacement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(replacement) => write!(f, "is superseded: use {replacement}"),
+            None => f.write_str("is deprecated, with no replacement"),
+        }
     }
 }
 

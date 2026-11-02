@@ -652,7 +652,8 @@ impl WorkspaceStruct {
             }
             DocDetails::Rtn(rtn, None) => {
                 let env = self.workspace_env();
-                let doc_env = check::DocumentEnv::new(&env, &rtn.map.expanded_olc, uri);
+                let doc_env = check::DocumentEnv::new(&env, &rtn.map.expanded_olc, uri)
+                    .with_source_map(&rtn.map);
                 let mut diagnostics = check::check_rtn(&doc_env, &rtn.routine, &rtn.definitions);
                 diagnostics.extend(env.soft_diagnostics());
                 let mut diagnostics = rtn.map.relocate_diagnostics(diagnostics, uri);
