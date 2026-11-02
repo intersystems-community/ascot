@@ -101,10 +101,15 @@ enum Command {
     },
     /// Run the MCP server on stdio, for AI agents
     ///
-    /// Exposes workspace analysis as tools an AI agent calls on demand. Takes no options: a
-    /// workspace's IRIS connection is set by the `iris` and `iris_namespace` arguments of the
-    /// `create_workspace` tool. For example: `claude mcp add ascot -- ascot mcp`.
-    Mcp,
+    /// Exposes workspace analysis as tools an AI agent calls on demand. A workspace's IRIS
+    /// connection is set by the `iris` and `iris_namespace` arguments of the `create_workspace`
+    /// tool. For example: `claude mcp add ascot -- ascot mcp`.
+    Mcp {
+        /// The server shares the client's file system: `insert` reads a `file://` uri, a file or
+        /// a whole directory, when no `src` is given
+        #[arg(long)]
+        shared_fs: bool,
+    },
     /// Run the LSP server on stdio, for editors and AI agents
     Lsp {
         #[command(flatten)]
@@ -193,9 +198,9 @@ fn main() {
             iris_namespace,
             file,
         } => declare(&iris, iris_namespace.as_deref(), file.as_deref()),
-        Command::Mcp => {
+        Command::Mcp { shared_fs } => {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
-            rt.block_on(run_mcp_server());
+            rt.block_on(run_mcp_server(shared_fs));
         }
         Command::Lsp { iris, style } => {
             if let Err(err) = ascot::lsp::run(iris.open(), style.load()) {
@@ -310,11 +315,11 @@ fn default_declaration_file(url: &str, namespace: &str) -> Result<PathBuf, Strin
     Ok(dir.join(format!("{name}.d.json")))
 }
 
-async fn run_mcp_server() {
+async fn run_mcp_server(shared_fs: bool) {
     use ascot::mcp::Server;
     use rmcp::ServiceExt;
 
-    let server = match Server::new().serve(rmcp::transport::stdio()).await {
+    let server = match Server::new(shared_fs).serve(rmcp::transport::stdio()).await {
         Ok(server) => server,
         Err(err) => {
             eprintln!("failed to start MCP server: {err:?}");

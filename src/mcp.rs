@@ -60,8 +60,10 @@ pub struct FileToInsert {
     /// Names the document, e.g. its file path; the extension (.cls, .mac, .int or .inc) decides
     /// how it is parsed.
     pub uri: String,
-    /// The document's full text.
-    pub src: String,
+    /// The document's full text. When the server was started with `--shared-fs`, omit it to read
+    /// `uri`, a `file://` url, from disk instead: a file is read as a document, a directory loads
+    /// every .cls/.mac/.int/.inc file under it and drops those it no longer holds.
+    pub src: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -151,20 +153,58 @@ pub struct ReferencesResult {
 pub struct Server {
     workspaces: Arc<RwLock<HashMap<String, Arc<Mutex<Workspace>>>>>,
     tool_router: ToolRouter<Self>,
+    // Whether `insert` may read a uri from disk: only when the server was told it shares the
+    // client's file system, since over MCP that is nothing to assume.
+    shared_fs: bool,
 }
 
 impl Default for Server {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl Server {
-    pub fn new() -> Self {
+    pub fn new(shared_fs: bool) -> Self {
         Self {
             workspaces: Arc::new(RwLock::new(HashMap::new())),
             tool_router: Self::tool_router(),
+            shared_fs,
         }
+    }
+
+    // Reads `uri` from disk into `workspace`: a file, or a directory whose documents are all
+    // (re)read, dropping the ones it no longer holds. Returns the uris now stale.
+    fn open_from_disk(&self, workspace: &Workspace, uri: &str) -> Result<Vec<String>, String> {
+        if !self.shared_fs {
+            return Err(format!(
+                "{uri}: no `src` given, and the server can only read a uri from disk when started with --shared-fs"
+            ));
+        }
+        let path = url::Url::parse(uri)
+            .ok()
+            .and_then(|url| url.to_file_path().ok())
+            .filter(|path| path.exists())
+            .ok_or_else(|| {
+                format!("{uri}: not the file:// url of an existing file or directory")
+            })?;
+        let (opened, mut affected) = workspace.open_directory(&path);
+        if path.is_dir() {
+            let opened: std::collections::HashSet<String> = opened.into_iter().collect();
+            let prefix = format!(
+                "{}/",
+                url::Url::from_file_path(&path)
+                    .map_err(|()| uri.to_string())?
+                    .as_str()
+                    .trim_end_matches('/')
+            );
+            for stale in workspace.uris() {
+                if stale.starts_with(&prefix) && !opened.contains(&stale) {
+                    affected.extend(workspace.close(stale));
+                }
+            }
+        }
+        Ok(affected)
     }
 
     async fn get_workspace(&self, id: &str) -> Result<Arc<Mutex<Workspace>>, String> {
@@ -240,7 +280,10 @@ impl Server {
         let workspace = workspace.lock().await;
         let mut affected = std::collections::HashSet::new();
         for FileToInsert { uri, src } in files {
-            affected.extend(workspace.open(uri, src));
+            affected.extend(match src {
+                Some(src) => workspace.open(uri, src),
+                None => self.open_from_disk(&workspace, &uri)?,
+            });
         }
         Ok(Json(InsertResult {
             affected: affected.into_iter().collect(),
@@ -365,7 +408,7 @@ impl Server {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+        let mut instructions = String::from(
             "Real ObjectScript/COS parser and type-checker. Use this instead of guessing at \
              ObjectScript syntax, semantics, or types, or hand-rolling regex/grep checks over \
              .cls/.mac/.int/.inc source — it understands the language's grammar, class \
@@ -377,6 +420,14 @@ impl ServerHandler for Server {
              to catch syntax errors, undefined variables, class-context violations, and type \
              mismatches before treating the code as correct. Use hover instead of grepping to \
              look up a class member's definition. Call delete_workspace when done.",
-        )
+        );
+        if self.shared_fs {
+            instructions.push_str(
+                "\n\nThis server shares your file system: insert() a file:// uri with no `src` to \
+                 read the file, or a directory's to load every file under it.",
+            );
+        }
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(instructions)
     }
 }
