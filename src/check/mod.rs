@@ -1903,11 +1903,8 @@ fn check_merge_target<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
-    check_set_target(target, source, range, env, flow)?;
-    if let Some(target) = target.as_variable()
-        && let Left(target) = target.as_local(env, flow)?
-    {
-        flow.handle_merge(target)?
+    if let Some(local) = check_target(target, env, flow)? {
+        flow.handle_merge(local, source, range)?;
     }
     Ok(())
 }
@@ -1919,33 +1916,42 @@ fn check_set_target<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
+    if let Some(local) = check_target(target, env, flow)? {
+        flow.handle_set(local, source, range)?;
+    }
+    Ok(())
+}
+
+// Checks a target's parts and resolves it; the tracked local it names, if any.
+fn check_target<'a>(
+    target: &cos::SetTarget,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+) -> Result<Option<Local>, QuasiTypeError> {
     match target {
         SetTarget::Sub { obj, op } => {
             let obj = obj.to_ty(env, flow)?;
-            check_set_member(env, flow, obj, op.mem.deref(), op.args.as_ref())
+            check_set_member(env, flow, obj, op.mem.deref(), op.args.as_ref())?;
         }
         SetTarget::Member { member, args } => {
             let obj = Ty::OREF(env.this()?);
-            check_set_member(env, flow, obj, member.deref(), args.as_ref())
+            check_set_member(env, flow, obj, member.deref(), args.as_ref())?;
         }
         SetTarget::Var(variable) => {
             let _ = variable.to_maybe_ty(env, flow)?;
-            if let Left(id) = variable.as_local(env, flow)? {
-                flow.handle_set(id, source, range)
-            } else {
-                Ok(())
-            }
+            return Ok(variable.as_local(env, flow)?.left());
         }
-        SetTarget::Fun(fun) => builtins::check_settarget_fun(fun, env, flow),
+        SetTarget::Fun(fun) => builtins::check_settarget_fun(fun, env, flow)?,
         SetTarget::Indirection(indirection) => {
             let _ = indirection.expr.to_ty(env, flow)?;
-            flow.invalidate_all()
+            flow.invalidate_all()?;
         }
         // Every variant is a bare keyword (see `SpecialVariable`) -- nothing to type-check, and
         // setting one has no effect this checker tracks (unlike a local variable's `Flow`
         // binding), so there's nothing more to do than accept it.
-        SetTarget::Special(..) => Ok(()),
+        SetTarget::Special(..) => {}
     }
+    Ok(None)
 }
 
 trait CheckExpr: Sized {
@@ -2577,17 +2583,11 @@ fn check_param_arg<'a>(
                 mode_mismatch(flow, ArgMode::ByRef);
             }
             let source = PowerTy::from(par.ty.clone().unwrap_or_default());
-            match target.as_variable() {
-                // The callee may read the prior value before writing, so `invalidate` — not a
-                // fresh, obligated write — models it: satisfies whatever was pending instead of
-                // demanding another read.
-                Some(variable) => {
-                    let _ = variable.to_maybe_ty(env, flow)?;
-                    if let Left(local) = variable.as_local(env, flow)? {
-                        flow.invalidate(local, source)?;
-                    }
-                }
-                None => check_merge_target(target, source, env.range(arg), env, flow)?,
+            // The callee may read the prior value before writing, so `invalidate` — not a
+            // fresh, obligated write — models it: satisfies whatever was pending instead of
+            // demanding another read.
+            if let Some(local) = check_target(target, env, flow)? {
+                flow.invalidate(local, source)?;
             }
         }
         None => {

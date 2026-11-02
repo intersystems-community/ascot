@@ -1420,8 +1420,9 @@ fn check_compile<'a>(
     arg6: Option<&Range<Option<Expr>>>,
     rname: Option<&Range<Option<Expr>>>,
 ) -> Result<PowerTy, QuasiTypeError> {
+    // The array is handed over by reference, as `.source` would be.
     if let Left(source) = source.as_local(env, flow)? {
-        flow.handle_merge(source)?;
+        flow.invalidate(source, Ty::Any.into())?;
     }
     let _ = qspec.to_ty(env, flow)?;
     for output in std::iter::once(errors).chain(object) {

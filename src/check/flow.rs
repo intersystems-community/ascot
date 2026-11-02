@@ -858,8 +858,22 @@ impl<'a> Flow<'a> {
 
     // MERGE always writes opaquely into the target's subtree, regardless of its own literal
     // subscript depth — unlike `handle_set`, which only takes the subtree branch when the
-    // reference itself was subscripted.
-    pub(crate) fn handle_merge(&mut self, local: Local) -> Result<(), QuasiTypeError> {
+    // reference itself was subscripted. The node comes along only if the source has one.
+    pub(crate) fn handle_merge(
+        &mut self,
+        local: Local,
+        source: PowerTy,
+        range: bindings::Range,
+    ) -> Result<(), QuasiTypeError> {
+        let env = self.shared.env;
+        let node = match source.to_maybe_ty(env) {
+            MaybeTy::Undefined => None,
+            MaybeTy::Plain(_) => Some(source),
+            MaybeTy::Maybe(_) => Some(env.merge_power_ty(self.handle_get(local.clone())?, source)),
+        };
+        if let Some(node) = node {
+            self.handle_set(local.clone(), node, range)?;
+        }
         let binding = self.lookup(local.name.clone())?;
         binding.subscript_assigned = Some(());
         let is_new = binding.new;
