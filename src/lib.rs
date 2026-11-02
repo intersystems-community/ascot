@@ -54,6 +54,7 @@ mod mask;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
 mod render;
+pub mod sarif;
 pub mod style;
 #[cfg(not(target_arch = "wasm32"))]
 pub use atelier::RawAtelier;
