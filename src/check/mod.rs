@@ -1144,7 +1144,7 @@ impl CheckCommandInner for cos::Command {
             cos::Command::Write(cos::WriteCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.iter().flat_map(|args| args.items.iter()) {
-                        check_write_arg(arg, env, flow)?;
+                        arg.inner_check(env, flow)?;
                     }
                     Ok(())
                 })
@@ -1346,7 +1346,7 @@ impl CheckCommandInner for cos::Command {
             | cos::Command::MVC(cos::MVCCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.items.iter() {
-                        check_write_arg(arg, env, flow)?;
+                        arg.inner_check(env, flow)?;
                     }
                     Ok(())
                 })
@@ -1639,41 +1639,6 @@ fn split_on_conjunction<'a, X: Grammar, Y: Grammar>(
         if_false.merge(flow).with_range(|| env.range(rhs))?;
     }
     Ok(if_false)
-}
-
-// Every expression a `Write`-style argument holds: the value itself, the `?` column, the `*`
-// character code, the `*-` device control, and a `/mnemonic(...)`'s parameters.
-fn check_write_arg<'a>(
-    arg: &cos::WriteArg,
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-) -> Result<(), QuasiTypeError> {
-    match arg {
-        cos::WriteArg::Expr(expr)
-        | cos::WriteArg::Dev { val: expr, .. }
-        | cos::WriteArg::Char { val: expr, .. } => {
-            let _ = expr.to_ty(env, flow)?;
-        }
-        cos::WriteArg::Fmts(fmts) => {
-            for fmt in fmts.iter() {
-                match fmt {
-                    cos::WriteFChar::Tab(_, expr) => {
-                        let _ = expr.to_ty(env, flow)?;
-                    }
-                    cos::WriteFChar::Mnemonic {
-                        params: Some(params),
-                        ..
-                    } => {
-                        for param in params.items.iter() {
-                            let _ = param.to_ty(env, flow)?;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 fn check_pc<'a>(
@@ -3058,6 +3023,55 @@ impl CheckExprInner for cos::DAO {
                 Ok(Ty::from("%DynamicArray").into())
             }
         }
+    }
+}
+
+// Every expression a `Write`-style argument holds: the value itself, the `*` character code,
+// the `*-` device control, and what its format characters hold.
+impl CheckCommandInner for cos::WriteArg {
+    fn inner_check<'a>(
+        &self,
+        env: &CodeEnv<'a>,
+        flow: &mut Flow<'a>,
+    ) -> Result<(), QuasiTypeError> {
+        match self {
+            cos::WriteArg::Expr(expr)
+            | cos::WriteArg::Dev { val: expr, .. }
+            | cos::WriteArg::Char { val: expr, .. } => {
+                let _ = expr.to_ty(env, flow)?;
+            }
+            cos::WriteArg::Fmts(fmts) => {
+                for fmt in fmts.iter() {
+                    fmt.inner_check(env, flow)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// The `?` column and a `/mnemonic(...)`'s parameters.
+impl CheckCommandInner for cos::WriteFChar {
+    fn inner_check<'a>(
+        &self,
+        env: &CodeEnv<'a>,
+        flow: &mut Flow<'a>,
+    ) -> Result<(), QuasiTypeError> {
+        match self {
+            cos::WriteFChar::Tab(_, expr) => {
+                let _ = expr.to_ty(env, flow)?;
+            }
+            cos::WriteFChar::Mnemonic {
+                params: Some(params),
+                ..
+            } => {
+                for param in params.items.iter() {
+                    let _ = param.to_ty(env, flow)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
