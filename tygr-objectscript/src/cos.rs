@@ -2281,19 +2281,15 @@ pub enum CollectionKind {
 }
 
 #[derive(Grammar)]
-pub struct KeywordList {
+pub struct KeywordList<Entry = KeywordEntry> {
     open: Raw<(Space, StringEq!("["), Space)>,
-    pub entries: Option<VecSep<KeywordEntryWithSpace, CommaWithSpace>>,
+    pub entries: Option<VecSep<KeywordEntryWithSpace<Entry>, CommaWithSpace>>,
     close: Raw<(Space, StringEq!("]"))>,
 }
 
-impl KeywordList {
-    pub fn get(&self, key: &str) -> Option<&KeywordEntry> {
-        self.entries
-            .iter()
-            .flat_map(|entries| entries.items.iter())
-            .map(|entry| &***entry)
-            .find(|entry| entry.keyword().print().eq_ignore_ascii_case(key))
+impl<Entry: Grammar> KeywordList<Entry> {
+    pub fn items(&self) -> impl Iterator<Item = &KeywordEntryWithSpace<Entry>> {
+        self.entries.iter().flat_map(|entries| entries.items.iter())
     }
 }
 
@@ -2302,7 +2298,11 @@ impl KeywordList {
 pub struct CommaWithSpace(Raw<(StringEq!(","), Space)>);
 
 // Ranged so a diagnostic about one keyword (`[ CompileAfter = , ... ]`) can point at it.
-pub type KeywordEntryWithSpace = Range<Suffix<KeywordEntry, Space>>;
+pub type KeywordEntryWithSpace<Entry = KeywordEntry> = Range<Suffix<Entry, Space>>;
+
+/// An entry read as one of the declaration's keywords `K`, or kept as written when it is none.
+/// IRIS parses any entry here; what it does with one it doesn't know is the checker's to report.
+pub type FailableKeyword<K> = Either<K, KeywordEntry>;
 
 #[derive(Grammar)]
 pub enum KeywordEntry {
@@ -2320,20 +2320,348 @@ pub enum KeywordEntry {
 }
 
 impl KeywordEntry {
-    fn keyword(&self) -> &Identifier {
+    pub fn keyword(&self) -> &Identifier {
         match self {
             KeywordEntry::Assign { keyword, .. } => keyword,
             KeywordEntry::Not { keyword, .. } => keyword,
             KeywordEntry::Flag(keyword) => keyword,
         }
     }
+}
 
-    pub fn value(&self) -> Option<&KeywordValue> {
-        match self {
-            KeywordEntry::Assign { value, .. } => value.as_ref(),
-            _ => None,
-        }
+// Where a keyword's name or value ends: before anything but another name character, so that
+// `Final` doesn't match the start of `FinalFoo`, nor `persistent` of `persistentfoo`.
+#[derive(Grammar)]
+#[grammar(hidden)]
+pub struct KeywordEnd(NotFollowedBy<CharOf<IsKeywordValue>>);
+
+/// A flag keyword: `Name` sets it, `Not Name` clears it. `Name = 1` is no flag: IRIS refuses it on a
+/// member, and takes it on a class as a bare `Name` whatever the value.
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum Flag<Name> {
+    Not {
+        not: Raw<(StringEqCI!("Not"), Space1)>,
+        name: Name,
+        end: KeywordEnd,
+    },
+    Set {
+        name: Name,
+        end: KeywordEnd,
+        // Fail at `Abstract = 1` rather than leave `= 1` behind.
+        no_assign: NoAssign,
+    },
+}
+
+impl<Name: Grammar> Flag<Name> {
+    pub fn is_set(&self) -> bool {
+        matches!(self, Flag::Set { .. })
     }
+}
+
+#[derive(Grammar)]
+#[grammar(hidden)]
+pub struct NoAssign(NotFollowedBy<Raw<(Space, StringEq!("="))>>);
+
+/// The `0` or `1` of `ProcedureBlock = 1` and `ServerOnly = 0`.
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum Bit {
+    Off(StringEq!("0")),
+    On(StringEq!("1")),
+}
+
+impl Bit {
+    pub fn is_set(&self) -> bool {
+        matches!(self, Bit::On(_))
+    }
+}
+
+/// A keyword taking a value of the shape `Value`: `Name = value`.
+#[derive(Grammar)]
+#[grammar(inline)]
+pub struct Valued<Name, Value> {
+    name: Name,
+    end: KeywordEnd,
+    eq: Raw<(Space, StringEq!("="), Space)>,
+    pub value: Value,
+    after: KeywordEnd,
+}
+
+// Spelled as IRIS accepts them: `ClassType` in lowercase only, the rest in any case.
+
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum ClassType {
+    Datatype(StringEq!("datatype")),
+    Dynamic(StringEq!("dynamic")),
+    Index(StringEq!("index")),
+    Literal(StringEq!("literal")),
+    Persistent(StringEq!("persistent")),
+    Serial(StringEq!("serial")),
+    Stream(StringEq!("stream")),
+    View(StringEq!("view")),
+}
+
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum Inheritance {
+    Left(StringEqCI!("left")),
+    Right(StringEqCI!("right")),
+}
+
+/// A class's keywords (`https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class`):
+/// a value the checker reads has its own shape, any other is taken as written.
+#[derive(Grammar)]
+pub enum ClassKeyword {
+    Abstract(Flag<StringEqCI!("Abstract")>),
+    ClassType(Valued<StringEqCI!("ClassType"), ClassType>),
+    ClientDataType(Valued<StringEqCI!("ClientDataType"), KeywordValue>),
+    ClientName(Valued<StringEqCI!("ClientName"), KeywordValue>),
+    CompileAfter(Valued<StringEqCI!("CompileAfter"), KeywordValue>),
+    DdlAllowed(Flag<StringEqCI!("DdlAllowed")>),
+    DependsOn(Valued<StringEqCI!("DependsOn"), KeywordValue>),
+    Deprecated(Flag<StringEqCI!("Deprecated")>),
+    Final(Flag<StringEqCI!("Final")>),
+    GeneratedBy(Valued<StringEqCI!("GeneratedBy"), KeywordValue>),
+    Hidden(Flag<StringEqCI!("Hidden")>),
+    Inheritance(Valued<StringEqCI!("Inheritance"), Inheritance>),
+    Language(Valued<StringEqCI!("Language"), MethodLanguage>),
+    LegacyInstanceContext(Flag<StringEqCI!("LegacyInstanceContext")>),
+    NoExtent(Flag<StringEqCI!("NoExtent")>),
+    OdbcType(Valued<StringEqCI!("OdbcType"), KeywordValue>),
+    Owner(Valued<StringEqCI!("Owner"), KeywordValue>),
+    ProcedureBlock(Flag<StringEqCI!("ProcedureBlock")>),
+    PropertyClass(Valued<StringEqCI!("PropertyClass"), ClassList>),
+    ServerOnly(Valued<StringEqCI!("ServerOnly"), Bit>),
+    Sharded(Valued<StringEqCI!("Sharded"), Bit>),
+    SoapBindingStyle(Valued<StringEqCI!("SoapBindingStyle"), KeywordValue>),
+    SoapBodyUse(Valued<StringEqCI!("SoapBodyUse"), KeywordValue>),
+    SqlCategory(Valued<StringEqCI!("SqlCategory"), KeywordValue>),
+    SqlRowIdName(Valued<StringEqCI!("SqlRowIdName"), KeywordValue>),
+    SqlRowIdPrivate(Flag<StringEqCI!("SqlRowIdPrivate")>),
+    SqlTableName(Valued<StringEqCI!("SqlTableName"), KeywordValue>),
+    StorageStrategy(Valued<StringEqCI!("StorageStrategy"), KeywordValue>),
+    System(Valued<StringEqCI!("System"), KeywordValue>),
+    ViewQuery(Valued<StringEqCI!("ViewQuery"), KeywordValue>),
+}
+
+/// The keywords every member takes, besides its kind's own.
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum MemberKeyword {
+    Deprecated(Flag<StringEqCI!("Deprecated")>),
+    Internal(Flag<StringEqCI!("Internal")>),
+}
+
+/// A member kind's keywords, which include every `MemberKeyword`.
+pub trait HasMemberKeyword {
+    fn member(&self) -> Option<&MemberKeyword>;
+}
+
+macro_rules! has_member_keyword {
+    ($($kind:ident),* $(,)?) => {$(
+        impl HasMemberKeyword for $kind {
+            fn member(&self) -> Option<&MemberKeyword> {
+                match self {
+                    Self::Member(keyword) => Some(keyword),
+                    _ => None,
+                }
+            }
+        }
+    )*};
+}
+
+has_member_keyword!(
+    MethodKeyword,
+    PropertyKeyword,
+    ParameterKeyword,
+    IndexKeyword,
+    QueryKeyword,
+    TriggerKeyword,
+    ForeignKeyKeyword,
+    XDataKeyword,
+);
+
+impl HasMemberKeyword for ProjectionKeyword {
+    fn member(&self) -> Option<&MemberKeyword> {
+        let Self::Member(keyword) = self;
+        Some(keyword)
+    }
+}
+
+/// KEY=ROBJ_method, plus `SqlRoutine` and `ZenMethod`, which IRIS still accepts.
+#[derive(Grammar)]
+pub enum MethodKeyword {
+    Member(MemberKeyword),
+    Abstract(Flag<StringEqCI!("Abstract")>),
+    ClientName(Valued<StringEqCI!("ClientName"), KeywordValue>),
+    CodeMode(Valued<StringEqCI!("CodeMode"), CodeMode>),
+    ExternalProcName(Valued<StringEqCI!("ExternalProcName"), KeywordValue>),
+    Final(Flag<StringEqCI!("Final")>),
+    ForceGenerate(Flag<StringEqCI!("ForceGenerate")>),
+    GenerateAfter(Valued<StringEqCI!("GenerateAfter"), KeywordValue>),
+    Language(Valued<StringEqCI!("Language"), MethodLanguage>),
+    NotInheritable(Flag<StringEqCI!("NotInheritable")>),
+    PlaceAfter(Valued<StringEqCI!("PlaceAfter"), KeywordValue>),
+    Private(Flag<StringEqCI!("Private")>),
+    ProcedureBlock(Valued<StringEqCI!("ProcedureBlock"), Bit>),
+    PublicList(Valued<StringEqCI!("PublicList"), KeywordValue>),
+    Requires(Valued<StringEqCI!("Requires"), KeywordValue>),
+    ReturnResultsets(Flag<StringEqCI!("ReturnResultsets")>),
+    ServerOnly(Valued<StringEqCI!("ServerOnly"), Bit>),
+    SoapAction(Valued<StringEqCI!("SoapAction"), KeywordValue>),
+    SoapBindingStyle(Valued<StringEqCI!("SoapBindingStyle"), KeywordValue>),
+    SoapBodyUse(Valued<StringEqCI!("SoapBodyUse"), KeywordValue>),
+    SoapMessageName(Valued<StringEqCI!("SoapMessageName"), KeywordValue>),
+    SoapNameSpace(Valued<StringEqCI!("SoapNameSpace"), KeywordValue>),
+    SoapRequestMessage(Valued<StringEqCI!("SoapRequestMessage"), KeywordValue>),
+    SoapTypeNameSpace(Valued<StringEqCI!("SoapTypeNameSpace"), KeywordValue>),
+    SqlName(Valued<StringEqCI!("SqlName"), KeywordValue>),
+    SqlProc(Flag<StringEqCI!("SqlProc")>),
+    SqlRoutine(Valued<StringEqCI!("SqlRoutine"), KeywordValue>),
+    WebMethod(Flag<StringEqCI!("WebMethod")>),
+    ZenMethod(Flag<StringEqCI!("ZenMethod")>),
+}
+
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum Cardinality {
+    One(StringEqCI!("one")),
+    Many(StringEqCI!("many")),
+    Parent(StringEqCI!("parent")),
+    Children(StringEqCI!("children")),
+}
+
+/// KEY=ROBJ_property; a relationship takes the same.
+#[derive(Grammar)]
+pub enum PropertyKeyword {
+    Member(MemberKeyword),
+    Aliases(Valued<StringEqCI!("Aliases"), KeywordValue>),
+    Calculated(Flag<StringEqCI!("Calculated")>),
+    Cardinality(Valued<StringEqCI!("Cardinality"), Cardinality>),
+    ClientName(Valued<StringEqCI!("ClientName"), KeywordValue>),
+    Collection(Valued<StringEqCI!("Collection"), KeywordValue>),
+    ComputeLocalOnly(Flag<StringEqCI!("ComputeLocalOnly")>),
+    Deferred(Flag<StringEqCI!("Deferred")>),
+    Final(Flag<StringEqCI!("Final")>),
+    Identity(Flag<StringEqCI!("Identity")>),
+    InitialExpression(Valued<StringEqCI!("InitialExpression"), KeywordValue>),
+    Inverse(Valued<StringEqCI!("Inverse"), KeywordValue>),
+    MultiDimensional(Flag<StringEqCI!("MultiDimensional")>),
+    OnDelete(Valued<StringEqCI!("OnDelete"), KeywordValue>),
+    Private(Flag<StringEqCI!("Private")>),
+    ReadOnly(Flag<StringEqCI!("ReadOnly")>),
+    Required(Flag<StringEqCI!("Required")>),
+    ServerOnly(Valued<StringEqCI!("ServerOnly"), Bit>),
+    SqlColumnNumber(Valued<StringEqCI!("SqlColumnNumber"), KeywordValue>),
+    SqlComputeCode(Valued<StringEqCI!("SqlComputeCode"), KeywordValue>),
+    SqlComputed(Flag<StringEqCI!("SqlComputed")>),
+    SqlComputeOnChange(Valued<StringEqCI!("SqlComputeOnChange"), KeywordValue>),
+    SqlFieldName(Valued<StringEqCI!("SqlFieldName"), KeywordValue>),
+    SqlListDelimiter(Valued<StringEqCI!("SqlListDelimiter"), KeywordValue>),
+    SqlListType(Valued<StringEqCI!("SqlListType"), KeywordValue>),
+    Transient(Flag<StringEqCI!("Transient")>),
+}
+
+/// KEY=ROBJ_parameter, plus `Encoded`, which IRIS still accepts.
+#[derive(Grammar)]
+pub enum ParameterKeyword {
+    Member(MemberKeyword),
+    Abstract(Flag<StringEqCI!("Abstract")>),
+    Constraint(Valued<StringEqCI!("Constraint"), KeywordValue>),
+    Encoded(Flag<StringEqCI!("Encoded")>),
+    Final(Flag<StringEqCI!("Final")>),
+    Flags(Valued<StringEqCI!("Flags"), KeywordValue>),
+}
+
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum IndexType {
+    Bitmap(StringEqCI!("bitmap")),
+    Bitslice(StringEqCI!("bitslice")),
+    CollatedKey(StringEqCI!("collatedkey")),
+    Columnar(StringEqCI!("columnar")),
+    Index(StringEqCI!("index")),
+    Key(StringEqCI!("key")),
+}
+
+/// KEY=ROBJ_index.
+#[derive(Grammar)]
+pub enum IndexKeyword {
+    Member(MemberKeyword),
+    Abstract(Flag<StringEqCI!("Abstract")>),
+    Condition(Valued<StringEqCI!("Condition"), KeywordValue>),
+    CoshardWith(Valued<StringEqCI!("CoshardWith"), KeywordValue>),
+    Data(Valued<StringEqCI!("Data"), KeywordValue>),
+    Deferred(Flag<StringEqCI!("Deferred")>),
+    Extent(Flag<StringEqCI!("Extent")>),
+    IdKey(Flag<StringEqCI!("IdKey")>),
+    PrimaryKey(Flag<StringEqCI!("PrimaryKey")>),
+    ShardKey(Flag<StringEqCI!("ShardKey")>),
+    SqlName(Valued<StringEqCI!("SqlName"), KeywordValue>),
+    Type(Valued<StringEqCI!("Type"), IndexType>),
+    Unique(Flag<StringEqCI!("Unique")>),
+}
+
+/// KEY=ROBJ_query.
+#[derive(Grammar)]
+pub enum QueryKeyword {
+    Member(MemberKeyword),
+    ClientName(Valued<StringEqCI!("ClientName"), KeywordValue>),
+    Final(Flag<StringEqCI!("Final")>),
+    Private(Flag<StringEqCI!("Private")>),
+    Requires(Valued<StringEqCI!("Requires"), KeywordValue>),
+    SoapBindingStyle(Valued<StringEqCI!("SoapBindingStyle"), KeywordValue>),
+    SoapBodyUse(Valued<StringEqCI!("SoapBodyUse"), KeywordValue>),
+    SoapNameSpace(Valued<StringEqCI!("SoapNameSpace"), KeywordValue>),
+    SqlName(Valued<StringEqCI!("SqlName"), KeywordValue>),
+    SqlProc(Flag<StringEqCI!("SqlProc")>),
+    SqlView(Flag<StringEqCI!("SqlView")>),
+    SqlViewName(Valued<StringEqCI!("SqlViewName"), KeywordValue>),
+    WebMethod(Flag<StringEqCI!("WebMethod")>),
+}
+
+/// KEY=ROBJ_trigger.
+#[derive(Grammar)]
+pub enum TriggerKeyword {
+    Member(MemberKeyword),
+    CodeMode(Valued<StringEqCI!("CodeMode"), KeywordValue>),
+    Event(Valued<StringEqCI!("Event"), KeywordValue>),
+    Final(Flag<StringEqCI!("Final")>),
+    Foreach(Valued<StringEqCI!("Foreach"), KeywordValue>),
+    Language(Valued<StringEqCI!("Language"), KeywordValue>),
+    NewTable(Valued<StringEqCI!("NewTable"), KeywordValue>),
+    OldTable(Valued<StringEqCI!("OldTable"), KeywordValue>),
+    Order(Valued<StringEqCI!("Order"), KeywordValue>),
+    SqlName(Valued<StringEqCI!("SqlName"), KeywordValue>),
+    Time(Valued<StringEqCI!("Time"), KeywordValue>),
+    UpdateColumnList(Valued<StringEqCI!("UpdateColumnList"), KeywordValue>),
+}
+
+/// KEY=ROBJ_foreignkey.
+#[derive(Grammar)]
+pub enum ForeignKeyKeyword {
+    Member(MemberKeyword),
+    NoCheck(Flag<StringEqCI!("NoCheck")>),
+    OnDelete(Valued<StringEqCI!("OnDelete"), KeywordValue>),
+    OnUpdate(Valued<StringEqCI!("OnUpdate"), KeywordValue>),
+    SqlName(Valued<StringEqCI!("SqlName"), KeywordValue>),
+}
+
+/// KEY=ROBJ_xdata.
+#[derive(Grammar)]
+pub enum XDataKeyword {
+    Member(MemberKeyword),
+    MimeType(Valued<StringEqCI!("MimeType"), KeywordValue>),
+    SchemaSpec(Valued<StringEqCI!("SchemaSpec"), KeywordValue>),
+    XMLNamespace(Valued<StringEqCI!("XMLNamespace"), KeywordValue>),
+}
+
+/// KEY=ROBJ_projection.
+#[derive(Grammar)]
+pub enum ProjectionKeyword {
+    Member(MemberKeyword),
 }
 
 #[derive(Grammar)]
@@ -2414,7 +2742,7 @@ pub struct ForeignKey {
     refs_keyword: Raw<(Space1, StringEqCI!("References"), Space1)>,
     ref_class: ClassName,
     ref_index: Option<RefIndex>,
-    pub keywords: Option<KeywordList>,
+    pub keywords: Option<KeywordList<FailableKeyword<ForeignKeyKeyword>>>,
     semicolon: Raw<(Space, StringEq!(";"))>,
 }
 
@@ -2440,7 +2768,7 @@ pub struct Index {
     keyword: Raw<(StringEqCI!("Index"), Space1)>,
     pub name: QuotableClassMemberName,
     on_clause: Option<IndexOn>,
-    pub keywords: Option<KeywordList>,
+    pub keywords: Option<KeywordList<FailableKeyword<IndexKeyword>>>,
     semicolon: Raw<(Space, StringEq!(";"))>,
 }
 
@@ -2536,11 +2864,11 @@ pub struct SqlUpperParam {
 
 #[derive(Grammar)]
 pub struct MethodHeader {
-    pub keyword: MethodKeyword,
+    pub keyword: MethodKind,
     pub name: QuotableClassMemberName,
     pub formal_spec: Option<FormalSpec>,
     pub return_type: Range<Option<As<Type>>>,
-    pub keywords: Option<KeywordList>,
+    pub keywords: Option<KeywordList<FailableKeyword<MethodKeyword>>>,
 }
 
 #[derive(Grammar, Clone)]
@@ -2584,7 +2912,7 @@ type OSBody = Prefix<Space, Brace<Range<OSText>>>;
 // closing `}` ending the document (a bare `}` may just as well be the enclosing method's).
 #[derive(Grammar)]
 pub enum AfterMember {
-    Method(MethodKeyword),
+    Method(MethodKind),
     Property(Raw<(StringEqCI!("Property"), Space1)>),
     Relationship(Raw<(StringEqCI!("Relationship"), Space1)>),
     Parameter(Raw<(StringEqCI!("Parameter"), Space1)>),
@@ -2643,15 +2971,14 @@ fn foreign_body(input: &str, pos: usize, mut state: State) -> Option<(OSBody, us
 
 impl MethodHeader {
     fn is_objectscript(&self) -> bool {
-        let language = self.keywords.as_ref().and_then(|keywords| {
-            let KeywordEntry::Assign {
-                value: Some(value), ..
-            } = keywords.get("Language")?
-            else {
-                return None;
-            };
-            MethodLanguage::parse(&value.print()).ok()
-        });
+        let language = self
+            .keywords
+            .iter()
+            .flat_map(KeywordList::items)
+            .find_map(|entry| match &***entry {
+                Either::Left(MethodKeyword::Language(language)) => Some(&language.value),
+                _ => None,
+            });
         matches!(language, None | Some(MethodLanguage::ObjectScript(..)))
     }
 }
@@ -2708,7 +3035,7 @@ impl Deref for Method {
 
 #[derive(Grammar)]
 #[grammar(inline)]
-pub enum MethodKeyword {
+pub enum MethodKind {
     Method(Raw<(StringEqCI!("Method"), Space1)>),
     ClassMethod(Raw<(StringEqCI!("ClassMethod"), Space1)>),
     ClientMethod(Raw<(StringEqCI!("ClientMethod"), Space1)>),
@@ -2777,7 +3104,7 @@ pub struct Parameter {
     keyword: Raw<(StringEqCI!("Parameter"), Space1)>,
     pub name: QuotableClassMemberName,
     pub as_type: Option<As<Type>>,
-    pub keywords: Option<KeywordList>,
+    pub keywords: Option<KeywordList<FailableKeyword<ParameterKeyword>>>,
     pub default: Option<DefaultValue>,
     semicolon: Raw<(Space, StringEq!(";"))>,
 }
@@ -2787,7 +3114,7 @@ pub struct Projection {
     keyword: Raw<(StringEqCI!("Projection"), Space1)>,
     pub name: QuotableClassMemberName,
     as_type: Option<As<Type>>,
-    pub keywords: Option<KeywordList>,
+    pub keywords: Option<KeywordList<FailableKeyword<ProjectionKeyword>>>,
     semicolon: Raw<(Space, StringEq!(";"))>,
 }
 
@@ -2798,14 +3125,14 @@ pub enum Property {
         name: QuotableClassMemberName,
         as_type: Option<As<PropertyType>>,
         type_params: Option<TypeParamList>,
-        keywords: Option<KeywordList>,
+        keywords: Option<KeywordList<FailableKeyword<PropertyKeyword>>>,
         semicolon: Raw<(Space, StringEq!(";"))>,
     },
     Relationship {
         keyword: Raw<(StringEqCI!("Relationship"), Space1)>,
         name: QuotableClassMemberName,
         as_type: Option<As<Type>>,
-        keywords: Option<KeywordList>,
+        keywords: Option<KeywordList<FailableKeyword<PropertyKeyword>>>,
         semicolon: Raw<(Space, StringEq!(";"))>,
     },
 }
@@ -2817,7 +3144,7 @@ impl Property {
             Property::Relationship { name, .. } => name,
         }
     }
-    pub fn keywords(&self) -> &Option<KeywordList> {
+    pub fn keywords(&self) -> &Option<KeywordList<FailableKeyword<PropertyKeyword>>> {
         match &self {
             Property::Simple { keywords, .. } => keywords,
             Property::Relationship { keywords, .. } => keywords,
@@ -2831,7 +3158,7 @@ pub struct Query {
     pub name: QuotableClassMemberName,
     formal_spec: Option<FormalSpec>,
     return_type: Option<As<Type>>,
-    pub keywords: Option<KeywordList>,
+    pub keywords: Option<KeywordList<FailableKeyword<QueryKeyword>>>,
     body: MemberBody,
 }
 
@@ -2849,7 +3176,7 @@ pub struct Storage {
 pub struct Trigger {
     keyword: Raw<(StringEqCI!("Trigger"), Space1)>,
     pub name: QuotableClassMemberName,
-    pub keywords: Option<KeywordList>,
+    pub keywords: Option<KeywordList<FailableKeyword<TriggerKeyword>>>,
     body: MemberBody,
 }
 
@@ -2864,6 +3191,13 @@ impl XData {
         match &self {
             XData::XML(xdata_of_xml) => &xdata_of_xml.name,
             XData::Other(xdata_of_other) => &xdata_of_other.name,
+        }
+    }
+
+    pub fn keywords(&self) -> Option<&KeywordList<FailableKeyword<XDataKeyword>>> {
+        match &self {
+            XData::XML(xdata_of_xml) => xdata_of_xml.keywords.as_ref().map(|list| &list.0),
+            XData::Other(xdata_of_other) => xdata_of_other.keywords.as_ref(),
         }
     }
 }
@@ -2884,7 +3218,7 @@ pub struct XDataOfXML {
 pub struct XDataOfOther {
     keyword: Raw<(StringEqCI!("XData"), Space1)>,
     name: QuotableClassMemberName,
-    pub keywords: Option<KeywordList>,
+    pub keywords: Option<KeywordList<FailableKeyword<XDataKeyword>>>,
     open: Raw<(Space, StringEq!("{"), Space)>,
     content: Data,
     close: Raw<(Space, StringEq!("}"))>,
@@ -2892,25 +3226,15 @@ pub struct XDataOfOther {
 
 #[derive(Grammar)]
 #[grammar(validated)]
-pub struct KeywordListWithMimeTypeIsXML(KeywordList);
+pub struct KeywordListWithMimeTypeIsXML(KeywordList<FailableKeyword<XDataKeyword>>);
 
 impl Validate for KeywordListWithMimeTypeIsXML {
     const REQUIREMENT: &'static str = "have MimeType end with /xml";
     fn validate(&self) -> bool {
-        if let Some(entries) = &self.0.entries {
-            entries.items.iter().all(|entry| match &***entry {
-                KeywordEntry::Assign { keyword, value, .. }
-                    if keyword.0.0.as_str() == "MimeType" =>
-                {
-                    value
-                        .as_ref()
-                        .is_some_and(|value| value.0.ends_with("/xml"))
-                }
-                _ => true,
-            })
-        } else {
-            true
-        }
+        self.0.items().all(|entry| match &***entry {
+            Either::Left(XDataKeyword::MimeType(mime_type)) => mime_type.value.0.ends_with("/xml"),
+            _ => true,
+        })
     }
 }
 
@@ -3002,7 +3326,7 @@ pub struct ClassDefinitionHeader {
 pub struct ClassDefinition {
     header: ClassDefinitionHeader,
     pub extends: Option<Extends>,
-    pub keyword_list: Option<KeywordList>,
+    pub keyword_list: Option<KeywordList<FailableKeyword<ClassKeyword>>>,
     pub member_list: MemberList,
     pub gap_end: ImportIncludeGap,
 }
@@ -6607,8 +6931,16 @@ mod regression_tests {
         )
         .expect("Ok");
         let keywords = methods(&cls)[0].header.keywords.as_ref().expect("keywords");
-        assert!(keywords.get("CodeMode").is_some());
-        assert!(keywords.get("Language").is_none());
+        let has = |is: fn(&MethodKeyword) -> bool| {
+            keywords
+                .items()
+                .any(|entry| matches!(&***entry, Either::Left(keyword) if is(keyword)))
+        };
+        assert!(has(|keyword| matches!(keyword, MethodKeyword::CodeMode(_))));
+        assert!(!has(|keyword| matches!(
+            keyword,
+            MethodKeyword::Language(_)
+        )));
     }
 
     #[test]
