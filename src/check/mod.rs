@@ -772,7 +772,7 @@ fn check_goto_case<'a>(
                     env,
                     flow,
                     Some(label.print()),
-                    None,
+                    false,
                     None,
                     &None,
                     range,
@@ -2920,7 +2920,16 @@ fn check_label_call<'a>(
         .map(|routine| plain_name(env, flow, &routine.name))
         .transpose()?
         .flatten();
-    call_label(env, flow, label, offset, routine, args, range, extrinsic)
+    call_label(
+        env,
+        flow,
+        label,
+        offset.is_some(),
+        routine,
+        args,
+        range,
+        extrinsic,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2928,14 +2937,14 @@ fn call_label<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     label: Option<String>,
-    offset: Option<Ty>,
+    offset: bool,
     routine: Option<String>,
     args: &Option<MthArgList>,
     range: bindings::Range,
     extrinsic: bool,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     // A routine whose labels are out of reach: say why, and check the call as untyped.
-    let proc = match env.resolve_label(label.clone(), offset, routine) {
+    let proc = match env.resolve_label(label.clone(), routine) {
         Err(
             err @ QuasiTypeError::WithoutRange(
                 TypeErrorKind::CannotFindRoutine { .. }
@@ -2955,6 +2964,14 @@ fn call_label<'a>(
     {
         env.reference(range, location);
     }
+    // `label+n` enters the procedure part-way, where its formal list no longer applies, and which
+    // line that is depends on the compiled routine: the label is confirmed, the rest is untyped.
+    let proc = if offset {
+        env.soft_diagnostic(TypeError::label_offset(range));
+        TyProcedureOrAny::Any
+    } else {
+        proc
+    };
     if let (true, TyProcedureOrAny::Procedure(proc), Some(label)) = (extrinsic, &proc, label)
         && !proc.formal_list
     {
