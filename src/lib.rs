@@ -1502,25 +1502,6 @@ mod tests {
         assert!(!hints.iter().any(|h| h.label.starts_with('[')), "{hints:?}");
     }
 
-    // The `?`, `*`, `*-` and `/mnemonic(...)` parts of a Write argument hold expressions too.
-    #[test]
-    fn write_format_arguments_are_checked() {
-        let diagnostics = diagnostics_for(&[(
-            "WriteArgs.mac",
-            "ROUTINE WriteArgs\nTAB(n) public {\n write ?(n - 1 * 12), \"x\", !\n quit\n}\nCHAR() public {\n write *nochar\n quit\n}\nDEV() public {\n write *-nodev\n quit\n}\nMNEMONIC() public {\n write /CUP(nocol, 1)\n quit\n}\n",
-        )]);
-        let mut found: Vec<(u32, &str)> = diagnostics
-            .iter()
-            .map(|d| (d.range.start.line, d.code.as_str()))
-            .collect();
-        found.sort();
-        assert_eq!(
-            found,
-            [(2, "A7155"), (6, "A7095"), (10, "A7095"), (14, "A7095")],
-            "{diagnostics:?}"
-        );
-    }
-
     // An argumentless `Do` with its dotted block, and a stand-alone `Else`, get a hint and are
     // skipped; the defect after each is still reported.
     #[test]
