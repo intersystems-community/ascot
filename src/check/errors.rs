@@ -447,7 +447,7 @@ type_error_kinds! {
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
     #[code = "A3303"]
-    #[severity = Warning]
+    #[severity = Hint]
     #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
     CannotFindRoutine { routine: String },
     #[code = "A4439"]
