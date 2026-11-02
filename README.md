@@ -263,15 +263,6 @@ intrinsic function name written differently is reported as a warning.
 }
 ```
 
-### Legacy syntax
-
-ascot models the ObjectScript that the latest official IRIS documentation
-specifies. A construct the current reference no longer describes gets hint
-A4043 (`Type checking not implemented for ...`) and is skipped unanalyzed, and
-checking continues after it. Today that covers an argumentless `Do` with its
-dotted block, and a stand-alone `Else` or `ElseIf`, one that does not follow a
-line-level `If`.
-
 ## Contributing
 
 Please [open an issue](https://github.com/intersystems-community/ascot/issues/new/choose)
