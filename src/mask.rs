@@ -1,4 +1,4 @@
-use crate::bindings::ArgMode;
+use crate::bindings::RefMode;
 use crate::check::types::{NormalArg, Ty, TyProcedure, VariadicArg, ty_from_mask};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -122,8 +122,8 @@ pub(crate) fn label(routine: &str, label: &str) -> Option<Arc<TyProcedure>> {
                 _ => None,
             })?;
     let mode = |name: &str| match name.strip_prefix('&') {
-        Some(name) => (ArgMode::ByRef, name.to_string()),
-        None => (ArgMode::Default, name.to_string()),
+        Some(name) => (Some(RefMode::ByRef), name.to_string()),
+        None => (None, name.to_string()),
     };
     let mut normal_args = vec![];
     let mut variadic_arg = None;

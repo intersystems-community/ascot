@@ -2,7 +2,7 @@
 //! text. Used by `Workspace::hover` in `lib.rs`; the LSP and MCP front ends pass the result
 //! through unchanged.
 
-use crate::bindings::{ArgMode, CollectionKind, MemberInfo, MemberKind, MethodInfo};
+use crate::bindings::{CollectionKind, MemberInfo, MemberKind, MethodInfo, RefMode};
 
 pub(crate) fn format_member_hover(member: &MemberInfo) -> String {
     let name = &member.name.content;
@@ -77,10 +77,10 @@ fn format_method_signature(info: &MethodInfo) -> String {
     format!("({}){}", args.join(", "), format_as(info.t.as_deref()))
 }
 
-fn arg_mode_prefix(mode: ArgMode) -> &'static str {
+fn arg_mode_prefix(mode: Option<RefMode>) -> &'static str {
     match mode {
-        ArgMode::ByRef => "ByRef ",
-        ArgMode::Output => "Output ",
-        ArgMode::Default => "",
+        Some(RefMode::ByRef) => "ByRef ",
+        Some(RefMode::Output) => "Output ",
+        None => "",
     }
 }

@@ -28,14 +28,15 @@ interface common {
         after: position,
     }
 
-    enum arg-mode {
-        default,
-        output,
+    // How a parameter is passed by reference; `none` is by value.
+    enum ref-mode {
         by-ref,
+        // No value is expected to come in.
+        output,
     }
 
     record normal-arg {
-        mode: arg-mode,
+        mode: option<ref-mode>,
         name: string,
         t: option<string>,
         default: option<string>,
@@ -43,7 +44,7 @@ interface common {
     }
 
     record variadic-arg {
-        mode: arg-mode,
+        mode: option<ref-mode>,
         name: string,
         t: option<string>,
         declared-at: option<range>,
