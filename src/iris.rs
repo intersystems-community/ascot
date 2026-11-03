@@ -132,7 +132,12 @@ fn keyword_list(entries: &[String]) -> String {
 }
 
 fn as_type(t: Option<&str>) -> String {
-    t.map(|t| format!(" As {t}")).unwrap_or_default()
+    t.map(|t| format!(" As {}", short(t))).unwrap_or_default()
+}
+
+// `%Library.X` as `%X`, the short name the class syntax allows.
+fn short(class: &str) -> String {
+    class.replace("%Library.", "%")
 }
 
 // `{:?}` of a WIT enum is its variant's name, which is how the class syntax spells the value.
@@ -217,7 +222,7 @@ fn member_header(member: &MemberInfo) -> Option<String> {
                 .unwrap_or_default();
             let t =
                 p.t.as_deref()
-                    .map(|t| format!(" As {of}{t}"))
+                    .map(|t| format!(" As {of}{}", short(t)))
                     .unwrap_or_default();
             if p.multidimensional {
                 keywords.push("MultiDimensional".to_string());
@@ -323,8 +328,8 @@ impl From<&ClassInfo> for DeclaredClass {
     fn from(info: &ClassInfo) -> Self {
         let extends = match info.extends.as_slice() {
             [] => String::new(),
-            [one] => format!(" Extends {one}"),
-            many => format!(" Extends ({})", many.join(", ")),
+            [one] => format!(" Extends {}", short(one)),
+            many => format!(" Extends ({})", short(&many.join(", "))),
         };
         let mut keywords = vec![];
         if let Some(t) = info.class_type {
@@ -347,12 +352,12 @@ impl From<&ClassInfo> for DeclaredClass {
         if !info.property_class.is_empty() {
             keywords.push(format!(
                 "PropertyClass = ({})",
-                info.property_class.join(", ")
+                short(&info.property_class.join(", "))
             ));
         }
         Self {
             doc: info.doc.clone(),
-            header: format!("Class {}{extends}{}", info.name, keyword_list(&keywords)),
+            header: format!("Class {}{extends}{}", short(&info.name), keyword_list(&keywords)),
             include: info.include.clone(),
             storage: info.storage.clone(),
             members: info
@@ -409,6 +414,7 @@ impl DeclaredClass {
     pub fn to_class_info(&self, name: &str) -> Option<ClassInfo> {
         let details = ClassDetails::try_from(self.source().as_str()).ok()?;
         let mut info = ClassInfo::from(&details);
+        info.name = name.to_string();
         info.storage = self.storage.clone();
         for member in &mut info.members {
             member.origin = Some(name.to_string());
