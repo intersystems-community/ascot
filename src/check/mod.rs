@@ -456,6 +456,40 @@ impl MethodDetails {
                 if is_generator {
                     flow.mark_incomplete();
                 }
+                for default in &self.brace_defaults {
+                    // Its own env: the text sits at `default.start` of the header.
+                    let env = method_env.for_member(
+                        default.start,
+                        Some(&cls.class),
+                        !self.is_class_method,
+                        name,
+                        &definitions,
+                    );
+                    let range = env.span(0, default.text.len());
+                    flow.with_range(range, |flow| {
+                        let ty = match Expr::parse(&default.text) {
+                            Ok(expr) => expr.to_power_ty(&env, flow).unwrap_or_else(|err| {
+                                flow.add_soft_diagnostic(err);
+                                Ty::Any.into()
+                            }),
+                            Err(err) => {
+                                env.soft_diagnostic(TypeError::invalid_syntax(range, err));
+                                Ty::Any.into()
+                            }
+                        };
+                        // Set only when the argument wasn't passed, so the incoming value stays
+                        // a live alternative.
+                        let passed = flow.split_on(PowerTy::from("%Boolean"), true);
+                        if let Err(err) =
+                            flow.handle_set(Local::bare(default.name.clone()), ty, range)
+                        {
+                            flow.add_soft_diagnostic(err);
+                        }
+                        if let Err(err) = flow.merge(passed) {
+                            flow.add_soft_diagnostic(err);
+                        }
+                    });
+                }
                 body.check(&code_env, flow)
             },
             true,

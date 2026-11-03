@@ -316,6 +316,16 @@ pub struct MethodDetails {
     pub header_start: usize,
     // Source text from `header_start` through the body's opening `{`.
     pub header_text: String,
+    pub brace_defaults: Vec<BraceDefault>,
+}
+
+// An argument default in braces, `x As %Integer = {expr}`: IRIS evaluates it on entry, in the
+// method's own context, in argument order, when the argument wasn't passed.
+pub struct BraceDefault {
+    pub name: String,
+    // Where `text` starts within `header_text`.
+    pub start: usize,
+    pub text: String,
 }
 
 pub enum RoutineElementKind {
@@ -913,6 +923,21 @@ fn method_kind(
         })
         .collect();
     let (normal_args, variadic_arg) = split_args(args);
+    let brace_defaults = method
+        .formal_spec
+        .iter()
+        .flat_map(|spec| spec.formals().into_iter())
+        .filter_map(|formal| {
+            let cos::OSExpr::Brace { content, .. } = formal.default.as_deref()?.deref() else {
+                return None;
+            };
+            Some(BraceDefault {
+                name: formal.name.print(),
+                start: content.start - header_start,
+                text: content.print(),
+            })
+        })
+        .collect();
     let out = method
         .return_type
         .as_ref()
@@ -958,6 +983,7 @@ fn method_kind(
         body,
         header_start,
         header_text: header_text.to_string(),
+        brace_defaults,
         language,
         mode,
         procedure_block,
