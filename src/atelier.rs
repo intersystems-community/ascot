@@ -24,8 +24,8 @@ use {
 
 use crate::IrisContext;
 use crate::bindings::{
-    ArgMode, Cardinality, ClassInfo, CollectionKind, IndexInfo, IndexKey, IndexSubscript,
-    MemberInfo, MemberKind, NormalArg, ParameterInfo, PropertyInfo, RelationshipInfo, RoutineInfo,
+    Cardinality, ClassInfo, CollectionKind, IndexInfo, IndexKey, IndexSubscript, MemberInfo,
+    MemberKind, NormalArg, ParameterInfo, PropertyInfo, RefMode, RelationshipInfo, RoutineInfo,
     Signature, Source, VariadicArg,
 };
 use crate::cos::{self, LocalVariableName, OSString, Space, Type};
@@ -635,9 +635,9 @@ fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
     let mut variadic = None;
     for formal in &formals.items {
         let mode = match formal.call_type {
-            Some(CompiledCallType::Output(_)) => ArgMode::Output,
-            Some(CompiledCallType::ByRef(_)) => ArgMode::ByRef,
-            None => ArgMode::Default,
+            Some(CompiledCallType::Output(_)) => Some(RefMode::Output),
+            Some(CompiledCallType::ByRef(_)) => Some(RefMode::ByRef),
+            None => None,
         };
         let name = formal.name.print();
         let t = formal.as_type.as_ref().map(|t| t.deref().print());
@@ -1115,13 +1115,13 @@ mod tests {
         let (normal, variadic) =
             parse_formal_spec(r#"*out:%String,&ref:%Integer,x:%String="a",y..."#);
         assert_eq!(normal.len(), 3);
-        assert_eq!(normal[0].mode, ArgMode::Output);
+        assert_eq!(normal[0].mode, Some(RefMode::Output));
         assert_eq!(normal[0].name, "out");
         assert_eq!(normal[0].t, Some("%String".to_string()));
-        assert_eq!(normal[1].mode, ArgMode::ByRef);
+        assert_eq!(normal[1].mode, Some(RefMode::ByRef));
         assert_eq!(normal[1].name, "ref");
         assert_eq!(normal[1].t, Some("%Integer".to_string()));
-        assert_eq!(normal[2].mode, ArgMode::Default);
+        assert_eq!(normal[2].mode, None);
         assert_eq!(normal[2].name, "x");
         assert_eq!(normal[2].t, Some("%String".to_string()));
         assert_eq!(normal[2].default, Some("\"a\"".to_string()));

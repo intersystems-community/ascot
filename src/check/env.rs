@@ -21,7 +21,7 @@ use std::{
 
 use tygr::OLC;
 
-use crate::bindings::{ArgMode, InlayHint, MemberKind};
+use crate::bindings::{InlayHint, MemberKind, RefMode};
 use crate::check::errors::*;
 use crate::check::flow::OutputCell;
 use crate::check::types::*;
@@ -316,7 +316,7 @@ fn generated_procedure(
 ) -> Arc<TyProcedure> {
     Arc::new(TyProcedure {
         normal_args,
-        variadic_arg: variadic.then(|| VariadicArg::new(ArgMode::Default, "args".into(), None)),
+        variadic_arg: variadic.then(|| VariadicArg::new(None, "args".into(), None)),
         out,
         procedure_block: Some(vec![]),
         formal_list: true,
@@ -388,7 +388,7 @@ fn query_methods(
     normal: Vec<NormalArg>,
     variadic: Option<VariadicArg>,
 ) -> Vec<(String, Generated)> {
-    use ArgMode::{ByRef, Default, Output};
+    let (by_ref, output) = (Some(RefMode::ByRef), Some(RefMode::Output));
     let arg = |mode, name: &str, ty: &str, default: Option<&str>| {
         NormalArg::new(
             mode,
@@ -410,7 +410,7 @@ fn query_methods(
             declared_at: None,
         })
     };
-    let execute = std::iter::once(handle(Output))
+    let execute = std::iter::once(handle(output))
         .chain(normal.iter().cloned())
         .collect();
     [
@@ -427,9 +427,9 @@ fn query_methods(
             "Fetch",
             proc(
                 vec![
-                    handle(ByRef),
-                    arg(Output, "Row", "%List", None),
-                    arg(Output, "AtEnd", "%Integer", Some("0")),
+                    handle(by_ref),
+                    arg(output, "Row", "%List", None),
+                    arg(output, "AtEnd", "%Integer", Some("0")),
                 ],
                 None,
                 status(),
@@ -439,27 +439,27 @@ fn query_methods(
             "FetchRows",
             proc(
                 vec![
-                    handle(ByRef),
-                    arg(Default, "FetchCount", "%Integer", Some("0")),
-                    arg(Output, "RowSet", "%List", None),
-                    arg(Output, "ReturnCount", "%Integer", None),
-                    arg(Output, "AtEnd", "%Integer", None),
+                    handle(by_ref),
+                    arg(None, "FetchCount", "%Integer", Some("0")),
+                    arg(output, "RowSet", "%List", None),
+                    arg(output, "ReturnCount", "%Integer", None),
+                    arg(output, "AtEnd", "%Integer", None),
                 ],
                 None,
                 status(),
             ),
         ),
-        ("Close", proc(vec![handle(ByRef)], None, status())),
+        ("Close", proc(vec![handle(by_ref)], None, status())),
         (
             "GetInfo",
             proc(
                 vec![
-                    arg(Output, "colinfo", "%List", None),
-                    arg(Output, "parminfo", "%List", None),
-                    arg(Output, "idinfo", "%List", None),
-                    handle(ByRef),
-                    arg(Default, "extoption", "%Integer", Some("0")),
-                    arg(Output, "extinfo", "%List", None),
+                    arg(output, "colinfo", "%List", None),
+                    arg(output, "parminfo", "%List", None),
+                    arg(output, "idinfo", "%List", None),
+                    handle(by_ref),
+                    arg(None, "extoption", "%Integer", Some("0")),
+                    arg(output, "extinfo", "%List", None),
                 ],
                 None,
                 status(),
@@ -469,8 +469,8 @@ fn query_methods(
             "GetODBCInfo",
             proc(
                 vec![
-                    arg(Output, "colinfo", "%List", None),
-                    arg(Output, "parminfo", "%List", None),
+                    arg(output, "colinfo", "%List", None),
+                    arg(output, "parminfo", "%List", None),
                 ],
                 None,
                 status(),
@@ -509,9 +509,9 @@ impl Shape {
         let one = |mode, name: &str, ty| vec![NormalArg::new(mode, name.into(), Some(ty), None)];
         let args = match arg {
             Arg::None => vec![],
-            Arg::Value => one(ArgMode::Default, "value", prop.clone()),
-            Arg::Id => one(ArgMode::Default, "id", Ty::from("%String")),
-            Arg::Concurrency => one(ArgMode::Output, "concurrency", Ty::from("%Integer")),
+            Arg::Value => one(None, "value", prop.clone()),
+            Arg::Id => one(None, "id", Ty::from("%String")),
+            Arg::Concurrency => one(Some(RefMode::Output), "concurrency", Ty::from("%Integer")),
         };
         let out = match out {
             Out::Prop => prop.clone(),
@@ -834,39 +834,34 @@ impl<'a> WorkspaceEnv<'a> {
                     Some(PropertyTy::Value(ty)) => ty,
                     _ => Ty::Any,
                 };
-                arg("value", ArgMode::Default, ty, None)
+                arg("value", None, ty, None)
             })
             .collect();
         if keys.is_empty() {
-            args.push(arg("id", ArgMode::Default, Ty::from("%String"), None));
+            args.push(arg("id", None, Ty::from("%String"), None));
         }
         let exists = (
             "Exists",
-            vec![arg("id", ArgMode::Output, Ty::from("%String"), None)],
+            vec![arg("id", Some(RefMode::Output), Ty::from("%String"), None)],
             Ty::from("%Boolean"),
         );
         let open_and_delete = [
             (
                 "Open",
                 vec![
+                    arg("concurrency", None, Ty::from("%Integer"), Some("-1")),
                     arg(
-                        "concurrency",
-                        ArgMode::Default,
-                        Ty::from("%Integer"),
-                        Some("-1"),
+                        "sc",
+                        Some(RefMode::ByRef),
+                        Ty::from("%Status"),
+                        Some("$$$OK"),
                     ),
-                    arg("sc", ArgMode::ByRef, Ty::from("%Status"), Some("$$$OK")),
                 ],
                 Ty::This,
             ),
             (
                 "Delete",
-                vec![arg(
-                    "concurrency",
-                    ArgMode::Default,
-                    Ty::from("%Integer"),
-                    Some("-1"),
-                )],
+                vec![arg("concurrency", None, Ty::from("%Integer"), Some("-1"))],
                 Ty::from("%Status"),
             ),
         ];

@@ -11,6 +11,7 @@ use ascot::bindings::GuestWorkspace;
 use ascot::bindings::Style;
 use ascot::cos;
 use ascot::cos::Routine;
+use ascot::diagnostic_filter::{Batch, Filter};
 use ascot::mcp::{DiagnosticsResult, FileDiagnostics};
 use ascot::style;
 use std::collections::HashSet;
@@ -51,6 +52,8 @@ enum Command {
         #[command(flatten)]
         style: StyleArgs,
         #[command(flatten)]
+        filter: FilterArgs,
+        #[command(flatten)]
         output: OutputArgs,
         /// Files or directories to check
         #[arg(required = true)]
@@ -66,6 +69,8 @@ enum Command {
         iris: IrisArgs,
         #[command(flatten)]
         style: StyleArgs,
+        #[command(flatten)]
+        filter: FilterArgs,
         #[command(flatten)]
         output: OutputArgs,
         /// The directory whose files are all loaded
@@ -116,6 +121,8 @@ enum Command {
         iris: IrisArgs,
         #[command(flatten)]
         style: StyleArgs,
+        #[command(flatten)]
+        filter: FilterArgs,
     },
 }
 
@@ -140,6 +147,28 @@ enum Format {
     Text,
     Lsp,
     Sarif,
+}
+
+#[derive(Args)]
+struct FilterArgs {
+    #[arg(
+        short = 'd',
+        long,
+        value_name = "VERB:TARGETS",
+        help = "Which codes are reported, and at what severity",
+        long_help = diagnostics_help()
+    )]
+    diagnostics: Vec<Batch>,
+}
+
+fn diagnostics_help() -> String {
+    format!(
+        "Which codes are reported, and at what severity\n\nRepeatable; the last value naming a code \
+         (or `all`) decides it, `on` being the code's own severity. For example `-d off:A5579`, \
+         `-d off:all -d on:A7095,A6851`, or `-d hint:A4471`. The exit code follows what is \
+         reported.\n\n{}",
+        ascot::diagnostic_filter::bnf()
+    )
 }
 
 #[derive(Args)]
@@ -171,17 +200,20 @@ fn main() {
         Command::Analyze {
             iris,
             style,
+            filter,
             output,
             paths,
         } => analyze(
             paths.iter().map(PathBuf::as_path),
             iris.open(),
             style.load(),
+            Filter(filter.diagnostics),
             output.format,
         ),
         Command::AnalyzeWorkspace {
             iris,
             style,
+            filter,
             output,
             root,
             paths,
@@ -190,6 +222,7 @@ fn main() {
             paths.iter().map(PathBuf::as_path),
             iris.open(),
             style.load(),
+            Filter(filter.diagnostics),
             output.format,
         ),
         Command::Parse { file } => scan_file(&file),
@@ -202,8 +235,13 @@ fn main() {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
             rt.block_on(run_mcp_server(shared_fs));
         }
-        Command::Lsp { iris, style } => {
-            if let Err(err) = ascot::lsp::run(iris.open(), style.load()) {
+        Command::Lsp {
+            iris,
+            style,
+            filter,
+        } => {
+            if let Err(err) = ascot::lsp::run(iris.open(), style.load(), Filter(filter.diagnostics))
+            {
                 eprintln!("LSP server error: {err}");
                 exit(1);
             }
@@ -358,6 +396,7 @@ fn analyze<'a>(
     roots: impl Iterator<Item = &'a Path>,
     iris: Option<Box<dyn IrisContext>>,
     style: Option<Style>,
+    filter: Filter,
     format: Format,
 ) {
     let mut files = Vec::new();
@@ -371,6 +410,7 @@ fn analyze<'a>(
     files.sort();
 
     let workspace = Workspace::native(iris, style);
+    workspace.set_diagnostic_filter(filter);
     insert_files(&workspace, &files);
 
     let count = report_diagnostics(&workspace, &files, format);
@@ -389,6 +429,7 @@ fn analyze_workspace<'a>(
     paths: impl Iterator<Item = &'a Path>,
     iris: Option<Box<dyn IrisContext>>,
     style: Option<Style>,
+    filter: Filter,
     format: Format,
 ) {
     let root = match fs::canonicalize(root) {
@@ -417,6 +458,7 @@ fn analyze_workspace<'a>(
     diagnose_files.dedup();
 
     let workspace = Workspace::native(iris, style);
+    workspace.set_diagnostic_filter(filter);
     insert_files(&workspace, &all_files);
 
     let all_files_set: HashSet<&PathBuf> = all_files.iter().collect();

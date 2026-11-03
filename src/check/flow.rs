@@ -7,8 +7,8 @@
 //! by the command rules in `mod.rs`; produces `types.rs` values; reports through `errors.rs`.
 
 use crate::bindings;
-use crate::bindings::ArgMode;
 use crate::bindings::Location;
+use crate::bindings::RefMode;
 use crate::check::env::*;
 use crate::check::errors::*;
 use crate::check::types::*;
@@ -34,6 +34,25 @@ impl Written {
     }
 }
 
+// A parameter passed by reference (`ByRef` or `Output`) and how the body used it: read needing
+// its incoming value, read tolerating its absence, written (assigned, merged into, killed or
+// handed on by reference).
+struct RefParam {
+    name: String,
+    range: bindings::Range,
+    mode: RefMode,
+    needed: bool,
+    read: bool,
+    written: bool,
+}
+
+// The handler that used it: `handle_ref`, `handle_get`, or any write.
+enum RefUse {
+    Ref,
+    Get,
+    Set,
+}
+
 struct Shared<'a> {
     uri: &'a str,
     env: &'a WorkspaceEnv<'a>,
@@ -44,10 +63,8 @@ struct Shared<'a> {
     output: OutputCell,
     ty_var: RefCell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
-    // Kept in declaration order for a deterministic diagnostic when more than one is never
-    // assigned.
-    output_params: Vec<(String, bindings::Range)>,
-    output_written: RefCell<HashSet<String>>,
+    // In declaration order, for a deterministic diagnostic when more than one qualifies.
+    ref_params: RefCell<Vec<RefParam>>,
     // Visible in the signature already, so excluded from `creates` below.
     known_names: HashSet<String>,
     // Every not-`New`'d (`new != Some(true)`) variable written anywhere in the procedure, i.e.
@@ -141,7 +158,13 @@ impl<'a> Flow<'a> {
                 self.add_soft_diagnostic(QuasiTypeError::undefined().with_expr_text(text));
                 Ok(Ty::Any)
             }
-            maybe => maybe.to_ty(),
+            MaybeTy::Maybe(ty) => {
+                self.add_soft_diagnostic(
+                    QuasiTypeError::maybe_undefined(ty.clone()).with_expr_text(text),
+                );
+                Ok(ty)
+            }
+            MaybeTy::Plain(ty) => Ok(ty),
         }
     }
 
@@ -166,7 +189,7 @@ impl<'a> Flow<'a> {
         output: OutputCell,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
     ) -> Result<Vec<String>, TypeError> {
-        Self::run(uri, env, range, args, None, output, handler, false)
+        Self::run(uri, env, range, args, None, output, handler, false, false)
     }
 
     pub(crate) fn is_procedure_block(&self) -> bool {
@@ -209,6 +232,8 @@ impl<'a> Flow<'a> {
         output: WithRange<Option<Option<Ty>>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
         auto_return: bool,
+        // Whether the signature can say `Output`: a method's can, a label's can't.
+        output_keyword: bool,
     ) -> Result<Vec<String>, TypeError> {
         let output = Rc::new(RefCell::new(
             output.it.map(|it| WithRange::new(it, output.range)),
@@ -222,6 +247,7 @@ impl<'a> Flow<'a> {
             output,
             handler,
             auto_return,
+            output_keyword,
         )
     }
 
@@ -236,11 +262,12 @@ impl<'a> Flow<'a> {
         output: OutputCell,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
         auto_return: bool,
+        output_keyword: bool,
     ) -> Result<Vec<String>, TypeError> {
         let procedure_block = public_list.is_some();
         let mut bindings = HashMap::new();
         let mut reading_list = HashMap::new();
-        let mut output_params = Vec::new();
+        let mut ref_params = Vec::new();
         let mut known_names = HashSet::new();
         for WithRange {
             it:
@@ -260,29 +287,34 @@ impl<'a> Flow<'a> {
             }
             let binding = {
                 let (assigned, subscript_assigned, new) = match mode {
-                    ArgMode::Default => {
+                    None => {
                         reading_list.insert(Written::new(name.clone(), range), false);
                         let subscripts = variadic.then_some(());
                         (ty.clone().unwrap_or_default().into(), subscripts, true)
                     }
-                    ArgMode::ByRef => {
-                        reading_list.insert(Written::new(name.clone(), range), false);
+                    Some(RefMode::ByRef) => {
                         (ty.clone().unwrap_or_default().into(), Some(()), false)
                     }
-                    ArgMode::Output => {
-                        output_params.push((name.clone(), range));
-                        (
-                            MaybeTy::Maybe(ty.clone().unwrap_or_default()).into(),
-                            Some(()),
-                            false,
-                        )
-                    }
+                    // The caller need not pass a value, so there is none until the body assigns
+                    // one.
+                    Some(RefMode::Output) => (PowerTy::undefined(), Some(()), false),
                 };
+                if let Some(mode) = mode {
+                    ref_params.push(RefParam {
+                        name: name.clone(),
+                        range,
+                        mode,
+                        needed: false,
+                        read: false,
+                        written: false,
+                    });
+                }
                 Binding {
                     assigned,
                     subscript_assigned,
                     new: Some(new),
                     new_at: None,
+                    incoming: mode.is_some(),
                     private: procedure_block,
                     declared: Some(WithRange::new(ty.clone().unwrap_or_default(), range)),
                     assigned_at: HashSet::from([range]),
@@ -315,8 +347,7 @@ impl<'a> Flow<'a> {
                 output,
                 ty_var: RefCell::new(0),
                 reading_list: RefCell::new(reading_list),
-                output_params,
-                output_written: RefCell::new(HashSet::new()),
+                ref_params: RefCell::new(ref_params),
                 known_names,
                 creates: RefCell::new(HashSet::new()),
                 incomplete: std::cell::Cell::new(false),
@@ -345,19 +376,39 @@ impl<'a> Flow<'a> {
             for (name, range) in unread {
                 flow.add_soft_diagnostic(TypeError::unread_assignment(name, range).into());
             }
+            // The caller reads a by-reference parameter, and need not set an `Output` one, so the
+            // body's own use says which mode fits: a `ByRef` written without its incoming value
+            // ever being needed is `Output` in all but name, an `Output` read before it is
+            // written is `ByRef`; an untouched `ByRef` is unused.
+            for param in flow.shared.ref_params.borrow().iter() {
+                let (name, range) = (param.name.clone(), param.range);
+                let err = match (param.mode, param.needed, param.written, param.read) {
+                    (RefMode::ByRef, false, true, _) if output_keyword => {
+                        TypeError::by_ref_never_read(name, range)
+                    }
+                    (RefMode::ByRef, false, false, false) => {
+                        TypeError::unread_assignment(name, range)
+                    }
+                    (RefMode::Output, true, true, _) => TypeError::output_read_first(name, range),
+                    _ => continue,
+                };
+                flow.add_soft_diagnostic(err.into());
+            }
         }
-        // Likewise deferred: an `Output` parameter absent from `output_written` was never
-        // assigned on any path, so its caller gets an undefined value back.
-        let output_written = flow.shared.output_written.borrow();
+        // Likewise deferred: an `Output` parameter never assigned on any path leaves its caller an
+        // undefined value.
+        let ref_params = flow.shared.ref_params.borrow();
         if !flow.shared.incomplete.get()
-            && let Some((name, range)) = flow
-                .shared
-                .output_params
+            && let Some(param) = ref_params
                 .iter()
-                .find(|(name, _)| !output_written.contains(name))
+                .find(|param| param.mode == RefMode::Output && !param.written)
         {
-            return Err(TypeError::output_never_assigned(name.clone(), *range));
+            return Err(TypeError::output_never_assigned(
+                param.name.clone(),
+                param.range,
+            ));
         }
+        drop(ref_params);
         let mut creates: Vec<String> = flow
             .shared
             .creates
@@ -790,6 +841,7 @@ impl<'a> Flow<'a> {
         range: bindings::Range,
     ) -> Result<(), QuasiTypeError> {
         let Local { name, subs } = local;
+        self.note_ref_param(&name, RefUse::Set)?;
         let env = self.shared.env;
         let ty = match ty.to_maybe_ty(env).maybe_defined() {
             Some(_) => ty,
@@ -809,6 +861,7 @@ impl<'a> Flow<'a> {
                 .map_err(|err| err.assign(name.clone()))?;
             binding.assigned = ty;
             binding.assigned_at = HashSet::from([range]);
+            binding.incoming = false;
             // `or_insert`, not a blind `insert`: the only way this exact (name, range) pair is
             // set twice is the loop body being simulated twice (throwaway pass, then real) — if
             // the throwaway write was already marked read, that must survive the real pass
@@ -829,12 +882,6 @@ impl<'a> Flow<'a> {
     }
 
     fn note_write(&self, name: &str, new: Option<bool>) {
-        if self.shared.output_params.iter().any(|(n, _)| n == name) {
-            self.shared
-                .output_written
-                .borrow_mut()
-                .insert(name.to_string());
-        }
         if new != Some(true) {
             self.shared.creates.borrow_mut().insert(name.to_string());
         }
@@ -849,9 +896,6 @@ impl<'a> Flow<'a> {
     ) -> Result<(), QuasiTypeError> {
         if subs.is_empty() {
             self.lookup(name.clone())?.assigned = ty;
-            if self.shared.output_params.iter().any(|(n, _)| *n == name) {
-                self.shared.output_written.borrow_mut().insert(name);
-            }
         }
         Ok(())
     }
@@ -865,6 +909,7 @@ impl<'a> Flow<'a> {
         source: PowerTy,
         range: bindings::Range,
     ) -> Result<(), QuasiTypeError> {
+        self.note_ref_param(&local.name, RefUse::Set)?;
         let env = self.shared.env;
         let node = match source.to_maybe_ty(env) {
             MaybeTy::Undefined => None,
@@ -889,6 +934,8 @@ impl<'a> Flow<'a> {
     // site wants both. Ignores `local.subs`: a callee-mutated variable is invalidated wholesale
     // either way.
     pub(crate) fn invalidate(&mut self, local: Local, ty: PowerTy) -> Result<(), QuasiTypeError> {
+        self.note_ref_param(&local.name, RefUse::Ref)?;
+        self.note_ref_param(&local.name, RefUse::Set)?;
         self.read(&local.name)?;
         let binding = self.lookup(local.name.clone())?;
         binding.assigned = ty;
@@ -904,11 +951,13 @@ impl<'a> Flow<'a> {
     // specific path only removes that path — since individual subscripts aren't tracked, the
     // scalar and other subscripts might still exist, so both are left untouched.
     pub(crate) fn handle_kill(&mut self, local: Local) -> Result<(), QuasiTypeError> {
+        self.note_ref_param(&local.name, RefUse::Set)?;
         if local.subs.is_empty() {
             let binding = self.lookup(local.name)?;
             binding.assigned = PowerTy::undefined();
             binding.assigned_at = HashSet::new();
             binding.subscript_assigned = None;
+            binding.incoming = false;
         }
         Ok(())
     }
@@ -916,6 +965,7 @@ impl<'a> Flow<'a> {
     // ZKILL removes only a node's own value, never its descendants — unlike `KILL`, this never
     // touches `subscript_assigned`, regardless of whether the target itself was subscripted.
     pub(crate) fn handle_zkill(&mut self, local: Local) -> Result<(), QuasiTypeError> {
+        self.note_ref_param(&local.name, RefUse::Set)?;
         let binding = self.lookup(local.name)?;
         binding.assigned = PowerTy::undefined();
         binding.assigned_at = HashSet::new();
@@ -943,6 +993,33 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
+    // Records a use of `name` if it is a parameter passed by reference; every read and write of
+    // a local passes through here. A read needs the incoming value only while the binding still
+    // holds it, i.e. before this path's first write.
+    fn note_ref_param(&mut self, name: &str, used: RefUse) -> Result<(), QuasiTypeError> {
+        let Some(i) = self
+            .shared
+            .ref_params
+            .borrow()
+            .iter()
+            .position(|param| param.name == name)
+        else {
+            return Ok(());
+        };
+        let incoming = self.lookup(name.to_string())?.incoming;
+        let mut params = self.shared.ref_params.borrow_mut();
+        let param = &mut params[i];
+        match used {
+            RefUse::Ref => {
+                param.needed |= incoming;
+                param.read = true;
+            }
+            RefUse::Get => param.read = true,
+            RefUse::Set => param.written = true,
+        }
+        Ok(())
+    }
+
     pub(crate) fn read(&mut self, name: &str) -> Result<(), QuasiTypeError> {
         let binding = self.lookup(name.to_string())?;
         for pending in std::mem::take(&mut binding.assigned_at) {
@@ -956,10 +1033,21 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
-    pub(crate) fn handle_get(
+    pub(crate) fn handle_ref(&mut self, local: Local) -> Result<PowerTy, QuasiTypeError> {
+        self.handle_access(local, RefUse::Ref)
+    }
+
+    // A read that tolerates an absent value (`$Get`, `$Data`, a target's old value).
+    pub(crate) fn handle_get(&mut self, local: Local) -> Result<PowerTy, QuasiTypeError> {
+        self.handle_access(local, RefUse::Get)
+    }
+
+    fn handle_access(
         &mut self,
         Local { name, subs }: Local,
+        used: RefUse,
     ) -> Result<PowerTy, QuasiTypeError> {
+        self.note_ref_param(&name, used)?;
         self.read(&name)?;
         let binding = self.lookup(name)?;
         Ok(if subs.is_empty() {
@@ -996,6 +1084,8 @@ struct Binding {
     // default in a procedure-block routine). Only an explicit `New` on top of another explicit
     // `New` is reported; re-scoping a parameter/public variable is legitimate (see `handle_new`).
     new_at: Option<bindings::Range>,
+    // A parameter passed by reference that this body hasn't written yet (see `RefParam`).
+    incoming: bool,
 }
 
 // Untracked, like a global: `Variable::as_local` never yields one, by-name entry points skip it.
@@ -1010,6 +1100,7 @@ impl Binding {
             subscript_assigned: Some(()),
             new: Some(false),
             new_at: None,
+            incoming: false,
             private: false,
             declared: None,
             assigned_at: HashSet::from([range]),
@@ -1029,6 +1120,7 @@ impl Binding {
             private: procedure_block,
             new: Some(procedure_block),
             new_at: None,
+            incoming: false,
         }
     }
 
@@ -1072,6 +1164,7 @@ impl Binding {
             private: self.private,
             new,
             new_at,
+            incoming: self.incoming || that.incoming,
         })
     }
 }

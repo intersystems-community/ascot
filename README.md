@@ -274,6 +274,24 @@ intrinsic function name written differently is reported as a warning.
 }
 ```
 
+### Diagnostics Filter
+
+`analyze`, `analyze-workspace` and `lsp` take `-d VERB:TARGETS` (long form
+`--diagnostics`), repeatable, to choose which codes are reported and at what
+severity; the MCP `create_workspace` call takes the same strings as its
+`diagnostics` list. VERB is `off`, `on` (the code's own severity) or a severity
+(`error`, `warning`, `information`, `hint`); TARGETS is a comma-separated list
+of codes, or `all`. The last value naming a code decides it:
+
+```sh
+ascot analyze -d off:A5579,A4043 src/            # drop two codes
+ascot analyze -d off:all -d on:A7095,A6851 src/  # report only two
+ascot analyze -d hint:A4471 src/                 # report one as a hint
+```
+
+The exit code follows what is reported, so a dropped or downgraded warning no
+longer fails a build.
+
 ## Contributing
 
 Please [open an issue](https://github.com/intersystems-community/ascot/issues/new/choose)
