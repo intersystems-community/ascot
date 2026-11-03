@@ -3162,8 +3162,8 @@ impl Property {
 pub struct Query {
     keyword: Raw<(StringEqCI!("Query"), Space1)>,
     pub name: QuotableClassMemberName,
-    formal_spec: Option<FormalSpec>,
-    return_type: Option<As<Type>>,
+    pub formal_spec: Option<FormalSpec>,
+    pub return_type: Option<As<Type>>,
     pub keywords: Option<KeywordList<FailableKeyword<QueryKeyword>>>,
     body: MemberBody,
 }

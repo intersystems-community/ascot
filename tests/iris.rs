@@ -53,7 +53,7 @@ fn a_class_has_only_its_own_members_plus_its_storage_class() {
     assert!(
         cls.members
             .iter()
-            .any(|m| m.name == "Detail" && m.kind == MemberKind::Query)
+            .any(|m| m.name == "Detail" && matches!(m.kind, MemberKind::Query(_)))
     );
 }
 
