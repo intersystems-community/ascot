@@ -57,6 +57,8 @@ struct Shared<'a> {
     uri: &'a str,
     env: &'a WorkspaceEnv<'a>,
     procedure_block: bool,
+    // Entered as an error handler (see `Traps`): an error is being handled throughout.
+    handler: bool,
     // `None` is for subroutines and procedures only. It means that the output expectation
     // is unclear until the first return/quit command. Shared (the `Rc`) with the labels that
     // return for this body (see `check_block_body`).
@@ -95,6 +97,63 @@ impl LoopContext {
 // for the same caller.
 pub(crate) type OutputCell = Rc<RefCell<Option<WithRange<Option<Ty>>>>>;
 
+// The special variable that armed a trap, and so the one whose reset disarms it.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum TrapVar {
+    ZTrap,
+    ETrap,
+}
+
+impl TrapVar {
+    fn name(self) -> &'static str {
+        match self {
+            TrapVar::ZTrap => "$ZTRAP",
+            TrapVar::ETrap => "$ETRAP",
+        }
+    }
+}
+
+// The error traps a flow arms. `active` is where an error on this path goes: a label of this
+// body, or (`None`) the handler this flow is, entered with the trap still naming it, so that a
+// raise before it is reset comes right back. `joins` is, per handler label, the merge of every
+// state it can be entered from, deposited in the `CodeEnv` at the body's end for the label's own
+// check (see `arm_trap`, `step_traps`).
+#[derive(Clone, Default)]
+struct Traps {
+    active: Option<(TrapVar, Option<String>)>,
+    joins: HashMap<String, Join>,
+}
+
+impl Traps {
+    fn merge(
+        &mut self,
+        them: Traps,
+        env: &WorkspaceEnv<'_>,
+        procedure_block: bool,
+    ) -> Result<(), QuasiTypeError> {
+        if self.active.is_none() {
+            self.active = them.active;
+        }
+        for (label, join) in them.joins {
+            match self.joins.get_mut(&label) {
+                Some(mine) => {
+                    Bindings::merge_into(&mut mine.bindings, join.bindings, env, procedure_block)?
+                }
+                None => {
+                    self.joins.insert(label, join);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Join {
+    var: TrapVar,
+    bindings: Option<Bindings>,
+}
+
 // The life time 'a is for the entire code block (i.e., method body or a stand-alone expression)
 pub struct Flow<'a> {
     shared: Rc<Shared<'a>>,
@@ -103,6 +162,11 @@ pub struct Flow<'a> {
     bindings: Option<Bindings>,
     loop_context: Option<LoopContext>,
     current_range: bindings::Range,
+    traps: Traps,
+    // Inside a `Try` block, where IRIS refuses to set a trap and a `Throw` goes to the `Catch`.
+    in_try: bool,
+    // Past a `ZQuit`: the frames below are gone, so what this path returns is nobody's to check.
+    detached: bool,
 }
 
 // A local variable name plus its literal subscript keys (checked types, in order, unused today
@@ -180,20 +244,35 @@ impl<'a> Flow<'a> {
         result
     }
 
-    // A label, held to `output` (see `LabelEntry::output`). Returns what it creates.
+    // A label, held to `output` (see `LabelEntry::output`); an error handler starts from `join`,
+    // the states it can be entered from (see `Traps`). Returns what it creates.
     pub(crate) fn with_label(
         uri: &'a str,
         env: &'a WorkspaceEnv,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
         output: OutputCell,
+        join: Option<Join>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
     ) -> Result<Vec<String>, TypeError> {
-        Self::run(uri, env, range, args, None, output, handler, false, false)
+        Self::run(
+            uri, env, range, args, None, output, join, handler, false, false,
+        )
     }
 
     pub(crate) fn is_procedure_block(&self) -> bool {
         self.shared.procedure_block
+    }
+
+    pub(crate) fn is_handler(&self) -> bool {
+        self.shared.handler
+    }
+
+    // `ZQuit`: the frames below are gone, and this code goes on without them (measured).
+    pub(crate) fn detach(&mut self) -> Result<(), QuasiTypeError> {
+        self.invalidate_all()?;
+        self.detached = true;
+        Ok(())
     }
 
     // `label` returns for this flow, so its returns are held to this flow's.
@@ -245,6 +324,7 @@ impl<'a> Flow<'a> {
             args,
             public_list,
             output,
+            None,
             handler,
             auto_return,
             output_keyword,
@@ -260,6 +340,7 @@ impl<'a> Flow<'a> {
         args: Vec<WithRange<NormalArg>>,
         public_list: ProcedureBlock,
         output: OutputCell,
+        join: Option<Join>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
         auto_return: bool,
         output_keyword: bool,
@@ -339,11 +420,27 @@ impl<'a> Flow<'a> {
                 }
             }
         }
+        // A handler's trap still names it when it is entered.
+        let (bindings, traps, is_handler) = match join {
+            Some(Join {
+                var,
+                bindings: Some(join),
+            }) => (
+                join,
+                Traps {
+                    active: Some((var, None)),
+                    joins: HashMap::new(),
+                },
+                true,
+            ),
+            _ => (Bindings { bindings }, Traps::default(), false),
+        };
         let mut flow = Self {
             shared: Rc::new(Shared {
                 uri,
                 env,
                 procedure_block,
+                handler: is_handler,
                 output,
                 ty_var: RefCell::new(0),
                 reading_list: RefCell::new(reading_list),
@@ -352,10 +449,18 @@ impl<'a> Flow<'a> {
                 creates: RefCell::new(HashSet::new()),
                 incomplete: std::cell::Cell::new(false),
             }),
-            bindings: Some(Bindings { bindings }),
+            bindings: Some(bindings),
             loop_context: None,
             current_range: range,
+            traps,
+            in_try: false,
+            detached: false,
         };
+        // A handler may hand what it assigns on to another label (`Goto Exit`), so its deferred
+        // reports can't be trusted.
+        if is_handler {
+            flow.mark_incomplete();
+        }
         handler(&mut flow)?;
         if flow.bindings.is_some() && auto_return {
             flow.handle_return(WithRange::new(
@@ -526,6 +631,9 @@ impl<'a> Flow<'a> {
                 .as_ref()
                 .map(|context| LoopContext::new(context.range)),
             current_range: self.current_range,
+            traps: self.traps.clone(),
+            in_try: self.in_try,
+            detached: self.detached,
         }
     }
 
@@ -583,38 +691,19 @@ impl<'a> Flow<'a> {
     }
 
     fn merge_bindings(&mut self, that: Option<Bindings>) -> Result<(), QuasiTypeError> {
-        let Some(this) = &mut self.bindings else {
-            self.bindings = that;
-            return Ok(());
-        };
-        let Some(mut that) = that else {
-            return Ok(());
-        };
-        let procedure_block = self.shared.procedure_block;
-        // Sorted, so which inconsistent declaration is reported first doesn't depend on hash order.
-        let all_names: BTreeSet<String> = this
-            .bindings
-            .keys()
-            .chain(that.bindings.keys())
-            .cloned()
-            .collect();
-        for name in all_names {
-            let this_binding = this
-                .bindings
-                .remove(&name)
-                .unwrap_or_else(|| Binding::undeclared(procedure_block));
-            let that_binding = that
-                .bindings
-                .remove(&name)
-                .unwrap_or_else(|| Binding::undeclared(procedure_block));
-            let merged = this_binding.merge(that_binding, self.shared.env, &name)?;
-            this.bindings.insert(name, merged);
-        }
-        Ok(())
+        Bindings::merge_into(
+            &mut self.bindings,
+            that,
+            self.shared.env,
+            self.shared.procedure_block,
+        )
     }
 
     pub(crate) fn merge(&mut self, them: Self) -> Result<(), QuasiTypeError> {
         self.merge_bindings(them.bindings)?;
+        self.traps
+            .merge(them.traps, self.shared.env, self.shared.procedure_block)?;
+        self.detached |= them.detached;
         match (&mut self.loop_context, them.loop_context) {
             (Some(mine), Some(theirs)) => {
                 mine.quits.extend(theirs.quits);
@@ -673,6 +762,10 @@ impl<'a> Flow<'a> {
     ) -> Result<(), TypeError> {
         let WithRange { it, range } = val;
         self.read_olds().map_err(|err| err.into_error(|| range))?;
+        if self.detached {
+            self.bindings = None;
+            return Ok(());
+        }
         // A lazily-established kind uses `%Any`: we only need every branch to agree on
         // *whether* a value comes back, not on one exact type.
         let established = self.shared.output.borrow().clone();
@@ -716,6 +809,84 @@ impl<'a> Flow<'a> {
     pub(crate) fn handle_throw(&mut self) -> Result<(), QuasiTypeError> {
         self.bindings = None;
         Ok(())
+    }
+
+    // An error raised on purpose (`ZTrap`, `Throw`, a non-empty `$ECODE`). From inside the handler
+    // the trap still names, it comes right back here.
+    pub(crate) fn raise(&mut self) -> Result<(), QuasiTypeError> {
+        if let Some((var, None)) = self.traps.active
+            && !self.in_try
+        {
+            self.add_soft_diagnostic(TypeErrorKind::TrapReenters { var: var.name() }.into());
+        }
+        self.handle_throw()
+    }
+
+    pub(crate) fn in_try(&self) -> bool {
+        self.in_try
+    }
+
+    pub(crate) fn with_try(
+        &mut self,
+        range: bindings::Range,
+        handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
+    ) -> Result<(), QuasiTypeError> {
+        let outer = std::mem::replace(&mut self.in_try, true);
+        let result = self.with_block(range, handler);
+        self.in_try = outer;
+        result
+    }
+
+    // `var` now names `label`, a handler of this body. A trap can fire anywhere from here on, so
+    // this state and (see `step_traps`) each one after it join into what the handler is checked
+    // from -- and it may read what this body assigns, so the deferred reports can't be trusted.
+    pub(crate) fn arm_trap(&mut self, var: TrapVar, label: String) -> Result<(), QuasiTypeError> {
+        let bindings = self.bindings()?.clone();
+        self.mark_incomplete();
+        self.traps.active = Some((var, Some(label.clone())));
+        let join = self.traps.joins.entry(label).or_insert(Join {
+            var,
+            bindings: None,
+        });
+        join.var = var;
+        Bindings::merge_into(
+            &mut join.bindings,
+            Some(bindings),
+            self.shared.env,
+            self.shared.procedure_block,
+        )
+    }
+
+    // `var` is cleared. `$ZTRAP` takes precedence, so clearing `$ETRAP` under it changes nothing.
+    pub(crate) fn disarm_trap(&mut self, var: TrapVar) {
+        if matches!(self.traps.active, Some((active, _)) if active == var) {
+            self.traps.active = None;
+        }
+    }
+
+    // A trap set to something unknown: where an error goes now isn't known either.
+    pub(crate) fn forget_traps(&mut self) {
+        self.traps.active = None;
+    }
+
+    pub(crate) fn step_traps(&mut self) -> Result<(), QuasiTypeError> {
+        let Some((_, Some(label))) = &self.traps.active else {
+            return Ok(());
+        };
+        let Some(join) = self.traps.joins.get_mut(label) else {
+            return Ok(());
+        };
+        Bindings::merge_into(
+            &mut join.bindings,
+            self.bindings.clone(),
+            self.shared.env,
+            self.shared.procedure_block,
+        )
+    }
+
+    // The handlers this body armed, each with its join, for `CodeEnv::deposit_traps`.
+    pub(crate) fn take_traps(&mut self) -> HashMap<String, Join> {
+        std::mem::take(&mut self.traps.joins)
     }
 
     fn bindings(&mut self) -> Result<&mut Bindings, QuasiTypeError> {
@@ -1194,6 +1365,43 @@ impl Bindings {
     // Default is a closure, not a stored `procedure_block`, since only `Flow::lookup` knows it.
     fn entry(&mut self, name: String, default: impl FnOnce() -> Binding) -> &mut Binding {
         self.bindings.entry(name).or_insert_with(default)
+    }
+
+    // Merges another path's `that` into `this`: a name bound on one side only is undeclared on
+    // the other.
+    fn merge_into(
+        this: &mut Option<Bindings>,
+        that: Option<Bindings>,
+        env: &WorkspaceEnv<'_>,
+        procedure_block: bool,
+    ) -> Result<(), QuasiTypeError> {
+        let Some(this) = this else {
+            *this = that;
+            return Ok(());
+        };
+        let Some(mut that) = that else {
+            return Ok(());
+        };
+        // Sorted, so which inconsistent declaration is reported first doesn't depend on hash order.
+        let all_names: BTreeSet<String> = this
+            .bindings
+            .keys()
+            .chain(that.bindings.keys())
+            .cloned()
+            .collect();
+        for name in all_names {
+            let this_binding = this
+                .bindings
+                .remove(&name)
+                .unwrap_or_else(|| Binding::undeclared(procedure_block));
+            let that_binding = that
+                .bindings
+                .remove(&name)
+                .unwrap_or_else(|| Binding::undeclared(procedure_block));
+            let merged = this_binding.merge(that_binding, env, &name)?;
+            this.bindings.insert(name, merged);
+        }
+        Ok(())
     }
 
     fn refine_on_prop(&mut self, target: u32, term: &Term) {

@@ -771,6 +771,34 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
     MissingQuit,
+    #[code = "A4304"]
+    #[severity = Error]
+    #[message = "{what} is not allowed in {context} (IRIS: {iris})"]
+    NotAllowedIn {
+        what: &'static str,
+        context: &'static str,
+        iris: &'static str,
+    },
+    #[code = "A8478"]
+    #[severity = Error]
+    #[message = "{name} cannot be NEWed: only $ESTACK, $ETRAP, $NAMESPACE and $ROLES can (IRIS: ERROR #1032)"]
+    NewSpecialVariable { name: String },
+    #[code = "A6613"]
+    #[severity = Warning]
+    #[message = "ZQUIT wants an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack"]
+    ZQuitArgument { value: String },
+    #[code = "A4344"]
+    #[severity = Warning]
+    #[message = "An error here re-enters the handler {var} still names; set {var} to \"\" first"]
+    TrapReenters { var: &'static str },
+    #[code = "A3913"]
+    #[severity = Hint]
+    #[message = "{what} is not checked"]
+    NotChecked { what: &'static str },
+    #[code = "A1765"]
+    #[severity = Hint]
+    #[message = "A $ETRAP that only jumps to a label is what `Set $ZTrap = \"{label}\"` does; $ZTRAP is scoped to this frame, where $ETRAP is inherited by callees"]
+    ETrapGoto { label: String },
 }
 
 // The conditional parts of messages, each rendering nothing or a fragment of its kind's message.
@@ -1244,6 +1272,42 @@ impl TypeError {
 
     pub fn unrecognized_class_keyword(entry: String, range: Range) -> Self {
         Self::at(TypeErrorKind::UnrecognizedClassKeyword { entry }, range)
+    }
+
+    pub fn not_allowed_in(
+        what: &'static str,
+        context: &'static str,
+        iris: &'static str,
+        range: Range,
+    ) -> Self {
+        Self::at(
+            TypeErrorKind::NotAllowedIn {
+                what,
+                context,
+                iris,
+            },
+            range,
+        )
+    }
+
+    pub fn new_special_variable(name: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::NewSpecialVariable { name }, range)
+    }
+
+    pub fn zquit_argument(value: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::ZQuitArgument { value }, range)
+    }
+
+    pub fn trap_reenters(var: &'static str, range: Range) -> Self {
+        Self::at(TypeErrorKind::TrapReenters { var }, range)
+    }
+
+    pub fn not_checked(what: &'static str, range: Range) -> Self {
+        Self::at(TypeErrorKind::NotChecked { what }, range)
+    }
+
+    pub fn etrap_goto(label: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::ETrapGoto { label }, range)
     }
 
     pub fn unrecognized_type_param(
