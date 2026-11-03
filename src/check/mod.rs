@@ -1189,16 +1189,20 @@ impl CheckCommandInner for cos::Command {
             // Unwinds to a frame that set `$ZTRAP`, or to the bottom of the stack, and goes on
             // with the command after it: no end to this path, though what it finds there is
             // anyone's guess, and no caller is left to return to. IRIS refuses it in a procedure
-            // block that has private variables (measured: one without may unwind).
+            // block that has private variables (measured): one without unwinds, by that accident.
             cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    if in_procedure_block(env, flow) && flow.has_private_variables()? {
-                        env.soft_diagnostic(TypeError::not_allowed_in(
-                            "ZQUIT",
-                            "a procedure block with private variables",
-                            "<COMMAND> at run time",
-                            flow.range(),
-                        ));
+                    if in_procedure_block(env, flow) {
+                        env.soft_diagnostic(if flow.has_private_variables()? {
+                            TypeError::not_allowed_in(
+                                "ZQUIT",
+                                "a procedure block with private variables",
+                                "<COMMAND> at run time",
+                                flow.range(),
+                            )
+                        } else {
+                            TypeError::zquit_without_privates(flow.range())
+                        });
                     }
                     if let Some(exp) = exp {
                         match exp.to_power_ty(env, flow)? {

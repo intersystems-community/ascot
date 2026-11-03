@@ -795,6 +795,10 @@ type_error_kinds! {
     #[severity = Hint]
     #[message = "{what} is not checked"]
     NotChecked { what: &'static str },
+    #[code = "A5780"]
+    #[severity = Hint]
+    #[message = "ZQUIT unwinds here only because this procedure block has no private variables; one with any fails with <COMMAND>, so its error handling may not be what you expect"]
+    ZQuitWithoutPrivates,
     #[code = "A1765"]
     #[severity = Hint]
     #[message = "A $ETRAP that only jumps to a label is what `Set $ZTrap = \"{label}\"` does; $ZTRAP is scoped to this frame, where $ETRAP is inherited by callees"]
@@ -1308,6 +1312,10 @@ impl TypeError {
 
     pub fn etrap_goto(label: String, range: Range) -> Self {
         Self::at(TypeErrorKind::ETrapGoto { label }, range)
+    }
+
+    pub fn zquit_without_privates(range: Range) -> Self {
+        Self::at(TypeErrorKind::ZQuitWithoutPrivates, range)
     }
 
     pub fn unrecognized_type_param(
