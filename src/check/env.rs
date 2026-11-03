@@ -380,29 +380,108 @@ enum Class {
     Unknown(Option<String>),
 }
 
-// `Query Q`'s `QFunc` (its result set) and `QExecute`/`QFetch`/... family; the query's own
-// arguments aren't tracked.
-fn query_methods() -> Vec<(String, Generated)> {
-    let method = |suffix: &str, out: &str| {
-        let proc = generated_procedure(vec![], true, Some(Ty::from(out)));
-        (suffix.to_string(), (proc, false))
-    };
-    std::iter::once(method("Func", "%SQL.StatementResult"))
-        .chain(
-            [
-                "Execute",
-                "Fetch",
-                "FetchRows",
-                "Close",
-                "GetInfo",
-                "GetODBCInfo",
-                "Prepare",
-                "SendODBC",
-            ]
-            .into_iter()
-            .map(|suffix| method(suffix, "%Status")),
+// `Query Q(args)`'s generated family, in the shapes IRIS gives them (`QUERY_METHOD_SUFFIXES`):
+// `QFunc(args)` is its result set; `QExecute` takes a handle out and the query's arguments;
+// `QFetch`, `QFetchRows`, `QClose`, `QGetInfo` and `QGetODBCInfo` are fixed; `QPrepare` and
+// `QSendODBC` are left loose.
+fn query_methods(
+    normal: Vec<NormalArg>,
+    variadic: Option<VariadicArg>,
+) -> Vec<(String, Generated)> {
+    use ArgMode::{ByRef, Default, Output};
+    let arg = |mode, name: &str, ty: &str, default: Option<&str>| {
+        NormalArg::new(
+            mode,
+            name.into(),
+            Some(Ty::from(ty)),
+            default.map(str::to_string),
         )
-        .collect()
+    };
+    let handle = |mode| arg(mode, "qHandle", "%Binary", None);
+    let status = || Some(Ty::from("%Status"));
+    let proc = |args, variadic, out| {
+        Arc::new(TyProcedure {
+            normal_args: args,
+            variadic_arg: variadic,
+            out,
+            procedure_block: Some(vec![]),
+            formal_list: true,
+            uri: None,
+            declared_at: None,
+        })
+    };
+    let execute = std::iter::once(handle(Output))
+        .chain(normal.iter().cloned())
+        .collect();
+    [
+        (
+            "Func",
+            proc(
+                normal,
+                variadic.clone(),
+                Some(Ty::from("%SQL.StatementResult")),
+            ),
+        ),
+        ("Execute", proc(execute, variadic, status())),
+        (
+            "Fetch",
+            proc(
+                vec![
+                    handle(ByRef),
+                    arg(Output, "Row", "%List", None),
+                    arg(Output, "AtEnd", "%Integer", Some("0")),
+                ],
+                None,
+                status(),
+            ),
+        ),
+        (
+            "FetchRows",
+            proc(
+                vec![
+                    handle(ByRef),
+                    arg(Default, "FetchCount", "%Integer", Some("0")),
+                    arg(Output, "RowSet", "%List", None),
+                    arg(Output, "ReturnCount", "%Integer", None),
+                    arg(Output, "AtEnd", "%Integer", None),
+                ],
+                None,
+                status(),
+            ),
+        ),
+        ("Close", proc(vec![handle(ByRef)], None, status())),
+        (
+            "GetInfo",
+            proc(
+                vec![
+                    arg(Output, "colinfo", "%List", None),
+                    arg(Output, "parminfo", "%List", None),
+                    arg(Output, "idinfo", "%List", None),
+                    handle(ByRef),
+                    arg(Default, "extoption", "%Integer", Some("0")),
+                    arg(Output, "extinfo", "%List", None),
+                ],
+                None,
+                status(),
+            ),
+        ),
+        (
+            "GetODBCInfo",
+            proc(
+                vec![
+                    arg(Output, "colinfo", "%List", None),
+                    arg(Output, "parminfo", "%List", None),
+                ],
+                None,
+                status(),
+            ),
+        ),
+        ("Prepare", generated_procedure(vec![], true, status())),
+        ("SendODBC", generated_procedure(vec![], true, status())),
+    ]
+    .into_iter()
+    .map(|(suffix, proc)| (suffix.to_string(), (proc, false)))
+    .collect()
 }
 
 // A generated property method: suffix, argument, result (`Prop`: the property's type), instance-only.
@@ -596,8 +675,17 @@ impl<'a> WorkspaceEnv<'a> {
                 if !declares_id_key && self.is_persistent(cls) {
                     add("IDKEY", self.index_methods(cls, &default_id_key()));
                 }
-                for name in details.members.query.keys() {
-                    add(name, query_methods());
+                for (name, query) in &details.members.query {
+                    if let MemberKindSpecificDetails::Query {
+                        normal_args,
+                        variadic_arg,
+                        ..
+                    } = &query.kind
+                    {
+                        let normal = normal_args.iter().map(|arg| arg.it.clone()).collect();
+                        let variadic = variadic_arg.as_ref().map(|arg| arg.it.clone());
+                        add(name, query_methods(normal, variadic));
+                    }
                 }
                 add(
                     "",
@@ -617,7 +705,10 @@ impl<'a> WorkspaceEnv<'a> {
                             add(name, self.property_methods(ty));
                         }
                         MemberKind::Index(index) => add(name, self.index_methods(cls, index)),
-                        MemberKind::Query => add(name, query_methods()),
+                        MemberKind::Query(sig) => {
+                            let proc = TyProcedure::from(sig.clone());
+                            add(name, query_methods(proc.normal_args, proc.variadic_arg));
+                        }
                         MemberKind::Method(_) | MemberKind::ClassMethod(_) if name == "%OnNew" => {
                             add("", new(iris_found::<Methods>(member.clone(), cls)));
                         }
@@ -1757,7 +1848,7 @@ impl<'a> CodeEnv<'a> {
                             | TypeErrorKind::IrisLookupFailed { .. },
                             _,
                         ),
-                    ) => crate::iris::curated_label(&routine, &label)
+                    ) => crate::curated_label(&routine, &label)
                         .map(|signature| {
                             TyProcedureOrAny::Procedure(Arc::new(TyProcedure::from_label(
                                 signature, None,

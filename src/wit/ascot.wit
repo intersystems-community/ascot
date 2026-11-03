@@ -82,7 +82,8 @@ interface common {
         trigger,
         x-data,
         storage,
-        query,
+        // The query's own arguments and its class; IRIS generates its methods from them.
+        query(signature),
         method(signature),
         class-method(signature),
         client-method(signature),

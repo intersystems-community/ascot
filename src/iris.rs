@@ -3,26 +3,12 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
 use crate::IrisContext;
 use crate::atelier::{AtelierContext, RawAtelier};
-use crate::bindings::{ClassInfo, RoutineInfo, Signature, Source};
-
-/// The signatures of the `%SYS` routine labels the system macros call, which IRIS ships as object
-/// code only: `scripts/prebuilt-declarations.sh` merges them into a declaration file, and a live
-/// instance without the routines' source is held to them too.
-static CURATED_LABELS: LazyLock<BTreeMap<String, BTreeMap<String, Signature>>> =
-    LazyLock::new(|| {
-        serde_json::from_str(include_str!("../scripts/prebuilt-labels.json"))
-            .expect("a valid prebuilt-labels.json")
-    });
-
-pub(crate) fn curated_label(routine: &str, label: &str) -> Option<Signature> {
-    CURATED_LABELS.get(routine)?.get(label).cloned()
-}
+use crate::bindings::{ClassInfo, RoutineInfo, Source};
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 

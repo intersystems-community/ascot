@@ -40,7 +40,7 @@ pub(crate) fn format_member_hover(member: &MemberInfo) -> String {
         MemberKind::Trigger => format!("Trigger {name}"),
         MemberKind::XData => format!("XData {name}"),
         MemberKind::Storage => format!("Storage {name}"),
-        MemberKind::Query => format!("Query {name}"),
+        MemberKind::Query(info) => format!("Query {name}{}", format_method_signature(info)),
     };
     if member.doc.is_empty() {
         format!("```objectscript\n{signature}\n```")

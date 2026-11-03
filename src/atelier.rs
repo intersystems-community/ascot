@@ -249,6 +249,9 @@ fn assemble(
                 .push(member_row_to_info(row));
         }
     }
+    for members in members.values_mut() {
+        drop_query_methods(members);
+    }
     class_rows
         .into_iter()
         .filter_map(|row| {
@@ -276,6 +279,41 @@ fn assemble(
             Some((cls, info))
         })
         .collect()
+}
+
+// The methods IRIS generates from each `Query` have fixed shapes the checker knows, so they go;
+// the query itself keeps `QExecute`'s view of its arguments, which has the defaults the
+// query's own `FormalSpec` drops.
+fn drop_query_methods(members: &mut Vec<MemberInfo>) {
+    let queries: Vec<String> = members
+        .iter()
+        .filter(|m| matches!(m.kind, MemberKind::Query(_)))
+        .map(|m| m.name.clone())
+        .collect();
+    for query in &queries {
+        let execute = members.iter().find(|m| m.name == format!("{query}Execute"));
+        let Some(MemberKind::ClassMethod(sig) | MemberKind::Method(sig)) = execute.map(|m| &m.kind)
+        else {
+            continue;
+        };
+        let (normal, variadic) = (sig.normal[1..].to_vec(), sig.variadic.clone());
+        let Some(MemberKind::Query(sig)) = members
+            .iter_mut()
+            .find(|m| &m.name == query)
+            .map(|m| &mut m.kind)
+        else {
+            continue;
+        };
+        (sig.normal, sig.variadic) = (normal, variadic);
+    }
+    members.retain(|m| {
+        matches!(m.kind, MemberKind::Query(_))
+            || !queries.iter().any(|q| {
+                crate::details::QUERY_METHOD_SUFFIXES
+                    .iter()
+                    .any(|suffix| m.name == format!("{q}{suffix}"))
+            })
+    });
 }
 
 // A compiled keyword value, read by the grammar's spelling of it into the host's enum.
@@ -518,7 +556,15 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
                 .and_then(|t| crate::details::index_type(&t)),
             unique: is_truthy(&row.index_unique),
         }),
-        "query" => MemberKind::Query,
+        "query" => {
+            let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
+            MemberKind::Query(Signature {
+                normal,
+                variadic,
+                t: row.return_type.clone(),
+                procedure_block: None,
+            })
+        }
         _ => {
             let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
             let info = Signature {

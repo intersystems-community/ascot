@@ -214,7 +214,20 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
             MemberKindSpecificDetails::Trigger => MemberKind::Trigger,
             MemberKindSpecificDetails::XData => MemberKind::XData,
             MemberKindSpecificDetails::Storage => MemberKind::Storage,
-            MemberKindSpecificDetails::Query => MemberKind::Query,
+            MemberKindSpecificDetails::Query {
+                normal_args,
+                variadic_arg,
+                ty,
+            } => MemberKind::Query(wit_bind::Signature {
+                normal: normal_args
+                    .iter()
+                    .map(Deref::deref)
+                    .map(bindings::NormalArg::from)
+                    .collect(),
+                variadic: variadic_arg.as_deref().map(bindings::VariadicArg::from),
+                t: ty.as_ref().map(|t| t.to_string()),
+                procedure_block: None,
+            }),
         }
     }
 }
@@ -232,7 +245,7 @@ pub(crate) fn member_kind_to_symbol_kind(kind: &wit_bind::MemberKind) -> wit_bin
         MemberKind::Trigger => SymbolKind::Event,
         MemberKind::XData => SymbolKind::Struct,
         MemberKind::Storage => SymbolKind::Object,
-        MemberKind::Query => SymbolKind::Function,
+        MemberKind::Query(_) => SymbolKind::Function,
     }
 }
 
