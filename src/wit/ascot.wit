@@ -22,12 +22,6 @@ interface common {
         message: string,
     }
 
-    record name-info {
-        before: position,
-        content: string,
-        after: position,
-    }
-
     enum arg-mode {
         default,
         output,
@@ -39,22 +33,21 @@ interface common {
         name: string,
         t: option<string>,
         default: option<string>,
-        declared-at: option<range>,
     }
 
     record variadic-arg {
         mode: arg-mode,
         name: string,
         t: option<string>,
-        declared-at: option<range>,
     }
 
-    record method-info {
+    // A method's or a label's formal list and what it returns.
+    record signature {
         normal: list<normal-arg>,
         variadic: option<variadic-arg>,
         t: option<string>,
+        // A procedure's public list; `none` for a subroutine.
         procedure-block: option<list<string>>,
-        body: range,
     }
 
     record parameter-info {
@@ -90,9 +83,9 @@ interface common {
         x-data,
         storage,
         query,
-        method(method-info),
-        class-method(method-info),
-        client-method(method-info),
+        method(signature),
+        class-method(signature),
+        client-method(signature),
     }
 
     enum index-subscript { keys, elements }
@@ -132,12 +125,10 @@ interface common {
 
     record member-info {
         doc: string,
-        before: position,
-        name: name-info,
+        name: string,
         aliases: list<string>,
         deprecated: bool,
         kind: member-kind,
-        after: position,
         uri: option<string>,
         // The class declaring it; `none` in the workspace.
         origin: option<string>,
@@ -156,7 +147,7 @@ interface common {
     // absent when not given. From IRIS the keywords are the compiled ones, defaults filled in.
     record class-info {
         doc: string,
-        name: name-info,
+        name: string,
         extends: list<string>,
         // The storage class a persistent class also inherits from (`%Storage.Persistent`), named by
         // its storage definition rather than `extends`.
@@ -182,13 +173,8 @@ interface common {
 
     record label-info {
         name: string,
-        normal: list<normal-arg>,
-        variadic: option<variadic-arg>,
-        // The type of what it `Quit`s with, when known.
-        t: option<string>,
-        // A procedure's public list; `none` for a subroutine.
-        procedure-block: option<list<string>>,
-        declared-at: option<range>,
+        // `none` when only the name is known, as from compiled code.
+        signature: option<signature>,
     }
 
     record routine-info {

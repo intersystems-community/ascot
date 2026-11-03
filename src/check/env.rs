@@ -326,16 +326,12 @@ fn generated_procedure(
 }
 
 // Where a host-reported member is declared: only known when the host could map it to a uri
-// (e.g. not a bare IRIS system class).
+// (e.g. not a bare IRIS system class), and then only as far as the document.
 fn location(member: &bindings::MemberInfo) -> Option<bindings::Location> {
-    let range = bindings::Range {
-        start: member.before,
-        end: member.after,
-    };
     member
         .uri
         .clone()
-        .map(|uri| bindings::Location::new(uri, range))
+        .map(|uri| bindings::Location::new(uri, bindings::Range::default()))
 }
 
 // The `IDKEY` index IRIS gives a persistent class that declares no id key: no `On` clause, so
@@ -362,10 +358,10 @@ fn default_id_key() -> bindings::IndexInfo {
 // An IRIS-reported member of `cls`, typed and masked by its declaring class.
 fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<Found<N::Ty>> {
     let origin = member.origin.clone().unwrap_or_else(|| cls.to_string());
-    if crate::mask::dropped(&origin, &member.name.content) {
+    if crate::mask::dropped(&origin, &member.name) {
         return None;
     }
-    let correction = crate::mask::correction(&origin, &member.name.content);
+    let correction = crate::mask::correction(&origin, &member.name);
     let location = location(&member);
     let (ty, is_instance_only) = N::reported(member, correction)?;
     Some(Found {
@@ -520,12 +516,9 @@ impl<'a> WorkspaceEnv<'a> {
                     (info.members.iter())
                         .filter(|m| MemberNs::of_info(&m.kind) == N::NS)
                         .filter(|m| {
-                            !crate::mask::dropped(
-                                m.origin.as_deref().unwrap_or(&cls),
-                                &m.name.content,
-                            )
+                            !crate::mask::dropped(m.origin.as_deref().unwrap_or(&cls), &m.name)
                         })
-                        .map(|m| m.name.content.clone()),
+                        .map(|m| m.name.clone()),
                 ),
                 Some(Class::Unknown(_)) | None => continue,
             }
@@ -613,7 +606,7 @@ impl<'a> WorkspaceEnv<'a> {
             }
             Some(Class::Iris(info)) => {
                 for member in &info.members {
-                    let name = member.name.content.as_str();
+                    let name = member.name.as_str();
                     match &member.kind {
                         MemberKind::Property(_) | MemberKind::Relationship(_) => {
                             let found = iris_found::<Properties<Read>>(member.clone(), cls);
@@ -703,7 +696,7 @@ impl<'a> WorkspaceEnv<'a> {
                             && let Some(proc) = found.member.ty.procedure()
                         {
                             methods
-                                .entry(member.name.content.clone())
+                                .entry(member.name.clone())
                                 .or_insert((proc.clone(), false));
                         }
                     }
@@ -970,7 +963,7 @@ impl<'a> WorkspaceEnv<'a> {
             }
             Some(Class::Iris(info)) => {
                 let named = |m: &&bindings::MemberInfo| {
-                    m.name.content.eq_ignore_ascii_case(mem)
+                    m.name.eq_ignore_ascii_case(mem)
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
                 };
                 let member = (info.members.iter())
@@ -1232,10 +1225,12 @@ impl<'a> WorkspaceEnv<'a> {
             .labels
             .ok_or_else(|| QuasiTypeError::routine_without_source(name.into()))?;
         let labels = labels.into_iter().map(|label| {
-            let name = label.name.clone();
+            let proc = label
+                .signature
+                .map(|signature| Arc::new(TyProcedure::from_label(signature, info.uri.clone())));
             (
-                name,
-                Arc::new(TyProcedure::from_label(label, info.uri.clone())),
+                label.name,
+                proc.map_or(TyProcedureOrAny::Any, TyProcedureOrAny::Procedure),
             )
         });
         Ok(Some(labels.collect()))
@@ -1549,7 +1544,8 @@ impl<'a> DocumentEnv<'a> {
 /// label -> signature, for the subroutines/procedures declared in a routine. Plain data: built
 /// once per routine and memoized on the workspace (which the MCP server needs to be `Send`), for
 /// resolving `label^routine` calls into it.
-pub type Labels = HashMap<String, Arc<TyProcedure>>;
+// A routine's labels: a signature where one is known, else Any for a label known by name only.
+pub type Labels = HashMap<String, TyProcedureOrAny>;
 
 /// The labels in scope while checking one body: the signatures plus per-entry state that exists
 /// only during checking (`LabelEntry::output` is a live `Rc` cell, so this map isn't `Send`).
@@ -1605,7 +1601,7 @@ pub(crate) fn labels_of(olc: &OLC, routine: &cos::Routine, uri: Option<&str>) ->
         .map(|details| {
             (
                 details.name.it.clone(),
-                Arc::new(details.to_ty_procedure(uri)),
+                TyProcedureOrAny::Procedure(Arc::new(details.to_ty_procedure(uri))),
             )
         })
         .collect()
@@ -1753,18 +1749,24 @@ impl<'a> CodeEnv<'a> {
             // or via IRIS (see `resolve_rtn_labels`).
             Some(routine) => match label {
                 Some(label) => match self.resolve_rtn_labels(&routine) {
+                    // A routine IRIS has without source: the curated signatures still cover the
+                    // labels the system macros call.
                     Err(
                         err @ QuasiTypeError::WithoutRange(
                             TypeErrorKind::RoutineWithoutSource { .. }
                             | TypeErrorKind::IrisLookupFailed { .. },
                             _,
                         ),
-                    ) => crate::mask::label(&routine, &label)
-                        .map(TyProcedureOrAny::Procedure)
+                    ) => crate::iris::curated_label(&routine, &label)
+                        .map(|signature| {
+                            TyProcedureOrAny::Procedure(Arc::new(TyProcedure::from_label(
+                                signature, None,
+                            )))
+                        })
                         .ok_or(err),
                     labels => match labels? {
                         Some(labels) => match labels.get(&label) {
-                            Some(proc) => Ok(TyProcedureOrAny::Procedure(proc.clone())),
+                            Some(proc) => Ok(proc.clone()),
                             None => Err(QuasiTypeError::cannot_find_label(label, Some(routine))),
                         },
                         None => Ok(TyProcedureOrAny::Any),
@@ -1851,25 +1853,15 @@ mod tests {
 
     #[test]
     fn a_many_relationship_from_iris_binds_its_element_type() {
-        let zero = bindings::Position {
-            line: 0,
-            character: 0,
-        };
         let children = bindings::MemberInfo {
             doc: String::new(),
-            before: zero,
-            name: bindings::NameInfo {
-                before: zero,
-                content: "Children".to_string(),
-                after: zero,
-            },
+            name: "Children".to_string(),
             aliases: vec![],
             deprecated: false,
             kind: MemberKind::Relationship(bindings::RelationshipInfo {
                 t: Some("Ext.Child".to_string()),
                 cardinality: Some(bindings::Cardinality::Many),
             }),
-            after: zero,
             uri: None,
             origin: None,
         };

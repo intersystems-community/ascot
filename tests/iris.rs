@@ -21,12 +21,9 @@ fn system_class_has_its_members() {
         .unwrap()
         .expect("%SYSTEM.Version");
     assert!(
-        cls.members.iter().any(|m| m.name.content == "GetVersion"),
+        cls.members.iter().any(|m| m.name == "GetVersion"),
         "{:?}",
-        cls.members
-            .iter()
-            .map(|m| &m.name.content)
-            .collect::<Vec<_>>()
+        cls.members.iter().map(|m| &m.name).collect::<Vec<_>>()
     );
     assert!(iris.get_cls("No.Such.Class").unwrap().is_none());
 }
@@ -47,7 +44,7 @@ fn a_class_has_only_its_own_members_plus_its_storage_class() {
         cls.members
             .iter()
             .filter(|m| m.origin.as_deref() != Some("Security.Users"))
-            .map(|m| (&m.name.content, &m.origin))
+            .map(|m| (&m.name, &m.origin))
             .collect::<Vec<_>>()
     );
     assert!(cls.members.iter().any(|m| {
@@ -56,7 +53,7 @@ fn a_class_has_only_its_own_members_plus_its_storage_class() {
     assert!(
         cls.members
             .iter()
-            .any(|m| m.name.content == "Detail" && m.kind == MemberKind::Query)
+            .any(|m| m.name == "Detail" && m.kind == MemberKind::Query)
     );
 }
 

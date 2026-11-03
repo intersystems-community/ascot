@@ -25,8 +25,8 @@ use {
 use crate::IrisContext;
 use crate::bindings::{
     ArgMode, Cardinality, ClassInfo, CollectionKind, IndexInfo, IndexKey, IndexSubscript,
-    MemberInfo, MemberKind, MethodInfo, NameInfo, NormalArg, ParameterInfo, Position, PropertyInfo,
-    Range, RelationshipInfo, RoutineInfo, Source, VariadicArg,
+    MemberInfo, MemberKind, NormalArg, ParameterInfo, PropertyInfo, RelationshipInfo, RoutineInfo,
+    Signature, Source, VariadicArg,
 };
 use crate::cos::{self, LocalVariableName, OSString, Space, Type};
 
@@ -249,7 +249,6 @@ fn assemble(
                 .push(member_row_to_info(row));
         }
     }
-    let zero = Position::default();
     class_rows
         .into_iter()
         .filter_map(|row| {
@@ -260,11 +259,7 @@ fn assemble(
             }
             let info = ClassInfo {
                 doc: str_field("Description").to_string(),
-                name: NameInfo {
-                    before: zero,
-                    content: cls.clone(),
-                    after: zero,
-                },
+                name: cls.clone(),
                 extends: split_classes(str_field("Super")),
                 storage: storages.get(&cls).cloned(),
                 members: members.remove(&cls).unwrap_or_default(),
@@ -441,19 +436,12 @@ fn member_row_to_info(row: MemberRow) -> MemberInfo {
     let name = row.name.clone();
     let aliases = split_aliases(row.aliases.as_deref());
     let origin = row.origin.clone();
-    let zero = Position::default();
     MemberInfo {
         doc: row.description.clone().unwrap_or_default(),
-        before: zero,
-        name: NameInfo {
-            before: zero,
-            content: name,
-            after: zero,
-        },
+        name,
         aliases,
         deprecated: is_truthy(&row.deprecated),
         kind: row_to_member_kind(&row),
-        after: zero,
         uri: None,
         origin,
     }
@@ -533,12 +521,11 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
         "query" => MemberKind::Query,
         _ => {
             let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
-            let info = MethodInfo {
+            let info = Signature {
                 normal,
                 variadic,
                 t: row.return_type.clone(),
                 procedure_block: None,
-                body: Range::default(),
             };
             if is_truthy(&row.class_method) {
                 MemberKind::ClassMethod(info)
@@ -609,19 +596,13 @@ fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
         let name = formal.name.print();
         let t = formal.as_type.as_ref().map(|t| t.deref().print());
         if formal.variadic.is_some() {
-            variadic = Some(VariadicArg {
-                mode,
-                name,
-                t,
-                declared_at: None,
-            });
+            variadic = Some(VariadicArg { mode, name, t });
         } else {
             normal.push(NormalArg {
                 mode,
                 name,
                 t,
                 default: formal.default.as_ref().map(|d| d.deref().print()),
-                declared_at: None,
             });
         }
     }
@@ -1016,14 +997,14 @@ mod tests {
         assert!(classes["A.C"].storage.is_none());
         assert_eq!(b.class_type, None);
         assert_eq!(b.members.len(), 1, "the nameless row is dropped");
-        assert_eq!(b.members[0].name.content, "M");
+        assert_eq!(b.members[0].name, "M");
         assert!(matches!(b.members[0].kind, MemberKind::ClassMethod(_)));
         let c = &classes["A.C"];
         assert!(c.deprecated);
         assert_eq!(c.class_type, Some(crate::bindings::ClassType::Datatype));
         assert_eq!(c.inheritance, Some(crate::bindings::Inheritance::Right));
         assert_eq!(b.inheritance, None);
-        assert_eq!(c.members[0].name.content, "P");
+        assert_eq!(c.members[0].name, "P");
         let key = |property: &str, subscript, collation: Option<&str>| IndexKey {
             property: property.to_string(),
             subscript,

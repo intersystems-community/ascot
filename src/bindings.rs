@@ -72,16 +72,6 @@ impl From<&details::IndexDetails> for wit_bind::IndexInfo {
     }
 }
 
-impl From<&WithRange<String>> for wit_bind::NameInfo {
-    fn from(value: &WithRange<String>) -> Self {
-        Self {
-            before: value.range.start,
-            content: value.it.clone(),
-            after: value.range.end,
-        }
-    }
-}
-
 impl std::fmt::Display for wit_bind::Location {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.uri, self.range)
@@ -136,7 +126,6 @@ impl From<&check::types::NormalArg> for wit_bind::NormalArg {
             name: arg.name.clone(),
             t: arg.ty.as_ref().map(|ty| ty.to_string()),
             default: arg.default.clone(),
-            declared_at: arg.declared_at,
         }
     }
 }
@@ -147,14 +136,13 @@ impl From<&check::types::VariadicArg> for wit_bind::VariadicArg {
             mode: arg.mode,
             name: arg.name.clone(),
             t: arg.ty.as_ref().map(|ty| ty.to_string()),
-            declared_at: arg.declared_at,
         }
     }
 }
 
-impl From<&MethodDetails> for wit_bind::MethodInfo {
+impl From<&MethodDetails> for wit_bind::Signature {
     fn from(details: &MethodDetails) -> Self {
-        bindings::MethodInfo {
+        bindings::Signature {
             normal: details
                 .normal_args
                 .iter()
@@ -167,7 +155,6 @@ impl From<&MethodDetails> for wit_bind::MethodInfo {
                 .map(bindings::VariadicArg::from),
             t: details.out.it.as_ref().map(|t| t.to_string()),
             procedure_block: Some(vec![]),
-            body: details.body.range,
         }
     }
 }
@@ -178,21 +165,17 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
         match kind {
             MemberKindSpecificDetails::MethodOrClassMethod(m) => {
                 if m.is_class_method {
-                    MemberKind::ClassMethod(wit_bind::MethodInfo::from(m.as_ref()))
+                    MemberKind::ClassMethod(wit_bind::Signature::from(m.as_ref()))
                 } else {
-                    MemberKind::Method(wit_bind::MethodInfo::from(m.as_ref()))
+                    MemberKind::Method(wit_bind::Signature::from(m.as_ref()))
                 }
             }
             MemberKindSpecificDetails::ClientMethod => {
-                MemberKind::ClientMethod(wit_bind::MethodInfo {
+                MemberKind::ClientMethod(wit_bind::Signature {
                     normal: vec![],
                     variadic: None,
                     t: None,
                     procedure_block: None,
-                    body: wit_bind::Range::point(wit_bind::Position {
-                        line: 0,
-                        character: 0,
-                    }),
                 })
             }
             MemberKindSpecificDetails::Property {
@@ -257,12 +240,10 @@ impl From<&WithRange<details::MemberDetails>> for wit_bind::MemberInfo {
     fn from(member: &WithRange<details::MemberDetails>) -> Self {
         MemberInfo {
             doc: member.it.doc.clone(),
-            before: member.range.start,
-            name: NameInfo::from(&member.it.name),
+            name: member.it.name.it.clone(),
             aliases: vec![],
             deprecated: member.it.deprecated,
             kind: wit_bind::MemberKind::from(&member.it.kind),
-            after: member.range.end,
             uri: None,
             origin: None,
         }
@@ -274,7 +255,7 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
         let k = &details.keywords;
         Self {
             doc: details.doc.clone(),
-            name: NameInfo::from(&details.name),
+            name: details.name.it.clone(),
             extends: details.extends.clone(),
             storage: None,
             members: details
@@ -297,21 +278,13 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
     }
 }
 
+// Generated records take only the derives `additional_derives` gives them all, and an enum can't derive Default.
+#[allow(clippy::derivable_impls)]
 impl Default for wit_bind::ClassInfo {
     fn default() -> Self {
         Self {
             doc: String::new(),
-            name: NameInfo {
-                before: Position {
-                    line: 0,
-                    character: 0,
-                },
-                content: String::new(),
-                after: Position {
-                    line: 0,
-                    character: 0,
-                },
-            },
+            name: String::new(),
             extends: vec![],
             storage: None,
             members: vec![],

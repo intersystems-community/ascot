@@ -37,6 +37,15 @@ all. It is not run in CI: unit tests are the only check a PR gets, so a PR that 
 is reported should say so in its description, and the maintainer runs the corpus against it
 and before every release.
 
+### Pre-built declarations
+
+`scripts/prebuilt-declarations.sh [RELEASE] [OUT]` writes the declaration file of an IRIS
+Community release's `%SYS` namespace: it starts the release's Docker image, runs `ascot declare`
+against it, adds the label names of the routines the image ships as object code only (read with
+`ZLOAD` in an `iris session`, since no API lists them) and the curated label signatures in
+`scripts/prebuilt-labels.json`, and stops the container. The result is about 45 MB, 5 MB
+gzipped, and is not tracked here.
+
 ### npm package
 
 The JS bindings in `bindings/js/` are published as

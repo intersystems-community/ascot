@@ -3,12 +3,26 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
 use crate::IrisContext;
 use crate::atelier::{AtelierContext, RawAtelier};
-use crate::bindings::{ClassInfo, RoutineInfo, Source};
+use crate::bindings::{ClassInfo, RoutineInfo, Signature, Source};
+
+/// The signatures of the `%SYS` routine labels the system macros call, which IRIS ships as object
+/// code only: `scripts/prebuilt-declarations.sh` merges them into a declaration file, and a live
+/// instance without the routines' source is held to them too.
+static CURATED_LABELS: LazyLock<BTreeMap<String, BTreeMap<String, Signature>>> =
+    LazyLock::new(|| {
+        serde_json::from_str(include_str!("../scripts/prebuilt-labels.json"))
+            .expect("a valid prebuilt-labels.json")
+    });
+
+pub(crate) fn curated_label(routine: &str, label: &str) -> Option<Signature> {
+    CURATED_LABELS.get(routine)?.get(label).cloned()
+}
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
@@ -31,7 +45,7 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisContext>,
     Ok(Box::new(declarations))
 }
 
-pub(crate) const DECLARATIONS_VERSION: u32 = 4;
+pub(crate) const DECLARATIONS_VERSION: u32 = 5;
 
 /// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
 /// argument to its answer. A class holds only its own members; ascot walks its superclasses.
@@ -93,20 +107,11 @@ impl IrisContext for Declarations {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bindings::{NameInfo, Position};
 
     fn class_info(name: &str) -> ClassInfo {
-        let zero = Position {
-            line: 0,
-            character: 0,
-        };
         ClassInfo {
             doc: String::new(),
-            name: NameInfo {
-                before: zero,
-                content: name.to_string(),
-                after: zero,
-            },
+            name: name.to_string(),
             extends: vec!["%RegisteredObject".to_string()],
             ..Default::default()
         }

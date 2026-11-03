@@ -65,15 +65,5 @@
  "%Stream.Object.cls": {
   "%Open": { "returns": "This" },
   "%OpenId": { "returns": "This" }
- },
- "%apiOBJ.int": {
-  "EmbedStatus": { "args": ["status", "embed", "all="], "publics": [], "returns": "%Status" }
- },
- "%occMessages.int": {
-  "FormatMessage": { "args": ["language", "domain", "id", "default", "args..."], "returns": "%String" },
-  "FormatText": { "args": ["msg", "args..."], "returns": "%String" }
- },
- "%occSystem.int": {
-  "AppendStatus": { "args": ["sc1", "sc2"], "publics": [], "returns": "%Status" }
  }
 }

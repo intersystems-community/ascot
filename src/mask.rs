@@ -1,8 +1,7 @@
-use crate::bindings::ArgMode;
-use crate::check::types::{NormalArg, Ty, TyProcedure, VariadicArg, ty_from_mask};
+use crate::check::types::{Ty, TyProcedure, ty_from_mask};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,7 +28,6 @@ enum Entry {
     // `null`: a member the dictionary lists but the compiler doesn't recognize (`##super` from
     // an override reports it missing, MPP5386) -- the inert `%OnNew` and `%Dispatch*` defaults.
     Class(BTreeMap<String, Option<Correction>>),
-    Routine(BTreeMap<String, LabelSignature>),
     // What a class stands for as a type: `"Any"`, or another class's name.
     Type(String),
 }
@@ -102,51 +100,4 @@ pub(crate) fn generic_arg(
     args.get(name)
         .cloned()
         .or_else(|| declared.as_ref()?.default.clone())
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LabelSignature {
-    args: Vec<String>,
-    publics: Option<Vec<String>>,
-    returns: Option<String>,
-}
-
-/// Each arg is `name`, `name=` (optional), `&name` (by reference) or a final `name...`.
-pub(crate) fn label(routine: &str, label: &str) -> Option<Arc<TyProcedure>> {
-    let sig =
-        [".int", ".mac"]
-            .iter()
-            .find_map(|ext| match MASK.get(&format!("{routine}{ext}")) {
-                Some(Entry::Routine(labels)) => labels.get(label),
-                _ => None,
-            })?;
-    let mode = |name: &str| match name.strip_prefix('&') {
-        Some(name) => (ArgMode::ByRef, name.to_string()),
-        None => (ArgMode::Default, name.to_string()),
-    };
-    let mut normal_args = vec![];
-    let mut variadic_arg = None;
-    for arg in &sig.args {
-        if let Some(name) = arg.strip_suffix("...") {
-            let (mode, name) = mode(name);
-            variadic_arg = Some(VariadicArg::new(mode, name, None));
-        } else {
-            let (name, default) = match arg.strip_suffix('=') {
-                Some(name) => (name, Some(String::new())),
-                None => (arg.as_str(), None),
-            };
-            let (mode, name) = mode(name);
-            normal_args.push(NormalArg::new(mode, name, None, default));
-        }
-    }
-    Some(Arc::new(TyProcedure {
-        normal_args,
-        variadic_arg,
-        out: ty_from_mask(sig.returns.clone()).or(Some(Ty::Any)),
-        procedure_block: sig.publics.clone(),
-        formal_list: true,
-        uri: None,
-        declared_at: None,
-    }))
 }

@@ -911,7 +911,7 @@ impl std::fmt::Display for TyProcedure {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub enum TyProcedureOrAny {
     Procedure(Arc<TyProcedure>),
     #[default]
@@ -1019,39 +1019,21 @@ impl Instantiate for PropertyTy {
     }
 }
 
-impl From<bindings::MethodInfo> for TyProcedure {
+impl From<bindings::Signature> for TyProcedure {
     fn from(
-        bindings::MethodInfo {
+        bindings::Signature {
             normal,
             variadic,
             t,
             procedure_block,
-            body: _,
-        }: bindings::MethodInfo,
-    ) -> Self {
-        Self::declared(normal, variadic, t, procedure_block)
-    }
-}
-
-impl TyProcedure {
-    fn declared(
-        normal: Vec<bindings::NormalArg>,
-        variadic: Option<bindings::VariadicArg>,
-        t: Option<String>,
-        procedure_block: Option<Vec<String>>,
+        }: bindings::Signature,
     ) -> Self {
         Self {
             normal_args: normal
                 .into_iter()
-                .map(|arg: bindings::NormalArg| NormalArg {
-                    declared_at: arg.declared_at,
-                    ..NormalArg::new(arg.mode, arg.name, ty_from_declared(arg.t), arg.default)
-                })
+                .map(|arg| NormalArg::new(arg.mode, arg.name, ty_from_declared(arg.t), arg.default))
                 .collect(),
-            variadic_arg: variadic.map(|v| VariadicArg {
-                declared_at: v.declared_at,
-                ..VariadicArg::new(v.mode, v.name, ty_from_declared(v.t))
-            }),
+            variadic_arg: variadic.map(|v| VariadicArg::new(v.mode, v.name, ty_from_declared(v.t))),
             out: ty_from_declared(t),
             procedure_block,
             formal_list: true,
@@ -1059,27 +1041,21 @@ impl TyProcedure {
             declared_at: None,
         }
     }
+}
 
-    pub(crate) fn from_label(label: bindings::LabelInfo, uri: Option<String>) -> Self {
-        let bindings::LabelInfo {
-            name: _,
-            normal,
-            variadic,
-            t,
-            procedure_block,
-            declared_at,
-        } = label;
-        let mut label = Self::declared(normal, variadic, t, procedure_block);
+impl TyProcedure {
+    // A label's signature read from a declaration: untyped where the declaration is, and
+    // returning Any rather than nothing when its type isn't given.
+    pub(crate) fn from_label(signature: bindings::Signature, uri: Option<String>) -> Self {
+        let mut label = Self::from(signature);
         label.out = label.out.or(Some(Ty::Any));
         label.uri = uri;
-        label.declared_at = declared_at;
         label
     }
 
     // Read from source, so untyped.
     pub(crate) fn to_label(&self, name: String) -> bindings::LabelInfo {
-        bindings::LabelInfo {
-            name,
+        let signature = bindings::Signature {
             normal: self
                 .normal_args
                 .iter()
@@ -1094,7 +1070,10 @@ impl TyProcedure {
             }),
             t: None,
             procedure_block: self.procedure_block.clone(),
-            declared_at: self.declared_at,
+        };
+        bindings::LabelInfo {
+            name,
+            signature: Some(signature),
         }
     }
 }
