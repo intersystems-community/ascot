@@ -6466,6 +6466,11 @@ pub enum AtomicExpr {
         kw: StringEqCI!("##quoteExp"),
         cls: Paren<Expr>,
     },
+    // Evaluated by the compiler; its value is spliced into the source as text.
+    CompileTime {
+        kw: Either<StringEqCI!("##safeexpression"), StringEqCI!("##expression")>,
+        expr: Paren<Expr>,
+    },
     QuoteString {
         kw: StringEqCI!("##quote"),
         cls: MacroArgList,
