@@ -53,6 +53,11 @@ pub struct CreateWorkspaceRequest {
     /// https://github.com/intersystems-community/ascot#style.
     #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
     pub style: Option<serde_json::Value>,
+    /// Which codes are reported, and at what severity: `VERB:TARGETS` strings applied in order, a
+    /// later one overriding an earlier one. VERB is `off`, `on` (at the code's own severity) or a
+    /// severity (`error`, `warning`, `information`, `hint`); TARGETS is a comma-separated list of
+    /// codes, or `all`. For example `["off:A5579,A4043"]`, or `["off:all", "on:A7095,A6851"]`.
+    pub diagnostics: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -230,6 +235,7 @@ impl Server {
             iris,
             iris_namespace,
             style,
+            diagnostics,
         }): Parameters<CreateWorkspaceRequest>,
     ) -> Result<String, String> {
         let mut workspaces = self.workspaces.write().await;
@@ -240,13 +246,24 @@ impl Server {
             .map(style::from_value)
             .transpose()
             .map_err(|err| format!("style: {err}"))?;
+        let filter = diagnostics
+            .unwrap_or_default()
+            .iter()
+            .map(|batch| batch.parse())
+            .collect::<Result<_, _>>()
+            .map(crate::diagnostic_filter::Filter)
+            .map_err(|err| format!("diagnostics: {err}"))?;
         let iris = iris
             .map(|iris| iris::open(&iris, iris_namespace.as_deref()))
             .transpose()
             .map_err(|err| format!("iris: {err}"))?;
         workspaces.insert(
             workspace.clone(),
-            Arc::new(Mutex::new(Workspace::native(iris, style))),
+            Arc::new(Mutex::new({
+                let native = Workspace::native(iris, style);
+                native.set_diagnostic_filter(filter);
+                native
+            })),
         );
         Ok(format!("created workspace {workspace:?}"))
     }

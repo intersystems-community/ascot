@@ -35,6 +35,7 @@ use crate::{
 pub fn run(
     iris: Option<Box<dyn IrisContext>>,
     style: Option<Style>,
+    filter: crate::diagnostic_filter::Filter,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let (connection, io_threads) = Connection::stdio();
 
@@ -52,6 +53,7 @@ pub fn run(
     let params: InitializeParams = serde_json::from_value(initialize_params)?;
 
     let workspace = Workspace::native(iris, style);
+    workspace.set_diagnostic_filter(filter);
     // Insert every `.cls`/`.mac`/`.int`/`.inc` file under the workspace root up front, so
     // cross-file references (`##class(...)`, `#include`) resolve correctly from the start —
     // otherwise a file that's opened on its own, without whatever it `#include`s also being
