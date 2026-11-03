@@ -1883,6 +1883,7 @@ impl TypeUnclear for AtomicExpr {
             AtomicExpr::CallSubroutine { .. }
             | AtomicExpr::FunctionCall(..)
             | AtomicExpr::Super(..)
+            | AtomicExpr::CompileTime { .. }
             | AtomicExpr::Indirection(..) => true,
             AtomicExpr::Member { args, .. } => args.is_some(),
         }
@@ -2919,6 +2920,8 @@ impl CheckExprInner for AtomicExpr {
             AtomicExpr::QuoteExpression { .. } => Err(QuasiTypeError::unimplemented(
                 "'##quoteExp(...)'".to_string(),
             )),
+            // The inner expression runs in the compiler, not here, and its text becomes the code.
+            AtomicExpr::CompileTime { .. } => Ok(Ty::Any.into()),
         }
     }
 }
