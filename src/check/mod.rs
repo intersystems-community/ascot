@@ -431,6 +431,7 @@ impl MethodDetails {
             mode,
             Some(cos::CodeMode::Generator(..) | cos::CodeMode::ObjectGenerator(..))
         );
+        let in_doc_coordinates = std::cell::RefCell::new((Vec::new(), Vec::new()));
         // `?` is deferred until after relocation below, so an early return doesn't skip
         // relocating diagnostics/references/hints already recorded before the error.
         let result = Flow::with_procedure(
@@ -456,6 +457,54 @@ impl MethodDetails {
                 if is_generator {
                     flow.mark_incomplete();
                 }
+                // Checked against the class document itself, in argument order, before the body;
+                // their diagnostics need no relocation, so they're set aside until that's done.
+                let marks = (env.base.soft_diagnostics_mark(), env.base.references_mark());
+                let default_env = env.for_member(
+                    0,
+                    Some(&cls.class),
+                    !self.is_class_method,
+                    name,
+                    &definitions,
+                );
+                for default in &self.brace_defaults {
+                    let range = match &default.value {
+                        Left(expr) => default_env.range(expr),
+                        Right(text) => text.range,
+                    };
+                    flow.with_range(range, |flow| {
+                        let ty = match &default.value {
+                            Left(expr) => {
+                                expr.to_power_ty(&default_env, flow).unwrap_or_else(|err| {
+                                    default_env.soft_diagnostic(err);
+                                    Ty::Any.into()
+                                })
+                            }
+                            Right(text) => {
+                                if let Err(err) = Expr::parse(&text.it) {
+                                    default_env
+                                        .soft_diagnostic(TypeError::invalid_syntax(range, err));
+                                }
+                                Ty::Any.into()
+                            }
+                        };
+                        // Set only when the argument wasn't passed, so the incoming value stays
+                        // a live alternative.
+                        let passed = flow.split_on(PowerTy::from("%Boolean"), true);
+                        if let Err(err) =
+                            flow.handle_set(Local::bare(default.name.clone()), ty, range)
+                        {
+                            flow.add_soft_diagnostic(err);
+                        }
+                        if let Err(err) = flow.merge(passed) {
+                            flow.add_soft_diagnostic(err);
+                        }
+                    });
+                }
+                let mut aside = in_doc_coordinates.borrow_mut();
+                aside.0.extend(env.base.soft_diagnostics_since(marks.0));
+                aside.1.extend(env.base.references_since(marks.1));
+                drop(aside);
                 body.check(&code_env, flow)
             },
             true,
@@ -486,6 +535,13 @@ impl MethodDetails {
             &source_map,
             &shifter,
         ));
+        let (diagnostics, references) = in_doc_coordinates.into_inner();
+        for diagnostic in diagnostics {
+            env.base.add_soft_diagnostic(diagnostic);
+        }
+        for (source, target) in references {
+            env.base.reference(source, target);
+        }
         let creates =
             result.map_err(|err| relocate_method_error(err, &source_map, env.uri(), &shifter))?;
         if let Some(hint) = creates_hint(self.body.range.start, creates) {

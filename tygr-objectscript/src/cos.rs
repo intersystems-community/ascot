@@ -3070,6 +3070,13 @@ impl FormalSpec {
             .flat_map(|formals| formals.0.items.iter())
             .collect()
     }
+
+    pub fn into_formals(self) -> Vec<Range<Formal>> {
+        self.formals
+            .into_iter()
+            .flat_map(|formals| formals.0.items)
+            .collect()
+    }
 }
 
 #[derive(Grammar)]
@@ -3081,7 +3088,21 @@ pub struct Formal {
     pub name: Range<LocalVariableName>,
     pub variadic: Option<StringEq!("...")>,
     pub as_type: Option<As<Type>>,
-    pub default: Option<DefaultValue>,
+    pub default: Option<FormalDefault>,
+}
+
+pub type FormalDefault = Prefix<Raw<(Space, StringEq!("="), Space)>, Range<FormalDefaultValue>>;
+
+// `= literal`, or `= {expr}`: code of the method, run on entry when the argument wasn't passed.
+#[derive(Grammar)]
+pub enum FormalDefaultValue {
+    Brace {
+        open: Raw<(StringEq!("{"), Space)>,
+        expr: Range<Expr>,
+        close: Raw<(Space, StringEq!("}"))>,
+    },
+    // Including braces whose text is no expression, for the checker to report.
+    Other(OSExpr),
 }
 
 #[derive(Grammar)]
