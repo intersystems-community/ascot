@@ -50,7 +50,7 @@ pub struct CreateWorkspaceRequest {
     /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
     /// have every command keyword but `Do`'s written in full; `function` and `function_<name>` do
     /// the same for intrinsic functions. Applies to every document. The keys are documented at
-    /// https://github.com/intersystems-community/ascot#style.
+    /// https://github.com/intersystems-community/ascot/blob/main/STYLE.md.
     #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
     pub style: Option<serde_json::Value>,
     /// Which codes are reported, and at what severity: `VERB:TARGETS` strings applied in order, a

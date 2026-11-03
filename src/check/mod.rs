@@ -592,6 +592,7 @@ fn check_block_body<'a>(
     } else {
         env
     };
+    report_new_per_block(env, procedure_commands(&body.main));
     body.main.check(env, flow)?;
     if body.subroutines.is_none() {
         return Ok(());
@@ -668,10 +669,75 @@ impl<Start> CheckCommand for cos::CommandLine<Start> {
         if !self.periods.is_empty() {
             return Ok(());
         }
-        for command in self.commands.iter().flat_map(|cmds| cmds.items.iter()) {
+        if let Some(max) = env.style().and_then(|s| s.rules.max_commands_per_line) {
+            for command in commands_of(self).skip(max as usize) {
+                env.soft_diagnostic(TypeError::commands_per_line(max, env.range(command)));
+            }
+        }
+        for command in commands_of(self) {
             command.check(env, flow)?;
         }
         Ok(())
+    }
+}
+
+fn commands_of<S>(line: &CommandLine<S>) -> impl Iterator<Item = &Range<Command>> {
+    line.commands.iter().flat_map(|cmds| cmds.items.iter())
+}
+
+// The `New`s past the style's allowance for one block.
+fn report_new_per_block<'c>(env: &CodeEnv<'_>, commands: impl Iterator<Item = &'c Range<Command>>) {
+    let Some(max) = env.style().and_then(|s| s.rules.max_new_per_block) else {
+        return;
+    };
+    for command in commands
+        .filter(|c| matches!(***c, Command::New(_)))
+        .skip(max as usize)
+    {
+        env.soft_diagnostic(TypeError::new_per_block(max, env.range(command)));
+    }
+}
+
+// `command` is the full name, lowercased, as the style keys it.
+fn report_argument_postconditional(
+    env: &CodeEnv<'_>,
+    command: &str,
+    pc: &Option<cos::PostCondition>,
+) {
+    if let Some(pc) = pc
+        && env
+            .style()
+            .is_some_and(|s| !s.keywords.allows_postcondition_on_argument(command))
+    {
+        env.soft_diagnostic(TypeError::argument_postconditional(env.range(pc)));
+    }
+}
+
+// The conditions after the first of an `If` or `While`, each behind its comma.
+type Conjuncts = [Prefix<LGapXLGap<StringEq!(",")>, Range<Expr>>];
+
+// The commas, or the `&&`s, the style doesn't want between conditions.
+fn report_and_style<T: Grammar>(env: &CodeEnv<'_>, first: &GenericExpr<T>, remaining: &Conjuncts) {
+    use crate::bindings::AndOperator;
+    let Some(and) = env.style().and_then(|s| s.rules.condition_and) else {
+        return;
+    };
+    match and {
+        AndOperator::DoubleAmpersand => {
+            for cnd in remaining {
+                env.soft_diagnostic(TypeError::and_operator(and, env.range(cnd)));
+            }
+        }
+        AndOperator::Comma => {
+            let ops = (first.ops.iter()).chain(remaining.iter().flat_map(|cnd| cnd.ops.iter()));
+            for op in ops {
+                if let InfixOperation::Other { op: operator, .. } = op.deref()
+                    && matches!(operator.deref(), Operator::LA(_))
+                {
+                    env.soft_diagnostic(TypeError::and_operator(and, env.range(op)));
+                }
+            }
+        }
     }
 }
 
@@ -850,18 +916,18 @@ impl CheckCommandInner for cos::Block {
 
 // How each keyword in `keywords` is written, if a style was given.
 fn report_style(env: &CodeEnv, keywords: impl IntoIterator<Item = KeywordUse>) {
-    let Some(styles) = env.keyword_styles() else {
+    let Some(style) = env.style() else {
         return;
     };
     for kw in keywords {
-        if let Some(expected) = styles.of(&kw).expected(&kw) {
+        if let Some(expected) = style.keywords.expected(&kw) {
             let range = env.span(kw.start, kw.start + kw.text.len());
-            let (what, sigil) = match kw.kind {
-                KeywordKind::Command => ("Command keyword", ""),
-                KeywordKind::Function => ("Function", "$"),
+            let sigil = match kw.kind {
+                KeywordKind::Command => "",
+                KeywordKind::Function => "$",
             };
             env.soft_diagnostic(TypeError::keyword_style(
-                what,
+                kw.kind,
                 format!("{sigil}{}", kw.text),
                 format!("{sigil}{expected}"),
                 range,
@@ -892,6 +958,7 @@ impl CheckCommandInner for cos::Command {
                 };
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.items.iter() {
+                        report_argument_postconditional(env, "do", &arg.pc);
                         check_pc(&arg.pc, env, flow, |flow| {
                             Ok(arg.entry_ref.check(env, flow)?)
                         })?;
@@ -961,6 +1028,7 @@ impl CheckCommandInner for cos::Command {
                         ));
                     }
                     let GoToArg { location, pc } = args[0];
+                    report_argument_postconditional(env, "goto", pc);
                     check_pc(pc, env, flow, |flow| match location {
                         AllowCase::Plain(cos::Location(location)) => match location {
                             AllowIndirection::Plain(location) => {
@@ -1004,6 +1072,11 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::Quit(cos::QuitCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
+                    if env.style().and_then(|s| s.rules.allow_quit_for_return) == Some(false)
+                        && !flow.in_block()
+                    {
+                        flow.add_soft_diagnostic(QuasiTypeError::quit_exits());
+                    }
                     let exp_ty = exp
                         .deref()
                         .as_ref()
@@ -1263,6 +1336,7 @@ impl CheckCommandInner for cos::Command {
             cos::Command::Xecute(cos::XecuteCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.items.iter() {
+                        report_argument_postconditional(env, "xecute", &arg.pc);
                         check_pc(&arg.pc, env, flow, |flow| {
                             match &arg.arg {
                                 cos::XecuteArgEnum::Expr(code) => {
@@ -1600,12 +1674,13 @@ fn check_for_specs<'a, T>(
 #[allow(clippy::type_complexity)]
 fn check_and<'a, T: Grammar>(
     first: &Range<impl Deref<Target = GenericExpr<T>>>,
-    remaining: &[Prefix<LGapXLGap<StringEq!(",")>, Range<Expr>>],
+    remaining: &Conjuncts,
     env: &CodeEnv<'a>,
     if_true: &mut Flow<'a>,
     report_always: bool,
 ) -> Result<Flow<'a>, TypeError> {
     let first = first.as_ref().map(Deref::deref);
+    report_and_style(env, first.deref(), remaining);
     let mut if_false = split_on_conjunction(first, env, if_true, report_always)?;
     for cnd in remaining.iter() {
         let flow =
@@ -3231,6 +3306,15 @@ trait AsCommandLines<Start: 'static> {
     fn as_command_lines(&self) -> impl Iterator<Item = &CommandLine<Start>>;
 }
 
+// Its first line is typed apart from the rest, so this yields commands rather than lines.
+fn procedure_commands(main: &ProcedureMain) -> impl Iterator<Item = &Range<Command>> {
+    (main.line_1.iter().flat_map(commands_of)).chain(
+        (main.line_n.iter())
+            .flat_map(|line_n| line_n.items.iter())
+            .flat_map(commands_of),
+    )
+}
+
 impl AsCommandLines<SGap1> for RoutineMain {
     fn as_command_lines(&self) -> impl Iterator<Item = &CommandLine<SGap1>> {
         self.line_1
@@ -3256,6 +3340,7 @@ fn body_end_range(env: &CodeEnv<'_>, main: &RoutineMain) -> Option<bindings::Ran
 
 impl CheckCommand for RoutineMain {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
+        report_new_per_block(env, self.as_command_lines().flat_map(commands_of));
         for line in self.as_command_lines() {
             line.check(env, flow)?;
         }
