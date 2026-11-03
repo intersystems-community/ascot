@@ -45,6 +45,7 @@ mod atelier;
 pub mod bindings;
 pub mod check;
 mod details;
+pub mod diagnostic_filter;
 #[cfg(not(target_arch = "wasm32"))]
 mod iris;
 #[cfg(not(target_arch = "wasm32"))]
@@ -183,6 +184,7 @@ pub struct WorkspaceStruct {
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
     pub(crate) style: Option<style::KeywordStyles>,
+    diagnostic_filter: diagnostic_filter::Filter,
     // %occErrors, resolved on first use: the error names a compile-time macro such as `$$$ERROR`
     // accepts in its arguments without any `Include`. Dropped whenever an include file changes.
     pub(crate) error_names: RefCell<Option<MacroDefinitions>>,
@@ -778,6 +780,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         rtn_index: RefCell::new(HashMap::new()),
         iris,
         style: style.as_ref().map(style::KeywordStyles::new),
+        diagnostic_filter: diagnostic_filter::Filter::default(),
         error_names: RefCell::new(None),
         iris_includes: RefCell::new(HashMap::new()),
         implicit_definitions: RefCell::new(None),
@@ -789,6 +792,11 @@ impl Workspace {
     /// [`GuestWorkspace::new`](bindings::GuestWorkspace::new), with a native IRIS client.
     pub fn native(iris: Option<Box<dyn IrisContext>>, style: Option<Style>) -> Self {
         Workspace(RefCell::new(build_workspace_struct(iris, style)))
+    }
+
+    /// Which codes `diagnostics` reports, and at what severity.
+    pub fn set_diagnostic_filter(&self, filter: diagnostic_filter::Filter) {
+        self.borrow_mut().diagnostic_filter = filter;
     }
 
     /// Opens `path` if it is a `.cls`/`.mac`/`.int`/`.inc` file, or every such file under it if it
@@ -862,7 +870,13 @@ impl bindings::GuestWorkspace for Workspace {
 
     #[allow(async_fn_in_trait)]
     fn diagnostics(&self, uri: String) -> Vec<bindings::Diagnostic> {
-        self.borrow().ensure_checked(&uri).diagnostics
+        let this = self.borrow();
+        let filter = &this.diagnostic_filter;
+        this.ensure_checked(&uri)
+            .diagnostics
+            .into_iter()
+            .filter_map(|diagnostic| filter.apply(diagnostic))
+            .collect()
     }
 
     #[allow(async_fn_in_trait)]

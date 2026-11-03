@@ -377,6 +377,8 @@ macro_rules! type_error_kinds {
         }
 
         impl TypeErrorKind {
+            pub const CODES: &[&str] = &[$($code,)*];
+
             /// This kind's diagnostic code.
             pub fn code(&self) -> &'static str {
                 match self {
