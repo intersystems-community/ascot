@@ -281,10 +281,12 @@ intrinsic function name written differently is reported as a warning.
 severity; the MCP `create_workspace` call takes the same strings as its
 `diagnostics` list. VERB is `off`, `on` (the code's own severity) or a severity
 (`error`, `warning`, `information`, `hint`); TARGETS is a comma-separated list
-of codes, or `all`. The last value naming a code decides it:
+of codes, severities (every code currently reported at one), or `all`. Values
+apply in order, a later one overriding an earlier one:
 
 ```sh
 ascot analyze -d off:A5579,A4043 src/            # drop two codes
+ascot analyze -d off:hint,information src/       # errors and warnings only
 ascot analyze -d off:all -d on:A7095,A6851 src/  # report only two
 ascot analyze -d hint:A4471 src/                 # report one as a hint
 ```

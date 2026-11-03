@@ -56,7 +56,8 @@ pub struct CreateWorkspaceRequest {
     /// Which codes are reported, and at what severity: `VERB:TARGETS` strings applied in order, a
     /// later one overriding an earlier one. VERB is `off`, `on` (at the code's own severity) or a
     /// severity (`error`, `warning`, `information`, `hint`); TARGETS is a comma-separated list of
-    /// codes, or `all`. For example `["off:A5579,A4043"]`, or `["off:all", "on:A7095,A6851"]`.
+    /// codes, severities (every code currently reported at one), or `all`. For example
+    /// `["off:A5579,A4043"]`, `["off:hint,information"]`, or `["off:all", "on:A7095,A6851"]`.
     pub diagnostics: Option<Vec<String>>,
 }
 
