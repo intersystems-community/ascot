@@ -57,8 +57,6 @@ struct Shared<'a> {
     uri: &'a str,
     env: &'a WorkspaceEnv<'a>,
     procedure_block: bool,
-    // Entered as an error handler (see `Traps`): an error is being handled throughout.
-    handler: bool,
     // `None` is for subroutines and procedures only. It means that the output expectation
     // is unclear until the first return/quit command. Shared (the `Rc`) with the labels that
     // return for this body (see `check_block_body`).
@@ -264,8 +262,13 @@ impl<'a> Flow<'a> {
         self.shared.procedure_block
     }
 
-    pub(crate) fn is_handler(&self) -> bool {
-        self.shared.handler
+    // Whether the frame has private variables -- in a procedure block, every local it uses.
+    pub(crate) fn has_private_variables(&mut self) -> Result<bool, QuasiTypeError> {
+        Ok(self
+            .bindings()?
+            .bindings
+            .values()
+            .any(|binding| binding.private))
     }
 
     // `ZQuit`: the frames below are gone, and this code goes on without them (measured).
@@ -440,7 +443,6 @@ impl<'a> Flow<'a> {
                 uri,
                 env,
                 procedure_block,
-                handler: is_handler,
                 output,
                 ty_var: RefCell::new(0),
                 reading_list: RefCell::new(reading_list),
