@@ -205,9 +205,11 @@ claude plugin install ascot-lsp@ascot-plugins
 
 Every command can use a live IRIS instance, reached through the Atelier REST
 API, to resolve the system and library classes and routines that aren't part
-of the local workspace. Without a connection, such a class or routine is left
-unconfirmed (a hint, not an error) rather than checked against real IRIS
-metadata. The commands take the connection differently:
+of the local workspace. Without a connection, such a class, routine or include
+file is left unconfirmed (a hint, not an error) rather than checked against real
+IRIS metadata; so is a macro that may come from an include file that couldn't be
+read, such as the `%systemInclude` every class gets. The commands take the
+connection differently:
 
 - `analyze`, `analyze-workspace` and `lsp` take `--iris <url>` and
   `--iris-namespace <namespace>` (default `%SYS`) on the command line. The URL

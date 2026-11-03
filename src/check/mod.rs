@@ -447,6 +447,7 @@ impl MethodDetails {
                     !self.is_class_method,
                     name,
                     &definitions,
+                    &cls.unread_includes,
                 );
                 let body = MethodBody {
                     language,
@@ -2731,6 +2732,9 @@ impl MacroCallStructExt for MacroCallStruct {
         let name = self.name.print();
         if env.is_defined_macro(&name) {
             self.check_args(env, flow)
+        } else if !env.unread_includes.is_empty() {
+            flow.add_soft_diagnostic(QuasiTypeError::unconfirmed_macro(name, env.unread_includes));
+            self.check_args(env, flow)
         } else {
             Err(QuasiTypeError::undefined_macro(
                 name.clone(),
@@ -3400,12 +3404,13 @@ pub(crate) fn check_cls(
     }
     // Available to every class without an explicit `Include` (see `CLASS_IMPLICIT_INCLUDES`) --
     // resolved silently (no diagnostic on failure, unlike an explicit `Include`).
-    let mut macro_definitions = env.base.implicit_class_definitions();
+    let (mut macro_definitions, mut unread_includes) = env.base.implicit_class_definitions();
     // An `Include` is inherited: a subclass sees every include file of its superclasses too.
-    let (inherited_definitions, _) = env
+    let (inherited_definitions, inherited_failed) = env
         .base
         .resolve_class_includes(&env.base.inherited_include_names(cls));
     macro_definitions.extend(inherited_definitions);
+    unread_includes.extend(inherited_failed);
     let include_names: Vec<String> = cls.include_names.iter().map(|i| i.it.clone()).collect();
     let (own_definitions, failed_includes) = env.base.resolve_class_includes(&include_names);
     for include in &cls.include_names {
@@ -3418,19 +3423,26 @@ pub(crate) fn check_cls(
     // `include_range` is only `None` when there's no `Include` at all, in which case
     // `failed_includes` is empty too and this range is never actually used.
     let include_range = cls.include_range.unwrap_or(cls.name.range);
-    for (name, failure) in failed_includes {
+    for (name, failure) in &failed_includes {
+        let name = name.clone();
         let err = match failure {
-            Some(reason) => {
-                TypeError::iris_lookup_failed(crate::DocKind::Inc, name, reason, include_range)
-            }
-            None => TypeError::cannot_find_include(name, include_range),
+            Some(reason) => TypeError::iris_lookup_failed(
+                crate::DocKind::Inc,
+                name,
+                reason.clone(),
+                include_range,
+            ),
+            None if env.base.has_iris() => TypeError::cannot_find_include(name, include_range),
+            None => TypeError::unconfirmed_include(name, include_range),
         };
         diagnostics.push(err.into());
     }
+    unread_includes.extend(failed_includes);
     let doc = ClassDocument::new(
         cls.name.it.to_string().into(),
         cls.keywords.language,
         macro_definitions,
+        unread_includes.into_iter().map(|(name, _)| name).collect(),
     );
     for member in &cls.members.duplicates {
         let name = &member.name.it;

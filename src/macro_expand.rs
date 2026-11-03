@@ -132,6 +132,7 @@ pub struct SourceMap {
     invocations: Vec<std::ops::Range<usize>>,
     // Unresolved `#include`s, already positioned — must NOT go through `relocate_diagnostics`.
     pub(crate) unresolved: Vec<Diagnostic>,
+    pub(crate) unread_includes: Vec<String>,
     // The top-level file's own `#include` directives: source span and the include's name.
     include_directives: Vec<(std::ops::Range<usize>, String)>,
     include_names: HashSet<String>,
@@ -461,6 +462,8 @@ pub(crate) type Include = Arc<(String, String, Vec<Range<MacroedUnit>>)>;
 
 // An `Include` that didn't resolve, with why IRIS couldn't be asked for it, when that's why.
 pub(crate) type FailedInclude = (String, Option<String>);
+// What a set of include files defined, which of them couldn't be read, and every name asked for.
+pub(crate) type ResolvedIncludes = (MacroDefinitions, Vec<FailedInclude>, HashSet<String>);
 
 impl WorkspaceStruct {
     // Resolves an `#include name`: an already-open `.inc` document first, then (if connected)
@@ -584,9 +587,11 @@ impl WorkspaceStruct {
                                         .collect();
                                     todos.push_items(items);
                                 }
-                                Ok(None) => {
-                                    dones.note_unresolved_include(included_name.print(), &origin)
-                                }
+                                Ok(None) => dones.note_unresolved_include(
+                                    included_name.print(),
+                                    &origin,
+                                    self.iris.is_some(),
+                                ),
                                 Err(reason) => {
                                     dones.note_lookup_failed(included_name.print(), reason, &origin)
                                 }
@@ -948,10 +953,7 @@ impl WorkspaceStruct {
         }
     }
 
-    pub(crate) fn resolve_class_includes(
-        &self,
-        names: &[String],
-    ) -> (MacroDefinitions, Vec<FailedInclude>, HashSet<String>) {
+    pub(crate) fn resolve_class_includes(&self, names: &[String]) -> ResolvedIncludes {
         let mut definitions = HashMap::new();
         let mut failed = Vec::new();
         let mut include_names = HashSet::new();
@@ -976,13 +978,11 @@ impl WorkspaceStruct {
         (definitions, failed, include_names)
     }
 
-    pub(crate) fn implicit_class_definitions(&self) -> (MacroDefinitions, HashSet<String>) {
+    pub(crate) fn implicit_class_definitions(&self) -> ResolvedIncludes {
         self.implicit_definitions
             .borrow_mut()
             .get_or_insert_with(|| {
-                let (definitions, _, names) =
-                    self.resolve_class_includes(&implicit_includes(CLASS_IMPLICIT_INCLUDES));
-                (definitions, names)
+                self.resolve_class_includes(&implicit_includes(CLASS_IMPLICIT_INCLUDES))
             })
             .clone()
     }
@@ -1146,6 +1146,7 @@ struct DoneList {
     // literally, since the raw `#include Name` text rarely re-parses and would otherwise mask
     // this diagnostic behind a generic syntax error.
     unresolved: Vec<(UnresolvedError, String, Origin)>,
+    unread_includes: Vec<String>,
     include_directives: Vec<(std::ops::Range<usize>, String)>,
     include_names: HashSet<String>,
     // Macros `#define`d in an earlier method's body, by the method's name: usable, but warned.
@@ -1160,17 +1161,25 @@ impl DoneList {
             included: HashMap::new(),
             invocations: Vec::new(),
             unresolved: Vec::new(),
+            unread_includes: Vec::new(),
             include_directives: Vec::new(),
             include_names: HashSet::new(),
             body_macros: HashMap::new(),
         }
     }
 
-    fn note_unresolved_include(&mut self, name: String, origin: &Origin) {
-        self.note_unresolved(crate::check::TypeError::cannot_find_include, name, origin);
+    fn note_unresolved_include(&mut self, name: String, origin: &Origin, has_iris: bool) {
+        self.unread_includes.push(name.clone());
+        let make = if has_iris {
+            crate::check::TypeError::cannot_find_include
+        } else {
+            crate::check::TypeError::unconfirmed_include
+        };
+        self.note_unresolved(make, name, origin);
     }
 
     fn note_lookup_failed(&mut self, name: String, reason: String, origin: &Origin) {
+        self.unread_includes.push(name.clone());
         let make = move |name, range| {
             crate::check::TypeError::iris_lookup_failed(DocKind::Inc, name, reason.clone(), range)
         };
@@ -1250,6 +1259,7 @@ impl DoneList {
             included: self.included,
             invocations,
             unresolved: Vec::new(),
+            unread_includes: self.unread_includes,
             include_directives: self.include_directives,
             include_names: self.include_names,
         };

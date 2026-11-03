@@ -38,6 +38,15 @@ impl QuasiTypeError {
         .into()
     }
 
+    pub fn unconfirmed_macro(name: String, includes: &[String]) -> Self {
+        let includes = includes
+            .iter()
+            .map(|i| format!("'{i}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        TypeErrorKind::UnconfirmedMacro { name, includes }.into()
+    }
+
     pub fn unreachable() -> Self {
         TypeErrorKind::Unreachable.into()
     }
@@ -476,6 +485,10 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Include file '{name}' is not defined in the current workspace"]
     CannotFindInclude { name: String },
+    #[code = "A6398"]
+    #[severity = Hint]
+    #[message = "Cannot confirm include file '{name}' exists — it isn't open in this workspace, with no IRIS connection to read it from"]
+    UnconfirmedInclude { name: String },
     /// An `#if` whose condition isn't a literal `1` or `0` once its macros are expanded. IRIS
     /// evaluates any expression at compile time; ascot doesn't, and goes on with the first branch.
     #[code = "A5540"]
@@ -744,6 +757,12 @@ type_error_kinds! {
         name: String,
         suggestions: Suggestions,
     },
+    /// A macro that may well be defined in an include file that couldn't be read, such as the
+    /// `%systemInclude` every class gets, without an IRIS connection.
+    #[code = "A4712"]
+    #[severity = Hint]
+    #[message = "Cannot confirm macro '{name}' is defined — include file(s) {includes} couldn't be read"]
+    UnconfirmedMacro { name: String, includes: String },
     #[code = "A5789"]
     #[severity = Error]
     #[message = "CONTINUE is not within a loop"]
@@ -1084,6 +1103,10 @@ impl TypeError {
 
     pub fn cannot_find_include(name: String, range: Range) -> Self {
         Self::at(TypeErrorKind::CannotFindInclude { name }, range)
+    }
+
+    pub fn unconfirmed_include(name: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::UnconfirmedInclude { name }, range)
     }
 
     pub fn undecided_if(condition: String, expansion: Option<String>, range: Range) -> Self {

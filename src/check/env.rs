@@ -1180,10 +1180,12 @@ impl<'a> WorkspaceEnv<'a> {
         (definitions, failed)
     }
 
-    pub(crate) fn implicit_class_definitions(&self) -> MacroDefinitions {
-        let (definitions, include_names) = self.workspace.implicit_class_definitions();
+    pub(crate) fn implicit_class_definitions(
+        &self,
+    ) -> (MacroDefinitions, Vec<crate::macro_expand::FailedInclude>) {
+        let (definitions, failed, include_names) = self.workspace.implicit_class_definitions();
         self.touch_includes(include_names);
-        definitions
+        (definitions, failed)
     }
 
     fn touch_includes(&self, include_names: HashSet<String>) {
@@ -1374,6 +1376,10 @@ impl<'a> WorkspaceEnv<'a> {
         self.suppress_soft_diagnostics.get()
     }
 
+    pub(crate) fn has_iris(&self) -> bool {
+        self.workspace.iris.is_some()
+    }
+
     pub(crate) fn soft_diagnostics_mark(&self) -> usize {
         self.soft_diagnostics.borrow().len()
     }
@@ -1454,6 +1460,8 @@ pub struct ClassDocument {
     // `[ Language = ... ]`: what its methods are written in unless they say otherwise.
     pub language: Option<bindings::Language>,
     pub macro_definitions: MacroDefinitions,
+    // Include files that couldn't be read, so a macro they may define looks undefined.
+    pub unread_includes: Vec<String>,
     pub body_macros: RefCell<crate::macro_expand::BodyMacros>,
 }
 
@@ -1462,11 +1470,13 @@ impl ClassDocument {
         class: ClassTy,
         language: Option<bindings::Language>,
         macro_definitions: MacroDefinitions,
+        unread_includes: Vec<String>,
     ) -> Self {
         Self {
             class,
             language,
             macro_definitions,
+            unread_includes,
             body_macros: Default::default(),
         }
     }
@@ -1518,6 +1528,9 @@ impl<'a> DocumentEnv<'a> {
             labels: Some(Rc::new(labels)),
             method_name: None,
             macro_definitions: Some(macro_definitions),
+            unread_includes: self
+                .source_map
+                .map_or(&[], |map| map.unread_includes.as_slice()),
         }
     }
 
@@ -1528,6 +1541,7 @@ impl<'a> DocumentEnv<'a> {
         is_instance: bool,
         method_name: &'a str,
         macro_definitions: &'a MacroDefinitions,
+        unread_includes: &'a [String],
     ) -> CodeEnv<'_> {
         CodeEnv {
             base: self,
@@ -1537,6 +1551,7 @@ impl<'a> DocumentEnv<'a> {
             labels: None,
             method_name: Some(method_name),
             macro_definitions: Some(macro_definitions),
+            unread_includes,
         }
     }
 }
@@ -1619,6 +1634,7 @@ pub struct CodeEnv<'a> {
     // The enclosing class's own resolved `Include`s, for suggesting a similarly named macro on
     // an undefined-macro error -- `None` outside a class method (e.g. a routine).
     macro_definitions: Option<&'a MacroDefinitions>,
+    pub(crate) unread_includes: &'a [String],
 }
 
 impl<'a> CodeEnv<'a> {

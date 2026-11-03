@@ -191,7 +191,7 @@ pub struct WorkspaceStruct {
     // Includes fetched from IRIS, parsed once; `None` when IRIS has no such include.
     pub(crate) iris_includes: RefCell<HashMap<String, Option<macro_expand::Include>>>,
     // `CLASS_IMPLICIT_INCLUDES` expanded once, since every class gets the same result.
-    pub(crate) implicit_definitions: RefCell<Option<(MacroDefinitions, HashSet<String>)>>,
+    pub(crate) implicit_definitions: RefCell<Option<macro_expand::ResolvedIncludes>>,
 }
 
 /// What the checker asks about code outside the workspace. An `Err` says why a lookup couldn't be
@@ -1334,7 +1334,7 @@ mod tests {
             assert!(
                 diagnostics
                     .iter()
-                    .any(|d| d.message.contains("Include file 'Shared' is not defined")),
+                    .any(|d| d.message.contains("confirm include file 'Shared'")),
                 "{diagnostics:?}"
             );
         }
@@ -2666,11 +2666,11 @@ mod tests {
         let cases = [
             (
                 find("NoSuchMacro"),
-                check::TypeErrorKind::UndefinedMacro {
+                check::TypeErrorKind::UnconfirmedMacro {
                     name: String::new(),
-                    suggestions: check::Suggestions(vec![]),
+                    includes: String::new(),
                 },
-                "UndefinedMacro",
+                "UnconfirmedMacro",
             ),
             (
                 find("Cannot confirm class"),
@@ -2731,7 +2731,7 @@ mod tests {
         assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
         let undefined = diagnostics
             .iter()
-            .find(|d| d.message.contains("'LATE' is undefined"));
+            .find(|d| d.message.contains("confirm macro 'LATE'"));
         assert_eq!(
             undefined.map(|d| d.range.start.line),
             Some(8),
@@ -2876,7 +2876,7 @@ mod tests {
         let diagnostics = workspace.diagnostics("C.cls".to_string());
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
-            diagnostics[0].message.contains("'X' is undefined"),
+            diagnostics[0].message.contains("confirm macro 'X'"),
             "{diagnostics:?}"
         );
     }
