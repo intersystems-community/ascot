@@ -14,7 +14,7 @@ use tygr::{Grammar, GrammarRule, Prefix, Raw, StringEq, StringOf1, VecSep};
 #[cfg(not(target_arch = "wasm32"))]
 use {
     crate::DocKind,
-    crate::iris::{DECLARATIONS_VERSION, Declarations},
+    crate::iris::{DECLARATIONS_VERSION, Declarations, DeclaredClass},
     base64::Engine,
     percent_encoding::percent_decode_str,
     std::collections::BTreeMap,
@@ -833,8 +833,16 @@ impl RawAtelier {
                             DocKind::Cls => {
                                 let params: Vec<&str> = batch.iter().map(String::as_str).collect();
                                 let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
-                                class_infos(ctx, &filter, &params)
-                                    .map(|found| classes.lock().unwrap().extend(found))
+                                class_infos(ctx, &filter, &params).map(|found| {
+                                    let found = found.into_iter().map(|(name, info)| {
+                                        let (declared, dropped) = DeclaredClass::validated(&info);
+                                        for header in dropped {
+                                            eprintln!("declare: {name}: left out `{header}`, which the class parser rejects");
+                                        }
+                                        (name, declared)
+                                    });
+                                    classes.lock().unwrap().extend(found)
+                                })
                             }
                             DocKind::Inc => sources(ctx, batch, &["inc"])
                                 .map(|found| includes.lock().unwrap().extend(found)),
@@ -869,6 +877,7 @@ impl RawAtelier {
             classes: classes.into_inner().unwrap(),
             includes: includes.into_inner().unwrap(),
             routines: routines.into_inner().unwrap(),
+            ..Default::default()
         })
     }
 

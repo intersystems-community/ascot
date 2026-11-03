@@ -185,6 +185,17 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                 ..
             } => {
                 let multidimensional = *multidimensional;
+                // A `many`/`children` relationship was read as the collection of the related
+                // objects (see `details`); reported as the relationship it is.
+                if let Some(check::types::Ty::OREF(check::types::ClsOrIns::Ins(cls))) = ty
+                    && cls.name == "%Library.RelationshipObject"
+                    && let Some(element) = cls.generics.get("ELEMENTTYPE")
+                {
+                    return MemberKind::Relationship(wit_bind::RelationshipInfo {
+                        t: Some(element.clone()),
+                        cardinality: Some(wit_bind::Cardinality::Many),
+                    });
+                }
                 MemberKind::Property(match (ty, element_ty) {
                     (Some(ty), Some(element)) => wit_bind::PropertyInfo {
                         t: Some(element.to_string()),
@@ -202,12 +213,14 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                     },
                 })
             }
-            MemberKindSpecificDetails::Parameter { ty, default, .. } => {
-                MemberKind::Parameter(wit_bind::ParameterInfo {
-                    t: ty.as_ref().map(|t| t.to_string()),
-                    v: default.clone(),
-                })
-            }
+            // The meta-type as written (`INTEGER`), which is what IRIS reports too; `ty` is
+            // ascot's reading of it.
+            MemberKindSpecificDetails::Parameter {
+                as_type, default, ..
+            } => MemberKind::Parameter(wit_bind::ParameterInfo {
+                t: as_type.clone(),
+                v: default.clone(),
+            }),
             MemberKindSpecificDetails::ForeignKey => MemberKind::ForeignKey,
             MemberKindSpecificDetails::Index(index) => MemberKind::Index(index.into()),
             MemberKindSpecificDetails::Projection => MemberKind::Projection,

@@ -43,7 +43,7 @@ and before every release.
 Community release's `%SYS` namespace: it starts the release's Docker image, runs `ascot declare`
 against it, adds the label names of the routines the image ships as object code only (read with
 `ZLOAD` in an `iris session`, since no API lists them) and the curated label signatures in
-`scripts/prebuilt-labels.json`, and stops the container. The result is about 45 MB, 5 MB
+`scripts/prebuilt-labels.json`, and stops the container. The result is about 22 MB, 4 MB
 gzipped, and is not tracked here.
 
 ### npm package
