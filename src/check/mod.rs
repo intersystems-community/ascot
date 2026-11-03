@@ -690,7 +690,7 @@ impl CheckCommandInner for cos::EntryRefAndArgs {
                     check_member_of(ty, mem.deref(), Some(args), env, flow)?
                 }
                 cos::MethodOrFuncCallExpr::SelfMethod { member, args } => {
-                    let obj = Ty::OREF(env.this()?);
+                    let obj = env.this_ty(flow);
                     check_member(obj, member.deref(), Some(args), env, flow)?
                 }
                 cos::MethodOrFuncCallExpr::Super(sup) => {
@@ -1942,7 +1942,7 @@ fn check_target<'a>(
             check_set_member(env, flow, obj, op.mem.deref(), op.args.as_ref())?;
         }
         SetTarget::Member { member, args } => {
-            let obj = Ty::OREF(env.this()?);
+            let obj = env.this_ty(flow);
             check_set_member(env, flow, obj, member.deref(), args.as_ref())?;
         }
         SetTarget::Var(variable) => {
@@ -2295,7 +2295,7 @@ fn base_property<'a, T>(
             if let ParenedExpr::Normal(atom) = atom.deref()
                 && let AtomicExpr::Member { member, args: None } = atom.deref().deref() =>
         {
-            (Ty::OREF(env.this()?), member.deref())
+            (env.this_ty(flow), member.deref())
         }
         _ => return base.to_ty(env, flow).map(PropertyTy::Value),
     };
@@ -2451,7 +2451,7 @@ impl CheckExprInner for cos::GetTarget {
         match self {
             cos::GetTarget::Var(var) => var.to_power_ty(env, flow),
             cos::GetTarget::Member { member, args } => {
-                let obj = Ty::OREF(env.this()?);
+                let obj = env.this_ty(flow);
                 defined(check_member(obj, member.deref(), args.as_ref(), env, flow)?)
             }
             cos::GetTarget::Indirection(ind) => Ok(ind.to_power_ty(env, flow)?),
@@ -2807,10 +2807,10 @@ impl CheckExprInner for SpecialVariable {
     fn to_power_ty<'a>(
         &self,
         env: &CodeEnv<'a>,
-        _flow: &mut Flow<'a>,
+        flow: &mut Flow<'a>,
     ) -> Result<PowerTy, QuasiTypeError> {
         match self {
-            SpecialVariable::THIS(..) => Ok(check_this(env)?.into()),
+            SpecialVariable::THIS(..) => Ok(check_this(env, flow).into()),
             SpecialVariable::Unknown(name) => {
                 let name = name.print();
                 let suggestions =
@@ -2877,7 +2877,7 @@ impl CheckExprInner for AtomicExpr {
                 string.deref().print().replace("\"\"", "\""),
             ))),
             AtomicExpr::SpecialVariable { var, .. } => var.to_power_ty(env, flow),
-            AtomicExpr::This(..) => Ok(check_this(env)?.into()),
+            AtomicExpr::This(..) => Ok(check_this(env, flow).into()),
             // `##class(X)` denotes the class itself, not an instance of it — unlike every
             // other string-to-`Ty` conversion here, which always produces an instance. A class
             // that doesn't exist is reported here, at the `##class(...)`, not at whatever member
@@ -2890,7 +2890,7 @@ impl CheckExprInner for AtomicExpr {
                 Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(ClassTy::from(name)))))
             }
             AtomicExpr::Member { member, args } => {
-                let obj = Ty::OREF(env.this()?);
+                let obj = env.this_ty(flow);
                 defined(check_member(obj, member.deref(), args.as_ref(), env, flow)?)
             }
             AtomicExpr::BeginQuoteEndQuote(..) => Ok(PowerTy::from("%String")),
@@ -3028,11 +3028,12 @@ fn plain_name<'a>(
     }
 }
 
-fn check_this(env: &CodeEnv<'_>) -> Result<Ty, QuasiTypeError> {
-    match &env.this()? {
-        ClsOrIns::Ins(this) => Ok(Ty::from(this.to_string())),
+fn check_this(env: &CodeEnv<'_>, flow: &Flow<'_>) -> Ty {
+    match env.this_or_warn(flow) {
+        Some(ClsOrIns::Ins(this)) => Ty::from(this.to_string()),
         // In class methods, ##THIS refers to the string of its class name.
-        ClsOrIns::Cls(..) => Ok(Ty::from("%String")),
+        Some(ClsOrIns::Cls(..)) => Ty::from("%String"),
+        None => Ty::Any,
     }
 }
 
@@ -3185,10 +3186,10 @@ impl VariableExt for Variable {
                 // in-memory value) both name the same property, so they resolve identically here
                 // — ascot only tracks a property's type, not its in-memory-vs-stored value.
                 VariableBase::Instance(mem) => {
-                    check_instance_member(env, env.range(mem.deref()), quotable_name(mem))
+                    check_instance_member(env, flow, env.range(mem.deref()), quotable_name(mem))
                 }
                 VariableBase::RowInstance(mem) => {
-                    check_instance_member(env, env.range(mem.deref()), mem.deref().print())
+                    check_instance_member(env, flow, env.range(mem.deref()), mem.deref().print())
                 }
             },
             AllowMacro::Macro(macro_call) => macro_call.to_power_ty(env, flow).map(Either::Right),
@@ -3203,14 +3204,16 @@ fn quotable_name(name: &QuotableClassMemberName) -> String {
 
 fn check_instance_member(
     env: &CodeEnv<'_>,
+    flow: &Flow<'_>,
     mem_range: bindings::Range,
     mem: String,
 ) -> Result<Either<Local, PowerTy>, QuasiTypeError> {
-    match env.this()? {
-        ClsOrIns::Cls(_) => {
+    match env.this_or_warn(flow) {
+        None => Ok(Right(Ty::Any.into())),
+        Some(ClsOrIns::Cls(_)) => {
             Err(QuasiTypeError::access_instance_only_member_from_class_context(mem))
         }
-        ClsOrIns::Ins(cty) => {
+        Some(ClsOrIns::Ins(cty)) => {
             let obj = Ty::OREF(ClsOrIns::Ins(cty));
             let member = env.resolve_mem::<Properties<Read>>(&obj, mem, mem_range, true)?;
             if let Some(location) = &member.location {

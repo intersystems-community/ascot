@@ -23,7 +23,7 @@ use tygr::OLC;
 
 use crate::bindings::{InlayHint, MemberKind, RefMode};
 use crate::check::errors::*;
-use crate::check::flow::OutputCell;
+use crate::check::flow::{Flow, OutputCell};
 use crate::check::types::*;
 pub use crate::details::Positions;
 use crate::details::{
@@ -1714,6 +1714,18 @@ impl<'a> CodeEnv<'a> {
         } else {
             ClsOrIns::Cls(this)
         })
+    }
+
+    // `this`, or `None` under a warning outside a class: a routine may well run with `$this` set,
+    // by a method that called it, so the caller falls back to `Any`.
+    pub(crate) fn this_or_warn(&self, flow: &Flow<'_>) -> Option<ClsOrIns> {
+        self.this()
+            .map_err(|err| flow.add_soft_diagnostic(err))
+            .ok()
+    }
+
+    pub(crate) fn this_ty(&self, flow: &Flow<'_>) -> Ty {
+        self.this_or_warn(flow).map_or(Ty::Any, Ty::OREF)
     }
 
     // `##super(...)`'s target: the enclosing method's own name, resolved against `this`'s
