@@ -259,20 +259,21 @@ Regenerate it after the instance's code changes.
 
 ### Style
 
-Style rules (the `style` record in [ascot.wit](src/wit/ascot.wit)) are a
-JSON file passed with `--style <file>` to `analyze`, `analyze-workspace` and
-`lsp`; the MCP `create_workspace` call and the JavaScript `createWorkspace` take
-the same record directly. Every key is optional; each command keyword or
-intrinsic function name written differently is reported as a warning.
+A JSON file passed with `--style <file>` (or as the `style` of the MCP
+`create_workspace` and the JavaScript `createWorkspace`) says how code should be
+written; only what's set is checked, as a warning. For example, with
 
 ```json
-{
-  "command": { "form": "Long", "case": "Pascal" },
-  "command_do": { "form": "Short" },
-  "function": { "form": "Long", "case": "Pascal" },
-  "function_listbuild": { "form": "Short" }
-}
+{ "command": { "form": "Long", "case": "Pascal" }, "allow_quit_for_return": false }
 ```
+
+```
+$ ascot analyze --style style.json R.mac
+warning: R.mac:3:2-3 - Command keyword `s` should be written `Set` [S2839]
+warning: R.mac:4:2-8 - Use `Return` to leave a method or procedure; `Quit` is for loops and `Try` blocks [S4151]
+```
+
+Every rule is described in [STYLE.md](STYLE.md).
 
 ### Diagnostics Filter
 

@@ -1622,7 +1622,8 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
-    pub(crate) fn keyword_styles(&self) -> Option<&crate::style::KeywordStyles> {
+    // The workspace's style rules, if a style was given.
+    pub(crate) fn style(&self) -> Option<&crate::style::Styles> {
         self.base.base.workspace.style.as_ref()
     }
 

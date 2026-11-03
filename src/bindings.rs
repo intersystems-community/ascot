@@ -28,6 +28,15 @@ mod wit_bind {
     export!(Component);
 }
 
+impl std::fmt::Display for bindings::AndOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            bindings::AndOperator::Comma => ",",
+            bindings::AndOperator::DoubleAmpersand => "&&",
+        })
+    }
+}
+
 impl bindings::Location {
     pub fn new(uri: String, range: bindings::Range) -> Self {
         Self { uri, range }

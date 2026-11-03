@@ -1047,6 +1047,15 @@ pub enum KeywordKind {
     Function,
 }
 
+impl std::fmt::Display for KeywordKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            KeywordKind::Command => "Command keyword",
+            KeywordKind::Function => "Function",
+        })
+    }
+}
+
 impl KeywordUse {
     fn of<K: Keyword>(kw: &K, start: usize) -> Self {
         KeywordUse {
