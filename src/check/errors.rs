@@ -722,8 +722,8 @@ type_error_kinds! {
     #[message = "This value is undefined{expr}"]
     Undefined { expr: Detail },
     #[code = "A1368"]
-    #[severity = Error]
-    #[message = "Not in a class context"]
+    #[severity = Warning]
+    #[message = "Not in a class context; this relies on `$this` being set when it runs"]
     NotInClass,
     #[code = "A4025"]
     #[severity = Error]
