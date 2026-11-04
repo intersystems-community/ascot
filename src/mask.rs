@@ -22,7 +22,8 @@ struct Mask {
 
 #[derive(Deserialize)]
 struct MaskedClass {
-    /// Members that replace the ones IRIS reports under the same name.
+    /// Members that replace the ones IRIS reports under the same name, or that IRIS doesn't
+    /// report at all (the `%Dispatch*` hooks the kernel gives `%DynamicAbstractObject`).
     #[serde(flatten)]
     declared: DeclaredClass,
     /// Members the dictionary lists but the compiler doesn't recognize (`##super` from an
@@ -77,7 +78,11 @@ pub(crate) fn replacement(
     member: &str,
     kind: &MemberKind,
 ) -> Option<&'static MemberInfo> {
-    let ns = MemberNs::of_info(kind);
+    declared(cls, member, MemberNs::of_info(kind))
+}
+
+/// The member of `cls` named `member` in namespace `ns` as the mask declares it, if it does.
+pub(crate) fn declared(cls: &str, member: &str, ns: MemberNs) -> Option<&'static MemberInfo> {
     (MEMBERS.get(cls)?.get(&member.to_ascii_lowercase())?.iter())
         .find(|m| MemberNs::of_info(&m.kind) == ns)
 }
