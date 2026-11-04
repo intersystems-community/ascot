@@ -2706,6 +2706,11 @@ fn check_member<'a>(
                         builtins::check_args_any(env, flow, args.items(env))?;
                         Ok(Some(ty))
                     }
+                    // Unknown, so taken as present and untyped: it may well be one.
+                    Ok(PropertyTy::Value(Ty::Any)) => {
+                        builtins::check_args_any(env, flow, args.items(env))?;
+                        Ok(Some(Ty::Any))
+                    }
                     Ok(_) => Err(QuasiTypeError::not_multidimensional(name)),
                     Err(_) => Err(miss.into()),
                 }
@@ -2791,8 +2796,11 @@ fn check_set_member<'a>(
     let Some(subs) = subs else {
         return Ok(());
     };
-    if !matches!(property, PropertyTy::Multidimensional(_)) {
-        return Err(QuasiTypeError::not_multidimensional(name));
+    match property {
+        PropertyTy::Multidimensional(_) => {}
+        // Unknown, so taken as present and untyped: it may well be one.
+        PropertyTy::Value(Ty::Any) => return Ok(()),
+        _ => return Err(QuasiTypeError::not_multidimensional(name)),
     }
     if subs.items(env).all(|a| a.is_none()) {
         return Err(QuasiTypeError::node_without_subscripts(name));
