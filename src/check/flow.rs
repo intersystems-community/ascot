@@ -47,6 +47,7 @@ struct RefParam {
 }
 
 // The handler that used it: `handle_ref`, `handle_get`, or any write.
+#[derive(Clone, Copy)]
 enum RefUse {
     Ref,
     Get,
@@ -276,6 +277,7 @@ impl<'a> Flow<'a> {
                     name,
                     ty,
                     variadic,
+                    default,
                     ..
                 },
             range,
@@ -315,6 +317,7 @@ impl<'a> Flow<'a> {
                     new: Some(new),
                     new_at: None,
                     incoming: mode.is_some(),
+                    omittable: mode.is_none() && !variadic && default.is_none(),
                     private: procedure_block,
                     declared: Some(WithRange::new(ty.clone().unwrap_or_default(), range)),
                     assigned_at: HashSet::from([range]),
@@ -867,6 +870,7 @@ impl<'a> Flow<'a> {
             binding.assigned = ty;
             binding.assigned_at = HashSet::from([range]);
             binding.incoming = false;
+            binding.omittable = false;
             // `or_insert`, not a blind `insert`: the only way this exact (name, range) pair is
             // set twice is the loop body being simulated twice (throwaway pass, then real) — if
             // the throwaway write was already marked read, that must survive the real pass
@@ -900,7 +904,9 @@ impl<'a> Flow<'a> {
         ty: PowerTy,
     ) -> Result<(), QuasiTypeError> {
         if subs.is_empty() {
-            self.lookup(name.clone())?.assigned = ty;
+            let binding = self.lookup(name.clone())?;
+            binding.assigned = ty;
+            binding.omittable = false;
         }
         Ok(())
     }
@@ -1056,7 +1062,12 @@ impl<'a> Flow<'a> {
         self.read(&name)?;
         let binding = self.lookup(name)?;
         Ok(if subs.is_empty() {
-            binding.assigned.clone()
+            match (binding.assigned.clone(), used) {
+                (PowerTy::Plain(MaybeTy::Plain(ty)), RefUse::Get) if binding.omittable => {
+                    PowerTy::Plain(MaybeTy::Maybe(ty))
+                }
+                (assigned, _) => assigned,
+            }
         } else if let Some(()) = binding.subscript_assigned {
             Ty::Any.into()
         } else {
@@ -1091,6 +1102,9 @@ struct Binding {
     new_at: Option<bindings::Range>,
     // A parameter passed by reference that this body hasn't written yet (see `RefParam`).
     incoming: bool,
+    // A by-value parameter the caller may leave out, undefined then: what `$data` and `$get` see,
+    // while a plain read takes it as passed.
+    omittable: bool,
 }
 
 // Untracked, like a global: `Variable::as_local` never yields one, by-name entry points skip it.
@@ -1106,6 +1120,7 @@ impl Binding {
             new: Some(false),
             new_at: None,
             incoming: false,
+            omittable: false,
             private: false,
             declared: None,
             assigned_at: HashSet::from([range]),
@@ -1126,6 +1141,7 @@ impl Binding {
             new: Some(procedure_block),
             new_at: None,
             incoming: false,
+            omittable: false,
         }
     }
 
@@ -1170,6 +1186,7 @@ impl Binding {
             new,
             new_at,
             incoming: self.incoming || that.incoming,
+            omittable: self.omittable || that.omittable,
         })
     }
 }
