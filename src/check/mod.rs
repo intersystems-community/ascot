@@ -442,21 +442,21 @@ impl MethodDetails {
         let in_doc_coordinates = std::cell::RefCell::new((Vec::new(), Vec::new()));
         // `?` is deferred until after relocation below, so an early return doesn't skip
         // relocating diagnostics/references/hints already recorded before the error.
+        let code_env = method_env.for_member(
+            header_len,
+            Some(&cls.class),
+            !self.is_class_method,
+            name,
+            &definitions,
+            self.procedure_block.is_some(),
+        );
         let result = Flow::with_procedure(
-            env.uri(),
-            env.base,
+            &code_env,
             body_range,
             local_args,
             self.procedure_block.clone(),
             local_out,
             |flow| {
-                let code_env = method_env.for_member(
-                    header_len,
-                    Some(&cls.class),
-                    !self.is_class_method,
-                    name,
-                    &definitions,
-                );
                 let body = MethodBody {
                     language,
                     mode,
@@ -474,6 +474,7 @@ impl MethodDetails {
                     !self.is_class_method,
                     name,
                     &definitions,
+                    self.procedure_block.is_some(),
                 );
                 for default in &self.brace_defaults {
                     let range = match &default.value {
@@ -668,15 +669,41 @@ fn check_block_body<'a>(
             labels.entry(name).or_insert(entry);
         }
     }
+    let parent = env;
     let nested;
     let env = if is_body || !labels.is_empty() {
-        nested = env.with_nested_labels(labels, is_procedure);
+        nested = parent.with_nested_labels(labels.clone(), is_procedure);
         &nested
     } else {
         env
     };
+    // What each nested label assigns, for the body's `Do`s and `$$`s of it (see `call_label`):
+    // the labels checked with every report held back, in an env of their own so nothing else of
+    // this pass sticks, and again while the sets still grow, since the labels call one another.
+    if !subroutines.is_empty() {
+        let primed = parent.with_nested_labels(labels, is_procedure);
+        let suppressed = primed.suppress_soft_diagnostics();
+        let references = primed.references_mark();
+        primed.with_hints_suppressed(|| {
+            for _ in 0..4 {
+                let before = primed.label_writes_total();
+                for (sub, details) in &subroutines {
+                    let _ = check_label_body(&primed, details, sub);
+                }
+                if primed.label_writes_total() == before {
+                    break;
+                }
+            }
+        });
+        primed.references_since(references);
+        primed.restore_soft_diagnostics(suppressed);
+    }
     report_new_per_block(env, procedure_commands(&body.main));
-    body.main.check(env, flow)?;
+    let checked = body.main.check(env, flow);
+    if is_body {
+        env.deposit_traps(flow.take_traps());
+    }
+    checked?;
     if body.subroutines.is_none() {
         return Ok(());
     }
@@ -768,17 +795,23 @@ fn check_label_body<'a>(
         return Ok(vec![]);
     };
     let output = entry.output.get_or_init(Default::default);
-    Flow::with_label(
-        env.uri(),
-        env.deref(),
+    let effects = Flow::with_label(
+        env,
         range,
         details.args(),
         output.clone(),
+        env.take_trap_join(&details.name.it),
         |flow| {
-            sub.check(env, flow)?;
+            let checked = sub.check(env, flow);
+            env.deposit_traps(flow.take_traps());
+            checked?;
             flow.tail_call(next.map(|next| &next.output), range)
         },
-    )
+    )?;
+    if entry.nested {
+        env.record_label_writes(&details.name.it, effects.writes);
+    }
+    Ok(effects.creates)
 }
 
 impl CheckCommand for cos::ProcedureMain {
@@ -813,6 +846,7 @@ impl<Start> CheckCommand for cos::CommandLine<Start> {
         }
         for command in commands_of(self) {
             command.check(env, flow)?;
+            flow.step_traps().with_range(|| env.range(command))?;
         }
         Ok(())
     }
@@ -1318,6 +1352,14 @@ impl CheckCommandInner for cos::Command {
                                 Ok(flow.handle_void()?)
                             }
                             AllowIndirection::Indirection(indir) => {
+                                if env.in_procedure_block() {
+                                    env.soft_diagnostic(TypeError::not_allowed_in(
+                                        "An indirect GOTO",
+                                        "a procedure block",
+                                        "ERROR #1049",
+                                        flow.range(),
+                                    ));
+                                }
                                 let _ = indir.to_ty(env, flow)?;
                                 Ok(flow.handle_void()?)
                             }
@@ -1455,10 +1497,25 @@ impl CheckCommandInner for cos::Command {
                                 // A special variable (`New $Namespace`, ...) isn't a local
                                 // binding at all -- it's always a deliberate, meaningful
                                 // save/restore, never a redundant re-`New` of something the
-                                // procedure block already implicitly `New`'d.
+                                // procedure block already implicitly `New`'d. IRIS allows four.
                                 cos::NewArgument::Single(cos::AllowMacro::Plain(
-                                    cos::AllowIndirection::Plain(cos::NewTarget::Special(_)),
-                                )) => {}
+                                    cos::AllowIndirection::Plain(cos::NewTarget::Special(special)),
+                                )) => {
+                                    if !matches!(
+                                        special.deref(),
+                                        SpecialVariable::ESTACK(_)
+                                            | SpecialVariable::ETRAP(_)
+                                            | SpecialVariable::NAMESPACE(_)
+                                            | SpecialVariable::ROLES(_)
+                                    ) {
+                                        env.soft_diagnostic(TypeError::not_allowed_in(
+                                            special.print(),
+                                            "a NEW command",
+                                            "ERROR #1032; only $ESTACK, $ETRAP, $NAMESPACE and $ROLES can be NEWed",
+                                            env.range(target),
+                                        ));
+                                    }
+                                }
                                 cos::NewArgument::Single(name) => {
                                     flow.handle_new(name.print(), env.range(target))?;
                                 }
@@ -1496,13 +1553,57 @@ impl CheckCommandInner for cos::Command {
                 check_try(env, flow, b1.deref(), catch_target.as_ref(), b2)
             }
             cos::Command::Throw(cos::ThrowCommand { pc, e: exp, .. })
-            | cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. })
-            | cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
+            | cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
                     if let Some(exp) = exp {
                         exp.to_ty(env, flow)?;
                     }
-                    flow.handle_throw()
+                    flow.raise(env.in_try())
+                })
+            }
+            // Unwinds to a frame that set `$ZTRAP`, or to the bottom of the stack, and goes on
+            // with the command after it: no end to this path, though what it finds there is
+            // anyone's guess, and no caller is left to return to. IRIS refuses it in a procedure
+            // block that has private variables (measured): one without unwinds, by that accident.
+            cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    if env.in_procedure_block() {
+                        match flow.private_variables()? {
+                            Some(true) => env.soft_diagnostic(TypeError::not_allowed_in(
+                                "ZQUIT",
+                                "a procedure block with private variables",
+                                "<COMMAND> at run time",
+                                flow.range(),
+                            )),
+                            Some(false) => {
+                                env.soft_diagnostic(TypeError::zquit_without_privates(flow.range()))
+                            }
+                            None => {}
+                        }
+                    }
+                    if let Some(exp) = exp {
+                        match exp.to_power_ty(env, flow)? {
+                            // Truncated: 1.5 unwinds like 1; 0, 0.5, a negative or a non-number
+                            // act as a bare ZQUIT (measured).
+                            PowerTy::Const(c) => {
+                                let n = match &c {
+                                    Const::Integer(n) => f64::from(*n),
+                                    Const::String(s) => numeric_prefix(s).parse().unwrap_or(0.0),
+                                };
+                                if n < 1.0 {
+                                    env.soft_diagnostic(TypeError::zquit_argument(
+                                        c.to_string(),
+                                        flow.range(),
+                                    ));
+                                }
+                            }
+                            _ => env.soft_diagnostic(TypeError::not_checked(
+                                "A non-literal ZQUIT argument",
+                                flow.range(),
+                            )),
+                        }
+                    }
+                    flow.detach()
                 })
             }
             cos::Command::Write(cos::WriteCommand { pc, args, .. }) => {
@@ -1807,7 +1908,8 @@ fn check_try<'a>(
     catch_block: &Range<cos::Block>,
 ) -> Result<(), QuasiTypeError> {
     let before = flow.split();
-    flow.with_block(env.range(try_block), |flow| try_block.check(env, flow))?;
+    let try_env = env.with_try();
+    flow.with_block(env.range(try_block), |flow| try_block.check(&try_env, flow))?;
     // The exception may be thrown anywhere in the try block, so the catch block starts from
     // anything between its start and its end.
     let mut catch_flow = flow.split();
@@ -2162,6 +2264,9 @@ impl CheckCommandInner for cos::SetArgument {
             });
         }
         let target_range = env.range(&self.target);
+        if let cos::AssignTarget::Single(SetTarget::Special(special)) = self.target.deref() {
+            check_trap_set(env, flow, special, &ty, env.range(&self.value))?;
+        }
         match self.target.deref() {
             cos::AssignTarget::Multi(multi_set_target) => {
                 for target in multi_set_target.targets.items(env) {
@@ -2325,10 +2430,206 @@ fn check_target<'a>(
         }
         // Every variant is a bare keyword (see `SpecialVariable`) -- nothing to type-check, and
         // setting one has no effect this checker tracks (unlike a local variable's `Flow`
-        // binding), so there's nothing more to do than accept it.
+        // binding), except the error traps, which `check_trap_set` has already seen to.
         SetTarget::Special(..) => {}
     }
     Ok(None)
+}
+
+// `Set $ZTRAP/$ETRAP/$ECODE = value`. A literal is checked -- IRIS compiles a literal trap value
+// and refuses one it can't use -- and a handler of this body is armed; a non-empty `$ECODE`
+// raises. Anything else is a hint.
+fn check_trap_set<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    special: &SpecialVariable,
+    value: &PowerTy,
+    range: bindings::Range,
+) -> Result<(), QuasiTypeError> {
+    let var = match special {
+        SpecialVariable::ZTRAP(_) => TrapVar::ZTrap,
+        SpecialVariable::ETRAP(_) => TrapVar::ETrap,
+        SpecialVariable::ECODE(_) => {
+            return match value {
+                PowerTy::Const(Const::String(s)) if s.is_empty() => Ok(()),
+                PowerTy::Const(_) => flow.raise(env.in_try()),
+                _ => {
+                    env.soft_diagnostic(TypeError::not_checked(
+                        "A non-literal $ECODE value",
+                        range,
+                    ));
+                    Ok(())
+                }
+            };
+        }
+        _ => return Ok(()),
+    };
+    if env.in_try() {
+        env.soft_diagnostic(TypeError::not_allowed_in(
+            "An error trap",
+            "a TRY block",
+            "ERROR #1064",
+            range,
+        ));
+    }
+    let text = match value {
+        PowerTy::Const(Const::String(text)) => text.clone(),
+        PowerTy::Const(Const::Integer(n)) => n.to_string(),
+        _ => {
+            env.soft_diagnostic(TypeError::not_checked("A non-literal trap value", range));
+            flow.disarm_trap(var);
+            return Ok(());
+        }
+    };
+    if text.is_empty() {
+        flow.disarm_trap(var);
+        return Ok(());
+    }
+    match var {
+        TrapVar::ZTrap => check_ztrap_value(env, flow, &text, range),
+        TrapVar::ETrap => check_etrap_command(env, flow, &text, range),
+    }
+}
+
+// `label`, `*label` (the handler runs in the failing frame), `label^routine` or `^routine`. A
+// procedure block takes a plain label of its own only, and no trap value takes an offset.
+fn check_ztrap_value<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    text: &str,
+    range: bindings::Range,
+) -> Result<(), QuasiTypeError> {
+    let in_procedure = env.in_procedure_block();
+    let refused = |what| TypeError::not_allowed_in(what, "a procedure block", "ERROR #1058", range);
+    let (star, text) = match text.strip_prefix('*') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    if star && in_procedure {
+        env.soft_diagnostic(refused("A \"*\" trap"));
+    }
+    let (label, offset, routine) = match LegacyEntryRef::parse(text) {
+        Ok(LegacyEntryRef::Label(lor)) => (
+            plain_name(env, flow, &lor.label)?,
+            lor.offset.is_some(),
+            lor.routine
+                .as_ref()
+                .map(|rtn| plain_name(env, flow, &rtn.name))
+                .transpose()?,
+        ),
+        Ok(LegacyEntryRef::Routine(rtn)) => (None, false, Some(plain_name(env, flow, &rtn.name)?)),
+        Err(_) => (None, false, None),
+    };
+    if offset {
+        env.soft_diagnostic(TypeError::not_allowed_in(
+            "A label offset",
+            "a trap value",
+            "ERROR #1059",
+            range,
+        ));
+        return Ok(());
+    }
+    match (label, routine) {
+        (_, Some(_)) if in_procedure => {
+            env.soft_diagnostic(refused("A routine-qualified trap label"))
+        }
+        (label, Some(routine)) => {
+            resolve_label_soft(env, label, routine, range)?;
+        }
+        (Some(label), None) => arm_handler(env, flow, TrapVar::ZTrap, label, range)?,
+        (None, None) => env.soft_diagnostic(
+            QuasiTypeError::cannot_find_label(text.to_string(), None).into_error(|| range),
+        ),
+    }
+    Ok(())
+}
+
+// A `$ETRAP` command. One that only jumps to a label is a handler like `$ZTRAP`'s, and checked as
+// one; any other is parsed for a raise, which would re-run it forever, and otherwise taken on trust.
+fn check_etrap_command<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    text: &str,
+    range: bindings::Range,
+) -> Result<(), QuasiTypeError> {
+    let line = cos::CommandLine::<cos::SGap>::parse(text).ok();
+    let commands: Vec<&Command> = line
+        .iter()
+        .flat_map(|line| line.commands.iter())
+        .flat_map(|commands| commands.items.iter())
+        .map(Deref::deref)
+        .collect();
+    if let [
+        Command::Goto(GotoCommand {
+            pc: None,
+            args: Some(args),
+            ..
+        }),
+    ] = commands[..]
+        && let [
+            GoToArg {
+                location: AllowCase::Plain(Location(AllowIndirection::Plain(location))),
+                pc: None,
+            },
+        ] = &args.items[..]
+        && let LegacyEntryRef::Label(lor) = location.deref()
+        && lor.offset.is_none()
+        && lor.routine.is_none()
+        && let Some(label) = plain_name(env, flow, &lor.label)?
+    {
+        env.soft_diagnostic(TypeError::etrap_goto(label.clone(), range));
+        return arm_handler(env, flow, TrapVar::ETrap, label, range);
+    }
+    for command in commands {
+        match command {
+            Command::ZTrap(_) | Command::Throw(_) => {
+                env.soft_diagnostic(TypeError::trap_reenters("$ETRAP", range));
+                break;
+            }
+            Command::Set(set) if sets_etrap(set) => break,
+            _ => {}
+        }
+    }
+    env.soft_diagnostic(TypeError::not_checked("The $ETRAP command", range));
+    Ok(())
+}
+
+fn sets_etrap(set: &SetCommand) -> bool {
+    set.assignments.items.iter().any(|assignment| {
+        matches!(
+            assignment.deref(),
+            AllowIndirection::Plain(SetArgument { target, .. })
+                if matches!(
+                    target.deref(),
+                    cos::AssignTarget::Single(SetTarget::Special(SpecialVariable::ETRAP(_)))
+                )
+        )
+    })
+}
+
+// `label` is a handler of this body, or missing. Once armed, its returns are the body's, and the
+// states from here on join into what it is checked from (see `check_label_body`). A `$ZTRAP` in
+// a procedure block can't name a label outside it; a `$ETRAP`'s GOTO can (measured).
+fn arm_handler<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    var: TrapVar,
+    label: String,
+    range: bindings::Range,
+) -> Result<(), QuasiTypeError> {
+    let Some(entry) = env.label_entry(&label) else {
+        env.soft_diagnostic(QuasiTypeError::cannot_find_label(label, None).into_error(|| range));
+        return Ok(());
+    };
+    if entry.outside_block && var == TrapVar::ZTrap {
+        env.soft_diagnostic(QuasiTypeError::goto_out_of_block(label).into_error(|| range));
+        return Ok(());
+    }
+    if let Some(location) = entry.proc.location() {
+        env.reference(range, location);
+    }
+    flow.share_output(&entry.output);
+    flow.arm_trap(var, label)
 }
 
 trait CheckExpr: Sized {
@@ -3360,8 +3661,52 @@ fn call_label<'a>(
     range: bindings::Range,
     extrinsic: bool,
 ) -> Result<Option<Ty>, QuasiTypeError> {
-    // A routine whose labels are out of reach: say why, and check the call as untyped.
-    let proc = match env.resolve_label(label.clone(), routine) {
+    let nested = routine.is_none()
+        && label
+            .as_deref()
+            .and_then(|label| env.label_entry(label))
+            .is_some_and(|entry| entry.nested);
+    let proc = resolve_label_soft(env, label.clone(), routine, range)?;
+    // `label+n` enters the procedure part-way, where its formal list no longer applies, and which
+    // line that is depends on the compiled routine: the label is confirmed, the rest is untyped.
+    let proc = if offset {
+        env.soft_diagnostic(TypeError::label_offset(range));
+        TyProcedureOrAny::Any
+    } else {
+        proc
+    };
+    if let (true, TyProcedureOrAny::Procedure(proc), Some(label)) = (extrinsic, &proc, &label)
+        && !proc.formal_list
+    {
+        env.soft_diagnostic(TypeError::label_not_a_function(label.clone(), range));
+    }
+    let result = check_call(
+        env,
+        flow,
+        proc,
+        args.iter().flat_map(|args| args.items(env)),
+        range,
+    )?;
+    // A nested label runs on this block's variables: what it assigns is assigned here too.
+    if let Some(label) = &label
+        && nested
+    {
+        for name in env.label_writes(label) {
+            flow.invalidate(Local::bare(name), Ty::Any.into())?;
+        }
+    }
+    Ok(result)
+}
+
+// Resolves a label reference, with its go-to-definition link. A routine whose labels are out of
+// reach: say why, and leave the reference untyped.
+fn resolve_label_soft(
+    env: &CodeEnv<'_>,
+    label: Option<String>,
+    routine: Option<String>,
+    range: bindings::Range,
+) -> Result<TyProcedureOrAny, QuasiTypeError> {
+    let proc = match env.resolve_label(label, routine) {
         Err(
             err @ QuasiTypeError::WithoutRange(
                 TypeErrorKind::CannotFindLabel { .. }
@@ -3382,26 +3727,7 @@ fn call_label<'a>(
     {
         env.reference(range, location);
     }
-    // `label+n` enters the procedure part-way, where its formal list no longer applies, and which
-    // line that is depends on the compiled routine: the label is confirmed, the rest is untyped.
-    let proc = if offset {
-        env.soft_diagnostic(TypeError::label_offset(range));
-        TyProcedureOrAny::Any
-    } else {
-        proc
-    };
-    if let (true, TyProcedureOrAny::Procedure(proc), Some(label)) = (extrinsic, &proc, label)
-        && !proc.formal_list
-    {
-        env.soft_diagnostic(TypeError::label_not_a_function(label, range));
-    }
-    check_call(
-        env,
-        flow,
-        proc,
-        args.iter().flat_map(|args| args.items(env)),
-        range,
-    )
+    Ok(proc)
 }
 
 // A label or routine name — `None` for an indirect one, which we can't know statically, so
@@ -3675,18 +4001,19 @@ fn check_procedure(
     details: &details::RoutineElementDetails,
     env: &CodeEnv<'_>,
 ) -> Result<(), TypeError> {
+    let public_list = match &details.kind {
+        details::RoutineElementKind::Subroutine => None,
+        details::RoutineElementKind::Procedure { public_list } => Some(public_list.clone()),
+    };
+    let env = env.with_procedure_block(public_list.is_some());
     let range = env.range(&this.body);
     let creates = Flow::with_procedure(
-        env.uri(),
-        env.deref(),
+        &env,
         range,
         details.args(),
-        match &details.kind {
-            details::RoutineElementKind::Subroutine => None,
-            details::RoutineElementKind::Procedure { public_list } => Some(public_list.clone()),
-        },
+        public_list,
         env.with_range(this.header.as_ref().map(|_| None)),
-        |flow| check_block_body(&this.body, env, flow, true),
+        |flow| check_block_body(&this.body, &env, flow, true),
         true,
         false,
     )?;
@@ -3742,19 +4069,14 @@ pub(crate) fn check_rtn(
             .first()
             .filter(|(_, is_procedure)| !is_procedure)
             .and_then(|(details, _)| env.label_entry(&details.name.it));
-        match Flow::with_label(
-            env.uri(),
-            env.deref(),
-            range,
-            vec![],
-            Default::default(),
-            |flow| {
-                rtn.main.check(&env, flow)?;
-                flow.tail_call(first.map(|first| &first.output), range)
-            },
-        ) {
-            Ok(creates) => {
-                if let Some(hint) = creates_hint(range.start, creates) {
+        match Flow::with_label(&env, range, vec![], Default::default(), None, |flow| {
+            let checked = rtn.main.check(&env, flow);
+            env.deposit_traps(flow.take_traps());
+            checked?;
+            flow.tail_call(first.map(|first| &first.output), range)
+        }) {
+            Ok(effects) => {
+                if let Some(hint) = creates_hint(range.start, effects.creates) {
                     env.hint(hint);
                 }
             }
