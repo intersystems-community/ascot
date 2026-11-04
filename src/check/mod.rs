@@ -567,7 +567,7 @@ trait CheckCommand {
 
 impl<T: CheckCommandInner> CheckCommand for Range<T> {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        report_style(env, self.deref().keywords_at(self.start));
+        report_style(env, self.deref().keywords_at(self.start), &[]);
         flow.with_range(env.range(self), |flow| {
             self.inner_check(env, flow).with_range(|| env.range(self))
         })
@@ -829,6 +829,23 @@ fn close_brace_of(block: &Range<cos::Block>) -> Option<usize> {
     matches!(block.deref(), cos::Block::Curry(_)).then_some(block.end - 1)
 }
 
+// A comma-separated list: walking its items also holds its commas to the style.
+pub(crate) trait CommaList<T> {
+    fn check_commas(&self, env: &CodeEnv<'_>);
+    fn items(&self, env: &CodeEnv<'_>) -> std::slice::Iter<'_, T>;
+}
+
+impl<T, B, A> CommaList<T> for VecSep<T, CommaSep<B, A>> {
+    fn check_commas(&self, env: &CodeEnv<'_>) {
+        report_style(env, std::iter::empty(), &cos::commas_of(self));
+    }
+
+    fn items(&self, env: &CodeEnv<'_>) -> std::slice::Iter<'_, T> {
+        self.check_commas(env);
+        self.items.iter()
+    }
+}
+
 // The `New`s past the style's allowance for one block.
 fn report_new_per_block<'c>(env: &CodeEnv<'_>, commands: impl Iterator<Item = &'c Range<Command>>) {
     let Some(max) = env.style().and_then(|s| s.rules.max_new_per_block) else {
@@ -858,7 +875,7 @@ fn report_argument_postconditional(
 }
 
 // The conditions after the first of an `If` or `While`, each behind its comma.
-type Conjuncts = [Prefix<LGapXLGap<StringEq!(",")>, Range<Expr>>];
+type Conjuncts = [Conjunct];
 
 // The commas, or the `&&`s, the style doesn't want between conditions.
 fn report_and_style<T: Grammar>(env: &CodeEnv<'_>, first: &GenericExpr<T>, remaining: &Conjuncts) {
@@ -1008,7 +1025,7 @@ fn check_goto_case<'a>(
                 .map_err(Into::into),
         }
     };
-    for (i, arg) in cases.items.iter().enumerate() {
+    for (i, arg) in cases.items(env).enumerate() {
         match arg.deref() {
             Some(cos::FunArg::Normal { expr: selector, .. }) if i == 0 => {
                 let _ = selector.to_power_ty(env, flow)?;
@@ -1059,12 +1076,29 @@ impl CheckCommandInner for cos::Block {
 }
 
 // How each keyword in `keywords` is written, if a style was given.
-fn report_style(env: &CodeEnv, keywords: impl IntoIterator<Item = KeywordUse>) {
+// What a node spells out, against the style: how its keywords are written, how its commas are
+// spaced.
+pub(crate) fn report_style(
+    env: &CodeEnv,
+    keywords: impl IntoIterator<Item = KeywordUse>,
+    commas: &[CommaAt],
+) {
     let Some(style) = env.style() else {
         return;
     };
+    report_keyword_style(env, &style.keywords, keywords);
+    if let Some(space_after) = style.rules.space_after_comma {
+        report_comma_style(env, space_after, commas);
+    }
+}
+
+fn report_keyword_style(
+    env: &CodeEnv,
+    style: &crate::style::KeywordStyles,
+    keywords: impl IntoIterator<Item = KeywordUse>,
+) {
     for kw in keywords {
-        if let Some(expected) = style.keywords.expected(&kw) {
+        if let Some(expected) = style.expected(&kw) {
             let range = env.span(kw.start, kw.start + kw.text.len());
             let sigil = match kw.kind {
                 KeywordKind::Command => "",
@@ -1076,6 +1110,21 @@ fn report_style(env: &CodeEnv, keywords: impl IntoIterator<Item = KeywordUse>) {
                 format!("{sigil}{expected}"),
                 range,
             ));
+        }
+    }
+}
+
+// One space after and none before, or none on either side; a comma whose whitespace holds a
+// line break is layout, not spacing.
+fn report_comma_style(env: &CodeEnv, space_after: bool, commas: &[CommaAt]) {
+    for comma in commas {
+        let (start, end) = (comma.start - comma.before, comma.start + 1 + comma.after);
+        if env.line_of(start) != env.line_of(end) {
+            continue;
+        }
+        if comma.before != 0 || comma.after != usize::from(space_after) {
+            let range = env.span(comma.start, comma.start + 1);
+            env.soft_diagnostic(TypeError::comma_spacing(space_after, range));
         }
     }
 }
@@ -1101,7 +1150,7 @@ impl CheckCommandInner for cos::Command {
                     return Ok(());
                 };
                 check_pc(pc, env, flow, |flow| {
-                    for arg in args.items.iter() {
+                    for arg in args.items(env) {
                         report_argument_postconditional(env, "do", &arg.pc);
                         check_pc(&arg.pc, env, flow, |flow| {
                             Ok(arg.entry_ref.check(env, flow)?)
@@ -1159,7 +1208,7 @@ impl CheckCommandInner for cos::Command {
                             QuasiTypeError::unimplemented("Goto without arguments".into())
                         })?
                         .deref();
-                    let args: Vec<_> = args.items.iter().collect();
+                    let args: Vec<_> = args.items(env).collect();
                     if args.len() != 1 {
                         return Err(QuasiTypeError::unimplemented(
                             "Only goto with exactly one arg is supported".into(),
@@ -1193,7 +1242,7 @@ impl CheckCommandInner for cos::Command {
                             }
                         },
                         AllowCase::Case(_, kw, cases) => {
-                            report_style(env, [kw.spelled()]);
+                            report_style(env, [kw.spelled()], &[]);
                             check_goto_case(env, flow, cases)
                         }
                     })
@@ -1258,7 +1307,7 @@ impl CheckCommandInner for cos::Command {
                     None => Ty::Any,
                 };
                 let declared = env.with_range(as_type.as_ref().map(|_| declared));
-                for name in name.items.iter() {
+                for name in name.items(env) {
                     flow.handle_dim(name.print(), declared.clone())?
                 }
                 if let Some(default) = default {
@@ -1266,7 +1315,7 @@ impl CheckCommandInner for cos::Command {
                     // default value's range instead.
                     let default_range = env.range(&default.prefixed);
                     let default = default.to_power_ty(env, flow)?;
-                    for name in name.items.iter() {
+                    for name in name.items(env) {
                         flow.handle_set(Local::bare(name.print()), default.clone(), default_range)?
                     }
                 }
@@ -1275,14 +1324,14 @@ impl CheckCommandInner for cos::Command {
             cos::Command::Set(cos::SetCommand {
                 pc, assignments, ..
             }) => check_pc(pc, env, flow, |flow: &mut Flow| {
-                for assignment in assignments.items.iter() {
+                for assignment in assignments.items(env) {
                     assignment.check(env, flow)?;
                 }
                 Ok(())
             }),
             cos::Command::Kill(cos::KillCommand { pc, targets, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for target in targets.iter().flat_map(|targets| targets.items.iter()) {
+                    for target in targets.iter().flat_map(|targets| targets.items(env)) {
                         match target.deref() {
                             cos::AllowMacro::Plain(arg) => match &arg {
                                 cos::KillArgument::Single(target) => {
@@ -1298,7 +1347,7 @@ impl CheckCommandInner for cos::Command {
                                 }
                                 cos::KillArgument::Except(keep) => {
                                     let mut names = Vec::new();
-                                    for target in keep.items.iter() {
+                                    for target in keep.items(env) {
                                         if let Some(variable) = target.as_variable()
                                             && let Left(local) = variable.as_local(env, flow)?
                                         {
@@ -1320,7 +1369,7 @@ impl CheckCommandInner for cos::Command {
                 check_pc(pc, env, flow, |flow| match targets {
                     None => flow.handle_new_except(&[], flow.range()),
                     Some(targets) => {
-                        for target in targets.items.iter() {
+                        for target in targets.items(env) {
                             match target.deref() {
                                 // A special variable (`New $Namespace`, ...) isn't a local
                                 // binding at all -- it's always a deliberate, meaningful
@@ -1334,7 +1383,7 @@ impl CheckCommandInner for cos::Command {
                                 }
                                 cos::NewArgument::Except(keep) => {
                                     let keep: Vec<String> =
-                                        keep.items.iter().map(|name| name.print()).collect();
+                                        keep.items(env).map(|name| name.print()).collect();
                                     flow.handle_new_except(&keep, env.range(target))?;
                                 }
                             }
@@ -1348,7 +1397,7 @@ impl CheckCommandInner for cos::Command {
                 merge_arguments,
                 ..
             }) => check_pc(pc, env, flow, |flow| {
-                for merge_argument in merge_arguments.items.iter() {
+                for merge_argument in merge_arguments.items(env) {
                     merge_argument.check(env, flow)?;
                 }
                 Ok(())
@@ -1377,7 +1426,7 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::Write(cos::WriteCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for arg in args.iter().flat_map(|args| args.items.iter()) {
+                    for arg in args.iter().flat_map(|args| args.items(env)) {
                         arg.inner_check(env, flow)?;
                     }
                     Ok(())
@@ -1385,7 +1434,7 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::Read(cos::ReadCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for arg in args.items.iter() {
+                    for arg in args.items(env) {
                         if let cos::ReadArg::Var(_, target, len, timeout) = arg {
                             if let Some(len) = len {
                                 len.len.to_ty(env, flow)?;
@@ -1402,7 +1451,7 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::Open(cos::OpenCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for arg in args.items.iter() {
+                    for arg in args.items(env) {
                         arg.device.to_ty(env, flow)?;
                         check_io_parameters(env, flow, arg.parameters.as_deref())?;
                         if let Some(Some(timeout)) = arg.timeout.as_deref() {
@@ -1417,7 +1466,7 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::Close(cos::CloseCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for arg in args.items.iter() {
+                    for arg in args.items(env) {
                         arg.device.to_ty(env, flow)?;
                         if let Some(cos::CloseParameters::Many(parameters)) =
                             arg.parameters.as_deref()
@@ -1434,7 +1483,7 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::Use(cos::UseCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for arg in args.items.iter() {
+                    for arg in args.items(env) {
                         arg.device.to_ty(env, flow)?;
                         let parameters = arg.parameters.as_deref().and_then(Option::as_ref);
                         check_io_parameters(env, flow, parameters)?;
@@ -1465,7 +1514,7 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::ZKill(cos::ZKillCommand { pc, targets, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for target in targets.items.iter() {
+                    for target in targets.items(env) {
                         target.check(env, flow)?;
                     }
                     Ok(())
@@ -1479,7 +1528,7 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::Xecute(cos::XecuteCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for arg in args.items.iter() {
+                    for arg in args.items(env) {
                         report_argument_postconditional(env, "xecute", &arg.pc);
                         check_pc(&arg.pc, env, flow, |flow| {
                             match &arg.arg {
@@ -1513,7 +1562,7 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::View(cos::ViewCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for arg in exp.iter().flat_map(|args| args.items.iter()) {
+                    for arg in exp.iter().flat_map(|args| args.items(env)) {
                         match arg {
                             cos::ViewArgument::Block(e) => {
                                 e.to_ty(env, flow)?;
@@ -1571,7 +1620,7 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::ZZDump(cos::ZZDumpCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for e in exp.items.iter() {
+                    for e in exp.items(env) {
                         e.to_ty(env, flow)?;
                     }
                     Ok(())
@@ -1580,7 +1629,7 @@ impl CheckCommandInner for cos::Command {
             cos::Command::MVP(cos::MVPCommand { pc, args, .. })
             | cos::Command::MVC(cos::MVCCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    for arg in args.items.iter() {
+                    for arg in args.items(env) {
                         arg.inner_check(env, flow)?;
                     }
                     Ok(())
@@ -1833,6 +1882,8 @@ fn check_and<'a, T: Grammar>(
 ) -> Result<Flow<'a>, TypeError> {
     let first = first.as_ref().map(Deref::deref);
     report_and_style(env, first.deref(), remaining);
+    let commas: Vec<CommaAt> = remaining.iter().map(|cnd| (&cnd.comma).into()).collect();
+    report_style(env, std::iter::empty(), &commas);
     let mut if_false = split_on_conjunction(first, env, if_true, report_always)?;
     for cnd in remaining.iter() {
         let flow =
@@ -2032,7 +2083,7 @@ impl CheckCommandInner for cos::SetArgument {
         let target_range = env.range(&self.target);
         match self.target.deref() {
             cos::AssignTarget::Multi(multi_set_target) => {
-                for target in multi_set_target.targets.items.iter() {
+                for target in multi_set_target.targets.items(env) {
                     check_set_target(target, ty.clone(), target_range, env, flow)?;
                 }
                 Ok(())
@@ -2547,7 +2598,7 @@ fn check_member_of<'a>(
         && let Some(proc) = collection_method(*kind, element, &mem.id())
     {
         let proc = TyProcedureOrAny::Procedure(proc);
-        return check_call(env, flow, proc, args.items.iter(), env.range(mem));
+        return check_call(env, flow, proc, args.items(env), env.range(mem));
     }
     check_member(base.to_ty(), mem, args, env, flow)
 }
@@ -2640,7 +2691,7 @@ fn check_member<'a>(
         (false, Some(args)) => match env.resolve_mem::<Methods>(&ty, name.clone(), range, true) {
             Ok(method) => {
                 let method = referenced(env, mem, Ok(method))?;
-                check_call(env, flow, method, args.items.iter(), range)
+                check_call(env, flow, method, args.items(env), range)
             }
             // `..Prop(subs)`: a property, which IRIS requires to be multidimensional, its node
             // typed like the property; a `%DispatchMethod` takes the name when nothing else does.
@@ -2648,13 +2699,11 @@ fn check_member<'a>(
                 let property =
                     env.resolve_mem::<Properties<Called>>(&ty, name.clone(), range, true);
                 match referenced(env, mem, property) {
-                    Ok(PropertyTy::Multidimensional(_))
-                        if args.items.iter().all(|a| a.is_none()) =>
-                    {
+                    Ok(PropertyTy::Multidimensional(_)) if args.items(env).all(|a| a.is_none()) => {
                         Err(QuasiTypeError::node_without_subscripts(name))
                     }
                     Ok(PropertyTy::Multidimensional(ty)) => {
-                        builtins::check_args_any(env, flow, args.items.iter())?;
+                        builtins::check_args_any(env, flow, args.items(env))?;
                         Ok(Some(ty))
                     }
                     Ok(_) => Err(QuasiTypeError::not_multidimensional(name)),
@@ -2700,7 +2749,7 @@ fn check_super_call<'a>(
 ) -> Result<Option<Ty>, QuasiTypeError> {
     let range = env.range(args);
     let ty = env.resolve_super_mstr(range)?;
-    check_call(env, flow, ty, args.items.iter(), range)
+    check_call(env, flow, ty, args.items(env), range)
 }
 
 // A member of `obj`, recorded as a reference to where it's declared.
@@ -2733,7 +2782,7 @@ fn check_set_member<'a>(
     }
     let property = match subs {
         Some(subs) => {
-            builtins::check_args_any(env, flow, subs.items.iter())?;
+            builtins::check_args_any(env, flow, subs.items(env))?;
             env.resolve_mem::<Properties<AssignNode>>(&obj, name.clone(), range, true)
         }
         None => env.resolve_mem::<Properties<Assign>>(&obj, name.clone(), range, true),
@@ -2745,7 +2794,7 @@ fn check_set_member<'a>(
     if !matches!(property, PropertyTy::Multidimensional(_)) {
         return Err(QuasiTypeError::not_multidimensional(name));
     }
-    if subs.items.iter().all(|a| a.is_none()) {
+    if subs.items(env).all(|a| a.is_none()) {
         return Err(QuasiTypeError::node_without_subscripts(name));
     }
     Ok(())
@@ -3235,7 +3284,7 @@ fn call_label<'a>(
         env,
         flow,
         proc,
-        args.iter().flat_map(|args| args.items.iter()),
+        args.iter().flat_map(|args| args.items(env)),
         range,
     )
 }
@@ -3276,7 +3325,7 @@ impl CheckExprInner for cos::DAO {
         match self {
             cos::DAO::Obj { content, .. } => {
                 if let Some(content) = content.as_ref() {
-                    for bind in content.items.iter() {
+                    for bind in content.items(env) {
                         bind.value.check(env, flow)?;
                     }
                 }
@@ -3284,7 +3333,7 @@ impl CheckExprInner for cos::DAO {
             }
             cos::DAO::Arr { content, .. } => {
                 if let Some(content) = content.as_ref() {
-                    for item in content.items.iter() {
+                    for item in content.items(env) {
                         item.check(env, flow)?;
                     }
                 }
@@ -3333,7 +3382,7 @@ impl CheckCommandInner for cos::WriteFChar {
                 params: Some(params),
                 ..
             } => {
-                for param in params.items.iter() {
+                for param in params.items(env) {
                     let _ = param.to_ty(env, flow)?;
                 }
             }

@@ -178,6 +178,39 @@ pub type SGapXMGap<T> = Wrap<SGap, T, MGap>;
 pub type MGapXMGap<T> = Wrap<MGap, T, MGap>;
 pub type LGapXLGap<T> = Wrap<LGap, T, LGap>;
 
+// A list's comma, with the whitespace a list allows on each side kept as ranges, for the style.
+pub type CommaSep<Before, After = Before> = Wrap<Range<Before>, StringEq!(","), Range<After>>;
+
+// A comma between two present items: its offset, and the whitespace on each side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommaAt {
+    pub start: usize,
+    pub before: usize,
+    pub after: usize,
+}
+
+impl<B, A> From<&CommaSep<B, A>> for CommaAt {
+    fn from(comma: &CommaSep<B, A>) -> Self {
+        CommaAt {
+            start: comma.before.end,
+            before: comma.before.end - comma.before.start,
+            after: comma.after.end - comma.after.start,
+        }
+    }
+}
+
+// A list's commas, leaving out those next to an omitted item (`$lb(1,,3)`), which no spacing fits.
+pub fn commas_of<T, B, A>(list: &VecSep<T, CommaSep<B, A>>) -> Vec<CommaAt> {
+    let empty_item = |i: usize| {
+        list.seps.get(i).map(|next| next.before.start)
+            == list.seps.get(i.wrapping_sub(1)).map(|prev| prev.after.end)
+    };
+    (list.seps.iter().enumerate())
+        .filter(|&(i, _)| !empty_item(i) && !empty_item(i + 1))
+        .map(|(_, comma)| comma.into())
+        .collect()
+}
+
 type LGapX<T> = Prefix<LGap, T>;
 
 #[derive(Grammar)]
@@ -508,7 +541,7 @@ impl TryFrom<ListBuild> for ListBuildForSet {
         ListBuild {
             kw,
             lp,
-            args: ListBuildArgs { first, rest },
+            args: ListBuildArgs { first, rest, .. },
             rp,
         }: ListBuild,
     ) -> Result<Self, Self::Error> {
@@ -598,7 +631,7 @@ pub enum GlobalRefExtension {
     Bracket(Wrap<StringEq!("["), Option<VecSep<BracketSafeExpr, StringEq!(",")>>, StringEq!("]")>),
 }
 
-type SubscriptList = ParenList<Range<Expr>, StringEq!(",")>;
+type SubscriptList = ParenList<Range<Expr>>;
 
 #[derive(Grammar)]
 pub struct GlobalReference {
@@ -626,12 +659,12 @@ pub enum AllowIndirection<T> {
 pub enum DAO {
     Obj {
         open: StringEq!("{"),
-        content: MGapXMGap<Option<VecSep<DAOBind, MGapXMGap<StringEq!(",")>>>>,
+        content: MGapXMGap<Option<VecSep<DAOBind, CommaSep<MGap>>>>,
         close: StringEq!("}"),
     },
     Arr {
         open: StringEq!("["),
-        content: MGapXMGap<Option<VecSep<Range<DAOElem>, MGapXMGap<StringEq!(",")>>>>,
+        content: MGapXMGap<Option<VecSep<Range<DAOElem>, CommaSep<MGap>>>>,
         close: StringEq!("]"),
     },
 }
@@ -853,7 +886,7 @@ pub enum InfixOperation<BetweenInfix> {
 #[derive(Grammar)]
 pub struct MultiSetTarget {
     pub open: StringEq!("("),
-    pub targets: MGapXMGap<VecSep<SetTarget, SGapXMGap<StringEq!(",")>>>,
+    pub targets: MGapXMGap<VecSep<SetTarget, CommaSep<SGap, MGap>>>,
     pub close: StringEq!(")"),
 }
 
@@ -1283,7 +1316,7 @@ pub enum ViewArgument {
 #[derive(Grammar)]
 pub enum NewArgument {
     Single(AllowMacro<AllowIndirection<NewTarget>>),
-    Except(Paren<VecSep<AllowMacro<AllowIndirection<NewTarget>>, MGapXMGap<StringEq!(",")>>>),
+    Except(Paren<VecSep<AllowMacro<AllowIndirection<NewTarget>>, CommaSep<MGap>>>),
 }
 
 #[derive(Grammar)]
@@ -1295,7 +1328,7 @@ pub enum NewTarget {
 #[derive(Grammar)]
 pub enum KillArgument {
     Single(Range<SetTarget>),
-    Except(Paren<VecSep<Range<SetTarget>, MGapXMGap<StringEq!(",")>>>),
+    Except(Paren<VecSep<Range<SetTarget>, CommaSep<MGap>>>),
 }
 
 #[derive(Grammar)]
@@ -1377,7 +1410,7 @@ pub enum DimType {
 pub struct ForIterator {
     pub var: Variable,
     pub eq: SGapXMGap<StringEq!("=")>,
-    pub specs: VecSep<ForSpec, SGapXMGap<StringEq!(",")>>,
+    pub specs: VecSep<ForSpec, CommaSep<SGap, MGap>>,
 }
 
 #[derive(Grammar)]
@@ -1412,7 +1445,7 @@ pub enum WriteFChar {
     Mnemonic {
         slash: StringEq!("/"),
         name: LocalVariableName,
-        params: Option<ParenList<Range<Expr>, StringEq!(",")>>,
+        params: Option<ParenList<Range<Expr>>>,
     },
 }
 
@@ -1512,7 +1545,7 @@ pub enum LockEntry {
     One(AllowIndirection<LockNameType>),
     Many {
         open: StringEq!("("),
-        entries: VecSep<AllowIndirection<LockNameType>, SGapXMGap<StringEq!(",")>>,
+        entries: VecSep<AllowIndirection<LockNameType>, CommaSep<SGap, MGap>>,
         close: StringEq!(")"),
     },
 }
@@ -3394,13 +3427,28 @@ type CommandArgument<T> = Prefix<StringEq!(" "), Box<Range<T>>>;
 #[derive(Grammar)]
 pub struct IfConditions {
     pub first: Range<ExpressionAfterIf>,
-    pub remaining: Vec<Prefix<LGapXLGap<StringEq!(",")>, Range<Expr>>>,
+    pub remaining: Vec<Conjunct>,
+}
+
+// A condition after the first, behind its comma.
+#[derive(Grammar)]
+pub struct Conjunct {
+    pub comma: CommaSep<LGap>,
+    pub expr: Range<Expr>,
+}
+
+impl Deref for Conjunct {
+    type Target = Range<Expr>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.expr
+    }
 }
 
 #[derive(Grammar)]
 pub struct WhileConditions {
     pub first: Range<ExpressionAfterWhile>,
-    pub remaining: Vec<Prefix<LGapXLGap<StringEq!(",")>, Range<Expr>>>,
+    pub remaining: Vec<Conjunct>,
 }
 
 #[derive(Grammar)]
@@ -3417,7 +3465,7 @@ pub struct DoWhileCommand {
 pub struct DoCommand {
     pub kw: KwDo,
     pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<VecSep<DoArgument, LGapXLGap<StringEq!(",")>>>>,
+    pub args: Option<CommandArgument<VecSep<DoArgument, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
@@ -3446,7 +3494,7 @@ pub struct ForCommand {
 pub struct GotoCommand {
     pub kw: KwGoto,
     pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<VecSep<GoToArg, LGapXLGap<StringEq!(",")>>>>,
+    pub args: Option<CommandArgument<VecSep<GoToArg, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
@@ -3487,7 +3535,7 @@ pub struct ContinueCommand {
 pub struct DimCommand {
     pub kw: StringEqCI!("#dim"),
     pub g: SGap1,
-    pub name: VecSep<LocalVariableName, SGapXSGap<StringEq!(",")>>,
+    pub name: VecSep<LocalVariableName, CommaSep<SGap>>,
     // The reference makes `As <Type>` mandatory; it is accepted as optional here.
     pub as_type: Range<Option<As<DimType>>>,
     pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
@@ -3497,30 +3545,28 @@ pub struct DimCommand {
 pub struct SetCommand {
     pub kw: KwSet,
     pub pc: Option<PostCondition>,
-    pub assignments:
-        CommandArgument<VecSep<Range<AllowIndirection<SetArgument>>, LGapXLGap<StringEq!(",")>>>,
+    pub assignments: CommandArgument<VecSep<Range<AllowIndirection<SetArgument>>, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
 pub struct KillCommand {
     pub kw: KwKill,
     pub pc: Option<PostCondition>,
-    pub targets:
-        Option<CommandArgument<VecSep<Range<AllowMacro<KillArgument>>, LGapXLGap<StringEq!(",")>>>>,
+    pub targets: Option<CommandArgument<VecSep<Range<AllowMacro<KillArgument>>, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
 pub struct NewCommand {
     pub kw: KwNew,
     pub pc: Option<PostCondition>,
-    pub targets: Option<CommandArgument<VecSep<Range<NewArgument>, LGapXLGap<StringEq!(",")>>>>,
+    pub targets: Option<CommandArgument<VecSep<Range<NewArgument>, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
 pub struct MergeCommand {
     pub kw: KwMerge,
     pub pc: Option<PostCondition>,
-    pub merge_arguments: CommandArgument<VecSep<Range<MergeArgument>, LGapXLGap<StringEq!(",")>>>,
+    pub merge_arguments: CommandArgument<VecSep<Range<MergeArgument>, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
@@ -3551,42 +3597,42 @@ pub struct ZTrapCommand {
 pub struct ZZDumpCommand {
     pub kw: KwZZDump,
     pub pc: Option<PostCondition>,
-    pub exp: CommandArgument<VecSep<Expr, LGapXLGap<StringEq!(",")>>>,
+    pub exp: CommandArgument<VecSep<Expr, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
 pub struct WriteCommand {
     pub kw: KwWrite,
     pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>>,
+    pub args: Option<CommandArgument<VecSep<WriteArg, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
 pub struct ReadCommand {
     pub kw: KwRead,
     pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<ReadArg, LGapXLGap<StringEq!(",")>>>,
+    pub args: CommandArgument<VecSep<ReadArg, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
 pub struct OpenCommand {
     pub kw: KwOpen,
     pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<OpenArg, LGapXLGap<StringEq!(",")>>>,
+    pub args: CommandArgument<VecSep<OpenArg, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
 pub struct CloseCommand {
     pub kw: KwClose,
     pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<CloseArg, LGapXLGap<StringEq!(",")>>>,
+    pub args: CommandArgument<VecSep<CloseArg, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
 pub struct UseCommand {
     pub kw: KwUse,
     pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<UseArg, LGapXLGap<StringEq!(",")>>>,
+    pub args: CommandArgument<VecSep<UseArg, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
@@ -3595,10 +3641,7 @@ pub struct LockCommand {
     pub pc: Option<PostCondition>,
     pub args: Option<
         CommandArgument<
-            VecSep<
-                AllowMacro<(AllowMacro<LockArg>, Option<ReadTimeout>)>,
-                LGapXLGap<StringEq!(",")>,
-            >,
+            VecSep<AllowMacro<(AllowMacro<LockArg>, Option<ReadTimeout>)>, CommaSep<LGap>>,
         >,
     >,
 }
@@ -3627,7 +3670,7 @@ pub struct HCommand {
 pub struct JobCommand {
     pub kw: KwJob,
     pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<JobArgument, LGapXLGap<StringEq!(",")>>>,
+    pub args: CommandArgument<VecSep<JobArgument, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
@@ -3660,7 +3703,7 @@ pub struct ZWriteCommand {
 pub struct ZKillCommand {
     pub kw: KwZKill,
     pub pc: Option<PostCondition>,
-    pub targets: CommandArgument<VecSep<Range<ZKillTarget>, LGapXLGap<StringEq!(",")>>>,
+    pub targets: CommandArgument<VecSep<Range<ZKillTarget>, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
@@ -3674,14 +3717,14 @@ pub struct ZNspaceCommand {
 pub struct XecuteCommand {
     pub kw: KwXecute,
     pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<XecuteArg, LGapXLGap<StringEq!(",")>>>,
+    pub args: CommandArgument<VecSep<XecuteArg, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
 pub struct ViewCommand {
     pub kw: KwView,
     pub pc: Option<PostCondition>,
-    pub exp: Option<CommandArgument<VecSep<ViewArgument, LGapXLGap<StringEq!(",")>>>>,
+    pub exp: Option<CommandArgument<VecSep<ViewArgument, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
@@ -3702,7 +3745,7 @@ pub struct PrintCommand {
 pub struct ZBreakCommand {
     pub kw: KwZBreak,
     pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<VecSep<ZBreakArg, LGapXLGap<StringEq!(",")>>>>,
+    pub args: Option<CommandArgument<VecSep<ZBreakArg, CommaSep<LGap>>>>,
 }
 
 // MVP and MVC are undocumented commands
@@ -3710,14 +3753,14 @@ pub struct ZBreakCommand {
 pub struct MVPCommand {
     pub kw: KwMVPrint,
     pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>,
+    pub args: CommandArgument<VecSep<WriteArg, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
 pub struct MVCCommand {
     pub kw: KwMVCrt,
     pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<WriteArg, LGapXLGap<StringEq!(",")>>>,
+    pub args: CommandArgument<VecSep<WriteArg, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
@@ -4038,7 +4081,7 @@ pub enum XecuteArgEnum {
 #[derive(Grammar)]
 pub struct ParenXecuteArg {
     pub code: Expr,
-    pub params: Vec<Prefix<MGapXMGap<StringEq!(",")>, MthArg>>,
+    pub params: Vec<Prefix<CommaSep<MGap>, MthArg>>,
 }
 
 #[derive(Grammar)]
@@ -4178,7 +4221,23 @@ type More<T> = Prefix<StringEq!(","), T>;
 // ---- Function arguments ---------------------------------------------------------------------
 // Every known function parses its arguments generically and `fun_args!` converts them, so a
 // wrong number or kind of argument is reported by number rather than as a low-level parse error.
-pub type GenericFunArgs = Option<VecSep<ArgOf<Option<FunArg>>, StringEq!(",")>>;
+pub type GenericFunArgs = Option<VecSep<ArgOf<Option<FunArg>>, Range<StringEq!(",")>>>;
+
+// The commas of a generic argument list, as `commas_of` lists them.
+fn arg_commas(args: &GenericFunArgs) -> Vec<CommaAt> {
+    let Some(list) = args else {
+        return vec![];
+    };
+    let present = |arg: &ArgOf<Option<FunArg>>| arg.wrapped.start < arg.wrapped.end;
+    (list.seps.iter().zip(list.items.windows(2)))
+        .filter(|(_, pair)| pair.iter().all(present))
+        .map(|(comma, pair)| CommaAt {
+            start: comma.start,
+            before: comma.start - pair[0].wrapped.end,
+            after: pair[1].wrapped.start - comma.end,
+        })
+        .collect()
+}
 
 #[derive(Debug)]
 pub enum FunArgError {
@@ -4460,7 +4519,7 @@ impl ArgCursor {
         } else {
             items.len()
         };
-        let seps = std::iter::once(None).chain(seps.into_iter().map(Some));
+        let seps = std::iter::once(None).chain(seps.into_iter().map(|sep| Some(sep.into_inner())));
         Self {
             args: seps.zip(items).collect(),
             index: 0,
@@ -4610,6 +4669,7 @@ macro_rules! fun_args {
         pub struct $ty {
             pub $first: $firstty,
             $(pub $field: $fty,)*
+            pub commas: Vec<CommaAt>,
         }
 
         impl GrammarFrom for $ty {
@@ -4627,11 +4687,13 @@ macro_rules! fun_args {
                 const SLOTS: usize = <$firstty as FunArgField>::SLOTS $(+ <$fty as FunArgField>::SLOTS)*;
                 const VARIADIC: bool = <$firstty as FunArgField>::SLOTS == 0 $(|| <$fty as FunArgField>::SLOTS == 0)*;
                 let max = if VARIADIC { None } else { Some(SLOTS) };
+                let commas = arg_commas(&args);
                 let mut cursor = ArgCursor::new(args, MIN, max, <$firstty as FunArgField>::ACCEPTS_EMPTY);
                 cursor.check_count()?;
                 let value = Self {
                     $first: FunArgField::take(&mut cursor)?,
                     $($field: FunArgField::take(&mut cursor)?,)*
+                    commas,
                 };
                 cursor.finish()?;
                 Ok(value)
@@ -5524,6 +5586,81 @@ pub enum FunctionCall {
 }
 
 impl FunctionCall {
+    // The commas between the arguments of a call whose arguments are typed; a `Simple` or
+    // `Unknown` call keeps its list, whose commas `commas_of` reads.
+    pub fn arg_commas(&self) -> Vec<CommaAt> {
+        match self {
+            FunctionCall::Length { args, .. } => args.commas.clone(),
+            FunctionCall::Data { args, .. } => args.commas.clone(),
+            FunctionCall::Order { args, .. } => args.commas.clone(),
+            FunctionCall::Get { args, .. } => args.commas.clone(),
+            FunctionCall::Case { args, .. } => args.commas.clone(),
+            FunctionCall::Bit(call) => call.args.commas.clone(),
+            FunctionCall::BitCount { args, .. } => args.commas.clone(),
+            FunctionCall::BitFind { args, .. } => args.commas.clone(),
+            FunctionCall::Change { args, .. } => args.commas.clone(),
+            FunctionCall::Char { args, .. } => args.commas.clone(),
+            FunctionCall::ClassName { args, .. } => args.commas.clone(),
+            FunctionCall::Decimal { args, .. } => args.commas.clone(),
+            FunctionCall::Double { args, .. } => args.commas.clone(),
+            FunctionCall::Extract(call) => call.args.commas.clone(),
+            FunctionCall::FNumber { args, .. } => args.commas.clone(),
+            FunctionCall::IsObject { args, .. } => args.commas.clone(),
+            FunctionCall::Increment { args, .. } => args.commas.clone(),
+            FunctionCall::ListPlain(call) => call.args.commas.clone(),
+            FunctionCall::ListRange(call) => call.args.commas.clone(),
+            FunctionCall::ListBuild(call) => call.args.commas.clone(),
+            FunctionCall::ListData { args, .. } => args.commas.clone(),
+            FunctionCall::ListGet(call) => call.args.commas.clone(),
+            FunctionCall::ListNext { args, .. } => args.commas.clone(),
+            FunctionCall::ListUpdate { args, .. } => args.commas.clone(),
+            FunctionCall::Locate { args, .. } => args.commas.clone(),
+            FunctionCall::MV(call) => call.args.commas.clone(),
+            FunctionCall::Method { args, .. } => args.commas.clone(),
+            FunctionCall::Name { args, .. } => args.commas.clone(),
+            FunctionCall::Parameter { args, .. } => args.commas.clone(),
+            FunctionCall::Piece(call) => call.args.commas.clone(),
+            FunctionCall::PrefetchOff { args, .. } => args.commas.clone(),
+            FunctionCall::PrefetchOn { args, .. } => args.commas.clone(),
+            FunctionCall::Property(call) => call.args.commas.clone(),
+            FunctionCall::Query { args, .. } => args.commas.clone(),
+            FunctionCall::Select { args, .. } => args.commas.clone(),
+            FunctionCall::Sequence(call) => call.args.commas.clone(),
+            FunctionCall::SortBegin { args, .. } => args.commas.clone(),
+            FunctionCall::SortEnd { args, .. } => args.commas.clone(),
+            FunctionCall::Vector(call) => call.args.commas.clone(),
+            FunctionCall::VectorDefined { args, .. } => args.commas.clone(),
+            FunctionCall::VectorOp { args, .. } => args.commas.clone(),
+            FunctionCall::WChar { args, .. } => args.commas.clone(),
+            FunctionCall::WExtract(call) => call.args.commas.clone(),
+            FunctionCall::Xecute { args, .. } => args.commas.clone(),
+            FunctionCall::ClassMethod { args, .. } => args.commas.clone(),
+            FunctionCall::Compile { args, .. } => args.commas.clone(),
+            FunctionCall::ZP { args, .. } => args.commas.clone(),
+            FunctionCall::ZOrder { args, .. } => args.commas.clone(),
+            FunctionCall::Next { args, .. } => args.commas.clone(),
+            FunctionCall::ZObjRef { args, .. } => args.commas.clone(),
+            FunctionCall::ZStrip { args, .. } => args.commas.clone(),
+            FunctionCall::ZDateTime { args, .. } => args.commas.clone(),
+            FunctionCall::ZDate { args, .. } => args.commas.clone(),
+            FunctionCall::ZTime { args, .. } => args.commas.clone(),
+            FunctionCall::ZU { args, .. } => commas_of(&args.wrapped.wrapped),
+            // `$BITLOGIC` and `$ZF` parse their arguments in place, commas hidden in them.
+            FunctionCall::BitLogic { .. }
+            | FunctionCall::ZFm100 { .. }
+            | FunctionCall::ZFm1 { .. }
+            | FunctionCall::ZFm2 { .. }
+            | FunctionCall::ZFm3 { .. }
+            | FunctionCall::ZFm4 { .. }
+            | FunctionCall::ZFm5 { .. }
+            | FunctionCall::ZFm6 { .. }
+            | FunctionCall::DText(_)
+            | FunctionCall::Simple(_)
+            | FunctionCall::Generic(_)
+            | FunctionCall::Unknown(_) => vec![],
+        }
+    }
+
     // The function's name as written; `None` for a call that names no known function.
     pub fn name(&self) -> Option<KeywordUse> {
         Some(match self {
@@ -6156,7 +6293,7 @@ impl Validate for SimpleFunctionName {
     }
 }
 
-pub type ExprArgList = ParenList<Range<Option<Expr>>, StringEq!(",")>;
+pub type ExprArgList = ParenList<Range<Option<Expr>>>;
 
 #[derive(Grammar)]
 pub struct SimpleFunctionCallSource {
@@ -6686,9 +6823,9 @@ impl Expr {
 
 pub type ParenExpr = Paren<Wrap<MGap, Expr, MGap>>;
 
-pub type ParenList<Item, Sep> = Paren<MGapXMGap<VecSep<Item, Wrap<MGap, Sep, MGap>>>>;
-pub type MthArgList = ParenList<Range<Option<MthArg>>, StringEq!(",")>;
-pub type FunArgList = ParenList<Range<Option<FunArg>>, StringEq!(",")>;
+pub type ParenList<Item> = Paren<MGapXMGap<VecSep<Item, CommaSep<MGap>>>>;
+pub type MthArgList = ParenList<Range<Option<MthArg>>>;
+pub type FunArgList = ParenList<Range<Option<FunArg>>>;
 
 char_class!(pub IsSpaceOrTab, "space", |ch| matches!(ch, ' ' | '\t'));
 

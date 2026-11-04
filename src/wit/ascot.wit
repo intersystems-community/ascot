@@ -258,6 +258,8 @@ interface common {
         // Around a block's `}`: between the block's last command and it, and between it and an
         // `Else`, `ElseIf` or `Catch` that follows.
         close-brace: option<brace-breaks>,
+        // One space after a comma and none before (`true`), or none on either side (`false`).
+        space-after-comma: option<bool>,
         command: option<command-style>,
         command-do: option<command-style>,
         command-if: option<command-style>,
