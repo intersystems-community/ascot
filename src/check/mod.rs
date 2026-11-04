@@ -1195,16 +1195,18 @@ impl CheckCommandInner for cos::Command {
             cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
                     if env.in_procedure_block() {
-                        env.soft_diagnostic(if flow.has_private_variables()? {
-                            TypeError::not_allowed_in(
+                        match flow.private_variables()? {
+                            Some(true) => env.soft_diagnostic(TypeError::not_allowed_in(
                                 "ZQUIT",
                                 "a procedure block with private variables",
                                 "<COMMAND> at run time",
                                 flow.range(),
-                            )
-                        } else {
-                            TypeError::zquit_without_privates(flow.range())
-                        });
+                            )),
+                            Some(false) => {
+                                env.soft_diagnostic(TypeError::zquit_without_privates(flow.range()))
+                            }
+                            None => {}
+                        }
                     }
                     if let Some(exp) = exp {
                         match exp.to_power_ty(env, flow)? {
