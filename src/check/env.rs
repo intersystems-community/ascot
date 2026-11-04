@@ -1053,8 +1053,11 @@ impl<'a> WorkspaceEnv<'a> {
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
                 };
                 let member = (info.members.iter())
-                    .find(|m| named(m) && MemberNs::of_info(&m.kind) == N::NS)?;
-                iris_found::<N>(member.clone(), cls)
+                    .find(|m| named(m) && MemberNs::of_info(&m.kind) == N::NS)
+                    .cloned()
+                    // One IRIS doesn't report, the mask may declare.
+                    .or_else(|| crate::mask::declared(cls, mem, N::NS).cloned())?;
+                iris_found::<N>(member, cls)
             }
             Some(Class::Unknown(_)) | None => None,
         }
