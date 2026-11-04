@@ -945,14 +945,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let member = details.member(N::NS, mem)?;
                 let (mut ty, is_instance_only) = N::declared(member, uri)?;
                 // A member's declared type names are written relative to the declaring class.
-                N::class_names(&mut ty, |t| {
-                    if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = t {
-                        c.name = self.qualify_class_name(&c.name, Some(&details.name.it));
-                        for arg in c.generics.values_mut() {
-                            *arg = self.qualify_class_name(arg, Some(&details.name.it));
-                        }
-                    }
-                });
+                N::class_names(&mut ty, |t| self.qualify_ty(t, &details.name.it));
                 let location = bindings::Location::new(uri.to_string(), member.range);
                 Some(Found {
                     member: Member {
@@ -991,6 +984,16 @@ impl<'a> WorkspaceEnv<'a> {
                 Some(Class::Unknown(_)) | None => vec![],
             })
             .collect()
+    }
+
+    // `ty` as written in class `context`: its class names resolved as `qualify_class_name` does.
+    pub(crate) fn qualify_ty(&self, ty: &mut Ty, context: &str) {
+        if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = ty {
+            c.name = self.qualify_class_name(&c.name, Some(context));
+            for arg in c.generics.values_mut() {
+                *arg = self.qualify_class_name(arg, Some(context));
+            }
+        }
     }
 
     // IRIS resolves an unqualified class name (`Extends AbstractModel`, `##class(Date)`) against
