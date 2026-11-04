@@ -1689,6 +1689,13 @@ impl<'a> CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
+    pub(crate) fn line_of(&self, offset: usize) -> usize {
+        self.base
+            .olc
+            .offset_to_line_character(offset + self.offset)
+            .0
+    }
+
     // Whether `node` is text a macro expanded to (or an include supplied), rather than text the
     // document spells out.
     pub(crate) fn is_expanded<T>(&self, node: &tygr::Range<T>) -> bool {

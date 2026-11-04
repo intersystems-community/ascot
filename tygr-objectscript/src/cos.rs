@@ -1525,7 +1525,21 @@ pub struct LockNameType {
     t: Option<Prefix<StringEq!("#"), Expr>>,
 }
 
-pub type CurryBlock = LGapX<Box<Range<Wrap<StringEq!("{"), Box<ProcedureBody>, StringEq!("}")>>>>;
+// A braced block after a command, `Gap` the whitespace the command allows before the `{`.
+#[derive(Grammar)]
+pub struct CurryBlock<Gap = LGap> {
+    // It starts where the command's own text ended.
+    pub gap: Range<Gap>,
+    pub block: Box<Range<Brace<Box<ProcedureBody>>>>,
+}
+
+impl<Gap> Deref for CurryBlock<Gap> {
+    type Target = Range<Brace<Box<ProcedureBody>>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.block
+    }
+}
 
 #[derive(Grammar)]
 pub enum Block {
@@ -3392,8 +3406,9 @@ pub struct WhileConditions {
 #[derive(Grammar)]
 pub struct DoWhileCommand {
     pub kw: KwDo,
-    // Can't use block because iter must start with '{'
-    pub iter: Range<MGapXMGap<Box<Brace<ProcedureBody>>>>,
+    // Not a `Block`: the body must have braces.
+    pub iter: CurryBlock<MGap>,
+    gap: MGap,
     pub kw_while: Range<KwWhile>,
     pub cnds: Option<WhileConditions>,
 }

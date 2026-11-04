@@ -712,6 +712,25 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "The style allows {max} command(s) per line; this is one more"]
     CommandsPerLine { max: u32 },
+    #[code = "S8215"]
+    #[severity = Warning]
+    #[message = "Put {wanted} before `{{`"]
+    OpenBraceBreak { wanted: Break },
+    #[code = "S4933"]
+    #[severity = Warning]
+    #[message = "Put {wanted} after `{{`"]
+    BodyBreak { wanted: Break },
+    #[code = "S3627"]
+    #[severity = Warning]
+    #[message = "Put {wanted} before `}}`"]
+    CloseBraceBreak { wanted: Break },
+    #[code = "S9048"]
+    #[severity = Warning]
+    #[message = "Put {wanted} between `}}` and `{keyword}`"]
+    ChainBreak {
+        keyword: &'static str,
+        wanted: Break,
+    },
     #[code = "A7895"]
     #[severity = Error]
     #[message = "'{format}' is not a valid $FNUMBER format: {reason}"]
@@ -988,6 +1007,20 @@ impl std::fmt::Display for Detail {
     }
 }
 
+/// Whether a brace style wants a line break at a spot (`true`) or none (`false`).
+#[derive(Debug)]
+pub struct Break(pub bool);
+
+impl std::fmt::Display for Break {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0 {
+            "a line break"
+        } else {
+            "no line break"
+        })
+    }
+}
+
 /// What an `#if` condition's macros expanded to, when that differs from what was written.
 #[derive(Debug)]
 pub struct Expansion(pub Option<String>);
@@ -1123,6 +1156,26 @@ impl TypeError {
 
     pub fn commands_per_line(max: u32, range: Range) -> Self {
         Self::at(TypeErrorKind::CommandsPerLine { max }, range)
+    }
+
+    pub fn open_brace_break(newline: bool, range: Range) -> Self {
+        let wanted = Break(newline);
+        Self::at(TypeErrorKind::OpenBraceBreak { wanted }, range)
+    }
+
+    pub fn body_break(newline: bool, range: Range) -> Self {
+        let wanted = Break(newline);
+        Self::at(TypeErrorKind::BodyBreak { wanted }, range)
+    }
+
+    pub fn close_brace_break(newline: bool, range: Range) -> Self {
+        let wanted = Break(newline);
+        Self::at(TypeErrorKind::CloseBraceBreak { wanted }, range)
+    }
+
+    pub fn chain_break(keyword: &'static str, newline: bool, range: Range) -> Self {
+        let wanted = Break(newline);
+        Self::at(TypeErrorKind::ChainBreak { keyword, wanted }, range)
     }
 
     pub fn undecided_if(condition: String, expansion: Option<String>, range: Range) -> Self {
