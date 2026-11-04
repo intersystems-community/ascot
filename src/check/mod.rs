@@ -420,12 +420,20 @@ impl MethodDetails {
         };
         let diagnostics_mark = env.base.soft_diagnostics_mark();
         let references_mark = env.base.references_mark();
-        let local_args = self
-            .args()
-            .into_iter()
-            .map(|arg| WithRange::new(arg.it, shifter.unrange(arg.range)))
+        // The signature's types are written relative to the class: its package and `Import`s.
+        let qualified = |mut ty: Option<Ty>| {
+            if let Some(ty) = &mut ty {
+                env.base.qualify_ty(ty, &cls.class.name);
+            }
+            ty
+        };
+        let local_args = (self.args().into_iter())
+            .map(|mut arg| {
+                arg.it.ty = qualified(arg.it.ty.take());
+                WithRange::new(arg.it, shifter.unrange(arg.range))
+            })
             .collect();
-        let local_out = self.out.clone().map(Some);
+        let local_out = self.out.clone().map(|out| Some(qualified(out)));
         let local_out = WithRange::new(local_out.it, shifter.unrange(local_out.range));
         let is_generator = matches!(
             mode,
