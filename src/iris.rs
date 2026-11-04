@@ -1,16 +1,11 @@
 //! `open`, which answers an `--iris` argument with a live `RawAtelier` (a URL) or a
 //! `Declarations` file `ascot declare` wrote (a path), which never connects to anything.
 
-use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::Mutex;
-
-use serde::{Deserialize, Serialize};
 
 use crate::IrisContext;
 use crate::atelier::{AtelierContext, RawAtelier};
-use crate::bindings::{ClassInfo, RoutineInfo, Source};
-pub use crate::declared::DeclaredClass;
+pub(crate) use crate::declared::{DECLARATIONS_VERSION, Declarations, DeclaredClass};
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
@@ -45,51 +40,17 @@ fn open_file(iris: &Path, namespace: Option<&str>) -> Result<Box<dyn IrisContext
     Ok(Box::new(declarations))
 }
 
-/// The declaration format's version, semver: a file is readable while its major part matches.
-pub(crate) const DECLARATIONS_VERSION: &str = "1.0.0";
-
-/// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
-/// argument to its answer. A class holds only its own members; ascot walks its superclasses.
-#[derive(Serialize, Deserialize, Default)]
-pub struct Declarations {
-    pub version: String,
-    pub namespace: String,
-    /// The instance's `$ZVERSION`; empty in a file from before it was recorded.
-    #[serde(default)]
-    pub iris_version: String,
-    pub classes: BTreeMap<String, DeclaredClass>,
-    // Each class parsed once per `Declarations`, on first lookup.
-    #[serde(skip)]
-    pub(crate) parsed: Mutex<HashMap<String, Option<ClassInfo>>>,
-    /// `.inc` files by name without the extension.
-    pub includes: BTreeMap<String, Source>,
-    /// Routines by name without the extension.
-    pub routines: BTreeMap<String, RoutineInfo>,
-}
-
 impl Declarations {
     pub fn load(path: &Path) -> Result<Self, String> {
         // Anything without `://` lands here, so a URL missing its scheme reads as a file name.
-        let text = std::fs::read_to_string(path).map_err(|e| {
+        let bytes = std::fs::read(path).map_err(|e| {
             format!(
                 "cannot read declaration file {}: {e} (a live instance's URL starts with http:// \
                  or https://)",
                 path.display()
             )
         })?;
-        let declarations: Self = serde_json::from_str(&text)
-            .map_err(|e| format!("{} is not an ascot declaration file: {e}", path.display()))?;
-        let major = |v: &str| v.split('.').next().unwrap_or_default().to_string();
-        if major(&declarations.version) != major(DECLARATIONS_VERSION) {
-            return Err(format!(
-                "{} was written by an incompatible ascot (format {}, this one reads {}); \
-                 regenerate it with `ascot declare`",
-                path.display(),
-                declarations.version,
-                DECLARATIONS_VERSION
-            ));
-        }
-        Ok(declarations)
+        Self::from_bytes(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
@@ -98,32 +59,12 @@ impl Declarations {
     }
 }
 
-/// A class as a declaration file stores it: its header and each member's, in the class syntax,
-/// with the docs alongside. Read back through the parser a workspace class goes through, so the
-/// file holds what the source would, and no more.
-impl IrisContext for Declarations {
-    fn get_cls(&self, cls: &str) -> Result<Option<ClassInfo>, String> {
-        let mut parsed = self.parsed.lock().unwrap();
-        if let Some(info) = parsed.get(cls) {
-            return Ok(info.clone());
-        }
-        let info = self.classes.get(cls).and_then(|c| c.to_class_info(cls));
-        parsed.insert(cls.to_string(), info.clone());
-        Ok(info)
-    }
-
-    fn get_inc(&self, name: &str) -> Result<Option<Source>, String> {
-        Ok(self.includes.get(name).cloned())
-    }
-
-    fn get_rtn(&self, name: &str) -> Result<Option<RoutineInfo>, String> {
-        Ok(self.routines.get(name).cloned())
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use crate::bindings::{ClassInfo, RoutineInfo, Source};
 
     fn class_info(name: &str) -> ClassInfo {
         ClassInfo {
@@ -271,14 +212,11 @@ mod tests {
         )
         .unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
-        assert!(
-            err.contains("was written by an incompatible ascot"),
-            "{err}"
-        );
+        assert!(err.contains("written by an incompatible ascot"), "{err}");
         std::fs::write(&path, "Class A.B {}").unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
         let _ = std::fs::remove_file(&path);
-        assert!(err.contains("is not an ascot declaration file"), "{err}");
+        assert!(err.contains("not an ascot declaration file"), "{err}");
         let err = open("/no/such/declarations.json", None).err().unwrap();
         assert!(err.contains("cannot read declaration file"), "{err}");
     }

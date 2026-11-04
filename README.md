@@ -236,6 +236,10 @@ workspace are resolved against IRIS, in one of three ways:
 
 - **A declaration file** of your own, written by `ascot declare` (next section).
 
+A host embedding the wasm build has the same choices through the `env` it
+passes: its own lookups, an Atelier connection, or a declaration file's bytes,
+gzipped or not, such as the pre-built asset it bundles.
+
 `analyze`, `analyze-workspace` and `lsp` take these on the command line; `mcp`
 takes them per workspace, through the `iris` and `iris_namespace` arguments of
 the `create_workspace` tool call, with the same default.

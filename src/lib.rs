@@ -759,19 +759,20 @@ fn drop_derived(cell: &RefCell<DocCache>, expansion: bool) {
     }
 }
 
+// A declaration file that doesn't read is no environment at all, the strictest check; the host
+// is expected to pass the asset it bundles unchanged.
 fn iris_handle(env: Option<bindings::Env>) -> Option<IrisHandle> {
-    #[cfg(target_arch = "wasm32")]
-    return env.map(|env| -> IrisHandle {
-        match env {
-            bindings::Env::Context(context) => Box::new(context),
-            bindings::Env::Atelier(atelier) => Box::new(AtelierContext::from(atelier)),
-        }
-    });
-    // Never carries a real connection natively -- use `native` for that.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = env;
-        None
+    match env? {
+        bindings::Env::Declarations(bytes) => declared::Declarations::from_bytes(&bytes)
+            .ok()
+            .map(|declarations| Box::new(declarations) as IrisHandle),
+        #[cfg(target_arch = "wasm32")]
+        bindings::Env::Context(context) => Some(Box::new(context)),
+        #[cfg(target_arch = "wasm32")]
+        bindings::Env::Atelier(atelier) => Some(Box::new(AtelierContext::from(atelier))),
+        // Never carries a real connection natively -- use `native` for that.
+        #[cfg(not(target_arch = "wasm32"))]
+        _ => None,
     }
 }
 
@@ -1413,6 +1414,41 @@ mod tests {
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(diagnostics[0].message.contains("App.NotOpen"));
+    }
+
+    // The host hands over a declaration file's bytes, gzipped as the pre-built asset ships or not;
+    // one another ascot wrote is no environment at all.
+    #[test]
+    fn a_declaration_file_passed_as_bytes_is_the_environment() {
+        use std::io::Write;
+        let file = |version: &str| {
+            format!(
+                r#"{{"version":"{version}","namespace":"%SYS","classes":{{"Demo.Base":{{"header":"Class Demo.Base","members":[{{"header":"ClassMethod Hello() As %String"}}]}}}},"includes":{{}},"routines":{{}}}}"#
+            )
+        };
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(file(declared::DECLARATIONS_VERSION).as_bytes())
+            .unwrap();
+        let source = "Class Test.Use {\nClassMethod M() As %String {\n Quit ##class(Demo.Base).Hello()\n}\n}\n";
+        for bytes in [
+            gz.finish().unwrap(),
+            file(declared::DECLARATIONS_VERSION).into_bytes(),
+        ] {
+            let workspace = Workspace::new(Some(bindings::Env::Declarations(bytes)), None);
+            workspace.open("Use.cls".to_string(), source.to_string());
+            let diagnostics = workspace.diagnostics("Use.cls".to_string());
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
+        let incompatible = bindings::Env::Declarations(file("0.1.0").into_bytes());
+        let workspace = Workspace::new(Some(incompatible), None);
+        workspace.open("Use.cls".to_string(), source.to_string());
+        let diagnostics = workspace.diagnostics("Use.cls".to_string());
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("Cannot find class 'Demo.Base'")),
+            "{diagnostics:?}"
+        );
     }
 
     #[test]

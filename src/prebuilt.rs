@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn a_release_is_downloaded_checked_unpacked_and_then_read_from_the_cache() {
         let declarations = Declarations {
-            version: crate::iris::DECLARATIONS_VERSION.to_string(),
+            version: crate::declared::DECLARATIONS_VERSION.to_string(),
             namespace: "%SYS".to_string(),
             ..Default::default()
         };
