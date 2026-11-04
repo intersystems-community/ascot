@@ -49,7 +49,10 @@ static MEMBERS: LazyLock<HashMap<String, HashMap<String, Vec<MemberInfo>>>> = La
                 .unwrap_or_else(|| panic!("mask.json: {name} does not parse"));
             let mut members: HashMap<String, Vec<MemberInfo>> = HashMap::new();
             for m in info.members {
-                members.entry(m.name.to_ascii_lowercase()).or_default().push(m);
+                members
+                    .entry(m.name.to_ascii_lowercase())
+                    .or_default()
+                    .push(m);
             }
             (name.clone(), members)
         })
@@ -69,7 +72,11 @@ pub(crate) fn dropped(cls: &str, member: &str) -> bool {
 }
 
 /// The member of `cls` named `member` in `kind`'s namespace as the mask declares it, if it does.
-pub(crate) fn replacement(cls: &str, member: &str, kind: &MemberKind) -> Option<&'static MemberInfo> {
+pub(crate) fn replacement(
+    cls: &str,
+    member: &str,
+    kind: &MemberKind,
+) -> Option<&'static MemberInfo> {
     let ns = MemberNs::of_info(kind);
     (MEMBERS.get(cls)?.get(&member.to_ascii_lowercase())?.iter())
         .find(|m| MemberNs::of_info(&m.kind) == ns)
