@@ -2784,6 +2784,9 @@
    "members": [
     { "header": "Method %Clear() As This" },
     { "header": "Method %Clone() As This" },
+    { "header": "Method %DispatchGetProperty(propertyName As %String)" },
+    { "header": "Method %DispatchMethod(methodName As %String, args...)" },
+    { "header": "Method %DispatchSetProperty(propertyName As %String, value As %String)" },
     { "header": "ClassMethod %FromJSON(str As %RawString) As This" },
     { "header": "ClassMethod %FromJSONFile(filename As %RawString, TranslateTable As %String = \"UTF8\") As This" },
     { "header": "ClassMethod %FromJSONStats(str As %RawString, stats As %RawString) As This" },
@@ -2802,6 +2805,7 @@
   },
   "%Library.DynamicArray": {
    "header": "Class %Library.DynamicArray",
+   "drop": ["%DispatchGetProperty", "%DispatchMethod", "%DispatchSetProperty"],
    "members": [
     { "header": "Method %Get(key As %Integer, default As %Any = \"\", type As %String = \"\") As %Any" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
@@ -2827,6 +2831,7 @@
   },
   "%Library.DynamicObject": {
    "header": "Class %Library.DynamicObject",
+   "drop": ["%DispatchGetProperty", "%DispatchMethod", "%DispatchSetProperty"],
    "members": [
     { "header": "Method %Get(key As %String, default As %Any = \"\", type As %String = \"\") As %Any" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },

@@ -576,7 +576,7 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
 
 impl<'a> WorkspaceEnv<'a> {
     // The names in `N`'s namespace along `cls`'s chain -- all ObjectScript can refer to there.
-    fn names<N: Namespace>(&self, cls: &str) -> Vec<String> {
+    pub(crate) fn names<N: Namespace>(&self, cls: &str) -> Vec<String> {
         let mut names = Vec::new();
         for (cls, resolved) in self.ancestry(cls) {
             match &resolved {
@@ -877,19 +877,15 @@ impl<'a> WorkspaceEnv<'a> {
         range: bindings::Range,
         own: bool,
     ) -> Result<Member<N::Ty>, TypeError> {
-        // A member of an unresolved `Any`/`This`/`..#NAME` type (the last a mask bug) is taken
-        // as present and untyped.
         let Ty::OREF(obj) = ty else {
             return Ok(Member::undeclared(N::Ty::default()));
         };
-        let at = |err: FindError| QuasiTypeError::from(err).into_error(|| range);
-        let mut found = self.find::<N>(obj, &mem, own, range).map_err(at)?;
-        // Dynamic dispatch: a class overriding the hook takes any member name no class has.
-        if found.is_none() {
-            let hook = |hook: &str| Some(self.find::<Methods>(obj, hook, own, range).ok()??.ty);
-            found = N::dispatched(obj, hook).map(Member::undeclared);
+        if let Some(found) = self.lookup_mem::<N>(ty, &mem, range, own)? {
+            return Ok(found);
         }
-        found.ok_or_else(|| {
+        // No class declares it: reported softly, and taken as present and untyped, so every such
+        // access is reported and the rest of the body still checked.
+        let err = {
             let names = self.names::<N>(obj.name());
             let mut suggestions =
                 crate::check::top_similar(&mem, names.iter().map(String::as_str), 5);
@@ -906,10 +902,32 @@ impl<'a> WorkspaceEnv<'a> {
                     }
                 }
             }
-            let err =
-                QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get);
-            err.into_error(|| range)
-        })
+            QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get)
+        };
+        self.add_soft_diagnostic(err.into_error(|| range).into());
+        Ok(Member::undeclared(N::Ty::default()))
+    }
+
+    // `mem` of `ty` as some class declares it, `None` when none does; a member of an unresolved
+    // `Any`/`This`/`..#NAME` type (the last a mask bug) is taken as present and untyped.
+    pub(crate) fn lookup_mem<N: Namespace>(
+        &self,
+        ty: &Ty,
+        mem: &str,
+        range: bindings::Range,
+        own: bool,
+    ) -> Result<Option<Member<N::Ty>>, TypeError> {
+        let Ty::OREF(obj) = ty else {
+            return Ok(Some(Member::undeclared(N::Ty::default())));
+        };
+        let at = |err: FindError| QuasiTypeError::from(err).into_error(|| range);
+        let mut found = self.find::<N>(obj, mem, own, range).map_err(at)?;
+        // Dynamic dispatch: a class overriding the hook takes any member name no class has.
+        if found.is_none() {
+            let hook = |hook: &str| Some(self.find::<Methods>(obj, hook, own, range).ok()??.ty);
+            found = N::dispatched(obj, hook).map(Member::undeclared);
+        }
+        Ok(found)
     }
 
     // Where IRIS finds `mem` on `obj`: each class along the chain in precedence order, its own
@@ -1036,8 +1054,11 @@ impl<'a> WorkspaceEnv<'a> {
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
                 };
                 let member = (info.members.iter())
-                    .find(|m| named(m) && MemberNs::of_info(&m.kind) == N::NS)?;
-                iris_found::<N>(member.clone(), cls)
+                    .find(|m| named(m) && MemberNs::of_info(&m.kind) == N::NS)
+                    .cloned()
+                    // One IRIS doesn't report, the mask may declare.
+                    .or_else(|| crate::mask::declared(cls, mem, N::NS).cloned())?;
+                iris_found::<N>(member, cls)
             }
             Some(Class::Unknown(_)) | None => None,
         }
