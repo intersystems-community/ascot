@@ -178,7 +178,11 @@ fn member_header(member: &MemberInfo) -> Option<String> {
                             None => "",
                         };
                         let collation = k.collation.as_deref().map(|c| format!(" As {c}"));
-                        format!("{}{subscript}{}", k.property, collation.unwrap_or_default())
+                        format!(
+                            "{}{subscript}{}",
+                            member_name(&k.property),
+                            collation.unwrap_or_default()
+                        )
                     })
                     .collect();
                 match keys.as_slice() {
@@ -386,6 +390,32 @@ impl DeclaredClass {
 mod tests {
     use super::*;
     use crate::bindings::{MemberInfo, MemberKind, RefMode, Signature};
+
+    // IRIS quotes a name with a character outside the identifier set, in an index's key list as
+    // in a member's own name.
+    #[test]
+    fn an_index_key_with_an_underscore_is_quoted() {
+        let index = MemberInfo {
+            doc: String::new(),
+            name: "IDKEY".to_string(),
+            aliases: vec![],
+            deprecated: false,
+            kind: MemberKind::Index(crate::bindings::IndexInfo {
+                on: Some(vec![crate::bindings::IndexKey {
+                    property: "element_key".to_string(),
+                    subscript: None,
+                    collation: None,
+                }]),
+                ..Default::default()
+            }),
+            uri: None,
+            origin: None,
+        };
+        assert_eq!(
+            member_header(&index).unwrap(),
+            "Index IDKEY On \"element_key\""
+        );
+    }
 
     #[test]
     fn a_declared_class_round_trips_through_its_source() {

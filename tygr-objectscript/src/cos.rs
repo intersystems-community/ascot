@@ -2873,7 +2873,8 @@ pub struct IndexPropertyMultiple {
 
 #[derive(Grammar)]
 pub struct IndexProperty {
-    pub name: Range<ClassMemberName>,
+    // Quoted when it has a character outside the identifier set, like any member name.
+    pub name: QuotableClassMemberName,
     pub kind: Option<IndexPropertyKind>,
     as_collation: Option<AsCollation>,
 }

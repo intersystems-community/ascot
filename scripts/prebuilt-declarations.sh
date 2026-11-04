@@ -50,7 +50,9 @@ for r, info in mask["routines"].items():
     known.update((l["name"], l) for l in info["labels"])
     d["routines"][r]["labels"] = sorted(known.values(), key=lambda l: l["name"])
 # A mask member replaces the base member of its name. It may change only types, modes, defaults
-# and the return type: a member of another kind or arity than IRIS reports is a mistake.
+# and the return type: a member of another kind or arity than IRIS reports is a mistake. One the
+# declaration lacks is added: `declare` leaves out a header the class parser rejects, and the mask
+# supplies a readable one (a parameter named `Output`, say, renamed).
 KINDS = "ClassMethod|Method|ClientMethod|Property|Parameter|Relationship|Index|Query|Trigger|XData|Projection|ForeignKey"
 def shape(header):
     kind, name, rest = re.match(rf'({KINDS}) ("[^"]*"|[^\s(]+)(.*)', header).groups()
@@ -83,8 +85,9 @@ for cls, masked in mask["classes"].items():
     for m in masked["members"]:
         kind, mname, args = shape(m["header"])
         target = members.get(key(m["header"]))
-        if target is None:  # a member another release reports on this class
-            print(f"mask.json: {cls}.{mname} is not in the declaration", file=sys.stderr)
+        if target is None:
+            print(f"mask.json: {cls}.{mname} added; the declaration lacks it", file=sys.stderr)
+            base["members"].append(m)
             continue
         if shape(target["header"])[::2] != (kind, args):
             sys.exit(f"mask.json: {cls}.{mname} differs from IRIS in kind or arguments:\n  {target['header']}\n  {m['header']}")

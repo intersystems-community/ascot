@@ -1481,10 +1481,22 @@
     { "header": "ClassMethod GetPrimaryKey(Class As %String, Output Count As %Integer, Output Fields As %List, ByRef Properties As %ArrayOfObjects, EJBFlags As %Compiler.LG.EJBFlags) As %Status" }
    ]
   },
+  "%Compiler.LG.CPP": {
+   "header": "Class %Compiler.LG.CPP",
+   "members": [
+    { "header": "Method Type2CPPDecl(Class As %String, Type As %String, isByRef As %Integer) As %String" }
+   ]
+  },
   "%Compiler.LG.ClassAttributes": {
    "header": "Class %Compiler.LG.ClassAttributes",
    "members": [
     { "header": "Method GetReferencedClasses(Class As %String, Output RefClass As %String)" }
+   ]
+  },
+  "%Compiler.LG.EJBImports": {
+   "header": "Class %Compiler.LG.EJBImports",
+   "members": [
+    { "header": "Method SetOutput(output As %Compiler.LG.Output) As %Boolean" }
    ]
   },
   "%Compiler.LG.EJBProperty": {
@@ -1518,6 +1530,12 @@
    "header": "Class %Compiler.LG.JavaClassDefPointer",
    "members": [
     { "header": "ClassMethod init(javaDef As %Compiler.LG.JavaClassDef, Type As %String, Output retVal As %Compiler.LG.JavaClassDefPointer, GenFlags As %Compiler.LG.GenFlags) As %Status" }
+   ]
+  },
+  "%Compiler.LG.LanguageGeneratorTemplate": {
+   "header": "Class %Compiler.LG.LanguageGeneratorTemplate",
+   "members": [
+    { "header": "Method SetOutput(output As %Compiler.LG.Output) As %Boolean" }
    ]
   },
   "%Compiler.LG.MetaClassDef": {
