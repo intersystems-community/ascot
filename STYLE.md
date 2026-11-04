@@ -13,7 +13,8 @@ A style is a JSON file passed with `--style <file>` to `analyze`, `analyze-works
   "max_new_per_block": 1,
   "max_commands_per_line": 1,
   "open_brace": { "newline_before": false, "newline_after": true },
-  "close_brace": { "newline_before": true, "newline_after": false }
+  "close_brace": { "newline_before": true, "newline_after": false },
+  "space_after_comma": true
 }
 ```
 
@@ -41,3 +42,4 @@ With `form` alone, any casing passes; with `case` alone, the form written is kep
 | `open_brace.newline_after` | `true`, `false` | Likewise between a block's `{` and its first command: `true` wants the body to start on the next line. |
 | `close_brace.newline_before` | `true`, `false` | Likewise between a block's last command and its `}`: `true` wants the `}` on its own line. |
 | `close_brace.newline_after` | `true`, `false` | Likewise between a block's `}` and an `Else`, `ElseIf` or `Catch` that follows: `false` wants `} Else {`, `true` wants the keyword on the next line. |
+| `space_after_comma` | `true`, `false` | A list's comma spaced the other way: `true` wants one space after and none before (`$lb(1, 2)`, `If a, b`), `false` none on either side (`$lb(1,2)`). Two commas touching omit an argument and are left alone. |

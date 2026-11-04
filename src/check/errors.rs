@@ -731,6 +731,10 @@ type_error_kinds! {
         keyword: &'static str,
         wanted: Break,
     },
+    #[code = "S5583"]
+    #[severity = Warning]
+    #[message = "Put {wanted}"]
+    CommaSpacing { wanted: CommaSpace },
     #[code = "A7895"]
     #[severity = Error]
     #[message = "'{format}' is not a valid $FNUMBER format: {reason}"]
@@ -1021,6 +1025,20 @@ impl std::fmt::Display for Break {
     }
 }
 
+/// The `space-after-comma` style: one space after and none before, or none on either side.
+#[derive(Debug)]
+pub struct CommaSpace(pub bool);
+
+impl std::fmt::Display for CommaSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0 {
+            "one space after this comma, and none before"
+        } else {
+            "no space around this comma"
+        })
+    }
+}
+
 /// What an `#if` condition's macros expanded to, when that differs from what was written.
 #[derive(Debug)]
 pub struct Expansion(pub Option<String>);
@@ -1176,6 +1194,11 @@ impl TypeError {
     pub fn chain_break(keyword: &'static str, newline: bool, range: Range) -> Self {
         let wanted = Break(newline);
         Self::at(TypeErrorKind::ChainBreak { keyword, wanted }, range)
+    }
+
+    pub fn comma_spacing(space_after: bool, range: Range) -> Self {
+        let wanted = CommaSpace(space_after);
+        Self::at(TypeErrorKind::CommaSpacing { wanted }, range)
     }
 
     pub fn undecided_if(condition: String, expansion: Option<String>, range: Range) -> Self {
