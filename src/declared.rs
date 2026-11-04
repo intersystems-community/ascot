@@ -71,6 +71,14 @@ fn formal(mode: Option<RefMode>, name: &str, t: Option<&str>, default: Option<&s
     let mode = match mode {
         Some(RefMode::ByRef) => "ByRef ",
         Some(RefMode::Output) => "Output ",
+        // IRIS drops the default mode from what it reports; a parameter named like a mode keyword
+        // (`SetOutput(ByVal Output As ...)`) needs it back to parse, as it did in its source.
+        None if ["ByVal", "ByRef", "Output"]
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(name)) =>
+        {
+            "ByVal "
+        }
         None => "",
     };
     let default = default
@@ -391,6 +399,16 @@ mod tests {
     use super::*;
     use crate::bindings::{MemberInfo, MemberKind, RefMode, Signature};
 
+    #[test]
+    fn a_parameter_named_like_a_mode_keyword_gets_its_byval_back() {
+        assert_eq!(
+            formal(None, "Output", Some("%String"), None),
+            "ByVal Output As %String"
+        );
+        assert_eq!(formal(None, "byRef", None, Some("0")), "ByVal byRef = 0");
+        assert_eq!(formal(None, "out", None, None), "out");
+    }
+
     // IRIS quotes a name with a character outside the identifier set, in an index's key list as
     // in a member's own name.
     #[test]
@@ -406,7 +424,19 @@ mod tests {
                     subscript: None,
                     collation: None,
                 }]),
-                ..Default::default()
+                abstract_: false,
+                condition: None,
+                coshard_with: None,
+                data: vec![],
+                deferred: false,
+                extent: false,
+                id_key: false,
+                internal: false,
+                primary_key: false,
+                shard_key: false,
+                sql_name: None,
+                type_: None,
+                unique: false,
             }),
             uri: None,
             origin: None,
