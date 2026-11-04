@@ -1220,6 +1220,27 @@ impl<'a> WorkspaceEnv<'a> {
         }
     }
 
+    // `None` for a plain registered object, or when nobody can see.
+    fn class_type(&self, cls: &str) -> Option<bindings::ClassType> {
+        self.ancestry(cls).find_map(|(_, resolved)| match resolved {
+            Some(Class::Workspace(_, details)) => details.keywords.class_type,
+            Some(Class::Iris(info)) => info.class_type,
+            Some(Class::Unknown(_)) | None => None,
+        })
+    }
+
+    // Whose parameters (`CAPTION`, ...) a property of type `ty` takes besides the type's own.
+    pub(crate) fn property_class(&self, ty: &str) -> Option<&'static str> {
+        use bindings::ClassType::*;
+        Some(match (self.is_datatype(ty)?, self.class_type(ty)) {
+            (true, _) => "%Compiler.Type.Literal",
+            (false, Some(Persistent)) => "%Compiler.Type.Object",
+            (false, Some(Serial)) => "%Compiler.Type.Embedded",
+            (false, Some(Stream)) => "%Compiler.Type.Stream",
+            (false, _) => "%Compiler.Type.RegisteredObject",
+        })
+    }
+
     // `None` means we can't tell (class outside the workspace with no IRIS connection).
     pub(crate) fn is_datatype(&self, cls: &str) -> Option<bool> {
         let mut unknown = false;
