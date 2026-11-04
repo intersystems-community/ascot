@@ -990,7 +990,7 @@ impl CheckCommandInner for cos::Command {
                                 Ok(flow.handle_void()?)
                             }
                             AllowIndirection::Indirection(indir) => {
-                                if in_procedure_block(env, flow) {
+                                if env.in_procedure_block() {
                                     env.soft_diagnostic(TypeError::not_allowed_in(
                                         "An indirect GOTO",
                                         "a procedure block",
@@ -1194,7 +1194,7 @@ impl CheckCommandInner for cos::Command {
             // block that has private variables (measured): one without unwinds, by that accident.
             cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    if in_procedure_block(env, flow) {
+                    if env.in_procedure_block() {
                         env.soft_diagnostic(if flow.has_private_variables()? {
                             TypeError::not_allowed_in(
                                 "ZQUIT",
@@ -2048,12 +2048,6 @@ fn check_target<'a>(
     Ok(None)
 }
 
-// Whether this code compiles as a procedure block: the body's flow knows, and so does the env of
-// a label nested in one, which is checked in a flow of its own (see `check_label_body`).
-fn in_procedure_block(env: &CodeEnv<'_>, flow: &Flow<'_>) -> bool {
-    flow.is_procedure_block() || env.in_procedure_block()
-}
-
 // `Set $ZTRAP/$ETRAP/$ECODE = value`. A literal is checked -- IRIS compiles a literal trap value
 // and refuses one it can't use -- and a handler of this body is armed; a non-empty `$ECODE`
 // raises. Anything else is a hint.
@@ -2117,7 +2111,7 @@ fn check_ztrap_value<'a>(
     text: &str,
     range: bindings::Range,
 ) -> Result<(), QuasiTypeError> {
-    let in_procedure = in_procedure_block(env, flow);
+    let in_procedure = env.in_procedure_block();
     let refused = |what| TypeError::not_allowed_in(what, "a procedure block", "ERROR #1058", range);
     let (star, text) = match text.strip_prefix('*') {
         Some(rest) => (true, rest),
