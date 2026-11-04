@@ -650,13 +650,14 @@ impl std::fmt::Display for Ty {
     }
 }
 
-// `This` is the receiver's class and `..#NAME` the value of its class parameter `NAME`: the
-// forms the mask and the declaration files use beyond class names.
+// `This` is the receiver's class, `..#NAME` the value of its class parameter `NAME`, and `Any`
+// what `Ty::Any` prints as: the forms the mask and the declaration files use beyond class names.
 impl From<String> for Ty {
     fn from(value: String) -> Self {
         match value.strip_prefix("..#") {
             Some(param) => Ty::Param(param.to_string()),
             None if value == "This" => Ty::This,
+            None if value == "Any" => Ty::Any,
             None => Self::from(ClassTy::from(value)),
         }
     }

@@ -14,6 +14,12 @@
     { "header": "Method add(value As %Any) As This" }
    ]
   },
+  "%ASQ.Engine": {
+   "header": "Class %ASQ.Engine",
+   "members": [
+    { "header": "ClassMethod newSequence(element = \"\") As %ASQ.Sequence" }
+   ]
+  },
   "%ASQ.Queue": {
    "header": "Class %ASQ.Queue",
    "members": [
@@ -536,6 +542,7 @@
   "%Api.InteropEditors.Utils": {
    "header": "Class %Api.InteropEditors.Utils",
    "members": [
+    { "header": "ClassMethod CreateDTLInputObject(namespace As %String, pInputClass As %String = \"\", pData As %String = \"\", Output pStatus As %Status, ByRef pDocProperties) As %Library.Any" },
     { "header": "ClassMethod GetSegmentTypesForClass(namespace As %String, className As %String) As %DynamicAbstractObject" },
     { "header": "ClassMethod parseDocStringGroup(index As %Numeric, defString As %String, endChar As %String) As %DynamicAbstractObject" }
    ]
@@ -595,6 +602,13 @@
     { "header": "Method NextTag(Output Name As %String) As %Status" }
    ]
   },
+  "%Atelier.REST": {
+   "header": "Class %Atelier.REST",
+   "members": [
+    { "header": "ClassMethod RenderResponseBody(pStatus As %Status, pMsgPart As %DynamicArray = \"\", pResPart As %DynamicObject = \"\") As %Status" },
+    { "header": "ClassMethod ServeDoc(pDocName As %String, pStatus As %Status, pMsgArray As %DynamicArray, ByRef pResArray As %String, pTimeStamp As %String = \"\", pUpToDate As %Boolean, pExtensionContent As %DynamicObject = \"\") As %Status" }
+   ]
+  },
   "%Atelier.SourceControl": {
    "header": "Class %Atelier.SourceControl",
    "members": [
@@ -605,7 +619,8 @@
    "header": "Class %Atelier.v1.Utils.General",
    "members": [
     { "header": "ClassMethod GetModifiedClassesIndex(ByRef dirlist, dbdir As %String, dbname As %String, pShowGenerated As %Boolean, hashIn As %String, Output hashOut As %String) As %Status" },
-    { "header": "ClassMethod GetModifiedRoutinesIndex(pType As %String, ByRef dirlist, dbdir As %String, dbname As %String, pShowGenerated As %Boolean, hashIn As %String, Output hashOut As %String) As %Status" }
+    { "header": "ClassMethod GetModifiedRoutinesIndex(pType As %String, ByRef dirlist, dbdir As %String, dbname As %String, pShowGenerated As %Boolean, hashIn As %String, Output hashOut As %String) As %Status" },
+    { "header": "ClassMethod TS(pDocName, ByRef pUpToDate = \"\") As %String" }
    ]
   },
   "%Atelier.v5.XDebugAgent": {
@@ -619,6 +634,7 @@
    "header": "Class %BigData.ShardedSQL",
    "members": [
     { "header": "ClassMethod %ForwardIUDToMaster(pSQLText As %String, pArgs As %List = \"\", ByRef pSQLCODE As %List, ByRef pRowId As %String, ByRef pRowCount As %Integer, Output pForwarded As %Boolean) As %Status" },
+    { "header": "ClassMethod %GetShardKeyInfo(pTableName = \"\", pExtentName, pHasGeneratedId, pGeneratedIdIsShardKey, pShardKeyIsForeignId, pShardMapOwner, pShardKeyColumnNumbers = \"\", pShardKeyColumnNames) As %Status" },
     { "header": "ClassMethod %GetShardKeyType(pExtentName As %String, Output pResult As %Integer, Output pOwner As %String) As %Status" },
     { "header": "ClassMethod %UnshardClass(pClassName As %String, Output pPurgeTimestamp) As %Status" },
     { "header": "ClassMethod DeriveColumn(level As %Integer, ByRef columnName As %String, sourceName As %String, propertyNumber As %Integer, sourceDef As %Dictionary.ClassDefinition, proxyPackage As %String, Output derivedColumnName As %String, Output derivedType As %String, ByRef useDerivedType As %Boolean)" },
@@ -630,11 +646,12 @@
    "header": "Class %BigData.ShardingManager",
    "members": [
     { "header": "ClassMethod %ConnectOrDisconnectShard(clusterNamespace As %String, shardHost As %String, shardPort As %Integer, shardNamespace As %String, function As %Integer, Output isConnected As %Boolean) As %Status" },
+    { "header": "ClassMethod %ExecCommand(pCommand As %BigData.ShardableEntity, ByRef pInstanceCount As %Integer = \"\", ByRef pRowId As %String = \"\", ByRef pSQLCODE = \"\", pShardMask = \"\", pQueryId As %Integer = \"\") As %Status" },
     { "header": "ClassMethod %GetShardingManager() As This" },
     { "header": "ClassMethod %GetShardServerNamesAndDirectories(pShardCount As %Integer, pSkipShard As %Integer = \"\", Output pShards, pFirstShard As %Integer = 1, pGetAltDirectories As %Boolean = 0) As %Status" },
     { "header": "ClassMethod %InvalidateAllMappings(pNamespace As %String)" },
     { "header": "ClassMethod %NextAIRange(pStorageModel As %String(MAXLEN=2), pEntityName As %String, Output pRangeLow As %Integer, Output pRangeHigh As %Integer) As %Status" },
-    { "header": "ClassMethod GetShardingRole(namespace As %String, Output dataMaster As %String, Output shardNumber As %Integer, ByRef isConnected) As %String" }
+    { "header": "ClassMethod GetShardingRole(namespace As %String, Output dataMaster As %String, Output shardNumber As %Integer, ByRef isConnected = \"\") As %String" }
    ]
   },
   "%CPT.COS.Analysis.BasicBlock.TreeReader.Abstract": {
@@ -703,23 +720,68 @@
     { "header": "ClassMethod GetColorAssignments(ClassName As %String, MethodName As %String, ProcBlock As %Boolean, Output Assignments As %String) As %Status" }
    ]
   },
+  "%CPT.HPT.LoadingState": {
+   "header": "Class %CPT.HPT.LoadingState",
+   "members": [
+    { "header": "Method MakeHandler(HandlerRef As %String, InitialProgress As %Integer = 1) As %Library.Any" }
+   ]
+  },
+  "%CPT.JS.Analyse.Change.Assignment": {
+   "header": "Class %CPT.JS.Analyse.Change.Assignment",
+   "members": [
+    { "header": "Property Value As %Library.Any" }
+   ]
+  },
+  "%CPT.JS.Analyse.Clonable": {
+   "header": "Class %CPT.JS.Analyse.Clonable",
+   "members": [
+    { "header": "Method Clone() As This" }
+   ]
+  },
   "%CPT.JS.Analyse.Object": {
    "header": "Class %CPT.JS.Analyse.Object",
    "members": [
     { "header": "ClassMethod %NewObjectExpressionX(Exhaustive As %Boolean, Args...) As This" }
    ]
   },
+  "%CPT.JS.Analyse.PlainValue": {
+   "header": "Class %CPT.JS.Analyse.PlainValue",
+   "members": [
+    { "header": "Method ValueGet() As %Library.Any" }
+   ]
+  },
+  "%CPT.JS.Analyse.Statement": {
+   "header": "Class %CPT.JS.Analyse.Statement",
+   "members": [
+    { "header": "Method Clone() As This" }
+   ]
+  },
   "%CPT.JS.Analyse.Value": {
    "header": "Class %CPT.JS.Analyse.Value",
    "members": [
     { "header": "Method GetPropertyFrom(PropertyName As %CPT.JS.Analyse.Value) As This" },
-    { "header": "Method GetValue(CodeIndex As %Integer, FunctionIndex As %Integer, CurrentLevel As %Integer) As This" }
+    { "header": "Method GetValue(CodeIndex As %Integer, FunctionIndex As %Integer, CurrentLevel As %Integer) As This" },
+    { "header": "Method ValueGet() As %Library.Any" },
+    { "header": "Property Value As %Library.Any" }
    ]
   },
   "%CPT.JS.Analyse.World": {
    "header": "Class %CPT.JS.Analyse.World",
    "members": [
     { "header": "Method Clone(Label As %String) As This" }
+   ]
+  },
+  "%CPT.JS.Code.Symbol.InstanceMethodCall": {
+   "header": "Class %CPT.JS.Code.Symbol.InstanceMethodCall",
+   "members": [
+    { "header": "Property ObjectRef As %Library.Any" }
+   ]
+  },
+  "%CPT.JS.Common.Globals": {
+   "header": "Class %CPT.JS.Common.Globals",
+   "members": [
+    { "header": "ClassMethod ImplementationClassNameFor(BuiltinName As %String) As %Library.Any" },
+    { "header": "ClassMethod RuntimeObjectFor(GlobalObject As %CPT.JS.Runtime.GlobalObject, BuiltinName As %String) As %Library.Any" }
    ]
   },
   "%CPT.JS.Generate.Gen.Abstract": {
@@ -734,6 +796,14 @@
    "header": "Class %CPT.JS.Node.CPT",
    "members": [
     { "header": "ClassMethod NullNode(Editor As %CPT.Tree.Editor) As This" }
+   ]
+  },
+  "%CPT.JS.Runtime.Builtin.CacheObject": {
+   "header": "Class %CPT.JS.Runtime.Builtin.CacheObject",
+   "members": [
+    { "header": "Method GetShell() As %Library.Any" },
+    { "header": "Method shellGet() As %Library.Any" },
+    { "header": "Property shell As %Library.Any" }
    ]
   },
   "%CPT.JS.Runtime.Object": {
@@ -798,6 +868,12 @@
     { "header": "Method CopyTo(Ed As %CPT.Tree.Editor, SourceExtent As %List) As This" }
    ]
   },
+  "%CPT.Util.StreamTracker": {
+   "header": "Class %CPT.Util.StreamTracker",
+   "members": [
+    { "header": "Property BaseStream As %Stream.Object" }
+   ]
+  },
   "%CPT.Warp.Fragment": {
    "header": "Class %CPT.Warp.Fragment",
    "members": [
@@ -813,6 +889,7 @@
   "%CSP.Documatic": {
    "header": "Class %CSP.Documatic",
    "members": [
+    { "header": "ClassMethod EndFmt(internal As %Integer = \"\") As %String" },
     { "header": "ClassMethod RenderBanner(title As %String, %library As %String, class As %String)" },
     { "header": "ClassMethod RenderBannerOld(title As %String, %library As %String, class As %String)" }
    ]
@@ -862,7 +939,10 @@
    "header": "Class %CSP.Page",
    "members": [
     { "header": "ClassMethod EscapeURL(in As %String, charset As %String = \"\") As %String" },
-    { "header": "ClassMethod Link(link As %String, ByRef query As %String = \"\", addQ As %Boolean = 0) As %String" }
+    { "header": "ClassMethod HyperEventHead(iframeOnly As %Boolean = \"\", strict As %Boolean = 0, optionalBroker As %Boolean = \"\") As %String" },
+    { "header": "ClassMethod InsertHiddenFields(url As %String, ByRef query As %String = \"\") As %String" },
+    { "header": "ClassMethod Link(link As %String, ByRef query As %String = \"\", addQ As %Boolean = 0) As %String" },
+    { "header": "ClassMethod UnescapeURL(in As %String, charset As %String = \"\") As %String" }
    ]
   },
   "%CSP.PageLookup": {
@@ -870,6 +950,12 @@
    "members": [
     { "header": "ClassMethod BuildSelectStatement(class As %String, proplist As %List, Output statement As %String, getcount As %Boolean = 0, idname As %String = \"\", select As %String = \"SELECT\", Output idfield As %Integer) As %Status" },
     { "header": "ClassMethod CreateResultSet(class As %String, restrict As %List, return As %List, orderby As %List, getcount As %Boolean, Output resultset As %ResultSet, Output rcount As %Integer, idname As %String = \"\", ByRef idfield As %Integer) As %Status" }
+   ]
+  },
+  "%CSP.PageSection": {
+   "header": "Class %CSP.PageSection",
+   "members": [
+    { "header": "Method %OnNew(initvalue = \"\") As %Status" }
    ]
   },
   "%CSP.REST": {
@@ -890,7 +976,13 @@
    "members": [
     { "header": "Method EventClassList(Output Array As %String) As %Status" },
     { "header": "Method GetLinkTargets(link As %String, Output targetUsername As %String, Output targetAppName As %String, Output targetNamespace As %String) As %Integer" },
-    { "header": "ClassMethod GetSession(sessionId As %String, CSPSessionCookie As %String = \"\", lock As %Boolean = 1, request As %CSP.Request) As This" }
+    { "header": "ClassMethod GetSession(sessionId As %String, CSPSessionCookie As %String = \"\", lock As %Boolean = 1, request As %CSP.Request = \"\") As This" }
+   ]
+  },
+  "%CSP.StreamServer": {
+   "header": "Class %CSP.StreamServer",
+   "members": [
+    { "header": "ClassMethod FileClassify(ext As %String, ByRef type As %String, ByRef bin As %Boolean = \"\", ByRef charset As %String) As %Boolean" }
    ]
   },
   "%CSP.StudioTemplateMgr": {
@@ -1020,6 +1112,12 @@
     { "header": "ClassMethod GetLocator(pTitlePane As %CSP.Util.TitlePane, Output pAddress As %String, ByRef pBaseURL As %String = {%request.URL}) As %String" }
    ]
   },
+  "%CSP.UI.System.BackgroundTask": {
+   "header": "Class %CSP.UI.System.BackgroundTask",
+   "members": [
+    { "header": "ClassMethod RunTask(pTask As %String, pNS As %String, ByRef pParms As %String, ByRef tItems As %String = \"\", ByRef pJob As %Integer = \"\") As %Status" }
+   ]
+  },
   "%CSP.UI.System.DeletePane": {
    "header": "Class %CSP.UI.System.DeletePane",
    "members": [
@@ -1077,10 +1175,35 @@
     { "header": "ClassMethod ProcessSubmit(pRequest As %CSP.Request, ByRef pID As %String = \"\", Output pErrorMsg As %String) As This" }
    ]
   },
+  "%CSP.Util.CSPLogEvent": {
+   "header": "Class %CSP.Util.CSPLogEvent",
+   "members": [
+    { "header": "ClassMethod data(str, del1, del2 = \"\") As %String" },
+    { "header": "ClassMethod OPTION(prompt, default, max = \"\") As %String" }
+   ]
+  },
+  "%CSP.Util.FormPane": {
+   "header": "Class %CSP.Util.FormPane",
+   "members": [
+    { "header": "Property FormObject As %Library.Any" }
+   ]
+  },
   "%CSP.Util.MenuPane": {
    "header": "Class %CSP.Util.MenuPane",
    "members": [
     { "header": "Method DrawHEAD(pInstance As PageInstance)" }
+   ]
+  },
+  "%CSP.Util.PageInstance": {
+   "header": "Class %CSP.Util.PageInstance",
+   "members": [
+    { "header": "Method %OnNew(initval As %String = \"\") As %Status" }
+   ]
+  },
+  "%CSP.Util.Pane": {
+   "header": "Class %CSP.Util.Pane",
+   "members": [
+    { "header": "Property CommandFormObject As %Library.Any" }
    ]
   },
   "%CSP.Util.SMNavigatorPane": {
@@ -1133,7 +1256,7 @@
     { "header": "Method SetAt(element As ..#ELEMENTTYPE, key As %String) As %Status" }
    ],
    "generics": {
-    "ELEMENTTYPE": "%RegisteredObject"
+    "ELEMENTTYPE": "%Library.Any"
    }
   },
   "%Collection.AbstractIterator": {
@@ -1176,7 +1299,7 @@
     { "header": "Method SetAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" }
    ],
    "generics": {
-    "ELEMENTTYPE": "%RegisteredObject"
+    "ELEMENTTYPE": "%Library.Any"
    }
   },
   "%Collection.ArrayOfDT": {
@@ -1198,7 +1321,16 @@
     { "header": "Method SetAt(oref As ..#ELEMENTTYPE, key As %String) As %Status" }
    ],
    "generics": {
-    "ELEMENTTYPE": "%RegisteredObject"
+    "ELEMENTTYPE": "%Library.Any"
+   }
+  },
+  "%Collection.ArrayOfStream": {
+   "header": "Class %Collection.ArrayOfStream",
+   "members": [
+    { "header": "Method GetAt(key As %String) As ..#ELEMENTTYPE" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%Stream.Object"
    }
   },
   "%Collection.ListOfDT": {
@@ -1222,7 +1354,16 @@
     { "header": "Method SetAt(oref As ..#ELEMENTTYPE, key As %Integer) As %Status" }
    ],
    "generics": {
-    "ELEMENTTYPE": "%RegisteredObject"
+    "ELEMENTTYPE": "%Library.Any"
+   }
+  },
+  "%Collection.ListOfStream": {
+   "header": "Class %Collection.ListOfStream",
+   "members": [
+    { "header": "Method GetAt(key As %Integer) As ..#ELEMENTTYPE" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%Stream.Object"
    }
   },
   "%Compiler.Binding.Java": {
@@ -1364,6 +1505,8 @@
   "%Compiler.LG.QueryHelper": {
    "header": "Class %Compiler.LG.QueryHelper",
    "members": [
+    { "header": "Method GetAt(key As %Integer = 0) As %Library.Any" },
+    { "header": "Method GetNext(ByRef key As %Integer) As %Library.Any" },
     { "header": "ClassMethod Query(class As %String, sql As %String, args) As This" }
    ]
   },
@@ -1455,6 +1598,7 @@
   "%Compiler.Util.ParseTree": {
    "header": "Class %Compiler.Util.ParseTree",
    "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" },
     { "header": "ClassMethod Parse(source As %RawString, settings As %RawString = \"\", Output returnStatus As %Status, trigger As %Boolean = 0) As This" },
     { "header": "ClassMethod parseStream(source As %Stream.Object, settings As %RawString = \"\", ByRef returnStatus As %Status, trigger As %Boolean = 0) As This" }
    ]
@@ -1462,6 +1606,7 @@
   "%Compiler.Util.Visitor": {
    "header": "Class %Compiler.Util.Visitor",
    "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" },
     { "header": "ClassMethod parseName(pIdentifier As %String(MAXLEN=\"\"), Output pToken)" }
    ]
   },
@@ -1479,6 +1624,21 @@
    "header": "Class %Compiler.iFind.Index",
    "members": [
     { "header": "ClassMethod GetDataGlobalAndColumn(pClass As %String(MAXLEN=\"\"), pIndex As %String(MAXLEN=\"\"), Output pFetchCode As %String(MAXLEN=\"\") = \"\", Output pStreamLoc As %String(MAXLEN=\"\") = \"\", Output pCalcCode As %String(MAXLEN=\"\"), Output pType As %String(MAXLEN=\"\") = \"\")" }
+   ]
+  },
+  "%DataModel.Serializer": {
+   "header": "Class %DataModel.Serializer",
+   "members": [
+    { "header": "ClassMethod %FromJSONValue(str) As This" },
+    { "header": "ClassMethod %FromObject(source = \"\", target = \"\", laxMode As %Integer = 1) As This" },
+    { "header": "ClassMethod fromJson(str) As This" },
+    { "header": "ClassMethod mapArrayCollectionToRegistered(source As %Collection.AbstractList, target As %DynamicArray = \"\", laxMode As %Integer = 1) As %Library.Any" },
+    { "header": "ClassMethod mapListCollectionToRegistered(source As %Collection.AbstractList, target As %DynamicArray = \"\", laxMode As %Integer = 1) As %Library.Any" },
+    { "header": "ClassMethod mapObjectToRegistered(source As %DynamicObject, target As %RegisteredObject = \"\", laxMode As %Integer = 1, asReference As %Integer = 1) As %Library.Any" },
+    { "header": "ClassMethod mapPersistentToArray(source As %RegisteredObject, target As %RegisteredObject = \"\", laxMode As %Integer = 1, asReference As %Integer = 1) As %Library.Any" },
+    { "header": "ClassMethod mapRegisteredToArray(source As %RegisteredObject, target As %RegisteredObject = \"\", laxMode As %Integer = 1, asReference As %Integer = 1) As %Library.Any" },
+    { "header": "ClassMethod mapRegisteredToRegistered(source As %RegisteredObject, target As %RegisteredObject = \"\", laxMode As %Integer = 1, asReference As %Integer = 1) As %Library.Any" },
+    { "header": "ClassMethod mapStreamToRegistered(source As %SerialObject, target As %DynamicObject = \"\", laxMode As %Integer = 1) As %Library.Any" }
    ]
   },
   "%Debugger.System": {
@@ -1503,7 +1663,8 @@
   "%DeepSee.Component.pivotTable": {
    "header": "Class %DeepSee.Component.pivotTable",
    "members": [
-    { "header": "Method %DrawEmptyTable(pMessage As %String, Output pHTML As %String, Output pHTMLAttributes) As %Status" }
+    { "header": "Method %DrawEmptyTable(pMessage As %String, Output pHTML As %String, Output pHTMLAttributes) As %Status" },
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" }
    ]
   },
   "%DeepSee.ComputedDimension.Base": {
@@ -1512,6 +1673,12 @@
     { "header": "ClassMethod %Create(pCube As %String, pFactNo As %Integer, pDimNo As %Integer, pHierNo As %Integer, pLevelNo As %Integer) As This" },
     { "header": "Method %GetAllMembers(Output pMemberList, pCube As %String, pDimNo As %Integer, pHierNo As %Integer, pLevelNo As %Integer) As %Status" },
     { "header": "ClassMethod %GetPredefinedMembers(Output pMemberList, pCube As %String, pDimNo As %Integer, pHierNo As %Integer, pLevelNo As %Integer) As %Status" }
+   ]
+  },
+  "%DeepSee.Connector.abstractNode": {
+   "header": "Class %DeepSee.Connector.abstractNode",
+   "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" }
    ]
   },
   "%DeepSee.CubeManager.RegistryMap": {
@@ -1551,7 +1718,9 @@
   "%DeepSee.CubeVersion.Utils": {
    "header": "Class %DeepSee.CubeVersion.Utils",
    "members": [
-    { "header": "ClassMethod %GetDeprecatedVersionList(pCubeGenericName As %String = \"\", Output pList) As %Status" }
+    { "header": "ClassMethod %GetDeprecatedVersionList(pCubeGenericName As %String = \"\", Output pList) As %Status" },
+    { "header": "ClassMethod %GetGenericCubeName(pCubeVersionName As %String = \"\", pSC As %Status = \"\") As %String" },
+    { "header": "ClassMethod %GetVersionedCubeName(pCubeGenericName As %String = \"\", pVersion As %Integer = \"\", pSC As %Status = \"\") As %String" }
    ]
   },
   "%DeepSee.Dashboard.Element": {
@@ -1559,6 +1728,13 @@
    "members": [
     { "header": "ClassMethod %ExistsId(pID As %String) As This" },
     { "header": "ClassMethod %OpenId(pID As %String, Output pSC As %Status) As This" }
+   ]
+  },
+  "%DeepSee.Dashboard.Utils": {
+   "header": "Class %DeepSee.Dashboard.Utils",
+   "members": [
+    { "header": "ClassMethod %GetFiltersForDataSource(pDataSource As %String, Output pFilters As %List, ByRef pVisited = \"\", pParent As %String = \"\", pSearchKey As %String = \"\", pMaxDepth As %Integer = 3, pLevel As %Integer = 1) As %Status" },
+    { "header": "ClassMethod %GetMembersForFilter(pDataSource As %String, pFilter As %String, Output pMembers As %List, Output pDefaultValue As %String, pSearchKey As %String = \"\", ByRef pRelatedFilters = \"\", pCalcOnly As %Boolean = 0, pRangeMode As %Boolean = 0, ByRef pPreSelected As %String = \"\") As %Status" }
    ]
   },
   "%DeepSee.DataConnector": {
@@ -1588,6 +1764,18 @@
    "members": [
     { "header": "Method %OnComputeKPITimestamp(Output pTimestamp As %String, pSourceType As %String, pQueryText As %String = \"\") As %Status" },
     { "header": "Method %OnGetMDX(Output pMDX As %String) As %Status" }
+   ]
+  },
+  "%DeepSee.Model.SubjectArea.abstractNode": {
+   "header": "Class %DeepSee.Model.SubjectArea.abstractNode",
+   "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" }
+   ]
+  },
+  "%DeepSee.Model.abstractNode": {
+   "header": "Class %DeepSee.Model.abstractNode",
+   "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" }
    ]
   },
   "%DeepSee.PMML.Data": {
@@ -1775,10 +1963,22 @@
     { "header": "Method %OnGetMDX(Output pMDX As %String) As %Status" }
    ]
   },
+  "%DeepSee.QualityMeasure.Utils": {
+   "header": "Class %DeepSee.QualityMeasure.Utils",
+   "members": [
+    { "header": "ClassMethod %GetQualityMeasureClass(pQMSRName As %String, Output pStatus As %Status, pUseLink As %Boolean = 0, ByRef pVisited = \"\") As %String" }
+   ]
+  },
   "%DeepSee.Query.Engine": {
    "header": "Class %DeepSee.Query.Engine",
    "members": [
     { "header": "ClassMethod %SpecToJoinIndex(pSpec As %List, pCube As %String = \"\", pKey As %String = \"\", pUseAgents As %Boolean = 1, ByRef pRelation, Output pIntersect, pGroupId As %String = \"\") As %Status" }
+   ]
+  },
+  "%DeepSee.Query.Parser": {
+   "header": "Class %DeepSee.Query.Parser",
+   "members": [
+    { "header": "Method %ParseMEMBER(pParent As %DeepSee.Query.group, Output pNode As %DeepSee.Query.node, pCloseToken As %String, pMode As %Integer, ByRef pFlags As %String = \"\", pLevel As %Integer = 1, pParsingASetOfFlags As %Integer = 0) As %Status" }
    ]
   },
   "%DeepSee.Query.constant": {
@@ -1807,6 +2007,12 @@
     { "header": "ClassMethod %CreateMember(pClassName As %String, Output tSC As %Status, pCube As %String, pTuple As %DeepSee.Query.tuple, pDimNo As %Integer, pHierNo As %Integer, pAllName As %String = \"\") As This" }
    ]
   },
+  "%DeepSee.Query.memberData": {
+   "header": "Class %DeepSee.Query.memberData",
+   "members": [
+    { "header": "ClassMethod %GetMembers(pCubeName As %String, pDimNo As %Integer, pHierNo As %Integer, pLevelNo As %Integer, pRollupKey As %String, pParent As %Integer, pKey As %String, ByRef pNodeNo As %Integer, pRecurse As %Integer = 0, ByRef pRange As %String = \"\", ByRef pMemberList) As %Status" }
+   ]
+  },
   "%DeepSee.Query.memberMeasure": {
    "header": "Class %DeepSee.Query.memberMeasure",
    "members": [
@@ -1817,6 +2023,12 @@
    "header": "Class %DeepSee.Query.memberSpec",
    "members": [
     { "header": "Method %ProcessFilter(Output pFilterTree As %List, pCube As %String, Output pNodeNo As %Integer, Output pNewNodeNo As %Integer, pParent As %Integer) As %Status" }
+   ]
+  },
+  "%DeepSee.Query.memberTime": {
+   "header": "Class %DeepSee.Query.memberTime",
+   "members": [
+    { "header": "ClassMethod %GetMembers(pCubeName As %String, pDimNo As %Integer, pHierNo As %Integer, pLevelNo As %Integer, pRollupKey As %String, pParent As %Integer, pKey As %String, ByRef pNodeNo As %Integer, pRecurse As %Integer = 0, ByRef pRange As %String = \"\", ByRef pMemberList = \"\") As %Status" }
    ]
   },
   "%DeepSee.Query.namedSet": {
@@ -1830,6 +2042,7 @@
    "members": [
     { "header": "ClassMethod %CheckResultsCache(pCubeName, pQueryKey, Output pUpToDate = 1, ByRef pReason) As %Status" },
     { "header": "Method %GetCalculatedMembers(pDimName As %String, Output pList As %String) As %Status" },
+    { "header": "ClassMethod %HasMeasure(pNode As %DeepSee.Query.node, Output pStatus As %Status) As %Boolean" },
     { "header": "Method %LookupNamedSet(pName As %String, Output pSet As %DeepSee.Query.set, Output pSC As %Status) As %Boolean" },
     { "header": "ClassMethod %SplitDate(pDate As %Date, pCalendar As %String = \"gregorian\", Output pYear, Output pMonth, Output pDay)" }
    ]
@@ -1856,14 +2069,19 @@
   "%DeepSee.REST.REST": {
    "header": "Class %DeepSee.REST.REST",
    "members": [
+    { "header": "ClassMethod %ConstructResponseFromArray(ByRef pArray = \"\", pMetaData As %List = \"\", pNodeLabel = \"ListItems\", pFetchStatus As %Status = 1, Output pResponseObj, Output pProvider) As %Status" },
+    { "header": "ClassMethod %SetRequestField(pPropertyName As %String, pCurrentInput, pDefaultValue = \"\", Output ans, pTargetClass As %String = \"\") As %Status" },
     { "header": "ClassMethod OnPreDispatch(pUrl As %String, pMethod As %String, Output pContinue As %Boolean) As %Status" }
    ]
   },
   "%DeepSee.ResultSet": {
    "header": "Class %DeepSee.ResultSet",
    "members": [
-    { "header": "ClassMethod %ExecuteDirect(pMDX As %String, ByRef pParms, Output pSC As %Status, pAsync = 0, pWait = 1) As This" },
-    { "header": "Method %GetFiltersForCellRange(Output pFilters As %String, pStartRow As %Integer, pStartCol As %Integer, pEndRow As %Integer, pEndCol As %Integer, Output pMeasure As %String, pAllRows As %Boolean = 0, pAllCols As %Boolean = 0, pSortCol As %Integer = 0, pSortDir As %String = \"ASC\", Output pPluginInfo As %String) As %Status" }
+    { "header": "ClassMethod %ExecuteDirect(pMDX As %String, ByRef pParms = \"\", Output pSC As %Status, pAsync = 0, pWait = 1) As This" },
+    { "header": "Method %GetFiltersForCellRange(Output pFilters As %String, pStartRow As %Integer, pStartCol As %Integer, pEndRow As %Integer, pEndCol As %Integer, Output pMeasure As %String, pAllRows As %Boolean = 0, pAllCols As %Boolean = 0, pSortCol As %Integer = 0, pSortDir As %String = \"ASC\", Output pPluginInfo As %String) As %Status" },
+    { "header": "Method %PrepareKey(pCubeName As %String = \"\", pQueryKey As %String = \"\", ByRef pParms = \"\", pOriginalMDX As %String = \"\") As %Status" },
+    { "header": "Method %PrepareMDX(pMDX As %String = \"\", ByRef pVariables = \"\", Output pResolvedMDX) As %Status" },
+    { "header": "Method %RunQueryAuditCode(pQuery As %DeepSee.Query.query = \"\") As %Status" }
    ]
   },
   "%DeepSee.SQL.CatalogQueries": {
@@ -1900,6 +2118,12 @@
     { "header": "Method ContainsAll(rs As %RawString, Output sc As %Status) As %Boolean" }
    ]
   },
+  "%DeepSee.Sets.Set": {
+   "header": "Class %DeepSee.Sets.Set",
+   "members": [
+    { "header": "Method %OnNew(pValue As %RawString = \"\", offset As %Integer = \"\") As %Status" }
+   ]
+  },
   "%DeepSee.Sets.SetOperations": {
    "header": "Class %DeepSee.Sets.SetOperations",
    "members": [
@@ -1912,6 +2136,18 @@
    "header": "Class %DeepSee.TermList",
    "members": [
     { "header": "ClassMethod %GetTermListNameFromStream(pFileName As %String, Output pTermListName As %String = \"\") As %Status" }
+   ]
+  },
+  "%DeepSee.Time.AbstractLevel": {
+   "header": "Class %DeepSee.Time.AbstractLevel",
+   "members": [
+    { "header": "ClassMethod %GetAllMembers(Output pList As %List, pCube As %String, pFact As %String, pStartRange As %Date, pEndRange As %Date = \"\", pFormat As %String = \"\") As %Status" }
+   ]
+  },
+  "%DeepSee.UI.CubeRegistry": {
+   "header": "Class %DeepSee.UI.CubeRegistry",
+   "members": [
+    { "header": "Property %model As %Library.Any" }
    ]
   },
   "%DeepSee.UI.Dialog.finderDialog": {
@@ -1966,12 +2202,16 @@
     { "header": "ClassMethod %GetCollectionProjections(pClassname As %String, Output pProjectedClass As %String(MAXLEN=255)) As %Status" },
     { "header": "ClassMethod %GetCubeMeasures(pCube As %String, Output pMeasures, pSkipCalculated As %Boolean = 0) As %Status" },
     { "header": "ClassMethod %GetCubeSearchableMeasures(pCube As %String, Output pMeasures) As %Status" },
+    { "header": "ClassMethod %GetDataSourceTree(pClass As %String, Output pTree, ByRef pParms = \"\", pLevel As %Integer = 0, pParentRef As %String = \"\", pRoot As %String = \"\") As %Status" },
     { "header": "ClassMethod %GetDimensionCaption(pCube As %String, pDimNo As %Integer, pHierNo As %Integer, pLevelNo As %Integer, Output pCaption As %String) As %Status" },
     { "header": "ClassMethod %GetDimensionFact(pCube As %String, pDimNo As %Integer, pHierNo As %Integer, pLevelNo As %Integer, Output pFactName As %String) As %Status" },
+    { "header": "ClassMethod %GetDimensionInfo(pCubeName As %String, pSpec As %String, Output pDimNo, Output pHierNo, Output pLevelNo, Output pRelationName As %String, Output pRelationSpec As %String, Output pSpecInfo As %String, ByRef pLocalCalcMembers = \"\", pStrict As %Boolean = 1, ByRef pLocalNamedSets = \"\") As %Status" },
     { "header": "ClassMethod %GetDimensionList(pCube As %String, Output pInfo, pIncludeCalcMbrs As %Boolean = 0, pUseInFilter As %Boolean = 0, pExtendedInfo As %Boolean = 0, pShowAll As %Boolean = 0) As %Status" },
+    { "header": "ClassMethod %GetDimensionMembers(pCubeName As %String, pSpec As %String, pContext As %String = \"\", Output pMembers, pMaxMembers As %Integer = 100, Output pMemberClass As %String, ByRef pRelatedFilters = \"\", pCalcMode As %Integer = 0, pSearchKey As %String = \"\") As %Status" },
     { "header": "ClassMethod %GetDimensionProperties(pCube As %String, pDimName As %String, pHierName As %String, pLevelName As %String, Output pProperties) As %Status" },
     { "header": "ClassMethod %GetMemberCaption(pCube As %String, pDimName As %String, pHierName As %String = \"\", pLevelName As %String = \"\", Output pCaption As %String) As %Status" },
     { "header": "ClassMethod %GetMemberDescription(pCube As %String, pDimName As %String, pHierName As %String = \"\", pLevelName As %String = \"\", Output pDescription As %String) As %Status" },
+    { "header": "ClassMethod %GetMemberTree(pCube As %String, ByRef pTree, ByRef pVisited As %String = \"\", pSkipMeasures As %Boolean = 0, pRoot As %String = \"\", ByRef pLocalCalcMembers As %List, ByRef pLocalNamedSets As %List, pRelatedBy As %String = \"\", pLevel As %Integer = 0, pSkeleton As %Boolean = 0) As %Status" },
     { "header": "ClassMethod %GetNamedFilters(pCube As %String, Output pFilters, pUseCubeVersion As %Boolean = 0) As %Status" },
     { "header": "ClassMethod %GetPivotTree(pCube As %String, Output pTree, pCurrPivot As %String = \"\") As %Status" },
     { "header": "ClassMethod %GetPivotVariables(pCube As %String, Output pVariables, pUseCubeVersion As %Boolean = 0) As %Status" },
@@ -2013,7 +2253,8 @@
    "members": [
     { "header": "ClassMethod Create(dsName As %String, type As %EnumString, new As %Boolean, Output sc As %Status) As This" },
     { "header": "ClassMethod New(dsName As %String, type As %EnumString, Output sc As %Status) As This" },
-    { "header": "ClassMethod Open(dsName As %String, type As %EnumString, Output sc As %Status) As This" }
+    { "header": "ClassMethod Open(dsName As %String, type As %EnumString, Output sc As %Status) As This" },
+    { "header": "Property Mapper As %Library.Any" }
    ]
   },
   "%DeepSee.extensions.clusters.Ordered": {
@@ -2081,6 +2322,12 @@
     { "header": "ClassMethod create(parent As %DeepSee.extensions.stat.Abstract1DDistribution, ByRef q, Output sc As %Status) As This" }
    ]
   },
+  "%DeepSee.extensions.utils.LDA": {
+   "header": "Class %DeepSee.extensions.utils.LDA",
+   "members": [
+    { "header": "Method GetMajorContributors(targetPos As %String, targetNeg As %String = \"\", margin As %Double, Output listPos As %List, Output listNeg As %List) As %Status" }
+   ]
+  },
   "%DeepSee.extensions.utils.Optimizer": {
    "header": "Class %DeepSee.extensions.utils.Optimizer",
    "members": [
@@ -2090,13 +2337,95 @@
   "%Dictionary.ClassDefinition": {
    "header": "Class %Dictionary.ClassDefinition",
    "members": [
+    { "header": "ClassMethod %IsClsOpen(cls As %String) As %Library.Any" },
     { "header": "Method %OnNew(name As %String = \"\", classversion As %Integer = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.CompiledXData": {
+   "header": "Class %Dictionary.CompiledXData",
+   "members": [
+    { "header": "Method ObjectGet() As %Library.Any" },
+    { "header": "Property Object As %Library.Any" }
+   ]
+  },
+  "%Dictionary.ForeignKeyDefinition": {
+   "header": "Class %Dictionary.ForeignKeyDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.IndexDefinition": {
+   "header": "Class %Dictionary.IndexDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
    ]
   },
   "%Dictionary.MethodDefinition": {
    "header": "Class %Dictionary.MethodDefinition",
    "members": [
     { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.ParameterDefinition": {
+   "header": "Class %Dictionary.ParameterDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.PropertyDefinition": {
+   "header": "Class %Dictionary.PropertyDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.StorageDataDefinition": {
+   "header": "Class %Dictionary.StorageDataDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.StorageDataValueDefinition": {
+   "header": "Class %Dictionary.StorageDataValueDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.StorageDefinition": {
+   "header": "Class %Dictionary.StorageDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.StorageSQLMapDataDefinition": {
+   "header": "Class %Dictionary.StorageSQLMapDataDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.StorageSQLMapDefinition": {
+   "header": "Class %Dictionary.StorageSQLMapDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.StorageSQLMapRowIdSpecDefinition": {
+   "header": "Class %Dictionary.StorageSQLMapRowIdSpecDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.StorageSQLMapSubDefinition": {
+   "header": "Class %Dictionary.StorageSQLMapSubDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.XDataDefinition": {
+   "header": "Class %Dictionary.XDataDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" },
+    { "header": "Method ObjectGet() As %Library.Any" },
+    { "header": "Property Object As %Library.Any" }
    ]
   },
   "%DocDB.Database": {
@@ -2108,6 +2437,12 @@
     { "header": "Method %FromJSON(jsonValue As %RawString) As This" },
     { "header": "ClassMethod %GetDatabase(databaseName) As This" },
     { "header": "Method createIndex(indexName As %RawString = \"\", propertyName As %RawString = \"\", unique As %Integer = 0, collationExpression As %String = \"\") As This" }
+   ]
+  },
+  "%Document.Model.Schema.abstractNode": {
+   "header": "Class %Document.Model.Schema.abstractNode",
+   "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" }
    ]
   },
   "%Document.Object": {
@@ -2148,6 +2483,12 @@
     { "header": "ClassMethod CreateFromSQLCODE(pSQLCODE As %Integer, pMessage As %String(MAXLEN=\"\")) As This" }
    ]
   },
+  "%Exception.SystemException": {
+   "header": "Class %Exception.SystemException",
+   "members": [
+    { "header": "Method %OnNew(pName As %String = \"\", pCode As %String = \"\", pLocation As %String = \"\", pData As %String = \"\", pInnerException As %Exception.AbstractException = {$$$NULLOREF}, pStack As %String = \"\") As %Status" }
+   ]
+  },
   "%ExtentMgr.GUID": {
    "header": "Class %ExtentMgr.GUID",
    "members": [
@@ -2183,6 +2524,14 @@
     { "header": "Method import(module As %String, useProcessLoader As %Boolean) As This" }
    ]
   },
+  "%External.GeneralImpl": {
+   "header": "Class %External.GeneralImpl",
+   "members": [
+    { "header": "ClassMethod getGateway(externalServer As %RawString, useSharedMemoryIfPossible = \"\") As %External.Gateway" },
+    { "header": "ClassMethod getJavaGateway(useSharedMemoryIfPossible = \"\") As %External.JavaGateway" },
+    { "header": "ClassMethod getXSLTGateway(useSharedMemoryIfPossible = \"\") As %External.Gateway" }
+   ]
+  },
   "%External.JavaGateway": {
    "header": "Class %External.JavaGateway",
    "members": [
@@ -2211,6 +2560,7 @@
    "header": "Class %FOI.Schema",
    "members": [
     { "header": "ClassMethod %FromJSON(str As %RawString) As This" },
+    { "header": "Method avroTypeToClass(type As %DynamicAbstractObject, context = \"\") As %String" },
     { "header": "ClassMethod classToSchema(className As %String(MAXLEN=220) = \"\") As This" }
    ]
   },
@@ -2220,10 +2570,22 @@
     { "header": "ClassMethod AttachNew(pDevice As %String = {$IO}, Output pSC As %Status) As This" }
    ]
   },
+  "%IO.FileStream": {
+   "header": "Class %IO.FileStream",
+   "members": [
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" }
+   ]
+  },
   "%IO.NullStream": {
    "header": "Class %IO.NullStream",
    "members": [
     { "header": "Method Read(pMaxReadLen As %Integer, Output pTimeout As %Numeric = -1, Output pSC As %Status) As %String" }
+   ]
+  },
+  "%IO.SocketCommon": {
+   "header": "Class %IO.SocketCommon",
+   "members": [
+    { "header": "Property DisconnectHandler As %Library.Any" }
    ]
   },
   "%ISQL.SimpleStreamLexer": {
@@ -2232,10 +2594,22 @@
     { "header": "Method CrossCurrentToken(Output CrossedNL As %Boolean)" }
    ]
   },
+  "%JSON.Adaptor": {
+   "header": "Class %JSON.Adaptor",
+   "members": [
+    { "header": "ClassMethod %JSONNew(dynamicObject As %DynamicObject, containerOref As %RegisteredObject = \"\") As This" }
+   ]
+  },
   "%JSON.Generator": {
    "header": "Class %JSON.Generator",
    "members": [
     { "header": "ClassMethod GenerateImportInternal(class As %String, indent As %String, mappingName As %String, ByRef mapping As %String, Output needRequired As %Boolean, Output needTestInvalidField As %Boolean) As %Status" }
+   ]
+  },
+  "%Library.AbstractResultSet": {
+   "header": "Class %Library.AbstractResultSet",
+   "members": [
+    { "header": "Method GetObject() As %Library.Any" }
    ]
   },
   "%Library.AbstractSet": {
@@ -2274,6 +2648,7 @@
   "%Library.ArrayOfObjects": {
    "header": "Class %Library.ArrayOfObjects",
    "members": [
+    { "header": "Method %OnNew(initvalue As %String = \"\") As %Status" },
     { "header": "Method %SerializeObject(Output serial As %Binary, partial As %Integer = 0) As %Status" },
     { "header": "Method GetAt(key As %String) As ..#ELEMENTTYPE" },
     { "header": "Method GetNext(ByRef key As %String) As ..#ELEMENTTYPE" },
@@ -2283,7 +2658,7 @@
     { "header": "Method SetAt(oref As ..#ELEMENTTYPE, key As %String) As %Status" }
    ],
    "generics": {
-    "ELEMENTTYPE": "%RegisteredObject"
+    "ELEMENTTYPE": "%Library.Any"
    }
   },
   "%Library.Base": {
@@ -2359,6 +2734,7 @@
   "%Library.Device": {
    "header": "Class %Library.Device",
    "members": [
+    { "header": "ClassMethod ReDirectIO(n As %Boolean = \"\") As %Boolean" },
     { "header": "ClassMethod VirtualTermCheck(Output Device As %String, Output DeviceData As %String)" }
    ]
   },
@@ -2431,10 +2807,12 @@
    "members": [
     { "header": "ClassMethod dbOBJFromName(name As %String, Output db As SYS.Database) As %Status" },
     { "header": "ClassMethod deleteEnsTempData(Output pConsoleLog As %String)" },
+    { "header": "ClassMethod EnableNamespace(pTargetNS As %String, pVerbose As %Boolean = 0, ByRef pIsPrimary = \"\", pFromInstall = 0, pUpgrade = 0, ByRef pPortalSuffix As %String = \"\", ByRef pPortalPrefix As %String = \"\", pGrant As %String = \"\", pCookiePath As %String = \"\", pAuthMethods As %String = \"\") As %Status" },
     { "header": "ClassMethod getDBRWFlag(dir As %String, Output flag As %Integer) As %Status" },
     { "header": "ClassMethod getMappedGlobals(Output pGlobals, pDatabase As %String = {..#ENSLIB}, pTargetNS As %String = \"\")" },
     { "header": "ClassMethod getNamespaceDBResourceNames(pNamespace As %String, Output names, pVerbose As %Boolean = 0) As %Status" },
     { "header": "ClassMethod GetProdPrivsInfo(ns As %String = \"\", Output info, includeSQL As %Boolean = 0) As %Status" },
+    { "header": "ClassMethod mapCategory2enslib(pTargetNS As %String = {$NAMESPACE}, pTargetCategory As %String, pVerbose As %Boolean = 0, ByRef pIsPrimary = \"\", pEditGlobals As %Boolean = 1, pEnsLib As %String = {..#ENSLIB}) As %Status" },
     { "header": "ClassMethod validateNamespace(Output pTargetNS As %String, pIsEnabled As %Boolean = 0, Output pSC As %Status, pCheckIfAvailable As %Boolean = 0) As %Boolean" }
    ]
   },
@@ -2444,7 +2822,8 @@
     { "header": "ClassMethod Deconstruct(filename As %String, Output dirs As %String)" },
     { "header": "ClassMethod GetDirectoryPiece(name As %String, piece As %Integer, Output fullpath As %String, Output IsDrive As %Boolean) As %String" },
     { "header": "ClassMethod GetFileSHA256Hash(filename As %String, Output sc = 0) As %String" },
-    { "header": "ClassMethod NormalizeDirectory(directory As %String, absolutedirectory As %String = \"\", addnull As %Boolean = 0) As %String" }
+    { "header": "ClassMethod NormalizeDirectory(directory As %String, absolutedirectory As %String = \"\", addnull As %Boolean = 0) As %String" },
+    { "header": "ClassMethod TempFilename(ext As %String, dir As %String = \"\", Output return As %Integer) As %String" }
    ]
   },
   "%Library.FileStreamAdaptor": {
@@ -2514,7 +2893,8 @@
   "%Library.GTWResultSet": {
    "header": "Class %Library.GTWResultSet",
    "members": [
-    { "header": "Method %Next(Output sc As %Status) As %Integer" }
+    { "header": "Method %Next(Output sc As %Status) As %Integer" },
+    { "header": "Method NextResult() As %SQL.StatementResult" }
    ]
   },
   "%Library.GUID": {
@@ -2527,8 +2907,10 @@
    "header": "Class %Library.Global",
    "members": [
     { "header": "ClassMethod DoubleInnerQuotes(str As %String, Output ov As %Boolean) As %String" },
+    { "header": "ClassMethod Export(Nsp As %String = {$namespace}, ByRef GlobalList As %String, FileName As %String, OutputFormat As %Integer = 5, RecordFormat As %String = \"V\", qspec As %String = \"d\", Translation As %String = \"<Device Default>\", ByRef Skipped As %String = \"\", Header As %String = \"\") As %Status" },
     { "header": "ClassMethod GetFileFormat(FileName As %String, Output Format As %String, Output RecordFormat As %String, DefaultFormat As %String = \"5\", DefaultRecordFormat As %String = \"V\") As %Boolean" },
-    { "header": "ClassMethod GetFileHeaderString(Output Header As %String, FileName As %String, InputFormat As %Integer = 5, VariableLength As %Integer = 1) As %Status" }
+    { "header": "ClassMethod GetFileHeaderString(Output Header As %String, FileName As %String, InputFormat As %Integer = 5, VariableLength As %Integer = 1) As %Status" },
+    { "header": "ClassMethod Quote(str As %String, gvn As %Boolean = 0, ByRef ov As %Boolean = \"\", Flags As %Integer = 1) As %String" }
    ]
   },
   "%Library.GlobalEdit": {
@@ -2549,7 +2931,10 @@
   "%Library.IProcedureContext": {
    "header": "Class %Library.IProcedureContext",
    "members": [
-    { "header": "Method %Next(Output pStatus As %Status) As %Integer" }
+    { "header": "Method %Next(Output pStatus As %Status) As %Integer" },
+    { "header": "Method CurrentResultGet() As %SQL.StatementResult" },
+    { "header": "Method NextResult() As %SQL.StatementResult" },
+    { "header": "Property CurrentResult As %SQL.StatementResult [ Deprecated ]" }
    ]
   },
   "%Library.IResultSet": {
@@ -2570,7 +2955,8 @@
   "%Library.JGWResultSet": {
    "header": "Class %Library.JGWResultSet",
    "members": [
-    { "header": "Method %Next(Output sc As %Status = {$$$OK}) As %Integer" }
+    { "header": "Method %Next(Output sc As %Status = {$$$OK}) As %Integer" },
+    { "header": "Method NextResult() As %SQL.StatementResult" }
    ]
   },
   "%Library.List": {
@@ -2588,6 +2974,7 @@
   "%Library.ListOfObjects": {
    "header": "Class %Library.ListOfObjects",
    "members": [
+    { "header": "Method %OnNew(initvalue As %String = \"\") As %Status" },
     { "header": "Method %SerializeObject(Output serial As %Binary, partial As %Integer = 0) As %Status" },
     { "header": "Method GetAt(key As %Integer) As ..#ELEMENTTYPE" },
     { "header": "Method GetNext(ByRef key As %Integer) As ..#ELEMENTTYPE" },
@@ -2598,7 +2985,7 @@
     { "header": "Method SetAt(oref As ..#ELEMENTTYPE, key As %Integer) As %Status" }
    ],
    "generics": {
-    "ELEMENTTYPE": "%RegisteredObject"
+    "ELEMENTTYPE": "%Library.Any"
    }
   },
   "%Library.MethodDefinition": {
@@ -2627,6 +3014,8 @@
   "%Library.Persistent": {
    "header": "Class %Library.Persistent",
    "members": [
+    { "header": "ClassMethod %DeleteExtent(concurrency As %Integer = -1, ByRef deletecount = \"\", ByRef instancecount = \"\", pInitializeExtent As %Integer = 1, Output errorLog As %Status) As %Status" },
+    { "header": "ClassMethod %FileIndices(id As %String(MAXLEN=\"\"), ByRef pIndexHandle As %Binary = \"\") As %Status" },
     { "header": "Method %GetSwizzleObject(force As %Integer = 0, Output oid As %ObjectIdentity) As %Status" },
     { "header": "ClassMethod %LockId(id As %String, shared As %Boolean = 0, timeout As %Integer = \"\") As %Status" },
     { "header": "ClassMethod %OnDetermineClass(oid As %ObjectIdentity, Output class As %String) As %Status" },
@@ -2648,6 +3037,13 @@
     { "header": "ClassMethod TimeToLogical(%val As %Time) As This" },
     { "header": "ClassMethod UnixTimeToLogical(%val As %Decimal) As This" },
     { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.ProcedureContext": {
+   "header": "Class %Library.ProcedureContext",
+   "members": [
+    { "header": "Method %NextResult() As %SQL.StatementResult" },
+    { "header": "Method NextResult() As %SQL.StatementResult" }
    ]
   },
   "%Library.RegisteredObject": {
@@ -2684,6 +3080,8 @@
    "members": [
     { "header": "Method %OnNew(initvalue As %String = \"\") As %Status" },
     { "header": "ClassMethod %PrepareMetaData(pQueryId As %String(MAXLEN=\"\"), Output returnError As %SYSTEM.Error = \"\", importPackages As %RawString = \"\") As %ResultSet.MetaData" },
+    { "header": "Method GetInfo(extoption = \"\") As %Status" },
+    { "header": "Method GetObject() As %Library.Any" },
     { "header": "Method Next(ByRef sc As %Status = \"\") As %Integer" }
    ]
   },
@@ -2702,6 +3100,8 @@
     { "header": "ClassMethod AutoComplete(name As %String(MAXLEN=512), mask As %String = \"\", Output complete As %String(MAXLEN=512), generated As %Boolean = 1, directory As %String = \"\", saveas As %Boolean = 0) As %Status" },
     { "header": "ClassMethod CompileClass(class As %String, qspec As %String, Output Reload As %Boolean) As %Status" },
     { "header": "ClassMethod genPattern(pSpec As %String, Output prAS As %String, Output prAE As %String, Output prPattern As %String, pFlag As %Integer)" },
+    { "header": "ClassMethod GetOther(name As %String, type As %String, direction As %Integer = 1, label As %String = \"\") As %String" },
+    { "header": "ClassMethod GetWebServerPort(ByRef port As %Integer, ByRef server As %String = \"\", ByRef urlprefix As %String = \"\", ByRef url As %String = \"\") As %Status" },
     { "header": "ClassMethod IsMapped(name As %String, Output sourcedb As %String) As %Boolean" },
     { "header": "ClassMethod UserType(Name As %String, Output Class As %String, Output StudioType As %String, Output Schema As %String, Output StudioIcon As %Integer) As %Boolean" }
    ]
@@ -2726,6 +3126,7 @@
    "header": "Class %Library.ScrollableResultSet",
    "members": [
     { "header": "ClassMethod %OpenId(id As %String, concurrency As %Integer = -1, Output sc As %Status = {$$$OK}) As This" },
+    { "header": "Method GetObject() As %Library.Any" },
     { "header": "Method Next(Output sc As %Status) As %Integer" },
     { "header": "Method Previous(Output sc As %Status) As %Integer" }
    ]
@@ -2772,7 +3173,8 @@
   "%Library.SyntaxColorReader": {
    "header": "Class %Library.SyntaxColorReader",
    "members": [
-    { "header": "ClassMethod FromCode(Code As %Stream.Object, Language As %String, ExtraFlags As %String, Output Reader As %SyntaxColorReader, ByRef AnyColoringErrors As %Boolean, ByRef AnyColoringWarnings As %Boolean, Symbols As %String = \"\", BufferStream As %Boolean = 0) As %Status" }
+    { "header": "ClassMethod FromCode(Code As %Stream.Object, Language As %String, ExtraFlags As %String, Output Reader As %SyntaxColorReader, ByRef AnyColoringErrors As %Boolean, ByRef AnyColoringWarnings As %Boolean, Symbols As %String = \"\", BufferStream As %Boolean = 0) As %Status" },
+    { "header": "Property CSV As %Library.Any" }
    ]
   },
   "%Library.SystemBase": {
@@ -2813,6 +3215,12 @@
    "header": "Class %Library.TinyInt",
    "members": [
     { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.Transaction": {
+   "header": "Class %Library.Transaction",
+   "members": [
+    { "header": "Property object As %Library.Any [ MultiDimensional ]" }
    ]
   },
   "%Library.Utility": {
@@ -2928,7 +3336,27 @@
   "%Monitor.Manager": {
    "header": "Class %Monitor.Manager",
    "members": [
-    { "header": "ClassMethod AppDebug(Output Enable As %Boolean, ClassName As %String, Output Errors As %String) As %Status" }
+    { "header": "ClassMethod AlertLevel(level As %Integer = \"\") As %Integer" },
+    { "header": "ClassMethod AppDebug(Output Enable As %Boolean, ClassName As %String, Output Errors As %String) As %Status" },
+    { "header": "ClassMethod StartSystemCounters(System As %Boolean = 0, Processes As %Integer = {$$$STmaxpid}, Routines As %Integer = 200, Globals As %Integer = 100, Network As %Integer = 5, ProcessList As %List = \"\", Databases As %Integer = 10, RtnLines As %Boolean = 1) As %Integer" }
+   ]
+  },
+  "%Monitor.System.HistoryPerf": {
+   "header": "Class %Monitor.System.HistoryPerf",
+   "members": [
+    { "header": "Property User As %Library.Any" }
+   ]
+  },
+  "%Monitor.System.HistorySys": {
+   "header": "Class %Monitor.System.HistorySys",
+   "members": [
+    { "header": "Property User As %Library.Any" }
+   ]
+  },
+  "%Monitor.System.HistoryUser": {
+   "header": "Class %Monitor.System.HistoryUser",
+   "members": [
+    { "header": "Property User As %Library.Any" }
    ]
   },
   "%Net.Authenticator": {
@@ -2963,12 +3391,30 @@
     { "header": "Method ServerSet(value As %String)" }
    ]
   },
+  "%Net.JSON.JWKS": {
+   "header": "Class %Net.JSON.JWKS",
+   "members": [
+    { "header": "ClassMethod GetJWK(alg As %String, kid As %String = \"\", JWKS As %String, Output JWK As %DynamicObject) As %Status" }
+   ]
+  },
   "%Net.LDAP.Client.Session": {
    "header": "Class %Net.LDAP.Client.Session",
    "members": [
     { "header": "Method GetLastError(Output errNum As %Integer = 0, Output errStr As %String = \"\") As %Status" },
     { "header": "Method SASLConnect(Server As %String = \"127.0.0.1\", port As %Integer = 0, DistinguishedName As %String = \"\", AuthMechanism As %String, Credentials As %String, Output ServerData As %String) As %Status" },
     { "header": "ClassMethod TestCreateDN(x As %Net.LDAP.Client.Session, DC As %String, Output cn As %String) As %String" }
+   ]
+  },
+  "%Net.MIMEPart": {
+   "header": "Class %Net.MIMEPart",
+   "members": [
+    { "header": "Property Body As %Stream.Object" }
+   ]
+  },
+  "%Net.MIMEReader": {
+   "header": "Class %Net.MIMEReader",
+   "members": [
+    { "header": "Property inputStream As %Stream.Object" }
    ]
   },
   "%Net.MIMESerialPart": {
@@ -3023,7 +3469,14 @@
   "%Net.Remote.Proxy": {
    "header": "Class %Net.Remote.Proxy",
    "members": [
-    { "header": "ClassMethod %GetResponse(gateway As %Net.Remote.Gateway, functionCode As %String, Output orefCache)" }
+    { "header": "ClassMethod %GetResponse(gateway As %Net.Remote.Gateway, functionCode As %String, Output orefCache)" },
+    { "header": "ClassMethod %ProcessErrorNew(gateway As %Net.Remote.Gateway, error As %String = \"\")" }
+   ]
+  },
+  "%Net.Remote.Utility": {
+   "header": "Class %Net.Remote.Utility",
+   "members": [
+    { "header": "ClassMethod RunCommandViaCPIPE(pCmd As %String, Output pDevice As %String, Output pOutput As %String, pTimeoutOpen As %Integer = 10, pTimeoutRead As %Integer = 5, ByRef pCmdArgs, ByRef pEnvVars = \"\") As %Status" }
    ]
   },
   "%Net.SASL.CRAMMD5": {
@@ -3083,6 +3536,12 @@
     { "header": "ClassMethod ParseHost(pHost As %String, Output Components As %String)" }
    ]
   },
+  "%Net.WebSocket.Frame": {
+   "header": "Class %Net.WebSocket.Frame",
+   "members": [
+    { "header": "Method ReadBytes(pLength As %Integer, pTimeout As %Integer = \"\") As %String" }
+   ]
+  },
   "%Net.abstractMQ": {
    "header": "Class %Net.abstractMQ",
    "members": [
@@ -3134,10 +3593,29 @@
     { "header": "ClassMethod removeCheckClass(Output xml, derived As %String, type As %String, value As %String)" }
    ]
   },
+  "%REST.API": {
+   "header": "Class %REST.API",
+   "members": [
+    { "header": "ClassMethod LogStatusError(methodName As %String, sc As %Status, data As %String = \"\")" }
+   ]
+  },
+  "%REST.Impl": {
+   "header": "Class %REST.Impl",
+   "members": [
+    { "header": "ClassMethod %LogError(methodName As %String, error As %String, data As %String = \"\")" }
+   ]
+  },
+  "%REST.JPLUtils": {
+   "header": "Class %REST.JPLUtils",
+   "members": [
+    { "header": "ClassMethod %Error(shortForm, token = \"\")" }
+   ]
+  },
   "%REST.OpenAPI": {
    "header": "Class %REST.OpenAPI",
    "members": [
-    { "header": "ClassMethod ConvertURL(url As %String, Output modifiedUrl, Output parameters) As %Boolean" }
+    { "header": "ClassMethod ConvertURL(url As %String, Output modifiedUrl, Output parameters) As %Boolean" },
+    { "header": "Property referenceIndex As %Library.Any [ MultiDimensional ]" }
    ]
   },
   "%REST.Parameter": {
@@ -3152,6 +3630,12 @@
     { "header": "Method GetDefinition(type As %String, spec As %REST.RESTSpec.RESTSpecObject, reference As %String) As This" }
    ]
   },
+  "%REST.Utils": {
+   "header": "Class %REST.Utils",
+   "members": [
+    { "header": "ClassMethod LogError(methodName As %String, error As %String, data As %String = \"\")" }
+   ]
+  },
   "%REST.disp": {
    "header": "Class %REST.disp",
    "members": [
@@ -3161,19 +3645,22 @@
   "%ResultSet.SQL": {
    "header": "Class %ResultSet.SQL",
    "members": [
-    { "header": "ClassMethod %Prepare(ByRef sqlStatement As %String(MAXLEN=\"\"), ByRef returnError As %SYSTEM.Error, %importPackages As %RawString = \"\", %args...) As This" }
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" },
+    { "header": "ClassMethod %Prepare(ByRef sqlStatement As %String(MAXLEN=\"\"), ByRef returnError As %SYSTEM.Error = \"\", %importPackages As %RawString = \"\", %args...) As This" }
    ]
   },
   "%SAML.Assertion": {
    "header": "Class %SAML.Assertion",
    "members": [
     { "header": "ClassMethod Create() As This" },
-    { "header": "ClassMethod CreateX509(credentials As %SYS.X509Credentials, referenceOption As %Integer, prefixList As %String = \"\", useWSSecuritySignature As %Boolean = 1) As This" }
+    { "header": "ClassMethod CreateX509(credentials As %SYS.X509Credentials, referenceOption As %Integer, prefixList As %String = \"\", useWSSecuritySignature As %Boolean = 1) As This" },
+    { "header": "ClassMethod XMLNew(document As %XML.Document, nodeId As %Integer, containerOref As %RegisteredObject = \"\") As This" }
    ]
   },
   "%SOAP.Addressing.EndpointReference": {
    "header": "Class %SOAP.Addressing.EndpointReference",
    "members": [
+    { "header": "Method %OnNew(address As %String = \"\") As %Status" },
     { "header": "ClassMethod GetAnonymousEPR(namespace As %String) As This" }
    ]
   },
@@ -3201,7 +3688,8 @@
    "header": "Class %SOAP.Binary",
    "members": [
     { "header": "ClassMethod NextSOAPBlock(stream As %FileBinaryStream, Output block As %String) As %Boolean" },
-    { "header": "Method WriteValue(val, cat As %Integer, ByRef buffer As %String, Output oreflist)" }
+    { "header": "Method WriteValue(val, cat As %Integer, ByRef buffer As %String, Output oreflist)" },
+    { "header": "Property MessageList As %Library.Any [ MultiDimensional ]" }
    ]
   },
   "%SOAP.BufferedStream": {
@@ -3269,7 +3757,9 @@
    "header": "Class %SOAP.Security.Header",
    "members": [
     { "header": "Method FindElement(type As %String, Output pos As %String) As %SOAP.Security.Element" },
-    { "header": "Method FindLastElement(type As %String, Output pos As %String) As %SOAP.Security.Element" }
+    { "header": "Method FindLastElement(type As %String, Output pos As %String) As %SOAP.Security.Element" },
+    { "header": "Method GetElementById(id As %String, Output pos As %Integer) As %SOAP.Security.Element" },
+    { "header": "Method RemoveElement(type As %String) As %SOAP.Security.Element" }
    ]
   },
   "%SOAP.Security.Policy": {
@@ -3283,14 +3773,21 @@
     { "header": "ClassMethod AnalyzeWss(policy As %SOAP.Policy, nodeId As %Integer, Output alternative) As %Status" },
     { "header": "ClassMethod BuildValidateData(soapClass As %SOAP.WebBase) As This" },
     { "header": "ClassMethod FixReference(tokenId As %String, Output alternative, isInitiator As %Boolean)" },
+    { "header": "ClassMethod SignEncryptParts(soapClass As %SOAP.WebBase, index As %Integer, ByRef alternative, encrypt As %Boolean, ByRef sign, ref As %XML.Security.Reference = \"\", ByRef signature As %XML.Security.Signature = \"\") As %Boolean" },
     { "header": "ClassMethod UpdateBootstrapPolicy(Output alternative, tokenId As %String, Output bootstrap)" },
     { "header": "Method ValidateEncryption(ByRef alternative, Output elementIndex As %Integer, symmetric As %Boolean) As %Boolean" }
+   ]
+  },
+  "%SOAP.Security.Reference": {
+   "header": "Class %SOAP.Security.Reference",
+   "members": [
+    { "header": "Property Token As %Library.Any" }
    ]
   },
   "%SOAP.Security.SecurityTokenReference": {
    "header": "Class %SOAP.Security.SecurityTokenReference",
    "members": [
-    { "header": "ClassMethod GetDirectReference(tokenURI As %String, valueType As %String) As This" },
+    { "header": "ClassMethod GetDirectReference(tokenURI As %String, valueType As %String = \"\") As This" },
     { "header": "ClassMethod GetKeyIdentifier(valueType As %String, value As %Binary) As This" },
     { "header": "ClassMethod GetSAMLDirectReference(tokenURI As %String) As This" },
     { "header": "ClassMethod GetSAMLKeyIdentifier(credentials As %SAML.Assertion, type As %String) As This" },
@@ -3321,7 +3818,10 @@
   "%SOAP.WSDL.Reader": {
    "header": "Class %SOAP.WSDL.Reader",
    "members": [
-    { "header": "Method CreateProperty(pClassName, pCDef, pName, pType, pSeqNo, persistent, Output persistentProperties) As %Status" }
+    { "header": "Method CreateParameter(CDefArg = \"\", pName, pValue, pDocs, pSeqNo = \"\") As %Status" },
+    { "header": "Method CreateProperty(pClassName, pCDef, pName, pType, pSeqNo, persistent, Output persistentProperties) As %Status" },
+    { "header": "Method documentation(pIndex, baseChildlist, ByRef text = \"\")" },
+    { "header": "Method SetMethodProperty(name As %String, value As %String, MDef As %Dictionary.MethodDefinition = \"\")" }
    ]
   },
   "%SOAP.WSSC.DerivedKeyToken": {
@@ -3367,13 +3867,18 @@
    "header": "Class %SOAP.WebBase",
    "members": [
     { "header": "Method BeginSOAPEnvelope(bindingStyle As %String, bodyUse As %String, namespace As %String, typeNamespace As %String, forcePrefix As %Boolean, Output namespaces As %XML.Namespaces)" },
-    { "header": "Method GetEncodedAttribute(tree As %Integer, node As %String, childlist As %String, soapenv As %Integer, Output attrs, Output status As %Status) As %Boolean" }
+    { "header": "Method GetEncodedAttribute(tree As %Integer, node As %String, childlist As %String, soapenv As %Integer, Output attrs, Output status As %Status) As %Boolean" },
+    { "header": "ClassMethod NormalizeName(pName, pMaxLen = \"\", isMethod As %Boolean = \"\") As %String" },
+    { "header": "ClassMethod WebMethod(Operation As %String, RequestTag As %String = \"\") As %SOAP.Descriptor" },
+    { "header": "Property Transport As %Library.Any" }
    ]
   },
   "%SOAP.WebRequest": {
    "header": "Class %SOAP.WebRequest",
    "members": [
-    { "header": "ClassMethod GetSoapParameters(Output bindingStyle As %String, Output bodyUse As %String, Output namespace As %String, Output xmlimportnamespace As %String, Output typeNamespace As %String, Output oneWay As %Boolean, Output xmlelement As %Boolean, Output bare As %Boolean)" }
+    { "header": "ClassMethod GetSoapParameters(Output bindingStyle As %String, Output bodyUse As %String, Output namespace As %String, Output xmlimportnamespace As %String, Output typeNamespace As %String, Output oneWay As %Boolean, Output xmlelement As %Boolean, Output bare As %Boolean)" },
+    { "header": "Property Request As %Stream.Object" },
+    { "header": "Property Response As %Stream.Object" }
    ]
   },
   "%SQL.Agent": {
@@ -3460,6 +3965,7 @@
    "header": "Class %SQL.Manager.API",
    "members": [
     { "header": "ClassMethod CheckFileReadOnly(sFileName As %String, Output status As %Integer) As %Status" },
+    { "header": "ClassMethod GetCachedQueryInfo(Routine As %String, ByRef CreateTime As %TimeStamp, ByRef LastPrepareTime As %TimeStamp, ByRef Source As %Boolean, ByRef QueryType As %Integer, ByRef Cost As %Numeric = \"\", ByRef StatementOptions As %String) As %String" },
     { "header": "ClassMethod GetDatatype(name As %String, precision As %Integer, scale As %Integer, Output parms) As %String" },
     { "header": "ClassMethod GetDatatypeJ(name As %String, precision As %Integer, scale As %Integer, Output parms, name1 As %String) As %String" },
     { "header": "ClassMethod GetServerPlatForm(Output Server As %String, Output PlatForm As %String, Output Dir As %String, Output Version As %String) As %Status" },
@@ -3497,6 +4003,12 @@
     { "header": "Method %GetRows(Cnt As %Integer, Output Rows As %List, ByRef sc As %Status = {$$$OK}) As %Integer" }
    ]
   },
+  "%SQL.PassthroughResult.XDBC": {
+   "header": "Class %SQL.PassthroughResult.XDBC",
+   "members": [
+    { "header": "Method Query(funcFD As %Boolean = 0, dispatchFunc As %Integer = 2) As %Library.Any" }
+   ]
+  },
   "%SQL.QP.WindowFunction": {
    "header": "Class %SQL.QP.WindowFunction",
    "members": [
@@ -3518,6 +4030,13 @@
     { "header": "Method %OnNew(pSelectMode As %RawString = \"\", pPath As %RawString = \"\", pDialect As %RawString = \"\") As %Status" },
     { "header": "Method prepareForServer(Output pServerStatement As %Binary, pStatementHandle As %Integer = 0, Output pMetadata As %Binary = \"\")" },
     { "header": "ClassMethod preparse(ByRef pStatementText, Output pStatementPreparsed, Output pStatementArgs) As %Integer" }
+   ]
+  },
+  "%SQL.StatementResult": {
+   "header": "Class %SQL.StatementResult",
+   "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" },
+    { "header": "Method %NextResult() As %SQL.StatementResult" }
    ]
   },
   "%SQL.Util.Import": {
@@ -3557,7 +4076,16 @@
    "members": [
     { "header": "ClassMethod GetLastInfo(guid As %String, ByRef lastver As %Integer, Output sid As %String, Output nmsid As %String) As %Status" },
     { "header": "ClassMethod GetLastTRN(Output num As %String) As %RawString" },
-    { "header": "Method nextPointer(ByRef iTranPtr, Output iTranLast)" }
+    { "header": "Method nextPointer(ByRef iTranPtr, Output iTranLast)" },
+    { "header": "Property FilterObject As %Library.Any" },
+    { "header": "Property ResolveConflictEnv As %Library.Any" }
+   ]
+  },
+  "%SYNC.SyncSetObject": {
+   "header": "Class %SYNC.SyncSetObject",
+   "members": [
+    { "header": "Method SSObjectGet() As %Library.Any" },
+    { "header": "Property SSObject As %Library.Any" }
    ]
   },
   "%SYNC.SyncTime": {
@@ -3579,7 +4107,8 @@
     { "header": "ClassMethod childrenOrder(pCaller As %Integer = \"\", pInfoList As %String = \"\", ByRef amsParent, ByRef amsChildren, ByRef amsInfo, ByRef amsTree, Output stmtOrder As %Integer, level As %Integer) As %Status" },
     { "header": "ClassMethod getCachedQueryCaller(ns As %String = \"\", rtn As %String = \"\", Output tSC = \"\") As %String" },
     { "header": "ClassMethod populateSPCInfo(ByRef amsInfo, server, pid, sqlIndexHash, infoOnly, amsDebugID, amsBreak, getAllAMS, Output amsParent, Output amsChildren, Output amsTree) As %Status" },
-    { "header": "ClassMethod purgeOrphanChildren(ByRef amsParent, ByRef amsChildren, Output amsInfo, ByRef amsTree) As %Status" }
+    { "header": "ClassMethod purgeOrphanChildren(ByRef amsParent, ByRef amsChildren, Output amsInfo, ByRef amsTree) As %Status" },
+    { "header": "ClassMethod saveSQLAMSDebugInfo(debugRef, debugStage, ByRef amsInfo = \"\", ByRef amsParent, ByRef amsChildren, ByRef amsTree = \"\", node01 = \"\", node02 = \"\")" }
    ]
   },
   "%SYS.Audit": {
@@ -3651,6 +4180,7 @@
   "%SYS.Journal.System": {
    "header": "Class %SYS.Journal.System",
    "members": [
+    { "header": "ClassMethod GetDefaults(ByRef curdir As %String, ByRef altdir As %String, ByRef maxsize As %Integer, ByRef expqty As %Integer, ByRef prefix As %String, ByRef shortnam As %String, curfile As %String = \"\", jrnall As %Integer = \"\") As %Status" },
     { "header": "ClassMethod GetDejournalReaderSettings(Output CacheSize As %Integer, Output ReadAheadSize As %Integer, Output disableaio As %Integer) As %Status" },
     { "header": "ClassMethod GetDejournalSettings(type As %String, name As %String, Output numpref As %Integer, ByRef quesiz As %Integer, Output stksiz As %Integer, Output sizmod As %Integer, Output numupd As %Integer, Output rangemax As %Integer, Output maxpref As %Integer, Output inorder As %Integer) As %Status" },
     { "header": "ClassMethod GetImageJournalInfo(Output JournalFileName As %String, Output JournalFileOffset As %Integer, Output JournalFileCount As %Integer, Output OpenTransFileOffset As %Integer, Output OpenTransFileCount As %Integer) As %Status" },
@@ -3671,6 +4201,12 @@
    "members": [
     { "header": "ClassMethod %GetProviderFromName(name As %String(MAXLEN=256), Output sc As %Status) As %String" },
     { "header": "ClassMethod %SetDefaultSQL(name As %String(MAXLEN=256), Output SQLCODE As %Integer, ByRef %msg As %String = \"\")" }
+   ]
+  },
+  "%SYS.Monitor": {
+   "header": "Class %SYS.Monitor",
+   "members": [
+    { "header": "ClassMethod Interval(int As %Integer = \"\") As %Integer" }
    ]
   },
   "%SYS.Monitor.Control": {
@@ -3717,6 +4253,12 @@
     { "header": "ClassMethod ExportAll(filePrefix = \"\", delim = \"\", exportPlan = 0, silent = 0, rtnName = \"\", modName = \"\", ByRef conds As %RawString, Output ptInfo As %RawString) As %String [ Deprecated ]" }
    ]
   },
+  "%SYS.PTools.UtilSQLAnalysis": {
+   "header": "Class %SYS.PTools.UtilSQLAnalysis",
+   "members": [
+    { "header": "ClassMethod clearSQLAnalysisDB(ns As %String = \"\", clearErrs As %Integer = 0, returnType As %Integer = 0, ByRef ptInfo As %RawString = \"\") As %Status" }
+   ]
+  },
   "%SYS.PhoneProviders": {
    "header": "Class %SYS.PhoneProviders",
    "members": [
@@ -3740,6 +4282,12 @@
     { "header": "Method UserInfoSet(Val)" }
    ]
   },
+  "%SYS.Python": {
+   "header": "Class %SYS.Python",
+   "members": [
+    { "header": "ClassMethod Builtins(flags As %Integer = \"\") As %CPP.LongLong" }
+   ]
+  },
   "%SYS.Python.IteratorHelper": {
    "header": "Class %SYS.Python.IteratorHelper",
    "members": [
@@ -3761,7 +4309,8 @@
   "%SYS.REST": {
    "header": "Class %SYS.REST",
    "members": [
-    { "header": "ClassMethod DeleteCSPApplication(namespace As %String, applicationName As %String, Output exist As %Integer = 0) As %Status" }
+    { "header": "ClassMethod DeleteCSPApplication(namespace As %String, applicationName As %String, Output exist As %Integer = 0) As %Status" },
+    { "header": "ClassMethod GetCurrentRESTApplications(requestNamespace As %String = \"\") As %DynamicArray" }
    ]
   },
   "%SYS.RMSession": {
@@ -3780,7 +4329,8 @@
    "header": "Class %SYS.Task.Config",
    "members": [
     { "header": "ClassMethod EmailGet(Parameter As %String, Output Value As %String) As %Status" },
-    { "header": "ClassMethod SubstitutionsValid(text, Output bad) As %Boolean" }
+    { "header": "ClassMethod SubstitutionsValid(text, Output bad) As %Boolean" },
+    { "header": "ClassMethod UpdateData(ParamName As %String, Data As %String, Message As %String = \"\") As %Status" }
    ]
   },
   "%SYS.Trace": {
@@ -3800,14 +4350,16 @@
   "%SYS.Wallet.Secret": {
    "header": "Class %SYS.Wallet.Secret",
    "members": [
-    { "header": "ClassMethod GetObject(name As %String, readOnly As %Boolean = 1) As This" }
+    { "header": "ClassMethod GetObject(name As %String, readOnly As %Boolean = 1) As This" },
+    { "header": "Method GetStoredSecret(key = \"\") As %Any" }
    ]
   },
   "%SYS.X509Credentials": {
    "header": "Class %SYS.X509Credentials",
    "members": [
     { "header": "ClassMethod Exists(Name As %String, Output X509Credential As This, ByRef Status As %Status) As %Boolean" },
-    { "header": "ClassMethod GetByAlias(alias As %String, pwd As %String) As This" },
+    { "header": "ClassMethod FindByField(fieldName As %String, searchValue As %String, credentialsList As %ListOfObjects = \"\") As %ListOfObjects" },
+    { "header": "ClassMethod GetByAlias(alias As %String, pwd As %String = \"\") As This" },
     { "header": "ClassMethod GetByCertificate(searchValue As %Binary) As This" },
     { "header": "ClassMethod GetByCertificateWithPrivateKey(searchValue As %Binary) As This" },
     { "header": "ClassMethod GetByField(fieldName As %Integer, searchValue As %Binary) As This" },
@@ -3827,6 +4379,7 @@
   "%SYSTEM.AbstractWorkMgr": {
    "header": "Class %SYSTEM.AbstractWorkMgr",
    "members": [
+    { "header": "Method %OnNew(ByRef qstruct As %String, numberjobs As %Integer, category = \"\", target = \"\") As %Status" },
     { "header": "ClassMethod Initialize(qspec As %String = \"\", Output sc As %Status, numworkers As %Integer) As %SYSTEM.AbstractWorkMgr [ Deprecated ]" },
     { "header": "ClassMethod InitializeClass(iscname As %String, qspec As %String = \"\", Output sc As %Status, numworkers As %Integer) As This" }
    ]
@@ -3849,10 +4402,19 @@
     { "header": "Method DisableStatCollectionSet(val As %Boolean)" }
    ]
   },
+  "%SYSTEM.ECP": {
+   "header": "Class %SYSTEM.ECP",
+   "members": [
+    { "header": "ClassMethod Sync(index As %Integer = \"\") As %Integer" }
+   ]
+  },
   "%SYSTEM.Encryption": {
    "header": "Class %SYSTEM.Encryption",
    "members": [
-    { "header": "ClassMethod KMSCreateEncryptionKey(File As %String, Server As %String, ServerKeyID As %String, KeyLength As %Integer, ByRef Backup As %String, Region As %String = \"\", Description As %String = \"\", ByRef Env As %String, Output Status As %Status) As %String" }
+    { "header": "ClassMethod GenCryptRand(Length As %Integer, RequireBestEntropy As %Boolean = \"\") As %String" },
+    { "header": "ClassMethod KMSCreateEncryptionKey(File As %String, Server As %String, ServerKeyID As %String, KeyLength As %Integer, ByRef Backup As %String, Region As %String = \"\", Description As %String = \"\", ByRef Env As %String, Output Status As %Status) As %String" },
+    { "header": "ClassMethod RSADecrypt(Ciphertext As %String, Key As %String, Password As %String, Encoding As %Integer = \"\") As %String" },
+    { "header": "ClassMethod RSAEncrypt(Plaintext As %String, Certificate As %String, CAfile As %String, CRLfile As %String, Encoding As %Integer = \"\") As %String" }
    ]
   },
   "%SYSTEM.Error": {
@@ -3863,19 +4425,42 @@
     { "header": "ClassMethod FromXSQL(pDomain As %String = \"\", pXSQLCODE As %Integer = 0, pMessage As %String(MAXLEN=\"\") = \"\") As This" }
    ]
   },
+  "%SYSTEM.Event": {
+   "header": "Class %SYSTEM.Event",
+   "members": [
+    { "header": "ClassMethod Signal(ResourceName As %String, Message As %String = \"\") As %Integer" }
+   ]
+  },
   "%SYSTEM.IPQ": {
    "header": "Class %SYSTEM.IPQ",
    "members": [
     { "header": "ClassMethod Attach(name As %String) As This" }
    ]
   },
+  "%SYSTEM.IS": {
+   "header": "Class %SYSTEM.IS",
+   "members": [
+    { "header": "ClassMethod Receive(to As %Integer = \"\") As %String" }
+   ]
+  },
   "%SYSTEM.OBJ": {
    "header": "Class %SYSTEM.OBJ",
    "members": [
+    { "header": "ClassMethod Compile(ByRef classes As %String = \"\", qspec As %String = \"\", Output errorlog As %String, recurse As %Boolean = 0) As %Status" },
+    { "header": "ClassMethod CompileList(ByRef list As %String = \"\", qspec As %String = \"\", Output errorlog As %String, Output updatedlist As %String) As %Status" },
+    { "header": "ClassMethod Delete(ByRef classes As %String = \"\", qspec As %String = \"\", Output errorlog As %String) As %Status" },
+    { "header": "ClassMethod Export(ByRef items As %String = \"\", ByRef filename As %String = \"\", qspec As %String = \"\", Output errorlog As %String, Charset As %String = \"\") As %Status" },
     { "header": "ClassMethod GetClassList(Output items As %String, qspec As %String = \"\") As %Status" },
     { "header": "ClassMethod GetPackageList(Output items As %String, package As %String, qspec As %String = \"\") As %Status" },
+    { "header": "ClassMethod LoadStream(stream As %AbstractStream, qspec As %String = \"\", ByRef errorlog As %String, Output loadedlist As %String, listonly As %Boolean = \"\", selecteditems As %String = \"\", displayname As %String = \"\", charset As %String = \"\") As %Status" },
     { "header": "ClassMethod SetConcurrencyMode(value As %Integer = 1, Output pStatus As %Status) As %Integer" },
     { "header": "ClassMethod SetTransactionMode(value As %Integer = 1, Output pStatus As %Status) As %Integer" }
+   ]
+  },
+  "%SYSTEM.OS": {
+   "header": "Class %SYSTEM.OS",
+   "members": [
+    { "header": "ClassMethod SendRequest(msgid As %Integer, contxt As %Integer, opcode As %Integer, item As %String = \"\") As %Integer" }
    ]
   },
   "%SYSTEM.Process": {
@@ -3894,7 +4479,10 @@
     { "header": "ClassMethod SetIsolationMode(value As %Integer = 1, Output pStatus As %Status) As %Integer [ Deprecated ]" },
     { "header": "ClassMethod SetProcessLockTimeout(value As %Integer = 1, Output pStatus As %Status) As %Integer [ Deprecated ]" },
     { "header": "ClassMethod SetSelectMode(value As %Integer = 1, Output pStatus As %Status) As %Integer [ Deprecated ]" },
-    { "header": "ClassMethod SetSQLFunctionArgConversion(flag As %Integer = 1, Output pStatus As %Status) As %Boolean [ Deprecated ]" }
+    { "header": "ClassMethod SetSQLFunctionArgConversion(flag As %Integer = 1, Output pStatus As %Status) As %Boolean [ Deprecated ]" },
+    { "header": "ClassMethod SetSQLStats(actionFlag As %Integer = 0, returnActionFlag As %Integer = 0, collectFlag As %String = \"\", terminateCond As %String = 0, ByRef ptInfo As %ArrayOfObjects = \"\") As %Integer" },
+    { "header": "ClassMethod SetSQLStatsFlag(actionFlag As %Integer = 0, returnActionFlag As %Integer = 0, collectFlag As %String = \"\", terminateCond As %String = 0, ByRef ptInfo As %ArrayOfObjects = \"\") As %Integer" },
+    { "header": "ClassMethod SetSQLStatsFlagJob(actionFlag As %Integer = 0, returnActionFlag As %Integer = 0, collectFlag As %String = \"\", p4 As %String = \"\", ByRef ptInfo As %ArrayOfObjects = \"\") As %Integer" }
    ]
   },
   "%SYSTEM.SQL.Schema": {
@@ -3920,6 +4508,14 @@
     { "header": "ClassMethod SetOption(pOption As %String, pValue As %String = \"\", Output oldValue As %String) As %Status" }
    ]
   },
+  "%SYSTEM.Security": {
+   "header": "Class %SYSTEM.Security",
+   "members": [
+    { "header": "ClassMethod Check(ResourceName As %String, Permissions As %String = \"\") As %RawString" },
+    { "header": "ClassMethod GetGlobalPermission(Namespace As %String = \"\", Global As %String = \"\", Subscript As %String = \"\", Mount As %Boolean = 1) As %String" },
+    { "header": "ClassMethod Login(Username As %String, Password As %String = \"\") As %Boolean" }
+   ]
+  },
   "%SYSTEM.Sharding": {
    "header": "Class %SYSTEM.Sharding",
    "members": [
@@ -3929,17 +4525,26 @@
   "%SYSTEM.Status": {
    "header": "Class %SYSTEM.Status",
    "members": [
+    { "header": "ClassMethod DecomposeStatus(statuscode As %Status, ByRef errorlist, qspec As %String = \"\", language As %String = \"\") As %Status" },
     { "header": "ClassMethod Error(errorcode As %Integer, message1 As %String = \"\", message2 As %String = \"\", message3 As %String = \"\") As %Status" },
     { "header": "ClassMethod GetErrorText(statuscode As %Status, language As %String = \"\") As %String" },
     { "header": "ClassMethod GetOneErrorText(statuscode As %Status, index As %Integer = \"\", language As %String = \"\") As %String" },
-    { "header": "ClassMethod GetOneStatusText(statuscode As %Status, index As %Integer = \"\", language As %String = \"\") As %String" }
+    { "header": "ClassMethod GetOneStatusText(statuscode As %Status, index As %Integer = \"\", language As %String = \"\") As %String" },
+    { "header": "ClassMethod StatusToSQLCODE(statuscode As %Status, Output message As %String(MAXLEN=500), language = \"\") As %Integer" }
    ]
   },
   "%SYSTEM.Util": {
    "header": "Class %SYSTEM.Util",
    "members": [
     { "header": "ClassMethod CompressionNameList(Output EngineNames As %String) As %Integer" },
+    { "header": "ClassMethod CreateGUID(version As %Integer = \"\") As %String" },
     { "header": "ClassMethod GetPrivateVariables(ProcEntry As %String, Output OutArray) As %Integer" }
+   ]
+  },
+  "%SYSTEM.Version": {
+   "header": "Class %SYSTEM.Version",
+   "members": [
+    { "header": "ClassMethod SystemMode(mode As %String = \"\") As %String" }
    ]
   },
   "%SYSTEM.WorkMgr": {
@@ -4007,8 +4612,8 @@
     { "header": "Method %GetSwizzleObject(force As %Integer = 0, Output oid As %ObjectIdentity) As %Status" },
     { "header": "ClassMethod %LOBPrefetch(soid As %ObjectIdentity, prefetchsize As %Integer, Output data As %String) As %Integer" },
     { "header": "ClassMethod %LOBPrefetchInternal(soid As %ObjectIdentity, prefetchsize As %Integer, Output data As %String) As %Integer" },
-    { "header": "ClassMethod %Open(soid As %ObjectIdentity, concurrency As %Integer, ByRef sc As %Status = {$$$OK}) As This" },
-    { "header": "ClassMethod %OpenId(id As %String, concurrency As %Integer, ByRef sc As %Status = {$$$OK}) As This" },
+    { "header": "ClassMethod %Open(soid As %ObjectIdentity, concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" },
+    { "header": "ClassMethod %OpenId(id As %String, concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" },
     { "header": "Method Read(Output len As %Integer = 32656, Output sc As %Status) As %RawString" },
     { "header": "Method ReadLine(Output len As %Integer = 32000, Output sc As %Status, Output eol As %Boolean) As %RawString" },
     { "header": "Method ReadLineIntoStream(Output sc As %Status) As This" }
@@ -4076,6 +4681,7 @@
   "%Studio.Project": {
    "header": "Class %Studio.Project",
    "members": [
+    { "header": "Method %OnNew(initvalue = \"\") As %Status" },
     { "header": "Method IsUpToDate(Output uptodate As %Boolean, ByRef notuptodate As %String = \"\") As %Status" },
     { "header": "Method ListWebPages(Output pages As %String(MAXSTRING=\"\"), qspec As %String = \"\") As %Status" },
     { "header": "ClassMethod pattern(pattern As %String, wholewords As %Boolean = 0, Output wild As %Boolean) As %String" }
@@ -4084,7 +4690,8 @@
   "%Studio.SASchemaUtil": {
    "header": "Class %Studio.SASchemaUtil",
    "members": [
-    { "header": "ClassMethod loadSchema(pSchemaNameSpace As %String, pForce As %Boolean = 0, pForeground As %Boolean = 0, Output pIsSpawned As %Boolean = 0) As %Status" }
+    { "header": "ClassMethod loadSchema(pSchemaNameSpace As %String, pForce As %Boolean = 0, pForeground As %Boolean = 0, Output pIsSpawned As %Boolean = 0) As %Status" },
+    { "header": "ClassMethod returnCorrelated(xdata As %Dictionary.XDataDefinition, ByRef sc As %Status) As %Library.Any" }
    ]
   },
   "%Studio.SourceControl.Base": {
@@ -4098,9 +4705,12 @@
   "%Studio.SourceControl.Change": {
    "header": "Class %Studio.SourceControl.Change",
    "members": [
+    { "header": "ClassMethod GetUncommitted(Filename As %String, ByRef Action As %String, ByRef InternalName As %String = \"\", ByRef ChangedBy As %String = \"\", ByRef Source As %String = \"\", ByRef Updated As %TimeStamp = \"\", ByRef P4Issued As %TimeStamp = \"\", ByRef CCR As %String = \"\", ByRef Name As %String = \"\") As %Status" },
     { "header": "ClassMethod IsUncommitted(Filename As %String, Output ID) As %Boolean" },
     { "header": "ClassMethod ListUncommitted(Output UncommittedList = \"\", IncludeRevert As %Boolean = 0, RefreshUncommitted As %Boolean = 1) As %Status" },
-    { "header": "ClassMethod OpenUncommitted(Filename As %String) As This" }
+    { "header": "ClassMethod OpenUncommitted(Filename As %String) As This" },
+    { "header": "ClassMethod RemoveUncommitted(FileList, Display As %String = 1, Revert As %String = 0, ActiveCommit As %String = 1, CommitCCR As %String = \"\") As %Status" },
+    { "header": "ClassMethod UpdateUncommitted(Filename As %String, Action As %String, InternalName As %String, ChangedBy As %String, Source As %String, Updated = \"\", P4Issued As %Boolean, CCR As %String, Name As %String, Bulk As %Boolean) As %Status" }
    ]
   },
   "%Studio.SourceControl.File": {
@@ -4115,11 +4725,14 @@
     { "header": "Method AfterUserAction(Type As %Integer, Name As %String, InternalName As %String, Answer As %Integer, Msg As %String = \"\", Output Reload As %Boolean) As %Status" },
     { "header": "Method BaselineDecomposedProduction(InternalName As %String, ToReadOnly As %Boolean, checkOut As %Boolean, Output skipped) As %Status" },
     { "header": "ClassMethod GeneratePerforceTicket(p4pass As %String = \"\", Output p4ticket As %String) As %Status" },
-    { "header": "ClassMethod GetCredentials(Output p4user As %String, Output p4passwd As %String, ByRef p4workspace As %String, ByRef p4dir As %String, Output p4port As %String) As %Boolean" },
+    { "header": "ClassMethod GetCredentials(Output p4user As %String, Output p4passwd As %String, ByRef p4workspace As %String = \"\", ByRef p4dir As %String = \"\", Output p4port As %String) As %Boolean" },
     { "header": "Method GetProdDecompStatus(InternalName As %String, Output IsInSourceControl As %Boolean, ByRef Editable As %Boolean, ByRef IsCheckedOut As %Boolean, ByRef UserCheckedOut As %String) As %Status" },
     { "header": "ClassMethod GetSharedWorkspace(Output p4workspace As %String, Output p4directory As %String) As %Boolean" },
+    { "header": "Method GetStatus(InternalName As %String, ByRef IsInSourceControl As %Boolean, ByRef Editable As %Boolean, ByRef IsCheckedOut As %Boolean, ByRef UserCheckedOut As %String = \"\") As %Status" },
     { "header": "ClassMethod IsFatalBaselineError(name As %String, sc As %Status, Output skipped) As %Boolean" },
     { "header": "ClassMethod IsSDSExtractable(item As %String, Output reason) As %Boolean" },
+    { "header": "ClassMethod ItemLocked(InternalName As %String, ByRef Reason = \"\") As %String" },
+    { "header": "Method OnAfterSave(InternalName As %String, Object As %RegisteredObject = \"\") As %Status" },
     { "header": "Method OnMenuItem(MenuName As %String, InternalName As %String, SelectedText As %String, Output Enabled As %Boolean, Output DisplayName As %String) As %Status" },
     { "header": "ClassMethod RunCmd(cmd As %String, Output output As %String, display As %Boolean = 1, stream As %Boolean = 0) As %Status [ Deprecated ]" },
     { "header": "ClassMethod SecureRunCmd(cmd As %String, Output args, Output output As %String, display As %Boolean = 1, stream As %Boolean = 0, input As %String = \"\") As %Status" },
@@ -4131,7 +4744,9 @@
    "header": "Class %Studio.SourceControl.Interface",
    "members": [
     { "header": "ClassMethod AfterUserAction(Type As %Integer, Name As %String, InternalName As %String, Answer As %Integer, Msg As %String = \"\", Output Reload As %Boolean, Output Editable As %Boolean) As %Status" },
-    { "header": "ClassMethod GetStatus(InternalName As %String, ByRef IsInSourceControl As %Boolean, ByRef Editable As %Boolean, ByRef IsCheckedOut As %Boolean, ByRef UserCheckedOut As %String, Output Reload As %Boolean) As %Status" }
+    { "header": "ClassMethod GetStatus(InternalName As %String, ByRef IsInSourceControl As %Boolean, ByRef Editable As %Boolean, ByRef IsCheckedOut As %Boolean, ByRef UserCheckedOut As %String, Output Reload As %Boolean) As %Status" },
+    { "header": "ClassMethod SourceControlClassGet(namespace As %String = \"\") As %String" },
+    { "header": "ClassMethod SourceControlCreate(Name As %String = \"\", Password As %String = \"\", ByRef Created As %Boolean = \"\", ByRef Flags As %Integer = \"\", Output Username As %String, Version As %String = \"\", ByRef Reload As %String = \"\", MainJob As %String = \"\", ByRef IconStatus As %Integer = \"\") As %Status" }
    ]
   },
   "%Studio.SourceControl.ItemSetWS.InvokeWebMethod": {
@@ -4193,10 +4808,14 @@
   "%UnitTest.Manager": {
    "header": "Class %UnitTest.Manager",
    "members": [
+    { "header": "ClassMethod DebugRunTestCase(testsuite As %String = \"\", testcase As %String = \"\", qspec As %String = \"\", testmethod As %String = \"\", ByRef userparam = \"\") As %Status" },
     { "header": "ClassMethod GetCurrentPublicVariableSet(Output GetCurrentPublicVariableSetset)" },
     { "header": "ClassMethod getLoadedClass(Output classes, ByRef skipClasses) As %Status" },
     { "header": "ClassMethod getTestMethods(class As %String, Output methods) As %Status" },
+    { "header": "Method LogAssert(success, action, description, extra = \"\", location)" },
+    { "header": "Method LogStateBegin(testsuite, testcase = \"\", testmethod = \"\")" },
     { "header": "ClassMethod ReturnAllowedPublicVariables(Output prefix As %String) As %List" },
+    { "header": "ClassMethod setRecursiveStatus(pNamespace, pIndex, pSuite, pCase, pMethod = \"\") As %Integer" },
     { "header": "ClassMethod SubtractVariableSet(Output c, ByRef a, ByRef b)" },
     { "header": "Method WaitForAllSuitesForParallel(Output status) As %Status" }
    ]
@@ -4240,6 +4859,12 @@
     { "header": "ClassMethod describe(table As %String, Output colcount As %Integer = 0, Output sc As %Status) As %String" }
    ]
   },
+  "%Wallet.Collection": {
+   "header": "Class %Wallet.Collection",
+   "members": [
+    { "header": "ClassMethod Exists(name As %String, obj As %Wallet.Collection = \"\", sc As %Status = \"\") As %Boolean" }
+   ]
+  },
   "%Wallet.LocalStorage": {
    "header": "Class %Wallet.LocalStorage",
    "members": [
@@ -4249,6 +4874,7 @@
   "%Wallet.Secret": {
    "header": "Class %Wallet.Secret",
    "members": [
+    { "header": "ClassMethod Exists(name As %String, obj As %Wallet.Secret = \"\", sc As %Status = \"\") As %Boolean" },
     { "header": "ClassMethod ExportInternal(writer As %XML.Writer, collections As %String, secrets As %String, Output numExported)" }
    ]
   },
@@ -4301,12 +4927,24 @@
   "%XDBC.Gateway.ResultSet": {
    "header": "Class %XDBC.Gateway.ResultSet",
    "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" },
     { "header": "Method %GetClientMetadata(Output pMetadata As %RawString = \"\") As %Status" }
+   ]
+  },
+  "%XML.Adaptor": {
+   "header": "Class %XML.Adaptor",
+   "members": [
+    { "header": "Method XMLExport(top As %String = \"\", format As %String = \"\", namespaces As %XML.Namespaces = \"\", attrs = \"\", createId As %String = \"\", typeAttr As %String = \"\", ByRef oreflist = \"\", ByRef idlist = \"\", initialIndent As %String = \"\", local As %Boolean = \"\", mimeAttachments As %Net.MIMEPart = \"\") As %Status" },
+    { "header": "Method XMLExportToStream(Output export As %Stream.Object, top As %String = \"\", format As %String = \"\", namespaces As %XML.Namespaces = \"\", attrs = \"\", createId As %String = \"\", typeAttr As %String = \"\", ByRef oreflist = \"\", ByRef idlist = \"\", initialIndent As %String = \"\") As %Status" },
+    { "header": "Method XMLExportToString(Output export As %String, top As %String = \"\", format As %String = \"\", namespaces As %XML.Namespaces = \"\", attrs = \"\", createId As %String = \"\", typeAttr As %String = \"\", ByRef oreflist = \"\", ByRef idlist = \"\", initialIndent As %String = \"\") As %Status" },
+    { "header": "Method XMLImport(top As %String, format As %String, namespace As %String, handler As %XML.Document, node As %Integer, ByRef idlist = \"\", keynameattr As %String = \"\", mimeAttachments As %ListOfObjects) As %Status" },
+    { "header": "ClassMethod XMLNew(document As %XML.Document, node As %Integer, containerOref As %RegisteredObject = \"\") As This" }
    ]
   },
   "%XML.DataSet": {
    "header": "Class %XML.DataSet",
    "members": [
+    { "header": "Method GetObject() As %Library.Any" },
     { "header": "ClassMethod XMLSchema(top As %String, format As %String, namespacePrefix As %String = \"\", input As %Boolean, refOnly As %Boolean, Output schema) As %Status" }
    ]
   },
@@ -4329,9 +4967,17 @@
     { "header": "ClassMethod initQualifier(group As %String, Output qtable As %String)" }
    ]
   },
+  "%XML.Exchange.Adaptor": {
+   "header": "Class %XML.Exchange.Adaptor",
+   "members": [
+    { "header": "ClassMethod XMLLoadGUID(document As %XML.Document, node As %Integer, containerOref As %RegisteredObject = \"\") As This" },
+    { "header": "ClassMethod XMLNew(document As %XML.Document, node As %Integer, containerOref As %RegisteredObject = \"\") As This" }
+   ]
+  },
   "%XML.Exchange.ChangeControlInterface": {
    "header": "Class %XML.Exchange.ChangeControlInterface",
    "members": [
+    { "header": "ClassMethod ChangeControlCreate(Name As %String, Password As %String = \"\", ByRef Created As %Boolean = \"\", ByRef Flags As %Integer = \"\", Output Username As %String, Version As %String = \"\", ByRef Reload As %String = \"\") As %Status" },
     { "header": "ClassMethod GetStatus(InternalName As %String, ByRef IsInChangeControl As %Boolean, ByRef Editable As %Boolean, ByRef IsCheckedOut As %Boolean, ByRef UserCheckedOut As %String, Output Reload As %Boolean) As %Status" }
    ]
   },
@@ -4350,7 +4996,8 @@
   "%XML.ImportHandler": {
    "header": "Class %XML.ImportHandler",
    "members": [
-    { "header": "ClassMethod NextChild(docId As %String, parent As %String, Output parentChildlist As %String, childId As %String, Output descriptor As %String) As %String" }
+    { "header": "ClassMethod NextChild(docId As %String, parent As %String, Output parentChildlist As %String, childId As %String, Output descriptor As %String) As %String" },
+    { "header": "ClassMethod SerializeNode(tree As %String, node As %String, outputStream As %Boolean, mixed As %Integer = 0, ByRef data, includeTop As %Boolean = 0, lineMode As %Boolean = 0, baseChildlist As %String = \"\") As %Boolean" }
    ]
   },
   "%XML.Namespaces": {
@@ -4364,14 +5011,20 @@
   "%XML.Node": {
    "header": "Class %XML.Node",
    "members": [
+    { "header": "Method AppendCharacter(text As %String, raw As %Boolean = \"\", parent As %String = \"\")" },
+    { "header": "Method AppendElement(localName As %String, namespace As %String = \"\", text As %String = \"\", qname As %String = \"\")" },
     { "header": "Method GetAttribute(attributeName As %String, Output namespace As %String, Output value As %String, Output valueNamespace As %String)" },
-    { "header": "Method GetAttributeNS(attributeName As %String, namespace As %String, Output value As %String, Output valueNamespace As %String)" }
+    { "header": "Method GetAttributeNS(attributeName As %String, namespace As %String, Output value As %String, Output valueNamespace As %String)" },
+    { "header": "Method InsertElement(localName As %String, namespace As %String = \"\", ByRef child As %String, text As %String = \"\", qname As %String = \"\") As %String" }
    ]
   },
   "%XML.Reader": {
    "header": "Class %XML.Reader",
    "members": [
-    { "header": "Method Next(Output oref As %ObjectHandle, Output sc As %Status, namespace As %String = \"\") As %Integer" }
+    { "header": "Method Correlate(element As %String, class As %String, namespace As %String = \"\")" },
+    { "header": "Method Next(Output oref As %ObjectHandle, Output sc As %Status, namespace As %String = \"\") As %Integer" },
+    { "header": "Method Open(xmlsource, method As %String, format As %String, httprequest As %Net.HttpRequest = \"\") As %Status" },
+    { "header": "Method OpenString(xmlsource As %String, format As %String = \"\") As %Status" }
    ]
   },
   "%XML.SAX.ContentHandler": {
@@ -4383,13 +5036,14 @@
   "%XML.Schema": {
    "header": "Class %XML.Schema",
    "members": [
+    { "header": "Method DefineNamespace(ByRef namespace As %String, class As %String, encoded As %Boolean = \"\", defaultElementQualified As %Boolean = \"\", defaultAttributeQualified As %Boolean = \"\") As %Status" },
     { "header": "Method IsItemDefined(ByRef namespace As %String, kind As %Integer, name As %String, class As %String, input As %Boolean, summary As %Boolean, Output status As %Status) As %Boolean" }
    ]
   },
   "%XML.Security.EncryptedData": {
    "header": "Class %XML.Security.EncryptedData",
    "members": [
-    { "header": "ClassMethod Create(keyElement As %XML.Security.EncryptedKey = \"\", elementToEncrypt As %SOAP.Security.Element, referenceOption As %Integer = \"\") As This" },
+    { "header": "ClassMethod Create(keyElement As %XML.Security.EncryptedKey = \"\", elementToEncrypt As %SOAP.Security.Element = \"\", referenceOption As %Integer = \"\") As This" },
     { "header": "ClassMethod CreateFromEncryptedKey(encryptedKey As %XML.Security.EncryptedKey, elementToEncrypt As %SOAP.Security.Element) As This" }
    ]
   },
@@ -4414,11 +5068,24 @@
     { "header": "ClassMethod GetRSAKeyValue(credentials As %SYS.X509Credentials) As This" }
    ]
   },
+  "%XML.Security.Reference": {
+   "header": "Class %XML.Security.Reference",
+   "members": [
+    { "header": "ClassMethod Create(id As %String, algorithm As %String = \"\", prefixList As %String = \"\")" }
+   ]
+  },
   "%XML.Security.Signature": {
    "header": "Class %XML.Security.Signature",
    "members": [
     { "header": "ClassMethod Create(keyElement As %RegisteredObject = \"\", signatureOptions As %Integer, referenceOption As %Integer = \"\") As This" },
-    { "header": "ClassMethod CreateX509(credentials As %SYS.X509Credentials = \"\", signatureOptions As %Integer, referenceOption As %Integer, Output status As %Status) As This" }
+    { "header": "ClassMethod CreateX509(credentials As %SYS.X509Credentials = \"\", signatureOptions As %Integer, referenceOption As %Integer, Output status As %Status) As This" },
+    { "header": "ClassMethod XMLNew(document As %XML.Document, nodeId As %Integer, containerOref As %RegisteredObject = \"\") As This" }
+   ]
+  },
+  "%XML.Security.SignedInfo": {
+   "header": "Class %XML.Security.SignedInfo",
+   "members": [
+    { "header": "ClassMethod XMLNew(document As %XML.Document, nodeId As %Integer, containerOref As %RegisteredObject = \"\") As This" }
    ]
   },
   "%XML.Security.X509Certificate": {
@@ -4468,7 +5135,9 @@
   "%XML.Utils.SchemaReader": {
    "header": "Class %XML.Utils.SchemaReader",
    "members": [
-    { "header": "Method FindProperties(cls As %Integer, ByRef proplist, Output proporder, removeDuplicates As %Boolean = 0)" },
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
+    { "header": "Method FindClassType(key As %Integer, ByRef visits As %String = \"\") As %String" },
+    { "header": "Method FindProperties(cls As %Integer, ByRef proplist = \"\", Output proporder, removeDuplicates As %Boolean = 0)" },
     { "header": "Method GetCacheElement(pNamespace, pTypeName, Output pCacheType, Output pTypeNamespace As %String, Output elno) As %Status" },
     { "header": "Method GetElementProperties(elementNamespace As %String, elementName As %String, Output output, Output parameterType As %String, Output elno As %String, isType As %Boolean) As %Status" },
     { "header": "Method MakeNameUnique(cls As %Integer, prop As %Integer, ByRef name As %String, Output namesUpper)" },
@@ -4476,7 +5145,8 @@
     { "header": "Method MakeSOAPHeader(elementNamespace As %String, elementName As %String, isType As %Boolean, use As %String, Output parameterType As %String) As %Boolean" },
     { "header": "ClassMethod Open(id As %String) As This" },
     { "header": "Method OpenSetup(id As %String) As This" },
-    { "header": "Method PreParseSchema(filename As %String, url As %String = \"\", Output multipleNamespace As %Boolean, Output noSchema As %Boolean) As %Status" }
+    { "header": "Method PreParseSchema(filename As %String, url As %String = \"\", Output multipleNamespace As %Boolean, Output noSchema As %Boolean) As %Status" },
+    { "header": "Method TypeToClass(itype As %String, ByRef isdt As %Boolean = \"\", ByRef xmlname = \"\") As %String" }
    ]
   },
   "%XML.Utils.SchemaResult": {
@@ -4496,7 +5166,19 @@
   "%XML.Writer": {
    "header": "Class %XML.Writer",
    "members": [
-    { "header": "ClassMethod ParsePrefixList(PrefixList As %String, Output PrefixListArray)" }
+    { "header": "Method Object(objectArg As %XML.Adaptor, tag As %String = \"\", namespace As %String = \"\", local As %Boolean = \"\", className As %String = \"\", bare As %Boolean = \"\") As %Status" },
+    { "header": "ClassMethod ParsePrefixList(PrefixList As %String, Output PrefixListArray)" },
+    { "header": "Method RootElement(root, namespace As %String = \"\") As %Status" },
+    { "header": "Method RootObject(object As %XML.Adaptor, tag As %String = \"\", namespace As %String = \"\", className As %String = \"\", bare As %Boolean = \"\") As %Status" },
+    { "header": "Method WriteAttribute(name As %String, value As %String = \"\", namespace As %String = \"\", valueNamespace As %String = \"\", global As %Boolean = 0) As %Status" },
+    { "header": "Property OutputStream As %Stream.Object" },
+    { "header": "Property UserStream As %Stream.Object" }
+   ]
+  },
+  "%XML.XSLT.StreamAdapter": {
+   "header": "Class %XML.XSLT.StreamAdapter",
+   "members": [
+    { "header": "Property Stream As %Stream.Object" }
    ]
   },
   "%XSQL.DSI.Call": {
@@ -4508,13 +5190,34 @@
   "%XSQL.DSI.GlobalPrivateTable": {
    "header": "Class %XSQL.DSI.GlobalPrivateTable",
    "members": [
-    { "header": "ClassMethod %OnAfterGenerate(implementationClass, Output pCacheAddOns) As %SYSTEM.Error" }
+    { "header": "ClassMethod %OnAfterGenerate(implementationClass, Output pCacheAddOns) As %SYSTEM.Error" },
+    { "header": "ClassMethod %Prepare(ByRef sqlStatement As %RawString = \"\", importPackages As %RawString = \"\") As This" }
+   ]
+  },
+  "%XSQL.DSI.Statement": {
+   "header": "Class %XSQL.DSI.Statement",
+   "members": [
+    { "header": "ClassMethod %Prepare(ByRef sqlStatement As %RawString = \"\", importPackages As %RawString = \"\") As This" }
+   ]
+  },
+  "%XSQL.DSI.TSQL": {
+   "header": "Class %XSQL.DSI.TSQL",
+   "members": [
+    { "header": "ClassMethod %Prepare(ByRef sqlStatement As %RawString = \"\", importPackages As %RawString = \"\", dialect As %String = \"\") As This" },
+    { "header": "ClassMethod %PrepareStream(sqlSource As %Stream.Object, importPackages As %RawString = \"\", dialect As %String = \"\") As This" }
    ]
   },
   "%XSQL.DSI.TempTable": {
    "header": "Class %XSQL.DSI.TempTable",
    "members": [
-    { "header": "ClassMethod %OnAfterGenerate(implementationClass, Output pCacheAddOns) As %SYSTEM.Error" }
+    { "header": "ClassMethod %OnAfterGenerate(implementationClass, Output pCacheAddOns) As %SYSTEM.Error" },
+    { "header": "ClassMethod %Prepare(ByRef sqlStatement As %RawString = \"\", importPackages As %RawString = \"\") As This" }
+   ]
+  },
+  "%XSQL.DSI.spexecutesql": {
+   "header": "Class %XSQL.DSI.spexecutesql",
+   "members": [
+    { "header": "ClassMethod %Prepare(ByRef tsqlStatement As %RawString = \"\", arguments As %RawString = \"\", importPackages As %RawString = \"\") As This" }
    ]
   },
   "%XSQL.Format": {
@@ -4525,16 +5228,81 @@
     { "header": "ClassMethod ReadStringInnards(s As %String, Output value As %String, ByRef sp As %Integer = 1) As %Status" }
    ]
   },
+  "%ZEN.Auxiliary.abstractController": {
+   "header": "Class %ZEN.Auxiliary.abstractController",
+   "members": [
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" }
+   ]
+  },
   "%ZEN.Auxiliary.altJSONProvider": {
    "header": "Class %ZEN.Auxiliary.altJSONProvider",
    "members": [
-    { "header": "ClassMethod getOrderedProps(pClass As %Dictionary.CompiledClass, Output pList)" }
+    { "header": "ClassMethod %ObjectToJSON(pObject As %RegisteredObject, ByRef pVisited = \"\", pLevel As %Integer = 0, pFormat As %String = \"aceloqstw\") As %Status" },
+    { "header": "ClassMethod %UnpackAETToObject(obj As %DynamicAbstractObject, rootType As %String, pClass As %String, pIgnoreUnknownProps As %Boolean = 0) As %Library.Any" },
+    { "header": "ClassMethod %UnpackObjectToCOSObject(obj As %DynamicAbstractObject, pClass As %String, pIgnoreUnknownProps As %Boolean = 0) As %Library.Any" },
+    { "header": "ClassMethod getOrderedProps(pClass As %Dictionary.CompiledClass, Output pList)" },
+    { "header": "Property %ObjectReplacement As %Library.Any" },
+    { "header": "Property %TargetObject As %Library.Any" }
+   ]
+  },
+  "%ZEN.Auxiliary.jsonMDXProvider": {
+   "header": "Class %ZEN.Auxiliary.jsonMDXProvider",
+   "members": [
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
+    { "header": "ClassMethod %StatusToDynamicObject(pStatus As %Status) As %Library.Any" }
    ]
   },
   "%ZEN.Auxiliary.jsonProvider": {
    "header": "Class %ZEN.Auxiliary.jsonProvider",
    "members": [
-    { "header": "ClassMethod getOrderedProps(pClass As %Dictionary.CompiledClass, Output pList)" }
+    { "header": "ClassMethod %ObjectToJSON(pObject As %RegisteredObject, ByRef pVisited = \"\", pLevel As %Integer = 0, pFormat As %String = \"aceloqtw\") As %Status" },
+    { "header": "ClassMethod getOrderedProps(pClass As %Dictionary.CompiledClass, Output pList)" },
+    { "header": "Property %ObjectReplacement As %Library.Any" },
+    { "header": "Property %TargetObject As %Library.Any" }
+   ]
+  },
+  "%ZEN.Component.abstractPage": {
+   "header": "Class %ZEN.Component.abstractPage",
+   "members": [
+    { "header": "Method %Link(link As %String, ByRef query As %String = \"\", addQ As %Boolean = 0) As %String" }
+   ]
+  },
+  "%ZEN.Component.object": {
+   "header": "Class %ZEN.Component.object",
+   "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" },
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" }
+   ]
+  },
+  "%ZEN.Controller": {
+   "header": "Class %ZEN.Controller",
+   "members": [
+    { "header": "ClassMethod %GetOREF(orefint As %Integer) As %Library.Any" }
+   ]
+  },
+  "%ZEN.DataModel.Adaptor": {
+   "header": "Class %ZEN.DataModel.Adaptor",
+   "members": [
+    { "header": "ClassMethod %CreateModelInstance(pID As %String, pConcurrency As %Integer = -1, Output pSC As %Status = {$$$OK}) As This" },
+    { "header": "Method %OnOpenSource(pID As %String, pConcurrency As %Integer = -1, Output pSC As %Status = {$$$OK}) As %Library.Any" }
+   ]
+  },
+  "%ZEN.DataModel.DataModel": {
+   "header": "Class %ZEN.DataModel.DataModel",
+   "members": [
+    { "header": "Method %OnNewSource(Output pSC As %Status = {$$$OK}) As %Library.Any" },
+    { "header": "Method %OnOpenSource(pID As %String, pConcurrency As %Integer = -1, Output pSC As %Status = {$$$OK}) As %Library.Any" },
+    { "header": "ClassMethod %OpenModel(pID As %String, pConcurrency As %Integer = -1, Output pSC As %Status = {$$$OK}) As This" }
+   ]
+  },
+  "%ZEN.DataModel.ObjectDataModel": {
+   "header": "Class %ZEN.DataModel.ObjectDataModel",
+   "members": [
+    { "header": "ClassMethod %CreateModelInstance(pID As %String, pConcurrency As %Integer = -1, Output pSC As %Status = {$$$OK}) As This" },
+    { "header": "Method %OnNewSource(Output pSC As %Status = {$$$OK}) As %Library.Any" },
+    { "header": "Method %OnOpenSource(pID As %String, pConcurrency As %Integer = -1, Output pSC As %Status = {$$$OK}) As %Library.Any" },
+    { "header": "ClassMethod %OpenModel(pID As %String, pConcurrency As %Integer = -1, Output pSC As %Status = {$$$OK}) As This" },
+    { "header": "Property %source As %Library.Any" }
    ]
   },
   "%ZEN.Dialog.fileSelect": {
@@ -4559,7 +5327,8 @@
   "%ZEN.Report.Display.COSChart.Date": {
    "header": "Class %ZEN.Report.Display.COSChart.Date",
    "members": [
-    { "header": "ClassMethod createDate1(year, month, day, hours, minutes, seconds, milliseconds, Output pStatus)" }
+    { "header": "ClassMethod createDate1(year, month, day, hours, minutes, seconds, milliseconds, Output pStatus)" },
+    { "header": "ClassMethod zenDateToString(d, hasTime = 0, format = \"\", sep = \"\")" }
    ]
   },
   "%ZEN.Report.Display.COSChart.cchart": {
@@ -4591,7 +5360,9 @@
   "%ZEN.Report.Display.node": {
    "header": "Class %ZEN.Report.Display.node",
    "members": [
-    { "header": "Method %StyleXSLFO(ByRef context As %String, ByRef XSL As %GlobalCharacterStream, ByRef delay As %GlobalCharacterStream, isTableCell As %Boolean = 0, ignoreId As %Boolean = 0)" }
+    { "header": "Method %GetAbsoluteURL(url As %String, context As %String, isServer As %Boolean = \"\") As %String" },
+    { "header": "Method %StyleXSLFO(ByRef context As %String, ByRef XSL As %GlobalCharacterStream, ByRef delay As %GlobalCharacterStream, isTableCell As %Boolean = 0, ignoreId As %Boolean = 0)" },
+    { "header": "ClassMethod updateFromTemplate(child, parent = \"\")" }
    ]
   },
   "%ZEN.Report.Display.report": {
@@ -4661,8 +5432,14 @@
    "members": [
     { "header": "Method %getDisplayUniqueExcelSheetName(excelSheetName As %String, Output context) As %String" },
     { "header": "ClassMethod %GetFileByAbsoluteURL(url As %String, Output sc As %Status, norecurse As %Boolean = 0) As %Net.HttpResponse" },
+    { "header": "Method GenerateReport(outputfile As %String, mode As %Integer = 0, log As %Boolean = 0, renderServer As %String = \"\", ExcelMode As %String = \"\", pStr As %String = \"\", Output RenderDirect As %Integer = 1) As %Status" },
     { "header": "Method GenerateReportToStream(Output stream As %Stream.Object, mode As %Integer = 0, log As %Boolean = 0) As %Status" },
-    { "header": "Method GenerateStream(Output stream As %Stream.Object, mode As %Integer = 0, log As %Boolean = 0, pTranslateTable = \"UTF8\") As %Status" }
+    { "header": "Method GenerateStream(Output stream As %Stream.Object, mode As %Integer = 0, log As %Boolean = 0, pTranslateTable = \"UTF8\") As %Status" },
+    { "header": "Property toexcelstream As %Stream.Object" },
+    { "header": "Property tohtmlstream As %Stream.Object" },
+    { "header": "Property toxslfostream As %Stream.Object" },
+    { "header": "Property xmlstream As %Stream.Object" },
+    { "header": "Property xmlstylesheet As %Stream.Object" }
    ]
   },
   "%ZEN.TreeUtils": {
@@ -4686,6 +5463,12 @@
     { "header": "ClassMethod OpenEmbeddedDocument(pWhere As %ZEN.Datatype.string, pDocumentID As %ZEN.Datatype.string, pObjectID As %ZEN.Datatype.string, Output pStatus As %Status = \"\") As This" }
    ]
   },
+  "%iFind.Filer.Basic": {
+   "header": "Class %iFind.Filer.Basic",
+   "members": [
+    { "header": "ClassMethod SetDefaultCollation(ByRef pIndexParams = \"\")" }
+   ]
+  },
   "%iFind.Find.Basic": {
    "header": "Class %iFind.Find.Basic",
    "members": [
@@ -4694,16 +5477,35 @@
     { "header": "Method ParseInput(input As %String, Output searchParts) As %Status" }
    ]
   },
+  "%iFind.Index.ClassGenerator.Abstract": {
+   "header": "Class %iFind.Index.ClassGenerator.Abstract",
+   "members": [
+    { "header": "ClassMethod AddProperty(pClassDef As %Dictionary.ClassDefinition, pName As %String, pType As %String, ByRef pParams = \"\", pStoragePos As %Integer = 0, pCalculated As %Boolean = 0, pComputeCode As %String = \"\", pDescription As %String = \"\") As %Status" }
+   ]
+  },
+  "%iFind.Index.Minimal": {
+   "header": "Class %iFind.Index.Minimal",
+   "members": [
+    { "header": "ClassMethod Embedded() As %Library.Any" }
+   ]
+  },
   "%iKnow.Classification.UI.ClassifierBuilder": {
    "header": "Class %iKnow.Classification.UI.ClassifierBuilder",
    "members": [
-    { "header": "Method ExecuteResultSet(pRS As %ResultSet, Output tSC As %Status, pInfo As %ZEN.Auxiliary.QueryInfo) As %Boolean" }
+    { "header": "Method ExecuteResultSet(pRS As %ResultSet, Output tSC As %Status, pInfo As %ZEN.Auxiliary.QueryInfo) As %Boolean" },
+    { "header": "Method OnGetClassifierObject(ByRef Params = \"\", Output pObject As %RegisteredObject) As %Status" }
    ]
   },
   "%iKnow.Compiler.FailureFunction": {
    "header": "Class %iKnow.Compiler.FailureFunction",
    "members": [
     { "header": "ClassMethod Create(gotoFunc As GotoFunction, outputFunc As OutputFunction, isIdeographic As %Boolean = 0) As This" }
+   ]
+  },
+  "%iKnow.Compiler.InlReader": {
+   "header": "Class %iKnow.Compiler.InlReader",
+   "members": [
+    { "header": "Property s As %Library.Any [ MultiDimensional ]" }
    ]
   },
   "%iKnow.Compiler.Knowledgebase": {
@@ -4722,6 +5524,7 @@
   "%iKnow.Configuration": {
    "header": "Class %iKnow.Configuration",
    "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" },
     { "header": "ClassMethod CreateTransientConfig(pLanguage As %String = \"en\", pUserDictionary As %String = \"\", Output pSC As %Status = {$$$OK}) As This" },
     { "header": "ClassMethod Open(name As %String, Output pSC As %Status = {$$$OK}) As This" }
    ]
@@ -4742,6 +5545,12 @@
    "header": "Class %iKnow.DeepSee.UI.Analysis.Entities",
    "members": [
     { "header": "Method ExecuteEntitiesQuery(pRS As %ResultSet, Output tSC As %Status, pInfo As %ZEN.Auxiliary.QueryInfo) As %Boolean" }
+   ]
+  },
+  "%iKnow.Domain": {
+   "header": "Class %iKnow.Domain",
+   "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" }
    ]
   },
   "%iKnow.Filters.Filter": {
@@ -4810,6 +5619,12 @@
    "header": "Class %iKnow.ModelException",
    "members": [
     { "header": "ClassMethod Create(status As %Status = {$$$OK}, file As %String = \"\", lineNumber As %Integer = -1, lineContent As %String = \"\") As This" }
+   ]
+  },
+  "%iKnow.NativeSupport.Indexer": {
+   "header": "Class %iKnow.NativeSupport.Indexer",
+   "members": [
+    { "header": "Property DataTarget As %Library.Any" }
    ]
   },
   "%iKnow.NativeSupport.Languagebase": {
@@ -4889,7 +5704,8 @@
    "header": "Class %iKnow.Semantics.DominanceAPI",
    "members": [
     { "header": "ClassMethod GetDomainValue(domainid As %Integer, id As %Integer, type As %Integer = {$$$SDCONCEPT}, Output sc As %Status) As %Numeric" },
-    { "header": "ClassMethod GetProfileCountByDomain(domainid As %Integer, type As %Integer = {$$$SDCONCEPT}, Output sc As %Status) As %Integer [ Deprecated ]" }
+    { "header": "ClassMethod GetProfileCountByDomain(domainid As %Integer, type As %Integer = {$$$SDCONCEPT}, Output sc As %Status) As %Integer [ Deprecated ]" },
+    { "header": "ClassMethod GetSourceValue(domainid As %Integer, srcid As %Integer, id As %Integer, type As %Integer = {$$$SDCONCEPT}, Output sc As %Status) As %Numeric" }
    ]
   },
   "%iKnow.Shell": {
@@ -4970,6 +5786,18 @@
     { "header": "Method Describe(shell As %iKnow.Shell, Output description)" },
     { "header": "Method DescribeOption(shell As %iKnow.Shell, option As %String, Output description)" },
     { "header": "Method DescribeOptions(shell As %iKnow.Shell, Output description)" }
+   ]
+  },
+  "%iKnow.Source.Processor": {
+   "header": "Class %iKnow.Source.Processor",
+   "members": [
+    { "header": "Property Buffer As %Library.Any" }
+   ]
+  },
+  "%iKnow.Tables.Utils": {
+   "header": "Class %iKnow.Tables.Utils",
+   "members": [
+    { "header": "ClassMethod AddProperty(pClassDef As %Dictionary.ClassDefinition, pName As %String, pType As %String, ByRef pParams = \"\", pStoragePos As %Integer = 0, pReadOnly As %Boolean = 1, pCalculated As %Boolean = 0, pComputeCode As %String = \"\", pInternal As %Boolean = 0, pSqlFieldName As %String = \"\") As %Status" }
    ]
   },
   "%iKnow.TextTransformation.FileToTextArray": {
@@ -5105,6 +5933,7 @@
   "%iKnow.UserDictionary": {
    "header": "Class %iKnow.UserDictionary",
    "members": [
+    { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" },
     { "header": "ClassMethod CreateFromFile(pPath As %String) As This" },
     { "header": "ClassMethod CreateTransient(pName As %String = \"\") As This" },
     { "header": "Method GetEntries(Output pResult) As %Status" },
@@ -5127,21 +5956,21 @@
   "Config.CommonMapMethods": {
    "header": "Class Config.CommonMapMethods",
    "members": [
-    { "header": "ClassMethod Exists(Namespace, Name As %String, Output Obj As This, ByRef Status As %Status, ByRef CPFFile As %String = \"\", Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As %Boolean" },
+    { "header": "ClassMethod Exists(Namespace, Name As %String, Output Obj As This, Output Status As %Status, ByRef CPFFile As %String = \"\", Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As %Boolean" },
     { "header": "ClassMethod Open(Namespace As %String, Name As %String, ByRef CPFFile As %String = \"\", concurrency As %Integer = -1, ByRef Status As %Status, Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As This" }
    ]
   },
   "Config.CommonMultipleMethods": {
    "header": "Class Config.CommonMultipleMethods",
    "members": [
-    { "header": "ClassMethod Exists(Name As %String, Output Obj As This, ByRef Status As %Status, ByRef CPFFile As %String = \"\", Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As %Boolean" },
-    { "header": "ClassMethod Open(Name As %String, ByRef CPFFile As %String = \"\", concurrency As %Integer = -1, ByRef Status As %Status, Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As This" }
+    { "header": "ClassMethod Exists(Name As %String, Output Obj As This, Output Status As %Status, ByRef CPFFile As %String = \"\", Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As %Boolean" },
+    { "header": "ClassMethod Open(Name As %String, ByRef CPFFile As %String = \"\", concurrency As %Integer = -1, Output Status As %Status, Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As This" }
    ]
   },
   "Config.CommonSingleMethods": {
    "header": "Class Config.CommonSingleMethods",
    "members": [
-    { "header": "ClassMethod Open(ByRef CPFFile As %String = \"\", concurrency As %Integer = -1, ByRef Status As %Status, Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As This" }
+    { "header": "ClassMethod Open(ByRef CPFFile As %String = \"\", concurrency As %Integer = -1, Output Status As %Status, Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As This" }
    ]
   },
   "Config.GenericMapMethods": {
@@ -5242,7 +6071,7 @@
   "OAuth2.ResourceServer.Mapping": {
    "header": "Class OAuth2.ResourceServer.Mapping",
    "members": [
-    { "header": "ClassMethod Exists(service As %String, key As %String, Output mapping As OAuth2.ResourceServer.Mapping, ByRef status As %Status) As %Boolean" }
+    { "header": "ClassMethod Exists(service As %String, key As %String, Output mapping As OAuth2.ResourceServer.Mapping, ByRef status As %Status = \"\") As %Boolean" }
    ]
   },
   "OAuth2.Response": {
@@ -5262,6 +6091,13 @@
     { "header": "ClassMethod OpenByToken(accessToken As %String, Output sc As %Status) As This" }
    ]
   },
+  "OAuth2.Server.Auth": {
+   "header": "Class OAuth2.Server.Auth",
+   "members": [
+    { "header": "ClassMethod ReturnError(client As OAuth2.Server.Client, token As OAuth2.Server.AccessToken, error As %String, errorDescription As %String = \"\", sc As %Status = \"\")" },
+    { "header": "ClassMethod ValidateUser(token As OAuth2.Server.AccessToken, username As %String, password As %String, Output sc As %Status, use2fa As %Boolean = \"\") As %Boolean" }
+   ]
+  },
   "OAuth2.Server.Client": {
    "header": "Class OAuth2.Server.Client",
    "members": [
@@ -5272,6 +6108,12 @@
    "header": "Class OAuth2.Server.Configuration",
    "members": [
     { "header": "ClassMethod Open(Output sc As %Status) As This" }
+   ]
+  },
+  "OAuth2.Server.Registration": {
+   "header": "Class OAuth2.Server.Registration",
+   "members": [
+    { "header": "ClassMethod AddClientSecretToJWKS(JWKS As %String = \"\", clientSecret As %String, Output updatedJWKS As %String) As %Status" }
    ]
   },
   "OAuth2.ServerDefinition": {
@@ -5288,6 +6130,12 @@
     { "header": "ClassMethod DisplayToLogical(%val As %Binary) As This" },
     { "header": "ClassMethod GlobalName(key As GlobalReference, Output normalized As GlobalReference) As This" },
     { "header": "ClassMethod Normalize(%val As GlobalReference) As This" }
+   ]
+  },
+  "SYS.Database": {
+   "header": "Class SYS.Database",
+   "members": [
+    { "header": "ClassMethod ModifyDatabase(Directory As %String, Size As %Integer, Resource As %String, GlobalJournalState As %Integer = \"\") As %Status" }
    ]
   },
   "SYS.History.PerfData": {
@@ -5309,6 +6157,19 @@
    "members": [
     { "header": "ClassMethod DemoSample(pct As %Integer, ByRef DB As %String) As This" },
     { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "SYS.History.UserAbstract": {
+   "header": "Class SYS.History.UserAbstract",
+   "members": [
+    { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "SYS.MirrorConfiguration": {
+   "header": "Class SYS.MirrorConfiguration",
+   "members": [
+    { "header": "ClassMethod DoSSLConfigurationsExist(ByRef DN As %String = \"\") As %Status" },
+    { "header": "ClassMethod RetrieveMirrorConfig(MirrorSetName As %String, AgentIPAddress As Config.Host, MirrorAgentPort As %Integer, InstanceName As %String, ByRef Status As %Status = \"\", ByRef Unicode As %Integer = 0, SaveNode As %String = \"\", ByRef EMSManaged As %Integer = \"\") As Config.Mirrors" }
    ]
   },
   "SYS.Monitor.SAM.Config": {
@@ -5380,7 +6241,7 @@
   "Security.Applications": {
    "header": "Class Security.Applications",
    "members": [
-    { "header": "ClassMethod Exists(Name As %String, Output Application As This, ByRef Status As %Status) As %Boolean" }
+    { "header": "ClassMethod Exists(Name As %String, Output Application As This, Output Status As %Status) As %Boolean" }
    ]
   },
   "Security.DocDBs": {
@@ -5398,7 +6259,8 @@
   "Security.Events": {
    "header": "Class Security.Events",
    "members": [
-    { "header": "ClassMethod Exists(Source As %String = \"\", Type As %String = \"\", Name As %String = \"\", Output Event As This, ByRef Status As %Status) As %Boolean" }
+    { "header": "ClassMethod Create(Source As %String, Type As %String = \"\", Name As %String = \"\", Description As %String = \"\", Enabled As Security.Datatype.BooleanYN = 1, Flags As %Integer = 0) As %Status" },
+    { "header": "ClassMethod Exists(Source As %String = \"\", Type As %String = \"\", Name As %String = \"\", Output Event As This, Output Status As %Status) As %Boolean" }
    ]
   },
   "Security.KMIPServer": {
@@ -5417,19 +6279,22 @@
   "Security.Resources": {
    "header": "Class Security.Resources",
    "members": [
-    { "header": "ClassMethod Exists(Name As %String, Output Resource As This, ByRef Status As %Status) As %Boolean" }
+    { "header": "ClassMethod Exists(Name As %String, Output Resource As This, Output Status As %Status) As %Boolean" },
+    { "header": "ClassMethod InUse(Name As %String, ByRef InUse As %Status, ByRef Roles As %List, ByRef Databases As %List, ByRef Applications As %List = \"\", Flags As %Integer = 0) As %Status" }
    ]
   },
   "Security.Roles": {
    "header": "Class Security.Roles",
    "members": [
-    { "header": "ClassMethod Exists(Name As %String, Output Role As This, ByRef Status As %Status) As %Boolean" }
+    { "header": "ClassMethod Exists(Name As %String, Output Role As This, Output Status As %Status) As %Boolean" },
+    { "header": "ClassMethod Get(Name As %String, ByRef Properties As %String, ByRef Role As %ObjectHandle = \"\") As %Status" },
+    { "header": "ClassMethod InUse(Name As %String, ByRef InUse As %Boolean = 0, ByRef Users As %List, ByRef MoreUsers As %Boolean = 0, ByRef Roles As %List = \"\", ByRef MoreRoles As %Boolean = 0, Flags As %Integer = 0) As %Status" }
    ]
   },
   "Security.SSLConfigs": {
    "header": "Class Security.SSLConfigs",
    "members": [
-    { "header": "ClassMethod Exists(Name As %String, Output SSLConfig As This, ByRef Status As %Status) As %Boolean" },
+    { "header": "ClassMethod Exists(Name As %String, Output SSLConfig As This, Output Status As %Status) As %Boolean" },
     { "header": "ClassMethod Open(Name As %String, ByRef Status) As This" }
    ]
   },
@@ -5456,7 +6321,8 @@
   "Security.Users": {
    "header": "Class Security.Users",
    "members": [
-    { "header": "ClassMethod Exists(Username As %String, Output User As This, ByRef Status As %Status, Flag As %Integer = 0) As %Boolean" }
+    { "header": "ClassMethod Create(Username As %String, UserRoles As %String, Password As %String = \"\", FullName As %String = \"\", NameSpace As %String = \"\", Routine As %String = \"\", ExpirationDate As %String = \"\", ChangePassword As %Boolean = \"\", Enabled As %Boolean = \"\", Comment As %String = \"\", Flags As %String = 1, PhoneNumber As %String = \"\", PhoneProvider As %String = \"\", ByRef Attributes As %String = \"\", AccountNeverExpires As %Boolean = \"\", PasswordNeverExpires As %Boolean = \"\", PasswordHashAlgorithm As %String = \"\", PasswordHashWorkFactor As %Integer = \"\", EscalationRoles As %String = \"\") As %Status" },
+    { "header": "ClassMethod Exists(Username As %String, Output User As This, Output Status As %Status, Flag As %Integer = 0) As %Boolean" }
    ]
   },
   "Security.WebAppPctAccess": {
