@@ -29,8 +29,8 @@ pub fn fetch(release: &str) -> Result<PathBuf, String> {
     let dir = std::env::home_dir()
         .ok_or("cannot find the home directory to keep the declarations in")?
         .join(".ascot");
-    let base =
-        std::env::var("ASCOT_DECLARATIONS_URL").unwrap_or_else(|_| format!("{RELEASES}/declarations"));
+    let base = std::env::var("ASCOT_DECLARATIONS_URL")
+        .unwrap_or_else(|_| format!("{RELEASES}/declarations"));
     fetch_into(release, &base, &dir)
 }
 
@@ -127,7 +127,10 @@ mod tests {
                         r.extend_from_slice(body);
                         r
                     }
-                    None => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                    None => {
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            .to_vec()
+                    }
                 };
                 let _ = stream.write_all(&response);
             }
@@ -136,7 +139,8 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ascot-prebuilt-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ascot-prebuilt-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
     }
@@ -167,7 +171,11 @@ mod tests {
         assert_eq!(Declarations::load(&path).unwrap().namespace, "%SYS");
         assert_eq!(*hits.lock().unwrap(), 2);
         assert_eq!(fetch_into("2026.2", &url, &dir).unwrap(), path);
-        assert_eq!(*hits.lock().unwrap(), 2, "the cached file is read without a request");
+        assert_eq!(
+            *hits.lock().unwrap(),
+            2,
+            "the cached file is read without a request"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -176,7 +184,10 @@ mod tests {
         let gz = gzipped("{}");
         let (url, _) = server(vec![
             (format!("/{}", asset("2026.1")), gz),
-            (format!("/{}.sha256", asset("2026.1")), b"0000 wrong\n".to_vec()),
+            (
+                format!("/{}.sha256", asset("2026.1")),
+                b"0000 wrong\n".to_vec(),
+            ),
         ]);
         let dir = temp_dir("bad");
         let err = fetch_into("2026.1", &url, &dir).unwrap_err();

@@ -262,7 +262,9 @@ impl Server {
             // is an error.
             Err(err) if crate::prebuilt::is_release(&iris_name) => (
                 None,
-                format!(" without the IRIS declarations ({err}): every class, routine and include outside the workspace is an error"),
+                format!(
+                    " without the IRIS declarations ({err}): every class, routine and include outside the workspace is an error"
+                ),
             ),
             Err(err) => return Err(format!("iris: {err}")),
         };
