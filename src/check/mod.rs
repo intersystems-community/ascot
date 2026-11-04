@@ -685,6 +685,94 @@ fn commands_of<S>(line: &CommandLine<S>) -> impl Iterator<Item = &Range<Command>
     line.commands.iter().flat_map(|cmds| cmds.items.iter())
 }
 
+impl<Gap> CheckCommand for CurryBlock<Gap> {
+    fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
+        report_brace_style(env, self);
+        self.block.check(env, flow)
+    }
+}
+
+// A block's braces against the style: whether a line break sits between each pair of neighbours
+// that the style has an opinion on.
+fn report_brace_style<Gap>(env: &CodeEnv<'_>, block: &CurryBlock<Gap>) {
+    let Some(style) = env.style() else {
+        return;
+    };
+    let (open, close) = (block.block.start, block.block.end - 1);
+    let mut commands = procedure_commands(&block.block.wrapped.main).peekable();
+    let first = commands.peek().copied();
+    let last = commands.last().map(|c| c.end);
+    if let Some(breaks) = style.rules.open_brace {
+        if let Some(wanted) = breaks.newline_before {
+            let range = env.span(open, open + 1);
+            report_break(
+                env,
+                wanted,
+                block.gap.start,
+                open,
+                range,
+                TypeError::open_brace_break,
+            );
+        }
+        if let (Some(wanted), Some(first)) = (breaks.newline_after, first) {
+            let range = env.range(first);
+            report_break(env, wanted, open, first.start, range, TypeError::body_break);
+        }
+    }
+    if let (Some(Some(wanted)), Some(last)) =
+        (style.rules.close_brace.map(|b| b.newline_before), last)
+    {
+        let range = env.span(close, close + 1);
+        report_break(
+            env,
+            wanted,
+            last,
+            close,
+            range,
+            TypeError::close_brace_break,
+        );
+    }
+}
+
+// `Else`, `ElseIf` or `Catch` (`keyword`, at `kw`) after the block whose `}` is at `close`.
+fn report_chained_keyword<T>(
+    env: &CodeEnv<'_>,
+    close: usize,
+    kw: &Range<T>,
+    keyword: &'static str,
+) {
+    let Some(wanted) = env.style().and_then(|s| s.rules.close_brace?.newline_after) else {
+        return;
+    };
+    report_break(
+        env,
+        wanted,
+        close,
+        kw.start,
+        env.range(kw),
+        |wanted, range| TypeError::chain_break(keyword, wanted, range),
+    );
+}
+
+// Whether a line break between `from` and `to` is as `wanted`; if not, reports at `range`.
+fn report_break(
+    env: &CodeEnv<'_>,
+    wanted: bool,
+    from: usize,
+    to: usize,
+    range: bindings::Range,
+    make: impl FnOnce(bool, bindings::Range) -> TypeError,
+) {
+    if (env.line_of(from) != env.line_of(to)) != wanted {
+        env.soft_diagnostic(make(wanted, range));
+    }
+}
+
+// The offset of the `}` closing `block`, if it has braces.
+fn close_brace_of(block: &Range<cos::Block>) -> Option<usize> {
+    matches!(block.deref(), cos::Block::Curry(_)).then_some(block.end - 1)
+}
+
 // The `New`s past the style's allowance for one block.
 fn report_new_per_block<'c>(env: &CodeEnv<'_>, commands: impl Iterator<Item = &'c Range<Command>>) {
     let Some(max) = env.style().and_then(|s| s.rules.max_new_per_block) else {
@@ -970,13 +1058,7 @@ impl CheckCommandInner for cos::Command {
                 let cnds = cnds.as_ref().ok_or_else(|| {
                     QuasiTypeError::unimplemented("do-while without conditions".into())
                 })?;
-                check_do_while(
-                    env,
-                    flow,
-                    env.range(iter),
-                    iter.deref().as_ref().deref(),
-                    cnds,
-                )
+                check_do_while(env, flow, env.range(iter.deref()), iter, cnds)
             }
             cos::Command::If(cos::IfCommand {
                 cnds: Some(cnds),
@@ -999,7 +1081,7 @@ impl CheckCommandInner for cos::Command {
                 let cnds = cnds.as_ref().ok_or_else(|| {
                     QuasiTypeError::unimplemented("while without conditions".into())
                 })?;
-                check_while(env, flow, cnds, env.range(bdy), bdy.as_ref().deref())?;
+                check_while(env, flow, cnds, env.range(bdy.deref()), bdy)?;
 
                 env.hint(InlayHint {
                     position: env.position(bdy.as_ref().end),
@@ -1217,10 +1299,16 @@ impl CheckCommandInner for cos::Command {
             }),
             cos::Command::Try(cos::TryCommand {
                 b1,
+                kw_catch,
                 catch_target,
                 b2,
                 ..
-            }) => check_try(env, flow, b1.deref(), catch_target.as_ref(), b2),
+            }) => {
+                if let Some(close) = close_brace_of(b1) {
+                    report_chained_keyword(env, close, kw_catch, "Catch");
+                }
+                check_try(env, flow, b1.deref(), catch_target.as_ref(), b2)
+            }
             cos::Command::Throw(cos::ThrowCommand { pc, e: exp, .. })
             | cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. })
             | cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
@@ -1497,16 +1585,24 @@ fn check_if<'a>(
         Some(cos::IfBranches { thn, eifs, els }) => {
             check_branch(env, flow, thn);
             let mut flow = if_false;
+            let mut close = close_brace_of(thn);
             for eif in eifs {
+                if let Some(close) = close {
+                    report_chained_keyword(env, close, &eif.kw, "ElseIf");
+                }
+                close = close_brace_of(&eif.thn);
                 if_false = check_and(&eif.cnds.first, &eif.cnds.remaining, env, &mut flow, true)?;
                 check_branch(env, &mut flow, &eif.thn);
                 others.push(flow);
                 flow = if_false;
             }
-            if let Some(els) = els.as_deref()
-                && let Some(els) = els.body.as_ref()
-            {
-                check_branch(env, &mut flow, els);
+            if let Some(els) = els.as_deref() {
+                if let Some(close) = close {
+                    report_chained_keyword(env, close, &els.kw, "Else");
+                }
+                if let Some(els) = els.body.as_ref() {
+                    check_branch(env, &mut flow, els);
+                }
             }
             others.push(flow);
         }
@@ -1545,7 +1641,7 @@ fn check_while<'a>(
     flow: &mut Flow<'a>,
     cnds: &WhileConditions,
     range: bindings::Range,
-    block: &ProcedureBody,
+    block: &impl CheckCommand,
 ) -> Result<(), QuasiTypeError> {
     // The condition is re-evaluated every iteration, so it's part of each loop pass: the first
     // (throwaway) pass primes whatever it writes (e.g. a `$LISTNEXT` by-ref pointer), and the
@@ -1567,7 +1663,7 @@ fn check_do_while<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     range: bindings::Range,
-    block: &cos::ProcedureBody,
+    block: &impl CheckCommand,
     cnds: &WhileConditions,
 ) -> Result<(), QuasiTypeError> {
     flow.with_loop(range, false, false, env, |flow| block.check(env, flow))?;

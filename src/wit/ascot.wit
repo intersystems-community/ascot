@@ -235,6 +235,13 @@ interface common {
         double-ampersand,
     }
 
+    // Whether a line break is required (`true`) or forbidden (`false`) on each side of a brace; a
+    // field left out allows either.
+    record brace-breaks {
+        newline-before: option<bool>,
+        newline-after: option<bool>,
+    }
+
     // A field left out isn't checked. `command` applies to every command, and `command-<name>`
     // overrides it field by field for one; `function` and `function-<name>` do the same for
     // intrinsic functions.
@@ -245,6 +252,12 @@ interface common {
         condition-and: option<and-operator>,
         max-new-per-block: option<u32>,
         max-commands-per-line: option<u32>,
+        // Around a block's `{`: between the command and it, and between it and the block's first
+        // command.
+        open-brace: option<brace-breaks>,
+        // Around a block's `}`: between the block's last command and it, and between it and an
+        // `Else`, `ElseIf` or `Catch` that follows.
+        close-brace: option<brace-breaks>,
         command: option<command-style>,
         command-do: option<command-style>,
         command-if: option<command-style>,
