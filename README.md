@@ -209,7 +209,7 @@ workspace are resolved against IRIS, in one of three ways:
 - **A release's pre-built declarations**, the default. `--iris 2026.2` names an
   IRIS Community release; ascot downloads that release's declaration file (about
   4 MB) from this repository's
-  [`declarations-v5` release](https://github.com/intersystems-community/ascot/releases/tag/declarations-v5)
+  [`declarations` release](https://github.com/intersystems-community/ascot/releases/tag/declarations)
   the first time, says so, checks its checksum and keeps it in `~/.ascot/`.
   Without `--iris`, ascot uses the newest release it was built for, 2026.2. If
   the file isn't cached and can't be downloaded, ascot says so and goes on

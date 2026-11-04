@@ -45,13 +45,14 @@ fn open_file(iris: &Path, namespace: Option<&str>) -> Result<Box<dyn IrisContext
     Ok(Box::new(declarations))
 }
 
-pub(crate) const DECLARATIONS_VERSION: u32 = 5;
+/// The declaration format's version, semver: a file is readable while its major part matches.
+pub(crate) const DECLARATIONS_VERSION: &str = "1.0.0";
 
 /// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
 /// argument to its answer. A class holds only its own members; ascot walks its superclasses.
 #[derive(Serialize, Deserialize, Default)]
 pub struct Declarations {
-    pub version: u32,
+    pub version: String,
     pub namespace: String,
     /// The instance's `$ZVERSION`; empty in a file from before it was recorded.
     #[serde(default)]
@@ -78,10 +79,14 @@ impl Declarations {
         })?;
         let declarations: Self = serde_json::from_str(&text)
             .map_err(|e| format!("{} is not an ascot declaration file: {e}", path.display()))?;
-        if declarations.version != DECLARATIONS_VERSION {
+        let major = |v: &str| v.split('.').next().unwrap_or_default().to_string();
+        if major(&declarations.version) != major(DECLARATIONS_VERSION) {
             return Err(format!(
-                "{} was written by an incompatible ascot; regenerate it with `ascot declare`",
-                path.display()
+                "{} was written by an incompatible ascot (format {}, this one reads {}); \
+                 regenerate it with `ascot declare`",
+                path.display(),
+                declarations.version,
+                DECLARATIONS_VERSION
             ));
         }
         Ok(declarations)
@@ -145,7 +150,7 @@ mod tests {
     #[test]
     fn declarations_round_trip_through_their_file_and_answer_every_lookup() {
         let declarations = Declarations {
-            version: DECLARATIONS_VERSION,
+            version: DECLARATIONS_VERSION.to_string(),
             namespace: "USER".to_string(),
             iris_version: "IRIS for UNIX 2026.1".to_string(),
             classes: [("A.B".to_string(), DeclaredClass::from(&class_info("A.B")))].into(),
@@ -237,7 +242,7 @@ mod tests {
     #[test]
     fn open_reads_a_declaration_file_and_checks_its_namespace() {
         let declarations = Declarations {
-            version: DECLARATIONS_VERSION,
+            version: DECLARATIONS_VERSION.to_string(),
             namespace: "USER".to_string(),
             iris_version: String::new(),
             classes: BTreeMap::new(),
@@ -262,7 +267,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("ascot-version-{}.json", std::process::id()));
         std::fs::write(
             &path,
-            r#"{"version":1,"namespace":"USER","classes":{},"includes":{},"routines":{}}"#,
+            r#"{"version":"0.9.0","namespace":"USER","classes":{},"includes":{},"routines":{}}"#,
         )
         .unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();

@@ -53,20 +53,22 @@ receiver's class. The script checks that each override keeps the member's kind a
 names, so an override can only change types, modes, defaults and the return type. The same file
 is embedded in ascot and applied over a live instance.
 
-The generated files are published as assets of the `declarations-v<format>` GitHub Release,
-named `v<format>-iris-community-<release>.d.json.gz` with a `.sha256` beside each, which is
-where `--iris <release>` downloads from. The `Declarations` workflow builds and uploads one
+The generated files are published as assets of the `declarations` GitHub Release, named
+`iris-community-<release>.d.json.gz` with a `.sha256` beside each, which is where
+`--iris <release>` downloads from. The `Declarations` workflow builds and uploads one
 (`Run workflow`, with the release), or by hand:
 
 ```sh
-scripts/prebuilt-declarations.sh 2026.2 v5-iris-community-2026.2.d.json
-gzip -9 v5-iris-community-2026.2.d.json
-shasum -a 256 v5-iris-community-2026.2.d.json.gz > v5-iris-community-2026.2.d.json.gz.sha256
-gh release upload declarations-v5 v5-iris-community-2026.2.d.json.gz{,.sha256} --clobber
+scripts/prebuilt-declarations.sh 2026.2 iris-community-2026.2.d.json
+gzip -9 iris-community-2026.2.d.json
+shasum -a 256 iris-community-2026.2.d.json.gz > iris-community-2026.2.d.json.gz.sha256
+gh release upload declarations iris-community-2026.2.d.json.gz{,.sha256} --clobber
 ```
 
-Bump `DEFAULT_RELEASE` in `src/prebuilt.rs` when a new Community release's file is up, and the
-release tag when `DECLARATIONS_VERSION` changes.
+Bump `DEFAULT_RELEASE` in `src/prebuilt.rs` when a new Community release's file is up. The
+format's version, `DECLARATIONS_VERSION` in `src/iris.rs`, is semver: a file is readable while
+its major part matches, so bump the major for a change old ascots can't read, the minor for an
+addition, and re-upload every release's file after a major bump.
 
 ### npm package
 

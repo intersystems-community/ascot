@@ -8,8 +8,6 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
-use crate::iris::DECLARATIONS_VERSION;
-
 /// The release `--iris` means when it isn't given: the newest one ascot was built for.
 pub const DEFAULT_RELEASE: &str = "2026.2";
 const RELEASES: &str = "https://github.com/intersystems-community/ascot/releases/download";
@@ -20,9 +18,9 @@ pub fn is_release(iris: &str) -> bool {
     matches!(iris.split_once('.'), Some((year, minor)) if year.len() == 4 && digits(year) && digits(minor))
 }
 
-/// The asset's name carries the format version, so an older ascot keeps finding files it reads.
+/// The release's asset in the `declarations` GitHub Release.
 pub fn asset(release: &str) -> String {
-    format!("v{DECLARATIONS_VERSION}-iris-community-{release}.d.json.gz")
+    format!("iris-community-{release}.d.json.gz")
 }
 
 /// The cached declaration file of `release`, downloaded first if `~/.ascot` lacks it.
@@ -31,8 +29,8 @@ pub fn fetch(release: &str) -> Result<PathBuf, String> {
     let dir = std::env::home_dir()
         .ok_or("cannot find the home directory to keep the declarations in")?
         .join(".ascot");
-    let base = std::env::var("ASCOT_DECLARATIONS_URL")
-        .unwrap_or_else(|_| format!("{RELEASES}/declarations-v{DECLARATIONS_VERSION}"));
+    let base =
+        std::env::var("ASCOT_DECLARATIONS_URL").unwrap_or_else(|_| format!("{RELEASES}/declarations"));
     fetch_into(release, &base, &dir)
 }
 
@@ -153,7 +151,7 @@ mod tests {
     #[test]
     fn a_release_is_downloaded_checked_unpacked_and_then_read_from_the_cache() {
         let declarations = Declarations {
-            version: DECLARATIONS_VERSION,
+            version: crate::iris::DECLARATIONS_VERSION.to_string(),
             namespace: "%SYS".to_string(),
             ..Default::default()
         };
@@ -165,7 +163,7 @@ mod tests {
         ]);
         let dir = temp_dir("ok");
         let path = fetch_into("2026.2", &url, &dir).unwrap();
-        assert_eq!(path, dir.join(format!("v{DECLARATIONS_VERSION}-iris-community-2026.2.d.json")));
+        assert_eq!(path, dir.join("iris-community-2026.2.d.json"));
         assert_eq!(Declarations::load(&path).unwrap().namespace, "%SYS");
         assert_eq!(*hits.lock().unwrap(), 2);
         assert_eq!(fetch_into("2026.2", &url, &dir).unwrap(), path);
