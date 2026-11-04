@@ -203,49 +203,28 @@ claude plugin install ascot-lsp@ascot-plugins
 
 ### Connecting to IRIS
 
-The system and library classes and routines that aren't part of the local
-workspace are resolved against IRIS, in one of three ways:
+Classes, routines and include files outside the workspace are resolved against
+IRIS. `--iris` says which IRIS, for `analyze`, `analyze-workspace` and `lsp`;
+`mcp` takes the same in the `iris` argument of `create_workspace`:
 
-- **A release's pre-built declarations**, the default. `--iris 2026.2` names an
-  IRIS Community release; ascot downloads that release's declaration file (about
-  4 MB) from this repository's
+- `--iris 2026.2`, the default: the pre-built declarations of that IRIS
+  Community release. The first run downloads them (4 MB) from this repository's
   [`declarations` release](https://github.com/intersystems-community/ascot/releases/tag/declarations)
-  the first time, says so, checks its checksum and keeps it in `~/.ascot/`.
-  Without `--iris`, ascot uses the newest release it was built for, 2026.2. If
-  the file isn't cached and can't be downloaded, the run stops with the reason.
-  `ASCOT_DECLARATIONS_URL` points at another directory holding the assets, for
+  into `~/.ascot/iris-community-2026.2.d.json`, checksum verified, and says so;
+  later runs read that file. They hold the classes as IRIS reports them,
+  corrected by [`src/mask.json`](src/mask.json). `ASCOT_DECLARATIONS_URL` names
   a mirror.
+- `--iris http://user:password@host:port[/prefix]`, with `--iris-namespace`
+  (default `%SYS`): a live instance, through the Atelier REST API, for classes
+  the Community image doesn't ship. An `https` certificate is checked against
+  the operating system's trust store.
+- `--iris user.d.json`: a declaration file of your own (next section).
+- `--iris none`: no environment, so every class, routine or include outside the
+  workspace is an error.
 
-- **No environment**, `--iris none`: nothing outside the workspace exists, so
-  every class, routine or include it references but doesn't hold is an error,
-  the strictest reading. For code meant to stand alone, and for tests.
-
-  The pre-built files hold the classes as IRIS reports them, corrected by
-  [`src/mask.json`](src/mask.json): constructors return their own class,
-  collections their element type, optional arguments have their defaults.
-
-- **A live instance**, reached through the Atelier REST API, for code that uses
-  classes the Community image doesn't ship: `--iris <url>` and
-  `--iris-namespace <namespace>` (default `%SYS`). The URL carries the
-  credentials and, if the instance is served under one, its path prefix
-  (`/iris` below):
-
-  ```sh
-  ascot analyze --iris http://user:password@localhost:8080/iris --iris-namespace USER src/
-  ```
-
-  An `https` instance's certificate is checked against the operating system's
-  trust store, so one it trusts, such as a company CA's, works.
-
-- **A declaration file** of your own, written by `ascot declare` (next section).
-
-A host embedding the wasm build has the same choices through the `env` it
-passes: its own lookups, an Atelier connection, or a declaration file's bytes,
-gzipped or not, such as the pre-built asset it bundles.
-
-`analyze`, `analyze-workspace` and `lsp` take these on the command line; `mcp`
-takes them per workspace, through the `iris` and `iris_namespace` arguments of
-the `create_workspace` tool call, with the same default.
+Whatever `--iris` names has to open, or the run stops. A host embedding the
+wasm build passes the same through `env`: its own lookups, an Atelier
+connection, or a declaration file's bytes, gzipped or not.
 
 #### Declaration files
 
