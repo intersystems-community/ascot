@@ -54,11 +54,12 @@ enum RefUse {
 }
 
 struct Shared<'a> {
-    uri: &'a str,
-    env: &'a WorkspaceEnv<'a>,
-    procedure_block: bool,
-    // Started from the body's state, as the handler of a trap it armed (see `Traps`).
-    handler: bool,
+    env: &'a CodeEnv<'a>,
+    // Whether a name this flow has not seen may already hold a value: a free label's publics, or
+    // a nested label's privates, set by the block before the label was reached. False for a
+    // procedure's own body, which starts with its parameters and public list alone, and for a
+    // trap handler, which starts from the body's state.
+    may_exist: bool,
     // `None` is for subroutines and procedures only. It means that the output expectation
     // is unclear until the first return/quit command. Shared (the `Rc`) with the labels that
     // return for this body (see `check_block_body`).
@@ -72,6 +73,8 @@ struct Shared<'a> {
     // Every not-`New`'d (`new != Some(true)`) variable written anywhere in the procedure, i.e.
     // one whose value silently leaks into the caller's scope on return.
     creates: RefCell<HashSet<String>>,
+    // Every variable written, for a nested label whose block reads them after a `Do` of it.
+    writes: RefCell<HashSet<String>>,
     // Set once an `if` branch's checking failed partway (see `check_branch`): the deferred "never
     // read"/"never assigned" reports can't be trusted after that.
     incomplete: std::cell::Cell<bool>,
@@ -96,6 +99,14 @@ impl LoopContext {
 // What a flow's returns are held to, once one establishes it: shared by the labels that return
 // for the same caller.
 pub(crate) type OutputCell = Rc<RefCell<Option<WithRange<Option<Ty>>>>>;
+
+// What a body did to its variables, for whoever shares them.
+pub(crate) struct Effects {
+    // The not-`New`'d variables it assigned: what leaks into the caller's scope on return.
+    pub(crate) creates: Vec<String>,
+    // Every variable it assigned, including the block's privates.
+    pub(crate) writes: HashSet<String>,
+}
 
 // The special variable that armed a trap, and so the one whose reset disarms it.
 #[derive(Clone, Copy, PartialEq)]
@@ -128,16 +139,14 @@ impl Traps {
         &mut self,
         them: Traps,
         env: &WorkspaceEnv<'_>,
-        procedure_block: bool,
+        undeclared: &Binding,
     ) -> Result<(), QuasiTypeError> {
         if self.active.is_none() {
             self.active = them.active;
         }
         for (label, join) in them.joins {
             match self.joins.get_mut(&label) {
-                Some(mine) => mine
-                    .bindings
-                    .merge(Some(join.bindings), env, procedure_block)?,
+                Some(mine) => mine.bindings.merge(Some(join.bindings), env, undeclared)?,
                 None => {
                     self.joins.insert(label, join);
                 }
@@ -162,8 +171,8 @@ pub struct Flow<'a> {
     loop_context: Option<LoopContext>,
     current_range: bindings::Range,
     traps: Traps,
-    // Inside a `Try` block, where IRIS refuses to set a trap and a `Throw` goes to the `Catch`.
-    in_try: bool,
+    // A bare or exclusive `New` was issued: every name created from here on lives in this frame.
+    new_all: bool,
     // Past a `ZQuit`: the frames below are gone, so what this path returns is nobody's to check.
     detached: bool,
 }
@@ -246,30 +255,28 @@ impl<'a> Flow<'a> {
     // A label, held to `output` (see `LabelEntry::output`); an error handler starts from `join`,
     // the states it can be entered from (see `Traps`). Returns what it creates.
     pub(crate) fn with_label(
-        uri: &'a str,
-        env: &'a WorkspaceEnv,
+        env: &'a CodeEnv<'a>,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
         output: OutputCell,
         join: Option<Join>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
-    ) -> Result<Vec<String>, TypeError> {
-        Self::run(
-            uri, env, range, args, None, output, join, handler, false, false,
-        )
+    ) -> Result<Effects, TypeError> {
+        Self::run(env, range, args, None, output, join, handler, false, false)
     }
 
     pub(crate) fn is_procedure_block(&self) -> bool {
-        self.shared.procedure_block
+        self.shared.env.in_procedure_block()
     }
 
-    // Whether the procedure block has private variables, every local it uses: its body's flow and
-    // a handler's know; a label `Do`ne or `Goto`ne starts fresh and can't say.
+    // Whether the procedure block has private variables, every local it uses. A flow that may not
+    // know them all (a label `Do`ne or `Goto`ne) can only say yes.
     pub(crate) fn private_variables(&mut self) -> Result<Option<bool>, QuasiTypeError> {
-        if !(self.shared.procedure_block || self.shared.handler) {
+        if !self.shared.env.in_procedure_block() {
             return Ok(None);
         }
-        Ok(Some(self.bindings()?.bindings.values().any(|b| b.private)))
+        let any = self.bindings()?.bindings.values().any(|b| b.private);
+        Ok((any || !self.shared.may_exist).then_some(any))
     }
 
     // `ZQuit`: the frames below are gone, and this code goes on without them (measured).
@@ -307,8 +314,7 @@ impl<'a> Flow<'a> {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_procedure(
-        uri: &'a str,
-        env: &'a WorkspaceEnv,
+        env: &'a CodeEnv<'a>,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
         public_list: ProcedureBlock,
@@ -322,7 +328,6 @@ impl<'a> Flow<'a> {
             output.it.map(|it| WithRange::new(it, output.range)),
         ));
         Self::run(
-            uri,
             env,
             range,
             args,
@@ -333,13 +338,13 @@ impl<'a> Flow<'a> {
             auto_return,
             output_keyword,
         )
+        .map(|effects| effects.creates)
     }
 
     // Runs `handler` in a fresh flow for a body with `args`; returns what the body creates.
     #[allow(clippy::too_many_arguments)]
     fn run(
-        uri: &'a str,
-        env: &'a WorkspaceEnv,
+        env: &'a CodeEnv<'a>,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
         public_list: ProcedureBlock,
@@ -348,8 +353,9 @@ impl<'a> Flow<'a> {
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
         auto_return: bool,
         output_keyword: bool,
-    ) -> Result<Vec<String>, TypeError> {
-        let procedure_block = public_list.is_some();
+    ) -> Result<Effects, TypeError> {
+        let procedure_block = env.in_procedure_block();
+        let may_exist = public_list.is_none() && join.is_none();
         let mut bindings = HashMap::new();
         let mut reading_list = HashMap::new();
         let mut ref_params = Vec::new();
@@ -409,7 +415,10 @@ impl<'a> Flow<'a> {
                 return Err(TypeError::redeclare_variable(
                     name,
                     range,
-                    Location::new(uri.to_string(), previous_definition.declared.unwrap().range),
+                    Location::new(
+                        env.uri().to_string(),
+                        previous_definition.declared.unwrap().range,
+                    ),
                 ));
             }
         }
@@ -438,28 +447,27 @@ impl<'a> Flow<'a> {
         };
         let mut flow = Self {
             shared: Rc::new(Shared {
-                uri,
                 env,
-                procedure_block,
-                handler: is_handler,
+                may_exist,
                 output,
                 ty_var: RefCell::new(0),
                 reading_list: RefCell::new(reading_list),
                 ref_params: RefCell::new(ref_params),
                 known_names,
                 creates: RefCell::new(HashSet::new()),
+                writes: RefCell::new(HashSet::new()),
                 incomplete: std::cell::Cell::new(false),
             }),
             bindings: Some(bindings),
             loop_context: None,
             current_range: range,
             traps,
-            in_try: false,
+            new_all: false,
             detached: false,
         };
-        // A handler may hand what it assigns on to another label (`Goto Exit`), so its deferred
-        // reports can't be trusted.
-        if is_handler {
+        // A handler, or any nested label, may hand what it assigns on to another label or back to
+        // its block, so its deferred reports can't be trusted.
+        if is_handler || (may_exist && procedure_block) {
             flow.mark_incomplete();
         }
         handler(&mut flow)?;
@@ -524,7 +532,10 @@ impl<'a> Flow<'a> {
             .cloned()
             .collect();
         creates.sort();
-        Ok(creates)
+        Ok(Effects {
+            creates,
+            writes: flow.shared.writes.borrow().clone(),
+        })
     }
 
     pub(crate) fn with_loop(
@@ -633,7 +644,7 @@ impl<'a> Flow<'a> {
                 .map(|context| LoopContext::new(context.range)),
             current_range: self.current_range,
             traps: self.traps.clone(),
-            in_try: self.in_try,
+            new_all: self.new_all,
             detached: self.detached,
         }
     }
@@ -692,8 +703,9 @@ impl<'a> Flow<'a> {
     }
 
     fn merge_bindings(&mut self, that: Option<Bindings>) -> Result<(), QuasiTypeError> {
+        let undeclared = self.undeclared();
         match &mut self.bindings {
-            Some(this) => this.merge(that, self.shared.env, self.shared.procedure_block),
+            Some(this) => this.merge(that, self.shared.env, &undeclared),
             None => {
                 self.bindings = that;
                 Ok(())
@@ -703,8 +715,9 @@ impl<'a> Flow<'a> {
 
     pub(crate) fn merge(&mut self, them: Self) -> Result<(), QuasiTypeError> {
         self.merge_bindings(them.bindings)?;
-        self.traps
-            .merge(them.traps, self.shared.env, self.shared.procedure_block)?;
+        let undeclared = self.undeclared();
+        self.traps.merge(them.traps, self.shared.env, &undeclared)?;
+        self.new_all |= them.new_all;
         self.detached |= them.detached;
         match (&mut self.loop_context, them.loop_context) {
             (Some(mine), Some(theirs)) => {
@@ -746,7 +759,7 @@ impl<'a> Flow<'a> {
             // loop's exit.
             (Some(context), Some(actual)) => Err(QuasiTypeError::quit_x_in_control(
                 actual.to_ty(self.shared.env).unwrap_or_default(),
-                Location::new(self.shared.uri.to_string(), context.range),
+                Location::new(self.shared.env.uri().to_string(), context.range),
             )),
             // Breaking a loop hands control to whatever follows it, still within this same
             // procedure — our caller hasn't seen anything yet.
@@ -784,13 +797,13 @@ impl<'a> Flow<'a> {
                 .map_err(Incompatible::general),
             (Some(wanted), None) => Err(QuasiTypeError::return_nothing_for_x(
                 wanted.clone(),
-                Location::new(self.shared.uri.to_string(), established.range),
+                Location::new(self.shared.env.uri().to_string(), established.range),
             )),
             (None, actual) => {
                 if let Some(actual) = actual {
                     self.add_soft_diagnostic(QuasiTypeError::return_x_for_nothing(
                         actual.to_ty(self.shared.env).unwrap_or_default(),
-                        Location::new(self.shared.uri.to_string(), established.range),
+                        Location::new(self.shared.env.uri().to_string(), established.range),
                     ));
                 }
                 Ok(())
@@ -813,29 +826,15 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
-    // An error raised on purpose: from inside the handler the trap still names, it comes right back.
-    pub(crate) fn raise(&mut self) -> Result<(), QuasiTypeError> {
+    // An error raised on purpose: from inside the handler the trap still names, it comes right
+    // back, unless a `Try` around it catches it first.
+    pub(crate) fn raise(&mut self, in_try: bool) -> Result<(), QuasiTypeError> {
         if let Some((var, None)) = self.traps.active
-            && !self.in_try
+            && !in_try
         {
             self.add_soft_diagnostic(TypeErrorKind::TrapReenters { var: var.name() }.into());
         }
         self.handle_throw()
-    }
-
-    pub(crate) fn in_try(&self) -> bool {
-        self.in_try
-    }
-
-    pub(crate) fn with_try(
-        &mut self,
-        range: bindings::Range,
-        handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
-    ) -> Result<(), QuasiTypeError> {
-        let outer = std::mem::replace(&mut self.in_try, true);
-        let result = self.with_block(range, handler);
-        self.in_try = outer;
-        result
     }
 
     // `var` now names `label`, a handler of this body. A trap can fire anywhere from here on, so
@@ -858,17 +857,15 @@ impl<'a> Flow<'a> {
     }
 
     pub(crate) fn step_traps(&mut self) -> Result<(), QuasiTypeError> {
+        let undeclared = self.undeclared();
         let Some((_, Some(label))) = &self.traps.active else {
             return Ok(());
         };
         let Some(join) = self.traps.joins.get_mut(label) else {
             return Ok(());
         };
-        join.bindings.merge(
-            self.bindings.clone(),
-            self.shared.env,
-            self.shared.procedure_block,
-        )
+        join.bindings
+            .merge(self.bindings.clone(), self.shared.env, &undeclared)
     }
 
     // The handlers this body armed, each with its join, for `CodeEnv::deposit_traps`.
@@ -882,13 +879,21 @@ impl<'a> Flow<'a> {
             .ok_or_else(QuasiTypeError::unreachable)
     }
 
-    // The only place `procedure_block` is needed: it decides the default binding for a
-    // never-declared variable.
     fn lookup(&mut self, name: String) -> Result<&mut Binding, QuasiTypeError> {
-        let procedure_block = self.shared.procedure_block;
-        Ok(self
-            .bindings()?
-            .entry(name, || Binding::undeclared(procedure_block)))
+        let undeclared = self.undeclared();
+        Ok(self.bindings()?.entry(name, || undeclared))
+    }
+
+    // The binding of a name this flow has not seen: private in a procedure block, public outside
+    // one; holding a value it may already have (see `Shared::may_exist`), unless a bare `New` has
+    // made this frame the home of every name from here on.
+    fn undeclared(&self) -> Binding {
+        let private = self.shared.env.in_procedure_block();
+        Binding::undeclared(
+            private,
+            self.shared.may_exist && !self.new_all,
+            private || self.new_all,
+        )
     }
 
     // Unconditionally (re-)declares `name`, overwriting any existing binding — must be able to
@@ -902,20 +907,15 @@ impl<'a> Flow<'a> {
         if is_percent_variable(&name) {
             return Ok(());
         }
-        // IRIS refuses to `New` a private variable in a procedure block (#1038), parameters
-        // included; only a `PublicList` variable may be.
-        if self.shared.procedure_block {
-            if self.lookup(name.clone())?.private {
-                self.add_soft_diagnostic(QuasiTypeError::WithRange(
-                    TypeError::new_in_procedure_block(name.clone(), range),
-                ));
-            }
-            let binding = self.lookup(name)?;
-            binding.new = Some(true);
-            binding.new_at = Some(range);
+        // IRIS refuses to `New` a private variable of a procedure block (#1038), parameters
+        // included, in every frame of the block; only a public one may be.
+        if self.lookup(name.clone())?.private {
+            self.add_soft_diagnostic(QuasiTypeError::WithRange(
+                TypeError::new_in_procedure_block(name, range),
+            ));
             return Ok(());
         }
-        let uri = self.shared.uri.to_string();
+        let uri = self.shared.env.uri().to_string();
         let binding = self.lookup(name.clone())?;
         if let Some(previous) = binding.new_at {
             return Err(QuasiTypeError::WithRange(TypeError::redundant_new(
@@ -933,18 +933,33 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
+    // The bare and exclusive forms `New` every public not kept, undefined from here, and make this
+    // frame the home of every name created later. A procedure block's privates are untouched, and
+    // naming one is the error `New` of it gives (#1038).
     pub(crate) fn handle_new_except(
         &mut self,
         keep: &[String],
         range: bindings::Range,
     ) -> Result<(), QuasiTypeError> {
-        for name in self.other_names(keep)? {
-            let binding = self.lookup(name)?;
-            if binding.new != Some(true) {
-                binding.new = Some(true);
-                binding.new_at = Some(range);
+        for name in keep {
+            if !is_percent_variable(name) && self.lookup(name.clone())?.private {
+                self.add_soft_diagnostic(QuasiTypeError::WithRange(
+                    TypeError::new_in_procedure_block(name.clone(), range),
+                ));
             }
         }
+        for name in self.other_names(keep)? {
+            let binding = self.lookup(name)?;
+            if binding.private {
+                continue;
+            }
+            binding.new = Some(true);
+            binding.new_at = Some(range);
+            binding.assigned = PowerTy::undefined();
+            binding.assigned_at = HashSet::new();
+            binding.subscript_assigned = None;
+        }
+        self.new_all = true;
         Ok(())
     }
 
@@ -1040,6 +1055,7 @@ impl<'a> Flow<'a> {
     }
 
     fn note_write(&self, name: &str, new: Option<bool>) {
+        self.shared.writes.borrow_mut().insert(name.to_string());
         if new != Some(true) {
             self.shared.creates.borrow_mut().insert(name.to_string());
         }
@@ -1265,18 +1281,18 @@ impl Binding {
         }
     }
 
-    fn undeclared(procedure_block: bool) -> Self {
+    fn undeclared(private: bool, exists: bool, new: bool) -> Self {
         Self {
             declared: None,
-            assigned: if procedure_block {
-                PowerTy::undefined()
-            } else {
+            assigned: if exists {
                 Ty::Any.into()
+            } else {
+                PowerTy::undefined()
             },
             assigned_at: HashSet::new(),
-            subscript_assigned: if procedure_block { None } else { Some(()) },
-            private: procedure_block,
-            new: Some(procedure_block),
+            subscript_assigned: exists.then_some(()),
+            private,
+            new: Some(new),
             new_at: None,
             incoming: false,
         }
@@ -1359,7 +1375,7 @@ impl Bindings {
         &mut self,
         that: Option<Bindings>,
         env: &WorkspaceEnv<'_>,
-        procedure_block: bool,
+        undeclared: &Binding,
     ) -> Result<(), QuasiTypeError> {
         let Some(mut that) = that else {
             return Ok(());
@@ -1375,11 +1391,11 @@ impl Bindings {
             let this_binding = self
                 .bindings
                 .remove(&name)
-                .unwrap_or_else(|| Binding::undeclared(procedure_block));
+                .unwrap_or_else(|| undeclared.clone());
             let that_binding = that
                 .bindings
                 .remove(&name)
-                .unwrap_or_else(|| Binding::undeclared(procedure_block));
+                .unwrap_or_else(|| undeclared.clone());
             let merged = this_binding.merge(that_binding, env, &name)?;
             self.bindings.insert(name, merged);
         }

@@ -433,21 +433,21 @@ impl MethodDetails {
         );
         // `?` is deferred until after relocation below, so an early return doesn't skip
         // relocating diagnostics/references/hints already recorded before the error.
+        let code_env = method_env.for_member(
+            header_len,
+            Some(&cls.class),
+            !self.is_class_method,
+            name,
+            &definitions,
+            self.procedure_block.is_some(),
+        );
         let result = Flow::with_procedure(
-            env.uri(),
-            env.base,
+            &code_env,
             body_range,
             local_args,
             self.procedure_block.clone(),
             local_out,
             |flow| {
-                let code_env = method_env.for_member(
-                    header_len,
-                    Some(&cls.class),
-                    !self.is_class_method,
-                    name,
-                    &definitions,
-                );
                 let body = MethodBody {
                     language,
                     mode,
@@ -585,13 +585,35 @@ fn check_block_body<'a>(
             .map(|(_, d)| (d, false))
             .collect::<Vec<_>>(),
     );
+    let parent = env;
     let nested;
     let env = if is_body || !labels.is_empty() {
-        nested = env.with_nested_labels(labels, is_procedure);
+        nested = parent.with_nested_labels(labels.clone(), is_procedure);
         &nested
     } else {
         env
     };
+    // What each nested label assigns, for the body's `Do`s and `$$`s of it (see `call_label`):
+    // the labels checked with every report held back, in an env of their own so nothing else of
+    // this pass sticks, and again while the sets still grow, since the labels call one another.
+    if !subroutines.is_empty() {
+        let primed = parent.with_nested_labels(labels, is_procedure);
+        let suppressed = primed.suppress_soft_diagnostics();
+        let references = primed.references_mark();
+        primed.with_hints_suppressed(|| {
+            for _ in 0..4 {
+                let before = primed.label_writes_total();
+                for (sub, details) in &subroutines {
+                    let _ = check_label_body(&primed, details, sub);
+                }
+                if primed.label_writes_total() == before {
+                    break;
+                }
+            }
+        });
+        primed.references_since(references);
+        primed.restore_soft_diagnostics(suppressed);
+    }
     let checked = body.main.check(env, flow);
     if is_body {
         env.deposit_traps(flow.take_traps());
@@ -634,9 +656,8 @@ fn check_label_body<'a>(
         return Ok(vec![]);
     };
     let output = entry.output.get_or_init(Default::default);
-    Flow::with_label(
-        env.uri(),
-        env.deref(),
+    let effects = Flow::with_label(
+        env,
         range,
         details.args(),
         output.clone(),
@@ -647,7 +668,11 @@ fn check_label_body<'a>(
             checked?;
             flow.tail_call(next.map(|next| &next.output), range)
         },
-    )
+    )?;
+    if entry.nested {
+        env.record_label_writes(&details.name.it, effects.writes);
+    }
+    Ok(effects.creates)
 }
 
 impl CheckCommand for cos::ProcedureMain {
@@ -1185,7 +1210,7 @@ impl CheckCommandInner for cos::Command {
                     if let Some(exp) = exp {
                         exp.to_ty(env, flow)?;
                     }
-                    flow.raise()
+                    flow.raise(env.in_try())
                 })
             }
             // Unwinds to a frame that set `$ZTRAP`, or to the bottom of the stack, and goes on
@@ -1526,7 +1551,8 @@ fn check_try<'a>(
     catch_block: &Range<cos::Block>,
 ) -> Result<(), QuasiTypeError> {
     let before = flow.split();
-    flow.with_try(env.range(try_block), |flow| try_block.check(env, flow))?;
+    let try_env = env.with_try();
+    flow.with_block(env.range(try_block), |flow| try_block.check(&try_env, flow))?;
     // The exception may be thrown anywhere in the try block, so the catch block starts from
     // anything between its start and its end.
     let mut catch_flow = flow.split();
@@ -2066,7 +2092,7 @@ fn check_trap_set<'a>(
         SpecialVariable::ECODE(_) => {
             return match value {
                 PowerTy::Const(Const::String(s)) if s.is_empty() => Ok(()),
-                PowerTy::Const(_) => flow.raise(),
+                PowerTy::Const(_) => flow.raise(env.in_try()),
                 _ => {
                     env.soft_diagnostic(TypeError::not_checked(
                         "A non-literal $ECODE value",
@@ -2078,7 +2104,7 @@ fn check_trap_set<'a>(
         }
         _ => return Ok(()),
     };
-    if flow.in_try() {
+    if env.in_try() {
         env.soft_diagnostic(TypeError::not_allowed_in(
             "An error trap",
             "a TRY block",
@@ -3243,6 +3269,11 @@ fn call_label<'a>(
     range: bindings::Range,
     extrinsic: bool,
 ) -> Result<Option<Ty>, QuasiTypeError> {
+    let nested = routine.is_none()
+        && label
+            .as_deref()
+            .and_then(|label| env.label_entry(label))
+            .is_some_and(|entry| entry.nested);
     let proc = resolve_label_soft(env, label.clone(), routine, range)?;
     // `label+n` enters the procedure part-way, where its formal list no longer applies, and which
     // line that is depends on the compiled routine: the label is confirmed, the rest is untyped.
@@ -3252,18 +3283,27 @@ fn call_label<'a>(
     } else {
         proc
     };
-    if let (true, TyProcedureOrAny::Procedure(proc), Some(label)) = (extrinsic, &proc, label)
+    if let (true, TyProcedureOrAny::Procedure(proc), Some(label)) = (extrinsic, &proc, &label)
         && !proc.formal_list
     {
-        env.soft_diagnostic(TypeError::label_not_a_function(label, range));
+        env.soft_diagnostic(TypeError::label_not_a_function(label.clone(), range));
     }
-    check_call(
+    let result = check_call(
         env,
         flow,
         proc,
         args.iter().flat_map(|args| args.items.iter()),
         range,
-    )
+    )?;
+    // A nested label runs on this block's variables: what it assigns is assigned here too.
+    if let Some(label) = &label
+        && nested
+    {
+        for name in env.label_writes(label) {
+            flow.invalidate(Local::bare(name), Ty::Any.into())?;
+        }
+    }
+    Ok(result)
 }
 
 // Resolves a label reference, with its go-to-definition link. A routine whose labels are out of
@@ -3559,18 +3599,19 @@ fn check_procedure(
     details: &details::RoutineElementDetails,
     env: &CodeEnv<'_>,
 ) -> Result<(), TypeError> {
+    let public_list = match &details.kind {
+        details::RoutineElementKind::Subroutine => None,
+        details::RoutineElementKind::Procedure { public_list } => Some(public_list.clone()),
+    };
+    let env = env.with_procedure_block(public_list.is_some());
     let range = env.range(&this.body);
     let creates = Flow::with_procedure(
-        env.uri(),
-        env.deref(),
+        &env,
         range,
         details.args(),
-        match &details.kind {
-            details::RoutineElementKind::Subroutine => None,
-            details::RoutineElementKind::Procedure { public_list } => Some(public_list.clone()),
-        },
+        public_list,
         env.with_range(this.header.as_ref().map(|_| None)),
-        |flow| check_block_body(&this.body, env, flow, true),
+        |flow| check_block_body(&this.body, &env, flow, true),
         true,
         false,
     )?;
@@ -3626,22 +3667,14 @@ pub(crate) fn check_rtn(
             .first()
             .filter(|(_, is_procedure)| !is_procedure)
             .and_then(|(details, _)| env.label_entry(&details.name.it));
-        match Flow::with_label(
-            env.uri(),
-            env.deref(),
-            range,
-            vec![],
-            Default::default(),
-            None,
-            |flow| {
-                let checked = rtn.main.check(&env, flow);
-                env.deposit_traps(flow.take_traps());
-                checked?;
-                flow.tail_call(first.map(|first| &first.output), range)
-            },
-        ) {
-            Ok(creates) => {
-                if let Some(hint) = creates_hint(range.start, creates) {
+        match Flow::with_label(&env, range, vec![], Default::default(), None, |flow| {
+            let checked = rtn.main.check(&env, flow);
+            env.deposit_traps(flow.take_traps());
+            checked?;
+            flow.tail_call(first.map(|first| &first.output), range)
+        }) {
+            Ok(effects) => {
+                if let Some(hint) = creates_hint(range.start, effects.creates) {
                     env.hint(hint);
                 }
             }
