@@ -198,6 +198,10 @@ struct AnyCall(
     cos::FunArgList,
 );
 
+// `$Z` functions IRIS compiles but doesn't document: the object-system internals the kernel's
+// own classes call. Noted with a hint and typed as Any, per GOVERNANCE.md.
+const UNDOCUMENTED_FUNCTIONS: &[&str] = &["ZOBJEXPORT", "ZOBJVAL", "ZOBJNEW", "ZOBJNEXT"];
+
 fn check_empty_args(call: &cos::FunctionCall) -> Result<(), QuasiTypeError> {
     let Some(name) = call.name() else {
         return Ok(());
@@ -295,6 +299,13 @@ impl CheckExprInner for cos::FunctionCall {
                     }
                 }
                 let name = call.name.print();
+                if UNDOCUMENTED_FUNCTIONS
+                    .iter()
+                    .any(|f| f.eq_ignore_ascii_case(&name))
+                {
+                    flow.add_soft_diagnostic(QuasiTypeError::undocumented_function(name));
+                    return Ok(PowerTy::plain(Ty::Any));
+                }
                 let names = cos::FUNCTION_NAMES.iter().copied().chain(
                     cos::SIMPLE_FUNCTIONS
                         .iter()
