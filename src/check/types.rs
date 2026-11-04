@@ -607,6 +607,8 @@ pub enum PropertyTy {
     Collection { kind: CollectionClass, element: Ty },
     // `Property X [ MultiDimensional ]`: `..X(subs)` addresses a node typed like the property.
     Multidimensional(Ty),
+    // A name a `%Dispatch*` hook serves, with any arguments or subscripts, typed by the hook.
+    Dispatched(Ty),
 }
 
 impl Default for PropertyTy {
@@ -618,7 +620,9 @@ impl Default for PropertyTy {
 impl PropertyTy {
     pub fn to_ty(&self) -> Ty {
         match self {
-            PropertyTy::Value(ty) | PropertyTy::Multidimensional(ty) => ty.clone(),
+            PropertyTy::Value(ty)
+            | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Dispatched(ty) => ty.clone(),
             PropertyTy::Collection { kind, .. } => kind.class(),
         }
     }
@@ -993,6 +997,7 @@ impl Instantiate for PropertyTy {
         match self {
             PropertyTy::Value(ty)
             | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Dispatched(ty)
             | PropertyTy::Collection { element: ty, .. } => ty.instantiate(receiver, owner),
         }
     }
