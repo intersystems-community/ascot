@@ -2845,9 +2845,18 @@ fn check_param_arg<'a>(
     };
     match arg.deref() {
         Some(cos::MthArg::Expr { expr, expand }) => {
-            // A value where `ByRef`/`Output` is declared: the callee's changes never reach the
-            // caller.
-            if par.mode.is_some() {
+            // A value where `Output` is declared: the callee's result never reaches the caller.
+            // Where `ByRef` is declared, only a variable the caller could have dotted (a plain
+            // local or `%` variable; IRIS takes no dot on a subscript, a global or `i%P`) is
+            // reported: a constant or an expression takes the value's path by nature.
+            let dottable = expr.as_variable().is_some_and(|var| {
+                var.subs.is_none()
+                    && matches!(
+                        &var.base,
+                        AllowMacro::Plain(VariableBase::Local(_) | VariableBase::Public(_))
+                    )
+            });
+            if par.mode == Some(RefMode::Output) || (par.mode.is_some() && dottable) {
                 mode_mismatch(flow, None);
             }
             let target = par.ty.clone().unwrap_or_default();
