@@ -10,7 +10,7 @@ fn iris() -> Option<Box<dyn IrisContext>> {
         eprintln!("ASCOT_TEST_IRIS is unset; skipped");
         return None;
     };
-    Some(ascot::open_iris(&url, None).unwrap_or_else(|e| panic!("{e}")))
+    ascot::open_iris(&url, None).unwrap_or_else(|e| panic!("{e}"))
 }
 
 #[test]
