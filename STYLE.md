@@ -11,7 +11,9 @@ A style is a JSON file passed with `--style <file>` to `analyze`, `analyze-works
   "allow_quit_for_return": false,
   "condition_and": "DoubleAmpersand",
   "max_new_per_block": 1,
-  "max_commands_per_line": 1
+  "max_commands_per_line": 1,
+  "brace": { "open": "SameLine", "allow_one_line_block": true },
+  "space_after_comma": true
 }
 ```
 
@@ -35,3 +37,6 @@ With `form` alone, any casing passes; with `case` alone, the form written is kep
 | `condition_and` | `DoubleAmpersand`, `Comma` | Conditions of `If`, `ElseIf` and `While` joined the other way: `If a, b` under `DoubleAmpersand`, `If a && b` under `Comma`. |
 | `max_new_per_block` | a count | Each `New` past the count in one block or routine body. A nested `{ }` block counts its own. |
 | `max_commands_per_line` | a count | Each command past the count on one line. A brace-less `If`, `Else` or `For` and the commands it governs count as one. |
+| `brace.open` | `SameLine`, `NextLine` | A block's `{` placed the other way: `SameLine` wants `If x {`, `NextLine` the `{` alone on the next line. `Else`, `ElseIf` and `Catch` follow the `}` before them the same way: on its line, or on the next. With `brace` set at all, a `}` not starting its own line is reported. A method body's braces are class syntax and aren't checked. |
+| `brace.allow_one_line_block` | `true`, `false` | Under `false`, a block on one line, `If x { Set y = 1 }`, is reported at its `}`. Allowed unless set. |
+| `space_after_comma` | `true`, `false` | A comma spaced the other way, outside strings and patterns: `true` wants one space after and none before (`$lb(1, 2)`), `false` none on either side (`$lb(1,2)`). A comma next to another or before `)` omits an argument and is left alone, as are embedded SQL, HTML and JavaScript. |

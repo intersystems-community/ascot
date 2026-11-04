@@ -712,6 +712,25 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "The style allows {max} command(s) per line; this is one more"]
     CommandsPerLine { max: u32 },
+    #[code = "S8215"]
+    #[severity = Warning]
+    #[message = "Put `{{` {wanted}"]
+    OpenBrace { wanted: crate::bindings::BraceOpen },
+    #[code = "S3627"]
+    #[severity = Warning]
+    #[message = "Put `}}` on its own line"]
+    CloseBrace,
+    #[code = "S9048"]
+    #[severity = Warning]
+    #[message = "Put `{keyword}` {wanted}"]
+    ChainedKeyword {
+        keyword: &'static str,
+        wanted: Chain,
+    },
+    #[code = "S5583"]
+    #[severity = Warning]
+    #[message = "Put {wanted}"]
+    CommaSpacing { wanted: CommaSpace },
     #[code = "A7895"]
     #[severity = Error]
     #[message = "'{format}' is not a valid $FNUMBER format: {reason}"]
@@ -988,6 +1007,33 @@ impl std::fmt::Display for Detail {
     }
 }
 
+/// Where `Else`, `ElseIf` or `Catch` goes relative to the `}` before it, under a brace style.
+#[derive(Debug)]
+pub struct Chain(pub crate::bindings::BraceOpen);
+
+impl std::fmt::Display for Chain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            crate::bindings::BraceOpen::SameLine => "on the line of the `}` before it",
+            crate::bindings::BraceOpen::NextLine => "on the line after the `}` before it",
+        })
+    }
+}
+
+/// The `space-after-comma` style: one space after and none before, or none on either side.
+#[derive(Debug)]
+pub struct CommaSpace(pub bool);
+
+impl std::fmt::Display for CommaSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0 {
+            "one space after this comma, and none before"
+        } else {
+            "no space around this comma"
+        })
+    }
+}
+
 /// What an `#if` condition's macros expanded to, when that differs from what was written.
 #[derive(Debug)]
 pub struct Expansion(pub Option<String>);
@@ -1123,6 +1169,28 @@ impl TypeError {
 
     pub fn commands_per_line(max: u32, range: Range) -> Self {
         Self::at(TypeErrorKind::CommandsPerLine { max }, range)
+    }
+
+    pub fn open_brace(wanted: crate::bindings::BraceOpen, range: Range) -> Self {
+        Self::at(TypeErrorKind::OpenBrace { wanted }, range)
+    }
+
+    pub fn close_brace(range: Range) -> Self {
+        Self::at(TypeErrorKind::CloseBrace, range)
+    }
+
+    pub fn chained_keyword(
+        keyword: &'static str,
+        wanted: crate::bindings::BraceOpen,
+        range: Range,
+    ) -> Self {
+        let wanted = Chain(wanted);
+        Self::at(TypeErrorKind::ChainedKeyword { keyword, wanted }, range)
+    }
+
+    pub fn comma_spacing(space_after: bool, range: Range) -> Self {
+        let wanted = CommaSpace(space_after);
+        Self::at(TypeErrorKind::CommaSpacing { wanted }, range)
     }
 
     pub fn undecided_if(condition: String, expansion: Option<String>, range: Range) -> Self {

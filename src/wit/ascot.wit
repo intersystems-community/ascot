@@ -235,6 +235,21 @@ interface common {
         double-ampersand,
     }
 
+    enum brace-open {
+        // `If x {`
+        same-line,
+        // The `{` alone on the line after the command.
+        next-line,
+    }
+
+    // Where a block's braces go; `}` always starts its own line, and `Else`, `ElseIf` and `Catch`
+    // follow the `}` as `open` says.
+    record brace-style {
+        open: option<brace-open>,
+        // Whether a block may sit on one line, `If x { Set y = 1 }`; allowed unless `false`.
+        allow-one-line-block: option<bool>,
+    }
+
     // A field left out isn't checked. `command` applies to every command, and `command-<name>`
     // overrides it field by field for one; `function` and `function-<name>` do the same for
     // intrinsic functions.
@@ -245,6 +260,9 @@ interface common {
         condition-and: option<and-operator>,
         max-new-per-block: option<u32>,
         max-commands-per-line: option<u32>,
+        brace: option<brace-style>,
+        // One space after a comma and none before (`true`), or none on either side (`false`).
+        space-after-comma: option<bool>,
         command: option<command-style>,
         command-do: option<command-style>,
         command-if: option<command-style>,

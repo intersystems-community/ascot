@@ -632,7 +632,7 @@ impl WorkspaceStruct {
                 let env = self.workspace_env();
                 let text = self.doc_text(uri).unwrap_or_default();
                 let olc = OLC::new(&text);
-                let doc_env = check::DocumentEnv::new(&env, &olc, uri);
+                let doc_env = check::DocumentEnv::new(&env, &olc, &text, uri);
                 let mut diagnostics = check::check_cls(&doc_env, &cls);
                 let mut name = cls.name.to_string();
                 check::types::normalize_class_name(&mut name);
@@ -655,8 +655,13 @@ impl WorkspaceStruct {
             }
             DocDetails::Rtn(rtn, None) => {
                 let env = self.workspace_env();
-                let doc_env = check::DocumentEnv::new(&env, &rtn.map.expanded_olc, uri)
-                    .with_source_map(&rtn.map);
+                let doc_env = check::DocumentEnv::new(
+                    &env,
+                    &rtn.map.expanded_olc,
+                    rtn.map.expanded_text(),
+                    uri,
+                )
+                .with_source_map(&rtn.map);
                 let mut diagnostics = check::check_rtn(&doc_env, &rtn.routine, &rtn.definitions);
                 diagnostics.extend(env.soft_diagnostics());
                 let mut diagnostics = rtn.map.relocate_diagnostics(diagnostics, uri);

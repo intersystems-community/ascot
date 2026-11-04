@@ -28,6 +28,15 @@ mod wit_bind {
     export!(Component);
 }
 
+impl std::fmt::Display for bindings::BraceOpen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            bindings::BraceOpen::SameLine => "at the end of the command's line",
+            bindings::BraceOpen::NextLine => "on its own line",
+        })
+    }
+}
+
 impl std::fmt::Display for bindings::AndOperator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {

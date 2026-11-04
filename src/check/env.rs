@@ -1475,6 +1475,8 @@ impl ClassDocument {
 pub struct DocumentEnv<'a> {
     pub base: &'a WorkspaceEnv<'a>,
     olc: &'a OLC,
+    // The text `olc` indexes.
+    text: &'a str,
     uri: &'a str,
     pub inlay_hints: RefCell<Vec<bindings::InlayHint>>,
     pub hover_types: RefCell<Vec<(bindings::Range, String)>>,
@@ -1484,10 +1486,11 @@ pub struct DocumentEnv<'a> {
 }
 
 impl<'a> DocumentEnv<'a> {
-    pub fn new(base: &'a WorkspaceEnv, olc: &'a OLC, uri: &'a str) -> Self {
+    pub fn new(base: &'a WorkspaceEnv, olc: &'a OLC, text: &'a str, uri: &'a str) -> Self {
         Self {
             base,
             olc,
+            text,
             uri,
             inlay_hints: RefCell::new(vec![]),
             hover_types: RefCell::new(vec![]),
@@ -1689,6 +1692,22 @@ impl<'a> CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
+    // The text from `start` to `end`, offsets as the nodes checked here carry them.
+    pub(crate) fn text(&self, start: usize, end: usize) -> &'a str {
+        &self.base.text[start + self.offset..end + self.offset]
+    }
+
+    pub(crate) fn text_before(&self, offset: usize) -> &'a str {
+        &self.base.text[..offset + self.offset]
+    }
+
+    pub(crate) fn line_of(&self, offset: usize) -> usize {
+        self.base
+            .olc
+            .offset_to_line_character(offset + self.offset)
+            .0
+    }
+
     // Whether `node` is text a macro expanded to (or an include supplied), rather than text the
     // document spells out.
     pub(crate) fn is_expanded<T>(&self, node: &tygr::Range<T>) -> bool {

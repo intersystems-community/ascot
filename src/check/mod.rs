@@ -25,6 +25,7 @@ mod zutil;
 
 pub(crate) use similar::top_similar;
 
+use crate::bindings::BraceOpen;
 use either::Either::{self, Left, Right};
 use env::*;
 use flow::*;
@@ -400,8 +401,8 @@ impl MethodDetails {
             }
         }
         let expanded_olc = OLC::new(&expanded);
-        let method_env =
-            DocumentEnv::new(env.base, &expanded_olc, env.uri()).with_source_map(&source_map);
+        let method_env = DocumentEnv::new(env.base, &expanded_olc, &expanded, env.uri())
+            .with_source_map(&source_map);
         let header_len = self.header_text.len();
         let shifter = Shifter {
             body_olc: OLC::new(&format!("{}{}", self.header_text, self.body.it)),
@@ -674,6 +675,17 @@ impl<Start> CheckCommand for cos::CommandLine<Start> {
                 env.soft_diagnostic(TypeError::commands_per_line(max, env.range(command)));
             }
         }
+        if let Some(space_after) = env.style().and_then(|s| s.rules.space_after_comma) {
+            for command in commands_of(self) {
+                // Embedded SQL, HTML and JavaScript have their own conventions.
+                if !matches!(
+                    **command,
+                    Command::ESQL(..) | Command::HTML(..) | Command::JS(..)
+                ) {
+                    report_comma_spacing(env, space_after, command.start, command.end);
+                }
+            }
+        }
         for command in commands_of(self) {
             command.check(env, flow)?;
         }
@@ -683,6 +695,112 @@ impl<Start> CheckCommand for cos::CommandLine<Start> {
 
 fn commands_of<S>(line: &CommandLine<S>) -> impl Iterator<Item = &Range<Command>> {
     line.commands.iter().flat_map(|cmds| cmds.items.iter())
+}
+
+// Every comma of the command at `start..end` outside a string or a pattern, against the style:
+// one space after and none before, or none on either side. A comma next to another or before `)`
+// omits an argument and is left alone.
+fn report_comma_spacing(env: &CodeEnv<'_>, space_after: bool, start: usize, end: usize) {
+    let text = env.text(start, end).as_bytes();
+    let (mut in_string, mut pattern) = (false, None::<usize>);
+    for (i, &c) in text.iter().enumerate() {
+        if c == b'"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+        if let Some(depth) = &mut pattern {
+            match c {
+                b'(' => *depth += 1,
+                b')' | b',' if *depth == 0 => pattern = None,
+                b')' => *depth -= 1,
+                b' ' | b'\t' => pattern = None,
+                _ => {}
+            }
+            if pattern.is_some() || c != b',' {
+                continue;
+            }
+        }
+        match c {
+            b'?' => pattern = Some(0),
+            b',' => {
+                let before = i.checked_sub(1).map(|i| text[i]);
+                let after = text.get(i + 1).copied();
+                let fine = match (after, space_after) {
+                    (None | Some(b',') | Some(b')'), _) => true,
+                    _ if before == Some(b',') => true,
+                    (Some(b' '), true) => text.get(i + 2) != Some(&b' '),
+                    (Some(b' ' | b'\t'), false) => false,
+                    (Some(_), space_after) => !space_after,
+                } && !matches!(before, Some(b' ' | b'\t'));
+                if !fine {
+                    let range = env.span(start + i, start + i + 1);
+                    env.soft_diagnostic(TypeError::comma_spacing(space_after, range));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// Whether the text before `offset` on its line is blank: the character there starts the line.
+fn starts_its_line(env: &CodeEnv<'_>, offset: usize) -> bool {
+    let before = env.text_before(offset).trim_end_matches([' ', '\t']);
+    before.is_empty() || before.ends_with('\n')
+}
+
+// A block's braces, `open` and `close` the offsets of `{` and `}`, against the style.
+fn report_brace_style(env: &CodeEnv<'_>, open: usize, close: usize) {
+    let Some(brace) = env.style().and_then(|s| s.rules.brace) else {
+        return;
+    };
+    if env.line_of(open) == env.line_of(close) && brace.allow_one_line_block != Some(false) {
+        return;
+    }
+    if let Some(wanted) = brace.open {
+        let placed = if starts_its_line(env, open) {
+            BraceOpen::NextLine
+        } else {
+            BraceOpen::SameLine
+        };
+        if placed != wanted {
+            env.soft_diagnostic(TypeError::open_brace(wanted, env.span(open, open + 1)));
+        }
+    }
+    if !starts_its_line(env, close) {
+        env.soft_diagnostic(TypeError::close_brace(env.span(close, close + 1)));
+    }
+}
+
+// `Else`, `ElseIf` or `Catch` (`keyword`, at `kw`) after the block ending at `close`.
+fn report_chained_keyword<T>(
+    env: &CodeEnv<'_>,
+    close: usize,
+    kw: &Range<T>,
+    keyword: &'static str,
+) {
+    let Some(wanted) = env.style().and_then(|s| s.rules.brace?.open) else {
+        return;
+    };
+    let same_line = env.line_of(close) == env.line_of(kw.start);
+    if same_line != (wanted == BraceOpen::SameLine) {
+        env.soft_diagnostic(TypeError::chained_keyword(keyword, wanted, env.range(kw)));
+    }
+}
+
+fn leading_blank(text: &str) -> usize {
+    text.len() - text.trim_start().len()
+}
+
+fn trailing_blank(text: &str) -> usize {
+    text.len() - text.trim_end().len()
+}
+
+// The offset of the `}` closing `block`, if it has braces.
+fn close_brace_of(block: &Range<cos::Block>) -> Option<usize> {
+    matches!(block.deref(), cos::Block::Curry(_)).then_some(block.end - 1)
 }
 
 // The `New`s past the style's allowance for one block.
@@ -909,7 +1027,11 @@ impl CheckCommandInner for cos::Block {
                 .items
                 .iter()
                 .try_for_each(|command| command.check(env, flow))?),
-            cos::Block::Curry(block) => Ok(block.check(env, flow)?),
+            cos::Block::Curry(block) => {
+                let braced = &block.prefixed;
+                report_brace_style(env, braced.start, braced.end - 1);
+                Ok(block.check(env, flow)?)
+            }
         }
     }
 }
@@ -970,6 +1092,10 @@ impl CheckCommandInner for cos::Command {
                 let cnds = cnds.as_ref().ok_or_else(|| {
                     QuasiTypeError::unimplemented("do-while without conditions".into())
                 })?;
+                // `iter` includes the gaps around the braces.
+                let open = iter.start + leading_blank(env.text(iter.start, iter.end));
+                let close = iter.end - 1 - trailing_blank(env.text(iter.start, iter.end));
+                report_brace_style(env, open, close);
                 check_do_while(
                     env,
                     flow,
@@ -999,6 +1125,8 @@ impl CheckCommandInner for cos::Command {
                 let cnds = cnds.as_ref().ok_or_else(|| {
                     QuasiTypeError::unimplemented("while without conditions".into())
                 })?;
+                let braced = &bdy.prefixed;
+                report_brace_style(env, braced.start, braced.end - 1);
                 check_while(env, flow, cnds, env.range(bdy), bdy.as_ref().deref())?;
 
                 env.hint(InlayHint {
@@ -1217,10 +1345,16 @@ impl CheckCommandInner for cos::Command {
             }),
             cos::Command::Try(cos::TryCommand {
                 b1,
+                kw_catch,
                 catch_target,
                 b2,
                 ..
-            }) => check_try(env, flow, b1.deref(), catch_target.as_ref(), b2),
+            }) => {
+                if let Some(close) = close_brace_of(b1) {
+                    report_chained_keyword(env, close, kw_catch, "Catch");
+                }
+                check_try(env, flow, b1.deref(), catch_target.as_ref(), b2)
+            }
             cos::Command::Throw(cos::ThrowCommand { pc, e: exp, .. })
             | cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. })
             | cos::Command::ZQuit(cos::ZQuitCommand { pc, exp, .. }) => {
@@ -1497,16 +1631,24 @@ fn check_if<'a>(
         Some(cos::IfBranches { thn, eifs, els }) => {
             check_branch(env, flow, thn);
             let mut flow = if_false;
+            let mut close = close_brace_of(thn);
             for eif in eifs {
+                if let Some(close) = close {
+                    report_chained_keyword(env, close, &eif.kw, "ElseIf");
+                }
+                close = close_brace_of(&eif.thn);
                 if_false = check_and(&eif.cnds.first, &eif.cnds.remaining, env, &mut flow, true)?;
                 check_branch(env, &mut flow, &eif.thn);
                 others.push(flow);
                 flow = if_false;
             }
-            if let Some(els) = els.as_deref()
-                && let Some(els) = els.body.as_ref()
-            {
-                check_branch(env, &mut flow, els);
+            if let Some(els) = els.as_deref() {
+                if let Some(close) = close {
+                    report_chained_keyword(env, close, &els.kw, "Else");
+                }
+                if let Some(els) = els.body.as_ref() {
+                    check_branch(env, &mut flow, els);
+                }
             }
             others.push(flow);
         }
