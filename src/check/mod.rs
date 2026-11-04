@@ -2534,29 +2534,10 @@ impl<T> CheckExprInner for ExprOps<T> {
         match self {
             ExprOps::Base(base) => base.to_power_ty(env, flow),
             ExprOps::Then { base, op } => {
-                // `$SYSTEM.X.Y()` is shorthand for `##class(%SYSTEM.X).Y()`.
-                if op.args.is_none() && !op.mem.is_parameter() && is_system_var(base) {
-                    let cls = ClassTy::from(format!("%SYSTEM.{}", op.mem.id()));
-                    return Ok(Ty::OREF(ClsOrIns::Cls(cls)).into());
+                if let Some(cls) = system_class(env, self) {
+                    return Ok(Ty::OREF(cls).into());
                 }
                 let ty = base_property(base, env, flow)?;
-                // `$SYSTEM.Security.System.M()`, `$system.Context.SQL()`: a nested `%SYSTEM`
-                // class, the latter reached through a kernel accessor that yields its instance.
-                if let PropertyTy::Value(Ty::OREF(ClsOrIns::Cls(cls))) = &ty
-                    && cls.name.starts_with("%SYSTEM.")
-                    && !op.mem.is_parameter()
-                {
-                    let nested = format!("{}.{}", cls.name, op.mem.id());
-                    if env.class_exists(&nested) {
-                        let nested = ClassTy::from(nested);
-                        return Ok(Ty::OREF(if op.args.is_none() {
-                            ClsOrIns::Cls(nested)
-                        } else {
-                            ClsOrIns::Ins(nested)
-                        })
-                        .into());
-                    }
-                }
                 defined(check_member_of(ty, &op.mem, op.args.as_ref(), env, flow)?)
             }
         }
@@ -2572,10 +2553,11 @@ fn base_property<'a, T>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<PropertyTy, QuasiTypeError> {
+    if let Some(cls) = system_class(env, base.deref()) {
+        return Ok(PropertyTy::Value(Ty::OREF(cls)));
+    }
     let (obj, mem) = match base.deref() {
-        ExprOps::Then { base: inner, op }
-            if op.args.is_none() && !op.mem.is_parameter() && !is_system_var(inner) =>
-        {
+        ExprOps::Then { base: inner, op } if op.args.is_none() && !op.mem.is_parameter() => {
             (inner.to_ty(env, flow)?, op.mem.deref())
         }
         ExprOps::Base(atom)
@@ -2654,6 +2636,36 @@ fn collection_method(
         uri: None,
         declared_at: None,
     }))
+}
+
+// `$SYSTEM.A.B` as the class `%SYSTEM.A.B`, however many parts: the `%SYSTEM` classes have no
+// properties, so each argument-less `.X` is a part of the name. `$SYSTEM.A.B.M()` is the instance
+// of `%SYSTEM.A.B.M` when that is a class, a kernel accessor (`$system.Context.SQL()`), else a
+// method call, which like anything past the class is left to the ordinary member resolution.
+fn system_class<T>(env: &CodeEnv<'_>, expr: &ExprOps<T>) -> Option<ClsOrIns> {
+    let mut ops = vec![];
+    let mut base = expr;
+    while let ExprOps::Then { base: inner, op } = base {
+        ops.push(op);
+        base = inner.deref();
+    }
+    let (last, parts) = ops.split_first()?;
+    if !is_system_var(base)
+        || ops.iter().any(|op| op.mem.is_parameter())
+        || parts.iter().any(|op| op.args.is_some())
+    {
+        return None;
+    }
+    let mut name = "%SYSTEM".to_string();
+    for op in parts.iter().rev().chain([last]) {
+        name = format!("{name}.{}", op.mem.id());
+    }
+    match last.args {
+        None => Some(ClsOrIns::Cls(ClassTy::from(name))),
+        Some(_) => env
+            .class_exists(&name)
+            .then(|| ClsOrIns::Ins(ClassTy::from(name))),
+    }
 }
 
 fn is_system_var<T>(base: &ExprOps<T>) -> bool {
