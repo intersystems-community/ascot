@@ -1141,8 +1141,10 @@ impl CheckCommandInner for cos::Command {
                                             | SpecialVariable::NAMESPACE(_)
                                             | SpecialVariable::ROLES(_)
                                     ) {
-                                        env.soft_diagnostic(TypeError::new_special_variable(
+                                        env.soft_diagnostic(TypeError::not_allowed_in(
                                             special.print(),
+                                            "a NEW command",
+                                            "ERROR #1032; only $ESTACK, $ETRAP, $NAMESPACE and $ROLES can be NEWed",
                                             env.range(target),
                                         ));
                                     }
@@ -1209,13 +1211,11 @@ impl CheckCommandInner for cos::Command {
                             // Truncated: 1.5 unwinds like 1; 0, 0.5, a negative or a non-number
                             // act as a bare ZQUIT (measured).
                             PowerTy::Const(c) => {
-                                let unwinds = match &c {
-                                    Const::Integer(n) => *n >= 1,
-                                    Const::String(s) => {
-                                        numeric_prefix(s).parse::<f64>().is_ok_and(|n| n >= 1.0)
-                                    }
+                                let n = match &c {
+                                    Const::Integer(n) => f64::from(*n),
+                                    Const::String(s) => numeric_prefix(s).parse().unwrap_or(0.0),
                                 };
-                                if !unwinds {
+                                if n < 1.0 {
                                     env.soft_diagnostic(TypeError::zquit_argument(
                                         c.to_string(),
                                         flow.range(),
@@ -2055,8 +2055,8 @@ fn in_procedure_block(env: &CodeEnv<'_>, flow: &Flow<'_>) -> bool {
 }
 
 // `Set $ZTRAP/$ETRAP/$ECODE = value`. A literal is checked -- IRIS compiles a literal trap value
-// and refuses one it can't use -- and a handler of this body is armed (see `Flow::arm_trap`); a
-// non-empty `$ECODE` raises. Anything else is a hint.
+// and refuses one it can't use -- and a handler of this body is armed; a non-empty `$ECODE`
+// raises. Anything else is a hint.
 fn check_trap_set<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -2083,12 +2083,8 @@ fn check_trap_set<'a>(
         _ => return Ok(()),
     };
     if flow.in_try() {
-        let what = match var {
-            TrapVar::ZTrap => "Setting $ZTRAP",
-            TrapVar::ETrap => "Setting $ETRAP",
-        };
         env.soft_diagnostic(TypeError::not_allowed_in(
-            what,
+            "An error trap",
             "a TRY block",
             "ERROR #1064",
             range,
@@ -2098,12 +2094,8 @@ fn check_trap_set<'a>(
         PowerTy::Const(Const::String(text)) => text.clone(),
         PowerTy::Const(Const::Integer(n)) => n.to_string(),
         _ => {
-            let what = match var {
-                TrapVar::ZTrap => "A non-literal $ZTRAP value",
-                TrapVar::ETrap => "A non-literal $ETRAP value",
-            };
-            env.soft_diagnostic(TypeError::not_checked(what, range));
-            flow.forget_traps();
+            env.soft_diagnostic(TypeError::not_checked("A non-literal trap value", range));
+            flow.disarm_trap(var);
             return Ok(());
         }
     };
@@ -2136,11 +2128,14 @@ fn check_ztrap_value<'a>(
     }
     let (label, offset, routine) = match LegacyEntryRef::parse(text) {
         Ok(LegacyEntryRef::Label(lor)) => (
-            literal_name(lor.label.deref()),
+            plain_name(env, flow, &lor.label)?,
             lor.offset.is_some(),
-            lor.routine.as_ref().map(|rtn| literal_name(&rtn.name)),
+            lor.routine
+                .as_ref()
+                .map(|rtn| plain_name(env, flow, &rtn.name))
+                .transpose()?,
         ),
-        Ok(LegacyEntryRef::Routine(rtn)) => (None, false, Some(literal_name(&rtn.name))),
+        Ok(LegacyEntryRef::Routine(rtn)) => (None, false, Some(plain_name(env, flow, &rtn.name)?)),
         Err(_) => (None, false, None),
     };
     if offset {
@@ -2168,8 +2163,7 @@ fn check_ztrap_value<'a>(
 }
 
 // A `$ETRAP` command. One that only jumps to a label is a handler like `$ZTRAP`'s, and checked as
-// one; any other is parsed for a raise that would re-run it (an error in the command does), and
-// otherwise taken on trust.
+// one; any other is parsed for a raise, which would re-run it forever, and otherwise taken on trust.
 fn check_etrap_command<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -2199,7 +2193,7 @@ fn check_etrap_command<'a>(
         && let LegacyEntryRef::Label(lor) = location.deref()
         && lor.offset.is_none()
         && lor.routine.is_none()
-        && let Some(label) = literal_name(lor.label.deref())
+        && let Some(label) = plain_name(env, flow, &lor.label)?
     {
         env.soft_diagnostic(TypeError::etrap_goto(label.clone(), range));
         return arm_handler(env, flow, TrapVar::ETrap, label, range);
@@ -2231,17 +2225,9 @@ fn sets_etrap(set: &SetCommand) -> bool {
     })
 }
 
-// A literal label or routine name -- `None` for indirection, which has no place in a trap value.
-fn literal_name(name: &AllowIndirection<impl Grammar>) -> Option<String> {
-    match name {
-        AllowIndirection::Plain(name) => Some(name.print()),
-        AllowIndirection::Indirection(_) => None,
-    }
-}
-
-// `label` is a handler of this body, or missing. Once armed, the states from here on join into
-// what the handler is checked from, and its returns are the body's (see `check_label_body`). A
-// `$ZTRAP` in a procedure block can't name a label outside it; a `$ETRAP`'s GOTO can (measured).
+// `label` is a handler of this body, or missing. Once armed, its returns are the body's, and the
+// states from here on join into what it is checked from (see `check_label_body`). A `$ZTRAP` in
+// a procedure block can't name a label outside it; a `$ETRAP`'s GOTO can (measured).
 fn arm_handler<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,

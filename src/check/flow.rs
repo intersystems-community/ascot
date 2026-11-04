@@ -112,10 +112,9 @@ impl TrapVar {
 }
 
 // The error traps a flow arms. `active` is where an error on this path goes: a label of this
-// body, or (`None`) the handler this flow is, entered with the trap still naming it, so that a
-// raise before it is reset comes right back. `joins` is, per handler label, the merge of every
-// state it can be entered from, deposited in the `CodeEnv` at the body's end for the label's own
-// check (see `arm_trap`, `step_traps`).
+// body, or (`None`) the handler this flow is, entered with the trap still naming it. `joins` is,
+// per handler label, the merge of every state it can be entered from, deposited in the `CodeEnv`
+// at the body's end for the label's own check.
 #[derive(Clone, Default)]
 struct Traps {
     active: Option<(TrapVar, Option<String>)>,
@@ -134,9 +133,9 @@ impl Traps {
         }
         for (label, join) in them.joins {
             match self.joins.get_mut(&label) {
-                Some(mine) => {
-                    Bindings::merge_into(&mut mine.bindings, join.bindings, env, procedure_block)?
-                }
+                Some(mine) => mine
+                    .bindings
+                    .merge(Some(join.bindings), env, procedure_block)?,
                 None => {
                     self.joins.insert(label, join);
                 }
@@ -149,7 +148,7 @@ impl Traps {
 #[derive(Clone)]
 pub(crate) struct Join {
     var: TrapVar,
-    bindings: Option<Bindings>,
+    bindings: Bindings,
 }
 
 // The life time 'a is for the entire code block (i.e., method body or a stand-alone expression)
@@ -424,19 +423,16 @@ impl<'a> Flow<'a> {
             }
         }
         // A handler's trap still names it when it is entered.
-        let (bindings, traps, is_handler) = match join {
-            Some(Join {
-                var,
-                bindings: Some(join),
-            }) => (
-                join,
+        let is_handler = join.is_some();
+        let (bindings, traps) = match join {
+            Some(Join { var, bindings }) => (
+                bindings,
                 Traps {
                     active: Some((var, None)),
                     joins: HashMap::new(),
                 },
-                true,
             ),
-            _ => (Bindings { bindings }, Traps::default(), false),
+            None => (Bindings { bindings }, Traps::default()),
         };
         let mut flow = Self {
             shared: Rc::new(Shared {
@@ -693,12 +689,13 @@ impl<'a> Flow<'a> {
     }
 
     fn merge_bindings(&mut self, that: Option<Bindings>) -> Result<(), QuasiTypeError> {
-        Bindings::merge_into(
-            &mut self.bindings,
-            that,
-            self.shared.env,
-            self.shared.procedure_block,
-        )
+        match &mut self.bindings {
+            Some(this) => this.merge(that, self.shared.env, self.shared.procedure_block),
+            None => {
+                self.bindings = that;
+                Ok(())
+            }
+        }
     }
 
     pub(crate) fn merge(&mut self, them: Self) -> Result<(), QuasiTypeError> {
@@ -813,8 +810,7 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
-    // An error raised on purpose (`ZTrap`, `Throw`, a non-empty `$ECODE`). From inside the handler
-    // the trap still names, it comes right back here.
+    // An error raised on purpose: from inside the handler the trap still names, it comes right back.
     pub(crate) fn raise(&mut self) -> Result<(), QuasiTypeError> {
         if let Some((var, None)) = self.traps.active
             && !self.in_try
@@ -840,35 +836,22 @@ impl<'a> Flow<'a> {
     }
 
     // `var` now names `label`, a handler of this body. A trap can fire anywhere from here on, so
-    // this state and (see `step_traps`) each one after it join into what the handler is checked
-    // from -- and it may read what this body assigns, so the deferred reports can't be trusted.
+    // this state and each one after it (`step_traps`) join into what the handler is checked from;
+    // it may also read what this body assigns, so the deferred reports can't be trusted.
     pub(crate) fn arm_trap(&mut self, var: TrapVar, label: String) -> Result<(), QuasiTypeError> {
         let bindings = self.bindings()?.clone();
         self.mark_incomplete();
         self.traps.active = Some((var, Some(label.clone())));
-        let join = self.traps.joins.entry(label).or_insert(Join {
-            var,
-            bindings: None,
-        });
-        join.var = var;
-        Bindings::merge_into(
-            &mut join.bindings,
-            Some(bindings),
-            self.shared.env,
-            self.shared.procedure_block,
-        )
+        self.traps.joins.insert(label, Join { var, bindings });
+        Ok(())
     }
 
-    // `var` is cleared. `$ZTRAP` takes precedence, so clearing `$ETRAP` under it changes nothing.
+    // `var` is cleared or unknown. `$ZTRAP` takes precedence, so clearing `$ETRAP` under it
+    // changes nothing.
     pub(crate) fn disarm_trap(&mut self, var: TrapVar) {
         if matches!(self.traps.active, Some((active, _)) if active == var) {
             self.traps.active = None;
         }
-    }
-
-    // A trap set to something unknown: where an error goes now isn't known either.
-    pub(crate) fn forget_traps(&mut self) {
-        self.traps.active = None;
     }
 
     pub(crate) fn step_traps(&mut self) -> Result<(), QuasiTypeError> {
@@ -878,8 +861,7 @@ impl<'a> Flow<'a> {
         let Some(join) = self.traps.joins.get_mut(label) else {
             return Ok(());
         };
-        Bindings::merge_into(
-            &mut join.bindings,
+        join.bindings.merge(
             self.bindings.clone(),
             self.shared.env,
             self.shared.procedure_block,
@@ -1369,30 +1351,25 @@ impl Bindings {
         self.bindings.entry(name).or_insert_with(default)
     }
 
-    // Merges another path's `that` into `this`: a name bound on one side only is undeclared on
-    // the other.
-    fn merge_into(
-        this: &mut Option<Bindings>,
+    // Merges another path's state in: a name bound on one side only is undeclared on the other.
+    fn merge(
+        &mut self,
         that: Option<Bindings>,
         env: &WorkspaceEnv<'_>,
         procedure_block: bool,
     ) -> Result<(), QuasiTypeError> {
-        let Some(this) = this else {
-            *this = that;
-            return Ok(());
-        };
         let Some(mut that) = that else {
             return Ok(());
         };
         // Sorted, so which inconsistent declaration is reported first doesn't depend on hash order.
-        let all_names: BTreeSet<String> = this
+        let all_names: BTreeSet<String> = self
             .bindings
             .keys()
             .chain(that.bindings.keys())
             .cloned()
             .collect();
         for name in all_names {
-            let this_binding = this
+            let this_binding = self
                 .bindings
                 .remove(&name)
                 .unwrap_or_else(|| Binding::undeclared(procedure_block));
@@ -1401,7 +1378,7 @@ impl Bindings {
                 .remove(&name)
                 .unwrap_or_else(|| Binding::undeclared(procedure_block));
             let merged = this_binding.merge(that_binding, env, &name)?;
-            this.bindings.insert(name, merged);
+            self.bindings.insert(name, merged);
         }
         Ok(())
     }

@@ -775,14 +775,10 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "{what} is not allowed in {context} (IRIS: {iris})"]
     NotAllowedIn {
-        what: &'static str,
+        what: String,
         context: &'static str,
         iris: &'static str,
     },
-    #[code = "A8478"]
-    #[severity = Error]
-    #[message = "{name} cannot be NEWed: only $ESTACK, $ETRAP, $NAMESPACE and $ROLES can (IRIS: ERROR #1032)"]
-    NewSpecialVariable { name: String },
     #[code = "A6613"]
     #[severity = Warning]
     #[message = "ZQUIT wants an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack"]
@@ -1279,11 +1275,12 @@ impl TypeError {
     }
 
     pub fn not_allowed_in(
-        what: &'static str,
+        what: impl Into<String>,
         context: &'static str,
         iris: &'static str,
         range: Range,
     ) -> Self {
+        let what = what.into();
         Self::at(
             TypeErrorKind::NotAllowedIn {
                 what,
@@ -1292,10 +1289,6 @@ impl TypeError {
             },
             range,
         )
-    }
-
-    pub fn new_special_variable(name: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::NewSpecialVariable { name }, range)
     }
 
     pub fn zquit_argument(value: String, range: Range) -> Self {
