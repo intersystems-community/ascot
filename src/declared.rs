@@ -71,6 +71,14 @@ fn formal(mode: Option<RefMode>, name: &str, t: Option<&str>, default: Option<&s
     let mode = match mode {
         Some(RefMode::ByRef) => "ByRef ",
         Some(RefMode::Output) => "Output ",
+        // IRIS drops the default mode from what it reports; a parameter named like a mode keyword
+        // (`SetOutput(ByVal Output As ...)`) needs it back to parse, as it did in its source.
+        None if ["ByVal", "ByRef", "Output"]
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(name)) =>
+        {
+            "ByVal "
+        }
         None => "",
     };
     let default = default
@@ -178,7 +186,11 @@ fn member_header(member: &MemberInfo) -> Option<String> {
                             None => "",
                         };
                         let collation = k.collation.as_deref().map(|c| format!(" As {c}"));
-                        format!("{}{subscript}{}", k.property, collation.unwrap_or_default())
+                        format!(
+                            "{}{subscript}{}",
+                            member_name(&k.property),
+                            collation.unwrap_or_default()
+                        )
                     })
                     .collect();
                 match keys.as_slice() {
@@ -386,6 +398,54 @@ impl DeclaredClass {
 mod tests {
     use super::*;
     use crate::bindings::{MemberInfo, MemberKind, RefMode, Signature};
+
+    #[test]
+    fn a_parameter_named_like_a_mode_keyword_gets_its_byval_back() {
+        assert_eq!(
+            formal(None, "Output", Some("%String"), None),
+            "ByVal Output As %String"
+        );
+        assert_eq!(formal(None, "byRef", None, Some("0")), "ByVal byRef = 0");
+        assert_eq!(formal(None, "out", None, None), "out");
+    }
+
+    // IRIS quotes a name with a character outside the identifier set, in an index's key list as
+    // in a member's own name.
+    #[test]
+    fn an_index_key_with_an_underscore_is_quoted() {
+        let index = MemberInfo {
+            doc: String::new(),
+            name: "IDKEY".to_string(),
+            aliases: vec![],
+            deprecated: false,
+            kind: MemberKind::Index(crate::bindings::IndexInfo {
+                on: Some(vec![crate::bindings::IndexKey {
+                    property: "element_key".to_string(),
+                    subscript: None,
+                    collation: None,
+                }]),
+                abstract_: false,
+                condition: None,
+                coshard_with: None,
+                data: vec![],
+                deferred: false,
+                extent: false,
+                id_key: false,
+                internal: false,
+                primary_key: false,
+                shard_key: false,
+                sql_name: None,
+                type_: None,
+                unique: false,
+            }),
+            uri: None,
+            origin: None,
+        };
+        assert_eq!(
+            member_header(&index).unwrap(),
+            "Index IDKEY On \"element_key\""
+        );
+    }
 
     #[test]
     fn a_declared_class_round_trips_through_its_source() {
