@@ -1520,6 +1520,8 @@ impl<'a> DocumentEnv<'a> {
             macro_definitions: Some(macro_definitions),
             procedure_block: false,
             trap_joins: Default::default(),
+            label_writes: Default::default(),
+            in_try: false,
         }
     }
 
@@ -1530,6 +1532,7 @@ impl<'a> DocumentEnv<'a> {
         is_instance: bool,
         method_name: &'a str,
         macro_definitions: &'a MacroDefinitions,
+        procedure_block: bool,
     ) -> CodeEnv<'_> {
         CodeEnv {
             base: self,
@@ -1538,8 +1541,10 @@ impl<'a> DocumentEnv<'a> {
             this,
             labels: None,
             method_name: Some(method_name),
-            procedure_block: false,
+            procedure_block,
             trap_joins: Default::default(),
+            label_writes: Default::default(),
+            in_try: false,
             macro_definitions: Some(macro_definitions),
         }
     }
@@ -1629,6 +1634,11 @@ pub struct CodeEnv<'a> {
     // Error handlers armed by the bodies checked so far, each with the join of the states it can
     // be entered from (see `Flow::arm_trap`), until its label's own check takes it.
     trap_joins: RefCell<HashMap<String, Join>>,
+    // What each nested label of this body assigns (see `check_block_body`), shared with the envs
+    // derived for the body's blocks.
+    label_writes: Rc<RefCell<HashMap<String, HashSet<String>>>>,
+    // Inside a `Try` block, where IRIS refuses to set a trap and a `Throw` goes to the `Catch`.
+    in_try: bool,
 }
 
 impl<'a> CodeEnv<'a> {
@@ -1688,6 +1698,45 @@ impl<'a> CodeEnv<'a> {
 
     pub(crate) fn in_procedure_block(&self) -> bool {
         self.procedure_block
+    }
+
+    // The env of a routine procedure's body, or of a label's, before its own labels are known.
+    pub(crate) fn with_procedure_block(&self, procedure_block: bool) -> CodeEnv<'a> {
+        CodeEnv {
+            procedure_block,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn in_try(&self) -> bool {
+        self.in_try
+    }
+
+    pub(crate) fn with_try(&self) -> CodeEnv<'a> {
+        CodeEnv {
+            in_try: true,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn record_label_writes(&self, label: &str, writes: HashSet<String>) {
+        self.label_writes
+            .borrow_mut()
+            .entry(label.to_string())
+            .or_default()
+            .extend(writes);
+    }
+
+    pub(crate) fn label_writes(&self, label: &str) -> Vec<String> {
+        self.label_writes
+            .borrow()
+            .get(label)
+            .map(|writes| writes.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn label_writes_total(&self) -> usize {
+        self.label_writes.borrow().values().map(HashSet::len).sum()
     }
 
     pub(crate) fn deposit_traps(&self, joins: HashMap<String, Join>) {
