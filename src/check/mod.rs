@@ -641,14 +641,33 @@ fn check_block_body<'a>(
         .flat_map(|subs| subs.items.iter())
         .filter_map(|sub| Some((sub, details::subroutine_kind(env, sub)?)))
         .collect();
+    if !is_body {
+        for (_, details) in &subroutines {
+            let name = &details.name;
+            env.soft_diagnostic(TypeError::label_in_block(name.it.clone(), name.range));
+        }
+    }
     let is_procedure = is_body && flow.is_procedure_block();
-    let labels = env::scoped_labels(
+    let mut labels = env::scoped_labels(
         env.uri(),
         &subroutines
             .iter()
             .map(|(_, d)| (d, false))
             .collect::<Vec<_>>(),
     );
+    // IRIS reaches a label inside a block from the whole body, so a `Goto` to one resolves; the
+    // label itself is reported where its block is checked.
+    if is_body {
+        let mut inside = vec![];
+        labels_in_blocks(body, &mut inside);
+        let inside: Vec<_> = (inside.into_iter())
+            .filter_map(|sub| details::subroutine_kind(env, sub))
+            .collect();
+        let inside: Vec<_> = inside.iter().map(|d| (d, false)).collect();
+        for (name, entry) in env::scoped_labels(env.uri(), &inside) {
+            labels.entry(name).or_insert(entry);
+        }
+    }
     let nested;
     let env = if is_body || !labels.is_empty() {
         nested = env.with_nested_labels(labels, is_procedure);
@@ -675,6 +694,60 @@ fn check_block_body<'a>(
         }
     }
     Ok(())
+}
+
+// The labels inside the blocks of `body`, at any depth.
+fn labels_in_blocks<'b>(body: &'b ProcedureBody, out: &mut Vec<&'b Subroutine>) {
+    let labels = body.subroutines.iter().flat_map(|subs| subs.items.iter());
+    let commands = (procedure_commands(&body.main))
+        .chain(labels.flat_map(|sub| sub.body.as_command_lines().flat_map(commands_of)));
+    for command in commands {
+        labels_in_command(command, out);
+    }
+}
+
+fn labels_in_command<'b>(command: &'b Command, out: &mut Vec<&'b Subroutine>) {
+    let mut blocks: Vec<&'b cos::Block> = vec![];
+    let mut bodies: Vec<&'b ProcedureBody> = vec![];
+    match command {
+        Command::If(cos::IfCommand {
+            branches: Some(branches),
+            ..
+        }) => {
+            blocks.push(&branches.thn);
+            blocks.extend(branches.eifs.iter().map(|branch| &*branch.thn));
+            blocks.extend(
+                branches
+                    .els
+                    .iter()
+                    .filter_map(|branch| branch.body.as_deref()),
+            );
+        }
+        Command::ElseIf(branch) => blocks.push(&branch.thn),
+        Command::Else(branch) => blocks.extend(branch.body.as_deref()),
+        Command::For(cos::ForCommand { bdy: Some(bdy), .. }) => blocks.push(bdy),
+        Command::Try(try_command) => {
+            blocks.push(&try_command.b1.it);
+            blocks.push(&try_command.b2);
+        }
+        Command::While(while_command) => bodies.push(&while_command.bdy.block.wrapped),
+        Command::DoWhile(do_while) => bodies.push(&do_while.iter.block.wrapped),
+        _ => {}
+    }
+    for block in blocks {
+        match block {
+            cos::Block::Curry(block) => bodies.push(&block.block.wrapped),
+            cos::Block::Command(commands) => {
+                for command in &commands.items {
+                    labels_in_command(command, out);
+                }
+            }
+        }
+    }
+    for body in bodies {
+        out.extend(body.subroutines.iter().flat_map(|subs| subs.items.iter()));
+        labels_in_blocks(body, out);
+    }
 }
 
 fn check_label_body<'a>(

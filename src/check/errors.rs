@@ -464,6 +464,11 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
+    /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide.
+    #[code = "A7408"]
+    #[severity = Warning]
+    #[message = "Label '{label}' is inside a block; a label belongs at the top level of the body"]
+    LabelInBlock { label: String },
     #[code = "A3303"]
     #[severity = Error]
     #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
@@ -1114,6 +1119,10 @@ impl TypeError {
 
     // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
     // yet to attach one lazily this early (during macro expansion).
+    pub fn label_in_block(label: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::LabelInBlock { label }, range)
+    }
+
     pub(crate) fn cannot_find_class(cls: String, range: Range) -> Self {
         Self::at(TypeErrorKind::CannotFindClass { cls }, range)
     }
