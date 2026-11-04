@@ -693,12 +693,12 @@ impl MemberRef {
 
 pub type Field = Prefix<StringEq!("."), Range<MemberRef>>;
 
-// A type in ascot's mask: `This` (the receiver's class), a class parameter, or a class name.
+// A type's class: a class name (`This` among them, for the receiver's class) or a class
+// parameter's value `..#NAME`. IRIS takes only the first; ascot's declarations use the others.
 #[derive(Grammar)]
 pub enum SignatureType {
-    This(StringEq!("This")),
-    Parameter(StringEq!("..#"), ClassMemberName),
     Class(ClassName),
+    Parameter(StringEq!("..#"), ClassMemberName),
 }
 
 #[derive(Grammar)]
@@ -2232,7 +2232,7 @@ char_class!(pub IsDataSafe, "xdata_safe", |ch| !matches!(
 
 #[derive(Grammar)]
 pub struct Type {
-    pub class_name: ClassName,
+    pub class_name: SignatureType,
     pub params: Option<TypeParamList>,
 }
 
@@ -6957,10 +6957,6 @@ mod regression_tests {
     #[test]
     fn signature_types() {
         assert!(matches!(
-            SignatureType::parse("This"),
-            Ok(SignatureType::This(_))
-        ));
-        assert!(matches!(
             SignatureType::parse("..#ELEMENTTYPE"),
             Ok(SignatureType::Parameter(_, name)) if name.print() == "ELEMENTTYPE"
         ));
@@ -6968,6 +6964,7 @@ mod regression_tests {
             SignatureType::parse("%Library.ObjectHandle"),
             Ok(SignatureType::Class(_))
         ));
+        assert!(Type::parse("..#ELEMENTTYPE").is_ok());
     }
 
     #[test]

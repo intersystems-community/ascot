@@ -1,103 +1,91 @@
-use crate::check::types::{Ty, TyProcedure, ty_from_mask};
-use serde::Deserialize;
-use std::collections::BTreeMap;
+//! `mask.json`: ascot's corrections to what IRIS reports about its own classes and routines, in
+//! the declaration format (`declared`). `scripts/prebuilt-declarations.sh` composes it into the
+//! pre-built declarations, and a live instance is read through it here.
+
+use std::collections::{BTreeMap, HashMap};
 use std::sync::LazyLock;
 
+use serde::Deserialize;
+
+use crate::bindings::{MemberInfo, MemberKind, RoutineInfo, Signature};
+use crate::check::types::Ty;
+use crate::declared::DeclaredClass;
+use crate::details::MemberNs;
+
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Correction {
-    returns: Option<String>,
+struct Mask {
+    classes: BTreeMap<String, MaskedClass>,
+    /// The `%SYS` routine labels the system macros call, which IRIS ships as object code only.
     #[serde(default)]
-    args: BTreeMap<String, ArgCorrection>,
-    parameter: Option<String>,
-    default: Option<String>,
+    routines: BTreeMap<String, RoutineInfo>,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ArgCorrection {
+struct MaskedClass {
+    /// Members that replace the ones IRIS reports under the same name.
+    #[serde(flatten)]
+    declared: DeclaredClass,
+    /// Members the dictionary lists but the compiler doesn't recognize (`##super` from an
+    /// override reports it missing, MPP5386) -- the inert `%OnNew` and `%Dispatch*` defaults.
+    #[serde(default)]
+    drop: Vec<String>,
+    /// What the class stands for as a type: `"Any"`, or another class's name.
     #[serde(rename = "type")]
     ty: Option<String>,
+    /// The class parameters that type members (`..#NAME`), with their defaults.
     #[serde(default)]
-    optional: bool,
+    generics: BTreeMap<String, String>,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum Entry {
-    // `null`: a member the dictionary lists but the compiler doesn't recognize (`##super` from
-    // an override reports it missing, MPP5386) -- the inert `%OnNew` and `%Dispatch*` defaults.
-    Class(BTreeMap<String, Option<Correction>>),
-    // What a class stands for as a type: `"Any"`, or another class's name.
-    Type(String),
-}
-
-static MASK: LazyLock<BTreeMap<String, Entry>> =
+// The classes' members as `MemberInfo`s, by class and lower-cased name (a property and a method
+// may share one). Parsing them types their signatures, which reads `RAW` through `class_type`,
+// so the two stay separate statics.
+static RAW: LazyLock<Mask> =
     LazyLock::new(|| serde_json::from_str(include_str!("mask.json")).expect("a valid mask.json"));
+static MEMBERS: LazyLock<HashMap<String, HashMap<String, Vec<MemberInfo>>>> = LazyLock::new(|| {
+    (RAW.classes.iter())
+        .map(|(name, c)| {
+            let info = (c.declared.to_class_info(name))
+                .unwrap_or_else(|| panic!("mask.json: {name} does not parse"));
+            let mut members: HashMap<String, Vec<MemberInfo>> = HashMap::new();
+            for m in info.members {
+                members.entry(m.name.to_ascii_lowercase()).or_default().push(m);
+            }
+            (name.clone(), members)
+        })
+        .collect()
+});
 
 pub(crate) fn class_type(cls: &str) -> Option<Ty> {
-    match MASK.get(&format!("{cls}.cls"))? {
-        Entry::Type(t) if t == "Any" => Some(Ty::Any),
-        Entry::Type(t) => Some(Ty::from(t.clone())),
-        _ => None,
+    match RAW.classes.get(cls)?.ty.as_deref()? {
+        "Any" => Some(Ty::Any),
+        t => Some(Ty::from(t)),
     }
-}
-
-fn members(cls: &str) -> impl Iterator<Item = (&'static String, &'static Option<Correction>)> {
-    match MASK.get(&format!("{cls}.cls")) {
-        Some(Entry::Class(members)) => Some(members),
-        _ => None,
-    }
-    .into_iter()
-    .flatten()
-}
-
-fn entry(cls: &str, member: &str) -> Option<&'static Option<Correction>> {
-    members(cls)
-        .find(|(name, _)| name.eq_ignore_ascii_case(member))
-        .map(|(_, c)| c)
 }
 
 // Whether the mask says `cls` has no member `member`, whatever the dictionary lists.
 pub(crate) fn dropped(cls: &str, member: &str) -> bool {
-    matches!(entry(cls, member), Some(None))
+    (RAW.classes.get(cls)).is_some_and(|c| c.drop.iter().any(|d| d.eq_ignore_ascii_case(member)))
 }
 
-pub(crate) fn correction(cls: &str, member: &str) -> Option<&'static Correction> {
-    entry(cls, member)?
-        .as_ref()
-        .filter(|c| c.parameter.is_none())
+/// The member of `cls` named `member` in `kind`'s namespace as the mask declares it, if it does.
+pub(crate) fn replacement(cls: &str, member: &str, kind: &MemberKind) -> Option<&'static MemberInfo> {
+    let ns = MemberNs::of_info(kind);
+    (MEMBERS.get(cls)?.get(&member.to_ascii_lowercase())?.iter())
+        .find(|m| MemberNs::of_info(&m.kind) == ns)
 }
 
-impl Correction {
-    pub(crate) fn apply(&self, proc: &mut TyProcedure) {
-        if let Some(returns) = &self.returns {
-            proc.out = ty_from_mask(Some(returns.clone()));
-        }
-        for arg in &mut proc.normal_args {
-            let Some(correction) = self.args.get(&arg.name) else {
-                continue;
-            };
-            if let Some(t) = &correction.ty {
-                arg.ty = ty_from_mask(Some(t.clone()));
-            }
-            if correction.optional {
-                arg.default.get_or_insert_default();
-            }
-        }
-    }
+/// The default of `cls`'s generic parameter `param`, if the mask names it as one.
+pub(crate) fn generic_default(cls: &str, param: &str) -> Option<String> {
+    let generics = &RAW.classes.get(cls)?.generics;
+    generics
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(param))
+        .map(|(_, default)| default.clone())
 }
 
-/// The argument bound to `cls`'s generic parameter `param`, or else its default.
-pub(crate) fn generic_arg(
-    cls: &str,
-    args: &BTreeMap<String, String>,
-    param: &str,
-) -> Option<String> {
-    let (name, declared) = members(cls).find(|(name, c)| {
-        c.as_ref().is_some_and(|c| c.parameter.is_some()) && name.eq_ignore_ascii_case(param)
-    })?;
-    args.get(name)
-        .cloned()
-        .or_else(|| declared.as_ref()?.default.clone())
+/// A label's signature in a routine the mask covers.
+pub(crate) fn curated_label(routine: &str, label: &str) -> Option<Signature> {
+    let labels = RAW.routines.get(routine)?.labels.as_ref()?;
+    labels.iter().find(|l| l.name == label)?.signature.clone()
 }

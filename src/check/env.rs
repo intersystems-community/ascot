@@ -29,7 +29,6 @@ pub use crate::details::Positions;
 use crate::details::{
     MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
 };
-use crate::mask::Correction;
 use crate::{DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos};
 use std::marker::PhantomData;
 
@@ -52,10 +51,7 @@ pub(crate) trait Namespace {
     // The type of a member a workspace class declares, and whether it's instance-only.
     fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(Self::Ty, bool)>;
     // Likewise for one IRIS reports, corrected by the mask.
-    fn reported(
-        member: bindings::MemberInfo,
-        correction: Option<&Correction>,
-    ) -> Option<(Self::Ty, bool)>;
+    fn reported(member: bindings::MemberInfo) -> Option<(Self::Ty, bool)>;
     // A method as this namespace sees it: the generated members, and those taken as present past
     // a class nobody can see, are all methods.
     fn method(_proc: TyProcedureOrAny) -> Option<Self::Ty> {
@@ -130,7 +126,7 @@ impl Namespace for Parameters {
         Some((ty.clone().unwrap_or_default(), false))
     }
 
-    fn reported(member: bindings::MemberInfo, _: Option<&Correction>) -> Option<(Ty, bool)> {
+    fn reported(member: bindings::MemberInfo) -> Option<(Ty, bool)> {
         let MemberKind::Parameter(p) = member.kind else {
             return None;
         };
@@ -171,10 +167,7 @@ impl<A: Access> Namespace for Properties<A> {
         Some((ty, true))
     }
 
-    fn reported(
-        member: bindings::MemberInfo,
-        _: Option<&Correction>,
-    ) -> Option<(PropertyTy, bool)> {
+    fn reported(member: bindings::MemberInfo) -> Option<(PropertyTy, bool)> {
         let ty = match member.kind {
             MemberKind::Property(info) if info.multidimensional => {
                 PropertyTy::Multidimensional(ty_from_declared(info.t).unwrap_or_default())
@@ -250,10 +243,7 @@ impl Namespace for Methods {
         ))
     }
 
-    fn reported(
-        member: bindings::MemberInfo,
-        correction: Option<&Correction>,
-    ) -> Option<(TyProcedureOrAny, bool)> {
+    fn reported(member: bindings::MemberInfo) -> Option<(TyProcedureOrAny, bool)> {
         let location = location(&member);
         let (m, is_instance_only) = match member.kind {
             MemberKind::Method(m) => (m, true),
@@ -263,9 +253,6 @@ impl Namespace for Methods {
         let mut proc = TyProcedure::from(m);
         proc.uri = location.as_ref().map(|location| location.uri.clone());
         proc.declared_at = location.map(|location| location.range);
-        if let Some(correction) = correction {
-            correction.apply(&mut proc);
-        }
         Some((
             TyProcedureOrAny::Procedure(Arc::new(proc)),
             is_instance_only,
@@ -356,14 +343,16 @@ fn default_id_key() -> bindings::IndexInfo {
 }
 
 // An IRIS-reported member of `cls`, typed and masked by its declaring class.
-fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<Found<N::Ty>> {
+fn iris_found<N: Namespace>(mut member: bindings::MemberInfo, cls: &str) -> Option<Found<N::Ty>> {
     let origin = member.origin.clone().unwrap_or_else(|| cls.to_string());
     if crate::mask::dropped(&origin, &member.name) {
         return None;
     }
-    let correction = crate::mask::correction(&origin, &member.name);
+    if let Some(masked) = crate::mask::replacement(&origin, &member.name, &member.kind) {
+        member.kind = masked.kind.clone();
+    }
     let location = location(&member);
-    let (ty, is_instance_only) = N::reported(member, correction)?;
+    let (ty, is_instance_only) = N::reported(member)?;
     Some(Found {
         member: Member { ty, location },
         is_instance_only,
@@ -1855,7 +1844,7 @@ impl<'a> CodeEnv<'a> {
                             | TypeErrorKind::IrisLookupFailed { .. },
                             _,
                         ),
-                    ) => crate::curated_label(&routine, &label)
+                    ) => crate::mask::curated_label(&routine, &label)
                         .map(|signature| {
                             TyProcedureOrAny::Procedure(Arc::new(TyProcedure::from_label(
                                 signature, None,
@@ -1964,7 +1953,7 @@ mod tests {
             origin: None,
         };
         let Some((PropertyTy::Value(Ty::OREF(ClsOrIns::Ins(cls))), _)) =
-            Properties::<Read>::reported(children, None)
+            Properties::<Read>::reported(children)
         else {
             panic!("not an instance")
         };

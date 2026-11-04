@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the pre-built declaration file of an IRIS Community release: starts the release's Docker
 # image, runs `ascot declare` against its %SYS namespace, adds the label names of the routines it
-# ships as object code only (read with ZLOAD in an `iris session`, which no API offers) and the
-# curated signatures in prebuilt-labels.json, then stops the container.
+# ships as object code only (read with ZLOAD in an `iris session`, which no API offers), composes
+# src/mask.json's corrections into it, then stops the container.
 #
 # Usage: scripts/prebuilt-declarations.sh [RELEASE] [OUT]
 #   RELEASE  the iris-community image tag, default 2026.2
@@ -28,10 +28,11 @@ docker exec "$NAME" iris session IRIS -U %SYS '##class(Security.Users).UnExpireU
 
 "$ASCOT" declare --iris "http://_SYSTEM:SYS@localhost:$PORT" "$OUT"
 
-python3 - "$OUT" "$ROOT/scripts/prebuilt-labels.json" "$NAME" <<'PY'
-import json, subprocess, sys
-out, overlay, name = sys.argv[1:4]
+python3 - "$OUT" "$ROOT/src/mask.json" "$NAME" <<'PY'
+import json, re, subprocess, sys
+out, mask, name = sys.argv[1:4]
 d = json.load(open(out))
+mask = json.load(open(mask))
 # A routine declared without labels has no source: ask the terminal for its object code's labels,
 # clearing the routine buffer first so a failed ZLOAD doesn't report the previous routine's.
 compiled = [r for r, info in d["routines"].items() if info["labels"] is None]
@@ -44,13 +45,52 @@ for line in session.stdout.splitlines():
     if sep and d["routines"].get(r, {}).get("labels") is None and labels:
         d["routines"][r]["labels"] = [{"name": l, "signature": None} for l in labels.split(",")]
         named += 1
-for r, labels in json.load(open(overlay)).items():
-    info = d["routines"].setdefault(r, {"labels": None, "uri": None})
-    known = {l["name"]: l for l in info["labels"] or []}
-    for l, signature in labels.items():
-        known[l] = {"name": l, "signature": signature}
-    info["labels"] = sorted(known.values(), key=lambda l: l["name"])
+for r, info in mask["routines"].items():
+    known = {l["name"]: l for l in d["routines"].setdefault(r, {"labels": None, "uri": None})["labels"] or []}
+    known.update((l["name"], l) for l in info["labels"])
+    d["routines"][r]["labels"] = sorted(known.values(), key=lambda l: l["name"])
+# A mask member replaces the base member of its name. It may change only types, modes, defaults
+# and the return type: a member of another kind or arity than IRIS reports is a mistake.
+KINDS = "ClassMethod|Method|ClientMethod|Property|Parameter|Relationship|Index|Query|Trigger|XData|Projection|ForeignKey"
+def shape(header):
+    kind, name, rest = re.match(rf'({KINDS}) ("[^"]*"|[^\s(]+)(.*)', header).groups()
+    args = []
+    if rest.startswith("("):
+        depth = 0
+        for i, ch in enumerate(rest):
+            depth += (ch == "(") - (ch == ")")
+            if depth == 0:
+                break
+        for arg in filter(str.strip, re.split(r",(?![^({]*[)}])", rest[1:i])):
+            m = re.match(r"\s*(?:ByRef |Output )?(\S+?)(?:\.\.\.)?(?:\s*=|\s+As\b|\s*$)", arg)
+            args.append(m.group(1))
+    return kind, name.strip('"'), args
+NS = {"ClassMethod": "Method", "ClientMethod": "Method", "Relationship": "Property"}
+def key(header):
+    kind, name, _ = shape(header)
+    return NS.get(kind, kind), name.lower()
+replaced = 0
+for cls, masked in mask["classes"].items():
+    base = d["classes"].get(cls)
+    if base is None:
+        sys.exit(f"mask.json: {cls} is not in the declaration")
+    members = {key(m["header"]): m for m in base["members"]}
+    for m in masked["members"]:
+        kind, mname, args = shape(m["header"])
+        target = members.get(key(m["header"]))
+        if target is None:  # a member another release reports on this class
+            print(f"mask.json: {cls}.{mname} is not in the declaration", file=sys.stderr)
+            continue
+        if shape(target["header"])[::2] != (kind, args):
+            sys.exit(f"mask.json: {cls}.{mname} differs from IRIS in kind or arguments:\n  {target['header']}\n  {m['header']}")
+        target["header"] = m["header"]
+        replaced += 1
+    names = {shape(m["header"])[1].lower() for m in base["members"]}
+    for name in masked.get("drop", []):
+        if name.lower() not in names:
+            sys.exit(f"mask.json: {cls}.{name} is not in the declaration")
+    base["members"] = [m for m in base["members"] if shape(m["header"])[1].lower() not in {n.lower() for n in masked.get("drop", [])}]
 json.dump(d, open(out, "w"), separators=(",", ":"))
 print(f"{named} of {len(compiled)} compiled-only routines got their label names; "
-      f"{sum(map(len, json.load(open(overlay)).values()))} curated signatures merged")
+      f"{replaced} member(s) replaced and {sum(len(c.get('drop', [])) for c in mask['classes'].values())} dropped by the mask")
 PY

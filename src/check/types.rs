@@ -650,9 +650,15 @@ impl std::fmt::Display for Ty {
     }
 }
 
+// `This` is the receiver's class and `..#NAME` the value of its class parameter `NAME`: the
+// forms the mask and the declaration files use beyond class names.
 impl From<String> for Ty {
     fn from(value: String) -> Self {
-        Self::from(ClassTy::from(value))
+        match value.strip_prefix("..#") {
+            Some(param) => Ty::Param(param.to_string()),
+            None if value == "This" => Ty::This,
+            None => Self::from(ClassTy::from(value)),
+        }
     }
 }
 
@@ -922,15 +928,6 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     Ty::OREF(ClsOrIns::Ins(cls))
 }
 
-pub(crate) fn ty_from_mask(t: Option<String>) -> Option<Ty> {
-    use tygr_objectscript::cos::SignatureType;
-    match t.as_deref().map(SignatureType::parse) {
-        Some(Ok(SignatureType::This(_))) => Some(Ty::This),
-        Some(Ok(SignatureType::Parameter(_, name))) => Some(Ty::Param(name.print())),
-        _ => ty_from_declared(t),
-    }
-}
-
 // `This` is the receiver's class; `..#NAME` the receiver's argument for the parameter `NAME`
 // that `owner`, the member's declaring class, defines (its default when the receiver gives none).
 pub(crate) trait Instantiate {
@@ -942,7 +939,9 @@ impl Instantiate for Ty {
         match self {
             Ty::This => *self = Ty::ins(receiver.clone()),
             Ty::Param(param) => {
-                if let Some(arg) = crate::mask::generic_arg(owner, &receiver.generics, param) {
+                let arg = (receiver.generics.get(param).cloned())
+                    .or_else(|| crate::mask::generic_default(owner, param));
+                if let Some(arg) = arg {
                     *self = Ty::from(arg);
                 }
             }
@@ -1086,10 +1085,10 @@ mod tests {
         receiver
             .generics
             .insert("ELEMENTTYPE".to_string(), "Demo.Child".to_string());
-        let mut element = ty_from_mask(Some("..#ELEMENTTYPE".to_string())).unwrap();
+        let mut element = Ty::from("..#ELEMENTTYPE");
         element.instantiate(&receiver, "%Library.RelationshipObject");
         assert!(matches!(element, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "Demo.Child"));
-        let mut this = ty_from_mask(Some("This".to_string())).unwrap();
+        let mut this = Ty::from("This");
         this.instantiate(&receiver, "%Library.RelationshipObject");
         assert!(
             matches!(this, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "%Library.RelationshipObject")

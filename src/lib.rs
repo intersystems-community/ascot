@@ -44,6 +44,7 @@
 mod atelier;
 pub mod bindings;
 pub mod check;
+mod declared;
 mod details;
 pub mod diagnostic_filter;
 #[cfg(not(target_arch = "wasm32"))]
@@ -727,20 +728,6 @@ impl std::ops::Deref for Workspace {
 
 // A routine's labels read from its source; unknown if it doesn't parse. Its `#include`s aren't
 // resolved, so this suits an `.int`, whose macros are already expanded.
-/// The signatures of the `%SYS` routine labels the system macros call, which IRIS ships as object
-/// code only: `scripts/prebuilt-declarations.sh` merges them into a declaration file, and a live
-/// instance without the routines' source is held to them too.
-static CURATED_LABELS: std::sync::LazyLock<
-    std::collections::BTreeMap<String, std::collections::BTreeMap<String, bindings::Signature>>,
-> = std::sync::LazyLock::new(|| {
-    serde_json::from_str(include_str!("../scripts/prebuilt-labels.json"))
-        .expect("a valid prebuilt-labels.json")
-});
-
-pub(crate) fn curated_label(routine: &str, label: &str) -> Option<bindings::Signature> {
-    CURATED_LABELS.get(routine)?.get(label).cloned()
-}
-
 pub(crate) fn routine_info(text: &str, uri: Option<String>) -> bindings::RoutineInfo {
     let workspace = build_workspace_struct(None, None);
     let expanded = workspace.expand_rtn(uri.as_deref().unwrap_or_default(), text);
@@ -2409,8 +2396,9 @@ mod tests {
         without_hints(workspace.diagnostics(uri.to_string()))
     }
 
+    // A declaration may type a method's result as `This`: the receiver's class.
     #[test]
-    fn only_the_mask_says_this() {
+    fn a_declared_this_is_the_receiver() {
         let mut mem = external_method("getNextResultSet", vec![], Some("This"));
         mem.origin = Some("%Library.SQLGatewayConnection".to_string());
         let workspace = Workspace::native(
@@ -2429,7 +2417,7 @@ mod tests {
         assert!(
             diagnostics[0]
                 .message
-                .contains("Cannot find member 'Next' in This"),
+                .contains("Cannot find member 'Next' in %SQLGatewayConnection"),
             "{diagnostics:?}"
         );
     }

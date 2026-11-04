@@ -1,69 +1,1686 @@
 {
- "%Library.Any.cls": "Any",
- "%Library.Base.cls": {
-  "%ClassName": { "args": { "fullname": { "optional": true } } },
-  "%New": { "returns": "This", "args": { "initvalue": { "optional": true } } }
+ "classes": {
+  "%ASQ.Queue": {
+   "header": "Class %ASQ.Queue",
+   "members": [
+    { "header": "ClassMethod new() As This" }
+   ]
+  },
+  "%ASQ.Sequence": {
+   "header": "Class %ASQ.Sequence",
+   "members": [
+    { "header": "ClassMethod new(initvalue As %Any) As This" }
+   ]
+  },
+  "%ASQ.Stack": {
+   "header": "Class %ASQ.Stack",
+   "members": [
+    { "header": "ClassMethod new() As This" }
+   ]
+  },
+  "%BigData.ShardingManager": {
+   "header": "Class %BigData.ShardingManager",
+   "members": [
+    { "header": "ClassMethod %GetShardingManager() As This" }
+   ]
+  },
+  "%CPT.COS.Analysis.Condition.Abstract": {
+   "header": "Class %CPT.COS.Analysis.Condition.Abstract",
+   "members": [
+    { "header": "ClassMethod NoneCondition() As This" }
+   ]
+  },
+  "%CPT.COS.Analysis.Edge.Abstract": {
+   "header": "Class %CPT.COS.Analysis.Edge.Abstract",
+   "members": [
+    { "header": "ClassMethod MakeEdge(EdgeType As %String, DestEntryRef As %String, Condition As %CPT.COS.Analysis.Condition.Abstract) As This" }
+   ]
+  },
+  "%CPT.COS.Language.Abstract": {
+   "header": "Class %CPT.COS.Language.Abstract",
+   "members": [
+    { "header": "ClassMethod LangNode(TreeIndex As %Integer, NodeIndex As %Integer) As This" },
+    { "header": "ClassMethod MakeLangNode(TreeIndex As %Integer, NodeIndex As %Integer) As This" }
+   ]
+  },
+  "%CPT.COS.Language.Command.Abstract": {
+   "header": "Class %CPT.COS.Language.Command.Abstract",
+   "members": [
+    { "header": "ClassMethod MakeCommand(TreeIndex As %Integer, CommandNodeIndex As %Integer) As This" }
+   ]
+  },
+  "%CPT.JS.Analyse.Object": {
+   "header": "Class %CPT.JS.Analyse.Object",
+   "members": [
+    { "header": "ClassMethod %NewObjectExpressionX(Exhaustive As %Boolean, Args...) As This" }
+   ]
+  },
+  "%CPT.JS.Generate.Gen.Abstract": {
+   "header": "Class %CPT.JS.Generate.Gen.Abstract",
+   "members": [
+    { "header": "ClassMethod MakeGenerator(GeneratorClass As %String, TreeIndex As %Integer, NodeIndex As %Integer, Args...) As This" }
+   ]
+  },
+  "%CPT.JS.Node.CPT": {
+   "header": "Class %CPT.JS.Node.CPT",
+   "members": [
+    { "header": "ClassMethod NullNode(Editor As %CPT.Tree.Editor) As This" }
+   ]
+  },
+  "%CPT.JS.Runtime.Object": {
+   "header": "Class %CPT.JS.Runtime.Object",
+   "members": [
+    { "header": "ClassMethod %NewObjectExpression(Args...) As This" }
+   ]
+  },
+  "%CSP.Session": {
+   "header": "Class %CSP.Session",
+   "members": [
+    { "header": "ClassMethod GetSession(sessionId As %String, CSPSessionCookie As %String = \"\", lock As %Boolean = 1, request As %CSP.Request) As This" }
+   ]
+  },
+  "%CSP.Util.AutoForm": {
+   "header": "Class %CSP.Util.AutoForm",
+   "members": [
+    { "header": "ClassMethod CreateInstance(ByRef pID As %String) As This" },
+    { "header": "ClassMethod ProcessSubmit(pRequest As %CSP.Request, ByRef pID As %String = \"\", Output pErrorMsg As %String) As This" }
+   ]
+  },
+  "%Collection.AbstractArray": {
+   "header": "Class %Collection.AbstractArray",
+   "members": [
+    { "header": "Method Find(element As ..#ELEMENTTYPE, key As %String) As %String" },
+    { "header": "Method GetPrevious(ByRef key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method RemoveAt(key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method SetAt(element As ..#ELEMENTTYPE, key As %String) As %Status" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%RawString"
+   }
+  },
+  "%Collection.AbstractArrayOfObj": {
+   "header": "Class %Collection.AbstractArrayOfObj",
+   "members": [
+    { "header": "Method FindOref(oref As ..#ELEMENTTYPE, key As %String = \"\", id As %String) As %String" },
+    { "header": "Method GetAt(key As %String = \"\") As ..#ELEMENTTYPE" },
+    { "header": "Method GetNext(ByRef key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method GetPrevious(ByRef key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method SetAt(element As ..#ELEMENTTYPE, key As %String) As %Status" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%RegisteredObject"
+   }
+  },
+  "%Collection.AbstractIterator": {
+   "header": "Class %Collection.AbstractIterator",
+   "members": [
+    { "header": "Method GetAt(key As %RawString = \"\") As ..#ELEMENTTYPE" },
+    { "header": "Method GetNext(ByRef key As %RawString) As ..#ELEMENTTYPE" },
+    { "header": "Method Next(key As %RawString = \"\") As ..#ELEMENTTYPE" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%RawString"
+   }
+  },
+  "%Collection.AbstractList": {
+   "header": "Class %Collection.AbstractList",
+   "members": [
+    { "header": "Method Find(element As ..#ELEMENTTYPE, key As %Integer) As %String" },
+    { "header": "Method GetAt(key As %Integer = 0) As ..#ELEMENTTYPE" },
+    { "header": "Method GetNext(ByRef key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method GetPrevious(ByRef key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method Insert(element As ..#ELEMENTTYPE) As %Status" },
+    { "header": "Method InsertAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" },
+    { "header": "Method InsertOrdered(element As ..#ELEMENTTYPE) As %Status" },
+    { "header": "Method RemoveAt(key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method SetAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%RawString"
+   }
+  },
+  "%Collection.AbstractListOfObj": {
+   "header": "Class %Collection.AbstractListOfObj",
+   "members": [
+    { "header": "Method FindOref(oref As ..#ELEMENTTYPE, key As %Integer = \"\", id As %String = \"\") As %String" },
+    { "header": "Method GetAt(key As %Integer = 0) As ..#ELEMENTTYPE" },
+    { "header": "Method GetNext(ByRef key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method GetPrevious(ByRef key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method Insert(element As ..#ELEMENTTYPE) As %Status" },
+    { "header": "Method InsertAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" },
+    { "header": "Method SetAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%RegisteredObject"
+   }
+  },
+  "%Collection.ArrayOfObj": {
+   "header": "Class %Collection.ArrayOfObj",
+   "members": [
+    { "header": "Method FindOref(oref As ..#ELEMENTTYPE, key As %String = \"\", id As %String = \"\") As %String" },
+    { "header": "Method GetAt(key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method GetNext(ByRef key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method GetPrevious(ByRef key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method SetAt(oref As ..#ELEMENTTYPE, key As %String) As %Status" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%RegisteredObject"
+   }
+  },
+  "%Collection.ListOfObj": {
+   "header": "Class %Collection.ListOfObj",
+   "members": [
+    { "header": "Method FindOref(oref As ..#ELEMENTTYPE, key As %Integer = \"\", id As %String = \"\") As %String" },
+    { "header": "Method GetAt(key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method GetNext(ByRef key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method GetPrevious(ByRef key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method Insert(oref As ..#ELEMENTTYPE) As %Status" },
+    { "header": "Method InsertAt(oref As ..#ELEMENTTYPE, key As %Integer) As %Status" },
+    { "header": "Method SetAt(oref As ..#ELEMENTTYPE, key As %Integer) As %Status" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%RegisteredObject"
+   }
+  },
+  "%Compiler.LG.EJBProperty": {
+   "header": "Class %Compiler.LG.EJBProperty",
+   "members": [
+    { "header": "ClassMethod GetID(Properties As %ArrayOfObjects) As This" }
+   ]
+  },
+  "%Compiler.LG.JavaBlock": {
+   "header": "Class %Compiler.LG.JavaBlock",
+   "members": [
+    { "header": "ClassMethod %Open(ClassName As %String, ByRef sc As %Status) As This" },
+    { "header": "ClassMethod GetTest() As This" }
+   ]
+  },
+  "%Compiler.LG.QueryHelper": {
+   "header": "Class %Compiler.LG.QueryHelper",
+   "members": [
+    { "header": "ClassMethod Query(class As %String, sql As %String, args) As This" }
+   ]
+  },
+  "%Compiler.SQL.ParseTree": {
+   "header": "Class %Compiler.SQL.ParseTree",
+   "members": [
+    { "header": "ClassMethod parseStream(source As %Stream.Object, settings As %RawString = \"\", ByRef returnStatus As %Status, trigger As %Boolean = 0) As This" }
+   ]
+  },
+  "%Compiler.TSQL.ParseTree": {
+   "header": "Class %Compiler.TSQL.ParseTree",
+   "members": [
+    { "header": "ClassMethod parseStream(source As %Stream.Object, settings As %RawString = \"\", ByRef returnStatus As %Status, trigger As %Boolean = 0, dialect As %String = \"\") As This" }
+   ]
+  },
+  "%Compiler.Util.ParseTree": {
+   "header": "Class %Compiler.Util.ParseTree",
+   "members": [
+    { "header": "ClassMethod Parse(source As %RawString, settings As %RawString = \"\", ByRef returnStatus As %Status, trigger As %Boolean = 0) As This" },
+    { "header": "ClassMethod parseStream(source As %Stream.Object, settings As %RawString = \"\", ByRef returnStatus As %Status, trigger As %Boolean = 0) As This" }
+   ]
+  },
+  "%DeepSee.ComputedDimension.Base": {
+   "header": "Class %DeepSee.ComputedDimension.Base",
+   "members": [
+    { "header": "ClassMethod %Create(pCube As %String, pFactNo As %Integer, pDimNo As %Integer, pHierNo As %Integer, pLevelNo As %Integer) As This" }
+   ]
+  },
+  "%DeepSee.CubeManager.RegistryMap": {
+   "header": "Class %DeepSee.CubeManager.RegistryMap",
+   "members": [
+    { "header": "ClassMethod LoadFromClass(pClassname As %String, Output pStatus As %Status) As This" }
+   ]
+  },
+  "%DeepSee.CubeSchedule.Map": {
+   "header": "Class %DeepSee.CubeSchedule.Map",
+   "members": [
+    { "header": "ClassMethod LoadFromClass(pClassname As %String, Output pStatus As %Status) As This" }
+   ]
+  },
+  "%DeepSee.Dashboard.Element": {
+   "header": "Class %DeepSee.Dashboard.Element",
+   "members": [
+    { "header": "ClassMethod %ExistsId(pID As %String) As This" },
+    { "header": "ClassMethod %OpenId(pID As %String, Output pSC As %Status) As This" }
+   ]
+  },
+  "%DeepSee.PMML.Data": {
+   "header": "Class %DeepSee.PMML.Data",
+   "members": [
+    { "header": "ClassMethod %CreateFromArray(ByRef pArray, Output pSC As %Status = {$$$OK}) As This" },
+    { "header": "ClassMethod %CreateFromObject(pObject, Output pSC As %Status = {$$$OK}) As This" }
+   ]
+  },
+  "%DeepSee.PMML.Dataset.Array": {
+   "header": "Class %DeepSee.PMML.Dataset.Array",
+   "members": [
+    { "header": "ClassMethod %CreateFromModelValidation(pName As %String, pModelVerification As %DeepSee.PMML.Definition.ModelVerification, Output pSC As %Status) As This" }
+   ]
+  },
+  "%DeepSee.PMML.Dataset.Cube": {
+   "header": "Class %DeepSee.PMML.Dataset.Cube",
+   "members": [
+    { "header": "ClassMethod %Create(pName As %String, pCubeName As %String, ByRef pFields, pFilter As %String = \"\", Output pSC As %Status) As This" }
+   ]
+  },
+  "%DeepSee.PMML.Dataset.ResultSet": {
+   "header": "Class %DeepSee.PMML.Dataset.ResultSet",
+   "members": [
+    { "header": "ClassMethod %Create(pName As %String, pResultSet As %IResultSet, ByRef pFields, ByRef pTempTableName As %String = \"\", pIdColumn As %String = \"\", Output pSC As %Status) As This" }
+   ]
+  },
+  "%DeepSee.PMML.Dataset.SQL": {
+   "header": "Class %DeepSee.PMML.Dataset.SQL",
+   "members": [
+    { "header": "ClassMethod %Create(pName As %String, pSQL As %String, ByRef pFields, ByRef pCreateTempTable As %String = \"\", pIdColumn As %String = \"\", Output pSC As %Status) As This" }
+   ]
+  },
+  "%DeepSee.PMML.Definition.PMML": {
+   "header": "Class %DeepSee.PMML.Definition.PMML",
+   "members": [
+    { "header": "ClassMethod %Create(pVersion As %String, pDescription As %String = \"\", pApplication As %String = \"\") As This" }
+   ]
+  },
+  "%DeepSee.Query.member": {
+   "header": "Class %DeepSee.Query.member",
+   "members": [
+    { "header": "ClassMethod %CreateMember(pClassName As %String, Output tSC As %Status, pCube As %String, pTuple As %DeepSee.Query.tuple, pDimNo As %Integer, pHierNo As %Integer, pAllName As %String = \"\") As This" }
+   ]
+  },
+  "%DeepSee.ResultSet": {
+   "header": "Class %DeepSee.ResultSet",
+   "members": [
+    { "header": "ClassMethod %ExecuteDirect(pMDX As %String, ByRef pParms, Output pSC As %Status, pAsync = 0, pWait = 1) As This" }
+   ]
+  },
+  "%DeepSee.Session": {
+   "header": "Class %DeepSee.Session",
+   "members": [
+    { "header": "ClassMethod %CreateSession(pSessionId As %String = \"\", Output pSC As %Status) As This" },
+    { "header": "ClassMethod %ResumeSession(pSessionId As %String = \"\", Output pSC As %Status) As This" }
+   ]
+  },
+  "%DeepSee.UserLibrary.TermList": {
+   "header": "Class %DeepSee.UserLibrary.TermList",
+   "members": [
+    { "header": "ClassMethod %OpenId(pID As %String = \"\") As This" }
+   ]
+  },
+  "%DeepSee.extensions.clusters.CLARA": {
+   "header": "Class %DeepSee.extensions.clusters.CLARA",
+   "members": [
+    { "header": "ClassMethod Create(dsName As %String, new As %Boolean, Output sc As %Status) As This" },
+    { "header": "ClassMethod New(dsName As %String, Output sc As %Status) As This" },
+    { "header": "ClassMethod Open(dsName As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "%DeepSee.extensions.clusters.DissimilarityModel": {
+   "header": "Class %DeepSee.extensions.clusters.DissimilarityModel",
+   "members": [
+    { "header": "ClassMethod Create(dsName As %String, type As %EnumString, new As %Boolean, Output sc As %Status) As This" },
+    { "header": "ClassMethod New(dsName As %String, type As %EnumString, Output sc As %Status) As This" },
+    { "header": "ClassMethod Open(dsName As %String, type As %EnumString, Output sc As %Status) As This" }
+   ]
+  },
+  "%DeepSee.extensions.clusters.PAM": {
+   "header": "Class %DeepSee.extensions.clusters.PAM",
+   "members": [
+    { "header": "ClassMethod Create(dsName As %String, new As %Boolean, Output sc As %Status) As This" },
+    { "header": "ClassMethod New(dsName As %String, Output sc As %Status) As This" },
+    { "header": "ClassMethod Open(dsName As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "%DeepSee.extensions.clusters.PAMSA": {
+   "header": "Class %DeepSee.extensions.clusters.PAMSA",
+   "members": [
+    { "header": "ClassMethod Create(dsName As %String, new As %Boolean, Output sc As %Status) As This" },
+    { "header": "ClassMethod New(dsName As %String, Output sc As %Status) As This" },
+    { "header": "ClassMethod Open(dsName As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "%DeepSee.extensions.clusters.opt.D1D": {
+   "header": "Class %DeepSee.extensions.clusters.opt.D1D",
+   "members": [
+    { "header": "ClassMethod create(ByRef x, N As %Integer = \"\", a As %Double = \"\", b As %Double = \"\", Output sc As %Status) As This" }
+   ]
+  },
+  "%DeepSee.extensions.clusters.opt.EntropyOptModel": {
+   "header": "Class %DeepSee.extensions.clusters.opt.EntropyOptModel",
+   "members": [
+    { "header": "ClassMethod create(distribution As D1D, Output sc As %Status) As This" }
+   ]
+  },
+  "%DeepSee.extensions.clusters.opt.PearsonOptModel": {
+   "header": "Class %DeepSee.extensions.clusters.opt.PearsonOptModel",
+   "members": [
+    { "header": "ClassMethod create(ByRef data, count As %Integer, Output sc As %Status) As This" }
+   ]
+  },
+  "%DeepSee.extensions.iKnow.ClassifierOptimizer": {
+   "header": "Class %DeepSee.extensions.iKnow.ClassifierOptimizer",
+   "members": [
+    { "header": "ClassMethod create(builder As ClassifierBuilder) As This" }
+   ]
+  },
+  "%DeepSee.extensions.stat.ExpDistribution": {
+   "header": "Class %DeepSee.extensions.stat.ExpDistribution",
+   "members": [
+    { "header": "ClassMethod create(lambda As %Double) As This" }
+   ]
+  },
+  "%DeepSee.extensions.stat.NormalDistribution": {
+   "header": "Class %DeepSee.extensions.stat.NormalDistribution",
+   "members": [
+    { "header": "ClassMethod create(mean As %Double, variance As %Double) As This" }
+   ]
+  },
+  "%DeepSee.extensions.stat.SubDistribution": {
+   "header": "Class %DeepSee.extensions.stat.SubDistribution",
+   "members": [
+    { "header": "ClassMethod create(parent As %DeepSee.extensions.stat.Abstract1DDistribution, ByRef q, Output sc As %Status) As This" }
+   ]
+  },
+  "%DocDB.Database": {
+   "header": "Class %DocDB.Database",
+   "members": [
+    { "header": "ClassMethod %CreateDatabase(databaseName As %String(MAXLEN=220) = \"\", documentType As %String = \"%Library.DynamicAbstractObject\", resource As %String = \"\") As This" },
+    { "header": "ClassMethod %GetDatabase(databaseName) As This" }
+   ]
+  },
+  "%Document.Object": {
+   "header": "Class %Document.Object",
+   "members": [
+    { "header": "ClassMethod CSON(pObjectValue As %String(MAXLEN=\"\")) As This" },
+    { "header": "ClassMethod open(pWhere As %ZEN.Datatype.string, pDocumentID As %ZEN.Datatype.string, Output pStatus As %Status = \"\") As This" },
+    { "header": "ClassMethod XML(pXML As %Binary = \"\") As This" }
+   ]
+  },
+  "%Exception.EMAPI": {
+   "header": "Class %Exception.EMAPI",
+   "members": [
+    { "header": "ClassMethod ClientError(text As %String) As This" },
+    { "header": "ClassMethod Create(name As %String = \"\", data As %String = \"\") As This" },
+    { "header": "ClassMethod CreateFromFault(fault As %SOAP.Fault) As This" },
+    { "header": "ClassMethod EMError(text As %String) As This" }
+   ]
+  },
+  "%Exception.SQL": {
+   "header": "Class %Exception.SQL",
+   "members": [
+    { "header": "ClassMethod CreateFromSQLCODE(pSQLCODE As %Integer, pMessage As %String(MAXLEN=\"\")) As This" }
+   ]
+  },
+  "%External.DotNetGateway": {
+   "header": "Class %External.DotNetGateway",
+   "members": [
+    { "header": "ClassMethod getGateway(gatewayName As %DynamicObject = {$$$EXTERNALLANGUAGESERVERNAMEDOTNET}, useSharedMemoryIfPossible) As This" }
+   ]
+  },
+  "%External.Gateway": {
+   "header": "Class %External.Gateway",
+   "members": [
+    { "header": "ClassMethod getGateway(gatewayName As %DynamicObject, useSharedMemoryIfPossible) As This" },
+    { "header": "ClassMethod getRemoteGateway(host As %RawString, port As %Integer, timeout As %Numeric, useSharedMemoryIfPossible) As This" }
+   ]
+  },
+  "%External.JavaGateway": {
+   "header": "Class %External.JavaGateway",
+   "members": [
+    { "header": "ClassMethod getGateway(gatewayName As %DynamicObject = {$$$EXTERNALLANGUAGESERVERNAMEJAVA}, useSharedMemoryIfPossible) As This" }
+   ]
+  },
+  "%External.Messaging.Client": {
+   "header": "Class %External.Messaging.Client",
+   "members": [
+    { "header": "ClassMethod CreateClient(settings As Settings, Output sc As %Status, additionalClasspaths As %String = \"\") As This" }
+   ]
+  },
+  "%External.PythonGateway": {
+   "header": "Class %External.PythonGateway",
+   "members": [
+    { "header": "ClassMethod getGateway(gatewayName As %DynamicObject = {$$$EXTERNALLANGUAGESERVERNAMEPYTHON}, useSharedMemoryIfPossible) As This" }
+   ]
+  },
+  "%FOI.Schema": {
+   "header": "Class %FOI.Schema",
+   "members": [
+    { "header": "ClassMethod %FromJSON(str As %RawString) As This" },
+    { "header": "ClassMethod classToSchema(className As %String(MAXLEN=220) = \"\") As This" }
+   ]
+  },
+  "%IO.DeviceStream": {
+   "header": "Class %IO.DeviceStream",
+   "members": [
+    { "header": "ClassMethod AttachNew(pDevice As %String = {$IO}, Output pSC As %Status) As This" }
+   ]
+  },
+  "%Library.Any": {
+   "header": "Class %Library.Any",
+   "type": "Any",
+   "members": []
+  },
+  "%Library.ArrayOfObjects": {
+   "header": "Class %Library.ArrayOfObjects",
+   "members": [
+    { "header": "Method GetAt(key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method GetNext(ByRef key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method GetPrevious(ByRef key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method SetAt(oref As ..#ELEMENTTYPE, key As %String) As %Status" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%RegisteredObject"
+   }
+  },
+  "%Library.Base": {
+   "header": "Class %Library.Base",
+   "members": [
+    { "header": "ClassMethod %ClassName(fullname As %Boolean = 0) As %String" },
+    { "header": "ClassMethod %New(initvalue As %RawString = \"\") As This" }
+   ]
+  },
+  "%Library.BigInt": {
+   "header": "Class %Library.BigInt",
+   "members": [
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.Binary": {
+   "header": "Class %Library.Binary",
+   "members": [
+    { "header": "ClassMethod JSONToLogical(%val As %String) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.Boolean": {
+   "header": "Class %Library.Boolean",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.Currency": {
+   "header": "Class %Library.Currency",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.Date": {
+   "header": "Class %Library.Date",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod JSONToLogical(%val As %String) As This" },
+    { "header": "ClassMethod Normalize(%val As %RawString) As This" },
+    { "header": "ClassMethod OdbcToLogical(%val As %String = \"\") As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.DeprecationPolicy": {
+   "header": "Class %Library.DeprecationPolicy",
+   "members": [
+    { "header": "ClassMethod GetActive() As This" }
+   ]
+  },
+  "%Library.Double": {
+   "header": "Class %Library.Double",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod JSONToLogical(%val As %String) As This" },
+    { "header": "ClassMethod Normalize(%val As %RawString) As This" },
+    { "header": "ClassMethod OdbcToLogical(%val As %RawString) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.DynamicAbstractObject": {
+   "header": "Class %Library.DynamicAbstractObject",
+   "members": [
+    { "header": "ClassMethod %FromJSON(str As %RawString) As This" },
+    { "header": "ClassMethod %FromJSONFile(filename As %RawString, TranslateTable As %String = \"UTF8\") As This" },
+    { "header": "ClassMethod %FromJSONStats(str As %RawString, stats As %RawString) As This" },
+    { "header": "ClassMethod %FromObject(source As %Any) As This" },
+    { "header": "ClassMethod %FromObjectMulti(oref As %Any, property As %String) As This" },
+    { "header": "ClassMethod %FromObjectSwizzle(oref As %Any, property As %String) As This" },
+    { "header": "ClassMethod %FromPVA(global As %String, keymap As %DynamicKeyMap = \"\", flags As %Integer = 0) As This" },
+    { "header": "Method %ToJSON(outstrm As %Stream.Object = \"\") As %String" },
+    { "header": "ClassMethod fromPVA(gloref As %RawString, keymap As %DynamicKeyMap = \"\") As This" }
+   ]
+  },
+  "%Library.DynamicArray": {
+   "header": "Class %Library.DynamicArray",
+   "members": [
+    { "header": "Method %Get(key As %Integer, default As %Any = \"\", type As %String = \"\") As %Any" },
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
+    { "header": "Method %Push(value As %Any, type As %String = \"\") As %DynamicAbstractObject" },
+    { "header": "Method %Set(key As %Integer, value As %Any, type As %String = \"\") As %DynamicAbstractObject" },
+    { "header": "ClassMethod fromObject(source = \"\", returnValue = \"\", laxMode As %Integer = 1) As This" }
+   ]
+  },
+  "%Library.DynamicCollection": {
+   "header": "Class %Library.DynamicCollection",
+   "members": [
+    { "header": "ClassMethod NewCollection(classname As %String, depth As %Integer, stream As %List, matchValue As %List, returnlevel As %Integer, summary As %Integer = 1, returnlen As %Integer) As This" }
+   ]
+  },
+  "%Library.DynamicObject": {
+   "header": "Class %Library.DynamicObject",
+   "members": [
+    { "header": "Method %Get(key As %String, default As %Any = \"\", type As %String = \"\") As %Any" },
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
+    { "header": "Method %Set(key As %String, value As %Any, type As %String = \"\") As %DynamicAbstractObject" }
+   ]
+  },
+  "%Library.FilemanDate": {
+   "header": "Class %Library.FilemanDate",
+   "members": [
+    { "header": "ClassMethod DateToLogical(%val As %String) As This" },
+    { "header": "ClassMethod DisplayToLogical(Arg1 As %String) As This" },
+    { "header": "ClassMethod JSONToLogical(%val As %String) As This" },
+    { "header": "ClassMethod OdbcToLogical(Arg1 As %String) As This" },
+    { "header": "ClassMethod TimeStampToLogical(%val As %TimeStamp) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.FilemanTime": {
+   "header": "Class %Library.FilemanTime",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(Arg1 As %String) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.FilemanTimeStamp": {
+   "header": "Class %Library.FilemanTimeStamp",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(Arg1 As %String) As This" },
+    { "header": "ClassMethod OdbcToLogical(Arg1 As %String) As This" },
+    { "header": "ClassMethod StorageToLogical(%val As %String) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.FilemanTimeStampUTC": {
+   "header": "Class %Library.FilemanTimeStampUTC",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(Arg1 As %String) As This" },
+    { "header": "ClassMethod OdbcToLogical(Arg1 As %String) As This" }
+   ]
+  },
+  "%Library.FilemanYear": {
+   "header": "Class %Library.FilemanYear",
+   "members": [
+    { "header": "ClassMethod DateToLogical(%val As %String = \"\") As This" },
+    { "header": "ClassMethod DisplayToLogical(Arg1 As %String) As This" },
+    { "header": "ClassMethod JSONToLogical(%val As %String) As This" },
+    { "header": "ClassMethod TimeStampToLogical(%val As %TimeStamp = \"\") As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.Float": {
+   "header": "Class %Library.Float",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod Normalize(%val As %RawString) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.GlobalEdit": {
+   "header": "Class %Library.GlobalEdit",
+   "members": [
+    { "header": "ClassMethod Open(Name As %String, Directory As %String = {$zu(12,\"\")}, System As %String = \"\", concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" }
+   ]
+  },
+  "%Library.IResultSet": {
+   "header": "Class %Library.IResultSet",
+   "members": [
+    { "header": "ClassMethod %Prepare(queryId As %String(MAXLEN=\"\"), ByRef %returnError As %SYSTEM.Error, %importPackages As %RawString = \"\", %args...) As This" }
+   ]
+  },
+  "%Library.Integer": {
+   "header": "Class %Library.Integer",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod Normalize(%val As %RawString) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.List": {
+   "header": "Class %Library.List",
+   "members": [
+    { "header": "ClassMethod XSDToLogical(val As %String) As This" }
+   ]
+  },
+  "%Library.ListOfObjects": {
+   "header": "Class %Library.ListOfObjects",
+   "members": [
+    { "header": "Method GetAt(key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method GetNext(ByRef key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method GetPrevious(ByRef key As %Integer) As ..#ELEMENTTYPE" },
+    { "header": "Method Insert(oref As ..#ELEMENTTYPE) As %Status" },
+    { "header": "Method InsertAt(oref As ..#ELEMENTTYPE, key As %Integer) As %Status" },
+    { "header": "Method SetAt(oref As ..#ELEMENTTYPE, key As %Integer) As %Status" }
+   ],
+   "generics": {
+    "ELEMENTTYPE": "%RegisteredObject"
+   }
+  },
+  "%Library.Name": {
+   "header": "Class %Library.Name",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String = \"\") As This" }
+   ]
+  },
+  "%Library.Numeric": {
+   "header": "Class %Library.Numeric",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod Normalize(%val As %RawString) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.Persistent": {
+   "header": "Class %Library.Persistent",
+   "members": [
+    { "header": "ClassMethod %Open(oid As %ObjectIdentity, concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" },
+    { "header": "ClassMethod %OpenId(id As %String = \"\", concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" }
+   ]
+  },
+  "%Library.PosixTime": {
+   "header": "Class %Library.PosixTime",
+   "members": [
+    { "header": "ClassMethod CurrentTimeStamp(precision As %Integer = 6) As This" },
+    { "header": "ClassMethod CurrentUTCTimeStamp(precision As %Integer = 6) As This" },
+    { "header": "ClassMethod DateToLogical(%val As %Date) As This" },
+    { "header": "ClassMethod DisplayToLogical(%val As %RawString) As This" },
+    { "header": "ClassMethod JSONToLogical(%val As %BigInt) As This" },
+    { "header": "ClassMethod Normalize(%val As %RawString) As This" },
+    { "header": "ClassMethod OdbcToLogical(%val As %RawString) As This" },
+    { "header": "ClassMethod TimeStampToLogical(%val As %TimeStamp) As This" },
+    { "header": "ClassMethod TimeToLogical(%val As %Time) As This" },
+    { "header": "ClassMethod UnixTimeToLogical(%val As %Decimal) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.RegisteredObject": {
+   "header": "Class %Library.RegisteredObject",
+   "drop": [
+    "%OnNew"
+   ],
+   "members": [
+    { "header": "ClassMethod %ClassName(fullname As %Boolean = 0) As %String" },
+    { "header": "Method %ConstructClone(deep As %Integer = 0, ByRef cloned As %String = \"\", location As %String = \"\") As This" },
+    { "header": "ClassMethod %New(initvalue As %RawString = \"\") As This" }
+   ]
+  },
+  "%Library.RelationshipObject": {
+   "header": "Class %Library.RelationshipObject",
+   "generics": {
+    "ELEMENTTYPE": "%Library.ObjectHandle"
+   },
+   "members": [
+    { "header": "Method FindExistingOref(oref As ..#ELEMENTTYPE) As %String" },
+    { "header": "Method FindOref(oref As ..#ELEMENTTYPE, key As %String = \"\", id As %String) As %String" },
+    { "header": "Method GetAt(key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method GetNext(ByRef key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method GetOrefAt(key As %String, force As %Integer = 0) As ..#ELEMENTTYPE" },
+    { "header": "Method GetPrevious(ByRef key As %String) As ..#ELEMENTTYPE" },
+    { "header": "Method Insert(oref As ..#ELEMENTTYPE) As %Status" },
+    { "header": "Method Relate(oref As ..#ELEMENTTYPE) As %Status" },
+    { "header": "Method Remove(oref As ..#ELEMENTTYPE) As %ObjectIdentity" },
+    { "header": "Method SetAt(oref As ..#ELEMENTTYPE, key As %String) As %Status" },
+    { "header": "Method UnRelate(oref As ..#ELEMENTTYPE) As %Status" }
+   ]
+  },
+  "%Library.ResultSet": {
+   "header": "Class %Library.ResultSet",
+   "members": [
+    { "header": "Method Next(ByRef sc As %Status = \"\") As %Integer" }
+   ]
+  },
+  "%Library.ScrollableResultSet": {
+   "header": "Class %Library.ScrollableResultSet",
+   "members": [
+    { "header": "ClassMethod %OpenId(id As %String, concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" }
+   ]
+  },
+  "%Library.SerialObject": {
+   "header": "Class %Library.SerialObject",
+   "members": [
+    { "header": "ClassMethod %Open(initvalue As %ObjectIdentity, concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" },
+    { "header": "ClassMethod %OpenId(initvalue As %String, concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" }
+   ]
+  },
+  "%Library.SmallInt": {
+   "header": "Class %Library.SmallInt",
+   "members": [
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.String": {
+   "header": "Class %Library.String",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod JSONToLogical(%val As %String) As This" },
+    { "header": "ClassMethod LogicalToDisplay(%val As %String) As This" },
+    { "header": "ClassMethod LogicalToJSON(%val As %String) As This" },
+    { "header": "ClassMethod LogicalToOdbc(%val As %String) As This" },
+    { "header": "ClassMethod LogicalToXSD(%val As %String) As This" },
+    { "header": "ClassMethod Normalize(%val As %RawString) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.StringTimeStamp": {
+   "header": "Class %Library.StringTimeStamp",
+   "members": [
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.SystemBase": {
+   "header": "Class %Library.SystemBase",
+   "drop": [
+    "%DispatchClassMethod",
+    "%DispatchGetModified",
+    "%DispatchGetProperty",
+    "%DispatchMethod",
+    "%DispatchSetModified",
+    "%DispatchSetMultidimProperty",
+    "%DispatchSetProperty"
+   ],
+   "members": [
+    { "header": "ClassMethod %ClassName(fullname As %Boolean = 0) As %String" },
+    { "header": "ClassMethod %New(initvalue As %RawString = \"\") As This" }
+   ]
+  },
+  "%Library.Time": {
+   "header": "Class %Library.Time",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod Normalize(%val As %RawString) As This" },
+    { "header": "ClassMethod OdbcToLogical(%val As %String = \"\") As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.TimeStamp": {
+   "header": "Class %Library.TimeStamp",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod Normalize(%val As %RawString) As This" },
+    { "header": "ClassMethod OdbcToLogical(%val As %String) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.TinyInt": {
+   "header": "Class %Library.TinyInt",
+   "members": [
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Library.Vector": {
+   "header": "Class %Library.Vector",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod Normalize(%val As %Vector) As This" },
+    { "header": "ClassMethod OdbcToLogical(%val As %String) As This" }
+   ]
+  },
+  "%MV.Date": {
+   "header": "Class %MV.Date",
+   "members": [
+    { "header": "ClassMethod DateToLogical(%val As %Date) As This" },
+    { "header": "ClassMethod DisplayToLogical(%val As %String) As This" },
+    { "header": "ClassMethod Normalize(%val As %String) As This" },
+    { "header": "ClassMethod OdbcToLogical(%val As %String = \"\") As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%MV.Numeric": {
+   "header": "Class %MV.Numeric",
+   "members": [
+    { "header": "ClassMethod StorageToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Net.Cloud.Storage.Client": {
+   "header": "Class %Net.Cloud.Storage.Client",
+   "members": [
+    { "header": "ClassMethod CreateClient(javaServer As %RawString = \"\", storageProvider As %Integer, credentialsFile As %String = \"\", region As %String, Output sc As %Status, endPoint As %String = \"\") As This" }
+   ]
+  },
+  "%Net.MIMESerialPart": {
+   "header": "Class %Net.MIMESerialPart",
+   "members": [
+    { "header": "ClassMethod CloneFromMIMEPart(pPart As %Net.MIMEPart) As This" }
+   ]
+  },
+  "%Net.Remote.Gateway": {
+   "header": "Class %Net.Remote.Gateway",
+   "members": [
+    { "header": "ClassMethod %CreateReverseGateway(device, protocol) As This" },
+    { "header": "ClassMethod %GetContextGateway() As This" }
+   ]
+  },
+  "%OAuth2.Server.CookieSession": {
+   "header": "Class %OAuth2.Server.CookieSession",
+   "members": [
+    { "header": "ClassMethod GetCurrentSession(Output sc As %Status) As This" },
+    { "header": "ClassMethod OpenByCookie(cookie As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "%ResultSet.SQL": {
+   "header": "Class %ResultSet.SQL",
+   "members": [
+    { "header": "ClassMethod %Prepare(ByRef sqlStatement As %String(MAXLEN=\"\"), ByRef returnError As %SYSTEM.Error, %importPackages As %RawString = \"\", %args...) As This" }
+   ]
+  },
+  "%SAML.Assertion": {
+   "header": "Class %SAML.Assertion",
+   "members": [
+    { "header": "ClassMethod Create() As This" },
+    { "header": "ClassMethod CreateX509(credentials As %SYS.X509Credentials, referenceOption As %Integer, prefixList As %String = \"\", useWSSecuritySignature As %Boolean = 1) As This" }
+   ]
+  },
+  "%SOAP.Addressing.EndpointReference": {
+   "header": "Class %SOAP.Addressing.EndpointReference",
+   "members": [
+    { "header": "ClassMethod GetAnonymousEPR(namespace As %String) As This" }
+   ]
+  },
+  "%SOAP.Addressing.Properties": {
+   "header": "Class %SOAP.Addressing.Properties",
+   "members": [
+    { "header": "ClassMethod GetDefaultRequestProperties(destination As %String, action As %String, addressingNamespace As %String) As This" },
+    { "header": "ClassMethod GetDefaultResponseProperties(requestProperties As %SOAP.Addressing.Properties, action As %String) As This" }
+   ]
+  },
+  "%SOAP.Policy": {
+   "header": "Class %SOAP.Policy",
+   "members": [
+    { "header": "ClassMethod ParsePolicy(node As %XML.Node, configLabel As %String, validWSDL As %List) As This" }
+   ]
+  },
+  "%SOAP.RM.CreateSequence": {
+   "header": "Class %SOAP.RM.CreateSequence",
+   "members": [
+    { "header": "ClassMethod Create(addressingNamespace As %String, oneWay As %Boolean = 0, retryInterval As %Float = 1.0, maxRetryCount As %Integer = 8, expires As %xsd.duration, SSLSecurity As %Boolean = 0) As This" }
+   ]
+  },
+  "%SOAP.RM.Sequence": {
+   "header": "Class %SOAP.RM.Sequence",
+   "members": [
+    { "header": "ClassMethod CreateHeader(session As %SYS.RMSession, request As %Boolean) As This" }
+   ]
+  },
+  "%SOAP.RM.SequenceAcknowledgement": {
+   "header": "Class %SOAP.RM.SequenceAcknowledgement",
+   "members": [
+    { "header": "ClassMethod CreateHeader(session As %SYS.RMSession, request As %Boolean) As This" }
+   ]
+  },
+  "%SOAP.Security.BinarySecurityToken": {
+   "header": "Class %SOAP.Security.BinarySecurityToken",
+   "members": [
+    { "header": "ClassMethod CreateX509Token(credentials As %SYS.X509Credentials) As This" }
+   ]
+  },
+  "%SOAP.Security.Policy": {
+   "header": "Class %SOAP.Security.Policy",
+   "members": [
+    { "header": "ClassMethod BuildValidateData(soapClass As %SOAP.WebBase) As This" }
+   ]
+  },
+  "%SOAP.Security.SecurityTokenReference": {
+   "header": "Class %SOAP.Security.SecurityTokenReference",
+   "members": [
+    { "header": "ClassMethod GetDirectReference(tokenURI As %String, valueType As %String) As This" },
+    { "header": "ClassMethod GetKeyIdentifier(valueType As %String, value As %Binary) As This" },
+    { "header": "ClassMethod GetSAMLDirectReference(tokenURI As %String) As This" },
+    { "header": "ClassMethod GetSAMLKeyIdentifier(credentials As %SAML.Assertion, type As %String) As This" },
+    { "header": "ClassMethod GetSCTReference(SCT As %SOAP.WSSC.SecurityContextToken) As This" },
+    { "header": "ClassMethod GetX509Data(valueType As %String, credentials As %SYS.X509Credentials, Output status As %Status) As This" },
+    { "header": "ClassMethod GetX509DirectReference(tokenURI As %String) As This" },
+    { "header": "ClassMethod GetX509KeyIdentifier(valueType As %String, credentials As %SYS.X509Credentials, Output status As %Status) As This" }
+   ]
+  },
+  "%SOAP.Security.SignatureConfirmation": {
+   "header": "Class %SOAP.Security.SignatureConfirmation",
+   "members": [
+    { "header": "ClassMethod Create(value As %xsd.base64Binary) As This" }
+   ]
+  },
+  "%SOAP.Security.Timestamp": {
+   "header": "Class %SOAP.Security.Timestamp",
+   "members": [
+    { "header": "ClassMethod Create(interval As %Integer = 300) As This" }
+   ]
+  },
+  "%SOAP.Security.UsernameToken": {
+   "header": "Class %SOAP.Security.UsernameToken",
+   "members": [
+    { "header": "ClassMethod Create(username As %String, password As %String, type As %String) As This" }
+   ]
+  },
+  "%SOAP.WSSC.DerivedKeyToken": {
+   "header": "Class %SOAP.WSSC.DerivedKeyToken",
+   "members": [
+    { "header": "ClassMethod Create(keyElement As %SOAP.Security.Element = \"\", referenceOption As %Integer = \"\") As This" }
+   ]
+  },
+  "%SOAP.WSSC.SecurityContextToken": {
+   "header": "Class %SOAP.WSSC.SecurityContextToken",
+   "members": [
+    { "header": "ClassMethod Create() As This" },
+    { "header": "ClassMethod Open(identifier As %xsd.anyURI, instance As %String = \"\") As This" }
+   ]
+  },
+  "%SOAP.WST.BinarySecret": {
+   "header": "Class %SOAP.WST.BinarySecret",
+   "members": [
+    { "header": "ClassMethod Create(type As %xsd.anyURI = \"\", size As %Integer = \"\") As This" }
+   ]
+  },
+  "%SOAP.WST.Entropy": {
+   "header": "Class %SOAP.WST.Entropy",
+   "members": [
+    { "header": "ClassMethod CreateBinarySecret(keysize As %Integer, type As %String) As This" },
+    { "header": "ClassMethod CreateX509EncryptedKey(keysize As %Integer, credentials As %SYS.X509Credentials = \"\", referenceOption As %Integer = \"\", Output status As %Status) As This" }
+   ]
+  },
+  "%SOAP.WST.Lifetime": {
+   "header": "Class %SOAP.WST.Lifetime",
+   "members": [
+    { "header": "ClassMethod Create(interval As %Integer = 300) As This" }
+   ]
+  },
+  "%SOAP.WST.RequestSecurityToken": {
+   "header": "Class %SOAP.WST.RequestSecurityToken",
+   "members": [
+    { "header": "ClassMethod CreateIssueRequest(interval As %Integer = 300, clientEntropy As %SOAP.WST.Entropy = \"\", requireServerEntropy As %Boolean) As This" }
+   ]
+  },
+  "%SQL.Diag.Result": {
+   "header": "Class %SQL.Diag.Result",
+   "members": [
+    { "header": "ClassMethod getLastResultId() As This" }
+   ]
+  },
+  "%SQL.Engine.Objects.MtVal": {
+   "header": "Class %SQL.Engine.Objects.MtVal",
+   "members": [
+    { "header": "ClassMethod ByIndex(index As %Integer) As This" }
+   ]
+  },
+  "%SQL.JSONQuery": {
+   "header": "Class %SQL.JSONQuery",
+   "members": [
+    { "header": "ClassMethod %Execute(dataSource As %String(MAXLEN=2000) = \"\", value As %String(MAXLEN=24000) = \"\", path As %String(MAXLEN=1000)) As This" }
+   ]
+  },
+  "%SQL.QP.WindowFunction": {
+   "header": "Class %SQL.QP.WindowFunction",
+   "members": [
+    { "header": "ClassMethod ByName(name As %String) As This" }
+   ]
+  },
+  "%SYS.Audit": {
+   "header": "Class %SYS.Audit",
+   "members": [
+    { "header": "ClassMethod OpenAuditItem(UTCTimeStamp As %String, SystemID As %String, AuditIndex As %BigInt, ByRef Status As %Status) As This" }
+   ]
+  },
+  "%SYS.MFT.Connection.Base": {
+   "header": "Class %SYS.MFT.Connection.Base",
+   "members": [
+    { "header": "ClassMethod Open(name As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "%SYS.Monitor.Sensor": {
+   "header": "Class %SYS.Monitor.Sensor",
+   "members": [
+    { "header": "ClassMethod Open(Sensor As %String, Item As %String = \"\", ByRef Status As %Status) As This" }
+   ]
+  },
+  "%SYS.OAuth2.Request": {
+   "header": "Class %SYS.OAuth2.Request",
+   "members": [
+    { "header": "ClassMethod OpenRequestObject(applicationName As %String, requestName As %String, Output sc As %Status) As This" },
+    { "header": "ClassMethod UpdateRequestObject(applicationName As %String, requestName As %String, ByRef properties As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "%SYS.RMSession": {
+   "header": "Class %SYS.RMSession",
+   "members": [
+    { "header": "ClassMethod Open(identifier As %xsd.anyURI) As This" }
+   ]
+  },
+  "%SYS.Wallet.Collection": {
+   "header": "Class %SYS.Wallet.Collection",
+   "members": [
+    { "header": "ClassMethod GetObject(name As %String) As This" }
+   ]
+  },
+  "%SYS.Wallet.Secret": {
+   "header": "Class %SYS.Wallet.Secret",
+   "members": [
+    { "header": "ClassMethod GetObject(name As %String, readOnly As %Boolean = 1) As This" }
+   ]
+  },
+  "%SYS.X509Credentials": {
+   "header": "Class %SYS.X509Credentials",
+   "members": [
+    { "header": "ClassMethod GetByAlias(alias As %String, pwd As %String) As This" },
+    { "header": "ClassMethod GetByCertificate(searchValue As %Binary) As This" },
+    { "header": "ClassMethod GetByCertificateWithPrivateKey(searchValue As %Binary) As This" },
+    { "header": "ClassMethod GetByField(fieldName As %Integer, searchValue As %Binary) As This" },
+    { "header": "ClassMethod GetByFieldNumber(field As %Integer, searchValue As %Binary) As This" },
+    { "header": "ClassMethod GetByRSAKeyValue(searchValue As %XML.Security.RSAKeyValue) As This" },
+    { "header": "ClassMethod GetBySubjectKeyIdentifier(searchValue As %Binary) As This" },
+    { "header": "ClassMethod GetByThumbprint(searchValue As %Binary) As This" },
+    { "header": "ClassMethod GetNext(ByRef alias As %String) As This" }
+   ]
+  },
+  "%SYSTEM.AbstractWorkMgr": {
+   "header": "Class %SYSTEM.AbstractWorkMgr",
+   "members": [
+    { "header": "ClassMethod Initialize(qspec As %String = \"\", ByRef sc As %Status, numworkers As %Integer) As This [ Deprecated ]" },
+    { "header": "ClassMethod InitializeClass(iscname As %String, qspec As %String = \"\", ByRef sc As %Status, numworkers As %Integer) As This" }
+   ]
+  },
+  "%SYSTEM.AutoLock": {
+   "header": "Class %SYSTEM.AutoLock",
+   "members": [
+    { "header": "ClassMethod Lock(lock As %String, args As %String = \"\", timeout As %Integer = 0) As This" }
+   ]
+  },
+  "%SYSTEM.Error": {
+   "header": "Class %SYSTEM.Error",
+   "members": [
+    { "header": "ClassMethod FromException(pException As %Exception.AbstractException = \"\") As This" },
+    { "header": "ClassMethod FromSQLCode(pSQLCODE As %Integer = -400, pMessage As %String(MAXLEN=\"\") = \"\") As This" },
+    { "header": "ClassMethod FromXSQL(pDomain As %String = \"\", pXSQLCODE As %Integer = 0, pMessage As %String(MAXLEN=\"\") = \"\") As This" }
+   ]
+  },
+  "%SYSTEM.IPQ": {
+   "header": "Class %SYSTEM.IPQ",
+   "members": [
+    { "header": "ClassMethod Attach(name As %String) As This" }
+   ]
+  },
+  "%SYSTEM.Status": {
+   "header": "Class %SYSTEM.Status",
+   "members": [
+    { "header": "ClassMethod GetErrorText(statuscode As %Status, language As %String = \"\") As %String" }
+   ]
+  },
+  "%SYSTEM.WorkMgr": {
+   "header": "Class %SYSTEM.WorkMgr",
+   "members": [
+    { "header": "ClassMethod Attach(token, ByRef sc As %Status) As This" }
+   ]
+  },
+  "%Stream.Object": {
+   "header": "Class %Stream.Object",
+   "members": [
+    { "header": "ClassMethod %Open(soid As %ObjectIdentity, concurrency As %Integer, ByRef sc As %Status = {$$$OK}) As This" },
+    { "header": "ClassMethod %OpenId(id As %String, concurrency As %Integer, ByRef sc As %Status = {$$$OK}) As This" }
+   ]
+  },
+  "%Stream.TmpBinary": {
+   "header": "Class %Stream.TmpBinary",
+   "members": [
+    { "header": "ClassMethod CopyFromAndUpdate(pSource As %Stream.Object = \"\", pInsertOffset As %Integer, pDeleteSize As %Integer, pText As %Binary, pTextObject As %Binary, ByRef pStatus As %Status) As This" }
+   ]
+  },
+  "%Studio.SourceControl.Change": {
+   "header": "Class %Studio.SourceControl.Change",
+   "members": [
+    { "header": "ClassMethod OpenUncommitted(Filename As %String) As This" }
+   ]
+  },
+  "%Studio.TimeStamp": {
+   "header": "Class %Studio.TimeStamp",
+   "members": [
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%Trace.Context": {
+   "header": "Class %Trace.Context",
+   "members": [
+    { "header": "ClassMethod GetCurrentContext() As This" }
+   ]
+  },
+  "%Wallet.Storage": {
+   "header": "Class %Wallet.Storage",
+   "members": [
+    { "header": "ClassMethod Create(name As %String, ByRef properties As %String) As This" },
+    { "header": "ClassMethod Deserialize(data As %String) As This" }
+   ]
+  },
+  "%WebStress.Control": {
+   "header": "Class %WebStress.Control",
+   "members": [
+    { "header": "ClassMethod StartProcs(testID As %String, runNumber As %Integer, param As %Integer, senderID As %String, senderTime As %Integer) As This" }
+   ]
+  },
+  "%XDBC.Gateway.Connection": {
+   "header": "Class %XDBC.Gateway.Connection",
+   "members": [
+    { "header": "ClassMethod %GetConnection(connectionInfo As %RawString, Output status As %Status) As This" },
+    { "header": "ClassMethod GetConnection(connectionInfo As %RawString) As This" }
+   ]
+  },
+  "%XDBC.Gateway.JDBC.Connection": {
+   "header": "Class %XDBC.Gateway.JDBC.Connection",
+   "members": [
+    { "header": "ClassMethod GetJdbcConnection(connectionInfo As %DynamicObject) As This" }
+   ]
+  },
+  "%XDBC.Gateway.ODBC.Connection": {
+   "header": "Class %XDBC.Gateway.ODBC.Connection",
+   "members": [
+    { "header": "ClassMethod GetODBCConnection(connectionInfo As %DynamicObject) As This" }
+   ]
+  },
+  "%XML.Document": {
+   "header": "Class %XML.Document",
+   "members": [
+    { "header": "ClassMethod CreateDocument(localName As %String, namespace As %String) As This" }
+   ]
+  },
+  "%XML.Security.EncryptedData": {
+   "header": "Class %XML.Security.EncryptedData",
+   "members": [
+    { "header": "ClassMethod Create(keyElement As %XML.Security.EncryptedKey = \"\", elementToEncrypt As %SOAP.Security.Element, referenceOption As %Integer = \"\") As This" },
+    { "header": "ClassMethod CreateFromEncryptedKey(encryptedKey As %XML.Security.EncryptedKey, elementToEncrypt As %SOAP.Security.Element) As This" }
+   ]
+  },
+  "%XML.Security.EncryptedKey": {
+   "header": "Class %XML.Security.EncryptedKey",
+   "members": [
+    { "header": "ClassMethod CreateX509(credentials As %SYS.X509Credentials = \"\", encryptionOptions As %Integer, referenceOption As %Integer, Output status As %Status) As This" }
+   ]
+  },
+  "%XML.Security.KeyInfo": {
+   "header": "Class %XML.Security.KeyInfo",
+   "members": [
+    { "header": "ClassMethod CreateBinarySecret(binarySecret As %SOAP.WST.BinarySecret, Output status As %Status) As This" },
+    { "header": "ClassMethod CreateEncryptedKey(encryptedKey As %XML.Security.EncryptedKey, Output status As %Status) As This" },
+    { "header": "ClassMethod CreateX509(ByRef credentials As %SYS.X509Credentials, referenceOption As %Integer, Output status As %Status) As This" }
+   ]
+  },
+  "%XML.Security.KeyValue": {
+   "header": "Class %XML.Security.KeyValue",
+   "members": [
+    { "header": "ClassMethod GetRSAKeyValue(credentials As %SYS.X509Credentials) As This" }
+   ]
+  },
+  "%XML.Security.Signature": {
+   "header": "Class %XML.Security.Signature",
+   "members": [
+    { "header": "ClassMethod Create(keyElement As %RegisteredObject = \"\", signatureOptions As %Integer, referenceOption As %Integer = \"\") As This" },
+    { "header": "ClassMethod CreateX509(credentials As %SYS.X509Credentials = \"\", signatureOptions As %Integer, referenceOption As %Integer, Output status As %Status) As This" }
+   ]
+  },
+  "%XML.Security.X509Certificate": {
+   "header": "Class %XML.Security.X509Certificate",
+   "members": [
+    { "header": "ClassMethod Create(credentials As %SYS.X509Credentials) As This" }
+   ]
+  },
+  "%XML.Security.X509Data": {
+   "header": "Class %XML.Security.X509Data",
+   "members": [
+    { "header": "ClassMethod Create(valueType As %String, credentials As %SYS.X509Credentials, Output status As %Status) As This" }
+   ]
+  },
+  "%XML.Security.X509IssuerSerial": {
+   "header": "Class %XML.Security.X509IssuerSerial",
+   "members": [
+    { "header": "ClassMethod Create(credentials As %SYS.X509Credentials) As This" }
+   ]
+  },
+  "%XML.Security.X509SKI": {
+   "header": "Class %XML.Security.X509SKI",
+   "members": [
+    { "header": "ClassMethod Create(credentials As %SYS.X509Credentials) As This" }
+   ]
+  },
+  "%XML.Security.X509SubjectName": {
+   "header": "Class %XML.Security.X509SubjectName",
+   "members": [
+    { "header": "ClassMethod Create(credentials As %SYS.X509Credentials) As This" }
+   ]
+  },
+  "%XML.Utils.SchemaReader": {
+   "header": "Class %XML.Utils.SchemaReader",
+   "members": [
+    { "header": "ClassMethod Open(id As %String) As This" }
+   ]
+  },
+  "%XML.Utils.SchemaResult": {
+   "header": "Class %XML.Utils.SchemaResult",
+   "members": [
+    { "header": "ClassMethod CreateResult(pReader As SchemaReader, pPackage As %String = \"\", ByRef pFeatures As %String) As This" }
+   ]
+  },
+  "%ZEN.Report.Models.Group.Report": {
+   "header": "Class %ZEN.Report.Models.Group.Report",
+   "members": [
+    { "header": "ClassMethod ImportFile(filename As %String) As This" }
+   ]
+  },
+  "%ZEN.proxyObject": {
+   "header": "Class %ZEN.proxyObject",
+   "members": [
+    { "header": "ClassMethod %Create(pState As %String) As This" },
+    { "header": "ClassMethod OpenDocument(pWhere As %ZEN.Datatype.string, pDocumentID As %ZEN.Datatype.string, Output pStatus As %Status = \"\") As This" },
+    { "header": "ClassMethod OpenEmbeddedDocument(pWhere As %ZEN.Datatype.string, pDocumentID As %ZEN.Datatype.string, pObjectID As %ZEN.Datatype.string, Output pStatus As %Status = \"\") As This" }
+   ]
+  },
+  "%iKnow.Compiler.FailureFunction": {
+   "header": "Class %iKnow.Compiler.FailureFunction",
+   "members": [
+    { "header": "ClassMethod Create(gotoFunc As GotoFunction, outputFunc As OutputFunction, isIdeographic As %Boolean = 0) As This" }
+   ]
+  },
+  "%iKnow.Configuration": {
+   "header": "Class %iKnow.Configuration",
+   "members": [
+    { "header": "ClassMethod Create(name As %String, DetectLanguage As %Integer = 0, languages As %List = {$lb(\"en\")}, userDictionary As %String = \"\", summarize As %Integer = 1, maxConceptLength As %Integer = 0, Output sc As %Status = {$$$OK}) As This [ Deprecated ]" },
+    { "header": "ClassMethod CreateTransientConfig(pLanguage As %String = \"en\", pUserDictionary As %String = \"\", Output pSC As %Status = {$$$OK}) As This" },
+    { "header": "ClassMethod Open(name As %String, Output pSC As %Status = {$$$OK}) As This" },
+    { "header": "ClassMethod OpenId(id As %Integer) As This [ Deprecated ]" }
+   ]
+  },
+  "%iKnow.Domain": {
+   "header": "Class %iKnow.Domain",
+   "members": [
+    { "header": "ClassMethod Create(name As %String, sortField As %Integer = -1, Output sc As %Status = {$$$OK}, buildFlags As %String = \"\") As This [ Deprecated ]" },
+    { "header": "ClassMethod Open(name As %String, Output sc As %Status = {$$$OK}) As This [ Deprecated ]" },
+    { "header": "ClassMethod OpenId(id As %Integer, Output sc As %Status = {$$$OK}) As This [ Deprecated ]" }
+   ]
+  },
+  "%iKnow.Filters.Filter": {
+   "header": "Class %iKnow.Filters.Filter",
+   "members": [
+    { "header": "ClassMethod CreateFromBitstring(pDomainId As %Integer, ByRef pBitstring) As This" },
+    { "header": "ClassMethod RestoreFilterFromId(domainId As %Integer, filterId As %Integer) As This" },
+    { "header": "ClassMethod RestoreFilterFromString(filterSpec As %String) As This" },
+    { "header": "ClassMethod RestoreFilterFromStringInternal(filterParams As %String) As This" }
+   ]
+  },
+  "%iKnow.KB.Knowledgebase": {
+   "header": "Class %iKnow.KB.Knowledgebase",
+   "members": [
+    { "header": "ClassMethod GetByName(name As %String) As This" },
+    { "header": "ClassMethod ImportFromCSV(name As %String, prefix As %String, obfuscate As %Boolean = 1, shmem As %Boolean = 0, complete As %Boolean = 0) As This" },
+    { "header": "ClassMethod ImportFromXML(fileName As %String) As This" }
+   ]
+  },
+  "%iKnow.KB.Label": {
+   "header": "Class %iKnow.KB.Label",
+   "members": [
+    { "header": "ClassMethod LabelFromString(line As %String, ByRef isDefault = \"\") As This" }
+   ]
+  },
+  "%iKnow.LB.Languagebase": {
+   "header": "Class %iKnow.LB.Languagebase",
+   "members": [
+    { "header": "ClassMethod GetByName(name As %String) As This" },
+    { "header": "ClassMethod Load(name As %String, fileName As %String, obfuscate As %Boolean = 1, complete As %Boolean = 0) As This" }
+   ]
+  },
+  "%iKnow.Matching.MatchingProfile": {
+   "header": "Class %iKnow.Matching.MatchingProfile",
+   "members": [
+    { "header": "ClassMethod GetProfile(pDomainId As %Integer = 0, pProfileId As %Integer = \"\", pSC As %Status = {$$$OK}) As This" },
+    { "header": "ClassMethod GetProfileByName(pDomainId As %Integer = 0, pName As %String, pSC As %Status = {$$$OK}) As This" }
+   ]
+  },
+  "%iKnow.Model.parameter": {
+   "header": "Class %iKnow.Model.parameter",
+   "members": [
+    { "header": "ClassMethod %Create(pValue As %String, pIsList As %Boolean = 0) As This" },
+    { "header": "ClassMethod %CreateNull() As This" }
+   ]
+  },
+  "%iKnow.ModelException": {
+   "header": "Class %iKnow.ModelException",
+   "members": [
+    { "header": "ClassMethod Create(status As %Status = {$$$OK}, file As %String = \"\", lineNumber As %Integer = -1, lineContent As %String = \"\") As This" }
+   ]
+  },
+  "%iKnow.NativeSupport.Languagebase": {
+   "header": "Class %iKnow.NativeSupport.Languagebase",
+   "members": [
+    { "header": "ClassMethod GetByName(name As %String) As This" }
+   ]
+  },
+  "%iKnow.NativeSupport.UserDictionary": {
+   "header": "Class %iKnow.NativeSupport.UserDictionary",
+   "members": [
+    { "header": "ClassMethod Create(name As %String, ud As %iKnow.UserDictionary) As This" }
+   ]
+  },
+  "%iKnow.Objects.Attributes": {
+   "header": "Class %iKnow.Objects.Attributes",
+   "members": [
+    { "header": "ClassMethod %match(term As %String, lang As %String = \"en\") As This" }
+   ]
+  },
+  "%iKnow.Objects.Dictionary": {
+   "header": "Class %iKnow.Objects.Dictionary",
+   "members": [
+    { "header": "ClassMethod Open(pDomainId As %Integer, pDictionaryId As %Integer) As This" }
+   ]
+  },
+  "%iKnow.Objects.DictionaryElement": {
+   "header": "Class %iKnow.Objects.DictionaryElement",
+   "members": [
+    { "header": "ClassMethod Open(pDomainId As %Integer, pDictionaryElementId As %Integer) As This" }
+   ]
+  },
+  "%iKnow.Objects.DictionaryItem": {
+   "header": "Class %iKnow.Objects.DictionaryItem",
+   "members": [
+    { "header": "ClassMethod Open(pDomainId As %Integer, pDictionaryItemId As %Integer) As This" }
+   ]
+  },
+  "%iKnow.Objects.DictionaryTerm": {
+   "header": "Class %iKnow.Objects.DictionaryTerm",
+   "members": [
+    { "header": "ClassMethod Open(pDomainId As %Integer, pDictionaryTermId As %Integer) As This" }
+   ]
+  },
+  "%iKnow.UserDictionary": {
+   "header": "Class %iKnow.UserDictionary",
+   "members": [
+    { "header": "ClassMethod CreateFromFile(pPath As %String) As This" },
+    { "header": "ClassMethod CreateTransient(pName As %String = \"\") As This" },
+    { "header": "ClassMethod OpenByName(pName As %String) As This" }
+   ]
+  },
+  "%xsd.duration": {
+   "header": "Class %xsd.duration",
+   "members": [
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "%xsd.hexBinary": {
+   "header": "Class %xsd.hexBinary",
+   "members": [
+    { "header": "ClassMethod JSONToLogical(%val As %String) As This" },
+    { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
+   ]
+  },
+  "Inventory.Scan": {
+   "header": "Class Inventory.Scan",
+   "members": [
+    { "header": "ClassMethod OpenByDescription(description As %String) As This" }
+   ]
+  },
+  "OAuth2.AccessToken": {
+   "header": "Class OAuth2.AccessToken",
+   "members": [
+    { "header": "ClassMethod Open(accessToken As %String, Output sc As %Status) As This" },
+    { "header": "ClassMethod OpenByIDToken(IDToken As %String, Output sc As %Status) As This" },
+    { "header": "ClassMethod OpenForSession(applicationName As %String, sessionId As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "OAuth2.Client": {
+   "header": "Class OAuth2.Client",
+   "members": [
+    { "header": "ClassMethod Open(applicationName As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "OAuth2.Endpoint": {
+   "header": "Class OAuth2.Endpoint",
+   "members": [
+    { "header": "ClassMethod MakeFromServerURL(url As %String) As This" }
+   ]
+  },
+  "OAuth2.Server.AccessToken": {
+   "header": "Class OAuth2.Server.AccessToken",
+   "members": [
+    { "header": "ClassMethod OpenByCode(authorizationCode As %String, Output sc As %Status) As This" },
+    { "header": "ClassMethod OpenByIDToken(IDToken As %String, Output sc As %Status) As This" },
+    { "header": "ClassMethod OpenByRefresh(refreshToken As %String, Output sc As %Status) As This" },
+    { "header": "ClassMethod OpenByToken(accessToken As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "OAuth2.Server.Client": {
+   "header": "Class OAuth2.Server.Client",
+   "members": [
+    { "header": "ClassMethod Open(clientId As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "OAuth2.Server.Configuration": {
+   "header": "Class OAuth2.Server.Configuration",
+   "members": [
+    { "header": "ClassMethod Open(Output sc As %Status) As This" }
+   ]
+  },
+  "OAuth2.ServerDefinition": {
+   "header": "Class OAuth2.ServerDefinition",
+   "members": [
+    { "header": "ClassMethod Open(serverDefinitionId As %String, Output sc As %Status) As This" },
+    { "header": "ClassMethod OpenByIssuer(issuerEndpoint As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "SYS.DataCheck.GlobalReference": {
+   "header": "Class SYS.DataCheck.GlobalReference",
+   "members": [
+    { "header": "ClassMethod DisplayToLogical(%val As %Binary) As This" },
+    { "header": "ClassMethod GlobalName(key As GlobalReference, Output normalized As GlobalReference) As This" },
+    { "header": "ClassMethod Normalize(%val As GlobalReference) As This" }
+   ]
+  },
+  "SYS.History.PerfData": {
+   "header": "Class SYS.History.PerfData",
+   "members": [
+    { "header": "ClassMethod DemoSample(pct As %Integer, dt As %String) As This" },
+    { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "SYS.History.SharedMemoryData": {
+   "header": "Class SYS.History.SharedMemoryData",
+   "members": [
+    { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "SYS.History.SysData": {
+   "header": "Class SYS.History.SysData",
+   "members": [
+    { "header": "ClassMethod DemoSample(pct As %Integer, ByRef DB As %String) As This" },
+    { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "SYS.Monitor.SAM.Config": {
+   "header": "Class SYS.Monitor.SAM.Config",
+   "members": [
+    { "header": "ClassMethod Open() As This" }
+   ]
+  },
+  "SYS.Stats.Buffer": {
+   "header": "Class SYS.Stats.Buffer",
+   "members": [
+    { "header": "ClassMethod Sample(Size As %Integer) As This" }
+   ]
+  },
+  "SYS.Stats.Dashboard": {
+   "header": "Class SYS.Stats.Dashboard",
+   "members": [
+    { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "SYS.Stats.Disk": {
+   "header": "Class SYS.Stats.Disk",
+   "members": [
+    { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "SYS.Stats.ECPAppSvr": {
+   "header": "Class SYS.Stats.ECPAppSvr",
+   "members": [
+    { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "SYS.Stats.ECPDataSvr": {
+   "header": "Class SYS.Stats.ECPDataSvr",
+   "members": [
+    { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "SYS.Stats.Global": {
+   "header": "Class SYS.Stats.Global",
+   "members": [
+    { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "SYS.Stats.Resource": {
+   "header": "Class SYS.Stats.Resource",
+   "members": [
+    { "header": "ClassMethod Sample(Index As %Integer) As This" }
+   ]
+  },
+  "SYS.Stats.WriteDaemon": {
+   "header": "Class SYS.Stats.WriteDaemon",
+   "members": [
+    { "header": "ClassMethod Sample(DaemonID As %Integer = 1) As This" }
+   ]
+  },
+  "SYS.WSMon.wsDatabase": {
+   "header": "Class SYS.WSMon.wsDatabase",
+   "members": [
+    { "header": "ClassMethod Sample(index) As This" }
+   ]
+  },
+  "SYS.WSMon.wsSystem": {
+   "header": "Class SYS.WSMon.wsSystem",
+   "members": [
+    { "header": "ClassMethod Sample() As This" }
+   ]
+  }
  },
- "%Library.DynamicAbstractObject.cls": {
-  "%ToJSON": { "args": { "outstrm": { "optional": true } } }
- },
- "%Library.DynamicArray.cls": {
-  "%Get": { "args": { "default": { "optional": true }, "type": { "optional": true } } },
-  "%OnNew": { "args": { "initvalue": { "optional": true } } },
-  "%Push": { "args": { "type": { "optional": true } } },
-  "%Set": { "args": { "type": { "optional": true } } }
- },
- "%Library.DynamicObject.cls": {
-  "%Get": { "args": { "default": { "optional": true }, "type": { "optional": true } } },
-  "%OnNew": { "args": { "initvalue": { "optional": true } } },
-  "%Set": { "args": { "type": { "optional": true } } }
- },
- "%Library.GlobalEdit.cls": {
-  "Open": { "returns": "This" }
- },
- "%Library.Persistent.cls": {
-  "%Open": { "returns": "This" },
-  "%OpenId": { "returns": "This" }
- },
- "%Library.RegisteredObject.cls": {
-  "%ClassName": { "args": { "fullname": { "optional": true } } },
-  "%ConstructClone": { "returns": "This", "args": { "cloned": { "optional": true }, "location": { "optional": true } } },
-  "%New": { "returns": "This", "args": { "initvalue": { "optional": true } } },
-  "%OnNew": null
- },
- "%Library.RelationshipObject.cls": {
-  "ELEMENTTYPE": { "parameter": "CLASSNAME", "default": "%Library.ObjectHandle" },
-  "GetAt": { "returns": "..#ELEMENTTYPE" },
-  "GetNext": { "returns": "..#ELEMENTTYPE" },
-  "GetOrefAt": { "returns": "..#ELEMENTTYPE" },
-  "GetPrevious": { "returns": "..#ELEMENTTYPE" }
- },
- "%Library.ResultSet.cls": {
-  "Next": { "args": { "sc": { "optional": true } } }
- },
- "%Library.ScrollableResultSet.cls": {
-  "%OpenId": { "returns": "This" }
- },
- "%Library.SerialObject.cls": {
-  "%Open": { "returns": "This" },
-  "%OpenId": { "returns": "This" }
- },
- "%Library.SystemBase.cls": {
-  "%ClassName": { "args": { "fullname": { "optional": true } } },
-  "%DispatchClassMethod": null,
-  "%DispatchGetModified": null,
-  "%DispatchGetProperty": null,
-  "%DispatchMethod": null,
-  "%DispatchSetModified": null,
-  "%DispatchSetMultidimProperty": null,
-  "%DispatchSetProperty": null,
-  "%New": { "returns": "This", "args": { "initvalue": { "optional": true } } }
- },
- "%SYSTEM.Status.cls": {
-  "GetErrorText": { "args": { "language": { "optional": true } } }
- },
- "%Stream.Object.cls": {
-  "%Open": { "returns": "This" },
-  "%OpenId": { "returns": "This" }
+ "routines": {
+  "%apiOBJ": {
+   "labels": [
+    {
+     "name": "EmbedStatus",
+     "signature": {
+      "normal": [
+       {
+        "mode": null,
+        "name": "status",
+        "t": null,
+        "default": null
+       },
+       {
+        "mode": null,
+        "name": "embed",
+        "t": null,
+        "default": null
+       },
+       {
+        "mode": null,
+        "name": "all",
+        "t": null,
+        "default": ""
+       }
+      ],
+      "variadic": null,
+      "t": "%Status",
+      "procedure_block": []
+     }
+    }
+   ],
+   "uri": null
+  },
+  "%occMessages": {
+   "labels": [
+    {
+     "name": "FormatMessage",
+     "signature": {
+      "normal": [
+       {
+        "mode": null,
+        "name": "language",
+        "t": null,
+        "default": null
+       },
+       {
+        "mode": null,
+        "name": "domain",
+        "t": null,
+        "default": null
+       },
+       {
+        "mode": null,
+        "name": "id",
+        "t": null,
+        "default": null
+       },
+       {
+        "mode": null,
+        "name": "default",
+        "t": null,
+        "default": null
+       }
+      ],
+      "variadic": {
+       "mode": null,
+       "name": "args",
+       "t": null
+      },
+      "t": "%String",
+      "procedure_block": null
+     }
+    },
+    {
+     "name": "FormatText",
+     "signature": {
+      "normal": [
+       {
+        "mode": null,
+        "name": "msg",
+        "t": null,
+        "default": null
+       }
+      ],
+      "variadic": {
+       "mode": null,
+       "name": "args",
+       "t": null
+      },
+      "t": "%String",
+      "procedure_block": null
+     }
+    }
+   ],
+   "uri": null
+  },
+  "%occSystem": {
+   "labels": [
+    {
+     "name": "AppendStatus",
+     "signature": {
+      "normal": [
+       {
+        "mode": null,
+        "name": "sc1",
+        "t": null,
+        "default": null
+       },
+       {
+        "mode": null,
+        "name": "sc2",
+        "t": null,
+        "default": null
+       }
+      ],
+      "variadic": null,
+      "t": "%Status",
+      "procedure_block": []
+     }
+    }
+   ],
+   "uri": null
+  }
  }
 }
