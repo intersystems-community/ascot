@@ -30,6 +30,10 @@ impl QuasiTypeError {
         TypeErrorKind::Unimplemented { what: msg }.into()
     }
 
+    pub fn quit_exits() -> Self {
+        TypeErrorKind::QuitExits.into()
+    }
+
     pub fn undefined_macro(name: String, suggestions: Vec<String>) -> Self {
         TypeErrorKind::UndefinedMacro {
             name,
@@ -173,6 +177,10 @@ impl QuasiTypeError {
 
     pub fn undocumented_zutil(call: String) -> Self {
         TypeErrorKind::UndocumentedZUtil { call }.into()
+    }
+
+    pub fn undocumented_function(name: String) -> Self {
+        TypeErrorKind::UndocumentedFunction { name }.into()
     }
 
     pub fn unknown_function(name: String, suggestions: Vec<String>) -> Self {
@@ -461,7 +469,7 @@ type_error_kinds! {
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
     #[code = "A3303"]
-    #[severity = Hint]
+    #[severity = Error]
     #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
     CannotFindRoutine { routine: String },
     #[code = "A4439"]
@@ -631,6 +639,12 @@ type_error_kinds! {
     #[severity = Hint]
     #[message = "{call} is not documented for IRIS; $ZUTIL was superseded by class methods and special variables"]
     UndocumentedZUtil { call: String },
+    /// A `$Z` function IRIS compiles but doesn't document (`$ZOBJEXPORT`); per GOVERNANCE.md,
+    /// noted and left unchecked rather than refused.
+    #[code = "A6037"]
+    #[severity = Hint]
+    #[message = "${name} is not documented for IRIS, so the call is not checked"]
+    UndocumentedFunction { name: String },
     #[code = "A6319"]
     #[severity = Error]
     #[message = "Parameter '{name}' is a constant: it takes no arguments and can't be assigned"]
@@ -680,15 +694,57 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "This call returns {class}, which Do discards -- consider Set to capture it, or checking it directly"]
     DiscardedReturnValue { class: String },
-    #[code = "A2839"]
+    #[code = "S2839"]
     #[severity = Warning]
-    #[message = "{what} `{found}` should be written `{expected}`"]
+    #[message = "{kind} `{found}` should be written `{expected}`"]
     KeywordStyle {
-        // "Command keyword" or "Function".
-        what: &'static str,
+        kind: tygr_objectscript::cos::KeywordKind,
         found: String,
         expected: String,
     },
+    #[code = "S4151"]
+    #[severity = Warning]
+    #[message = "Use `Return` to leave a method or procedure; `Quit` is for loops and `Try` blocks"]
+    QuitExits,
+    #[code = "S6307"]
+    #[severity = Warning]
+    #[message = "Put the postconditional on the command keyword, not on its argument"]
+    ArgumentPostconditional,
+    #[code = "S7442"]
+    #[severity = Warning]
+    #[message = "Join these conditions with `{wanted}`"]
+    AndOperator { wanted: crate::bindings::AndOperator },
+    #[code = "S3918"]
+    #[severity = Warning]
+    #[message = "The style allows {max} `New` per block; this is one more"]
+    NewPerBlock { max: u32 },
+    #[code = "S5260"]
+    #[severity = Warning]
+    #[message = "The style allows {max} command(s) per line; this is one more"]
+    CommandsPerLine { max: u32 },
+    #[code = "S8215"]
+    #[severity = Warning]
+    #[message = "Put {wanted} before `{{`"]
+    OpenBraceBreak { wanted: Break },
+    #[code = "S4933"]
+    #[severity = Warning]
+    #[message = "Put {wanted} after `{{`"]
+    BodyBreak { wanted: Break },
+    #[code = "S3627"]
+    #[severity = Warning]
+    #[message = "Put {wanted} before `}}`"]
+    CloseBraceBreak { wanted: Break },
+    #[code = "S9048"]
+    #[severity = Warning]
+    #[message = "Put {wanted} between `}}` and `{keyword}`"]
+    ChainBreak {
+        keyword: &'static str,
+        wanted: Break,
+    },
+    #[code = "S5583"]
+    #[severity = Warning]
+    #[message = "Put {wanted}"]
+    CommaSpacing { wanted: CommaSpace },
     #[code = "A7895"]
     #[severity = Error]
     #[message = "'{format}' is not a valid $FNUMBER format: {reason}"]
@@ -993,6 +1049,34 @@ impl std::fmt::Display for Detail {
     }
 }
 
+/// Whether a brace style wants a line break at a spot (`true`) or none (`false`).
+#[derive(Debug)]
+pub struct Break(pub bool);
+
+impl std::fmt::Display for Break {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0 {
+            "a line break"
+        } else {
+            "no line break"
+        })
+    }
+}
+
+/// The `space-after-comma` style: one space after and none before, or none on either side.
+#[derive(Debug)]
+pub struct CommaSpace(pub bool);
+
+impl std::fmt::Display for CommaSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0 {
+            "one space after this comma, and none before"
+        } else {
+            "no space around this comma"
+        })
+    }
+}
+
 /// What an `#if` condition's macros expanded to, when that differs from what was written.
 #[derive(Debug)]
 pub struct Expansion(pub Option<String>);
@@ -1068,6 +1152,10 @@ impl TypeError {
 
     // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
     // yet to attach one lazily this early (during macro expansion).
+    pub(crate) fn cannot_find_class(cls: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::CannotFindClass { cls }, range)
+    }
+
     pub(crate) fn unconfirmed_class(cls: String, has_iris: bool, range: Range) -> Self {
         Self::at(
             TypeErrorKind::UnconfirmedClass {
@@ -1112,6 +1200,47 @@ impl TypeError {
 
     pub fn cannot_find_include(name: String, range: Range) -> Self {
         Self::at(TypeErrorKind::CannotFindInclude { name }, range)
+    }
+
+    pub fn argument_postconditional(range: Range) -> Self {
+        Self::at(TypeErrorKind::ArgumentPostconditional, range)
+    }
+
+    pub fn and_operator(wanted: crate::bindings::AndOperator, range: Range) -> Self {
+        Self::at(TypeErrorKind::AndOperator { wanted }, range)
+    }
+
+    pub fn new_per_block(max: u32, range: Range) -> Self {
+        Self::at(TypeErrorKind::NewPerBlock { max }, range)
+    }
+
+    pub fn commands_per_line(max: u32, range: Range) -> Self {
+        Self::at(TypeErrorKind::CommandsPerLine { max }, range)
+    }
+
+    pub fn open_brace_break(newline: bool, range: Range) -> Self {
+        let wanted = Break(newline);
+        Self::at(TypeErrorKind::OpenBraceBreak { wanted }, range)
+    }
+
+    pub fn body_break(newline: bool, range: Range) -> Self {
+        let wanted = Break(newline);
+        Self::at(TypeErrorKind::BodyBreak { wanted }, range)
+    }
+
+    pub fn close_brace_break(newline: bool, range: Range) -> Self {
+        let wanted = Break(newline);
+        Self::at(TypeErrorKind::CloseBraceBreak { wanted }, range)
+    }
+
+    pub fn chain_break(keyword: &'static str, newline: bool, range: Range) -> Self {
+        let wanted = Break(newline);
+        Self::at(TypeErrorKind::ChainBreak { keyword, wanted }, range)
+    }
+
+    pub fn comma_spacing(space_after: bool, range: Range) -> Self {
+        let wanted = CommaSpace(space_after);
+        Self::at(TypeErrorKind::CommaSpacing { wanted }, range)
     }
 
     pub fn undecided_if(condition: String, expansion: Option<String>, range: Range) -> Self {
@@ -1227,14 +1356,14 @@ impl TypeError {
     }
 
     pub fn keyword_style(
-        what: &'static str,
+        kind: tygr_objectscript::cos::KeywordKind,
         found: String,
         expected: String,
         range: Range,
     ) -> Self {
         Self::at(
             TypeErrorKind::KeywordStyle {
-                what,
+                kind,
                 found,
                 expected,
             },
@@ -1356,7 +1485,9 @@ mod tests {
         let distinct: std::collections::HashSet<_> = CODES.iter().collect();
         assert_eq!(distinct.len(), CODES.len(), "a code is used twice");
         for code in CODES {
-            let digits = code.strip_prefix('A').unwrap_or_else(|| panic!("{code}"));
+            // `S` is a style rule, `A` everything else.
+            let digits = (code.strip_prefix('A').or_else(|| code.strip_prefix('S')))
+                .unwrap_or_else(|| panic!("{code}"));
             assert!(
                 digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit()),
                 "{code}"

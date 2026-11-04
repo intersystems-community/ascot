@@ -2,10 +2,10 @@
 //! text. Used by `Workspace::hover` in `lib.rs`; the LSP and MCP front ends pass the result
 //! through unchanged.
 
-use crate::bindings::{CollectionKind, MemberInfo, MemberKind, MethodInfo, RefMode};
+use crate::bindings::{CollectionKind, MemberInfo, MemberKind, RefMode, Signature};
 
 pub(crate) fn format_member_hover(member: &MemberInfo) -> String {
-    let name = &member.name.content;
+    let name = &member.name;
     let signature = match &member.kind {
         MemberKind::Method(info) => format!("Method {name}{}", format_method_signature(info)),
         MemberKind::ClassMethod(info) => {
@@ -40,7 +40,7 @@ pub(crate) fn format_member_hover(member: &MemberInfo) -> String {
         MemberKind::Trigger => format!("Trigger {name}"),
         MemberKind::XData => format!("XData {name}"),
         MemberKind::Storage => format!("Storage {name}"),
-        MemberKind::Query => format!("Query {name}"),
+        MemberKind::Query(info) => format!("Query {name}{}", format_method_signature(info)),
     };
     if member.doc.is_empty() {
         format!("```objectscript\n{signature}\n```")
@@ -53,7 +53,7 @@ fn format_as(ty: Option<&str>) -> String {
     ty.map(|t| format!(" As {t}")).unwrap_or_default()
 }
 
-fn format_method_signature(info: &MethodInfo) -> String {
+fn format_method_signature(info: &Signature) -> String {
     let mut args: Vec<String> = info
         .normal
         .iter()

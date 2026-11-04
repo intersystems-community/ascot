@@ -2,6 +2,7 @@
 // (`http://user:password@host:port`); the live test is skipped when it's unset.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { gzipSync } from "node:zlib";
 import ascot from "../dist/index.js";
 
 const { Atelier, createWorkspace } = ascot;
@@ -81,6 +82,41 @@ test(
     ]);
   },
 );
+
+// A declaration file's bytes stand in for a server: the pre-built asset, gzipped, as a host
+// would bundle it. Without any environment, a class outside the workspace is an error.
+test("a declaration file's bytes are the environment; none is the strictest check", async () => {
+  const declarations = JSON.stringify({
+    version: "1.0.0",
+    namespace: "%SYS",
+    classes: {
+      "Demo.Lib": {
+        header: "Class Demo.Lib",
+        members: [{ header: "ClassMethod Hello() As %String" }],
+      },
+    },
+    includes: {},
+    routines: {},
+  });
+  const source = [
+    "Class Demo.Use",
+    "{",
+    "ClassMethod M() As %String",
+    "{",
+    " Quit ##class(Demo.Lib).Hello()",
+    "}",
+    "}",
+    "",
+  ].join("\n");
+  const run = async (env) => {
+    const workspace = await createWorkspace(env);
+    await workspace.open("Demo.Use.cls", source);
+    return (await workspace.diagnostics("Demo.Use.cls")).map((d) => [d.severity, d.code]);
+  };
+  assert.deepEqual(await run(new Uint8Array(gzipSync(declarations))), []);
+  assert.deepEqual(await run(new TextEncoder().encode(declarations)), []);
+  assert.deepEqual(await run(undefined), [["error", "A8061"]]);
+});
 
 test("a request that fails leaves what it was for taken on trust, saying why", async () => {
   const hint = (what) => [

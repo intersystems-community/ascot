@@ -2,21 +2,68 @@
 //! session: `--style <file>` on the CLI, the `style` of an MCP `create_workspace`, or the
 //! second argument of a JS `createWorkspace`.
 
-use crate::bindings::{KeywordCase, KeywordForm, KeywordStyle, Style};
-use serde_json::Value;
+use crate::bindings::{CommandStyle, FunctionStyle, KeywordCase, KeywordForm, Style};
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use tygr_objectscript::cos::{KeywordKind, KeywordUse};
 
-const UNSET: KeywordStyle = KeywordStyle {
-    form: None,
-    case: None,
-};
+// A `Style`, resolved once per workspace: `rules` as given, keyword styles merged.
+pub struct Styles {
+    pub rules: Style,
+    pub keywords: KeywordStyles,
+}
 
-// A `Style`'s rules, resolved once per workspace: each `<kind>-<name>` field merged with its
-// `<kind>` default, keyed by the field's name as serde spells it (`command_do`).
+impl Styles {
+    pub fn new(style: &Style) -> Self {
+        Styles {
+            rules: *style,
+            keywords: KeywordStyles::new(style),
+        }
+    }
+}
+
+// A `Style`'s keyword rules: each `<kind>-<name>` field merged with its `<kind>` default, keyed
+// by the name as serde spells it (`do`, `listbuild`).
 pub struct KeywordStyles {
-    defaults: HashMap<String, KeywordStyle>,
-    by_name: HashMap<String, KeywordStyle>,
+    commands: Kind<CommandStyle>,
+    functions: Kind<FunctionStyle>,
+}
+
+struct Kind<T> {
+    default: T,
+    by_name: HashMap<String, T>,
+}
+
+impl<T: DeserializeOwned> Kind<T> {
+    // The `<prefix>` and `<prefix>_<name>` fields of `fields`, the latter completed by the former.
+    fn new(fields: &Map<String, Value>, prefix: &str) -> Self {
+        let default = fields.get(prefix).cloned().unwrap_or(Value::Null);
+        let by_name = fields
+            .iter()
+            .filter_map(|(key, value)| {
+                let name = key.strip_prefix(prefix)?.strip_prefix('_')?;
+                let mut merged = default.as_object().cloned().unwrap_or_default();
+                for (field, value) in value.as_object()? {
+                    if !value.is_null() {
+                        merged.insert(field.clone(), value.clone());
+                    }
+                }
+                Some((
+                    name.to_string(),
+                    serde_json::from_value(Value::Object(merged)).ok()?,
+                ))
+            })
+            .collect();
+        let default = serde_json::from_value(default)
+            .or_else(|_| serde_json::from_value(Value::Object(Map::new())))
+            .expect("a record of optional fields deserializes from an empty object");
+        Kind { default, by_name }
+    }
+
+    fn of(&self, name: &str) -> &T {
+        self.by_name.get(name).unwrap_or(&self.default)
+    }
 }
 
 impl KeywordStyles {
@@ -24,41 +71,31 @@ impl KeywordStyles {
         let Ok(Value::Object(fields)) = serde_json::to_value(style) else {
             unreachable!("a record serializes to an object")
         };
-        let (defaults, named): (Vec<_>, Vec<_>) = fields
-            .into_iter()
-            .filter_map(|(key, value)| Some((key, serde_json::from_value(value).ok()?)))
-            .partition(|(key, _): &(String, KeywordStyle)| !key.contains('_'));
-        let defaults: HashMap<_, _> = defaults.into_iter().collect();
-        let by_name = named
-            .into_iter()
-            .map(|(key, style)| {
-                let default = key
-                    .split_once('_')
-                    .and_then(|(kind, _)| defaults.get(kind))
-                    .unwrap_or(&UNSET);
-                let merged = KeywordStyle {
-                    form: style.form.or(default.form),
-                    case: style.case.or(default.case),
-                };
-                (key, merged)
-            })
-            .collect();
-        KeywordStyles { defaults, by_name }
+        KeywordStyles {
+            commands: Kind::new(&fields, "command"),
+            functions: Kind::new(&fields, "function"),
+        }
     }
 
-    pub fn of(&self, kw: &KeywordUse) -> &KeywordStyle {
-        let kind = kind_field(kw.kind);
-        self.by_name
-            .get(&format!("{kind}_{}", kw.full.to_ascii_lowercase()))
-            .or_else(|| self.defaults.get(kind))
-            .unwrap_or(&UNSET)
+    // How `kw` should have been written, or `None` if it already conforms.
+    pub fn expected(&self, kw: &KeywordUse) -> Option<String> {
+        let name = kw.full.to_ascii_lowercase();
+        let (form, case) = match kw.kind {
+            KeywordKind::Command => {
+                let style = self.commands.of(&name);
+                (style.form, style.case)
+            }
+            KeywordKind::Function => {
+                let style = self.functions.of(&name);
+                (style.form, style.case)
+            }
+        };
+        expected(form, case, kw)
     }
-}
 
-fn kind_field(kind: KeywordKind) -> &'static str {
-    match kind {
-        KeywordKind::Command => "command",
-        KeywordKind::Function => "function",
+    // Whether `command` (its full name, lowercased) may put a postconditional on an argument.
+    pub fn allows_postcondition_on_argument(&self, command: &str) -> bool {
+        self.commands.of(command).allow_postcondition_on_argument != Some(false)
     }
 }
 
@@ -71,24 +108,25 @@ fn spell_abbr(full: &str, abbr: &str) -> String {
     }
 }
 
-impl KeywordStyle {
-    // How `kw` should have been written under this style, or `None` if it already conforms.
-    pub fn expected(&self, kw: &KeywordUse) -> Option<String> {
-        let full = kw.full.to_string();
-        let abbr = kw.abbr.map(|abbr| spell_abbr(kw.full, abbr));
-        let base = match self.form {
-            Some(KeywordForm::Long) => full,
-            None if kw.text.eq_ignore_ascii_case(kw.full) => full,
-            Some(KeywordForm::Short) | None => abbr.unwrap_or(full),
-        };
-        let expected = match self.case {
-            Some(KeywordCase::Lower) => base.to_ascii_lowercase(),
-            Some(KeywordCase::Upper) => base.to_ascii_uppercase(),
-            None if kw.text.eq_ignore_ascii_case(&base) => return None,
-            Some(KeywordCase::Pascal) | None => base,
-        };
-        (kw.text != expected).then_some(expected)
-    }
+fn expected(
+    form: Option<KeywordForm>,
+    case: Option<KeywordCase>,
+    kw: &KeywordUse,
+) -> Option<String> {
+    let full = kw.full.to_string();
+    let abbr = kw.abbr.map(|abbr| spell_abbr(kw.full, abbr));
+    let base = match form {
+        Some(KeywordForm::Long) => full,
+        None if kw.text.eq_ignore_ascii_case(kw.full) => full,
+        Some(KeywordForm::Short) | None => abbr.unwrap_or(full),
+    };
+    let expected = match case {
+        Some(KeywordCase::Lower) => base.to_ascii_lowercase(),
+        Some(KeywordCase::Upper) => base.to_ascii_uppercase(),
+        None if kw.text.eq_ignore_ascii_case(&base) => return None,
+        Some(KeywordCase::Pascal) | None => base,
+    };
+    (kw.text != expected).then_some(expected)
 }
 
 // `{"command": {"form": "Long"}, "function_piece": {"form": "Short"}}` -- variant names as the
@@ -139,8 +177,16 @@ mod tests {
         }
     }
 
-    fn style(form: Option<KeywordForm>, case: Option<KeywordCase>) -> KeywordStyle {
-        KeywordStyle { form, case }
+    struct Spelling(Option<KeywordForm>, Option<KeywordCase>);
+
+    impl Spelling {
+        fn expected(&self, kw: &KeywordUse) -> Option<String> {
+            expected(self.0, self.1, kw)
+        }
+    }
+
+    fn style(form: Option<KeywordForm>, case: Option<KeywordCase>) -> Spelling {
+        Spelling(form, case)
     }
 
     fn function(text: &str, full: &'static str, abbr: Option<&'static str>) -> KeywordUse {
@@ -217,16 +263,21 @@ mod tests {
             &parse(r#"{"command": {"form": "Long", "case": "Pascal"}, "command_do": {"form": "Short"}}"#)
                 .unwrap(),
         );
-        let style = styles.of(&kw("do", "Do", Some("D")));
         assert_eq!(
-            style.expected(&kw("do", "Do", Some("D"))).as_deref(),
+            styles.expected(&kw("do", "Do", Some("D"))).as_deref(),
             Some("D")
         );
-        let style = styles.of(&kw("s", "Set", Some("S")));
         assert_eq!(
-            style.expected(&kw("s", "Set", Some("S"))).as_deref(),
+            styles.expected(&kw("s", "Set", Some("S"))).as_deref(),
             Some("Set")
         );
+        assert!(styles.allows_postcondition_on_argument("do"));
+        let styles = KeywordStyles::new(
+            &parse(r#"{"command": {"allow_postcondition_on_argument": false}, "command_do": {"allow_postcondition_on_argument": true}}"#)
+                .unwrap(),
+        );
+        assert!(styles.allows_postcondition_on_argument("do"));
+        assert!(!styles.allows_postcondition_on_argument("goto"));
     }
 
     // The WIT's `command-<name>` fields and the grammar's command keywords must list the same
@@ -313,14 +364,11 @@ mod tests {
             .unwrap(),
         );
         let set = kw("Set", "Set", Some("S"));
-        assert_eq!(styles.of(&set).expected(&set).as_deref(), Some("S"));
+        assert_eq!(styles.expected(&set).as_deref(), Some("S"));
         let length = function("L", "Length", Some("L"));
-        assert_eq!(
-            styles.of(&length).expected(&length).as_deref(),
-            Some("Length")
-        );
+        assert_eq!(styles.expected(&length).as_deref(), Some("Length"));
         let piece = function("Piece", "Piece", Some("P"));
-        assert_eq!(styles.of(&piece).expected(&piece).as_deref(), Some("P"));
+        assert_eq!(styles.expected(&piece).as_deref(), Some("P"));
     }
 
     #[test]

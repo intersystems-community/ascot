@@ -44,6 +44,7 @@
 mod atelier;
 pub mod bindings;
 pub mod check;
+mod declared;
 mod details;
 pub mod diagnostic_filter;
 #[cfg(not(target_arch = "wasm32"))]
@@ -54,6 +55,8 @@ mod macro_expand;
 mod mask;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
+#[cfg(not(target_arch = "wasm32"))]
+mod prebuilt;
 mod render;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sarif;
@@ -62,7 +65,10 @@ pub mod style;
 pub use atelier::RawAtelier;
 pub use atelier::{Atelier, AtelierContext};
 #[cfg(not(target_arch = "wasm32"))]
-pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, open as open_iris};
+pub use iris::{
+    DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, LATEST as LATEST_IRIS, NONE as NO_IRIS,
+    open as open_iris,
+};
 pub(crate) use macro_expand::MacroDefinitions;
 pub(crate) use macro_expand::SourceMap;
 use tygr_objectscript::cos::ClassDefinitionHeader;
@@ -78,7 +84,7 @@ use details::Positions;
 use tygr::{Grammar, OLC};
 
 use crate::{
-    bindings::{Diagnostic, InlayHint, Location, MemberInfo, NameInfo, Position, Style},
+    bindings::{Diagnostic, InlayHint, Location, MemberInfo, Position, Style},
     check::WorkspaceEnv,
     cos::Routine,
     details::{ClassDetails, MemberKindSpecificDetails, WithRange, with_range_name},
@@ -183,7 +189,7 @@ pub struct WorkspaceStruct {
     // Same idea as `class_index`, but for `ROUTINE` header names — see `resolve_uri`.
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
-    pub(crate) style: Option<style::KeywordStyles>,
+    pub(crate) style: Option<style::Styles>,
     diagnostic_filter: diagnostic_filter::Filter,
     // %occErrors, resolved on first use: the error names a compile-time macro such as `$$$ERROR`
     // accepts in its arguments without any `Include`. Dropped whenever an include file changes.
@@ -733,7 +739,7 @@ pub(crate) fn routine_info(text: &str, uri: Option<String>) -> bindings::Routine
     let labels = expanded.ok().map(|(routine, map, _)| {
         let mut labels: Vec<_> = check::labels_of(&map.expanded_olc, &routine, uri.as_deref())
             .iter()
-            .map(|(name, label)| label.to_label(name.clone()))
+            .filter_map(|(name, label)| Some(label.procedure()?.to_label(name.clone())))
             .collect();
         labels.sort_by(|a, b| a.name.cmp(&b.name));
         labels
@@ -754,19 +760,20 @@ fn drop_derived(cell: &RefCell<DocCache>, expansion: bool) {
     }
 }
 
+// A declaration file that doesn't read is no environment at all, the strictest check; the host
+// is expected to pass the asset it bundles unchanged.
 fn iris_handle(env: Option<bindings::Env>) -> Option<IrisHandle> {
-    #[cfg(target_arch = "wasm32")]
-    return env.map(|env| -> IrisHandle {
-        match env {
-            bindings::Env::Context(context) => Box::new(context),
-            bindings::Env::Atelier(atelier) => Box::new(AtelierContext::from(atelier)),
-        }
-    });
-    // Never carries a real connection natively -- use `native` for that.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = env;
-        None
+    match env? {
+        bindings::Env::Declarations(bytes) => declared::Declarations::from_bytes(&bytes)
+            .ok()
+            .map(|declarations| Box::new(declarations) as IrisHandle),
+        #[cfg(target_arch = "wasm32")]
+        bindings::Env::Context(context) => Some(Box::new(context)),
+        #[cfg(target_arch = "wasm32")]
+        bindings::Env::Atelier(atelier) => Some(Box::new(AtelierContext::from(atelier))),
+        // Never carries a real connection natively -- use `native` for that.
+        #[cfg(not(target_arch = "wasm32"))]
+        _ => None,
     }
 }
 
@@ -779,7 +786,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         inc_index: RefCell::new(HashMap::new()),
         rtn_index: RefCell::new(HashMap::new()),
         iris,
-        style: style.as_ref().map(style::KeywordStyles::new),
+        style: style.as_ref().map(style::Styles::new),
         diagnostic_filter: diagnostic_filter::Filter::default(),
         error_names: RefCell::new(None),
         iris_includes: RefCell::new(HashMap::new()),
@@ -864,7 +871,7 @@ impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn set_style(&self, style: Option<Style>) -> Vec<String> {
         let mut this = self.borrow_mut();
-        this.style = style.as_ref().map(style::KeywordStyles::new);
+        this.style = style.as_ref().map(style::Styles::new);
         this.forget(false)
     }
 
@@ -993,11 +1000,11 @@ impl bindings::GuestWorkspace for Workspace {
     fn query_mem(&self, cls: String, query: String) -> Vec<(String, MemberInfo)> {
         self.query_cls(cls.clone())
             .into_iter()
-            .filter(|(_, info)| info.name.content == cls)
+            .filter(|(_, info)| info.name == cls)
             .flat_map(|(uri, info)| {
                 info.members
                     .into_iter()
-                    .filter(|member| member.name.content.starts_with(&query))
+                    .filter(|member| member.name.starts_with(&query))
                     .map(move |member| (uri.clone(), member))
                     .collect::<Vec<_>>()
             })
@@ -1049,12 +1056,6 @@ impl bindings::GuestWorkspace for Workspace {
     // their members/labels.
     #[allow(async_fn_in_trait)]
     fn workspace_symbol(&self, query: String) -> Vec<bindings::WorkspaceSymbol> {
-        fn name_range(name: &NameInfo) -> bindings::Range {
-            bindings::Range {
-                start: name.before,
-                end: name.after,
-            }
-        }
         fn symbol_in(uri: &str, symbol: bindings::SymbolInfo) -> bindings::WorkspaceSymbol {
             bindings::WorkspaceSymbol {
                 name: symbol.name,
@@ -1063,32 +1064,32 @@ impl bindings::GuestWorkspace for Workspace {
                 location: bindings::Location::new(uri.to_string(), symbol.selection_range),
             }
         }
-        let cls_symbols =
-            self.query_cls(query.clone())
-                .into_iter()
-                .flat_map(|(uri, info)| {
-                    let cls_symbol = bindings::WorkspaceSymbol {
-                        name: info.name.content.clone(),
-                        kind: bindings::SymbolKind::Class,
-                        deprecated: info.deprecated,
-                        location: bindings::Location::new(uri.clone(), name_range(&info.name)),
-                    };
-                    std::iter::once(cls_symbol)
-                        .chain(info.members.into_iter().map(move |member| {
-                            bindings::WorkspaceSymbol {
-                                name: member.name.content.clone(),
-                                kind: bindings::member_kind_to_symbol_kind(&member.kind),
-                                deprecated: member.deprecated,
-                                location: bindings::Location::new(
-                                    uri.clone(),
-                                    name_range(&member.name),
-                                ),
-                            }
-                        }))
-                        .collect::<Vec<_>>()
-                });
-
         let this = self.borrow();
+        let cls_symbols = this
+            .uris_with_prefix(DocKind::Cls, &query)
+            .into_iter()
+            .filter_map(|uri| Some((uri.clone(), this.cls_details(&uri).ok()?)))
+            .flat_map(|(uri, details)| {
+                let cls_symbol = bindings::WorkspaceSymbol {
+                    name: details.name.to_string(),
+                    kind: bindings::SymbolKind::Class,
+                    deprecated: details.keywords.deprecated,
+                    location: bindings::Location::new(uri.clone(), details.name.range),
+                };
+                std::iter::once(cls_symbol)
+                    .chain(details.members.in_order().into_iter().map(move |member| {
+                        bindings::WorkspaceSymbol {
+                            name: member.it.name.to_string(),
+                            kind: bindings::member_kind_to_symbol_kind(
+                                &bindings::MemberKind::from(&member.it.kind),
+                            ),
+                            deprecated: member.it.deprecated,
+                            location: bindings::Location::new(uri.clone(), member.it.name.range),
+                        }
+                    }))
+                    .collect::<Vec<_>>()
+            });
+
         let rtn_symbols = this
             .uris_with_prefix(DocKind::Rtn, &query)
             .into_iter()
@@ -1416,8 +1417,43 @@ mod tests {
         assert!(diagnostics[0].message.contains("App.NotOpen"));
     }
 
+    // The host hands over a declaration file's bytes, gzipped as the pre-built asset ships or not;
+    // one another ascot wrote is no environment at all.
     #[test]
-    fn property_declared_type_outside_workspace_gets_a_hint() {
+    fn a_declaration_file_passed_as_bytes_is_the_environment() {
+        use std::io::Write;
+        let file = |version: &str| {
+            format!(
+                r#"{{"version":"{version}","namespace":"%SYS","classes":{{"Demo.Base":{{"header":"Class Demo.Base","members":[{{"header":"ClassMethod Hello() As %String"}}]}}}},"includes":{{}},"routines":{{}}}}"#
+            )
+        };
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(file(declared::DECLARATIONS_VERSION).as_bytes())
+            .unwrap();
+        let source = "Class Test.Use {\nClassMethod M() As %String {\n Quit ##class(Demo.Base).Hello()\n}\n}\n";
+        for bytes in [
+            gz.finish().unwrap(),
+            file(declared::DECLARATIONS_VERSION).into_bytes(),
+        ] {
+            let workspace = Workspace::new(Some(bindings::Env::Declarations(bytes)), None);
+            workspace.open("Use.cls".to_string(), source.to_string());
+            let diagnostics = workspace.diagnostics("Use.cls".to_string());
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
+        let incompatible = bindings::Env::Declarations(file("0.1.0").into_bytes());
+        let workspace = Workspace::new(Some(incompatible), None);
+        workspace.open("Use.cls".to_string(), source.to_string());
+        let diagnostics = workspace.diagnostics("Use.cls".to_string());
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("Cannot find class 'Demo.Base'")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn without_iris_a_property_type_outside_the_workspace_is_an_error() {
         let workspace = Workspace::new(None, None);
         let uri = "Owner.cls".to_string();
         workspace.open(
@@ -1427,7 +1463,7 @@ mod tests {
         );
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Error);
         assert!(diagnostics[0].message.contains("App.NotOpen"));
     }
 
@@ -1438,17 +1474,9 @@ mod tests {
 
     impl crate::IrisContext for MockIrisClient {
         fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
-            let zero = bindings::Position {
-                line: 0,
-                character: 0,
-            };
             Ok(Some(bindings::ClassInfo {
                 doc: String::new(),
-                name: bindings::NameInfo {
-                    before: zero,
-                    content: String::new(),
-                    after: zero,
-                },
+                name: String::new(),
                 members: self.mem.clone().into_iter().collect(),
                 class_type: self
                     .is_datatype
@@ -1466,12 +1494,11 @@ mod tests {
     }
 
     #[test]
-    fn unverifiable_member_reference_gets_a_hint() {
+    fn without_iris_a_member_past_the_workspace_is_an_error() {
         let workspace = Workspace::new(None, None);
         let uri = "Probe.cls".to_string();
-        // `%RegisteredObject` is outside the workspace and there's no IRIS connection, so its
-        // members can't be confirmed — intentionally not an error, but should surface as a hint
-        // right at this reference, rather than silently accepting anything.
+        // With no IRIS there is no environment: `%RegisteredObject` doesn't exist, so neither
+        // does anything inherited from it. The strictest reading, rather than trust.
         workspace.open(
             uri.clone(),
             "Class Test.Probe Extends %RegisteredObject {\nMethod Foo() {\n do ..SomeInheritedMethod()\n quit\n}\n}\n".to_string(),
@@ -1479,7 +1506,7 @@ mod tests {
 
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Error);
         assert!(diagnostics[0].message.contains("SomeInheritedMethod"));
         assert_eq!(diagnostics[0].range.start.line, 2);
     }
@@ -1687,13 +1714,10 @@ mod tests {
         let classes = workspace.query_cls("Test.".to_string());
         assert_eq!(classes.len(), 1);
         assert_eq!(classes[0].0, "Test.Foo.cls");
-        assert_eq!(classes[0].1.name.content, "Test.Foo");
+        assert_eq!(classes[0].1.name, "Test.Foo");
 
         let members = workspace.query_mem("Test.Foo".to_string(), "Ba".to_string());
-        let mut names: Vec<&str> = members
-            .iter()
-            .map(|(_, m)| m.name.content.as_str())
-            .collect();
+        let mut names: Vec<&str> = members.iter().map(|(_, m)| m.name.as_str()).collect();
         names.sort();
         assert_eq!(names, ["Bar", "Baz"]);
         assert!(members.iter().all(|(uri, _)| uri == "Test.Foo.cls"));
@@ -1838,7 +1862,7 @@ mod tests {
                 },
             )
             .expect("expected a member at that position");
-        assert_eq!(member.name.content, "Bar");
+        assert_eq!(member.name, "Bar");
     }
 
     #[test]
@@ -1858,7 +1882,7 @@ mod tests {
                 },
             )
             .expect("expected a member at that position");
-        assert_eq!(member.name.content, "Foo");
+        assert_eq!(member.name, "Foo");
         assert!(
             workspace
                 .hover_member(
@@ -1938,7 +1962,11 @@ mod tests {
 
     #[test]
     fn row_instance_percent_accesses_property_like_instance_percent() {
-        let workspace = Workspace::new(None, None);
+        let iris = MockIrisClient {
+            is_datatype: Some(true),
+            mem: None,
+        };
+        let workspace = Workspace::native(Some(Box::new(iris)), None);
         let uri = "RPercent.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -1990,17 +2018,9 @@ mod tests {
         struct ExternalClassIris;
         impl crate::IrisContext for ExternalClassIris {
             fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
-                let zero = bindings::Position {
-                    line: 0,
-                    character: 0,
-                };
                 Ok((cls == "Test.External").then(|| bindings::ClassInfo {
                     doc: String::new(),
-                    name: bindings::NameInfo {
-                        before: zero,
-                        content: cls.to_string(),
-                        after: zero,
-                    },
+                    name: cls.to_string(),
                     uri: Some("mock:///External.cls".to_string()),
                     ..Default::default()
                 }))
@@ -2420,9 +2440,10 @@ mod tests {
         without_hints(workspace.diagnostics(uri.to_string()))
     }
 
+    // A declaration may type a method's result as `This`: the receiver's class.
     #[test]
-    fn only_the_mask_says_this() {
-        let mut mem = external_method("getNextResultSet", vec![], Some("This"));
+    fn a_declared_this_is_the_receiver() {
+        let mut mem = external_method("nextResultSet", vec![], Some("This"));
         mem.origin = Some("%Library.SQLGatewayConnection".to_string());
         let workspace = Workspace::native(
             Some(Box::new(MockIrisClient {
@@ -2434,13 +2455,13 @@ mod tests {
         let diagnostics = errors_in(
             &workspace,
             "T.cls",
-            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Quit c.getNextResultSet().Next()\n}\n}\n",
+            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Quit c.nextResultSet().Next()\n}\n}\n",
         );
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
             diagnostics[0]
                 .message
-                .contains("Cannot find member 'Next' in This"),
+                .contains("Cannot find member 'Next' in %SQLGatewayConnection"),
             "{diagnostics:?}"
         );
     }
@@ -2449,11 +2470,11 @@ mod tests {
     // Without its own `%OnNew`, `%New` takes its own arguments: an optional `initvalue`.
     #[test]
     fn an_unmasked_object_handle_stays_one() {
-        let workspace = masked_iris("getNextResultSet", "%Library.SQLGatewayConnection", vec![]);
+        let workspace = masked_iris("nextResultSet", "%Library.SQLGatewayConnection", vec![]);
         let diagnostics = errors_in(
             &workspace,
             "T.cls",
-            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Set rs = c.getNextResultSet()\n Quit rs.Next()\n}\n}\n",
+            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Set rs = c.nextResultSet()\n Quit rs.Next()\n}\n}\n",
         );
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
@@ -2469,31 +2490,17 @@ mod tests {
         normal: Vec<bindings::NormalArg>,
         t: Option<&str>,
     ) -> bindings::MemberInfo {
-        let zero = bindings::Position {
-            line: 0,
-            character: 0,
-        };
         bindings::MemberInfo {
             doc: String::new(),
-            before: zero,
-            name: bindings::NameInfo {
-                before: zero,
-                content: name.to_string(),
-                after: zero,
-            },
+            name: name.to_string(),
             aliases: vec![],
             deprecated: false,
-            kind: bindings::MemberKind::Method(bindings::MethodInfo {
+            kind: bindings::MemberKind::Method(bindings::Signature {
                 normal,
                 variadic: None,
                 t: t.map(str::to_string),
                 procedure_block: None,
-                body: bindings::Range {
-                    start: zero,
-                    end: zero,
-                },
             }),
-            after: zero,
             uri: None,
             origin: None,
         }
@@ -2651,7 +2658,7 @@ mod tests {
     }
 
     // Every diagnostic carries its kind's code and a link to that kind's docs, including the ones
-    // raised outside the checker proper, such as the unconfirmed-class hint.
+    // raised outside the checker proper, such as a declared type's missing class.
     #[test]
     fn diagnostics_carry_their_kinds_code_and_docs_link() {
         let diagnostics = class_diagnostics(
@@ -2673,14 +2680,9 @@ mod tests {
                 "UndefinedMacro",
             ),
             (
-                find("Cannot confirm class"),
-                check::TypeErrorKind::UnconfirmedClass {
-                    lookup: check::ClassLookup {
-                        cls: String::new(),
-                        has_iris: false,
-                    },
-                },
-                "UnconfirmedClass",
+                find("Cannot find class"),
+                check::TypeErrorKind::CannotFindClass { cls: String::new() },
+                "CannotFindClass",
             ),
         ];
         for (diagnostic, kind, variant) in cases {

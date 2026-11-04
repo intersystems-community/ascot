@@ -174,7 +174,7 @@ impl MemberNs {
             MemberKindSpecificDetails::MethodOrClassMethod(..)
             | MemberKindSpecificDetails::ClientMethod => Self::Method,
             MemberKindSpecificDetails::Index(_) => Self::Index,
-            MemberKindSpecificDetails::Query => Self::Query,
+            MemberKindSpecificDetails::Query { .. } => Self::Query,
             _ => Self::Other,
         }
     }
@@ -189,7 +189,7 @@ impl MemberNs {
             | bindings::MemberKind::ClassMethod(_)
             | bindings::MemberKind::ClientMethod(_) => Self::Method,
             bindings::MemberKind::Index(_) => Self::Index,
-            bindings::MemberKind::Query => Self::Query,
+            bindings::MemberKind::Query(_) => Self::Query,
             _ => Self::Other,
         }
     }
@@ -299,7 +299,11 @@ pub enum MemberKindSpecificDetails {
     Trigger,
     XData,
     Storage,
-    Query,
+    Query {
+        normal_args: Vec<WithRange<NormalArg>>,
+        variadic_arg: Option<WithRange<VariadicArg>>,
+        ty: Option<Ty>,
+    },
 }
 
 pub struct MethodDetails {
@@ -316,6 +320,16 @@ pub struct MethodDetails {
     pub header_start: usize,
     // Source text from `header_start` through the body's opening `{`.
     pub header_text: String,
+    pub brace_defaults: Vec<BraceDefault>,
+}
+
+// An argument default in braces, `x As %Integer = {expr}`: IRIS evaluates it on entry, in the
+// method's own context, in argument order, when the argument wasn't passed. Ranged against the
+// class document, like `normal_args`.
+pub struct BraceDefault {
+    pub name: String,
+    // The expression, or the braces' text when it isn't one.
+    pub value: Either<Range<cos::Expr>, WithRange<String>>,
 }
 
 pub enum RoutineElementKind {
@@ -384,6 +398,36 @@ fn import_args(pos: &impl Positions, params: &Option<cos::SpaceThen<cos::Paramet
         .collect();
     split_args(args)
 }
+
+// A method's or query's `(...)` formal list, ranged against the class's whole-document `olc`.
+fn formal_args(olc: &OLC, spec: Option<&cos::FormalSpec>) -> Args {
+    let args = spec
+        .iter()
+        .flat_map(|spec| spec.formals().into_iter())
+        .map(|formal| {
+            if formal.variadic.is_none() {
+                Left(olc.with_range(formal.as_ref().map(NormalArg::from)))
+            } else {
+                Right(olc.with_range(formal.as_ref().map(VariadicArg::from)))
+            }
+        })
+        .collect();
+    split_args(args)
+}
+
+// The methods IRIS generates from `Query Q`: `QFunc`, `QExecute`, ... Their shapes are fixed (see
+// `check::env::query_methods`), so a class's declaration needn't carry them.
+pub(crate) const QUERY_METHOD_SUFFIXES: [&str; 9] = [
+    "Func",
+    "Execute",
+    "Fetch",
+    "FetchRows",
+    "Close",
+    "GetInfo",
+    "GetODBCInfo",
+    "Prepare",
+    "SendODBC",
+];
 
 // A variadic parameter can only come last.
 fn split_args(mut args: Vec<Either<WithRange<NormalArg>, WithRange<VariadicArg>>>) -> Args {
@@ -713,7 +757,7 @@ fn process_member(
                 on: index.on_properties().map(|keys| {
                     keys.into_iter()
                         .map(|key| IndexKey {
-                            property: with_range_name(&key.name, olc),
+                            property: olc.with_range(key.name.0.as_ref().map(|_| key.name.name())),
                             subscript: key.kind.as_ref().map(|kind| match kind {
                                 cos::IndexPropertyKind::Keys(_) => bindings::IndexSubscript::Keys,
                                 cos::IndexPropertyKind::Elements(_) => {
@@ -861,12 +905,19 @@ fn process_member(
                 )
             }
         },
-        cos::Member::Query(query) => (
-            with_range_name(&query.name, olc),
-            deprecated || is_deprecated(query.keywords.as_ref()),
-            keyword_issues_in(query.keywords.as_ref(), olc),
-            MemberKindSpecificDetails::Query,
-        ),
+        cos::Member::Query(query) => {
+            let (normal_args, variadic_arg) = formal_args(olc, query.formal_spec.as_ref());
+            (
+                with_range_name(&query.name, olc),
+                deprecated || is_deprecated(query.keywords.as_ref()),
+                keyword_issues_in(query.keywords.as_ref(), olc),
+                MemberKindSpecificDetails::Query {
+                    normal_args,
+                    variadic_arg,
+                    ty: query.return_type.as_deref().map(Ty::from),
+                },
+            )
+        }
         cos::Member::Storage(storage) => (
             with_range_name(&storage.name, olc),
             deprecated,
@@ -900,19 +951,23 @@ fn method_kind(
     // `normal_args`/`out` stay ranged against the class's whole-document `olc`, like any other
     // member -- other methods' call-site diagnostics reference these same ranges directly.
     let header_text = &src[header_start..body_start];
-    let args = method
-        .formal_spec
-        .iter()
-        .flat_map(|spec| spec.formals().into_iter())
-        .map(|formal| {
-            if formal.variadic.is_none() {
-                Left(olc.with_range(formal.as_ref().map(NormalArg::from)))
-            } else {
-                Right(olc.with_range(formal.as_ref().map(VariadicArg::from)))
-            }
+    let (normal_args, variadic_arg) = formal_args(olc, method.formal_spec.as_ref());
+    let brace_defaults = (method.header.formal_spec.take().into_iter())
+        .flat_map(cos::FormalSpec::into_formals)
+        .filter_map(|formal| {
+            let formal = formal.into_inner();
+            let name = formal.name.print();
+            let value = match formal.default?.prefixed.into_inner() {
+                cos::FormalDefaultValue::Brace { expr, .. } => Left(expr),
+                cos::FormalDefaultValue::Other(cos::OSExpr::Brace { content, .. }) => {
+                    let range = olc.range(&content);
+                    Right(WithRange::new(content.print(), range))
+                }
+                cos::FormalDefaultValue::Other(_) => return None,
+            };
+            Some(BraceDefault { name, value })
         })
         .collect();
-    let (normal_args, variadic_arg) = split_args(args);
     let out = method
         .return_type
         .as_ref()
@@ -958,6 +1013,7 @@ fn method_kind(
         body,
         header_start,
         header_text: header_text.to_string(),
+        brace_defaults,
         language,
         mode,
         procedure_block,

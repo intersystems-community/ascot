@@ -37,6 +37,41 @@ all. It is not run in CI: unit tests are the only check a PR gets, so a PR that 
 is reported should say so in its description, and the maintainer runs the corpus against it
 and before every release.
 
+### Pre-built declarations
+
+`scripts/prebuilt-declarations.sh [RELEASE] [OUT]` writes the declaration file of an IRIS
+Community release's `%SYS` namespace: it starts the release's Docker image, runs `ascot declare`
+against it, adds the label names of the routines the image ships as object code only (read with
+`ZLOAD` in an `iris session`, since no API lists them), composes `src/mask.json` into it, and
+stops the container. The result is about 22 MB, 4 MB gzipped, and is not tracked here.
+
+`src/mask.json` is ascot's set of corrections to what IRIS reports about its own classes, in the
+declaration format: for each class, the headers of the members to replace, written in class
+syntax, plus `drop` (members the compiler doesn't accept), `type` (what the class stands for) and
+`generics` (the parameters that type members as `..#NAME`). A header may say `As This` for the
+receiver's class. The script checks that each override keeps the member's kind and argument
+names, so an override can only change types, modes, defaults and the return type. The same file
+is embedded in ascot and applied over a live instance.
+
+The generated files are published as assets of the `declarations` GitHub Release, a prerelease
+on a fixed tag that is never GitHub's "latest" (which `releases/latest/download` must keep
+resolving to an ascot build); its notes are `.github/declarations-release.md`. The assets are named
+`iris-community-<release>.d.json.gz` with a `.sha256` beside each, which is where
+`--iris <release>` downloads from. The `Declarations` workflow builds and uploads one
+(`Run workflow`, with the release), or by hand:
+
+```sh
+scripts/prebuilt-declarations.sh 2026.2 iris-community-2026.2.d.json
+gzip -9 iris-community-2026.2.d.json
+shasum -a 256 iris-community-2026.2.d.json.gz > iris-community-2026.2.d.json.gz.sha256
+gh release upload declarations iris-community-2026.2.d.json.gz{,.sha256} --clobber
+```
+
+Bump `DEFAULT_RELEASE` in `src/prebuilt.rs` when a new Community release's file is up. The
+format's version, `DECLARATIONS_VERSION` in `src/iris.rs`, is semver: a file is readable while
+its major part matches, so bump the major for a change old ascots can't read, the minor for an
+addition, and re-upload every release's file after a major bump.
+
 ### npm package
 
 The JS bindings in `bindings/js/` are published as

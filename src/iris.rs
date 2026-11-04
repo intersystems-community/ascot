@@ -1,73 +1,68 @@
 //! `open`, which answers an `--iris` argument with a live `RawAtelier` (a URL) or a
 //! `Declarations` file `ascot declare` wrote (a path), which never connects to anything.
 
-use std::collections::BTreeMap;
 use std::path::Path;
-
-use serde::{Deserialize, Serialize};
 
 use crate::IrisContext;
 use crate::atelier::{AtelierContext, RawAtelier};
-use crate::bindings::{ClassInfo, RoutineInfo, Source};
+pub(crate) use crate::declared::{DECLARATIONS_VERSION, Declarations, DeclaredClass};
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
-/// A URL is a live connection (checked up front), anything else a declaration file's path.
-/// `namespace` defaults to `%SYS` for a URL; for a file it must match the one declared.
-pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisContext>, String> {
+/// `--iris` as given: `none` is no environment at all, the strictest check; a Community release
+/// (`2026.2`) is its pre-built declarations, fetched if need be; a URL is a live connection
+/// (checked up front); anything else, `file://` included, a declaration file's path. `namespace`
+/// defaults to `%SYS` for a URL; for a file it must match the one declared.
+pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisContext>>, String> {
+    if iris == NONE {
+        return Ok(None);
+    }
+    if iris == LATEST {
+        return open(crate::prebuilt::DEFAULT_RELEASE, namespace);
+    }
+    if crate::prebuilt::is_release(iris) {
+        return open_file(&crate::prebuilt::fetch(iris)?, namespace).map(Some);
+    }
+    if let Some(path) = iris.strip_prefix("file://") {
+        return open_file(Path::new(path), namespace).map(Some);
+    }
     if iris.contains("://") {
         let raw = RawAtelier::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
-        return Ok(Box::new(AtelierContext::from(raw)));
+        return Ok(Some(Box::new(AtelierContext::from(raw))));
     }
-    let declarations = Declarations::load(Path::new(iris))?;
+    open_file(Path::new(iris), namespace).map(Some)
+}
+
+/// The `--iris` value for no environment: nothing outside the workspace exists.
+pub const NONE: &str = "none";
+/// The `--iris` value for the newest release's pre-built declarations, the default.
+pub const LATEST: &str = "latest";
+
+fn open_file(iris: &Path, namespace: Option<&str>) -> Result<Box<dyn IrisContext>, String> {
+    let declarations = Declarations::load(iris)?;
     if let Some(namespace) = namespace
         && namespace != declarations.namespace
     {
         return Err(format!(
-            "{iris} declares namespace '{}', not '{namespace}'",
+            "{} declares namespace '{}', not '{namespace}'",
+            iris.display(),
             declarations.namespace
         ));
     }
     Ok(Box::new(declarations))
 }
 
-pub(crate) const DECLARATIONS_VERSION: u32 = 4;
-
-/// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
-/// argument to its answer. A class holds only its own members; ascot walks its superclasses.
-#[derive(Serialize, Deserialize, Clone)]
-pub struct Declarations {
-    pub version: u32,
-    pub namespace: String,
-    /// The instance's `$ZVERSION`; empty in a file from before it was recorded.
-    #[serde(default)]
-    pub iris_version: String,
-    pub classes: BTreeMap<String, ClassInfo>,
-    /// `.inc` files by name without the extension.
-    pub includes: BTreeMap<String, Source>,
-    /// Routines by name without the extension.
-    pub routines: BTreeMap<String, RoutineInfo>,
-}
-
 impl Declarations {
     pub fn load(path: &Path) -> Result<Self, String> {
         // Anything without `://` lands here, so a URL missing its scheme reads as a file name.
-        let text = std::fs::read_to_string(path).map_err(|e| {
+        let bytes = std::fs::read(path).map_err(|e| {
             format!(
                 "cannot read declaration file {}: {e} (a live instance's URL starts with http:// \
                  or https://)",
                 path.display()
             )
         })?;
-        let declarations: Self = serde_json::from_str(&text)
-            .map_err(|e| format!("{} is not an ascot declaration file: {e}", path.display()))?;
-        if declarations.version != DECLARATIONS_VERSION {
-            return Err(format!(
-                "{} was written by an incompatible ascot; regenerate it with `ascot declare`",
-                path.display()
-            ));
-        }
-        Ok(declarations)
+        Self::from_bytes(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
@@ -76,37 +71,17 @@ impl Declarations {
     }
 }
 
-impl IrisContext for Declarations {
-    fn get_cls(&self, cls: &str) -> Result<Option<ClassInfo>, String> {
-        Ok(self.classes.get(cls).cloned())
-    }
-
-    fn get_inc(&self, name: &str) -> Result<Option<Source>, String> {
-        Ok(self.includes.get(name).cloned())
-    }
-
-    fn get_rtn(&self, name: &str) -> Result<Option<RoutineInfo>, String> {
-        Ok(self.routines.get(name).cloned())
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
-    use crate::bindings::{NameInfo, Position};
+    use crate::bindings::{ClassInfo, RoutineInfo, Source};
 
     fn class_info(name: &str) -> ClassInfo {
-        let zero = Position {
-            line: 0,
-            character: 0,
-        };
         ClassInfo {
             doc: String::new(),
-            name: NameInfo {
-                before: zero,
-                content: name.to_string(),
-                after: zero,
-            },
+            name: name.to_string(),
             extends: vec!["%RegisteredObject".to_string()],
             ..Default::default()
         }
@@ -128,10 +103,10 @@ mod tests {
     #[test]
     fn declarations_round_trip_through_their_file_and_answer_every_lookup() {
         let declarations = Declarations {
-            version: DECLARATIONS_VERSION,
+            version: DECLARATIONS_VERSION.to_string(),
             namespace: "USER".to_string(),
             iris_version: "IRIS for UNIX 2026.1".to_string(),
-            classes: [("A.B".to_string(), class_info("A.B"))].into(),
+            classes: [("A.B".to_string(), DeclaredClass::from(&class_info("A.B")))].into(),
             includes: [(
                 "MyInc".to_string(),
                 source("ROUTINE MyInc [Type=INC]\n#define FIVE 5\n"),
@@ -160,10 +135,10 @@ mod tests {
                 ),
             ]
             .into(),
+            ..Default::default()
         };
         let path = declaration_file("round-trip", &declarations);
         let loaded = Declarations::load(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
         assert_eq!(loaded.namespace, "USER");
         assert_eq!(loaded.iris_version, "IRIS for UNIX 2026.1");
         assert_eq!(loaded.get_cls("A.B"), Ok(Some(class_info("A.B"))));
@@ -177,7 +152,8 @@ mod tests {
 
         use crate::bindings::{DiagnosticSeverity, GuestWorkspace};
         let check = |body: &str| {
-            let workspace = crate::Workspace::native(Some(Box::new(loaded.clone())), None);
+            let loaded = Declarations::load(&path).unwrap();
+            let workspace = crate::Workspace::native(Some(Box::new(loaded)), None);
             let uri = "Test.mac".to_string();
             workspace.open(
                 uri.clone(),
@@ -213,22 +189,25 @@ mod tests {
         );
         // Only a hint, which `check` leaves out.
         assert_eq!(check(" Do Plain^Compiled(1)"), Vec::<String>::new());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn open_reads_a_declaration_file_and_checks_its_namespace() {
         let declarations = Declarations {
-            version: DECLARATIONS_VERSION,
+            version: DECLARATIONS_VERSION.to_string(),
             namespace: "USER".to_string(),
             iris_version: String::new(),
             classes: BTreeMap::new(),
             includes: BTreeMap::new(),
             routines: BTreeMap::new(),
+            ..Default::default()
         };
         let path = declaration_file("open", &declarations);
         let arg = path.to_str().unwrap();
-        assert!(open(arg, None).is_ok());
-        assert!(open(arg, Some("USER")).is_ok());
+        assert!(open(arg, None).unwrap().is_some());
+        assert!(open(arg, Some("USER")).unwrap().is_some());
+        assert!(open(NONE, None).unwrap().is_none());
         let err = open(arg, Some("%SYS")).err().unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(
@@ -242,18 +221,15 @@ mod tests {
         let path = std::env::temp_dir().join(format!("ascot-version-{}.json", std::process::id()));
         std::fs::write(
             &path,
-            r#"{"version":1,"namespace":"USER","classes":{},"includes":{},"routines":{}}"#,
+            r#"{"version":"0.9.0","namespace":"USER","classes":{},"includes":{},"routines":{}}"#,
         )
         .unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
-        assert!(
-            err.contains("was written by an incompatible ascot"),
-            "{err}"
-        );
+        assert!(err.contains("written by an incompatible ascot"), "{err}");
         std::fs::write(&path, "Class A.B {}").unwrap();
         let err = open(path.to_str().unwrap(), None).err().unwrap();
         let _ = std::fs::remove_file(&path);
-        assert!(err.contains("is not an ascot declaration file"), "{err}");
+        assert!(err.contains("not an ascot declaration file"), "{err}");
         let err = open("/no/such/declarations.json", None).err().unwrap();
         assert!(err.contains("cannot read declaration file"), "{err}");
     }

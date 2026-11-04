@@ -593,6 +593,11 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
+    // Inside a loop or a `Try`/`Catch` block, where `Quit` leaves the block, not the body.
+    pub(crate) fn in_block(&self) -> bool {
+        self.loop_context.is_some()
+    }
+
     // A `Try`/`Catch` block: an argumentless `Quit` leaves it (to just after the `Catch`), an
     // argumented one is IRIS's compile error (`quit_x_in_control`), and a `Continue` still
     // targets the enclosing loop.

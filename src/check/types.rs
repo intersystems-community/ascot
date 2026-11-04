@@ -607,6 +607,8 @@ pub enum PropertyTy {
     Collection { kind: CollectionClass, element: Ty },
     // `Property X [ MultiDimensional ]`: `..X(subs)` addresses a node typed like the property.
     Multidimensional(Ty),
+    // A name a `%Dispatch*` hook serves, with any arguments or subscripts, typed by the hook.
+    Dispatched(Ty),
 }
 
 impl Default for PropertyTy {
@@ -618,7 +620,9 @@ impl Default for PropertyTy {
 impl PropertyTy {
     pub fn to_ty(&self) -> Ty {
         match self {
-            PropertyTy::Value(ty) | PropertyTy::Multidimensional(ty) => ty.clone(),
+            PropertyTy::Value(ty)
+            | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Dispatched(ty) => ty.clone(),
             PropertyTy::Collection { kind, .. } => kind.class(),
         }
     }
@@ -650,9 +654,16 @@ impl std::fmt::Display for Ty {
     }
 }
 
+// `This` is the receiver's class, `..#NAME` the value of its class parameter `NAME`, and `Any`
+// what `Ty::Any` prints as: the forms the mask and the declaration files use beyond class names.
 impl From<String> for Ty {
     fn from(value: String) -> Self {
-        Self::from(ClassTy::from(value))
+        match value.strip_prefix("..#") {
+            Some(param) => Ty::Param(param.to_string()),
+            None if value == "This" => Ty::This,
+            None if value == "Any" => Ty::Any,
+            None => Self::from(ClassTy::from(value)),
+        }
     }
 }
 
@@ -890,7 +901,7 @@ impl std::fmt::Display for TyProcedure {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub enum TyProcedureOrAny {
     Procedure(Arc<TyProcedure>),
     #[default]
@@ -922,15 +933,6 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     Ty::OREF(ClsOrIns::Ins(cls))
 }
 
-pub(crate) fn ty_from_mask(t: Option<String>) -> Option<Ty> {
-    use tygr_objectscript::cos::SignatureType;
-    match t.as_deref().map(SignatureType::parse) {
-        Some(Ok(SignatureType::This(_))) => Some(Ty::This),
-        Some(Ok(SignatureType::Parameter(_, name))) => Some(Ty::Param(name.print())),
-        _ => ty_from_declared(t),
-    }
-}
-
 // `This` is the receiver's class; `..#NAME` the receiver's argument for the parameter `NAME`
 // that `owner`, the member's declaring class, defines (its default when the receiver gives none).
 pub(crate) trait Instantiate {
@@ -942,7 +944,9 @@ impl Instantiate for Ty {
         match self {
             Ty::This => *self = Ty::ins(receiver.clone()),
             Ty::Param(param) => {
-                if let Some(arg) = crate::mask::generic_arg(owner, &receiver.generics, param) {
+                let arg = (receiver.generics.get(param).cloned())
+                    .or_else(|| crate::mask::generic_default(owner, param));
+                if let Some(arg) = arg {
                     *self = Ty::from(arg);
                 }
             }
@@ -993,44 +997,27 @@ impl Instantiate for PropertyTy {
         match self {
             PropertyTy::Value(ty)
             | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Dispatched(ty)
             | PropertyTy::Collection { element: ty, .. } => ty.instantiate(receiver, owner),
         }
     }
 }
 
-impl From<bindings::MethodInfo> for TyProcedure {
+impl From<bindings::Signature> for TyProcedure {
     fn from(
-        bindings::MethodInfo {
+        bindings::Signature {
             normal,
             variadic,
             t,
             procedure_block,
-            body: _,
-        }: bindings::MethodInfo,
-    ) -> Self {
-        Self::declared(normal, variadic, t, procedure_block)
-    }
-}
-
-impl TyProcedure {
-    fn declared(
-        normal: Vec<bindings::NormalArg>,
-        variadic: Option<bindings::VariadicArg>,
-        t: Option<String>,
-        procedure_block: Option<Vec<String>>,
+        }: bindings::Signature,
     ) -> Self {
         Self {
             normal_args: normal
                 .into_iter()
-                .map(|arg: bindings::NormalArg| NormalArg {
-                    declared_at: arg.declared_at,
-                    ..NormalArg::new(arg.mode, arg.name, ty_from_declared(arg.t), arg.default)
-                })
+                .map(|arg| NormalArg::new(arg.mode, arg.name, ty_from_declared(arg.t), arg.default))
                 .collect(),
-            variadic_arg: variadic.map(|v| VariadicArg {
-                declared_at: v.declared_at,
-                ..VariadicArg::new(v.mode, v.name, ty_from_declared(v.t))
-            }),
+            variadic_arg: variadic.map(|v| VariadicArg::new(v.mode, v.name, ty_from_declared(v.t))),
             out: ty_from_declared(t),
             procedure_block,
             formal_list: true,
@@ -1038,27 +1025,21 @@ impl TyProcedure {
             declared_at: None,
         }
     }
+}
 
-    pub(crate) fn from_label(label: bindings::LabelInfo, uri: Option<String>) -> Self {
-        let bindings::LabelInfo {
-            name: _,
-            normal,
-            variadic,
-            t,
-            procedure_block,
-            declared_at,
-        } = label;
-        let mut label = Self::declared(normal, variadic, t, procedure_block);
+impl TyProcedure {
+    // A label's signature read from a declaration: untyped where the declaration is, and
+    // returning Any rather than nothing when its type isn't given.
+    pub(crate) fn from_label(signature: bindings::Signature, uri: Option<String>) -> Self {
+        let mut label = Self::from(signature);
         label.out = label.out.or(Some(Ty::Any));
         label.uri = uri;
-        label.declared_at = declared_at;
         label
     }
 
     // Read from source, so untyped.
     pub(crate) fn to_label(&self, name: String) -> bindings::LabelInfo {
-        bindings::LabelInfo {
-            name,
+        let signature = bindings::Signature {
             normal: self
                 .normal_args
                 .iter()
@@ -1073,7 +1054,10 @@ impl TyProcedure {
             }),
             t: None,
             procedure_block: self.procedure_block.clone(),
-            declared_at: self.declared_at,
+        };
+        bindings::LabelInfo {
+            name,
+            signature: Some(signature),
         }
     }
 }
@@ -1107,10 +1091,10 @@ mod tests {
         receiver
             .generics
             .insert("ELEMENTTYPE".to_string(), "Demo.Child".to_string());
-        let mut element = ty_from_mask(Some("..#ELEMENTTYPE".to_string())).unwrap();
+        let mut element = Ty::from("..#ELEMENTTYPE");
         element.instantiate(&receiver, "%Library.RelationshipObject");
         assert!(matches!(element, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "Demo.Child"));
-        let mut this = ty_from_mask(Some("This".to_string())).unwrap();
+        let mut this = Ty::from("This");
         this.instantiate(&receiver, "%Library.RelationshipObject");
         assert!(
             matches!(this, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "%Library.RelationshipObject")

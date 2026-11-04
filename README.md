@@ -203,76 +203,52 @@ claude plugin install ascot-lsp@ascot-plugins
 
 ### Connecting to IRIS
 
-Every command can use a live IRIS instance, reached through the Atelier REST
-API, to resolve the system and library classes and routines that aren't part
-of the local workspace. Without a connection, such a class or routine is left
-unconfirmed (a hint, not an error) rather than checked against real IRIS
-metadata. The commands take the connection differently:
+Classes, routines and include files outside the workspace are resolved against
+IRIS. `--iris` says which IRIS, for `analyze`, `analyze-workspace` and `lsp`;
+`mcp` takes the same in the `iris` argument of `create_workspace`; a wasm host
+passes the same through `env`:
 
-- `analyze`, `analyze-workspace` and `lsp` take `--iris <url>` and
-  `--iris-namespace <namespace>` (default `%SYS`) on the command line. The URL
-  carries the credentials and, if the instance is served under one, its path
-  prefix (`/iris` below):
+- `--iris latest` (default): the newest declaration-only snapshot of IRIS this
+  ascot knows, downloaded once (4 MB) from this repository's
+  [`declarations` release](https://github.com/intersystems-community/ascot/releases/tag/declarations)
+  into `~/.ascot`.
+- `--iris <YYYY>.<N>`: the snapshot of that IRIS release.
+- `--iris http://user:password@host:port[/prefix]` with `--iris-namespace`
+  (default `%SYS`): a live connection to IRIS through the Atelier REST API.
+- `--iris path/to/declarations.d.json`: a declaration file, a released one or
+  one you [built yourself](#build-your-own-declaration-files). No REST
+  requests, and no instance needed.
+- `--iris none`: no environment, so every class, routine or include outside the
+  workspace is an error.
 
-  ```sh
-  ascot analyze --iris http://user:password@localhost:8080/iris --iris-namespace USER src/
-  ```
+#### Build Your Own Declaration Files
 
-  An `https` instance's certificate is checked against the operating system's
-  trust store, so one it trusts, such as a company CA's, works.
-
-  The `ascot-lsp` plugin starts `ascot lsp` with no flags, so it never connects
-  to IRIS.
-
-- `mcp` takes no flags. The connection is set per workspace, through the
-  `iris` and `iris_namespace` (default `%SYS`) arguments of the
-  `create_workspace` tool call.
-
-#### Declaration files
-
-Not every workflow has a live instance at hand, for example CI or analysis of
-code exported from another system, and a live connection costs one round of
-REST requests per class or routine looked up, every run. A declaration file
-holds everything a connection would be asked for, fetched once:
+`ascot declare` saves what a live connection would be asked for, so CI and
+machines without the instance can check against it:
 
 ```sh
-ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER user.d.json
+ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER path/to/declaration.d.json
 ```
 
-Without the file argument, it writes to
-`~/.ascot/<host>-<port>-<namespace>.d.json` and says so.
-
-Wherever `--iris` (or the MCP `iris` argument) takes a URL, it also takes the
-path of such a file, and no REST request is made:
-
-```sh
-ascot analyze --iris user.d.json src/
-```
-
-`--iris-namespace` is then optional; if given, it must match the namespace the
-file declares. The file holds every class's superclasses, members and their
-signatures and types, as a live connection would report them (no method code),
-the full source of every `.inc` file, and the labels and their arguments of every
-routine, or, for a routine without source (e.g. only its OBJ), that it exists, along
-with the instance's version.
-Regenerate it after the instance's code changes.
+Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
 
 ### Style
 
-Style rules (the `style` record in [ascot.wit](src/wit/ascot.wit)) are a
-JSON file passed with `--style <file>` to `analyze`, `analyze-workspace` and
-`lsp`; the MCP `create_workspace` call and the JavaScript `createWorkspace` take
-the same record directly. Every key is optional; each command keyword or
-intrinsic function name written differently is reported as a warning.
+A JSON file passed with `--style <file>` (or as the `style` of the MCP
+`create_workspace` and the JavaScript `createWorkspace`) says how code should be
+written; only what's set is checked, as a warning. For example, with
 
 ```json
-{
-  "command": { "form": "Long", "case": "Pascal" },
-  "command_do": { "form": "Short" },
-  "function": { "form": "Long", "case": "Pascal" },
-  "function_listbuild": { "form": "Short" }
-}
+{ "command": { "form": "Long", "case": "Pascal" }, "allow_quit_for_return": false }
 ```
+
+```
+$ ascot analyze --style style.json R.mac
+warning: R.mac:3:2-3 - Command keyword `s` should be written `Set` [S2839]
+warning: R.mac:4:2-8 - Use `Return` to leave a method or procedure; `Quit` is for loops and `Try` blocks [S4151]
+```
+
+Every rule is described in [STYLE.md](STYLE.md).
 
 ### Diagnostics Filter
 
