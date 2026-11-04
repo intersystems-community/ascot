@@ -39,10 +39,11 @@ pub struct WorkspaceIdRequest {
 pub struct CreateWorkspaceRequest {
     /// An id of your choice; every other tool names the workspace by it.
     pub workspace: String,
-    /// Optional IRIS connection: `scheme://user:pass@host:port`, or the path of a declaration
-    /// file written by `ascot declare`. When set, lookups that can't be resolved from documents
-    /// already in this workspace (e.g. a class that isn't open here) fall back to this IRIS
-    /// instance via the Atelier REST API, or to the file.
+    /// Where lookups that can't be resolved from documents in this workspace (e.g. a class that
+    /// isn't open here) go: an IRIS Community release such as `2026.2`, whose pre-built
+    /// declarations ascot downloads once; an IRIS instance, `scheme://user:pass@host:port`,
+    /// queried via the Atelier REST API; or the path of a declaration file written by
+    /// `ascot declare`. Defaults to the newest release ascot was built for.
     pub iris: Option<String>,
     /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
     /// for a URL; for a declaration file it must match the namespace it declares.
@@ -253,10 +254,17 @@ impl Server {
             .collect::<Result<_, _>>()
             .map(crate::diagnostic_filter::Filter)
             .map_err(|err| format!("diagnostics: {err}"))?;
-        let iris = iris
-            .map(|iris| iris::open(&iris, iris_namespace.as_deref()))
-            .transpose()
-            .map_err(|err| format!("iris: {err}"))?;
+        let iris_name = iris.unwrap_or_else(|| crate::prebuilt::DEFAULT_RELEASE.to_string());
+        let (iris, note) = match iris::open(&iris_name, iris_namespace.as_deref()) {
+            Ok(iris) => (Some(iris), String::new()),
+            // The pre-built declarations are a convenience: without them the system classes and
+            // routines stay unconfirmed, as they would without `iris`.
+            Err(err) if crate::prebuilt::is_release(&iris_name) => (
+                None,
+                format!(" without the IRIS declarations ({err}); system classes stay unconfirmed"),
+            ),
+            Err(err) => return Err(format!("iris: {err}")),
+        };
         workspaces.insert(
             workspace.clone(),
             Arc::new(Mutex::new({
@@ -265,7 +273,7 @@ impl Server {
                 native
             })),
         );
-        Ok(format!("created workspace {workspace:?}"))
+        Ok(format!("created workspace {workspace:?}{note}"))
     }
 
     /// Delete a workspace and all its documents by id. Call this when done with a workspace to free

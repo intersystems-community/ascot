@@ -203,16 +203,29 @@ claude plugin install ascot-lsp@ascot-plugins
 
 ### Connecting to IRIS
 
-Every command can use a live IRIS instance, reached through the Atelier REST
-API, to resolve the system and library classes and routines that aren't part
-of the local workspace. Without a connection, such a class or routine is left
-unconfirmed (a hint, not an error) rather than checked against real IRIS
-metadata. The commands take the connection differently:
+The system and library classes and routines that aren't part of the local
+workspace are resolved against IRIS, in one of three ways:
 
-- `analyze`, `analyze-workspace` and `lsp` take `--iris <url>` and
-  `--iris-namespace <namespace>` (default `%SYS`) on the command line. The URL
-  carries the credentials and, if the instance is served under one, its path
-  prefix (`/iris` below):
+- **A release's pre-built declarations**, the default. `--iris 2026.2` names an
+  IRIS Community release; ascot downloads that release's declaration file (about
+  4 MB) from this repository's
+  [`declarations-v5` release](https://github.com/intersystems-community/ascot/releases/tag/declarations-v5)
+  the first time, says so, checks its checksum and keeps it in `~/.ascot/`.
+  Without `--iris`, ascot uses the newest release it was built for, 2026.2. If
+  the file isn't cached and can't be downloaded, ascot says so and goes on
+  without it, leaving such a class or routine unconfirmed (a hint, not an
+  error). `ASCOT_DECLARATIONS_URL` points at another directory holding the
+  assets, for a mirror.
+
+  The pre-built files hold the classes as IRIS reports them, corrected by
+  [`src/mask.json`](src/mask.json): constructors return their own class,
+  collections their element type, optional arguments have their defaults.
+
+- **A live instance**, reached through the Atelier REST API, for code that uses
+  classes the Community image doesn't ship: `--iris <url>` and
+  `--iris-namespace <namespace>` (default `%SYS`). The URL carries the
+  credentials and, if the instance is served under one, its path prefix
+  (`/iris` below):
 
   ```sh
   ascot analyze --iris http://user:password@localhost:8080/iris --iris-namespace USER src/
@@ -221,12 +234,11 @@ metadata. The commands take the connection differently:
   An `https` instance's certificate is checked against the operating system's
   trust store, so one it trusts, such as a company CA's, works.
 
-  The `ascot-lsp` plugin starts `ascot lsp` with no flags, so it never connects
-  to IRIS.
+- **A declaration file** of your own, written by `ascot declare` (next section).
 
-- `mcp` takes no flags. The connection is set per workspace, through the
-  `iris` and `iris_namespace` (default `%SYS`) arguments of the
-  `create_workspace` tool call.
+`analyze`, `analyze-workspace` and `lsp` take these on the command line; `mcp`
+takes them per workspace, through the `iris` and `iris_namespace` arguments of
+the `create_workspace` tool call, with the same default.
 
 #### Declaration files
 
@@ -243,7 +255,7 @@ Without the file argument, it writes to
 `~/.ascot/<host>-<port>-<namespace>.d.json` and says so.
 
 Wherever `--iris` (or the MCP `iris` argument) takes a URL, it also takes the
-path of such a file, and no REST request is made:
+path of such a file, or a `file://` URL, and no REST request is made:
 
 ```sh
 ascot analyze --iris user.d.json src/

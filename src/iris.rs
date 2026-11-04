@@ -14,19 +14,31 @@ pub use crate::declared::DeclaredClass;
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
-/// A URL is a live connection (checked up front), anything else a declaration file's path.
-/// `namespace` defaults to `%SYS` for a URL; for a file it must match the one declared.
+/// A Community release (`2026.2`) is its pre-built declarations, fetched if need be; a URL is a
+/// live connection (checked up front); anything else, `file://` included, a declaration file's
+/// path. `namespace` defaults to `%SYS` for a URL; for a file it must match the one declared.
 pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisContext>, String> {
+    if crate::prebuilt::is_release(iris) {
+        return open_file(&crate::prebuilt::fetch(iris)?, namespace);
+    }
+    if let Some(path) = iris.strip_prefix("file://") {
+        return open_file(Path::new(path), namespace);
+    }
     if iris.contains("://") {
         let raw = RawAtelier::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
         return Ok(Box::new(AtelierContext::from(raw)));
     }
-    let declarations = Declarations::load(Path::new(iris))?;
+    open_file(Path::new(iris), namespace)
+}
+
+fn open_file(iris: &Path, namespace: Option<&str>) -> Result<Box<dyn IrisContext>, String> {
+    let declarations = Declarations::load(iris)?;
     if let Some(namespace) = namespace
         && namespace != declarations.namespace
     {
         return Err(format!(
-            "{iris} declares namespace '{}', not '{namespace}'",
+            "{} declares namespace '{}', not '{namespace}'",
+            iris.display(),
             declarations.namespace
         ));
     }

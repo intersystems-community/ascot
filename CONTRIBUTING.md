@@ -53,6 +53,21 @@ receiver's class. The script checks that each override keeps the member's kind a
 names, so an override can only change types, modes, defaults and the return type. The same file
 is embedded in ascot and applied over a live instance.
 
+The generated files are published as assets of the `declarations-v<format>` GitHub Release,
+named `v<format>-iris-community-<release>.d.json.gz` with a `.sha256` beside each, which is
+where `--iris <release>` downloads from. The `Declarations` workflow builds and uploads one
+(`Run workflow`, with the release), or by hand:
+
+```sh
+scripts/prebuilt-declarations.sh 2026.2 v5-iris-community-2026.2.d.json
+gzip -9 v5-iris-community-2026.2.d.json
+shasum -a 256 v5-iris-community-2026.2.d.json.gz > v5-iris-community-2026.2.d.json.gz.sha256
+gh release upload declarations-v5 v5-iris-community-2026.2.d.json.gz{,.sha256} --clobber
+```
+
+Bump `DEFAULT_RELEASE` in `src/prebuilt.rs` when a new Community release's file is up, and the
+release tag when `DECLARATIONS_VERSION` changes.
+
 ### npm package
 
 The JS bindings in `bindings/js/` are published as

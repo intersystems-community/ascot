@@ -30,5 +30,7 @@ lsp-types = "0.97"
 url = "2"
 percent-encoding = "2"
 ureq = { version = "3", features = ["json", "platform-verifier", "cookies"] }
+flate2 = "1"
+sha2 = "0.10"
 base64 = "0.23"
 clap = { version = "4.6.7", features = ["derive", "wrap_help"] }

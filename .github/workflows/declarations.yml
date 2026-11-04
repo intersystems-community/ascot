@@ -1,0 +1,38 @@
+name: Declarations
+
+# Builds an IRIS Community release's pre-built declaration file and uploads it, with its
+# checksum, to the `declarations-v<format>` release that `--iris <release>` downloads from.
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: The iris-community image tag, e.g. 2026.2
+        required: true
+        default: '2026.2'
+
+permissions:
+  contents: write
+
+jobs:
+  declare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: Declare
+        run: |
+          FORMAT=$(sed -n 's/^pub(crate) const DECLARATIONS_VERSION: u32 = \([0-9]*\);/\1/p' src/iris.rs)
+          NAME=v$FORMAT-iris-community-${{ inputs.release }}.d.json
+          scripts/prebuilt-declarations.sh ${{ inputs.release }} $NAME
+          gzip -9 $NAME
+          sha256sum $NAME.gz > $NAME.gz.sha256
+          echo "TAG=declarations-v$FORMAT" >> "$GITHUB_ENV"
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Pre-built declarations, format ${TAG#declarations-v}" --notes "The pre-built declaration files of the IRIS Community releases; \`--iris <release>\` downloads one into ~/.ascot on first use."
+          gh release upload "$TAG" "$NAME.gz" "$NAME.gz.sha256" --clobber

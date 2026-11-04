@@ -182,11 +182,12 @@ struct StyleArgs {
 
 #[derive(Args)]
 struct IrisArgs {
-    /// An IRIS instance, or a declaration file from `ascot declare`
+    /// An IRIS Community release, an IRIS instance, or a declaration file from `ascot declare`
     ///
-    /// The instance is given as http://user:password@host:port[/prefix]. Resolves the classes,
-    /// include files and routines outside the workspace; without it, they are left unconfirmed.
-    #[arg(long, value_name = "URL|FILE")]
+    /// Resolves the classes, include files and routines outside the workspace. A release, as
+    /// 2026.2, is its pre-built declarations, downloaded into ~/.ascot the first time. An instance
+    /// is given as http://user:password@host:port[/prefix]. [default: 2026.2]
+    #[arg(long, value_name = "RELEASE|URL|FILE")]
     iris: Option<String>,
     /// The namespace to use [default: %SYS]
     ///
@@ -250,10 +251,19 @@ fn main() {
 }
 
 impl IrisArgs {
-    /// Opens the connection or declaration file, if `--iris` was given.
+    /// Opens the release's declarations, the connection or the declaration file. A release that
+    /// can't be fetched is a warning, not an error: the run goes on as it would without `--iris`.
     fn open(self) -> Option<Box<dyn IrisContext>> {
-        match ascot::open_iris(&self.iris?, self.iris_namespace.as_deref()) {
+        let iris = (self.iris).unwrap_or_else(|| ascot::DEFAULT_IRIS_RELEASE.to_string());
+        match ascot::open_iris(&iris, self.iris_namespace.as_deref()) {
             Ok(iris) => Some(iris),
+            Err(err) if ascot::is_iris_release(&iris) => {
+                eprintln!(
+                    "--iris {iris}: {err}\n--iris {iris}: continuing without the IRIS \
+                     declarations; the system classes and routines are left unconfirmed"
+                );
+                None
+            }
             Err(err) => {
                 eprintln!("--iris: {err}");
                 exit(1);
