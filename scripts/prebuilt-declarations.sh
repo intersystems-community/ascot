@@ -56,14 +56,19 @@ def shape(header):
     kind, name, rest = re.match(rf'({KINDS}) ("[^"]*"|[^\s(]+)(.*)', header).groups()
     args = []
     if rest.startswith("("):
-        depth = 0
-        for i, ch in enumerate(rest):
-            depth += (ch == "(") - (ch == ")")
-            if depth == 0:
-                break
-        for arg in filter(str.strip, re.split(r",(?![^({]*[)}])", rest[1:i])):
-            m = re.match(r"\s*(?:ByRef |Output )?(\S+?)(?:\.\.\.)?(?:\s*=|\s+As\b|\s*$)", arg)
-            args.append(m.group(1))
+        depth, quoted, arg = 0, False, ""
+        for ch in rest[1:]:
+            quoted ^= ch == '"'
+            if not quoted:
+                depth += (ch in "({") - (ch in ")}")
+                if depth < 0 or (ch == "," and depth == 0):
+                    if arg.strip():
+                        args.append(re.match(r"\s*(?:ByRef |Output )?(%?\w+)", arg).group(1))
+                    arg = ""
+                    if depth < 0:
+                        break
+                    continue
+            arg += ch
     return kind, name.strip('"'), args
 NS = {"ClassMethod": "Method", "ClientMethod": "Method", "Relationship": "Property"}
 def key(header):

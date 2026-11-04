@@ -2399,7 +2399,7 @@ mod tests {
     // A declaration may type a method's result as `This`: the receiver's class.
     #[test]
     fn a_declared_this_is_the_receiver() {
-        let mut mem = external_method("getNextResultSet", vec![], Some("This"));
+        let mut mem = external_method("nextResultSet", vec![], Some("This"));
         mem.origin = Some("%Library.SQLGatewayConnection".to_string());
         let workspace = Workspace::native(
             Some(Box::new(MockIrisClient {
@@ -2411,7 +2411,7 @@ mod tests {
         let diagnostics = errors_in(
             &workspace,
             "T.cls",
-            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Quit c.getNextResultSet().Next()\n}\n}\n",
+            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Quit c.nextResultSet().Next()\n}\n}\n",
         );
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
@@ -2426,11 +2426,11 @@ mod tests {
     // Without its own `%OnNew`, `%New` takes its own arguments: an optional `initvalue`.
     #[test]
     fn an_unmasked_object_handle_stays_one() {
-        let workspace = masked_iris("getNextResultSet", "%Library.SQLGatewayConnection", vec![]);
+        let workspace = masked_iris("nextResultSet", "%Library.SQLGatewayConnection", vec![]);
         let diagnostics = errors_in(
             &workspace,
             "T.cls",
-            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Set rs = c.getNextResultSet()\n Quit rs.Next()\n}\n}\n",
+            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Set rs = c.nextResultSet()\n Quit rs.Next()\n}\n}\n",
         );
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
