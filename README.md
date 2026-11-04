@@ -214,11 +214,11 @@ IRIS. `--iris` says which IRIS, for `analyze`, `analyze-workspace` and `lsp`;
   later runs read that file. They hold the classes as IRIS reports them,
   corrected by [`src/mask.json`](src/mask.json). `ASCOT_DECLARATIONS_URL` names
   a mirror.
-- Your own instance, for the classes the Community image doesn't ship: live,
-  as `--iris http://user:password@host:port[/prefix]` with `--iris-namespace`
-  (default `%SYS`), through the Atelier REST API, an `https` certificate
-  checked against the operating system's trust store; or declared once into a
-  file with `ascot declare` (next section), as `--iris user.d.json`.
+- Your own instance, with its classes, its version and its changes to the
+  system ones: live, as `--iris http://user:password@host:port[/prefix]` with
+  `--iris-namespace` (default `%SYS`), through the Atelier REST API, an `https`
+  certificate checked against the operating system's trust store; or declared
+  once into a file with `ascot declare` (next section), as `--iris user.d.json`.
 - `--iris none`: no environment, so every class, routine or include outside the
   workspace is an error.
 
