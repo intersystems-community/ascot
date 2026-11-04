@@ -51,13 +51,14 @@ pub struct CreateWorkspaceRequest {
     /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
     /// have every command keyword but `Do`'s written in full; `function` and `function_<name>` do
     /// the same for intrinsic functions. Applies to every document. The keys are documented at
-    /// https://github.com/intersystems-community/ascot#style.
+    /// https://github.com/intersystems-community/ascot/blob/main/STYLE.md.
     #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
     pub style: Option<serde_json::Value>,
     /// Which codes are reported, and at what severity: `VERB:TARGETS` strings applied in order, a
     /// later one overriding an earlier one. VERB is `off`, `on` (at the code's own severity) or a
     /// severity (`error`, `warning`, `information`, `hint`); TARGETS is a comma-separated list of
-    /// codes, or `all`. For example `["off:A5579,A4043"]`, or `["off:all", "on:A7095,A6851"]`.
+    /// codes, severities (every code currently reported at one), or `all`. For example
+    /// `["off:A5579,A4043"]`, `["off:hint,information"]`, or `["off:all", "on:A7095,A6851"]`.
     pub diagnostics: Option<Vec<String>>,
 }
 

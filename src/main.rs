@@ -163,10 +163,11 @@ struct FilterArgs {
 
 fn diagnostics_help() -> String {
     format!(
-        "Which codes are reported, and at what severity\n\nRepeatable; the last value naming a code \
-         (or `all`) decides it, `on` being the code's own severity. For example `-d off:A5579`, \
-         `-d off:all -d on:A7095,A6851`, or `-d hint:A4471`. The exit code follows what is \
-         reported.\n\n{}",
+        "Which codes are reported, and at what severity\n\nRepeatable and applied in order, a later \
+         value overriding an earlier one; `on` is the code's own severity. A target is a code, a \
+         severity (every code currently reported at it), or `all`. For example `-d off:A5579`, \
+         `-d off:hint,information`, `-d off:all -d on:A7095,A6851`, or `-d hint:A4471`. The exit \
+         code follows what is reported.\n\n{}",
         ascot::diagnostic_filter::bnf()
     )
 }

@@ -320,6 +320,16 @@ pub struct MethodDetails {
     pub header_start: usize,
     // Source text from `header_start` through the body's opening `{`.
     pub header_text: String,
+    pub brace_defaults: Vec<BraceDefault>,
+}
+
+// An argument default in braces, `x As %Integer = {expr}`: IRIS evaluates it on entry, in the
+// method's own context, in argument order, when the argument wasn't passed. Ranged against the
+// class document, like `normal_args`.
+pub struct BraceDefault {
+    pub name: String,
+    // The expression, or the braces' text when it isn't one.
+    pub value: Either<Range<cos::Expr>, WithRange<String>>,
 }
 
 pub enum RoutineElementKind {
@@ -942,6 +952,22 @@ fn method_kind(
     // member -- other methods' call-site diagnostics reference these same ranges directly.
     let header_text = &src[header_start..body_start];
     let (normal_args, variadic_arg) = formal_args(olc, method.formal_spec.as_ref());
+    let brace_defaults = (method.header.formal_spec.take().into_iter())
+        .flat_map(cos::FormalSpec::into_formals)
+        .filter_map(|formal| {
+            let formal = formal.into_inner();
+            let name = formal.name.print();
+            let value = match formal.default?.prefixed.into_inner() {
+                cos::FormalDefaultValue::Brace { expr, .. } => Left(expr),
+                cos::FormalDefaultValue::Other(cos::OSExpr::Brace { content, .. }) => {
+                    let range = olc.range(&content);
+                    Right(WithRange::new(content.print(), range))
+                }
+                cos::FormalDefaultValue::Other(_) => return None,
+            };
+            Some(BraceDefault { name, value })
+        })
+        .collect();
     let out = method
         .return_type
         .as_ref()
@@ -987,6 +1013,7 @@ fn method_kind(
         body,
         header_start,
         header_text: header_text.to_string(),
+        brace_defaults,
         language,
         mode,
         procedure_block,

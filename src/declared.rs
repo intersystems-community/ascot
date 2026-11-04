@@ -74,7 +74,13 @@ fn formal(mode: Option<RefMode>, name: &str, t: Option<&str>, default: Option<&s
         None => "",
     };
     let default = default
-        .map(|d| if literal(d) { format!(" = {d}") } else { format!(" = {{{d}}}") })
+        .map(|d| {
+            if literal(d) {
+                format!(" = {d}")
+            } else {
+                format!(" = {{{d}}}")
+            }
+        })
         .unwrap_or_default();
     format!("{mode}{name}{}{default}", as_type(t))
 }
@@ -279,7 +285,11 @@ impl From<&ClassInfo> for DeclaredClass {
         }
         Self {
             doc: info.doc.clone(),
-            header: format!("Class {}{extends}{}", short(&info.name), keyword_list(&keywords)),
+            header: format!(
+                "Class {}{extends}{}",
+                short(&info.name),
+                keyword_list(&keywords)
+            ),
             include: info.include.clone(),
             storage: info.storage.clone(),
             members: info
@@ -371,7 +381,6 @@ impl DeclaredClass {
         (declared, dropped.into_iter().map(|m| m.header).collect())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -499,5 +508,4 @@ mod tests {
             declared.source()
         );
     }
-
 }
