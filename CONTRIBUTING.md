@@ -53,7 +53,8 @@ receiver's class. The script checks that each override keeps the member's kind a
 names, so an override can only change types, modes, defaults and the return type. The same file
 is embedded in ascot and applied over a live instance.
 
-The generated files are published as assets of the `declarations` GitHub Release, named
+The generated files are published as assets of the `declarations` GitHub Release (never marked
+GitHub's "latest" release, which `releases/latest/download` must keep resolving to an ascot build), named
 `iris-community-<release>.d.json.gz` with a `.sha256` beside each, which is where
 `--iris <release>` downloads from. The `Declarations` workflow builds and uploads one
 (`Run workflow`, with the release), or by hand:
