@@ -269,7 +269,7 @@ impl CheckExprInner for cos::FunctionCall {
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
     ) -> Result<PowerTy, QuasiTypeError> {
-        super::report_style(env, self.name());
+        super::report_style(env, self.name(), &self.arg_commas());
         check_empty_args(self)?;
         match self {
             FunctionCall::Length {
@@ -277,6 +277,7 @@ impl CheckExprInner for cos::FunctionCall {
                     LengthArgs {
                         expression,
                         delimitor,
+                        ..
                     },
                 ..
             } => check_read_args(
@@ -288,7 +289,7 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::Simple(call) => check_simple_function(env, flow, call),
             FunctionCall::Generic(_) => unreachable!("never converts"),
             FunctionCall::Unknown(call) => {
-                for arg in call.args.items.iter() {
+                for arg in call.args.items(env) {
                     if let Some(cos::FunArg::Normal { expr, .. }) = arg.deref() {
                         let _ = expr.to_ty(env, flow)?;
                     }
@@ -304,7 +305,9 @@ impl CheckExprInner for cos::FunctionCall {
                 Ok(PowerTy::plain(Ty::Any))
             }
             FunctionCall::Data {
-                args: DataArgs { variable, target },
+                args: DataArgs {
+                    variable, target, ..
+                },
                 ..
             } => check_data(env, flow, variable.deref(), arg(target)),
             FunctionCall::Order {
@@ -313,11 +316,14 @@ impl CheckExprInner for cos::FunctionCall {
                         variable,
                         direction,
                         target,
+                        ..
                     },
                 ..
             } => check_order(env, flow, variable.deref(), arg(direction), arg(target)),
             FunctionCall::Get {
-                args: GetArgs { variable, default },
+                args: GetArgs {
+                    variable, default, ..
+                },
                 ..
             } => check_get(env, flow, variable.deref(), arg(default)),
             FunctionCall::DText(dtext) => {
@@ -336,7 +342,7 @@ impl CheckExprInner for cos::FunctionCall {
             }
             // Internal storage handle -- opaque, like `$ZUTIL`'s catch-all return.
             FunctionCall::ZObjRef {
-                args: ZObjRefArgs { oref },
+                args: ZObjRefArgs { oref, .. },
                 ..
             } => {
                 let _ = oref.deref().to_ty(env, flow)?;
@@ -349,6 +355,7 @@ impl CheckExprInner for cos::FunctionCall {
                         action,
                         remchar,
                         keepchar,
+                        ..
                     },
                 ..
             } => {
@@ -369,15 +376,15 @@ impl CheckExprInner for cos::FunctionCall {
                 Ok(Ty::from("%String").into())
             }
             FunctionCall::ZDateTime {
-                args: ZDateTimeArgs { value, rest },
+                args: ZDateTimeArgs { value, rest, .. },
                 ..
             }
             | FunctionCall::ZDate {
-                args: ZDateArgs { value, rest },
+                args: ZDateArgs { value, rest, .. },
                 ..
             }
             | FunctionCall::ZTime {
-                args: ZTimeArgs { value, rest },
+                args: ZTimeArgs { value, rest, .. },
                 ..
             } => {
                 let _ = value.to_ty(env, flow)?;
@@ -450,7 +457,7 @@ impl CheckExprInner for cos::FunctionCall {
             }
             FunctionCall::ZU { kw, args } => check_zu_args(env, flow, kw, args),
             FunctionCall::Case {
-                args: CaseArgs { target, arms },
+                args: CaseArgs { target, arms, .. },
                 ..
             } => {
                 let target = target.deref();
@@ -469,7 +476,7 @@ impl CheckExprInner for cos::FunctionCall {
             }
             FunctionCall::Bit(c) => check_bit_call(env, flow, c),
             FunctionCall::BitCount {
-                args: BitCountArgs { bits, value },
+                args: BitCountArgs { bits, value, .. },
                 ..
             } => check_read_args(env, flow, [Some(bits.deref()), arg(value)], "%Integer"),
             FunctionCall::BitFind {
@@ -479,6 +486,7 @@ impl CheckExprInner for cos::FunctionCall {
                         value,
                         position,
                         direction,
+                        ..
                     },
                 ..
             } => check_read_args(
@@ -503,6 +511,7 @@ impl CheckExprInner for cos::FunctionCall {
                         replacement,
                         occurrences,
                         begin,
+                        ..
                     },
                 ..
             } => check_read_args(
@@ -518,7 +527,7 @@ impl CheckExprInner for cos::FunctionCall {
                 "%String",
             ),
             FunctionCall::Char {
-                args: CharArgs { first, rest },
+                args: CharArgs { first, rest, .. },
                 ..
             } => check_read_args(
                 env,
@@ -527,15 +536,15 @@ impl CheckExprInner for cos::FunctionCall {
                 "%String",
             ),
             FunctionCall::ClassName {
-                args: ClassNameArgs { oref },
+                args: ClassNameArgs { oref, .. },
                 ..
             } => check_read_args(env, flow, [oref.as_deref()], "%String"),
             FunctionCall::Decimal {
-                args: DecimalArgs { num, digits },
+                args: DecimalArgs { num, digits, .. },
                 ..
             } => check_read_args(env, flow, [Some(num.deref()), arg(digits)], "%Decimal"),
             FunctionCall::Double {
-                args: DoubleArgs { num },
+                args: DoubleArgs { num, .. },
                 ..
             } => check_read_args(env, flow, [Some(num.deref())], "%Double"),
             FunctionCall::Extract(c) => check_extract_call(env, flow, c),
@@ -545,6 +554,7 @@ impl CheckExprInner for cos::FunctionCall {
                         num,
                         format,
                         decimal,
+                        ..
                     },
                 ..
             } => {
@@ -564,17 +574,19 @@ impl CheckExprInner for cos::FunctionCall {
                 Ok(Ty::from("%String").into())
             }
             FunctionCall::Increment {
-                args: IncrementArgs { counter, amount },
+                args: IncrementArgs {
+                    counter, amount, ..
+                },
                 ..
             } => check_increment(env, flow, counter.deref(), arg(amount)),
             FunctionCall::IsObject {
-                args: IsObjectArgs { expr },
+                args: IsObjectArgs { expr, .. },
                 ..
             } => check_is_object(env, flow, expr),
             FunctionCall::ListRange(c) => check_list_range_call(env, flow, c),
             FunctionCall::ListPlain(c) => check_list_plain_call(env, flow, c),
             FunctionCall::ListBuild(ListBuild {
-                args: ListBuildArgs { first, rest },
+                args: ListBuildArgs { first, rest, .. },
                 ..
             }) => {
                 for arg in once(first.deref()).chain(each_arg(rest)) {
@@ -588,6 +600,7 @@ impl CheckExprInner for cos::FunctionCall {
                         list,
                         position,
                         var,
+                        ..
                     },
                 ..
             } => {
@@ -597,7 +610,9 @@ impl CheckExprInner for cos::FunctionCall {
             }
             FunctionCall::ListGet(c) => check_listget_call(env, flow, c),
             FunctionCall::ListNext {
-                args: ListNextArgs { list, ptr, value },
+                args: ListNextArgs {
+                    list, ptr, value, ..
+                },
                 ..
             } => check_listnext(
                 env,
@@ -613,6 +628,7 @@ impl CheckExprInner for cos::FunctionCall {
                         position,
                         value,
                         rest,
+                        ..
                     },
                 ..
             } => {
@@ -634,6 +650,7 @@ impl CheckExprInner for cos::FunctionCall {
                         start,
                         end,
                         val,
+                        ..
                     },
                 ..
             } => {
@@ -658,6 +675,7 @@ impl CheckExprInner for cos::FunctionCall {
                         instance: classname,
                         method,
                         args,
+                        ..
                     },
                 ..
             }
@@ -667,6 +685,7 @@ impl CheckExprInner for cos::FunctionCall {
                         classname,
                         method,
                         args,
+                        ..
                     },
                 ..
             } => Ok(check_classmethod(
@@ -678,7 +697,9 @@ impl CheckExprInner for cos::FunctionCall {
             )?
             .into()),
             FunctionCall::Name {
-                args: NameArgs { variable, integer },
+                args: NameArgs {
+                    variable, integer, ..
+                },
                 ..
             } => {
                 require_public(env, flow, variable.deref(), "$NAME")?;
@@ -686,7 +707,9 @@ impl CheckExprInner for cos::FunctionCall {
                 check_read_args(env, flow, [arg(integer)], "%String")
             }
             FunctionCall::Parameter {
-                args: ParameterArgs { class, parameter },
+                args: ParameterArgs {
+                    class, parameter, ..
+                },
                 ..
             } => {
                 class.check(env, flow)?;
@@ -694,7 +717,7 @@ impl CheckExprInner for cos::FunctionCall {
             }
             FunctionCall::Piece(c) => check_piece_call(env, flow, c),
             FunctionCall::PrefetchOff {
-                args: PrefetchOffArgs { first, second },
+                args: PrefetchOffArgs { first, second, .. },
                 ..
             } => {
                 for g in first.as_deref().into_iter().chain(arg(second)) {
@@ -703,7 +726,7 @@ impl CheckExprInner for cos::FunctionCall {
                 Ok(Ty::from("%String").into())
             }
             FunctionCall::PrefetchOn {
-                args: PrefetchOnArgs { gref, gref2 },
+                args: PrefetchOnArgs { gref, gref2, .. },
                 ..
             } => {
                 for g in std::iter::once(gref.deref()).chain(arg(gref2)) {
@@ -720,6 +743,7 @@ impl CheckExprInner for cos::FunctionCall {
                         reference,
                         direction,
                         target,
+                        ..
                     },
                 ..
             } => {
@@ -732,7 +756,7 @@ impl CheckExprInner for cos::FunctionCall {
                 Ok(Ty::from("%String").into())
             }
             FunctionCall::Select {
-                args: SelectArgs { first, rest },
+                args: SelectArgs { first, rest, .. },
                 ..
             } => {
                 let mut exhaustive = false;
@@ -753,14 +777,14 @@ impl CheckExprInner for cos::FunctionCall {
             }
             FunctionCall::Sequence(c) => check_sequence_call(env, flow, c),
             FunctionCall::SortBegin {
-                args: SortBeginArgs { set_global },
+                args: SortBeginArgs { set_global, .. },
                 ..
             } => {
                 check_global_ref(env, flow, set_global.deref())?;
                 Ok(Ty::from("%Integer").into())
             }
             FunctionCall::SortEnd {
-                args: SortEndArgs { first, dosort },
+                args: SortEndArgs { first, dosort, .. },
                 ..
             } => {
                 if let Some(Some(g)) = first.as_deref().map(|f| f.deref()) {
@@ -775,6 +799,7 @@ impl CheckExprInner for cos::FunctionCall {
                         vector,
                         position,
                         value,
+                        ..
                     },
                 ..
             } => {
@@ -788,7 +813,9 @@ impl CheckExprInner for cos::FunctionCall {
                 Ok(Ty::from("%Boolean").into())
             }
             FunctionCall::VectorOp {
-                args: VectorOpArgs { op, first, rest },
+                args: VectorOpArgs {
+                    op, first, rest, ..
+                },
                 ..
             } => check_read_args(
                 env,
@@ -799,7 +826,7 @@ impl CheckExprInner for cos::FunctionCall {
                 "%String",
             ),
             FunctionCall::WChar {
-                args: WCharArgs { first, rest },
+                args: WCharArgs { first, rest, .. },
                 ..
             } => check_read_args(
                 env,
@@ -809,7 +836,7 @@ impl CheckExprInner for cos::FunctionCall {
             ),
             FunctionCall::WExtract(c) => check_wextract_call(env, flow, c),
             FunctionCall::Xecute {
-                args: XecuteArgs { code, params },
+                args: XecuteArgs { code, params, .. },
                 ..
             } => check_read_args(
                 env,
@@ -827,6 +854,7 @@ impl CheckExprInner for cos::FunctionCall {
                         arg5,
                         arg6,
                         rname,
+                        ..
                     },
                 ..
             } => check_compile(
@@ -841,15 +869,15 @@ impl CheckExprInner for cos::FunctionCall {
                 arg(rname),
             ),
             FunctionCall::ZOrder {
-                args: ZOrderArgs { variable },
+                args: ZOrderArgs { variable, .. },
                 ..
             }
             | FunctionCall::Next {
-                args: NextArgs { variable },
+                args: NextArgs { variable, .. },
                 ..
             }
             | FunctionCall::ZP {
-                args: ZPArgs { variable },
+                args: ZPArgs { variable, .. },
                 ..
             } => {
                 let _ = variable.to_maybe_ty(env, flow)?;
@@ -886,7 +914,7 @@ pub(super) fn check_settarget_fun<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
-    super::report_style(env, [fun.name()]);
+    super::report_style(env, [fun.name()], &[]);
     use cos::SetTargetFun::*;
     match fun {
         Piece(c) => {
@@ -1164,7 +1192,7 @@ fn check_simple_function<'a>(
     call: &cos::SimpleFunctionCall,
 ) -> Result<PowerTy, QuasiTypeError> {
     let function = cos::simple_function(&call.name.print()).expect("validated by the grammar");
-    for (i, arg) in call.args.items.iter().enumerate() {
+    for (i, arg) in call.args.items(env).enumerate() {
         let Some(expr) = arg.deref() else { continue };
         let expr = Range::new(arg.start, expr, arg.end);
         // `$ZCONVERT(s, mode, table, handle)`: the handle is state the call writes, and IRIS
@@ -1219,7 +1247,7 @@ fn check_global_ref<'a>(
     flow: &mut Flow<'a>,
     g: &cos::GlobalReference,
 ) -> Result<(), QuasiTypeError> {
-    for sub in g.subs.iter().flat_map(|subs| subs.items.iter()) {
+    for sub in g.subs.iter().flat_map(|subs| subs.items(env)) {
         let _ = sub.to_ty(env, flow)?;
     }
     Ok(())
@@ -1395,7 +1423,7 @@ fn check_zu_args<'a>(
         };
         env.add_soft_diagnostic(err.into_error(|| env.range(kw)).into());
     }
-    for arg in args.items.iter() {
+    for arg in args.items(env) {
         let Some(fun_arg) = arg.deref() else { continue };
         match fun_arg {
             cos::FunArg::ColonNormal(ec) => {

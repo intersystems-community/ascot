@@ -8,7 +8,7 @@ use tygr::{Grammar, GrammarRule, StringEq, StringOf1, Suffix, VecSep, bnf_rules,
 use crate::bindings::{Diagnostic, DiagnosticSeverity};
 use crate::check::TypeErrorKind;
 
-/// The `VERB:TARGETS` values in order: the last one naming a code, or `all`, decides it.
+/// The `VERB:TARGETS` values, applied in order; each later one overrides the earlier.
 #[derive(Default)]
 pub struct Filter(pub Vec<Batch>);
 
@@ -23,15 +23,22 @@ pub enum Verb {
     Off(StringEq!("off")),
     /// At the code's own severity.
     On(StringEq!("on")),
+    At(Severity),
+}
+
+#[derive(Clone, Grammar)]
+pub enum Severity {
     Error(StringEq!("error")),
     Warning(StringEq!("warning")),
     Information(StringEq!("information")),
     Hint(StringEq!("hint")),
 }
 
+/// A code, or every code currently reported at a severity, or every code.
 #[derive(Clone, Grammar)]
 pub enum Target {
     All(StringEq!("all")),
+    Severity(Severity),
     Code(Code),
 }
 
@@ -42,35 +49,45 @@ char_class!(pub CodeChar, "letters or digits", |c| c.is_ascii_alphanumeric());
 
 /// The syntax of a value, for help and error messages.
 pub fn bnf() -> String {
-    bnf_rules![Batch, Verb, Target, Code]
+    bnf_rules![Batch, Verb, Severity, Target, Code]
 }
 
 impl Filter {
-    pub fn apply(&self, diagnostic: Diagnostic) -> Option<Diagnostic> {
-        let batch = (self.0.iter().rev()).find(|batch| batch.names(&diagnostic.code));
-        match batch.map(|batch| &*batch.verb) {
-            Some(Verb::Off(_)) => None,
-            None | Some(Verb::On(_)) => Some(diagnostic),
-            Some(Verb::Error(_)) => diagnostic.at(DiagnosticSeverity::Error),
-            Some(Verb::Warning(_)) => diagnostic.at(DiagnosticSeverity::Warning),
-            Some(Verb::Information(_)) => diagnostic.at(DiagnosticSeverity::Information),
-            Some(Verb::Hint(_)) => diagnostic.at(DiagnosticSeverity::Hint),
+    /// `diagnostic` arrives at its code's own severity.
+    pub fn apply(&self, mut diagnostic: Diagnostic) -> Option<Diagnostic> {
+        let own = diagnostic.severity;
+        let mut on = true;
+        for batch in &self.0 {
+            if !batch.names(&diagnostic) {
+                continue;
+            }
+            match &*batch.verb {
+                Verb::Off(_) => on = false,
+                Verb::On(_) => (on, diagnostic.severity) = (true, own),
+                Verb::At(severity) => (on, diagnostic.severity) = (true, severity.into()),
+            }
+        }
+        on.then_some(diagnostic)
+    }
+}
+
+impl From<&Severity> for DiagnosticSeverity {
+    fn from(severity: &Severity) -> Self {
+        match severity {
+            Severity::Error(_) => Self::Error,
+            Severity::Warning(_) => Self::Warning,
+            Severity::Information(_) => Self::Information,
+            Severity::Hint(_) => Self::Hint,
         }
     }
 }
 
-impl Diagnostic {
-    fn at(mut self, severity: DiagnosticSeverity) -> Option<Self> {
-        self.severity = severity;
-        Some(self)
-    }
-}
-
 impl Batch {
-    fn names(&self, code: &str) -> bool {
+    fn names(&self, diagnostic: &Diagnostic) -> bool {
         self.targets.items.iter().any(|target| match target {
             Target::All(_) => true,
-            Target::Code(known) => known.print() == code,
+            Target::Severity(severity) => diagnostic.severity == severity.into(),
+            Target::Code(known) => known.print() == diagnostic.code,
         })
     }
 }

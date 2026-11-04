@@ -184,7 +184,7 @@ pub struct WorkspaceStruct {
     // Same idea as `class_index`, but for `ROUTINE` header names — see `resolve_uri`.
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
-    pub(crate) style: Option<style::KeywordStyles>,
+    pub(crate) style: Option<style::Styles>,
     diagnostic_filter: diagnostic_filter::Filter,
     // %occErrors, resolved on first use: the error names a compile-time macro such as `$$$ERROR`
     // accepts in its arguments without any `Include`. Dropped whenever an include file changes.
@@ -780,7 +780,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         inc_index: RefCell::new(HashMap::new()),
         rtn_index: RefCell::new(HashMap::new()),
         iris,
-        style: style.as_ref().map(style::KeywordStyles::new),
+        style: style.as_ref().map(style::Styles::new),
         diagnostic_filter: diagnostic_filter::Filter::default(),
         error_names: RefCell::new(None),
         iris_includes: RefCell::new(HashMap::new()),
@@ -865,7 +865,7 @@ impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn set_style(&self, style: Option<Style>) -> Vec<String> {
         let mut this = self.borrow_mut();
-        this.style = style.as_ref().map(style::KeywordStyles::new);
+        this.style = style.as_ref().map(style::Styles::new);
         this.forget(false)
     }
 

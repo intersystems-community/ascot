@@ -1018,14 +1018,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let member = details.member(N::NS, mem)?;
                 let (mut ty, is_instance_only) = N::declared(member, uri)?;
                 // A member's declared type names are written relative to the declaring class.
-                N::class_names(&mut ty, |t| {
-                    if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = t {
-                        c.name = self.qualify_class_name(&c.name, Some(&details.name.it));
-                        for arg in c.generics.values_mut() {
-                            *arg = self.qualify_class_name(arg, Some(&details.name.it));
-                        }
-                    }
-                });
+                N::class_names(&mut ty, |t| self.qualify_ty(t, &details.name.it));
                 let location = bindings::Location::new(uri.to_string(), member.range);
                 Some(Found {
                     member: Member {
@@ -1064,6 +1057,16 @@ impl<'a> WorkspaceEnv<'a> {
                 Some(Class::Unknown(_)) | None => vec![],
             })
             .collect()
+    }
+
+    // `ty` as written in class `context`: its class names resolved as `qualify_class_name` does.
+    pub(crate) fn qualify_ty(&self, ty: &mut Ty, context: &str) {
+        if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = ty {
+            c.name = self.qualify_class_name(&c.name, Some(context));
+            for arg in c.generics.values_mut() {
+                *arg = self.qualify_class_name(arg, Some(context));
+            }
+        }
     }
 
     // IRIS resolves an unqualified class name (`Extends AbstractModel`, `##class(Date)`) against
@@ -1698,7 +1701,8 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
-    pub(crate) fn keyword_styles(&self) -> Option<&crate::style::KeywordStyles> {
+    // The workspace's style rules, if a style was given.
+    pub(crate) fn style(&self) -> Option<&crate::style::Styles> {
         self.base.base.workspace.style.as_ref()
     }
 
@@ -1764,6 +1768,13 @@ impl<'a> CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
+    pub(crate) fn line_of(&self, offset: usize) -> usize {
+        self.base
+            .olc
+            .offset_to_line_character(offset + self.offset)
+            .0
+    }
+
     // Whether `node` is text a macro expanded to (or an include supplied), rather than text the
     // document spells out.
     pub(crate) fn is_expanded<T>(&self, node: &tygr::Range<T>) -> bool {
