@@ -193,20 +193,21 @@ impl<A: Access> Namespace for Properties<A> {
         Some((ty, true))
     }
 
-    // Only `%DispatchGetProperty`'s return type matters; a dispatched name takes any subscripts.
+    // Only the hook's return type matters.
     fn dispatched(
         obj: &ClsOrIns,
         find: impl FnOnce(&str) -> Option<TyProcedureOrAny>,
     ) -> Option<PropertyTy> {
         let hook = find(A::hook(obj)?)?;
         let out = hook.procedure().and_then(|hook| hook.out.clone());
-        Some(PropertyTy::Multidimensional(out.unwrap_or_default()))
+        Some(PropertyTy::Dispatched(out.unwrap_or_default()))
     }
 
     fn class_names(ty: &mut PropertyTy, mut f: impl FnMut(&mut Ty)) {
         match ty {
             PropertyTy::Value(ty)
             | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Dispatched(ty)
             | PropertyTy::Collection { element: ty, .. } => f(ty),
         }
     }

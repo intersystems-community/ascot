@@ -2645,6 +2645,7 @@
   },
   "%Library.AbstractSet": {
    "header": "Class %Library.AbstractSet",
+   "drop": ["%DispatchMethod"],
    "members": [
     { "header": "Method add(value As %Any) As This" },
     { "header": "Method apply(expression As %Any, passing As %AbstractSet) As This" },
@@ -2785,7 +2786,6 @@
     { "header": "Method %Clear() As This" },
     { "header": "Method %Clone() As This" },
     { "header": "Method %DispatchGetProperty(propertyName As %String)" },
-    { "header": "Method %DispatchMethod(methodName As %String, args...)" },
     { "header": "Method %DispatchSetProperty(propertyName As %String, value As %String)" },
     { "header": "ClassMethod %FromJSON(str As %RawString) As This" },
     { "header": "ClassMethod %FromJSONFile(filename As %RawString, TranslateTable As %String = \"UTF8\") As This" },

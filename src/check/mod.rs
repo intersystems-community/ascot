@@ -2729,14 +2729,13 @@ fn check_member<'a>(
                     PropertyTy::Multidimensional(_) if args.items(env).all(|a| a.is_none()) => {
                         Err(QuasiTypeError::node_without_subscripts(name))
                     }
-                    PropertyTy::Multidimensional(ty) => {
+                    // A hook takes any arguments; an unknown property, taken as present and
+                    // untyped, may well be multidimensional.
+                    PropertyTy::Multidimensional(ty)
+                    | PropertyTy::Dispatched(ty)
+                    | PropertyTy::Value(ty @ Ty::Any) => {
                         builtins::check_args_any(env, flow, args.items(env))?;
                         Ok(Some(ty))
-                    }
-                    // Unknown, so taken as present and untyped: it may well be one.
-                    PropertyTy::Value(Ty::Any) => {
-                        builtins::check_args_any(env, flow, args.items(env))?;
-                        Ok(Some(Ty::Any))
                     }
                     _ => Err(QuasiTypeError::not_multidimensional(name)),
                 }
@@ -2823,8 +2822,9 @@ fn check_set_member<'a>(
     };
     match property {
         PropertyTy::Multidimensional(_) => {}
-        // Unknown, so taken as present and untyped: it may well be one.
-        PropertyTy::Value(Ty::Any) => return Ok(()),
+        // A hook takes any subscripts; an unknown property, taken as present and untyped, may
+        // well be multidimensional.
+        PropertyTy::Dispatched(_) | PropertyTy::Value(Ty::Any) => return Ok(()),
         _ => return Err(QuasiTypeError::not_multidimensional(name)),
     }
     if subs.items(env).all(|a| a.is_none()) {
