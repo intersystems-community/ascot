@@ -215,10 +215,12 @@ IRIS. `--iris` says which IRIS, for `analyze`, `analyze-workspace` and `lsp`;
   corrected by [`src/mask.json`](src/mask.json). `ASCOT_DECLARATIONS_URL` names
   a mirror.
 - Your own instance, with its classes, its version and its changes to the
-  system ones: live, as `--iris http://user:password@host:port[/prefix]` with
-  `--iris-namespace` (default `%SYS`), through the Atelier REST API, an `https`
-  certificate checked against the operating system's trust store; or declared
-  once into a file with `ascot declare` (next section), as `--iris user.d.json`.
+  system ones:
+  - live, as `--iris http://user:password@host:port[/prefix]` with
+    `--iris-namespace` (default `%SYS`), through the Atelier REST API; an
+    `https` certificate is checked against the operating system's trust store;
+  - or declared once into a file with `ascot declare` (next section), as
+    `--iris user.d.json`.
 - `--iris none`: no environment, so every class, routine or include outside the
   workspace is an error.
 
