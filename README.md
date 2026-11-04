@@ -230,32 +230,16 @@ connection, or a declaration file's bytes, gzipped or not.
 
 #### Declaration files
 
-Not every workflow has a live instance at hand, for example CI or analysis of
-code exported from another system, and a live connection costs one round of
-REST requests per class or routine looked up, every run. A declaration file
-holds everything a connection would be asked for, fetched once:
+`ascot declare` saves what a live connection would be asked for, so CI and
+machines without the instance can check against it:
 
 ```sh
 ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER user.d.json
-```
-
-Without the file argument, it writes to
-`~/.ascot/<host>-<port>-<namespace>.d.json` and says so.
-
-Wherever `--iris` (or the MCP `iris` argument) takes a URL, it also takes the
-path of such a file, or a `file://` URL, and no REST request is made:
-
-```sh
 ascot analyze --iris user.d.json src/
 ```
 
-`--iris-namespace` is then optional; if given, it must match the namespace the
-file declares. The file holds every class's superclasses, members and their
-signatures and types, as a live connection would report them (no method code),
-the full source of every `.inc` file, and the labels and their arguments of every
-routine, or, for a routine without source (e.g. only its OBJ), that it exists, along
-with the instance's version.
-Regenerate it after the instance's code changes.
+Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
+Regenerate the file after the instance's code changes.
 
 ### Style
 
