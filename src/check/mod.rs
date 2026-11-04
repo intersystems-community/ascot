@@ -474,6 +474,7 @@ impl MethodDetails {
                     !self.is_class_method,
                     name,
                     &definitions,
+                    self.procedure_block.is_some(),
                 );
                 for default in &self.brace_defaults {
                     let range = match &default.value {
