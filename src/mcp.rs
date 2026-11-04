@@ -256,18 +256,8 @@ impl Server {
             .map(crate::diagnostic_filter::Filter)
             .map_err(|err| format!("diagnostics: {err}"))?;
         let iris_name = iris.unwrap_or_else(|| crate::prebuilt::DEFAULT_RELEASE.to_string());
-        let (iris, note) = match iris::open(&iris_name, iris_namespace.as_deref()) {
-            Ok(iris) => (Some(iris), String::new()),
-            // Without the declarations the workspace has no environment: everything outside it
-            // is an error.
-            Err(err) if crate::prebuilt::is_release(&iris_name) => (
-                None,
-                format!(
-                    " without the IRIS declarations ({err}): every class, routine and include outside the workspace is an error"
-                ),
-            ),
-            Err(err) => return Err(format!("iris: {err}")),
-        };
+        let iris = iris::open(&iris_name, iris_namespace.as_deref())
+            .map_err(|err| format!("iris {iris_name}: {err}"))?;
         workspaces.insert(
             workspace.clone(),
             Arc::new(Mutex::new({
@@ -276,7 +266,7 @@ impl Server {
                 native
             })),
         );
-        Ok(format!("created workspace {workspace:?}{note}"))
+        Ok(format!("created workspace {workspace:?}"))
     }
 
     /// Delete a workspace and all its documents by id. Call this when done with a workspace to free

@@ -212,10 +212,13 @@ workspace are resolved against IRIS, in one of three ways:
   [`declarations` release](https://github.com/intersystems-community/ascot/releases/tag/declarations)
   the first time, says so, checks its checksum and keeps it in `~/.ascot/`.
   Without `--iris`, ascot uses the newest release it was built for, 2026.2. If
-  the file isn't cached and can't be downloaded, ascot says so and goes on with
-  no environment at all: every class, routine and include outside the workspace
-  is then an error, the strictest reading. `ASCOT_DECLARATIONS_URL` points at
-  another directory holding the assets, for a mirror.
+  the file isn't cached and can't be downloaded, the run stops with the reason.
+  `ASCOT_DECLARATIONS_URL` points at another directory holding the assets, for
+  a mirror.
+
+- **No environment**, `--iris none`: nothing outside the workspace exists, so
+  every class, routine or include it references but doesn't hold is an error,
+  the strictest reading. For code meant to stand alone, and for tests.
 
   The pre-built files hold the classes as IRIS reports them, corrected by
   [`src/mask.json`](src/mask.json): constructors return their own class,

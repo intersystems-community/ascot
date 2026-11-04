@@ -9,22 +9,29 @@ pub(crate) use crate::declared::{DECLARATIONS_VERSION, Declarations, DeclaredCla
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
-/// A Community release (`2026.2`) is its pre-built declarations, fetched if need be; a URL is a
-/// live connection (checked up front); anything else, `file://` included, a declaration file's
-/// path. `namespace` defaults to `%SYS` for a URL; for a file it must match the one declared.
-pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisContext>, String> {
+/// `--iris` as given: `none` is no environment at all, the strictest check; a Community release
+/// (`2026.2`) is its pre-built declarations, fetched if need be; a URL is a live connection
+/// (checked up front); anything else, `file://` included, a declaration file's path. `namespace`
+/// defaults to `%SYS` for a URL; for a file it must match the one declared.
+pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisContext>>, String> {
+    if iris == NONE {
+        return Ok(None);
+    }
     if crate::prebuilt::is_release(iris) {
-        return open_file(&crate::prebuilt::fetch(iris)?, namespace);
+        return open_file(&crate::prebuilt::fetch(iris)?, namespace).map(Some);
     }
     if let Some(path) = iris.strip_prefix("file://") {
-        return open_file(Path::new(path), namespace);
+        return open_file(Path::new(path), namespace).map(Some);
     }
     if iris.contains("://") {
         let raw = RawAtelier::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
-        return Ok(Box::new(AtelierContext::from(raw)));
+        return Ok(Some(Box::new(AtelierContext::from(raw))));
     }
-    open_file(Path::new(iris), namespace)
+    open_file(Path::new(iris), namespace).map(Some)
 }
+
+/// The `--iris` value for no environment: nothing outside the workspace exists.
+pub const NONE: &str = "none";
 
 fn open_file(iris: &Path, namespace: Option<&str>) -> Result<Box<dyn IrisContext>, String> {
     let declarations = Declarations::load(iris)?;
@@ -193,8 +200,9 @@ mod tests {
         };
         let path = declaration_file("open", &declarations);
         let arg = path.to_str().unwrap();
-        assert!(open(arg, None).is_ok());
-        assert!(open(arg, Some("USER")).is_ok());
+        assert!(open(arg, None).unwrap().is_some());
+        assert!(open(arg, Some("USER")).unwrap().is_some());
+        assert!(open(NONE, None).unwrap().is_none());
         let err = open(arg, Some("%SYS")).err().unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(
