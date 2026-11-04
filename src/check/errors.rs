@@ -461,7 +461,7 @@ type_error_kinds! {
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
     #[code = "A3303"]
-    #[severity = Hint]
+    #[severity = Error]
     #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
     CannotFindRoutine { routine: String },
     #[code = "A4439"]
@@ -1040,6 +1040,10 @@ impl TypeError {
 
     // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
     // yet to attach one lazily this early (during macro expansion).
+    pub(crate) fn cannot_find_class(cls: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::CannotFindClass { cls }, range)
+    }
+
     pub(crate) fn unconfirmed_class(cls: String, has_iris: bool, range: Range) -> Self {
         Self::at(
             TypeErrorKind::UnconfirmedClass {

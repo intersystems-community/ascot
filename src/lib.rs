@@ -1416,7 +1416,7 @@ mod tests {
     }
 
     #[test]
-    fn property_declared_type_outside_workspace_gets_a_hint() {
+    fn without_iris_a_property_type_outside_the_workspace_is_an_error() {
         let workspace = Workspace::new(None, None);
         let uri = "Owner.cls".to_string();
         workspace.open(
@@ -1426,7 +1426,7 @@ mod tests {
         );
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Error);
         assert!(diagnostics[0].message.contains("App.NotOpen"));
     }
 
@@ -1457,12 +1457,11 @@ mod tests {
     }
 
     #[test]
-    fn unverifiable_member_reference_gets_a_hint() {
+    fn without_iris_a_member_past_the_workspace_is_an_error() {
         let workspace = Workspace::new(None, None);
         let uri = "Probe.cls".to_string();
-        // `%RegisteredObject` is outside the workspace and there's no IRIS connection, so its
-        // members can't be confirmed — intentionally not an error, but should surface as a hint
-        // right at this reference, rather than silently accepting anything.
+        // With no IRIS there is no environment: `%RegisteredObject` doesn't exist, so neither
+        // does anything inherited from it. The strictest reading, rather than trust.
         workspace.open(
             uri.clone(),
             "Class Test.Probe Extends %RegisteredObject {\nMethod Foo() {\n do ..SomeInheritedMethod()\n quit\n}\n}\n".to_string(),
@@ -1470,7 +1469,7 @@ mod tests {
 
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Error);
         assert!(diagnostics[0].message.contains("SomeInheritedMethod"));
         assert_eq!(diagnostics[0].range.start.line, 2);
     }
@@ -1926,7 +1925,11 @@ mod tests {
 
     #[test]
     fn row_instance_percent_accesses_property_like_instance_percent() {
-        let workspace = Workspace::new(None, None);
+        let iris = MockIrisClient {
+            is_datatype: Some(true),
+            mem: None,
+        };
+        let workspace = Workspace::native(Some(Box::new(iris)), None);
         let uri = "RPercent.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -2618,7 +2621,7 @@ mod tests {
     }
 
     // Every diagnostic carries its kind's code and a link to that kind's docs, including the ones
-    // raised outside the checker proper, such as the unconfirmed-class hint.
+    // raised outside the checker proper, such as a declared type's missing class.
     #[test]
     fn diagnostics_carry_their_kinds_code_and_docs_link() {
         let diagnostics = class_diagnostics(
@@ -2640,14 +2643,9 @@ mod tests {
                 "UndefinedMacro",
             ),
             (
-                find("Cannot confirm class"),
-                check::TypeErrorKind::UnconfirmedClass {
-                    lookup: check::ClassLookup {
-                        cls: String::new(),
-                        has_iris: false,
-                    },
-                },
-                "UnconfirmedClass",
+                find("Cannot find class"),
+                check::TypeErrorKind::CannotFindClass { cls: String::new() },
+                "CannotFindClass",
             ),
         ];
         for (diagnostic, kind, variant) in cases {

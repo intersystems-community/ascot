@@ -257,11 +257,11 @@ impl Server {
         let iris_name = iris.unwrap_or_else(|| crate::prebuilt::DEFAULT_RELEASE.to_string());
         let (iris, note) = match iris::open(&iris_name, iris_namespace.as_deref()) {
             Ok(iris) => (Some(iris), String::new()),
-            // The pre-built declarations are a convenience: without them the system classes and
-            // routines stay unconfirmed, as they would without `iris`.
+            // Without the declarations the workspace has no environment: everything outside it
+            // is an error.
             Err(err) if crate::prebuilt::is_release(&iris_name) => (
                 None,
-                format!(" without the IRIS declarations ({err}); system classes stay unconfirmed"),
+                format!(" without the IRIS declarations ({err}): every class, routine and include outside the workspace is an error"),
             ),
             Err(err) => return Err(format!("iris: {err}")),
         };

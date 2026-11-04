@@ -252,7 +252,7 @@ fn main() {
 
 impl IrisArgs {
     /// Opens the release's declarations, the connection or the declaration file. A release that
-    /// can't be fetched is a warning, not an error: the run goes on as it would without `--iris`.
+    /// can't be fetched is a warning, not an error: the run goes on with no environment at all.
     fn open(self) -> Option<Box<dyn IrisContext>> {
         let iris = (self.iris).unwrap_or_else(|| ascot::DEFAULT_IRIS_RELEASE.to_string());
         match ascot::open_iris(&iris, self.iris_namespace.as_deref()) {
@@ -260,7 +260,8 @@ impl IrisArgs {
             Err(err) if ascot::is_iris_release(&iris) => {
                 eprintln!(
                     "--iris {iris}: {err}\n--iris {iris}: continuing without the IRIS \
-                     declarations; the system classes and routines are left unconfirmed"
+                     declarations; every class, routine and include outside the workspace is an \
+                     error"
                 );
                 None
             }
