@@ -3867,9 +3867,16 @@ fn check_property_or_parameter_declaration(
                 // ancestor (e.g. %JSON.Adaptor lists %JSON.PropertyParameters, making
                 // `%JSONFIELDNAME` valid everywhere) -- see `WorkspaceEnv::property_classes`.
                 let property_classes = env.base.property_classes(class_name);
-                let candidate_classes: Vec<&str> = type_class
-                    .as_deref()
-                    .into_iter()
+                // And its property class's, `%Compiler.Type.Collection` for a `list Of`.
+                let implicit = if element_ty.is_some() {
+                    Some("%Compiler.Type.Collection")
+                } else {
+                    type_class
+                        .as_deref()
+                        .and_then(|ty| env.base.property_class(ty))
+                };
+                let candidate_classes: Vec<&str> = (type_class.as_deref().into_iter())
+                    .chain(implicit)
                     .chain(property_classes.iter().map(String::as_str))
                     .collect();
                 for name in type_param_names {
@@ -3912,7 +3919,8 @@ fn check_property_or_parameter_declaration(
                                 })
                                 .collect()
                         };
-                        suggestions.dedup();
+                        let mut seen = std::collections::HashSet::new();
+                        suggestions.retain(|s| seen.insert(s.clone()));
                         diagnostics.push(
                             TypeError::unrecognized_type_param(
                                 name.clone(),
