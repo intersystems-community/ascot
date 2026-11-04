@@ -179,6 +179,10 @@ impl QuasiTypeError {
         TypeErrorKind::UndocumentedZUtil { call }.into()
     }
 
+    pub fn undocumented_function(name: String) -> Self {
+        TypeErrorKind::UndocumentedFunction { name }.into()
+    }
+
     pub fn unknown_function(name: String, suggestions: Vec<String>) -> Self {
         TypeErrorKind::UnknownFunction {
             name,
@@ -635,6 +639,12 @@ type_error_kinds! {
     #[severity = Hint]
     #[message = "{call} is not documented for IRIS; $ZUTIL was superseded by class methods and special variables"]
     UndocumentedZUtil { call: String },
+    /// A `$Z` function IRIS compiles but doesn't document (`$ZOBJEXPORT`); per GOVERNANCE.md,
+    /// noted and left unchecked rather than refused.
+    #[code = "A6037"]
+    #[severity = Hint]
+    #[message = "${name} is not documented for IRIS, so the call is not checked"]
+    UndocumentedFunction { name: String },
     #[code = "A6319"]
     #[severity = Error]
     #[message = "Parameter '{name}' is a constant: it takes no arguments and can't be assigned"]
