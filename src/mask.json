@@ -173,6 +173,12 @@
     { "header": "Method RunList(ByRef sc As %Status, requestBody As %DynamicObject) As %DynamicAbstractObject" }
    ]
   },
+  "%Api.Admin.Endpoints.Journal.ListTask": {
+   "header": "Class %Api.Admin.Endpoints.Journal.ListTask",
+   "members": [
+    { "header": "Method GetResult() As %DynamicAbstractObject" }
+   ]
+  },
   "%Api.Admin.Endpoints.Journal.Settings": {
    "header": "Class %Api.Admin.Endpoints.Journal.Settings",
    "members": [
@@ -566,7 +572,10 @@
   "%Api.InteropEditors.v2.impl": {
    "header": "Class %Api.InteropEditors.v2.impl",
    "members": [
+    { "header": "ClassMethod GetClassSummaries(namespace As %String) As %DynamicAbstractObject" },
     { "header": "ClassMethod GetDocTypes(namespace As %String, assistClassName As %String) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetProductionItems(namespace As %String) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetRuleTypes(namespace As %String) As %DynamicAbstractObject" },
     { "header": "ClassMethod GetTestingInputs(namespace As %String, ruleClass As %String) As %DynamicAbstractObject" }
    ]
   },
@@ -576,13 +585,27 @@
     { "header": "ClassMethod GetAllConnectionsById(namespace As %String, productionClass As %String, hostID As %String, hostName As %String) As %DynamicAbstractObject" },
     { "header": "ClassMethod GetBusinessServices(namespace As %String) As %DynamicAbstractObject" },
     { "header": "ClassMethod GetCategories(namespace As %String, productionClass As %String) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetDocTypes(namespace As %String, assistClassName As %String) As %DynamicAbstractObject" },
     { "header": "ClassMethod GetDocTypesForClass(namespace As %String, messageClass As %String) As %DynamicAbstractObject" },
     { "header": "ClassMethod GetDTLFunctions(namespace As %String) As %DynamicAbstractObject" },
-    { "header": "ClassMethod GetDTLSegments(namespace As %String) As %DynamicAbstractObject" }
+    { "header": "ClassMethod GetDTLSegments(namespace As %String) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetTestingInputs(namespace As %String, ruleClass As %String) As %DynamicAbstractObject" }
    ]
   },
   "%Api.InteropEditors.v4.impl": {
    "header": "Class %Api.InteropEditors.v4.impl",
+   "members": [
+    { "header": "ClassMethod GetAllConnectionsById(namespace As %String, productionClass As %String, hostID As %String, hostName As %String) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetBPLSegments(namespace As %String, modes As %String, classes As %String, docTypes As %String) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetCategories(namespace As %String, productionClass As %String) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetDocTypesForClass(namespace As %String, messageClass As %String) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetDTLFunctions(namespace As %String) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetDTLSegments(namespace As %String) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetTargetRequestTypes(namespace As %String, productionClass As %String, target As %String) As %DynamicAbstractObject" }
+   ]
+  },
+  "%Api.InteropEditors.v5.impl": {
+   "header": "Class %Api.InteropEditors.v5.impl",
    "members": [
     { "header": "ClassMethod GetBPLSegments(namespace As %String, modes As %String, classes As %String, docTypes As %String) As %DynamicAbstractObject" },
     { "header": "ClassMethod GetTargetRequestTypes(namespace As %String, productionClass As %String, target As %String) As %DynamicAbstractObject" }
@@ -590,6 +613,14 @@
   },
   "%Api.InteropEditors.v6.impl": {
    "header": "Class %Api.InteropEditors.v6.impl",
+   "members": [
+    { "header": "ClassMethod GetBPLSegments(namespace As %String, modes As %String, classes As %String, docTypes As %String, extraDetails As %Boolean) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetDTLSegments(namespace As %String, extraDetails As %Boolean) As %DynamicAbstractObject" },
+    { "header": "ClassMethod GetSegmentTypes(namespace As %String, className As %String) As %DynamicAbstractObject" }
+   ]
+  },
+  "%Api.InteropEditors.v7.impl": {
+   "header": "Class %Api.InteropEditors.v7.impl",
    "members": [
     { "header": "ClassMethod GetBPLSegments(namespace As %String, modes As %String, classes As %String, docTypes As %String, extraDetails As %Boolean) As %DynamicAbstractObject" },
     { "header": "ClassMethod GetDTLSegments(namespace As %String, extraDetails As %Boolean) As %DynamicAbstractObject" }
