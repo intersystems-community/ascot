@@ -42,9 +42,16 @@ and before every release.
 `scripts/prebuilt-declarations.sh [RELEASE] [OUT]` writes the declaration file of an IRIS
 Community release's `%SYS` namespace: it starts the release's Docker image, runs `ascot declare`
 against it, adds the label names of the routines the image ships as object code only (read with
-`ZLOAD` in an `iris session`, since no API lists them) and the curated label signatures in
-`scripts/prebuilt-labels.json`, and stops the container. The result is about 22 MB, 4 MB
-gzipped, and is not tracked here.
+`ZLOAD` in an `iris session`, since no API lists them), composes `src/mask.json` into it, and
+stops the container. The result is about 22 MB, 4 MB gzipped, and is not tracked here.
+
+`src/mask.json` is ascot's set of corrections to what IRIS reports about its own classes, in the
+declaration format: for each class, the headers of the members to replace, written in class
+syntax, plus `drop` (members the compiler doesn't accept), `type` (what the class stands for) and
+`generics` (the parameters that type members as `..#NAME`). A header may say `As This` for the
+receiver's class. The script checks that each override keeps the member's kind and argument
+names, so an override can only change types, modes, defaults and the return type. The same file
+is embedded in ascot and applied over a live instance.
 
 ### npm package
 

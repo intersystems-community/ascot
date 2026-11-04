@@ -73,6 +73,13 @@
     { "header": "ClassMethod %NewObjectExpression(Args...) As This" }
    ]
   },
+  "%CSP.Page": {
+   "header": "Class %CSP.Page",
+   "members": [
+    { "header": "ClassMethod EscapeURL(in As %String, charset As %String = \"\") As %String" },
+    { "header": "ClassMethod Link(link As %String, ByRef query As %String = \"\", addQ As %Boolean = 0) As %String" }
+   ]
+  },
   "%CSP.Session": {
    "header": "Class %CSP.Session",
    "members": [
@@ -381,6 +388,18 @@
     { "header": "ClassMethod create(parent As %DeepSee.extensions.stat.Abstract1DDistribution, ByRef q, Output sc As %Status) As This" }
    ]
   },
+  "%Dictionary.ClassDefinition": {
+   "header": "Class %Dictionary.ClassDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\", classversion As %Integer = \"\") As %Status" }
+   ]
+  },
+  "%Dictionary.MethodDefinition": {
+   "header": "Class %Dictionary.MethodDefinition",
+   "members": [
+    { "header": "Method %OnNew(name As %String = \"\") As %Status" }
+   ]
+  },
   "%DocDB.Database": {
    "header": "Class %DocDB.Database",
    "members": [
@@ -453,6 +472,13 @@
    "header": "Class %IO.DeviceStream",
    "members": [
     { "header": "ClassMethod AttachNew(pDevice As %String = {$IO}, Output pSC As %Status) As This" }
+   ]
+  },
+  "%Library.AbstractStream": {
+   "header": "Class %Library.AbstractStream",
+   "members": [
+    { "header": "Method Read(ByRef len As %Integer = 32656, Output sc As %Status) As %RawString" },
+    { "header": "Method ReadLine(ByRef len As %Integer = 32000, Output sc As %Status, Output eol As %Boolean) As %RawString" }
    ]
   },
   "%Library.Any": {
@@ -570,6 +596,12 @@
     { "header": "Method %Set(key As %String, value As %Any, type As %String = \"\") As %DynamicAbstractObject" }
    ]
   },
+  "%Library.File": {
+   "header": "Class %Library.File",
+   "members": [
+    { "header": "ClassMethod NormalizeDirectory(directory As %String, absolutedirectory As %String = \"\", addnull As %Boolean = 0) As %String" }
+   ]
+  },
   "%Library.FilemanDate": {
    "header": "Class %Library.FilemanDate",
    "members": [
@@ -679,6 +711,7 @@
   "%Library.Persistent": {
    "header": "Class %Library.Persistent",
    "members": [
+    { "header": "ClassMethod %LockId(id As %String, shared As %Boolean = 0, timeout As %Integer = \"\") As %Status" },
     { "header": "ClassMethod %Open(oid As %ObjectIdentity, concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" },
     { "header": "ClassMethod %OpenId(id As %String = \"\", concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" }
    ]
@@ -732,6 +765,7 @@
   "%Library.ResultSet": {
    "header": "Class %Library.ResultSet",
    "members": [
+    { "header": "Method %OnNew(initvalue As %String = \"\") As %Status" },
     { "header": "Method Next(ByRef sc As %Status = \"\") As %Integer" }
    ]
   },
@@ -856,11 +890,23 @@
     { "header": "ClassMethod %GetContextGateway() As This" }
    ]
   },
+  "%OAuth2.Error": {
+   "header": "Class %OAuth2.Error",
+   "members": [
+    { "header": "Method %OnNew(error As %String, desc As %String = \"\", uri As %String = \"\") As %Status" }
+   ]
+  },
   "%OAuth2.Server.CookieSession": {
    "header": "Class %OAuth2.Server.CookieSession",
    "members": [
     { "header": "ClassMethod GetCurrentSession(Output sc As %Status) As This" },
     { "header": "ClassMethod OpenByCookie(cookie As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "%OAuth2.Utils": {
+   "header": "Class %OAuth2.Utils",
+   "members": [
+    { "header": "ClassMethod LogError(methodName As %String, server As %Boolean, sc As %Status, data As %String = \"\")" }
    ]
   },
   "%ResultSet.SQL": {
@@ -1018,10 +1064,23 @@
     { "header": "ClassMethod ByName(name As %String) As This" }
    ]
   },
+  "%SQL.Statement": {
+   "header": "Class %SQL.Statement",
+   "members": [
+    { "header": "Method %OnNew(pSelectMode As %RawString = \"\", pPath As %RawString = \"\", pDialect As %RawString = \"\") As %Status" }
+   ]
+  },
   "%SYS.Audit": {
    "header": "Class %SYS.Audit",
    "members": [
+    { "header": "ClassMethod Exists(UTCTimeStamp As %String = \"\", SystemID As %String = \"\", AuditIndex As %Integer = 0, Output Audit As This, ByRef Status As %Status) As %Boolean" },
     { "header": "ClassMethod OpenAuditItem(UTCTimeStamp As %String, SystemID As %String, AuditIndex As %BigInt, ByRef Status As %Status) As This" }
+   ]
+  },
+  "%SYS.FileSystemAccess": {
+   "header": "Class %SYS.FileSystemAccess",
+   "members": [
+    { "header": "ClassMethod Exists(RootPath As %String, Purpose As %String, Output PathEntry As This, ByRef Status As %Status) As %Boolean" }
    ]
   },
   "%SYS.MFT.Connection.Base": {
@@ -1041,6 +1100,24 @@
    "members": [
     { "header": "ClassMethod OpenRequestObject(applicationName As %String, requestName As %String, Output sc As %Status) As This" },
     { "header": "ClassMethod UpdateRequestObject(applicationName As %String, requestName As %String, ByRef properties As %String, Output sc As %Status) As This" }
+   ]
+  },
+  "%SYS.OpenAM.IdentityServices": {
+   "header": "Class %SYS.OpenAM.IdentityServices",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output OpenAMIdentityService As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "%SYS.PhoneProviders": {
+   "header": "Class %SYS.PhoneProviders",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output PhoneProvider As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "%SYS.ProcessQuery": {
+   "header": "Class %SYS.ProcessQuery",
+   "members": [
+    { "header": "ClassMethod Open(Id As %String, concurrency As %Integer = -1, ByRef sc As %Status = 1) As This" }
    ]
   },
   "%SYS.RMSession": {
@@ -1064,6 +1141,7 @@
   "%SYS.X509Credentials": {
    "header": "Class %SYS.X509Credentials",
    "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output X509Credential As This, ByRef Status As %Status) As %Boolean" },
     { "header": "ClassMethod GetByAlias(alias As %String, pwd As %String) As This" },
     { "header": "ClassMethod GetByCertificate(searchValue As %Binary) As This" },
     { "header": "ClassMethod GetByCertificateWithPrivateKey(searchValue As %Binary) As This" },
@@ -1105,7 +1183,10 @@
   "%SYSTEM.Status": {
    "header": "Class %SYSTEM.Status",
    "members": [
-    { "header": "ClassMethod GetErrorText(statuscode As %Status, language As %String = \"\") As %String" }
+    { "header": "ClassMethod Error(errorcode As %Integer, message1 As %String = \"\", message2 As %String = \"\", message3 As %String = \"\") As %Status" },
+    { "header": "ClassMethod GetErrorText(statuscode As %Status, language As %String = \"\") As %String" },
+    { "header": "ClassMethod GetOneErrorText(statuscode As %Status, index As %Integer = \"\", language As %String = \"\") As %String" },
+    { "header": "ClassMethod GetOneStatusText(statuscode As %Status, index As %Integer = \"\", language As %String = \"\") As %String" }
    ]
   },
   "%SYSTEM.WorkMgr": {
@@ -1118,7 +1199,9 @@
    "header": "Class %Stream.Object",
    "members": [
     { "header": "ClassMethod %Open(soid As %ObjectIdentity, concurrency As %Integer, ByRef sc As %Status = {$$$OK}) As This" },
-    { "header": "ClassMethod %OpenId(id As %String, concurrency As %Integer, ByRef sc As %Status = {$$$OK}) As This" }
+    { "header": "ClassMethod %OpenId(id As %String, concurrency As %Integer, ByRef sc As %Status = {$$$OK}) As This" },
+    { "header": "Method Read(ByRef len As %Integer = 32656, Output sc As %Status) As %RawString" },
+    { "header": "Method ReadLine(ByRef len As %Integer = 32000, Output sc As %Status, Output eol As %Boolean) As %RawString" }
    ]
   },
   "%Stream.TmpBinary": {
@@ -1409,6 +1492,57 @@
     { "header": "ClassMethod XSDToLogical(%val As %String) As This" }
    ]
   },
+  "Config.CommonMapMethods": {
+   "header": "Class Config.CommonMapMethods",
+   "members": [
+    { "header": "ClassMethod Exists(Namespace, Name As %String, Output Obj As This, ByRef Status As %Status, ByRef CPFFile As %String = \"\", Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As %Boolean" },
+    { "header": "ClassMethod Open(Namespace As %String, Name As %String, ByRef CPFFile As %String = \"\", concurrency As %Integer = -1, ByRef Status As %Status, Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As This" }
+   ]
+  },
+  "Config.CommonMultipleMethods": {
+   "header": "Class Config.CommonMultipleMethods",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output Obj As This, ByRef Status As %Status, ByRef CPFFile As %String = \"\", Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As %Boolean" },
+    { "header": "ClassMethod Open(Name As %String, ByRef CPFFile As %String = \"\", concurrency As %Integer = -1, ByRef Status As %Status, Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As This" }
+   ]
+  },
+  "Config.CommonSingleMethods": {
+   "header": "Class Config.CommonSingleMethods",
+   "members": [
+    { "header": "ClassMethod Open(ByRef CPFFile As %String = \"\", concurrency As %Integer = -1, ByRef Status As %Status, Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As This" }
+   ]
+  },
+  "Config.GenericMapMethods": {
+   "header": "Class Config.GenericMapMethods",
+   "members": [
+    { "header": "ClassMethod Exists(ID, Name As %String, Output Obj As This, ByRef Status As %Status, ByRef CPFFile As %String = \"\", Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As %Boolean" },
+    { "header": "ClassMethod Open(ID As %String, Name As %String, ByRef CPFFile As %String = \"\", concurrency As %Integer = -1, ByRef Status As %Status, Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As This" }
+   ]
+  },
+  "Config.NLS.Locales": {
+   "header": "Class Config.NLS.Locales",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output Locale As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "Config.NLS.SubTables": {
+   "header": "Class Config.NLS.SubTables",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output SubTable As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "Config.NLS.Tables": {
+   "header": "Class Config.NLS.Tables",
+   "members": [
+    { "header": "ClassMethod Exists(Type As %String, NameFrom As %String, NameTo As %String, Output Table As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "DataMove.Defaults": {
+   "header": "Class DataMove.Defaults",
+   "members": [
+    { "header": "ClassMethod Open(ByRef Status As %Status) As This" }
+   ]
+  },
   "Inventory.Scan": {
    "header": "Class Inventory.Scan",
    "members": [
@@ -1555,6 +1689,94 @@
    "header": "Class SYS.WSMon.wsSystem",
    "members": [
     { "header": "ClassMethod Sample() As This" }
+   ]
+  },
+  "Security.Applications": {
+   "header": "Class Security.Applications",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output Application As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "Security.DocDBs": {
+   "header": "Class Security.DocDBs",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String = \"\", Namespace As %String = \"\", Output DocDB As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "Security.Domains": {
+   "header": "Class Security.Domains",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output Domain As This, ByRef Status As %Status) As %Boolean [ Deprecated ]" }
+   ]
+  },
+  "Security.Events": {
+   "header": "Class Security.Events",
+   "members": [
+    { "header": "ClassMethod Exists(Source As %String = \"\", Type As %String = \"\", Name As %String = \"\", Output Event As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "Security.KMIPServer": {
+   "header": "Class Security.KMIPServer",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output KMIPServer As This, ByRef Status As %Status) As %Boolean" },
+    { "header": "ClassMethod Open(Name As %String, ByRef Status) As This" }
+   ]
+  },
+  "Security.LDAPConfigs": {
+   "header": "Class Security.LDAPConfigs",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output LDAP As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "Security.Resources": {
+   "header": "Class Security.Resources",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output Resource As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "Security.Roles": {
+   "header": "Class Security.Roles",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output Role As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "Security.SSLConfigs": {
+   "header": "Class Security.SSLConfigs",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output SSLConfig As This, ByRef Status As %Status) As %Boolean" },
+    { "header": "ClassMethod Open(Name As %String, ByRef Status) As This" }
+   ]
+  },
+  "Security.Servers": {
+   "header": "Class Security.Servers",
+   "members": [
+    { "header": "ClassMethod Exists(Port As %String, BindAddress As %String = \"\", Output Server As This, ByRef Status As %Status) As %Boolean" }
+   ]
+  },
+  "Security.Services": {
+   "header": "Class Security.Services",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String, Output Service As This, ByRef Status As %Status) As %Boolean" },
+    { "header": "ClassMethod Open(Name As %String, ByRef Status) As This" }
+   ]
+  },
+  "Security.System": {
+   "header": "Class Security.System",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String = {$$$SystemSecurityName}, Output System As This, ByRef Status As %Status) As %Boolean" },
+    { "header": "ClassMethod Open(ByRef Status) As This" }
+   ]
+  },
+  "Security.Users": {
+   "header": "Class Security.Users",
+   "members": [
+    { "header": "ClassMethod Exists(Username As %String, Output User As This, ByRef Status As %Status, Flag As %Integer = 0) As %Boolean" }
+   ]
+  },
+  "Security.WebAppPctAccess": {
+   "header": "Class Security.WebAppPctAccess",
+   "members": [
+    { "header": "ClassMethod Exists(Name As %String = \"\", AllowType As %String = \"\", Class As %String = \"\", Output WebAppPctAccess As This, ByRef Status As %Status) As %Boolean" }
    ]
   }
  },
