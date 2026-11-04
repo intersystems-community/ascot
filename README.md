@@ -213,7 +213,7 @@ IRIS. `--iris` says which IRIS, for `analyze`, `analyze-workspace` and `lsp`;
   into `~/.ascot/iris-community-<release>.d.json` and read from there after.
   Without `--iris`, the newest release at the time ascot was released. The
   classes are as IRIS reports them, corrected by
-  [`src/mask.json`](src/mask.json). `ASCOT_DECLARATIONS_URL` names a mirror.
+  [`src/mask.json`](src/mask.json).
 - Your own instance, with its classes, its version and its changes to the
   system ones:
   - live, as `--iris http://user:password@host:port[/prefix]` with

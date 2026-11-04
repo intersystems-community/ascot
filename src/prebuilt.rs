@@ -23,15 +23,13 @@ pub fn asset(release: &str) -> String {
     format!("iris-community-{release}.d.json.gz")
 }
 
-/// The cached declaration file of `release`, downloaded first if `~/.ascot` lacks it.
-/// `ASCOT_DECLARATIONS_URL` names another directory of assets than the GitHub Release.
+/// The cached declaration file of `release`, downloaded first if `~/.ascot` lacks it. A machine
+/// that can't reach GitHub gets the file put there by hand.
 pub fn fetch(release: &str) -> Result<PathBuf, String> {
     let dir = std::env::home_dir()
         .ok_or("cannot find the home directory to keep the declarations in")?
         .join(".ascot");
-    let base = std::env::var("ASCOT_DECLARATIONS_URL")
-        .unwrap_or_else(|_| format!("{RELEASES}/declarations"));
-    fetch_into(release, &base, &dir)
+    fetch_into(release, &format!("{RELEASES}/declarations"), &dir)
 }
 
 pub(crate) fn fetch_into(release: &str, base: &str, dir: &Path) -> Result<PathBuf, String> {
