@@ -65,11 +65,12 @@ pub mod style;
 pub use atelier::RawAtelier;
 pub use atelier::{Atelier, AtelierContext};
 #[cfg(not(target_arch = "wasm32"))]
-pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, NONE as NO_IRIS, open as open_iris};
+pub use iris::{
+    DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, LATEST as LATEST_IRIS, NONE as NO_IRIS,
+    open as open_iris,
+};
 pub(crate) use macro_expand::MacroDefinitions;
 pub(crate) use macro_expand::SourceMap;
-#[cfg(not(target_arch = "wasm32"))]
-pub use prebuilt::DEFAULT_RELEASE as DEFAULT_IRIS_RELEASE;
 use tygr_objectscript::cos::ClassDefinitionHeader;
 pub use tygr_objectscript::{cos, sql};
 

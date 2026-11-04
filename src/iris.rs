@@ -17,6 +17,9 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisCo
     if iris == NONE {
         return Ok(None);
     }
+    if iris == LATEST {
+        return open(crate::prebuilt::DEFAULT_RELEASE, namespace);
+    }
     if crate::prebuilt::is_release(iris) {
         return open_file(&crate::prebuilt::fetch(iris)?, namespace).map(Some);
     }
@@ -32,6 +35,8 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisCo
 
 /// The `--iris` value for no environment: nothing outside the workspace exists.
 pub const NONE: &str = "none";
+/// The `--iris` value for the newest release's pre-built declarations, the default.
+pub const LATEST: &str = "latest";
 
 fn open_file(iris: &Path, namespace: Option<&str>) -> Result<Box<dyn IrisContext>, String> {
     let declarations = Declarations::load(iris)?;

@@ -255,7 +255,7 @@ impl Server {
             .collect::<Result<_, _>>()
             .map(crate::diagnostic_filter::Filter)
             .map_err(|err| format!("diagnostics: {err}"))?;
-        let iris_name = iris.unwrap_or_else(|| crate::prebuilt::DEFAULT_RELEASE.to_string());
+        let iris_name = iris.unwrap_or_else(|| iris::LATEST.to_string());
         let iris = iris::open(&iris_name, iris_namespace.as_deref())
             .map_err(|err| format!("iris {iris_name}: {err}"))?;
         workspaces.insert(

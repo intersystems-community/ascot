@@ -205,41 +205,32 @@ claude plugin install ascot-lsp@ascot-plugins
 
 Classes, routines and include files outside the workspace are resolved against
 IRIS. `--iris` says which IRIS, for `analyze`, `analyze-workspace` and `lsp`;
-`mcp` takes the same in the `iris` argument of `create_workspace`:
+`mcp` takes the same in the `iris` argument of `create_workspace`; a wasm host
+passes the same through `env`:
 
-- `--iris <release>`, as `--iris 2026.2`: the pre-built declarations of that
-  IRIS Community release, downloaded once (4 MB) from this repository's
+- `--iris latest` (default): the newest declaration-only snapshot of IRIS this
+  ascot knows, downloaded once (4 MB) from this repository's
   [`declarations` release](https://github.com/intersystems-community/ascot/releases/tag/declarations)
-  into `~/.ascot/iris-community-<release>.d.json` and read from there after.
-  Without `--iris`, the newest release at the time ascot was released. The
-  classes are as IRIS reports them, corrected by
-  [`src/mask.json`](src/mask.json).
-- Your own instance, with its classes, its version and its changes to the
-  system ones:
-  - live, as `--iris http://user:password@host:port[/prefix]` with
-    `--iris-namespace` (default `%SYS`), through the Atelier REST API; an
-    `https` certificate is checked against the operating system's trust store;
-  - or declared once into a file with `ascot declare` (next section), as
-    `--iris user.d.json`.
+  into `~/.ascot`.
+- `--iris <YYYY>.<N>`: the snapshot of that IRIS release.
+- `--iris http://user:password@host:port[/prefix]` with `--iris-namespace`
+  (default `%SYS`): a live connection to IRIS through the Atelier REST API.
+- `--iris path/to/declarations.d.json`: a declaration file, a released one or
+  one you [built yourself](#build-your-own-declaration-files). No REST
+  requests, and no instance needed.
 - `--iris none`: no environment, so every class, routine or include outside the
   workspace is an error.
 
-Whatever `--iris` names has to open, or the run stops. A host embedding the
-wasm build passes the same through `env`: its own lookups, an Atelier
-connection, or a declaration file's bytes, gzipped or not.
-
-#### Declaration files
+#### Build Your Own Declaration Files
 
 `ascot declare` saves what a live connection would be asked for, so CI and
 machines without the instance can check against it:
 
 ```sh
-ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER user.d.json
-ascot analyze --iris user.d.json src/
+ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER path/to/declaration.d.json
 ```
 
 Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
-Regenerate the file after the instance's code changes.
 
 ### Style
 

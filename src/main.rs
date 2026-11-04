@@ -187,10 +187,10 @@ struct IrisArgs {
     /// `none`
     ///
     /// Resolves the classes, include files and routines outside the workspace. A release, as
-    /// 2026.2, is its pre-built declarations, downloaded into ~/.ascot the first time. An instance
-    /// is given as http://user:password@host:port[/prefix]. With `none`, nothing outside the
-    /// workspace exists: every reference to such a class, routine or include is an error.
-    /// [default: 2026.2]
+    /// 2026.2, is its pre-built declarations, downloaded into ~/.ascot the first time; `latest`
+    /// is the newest this ascot knows. An instance is given as
+    /// http://user:password@host:port[/prefix]. With `none`, nothing outside the workspace
+    /// exists: every reference to such a class, routine or include is an error. [default: latest]
     #[arg(long, value_name = "RELEASE|URL|FILE|none")]
     iris: Option<String>,
     /// The namespace to use [default: %SYS]
@@ -258,7 +258,7 @@ impl IrisArgs {
     /// Opens the release's declarations, the connection or the declaration file; `none` is no
     /// environment. Whatever can't be opened or fetched ends the run.
     fn open(self) -> Option<Box<dyn IrisContext>> {
-        let iris = (self.iris).unwrap_or_else(|| ascot::DEFAULT_IRIS_RELEASE.to_string());
+        let iris = (self.iris).unwrap_or_else(|| ascot::LATEST_IRIS.to_string());
         match ascot::open_iris(&iris, self.iris_namespace.as_deref()) {
             Ok(iris) => iris,
             Err(err) => {
