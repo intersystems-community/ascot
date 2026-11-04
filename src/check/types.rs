@@ -79,7 +79,7 @@ impl Const {
 
 // The numeric literal a string starts with, as ObjectScript reads it: signs, digits, a fraction,
 // an exponent; empty when there is none (a leading space included).
-fn numeric_prefix(s: &str) -> &str {
+pub(crate) fn numeric_prefix(s: &str) -> &str {
     let bytes = s.as_bytes();
     let digits = |mut i: usize| {
         while bytes.get(i).is_some_and(u8::is_ascii_digit) {

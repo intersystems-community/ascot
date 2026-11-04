@@ -468,6 +468,11 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
+    /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide.
+    #[code = "A7408"]
+    #[severity = Warning]
+    #[message = "Label '{label}' is inside a block; a label belongs at the top level of the body"]
+    LabelInBlock { label: String },
     #[code = "A3303"]
     #[severity = Error]
     #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
@@ -827,6 +832,34 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
     MissingQuit,
+    #[code = "A4304"]
+    #[severity = Error]
+    #[message = "{what} is not allowed in {context} (IRIS: {iris})"]
+    NotAllowedIn {
+        what: String,
+        context: &'static str,
+        iris: &'static str,
+    },
+    #[code = "A6613"]
+    #[severity = Warning]
+    #[message = "ZQUIT wants an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack"]
+    ZQuitArgument { value: String },
+    #[code = "A4344"]
+    #[severity = Warning]
+    #[message = "An error here re-enters the handler {var} still names; set {var} to \"\" first"]
+    TrapReenters { var: &'static str },
+    #[code = "A3913"]
+    #[severity = Hint]
+    #[message = "{what} is not checked"]
+    NotChecked { what: &'static str },
+    #[code = "A5780"]
+    #[severity = Hint]
+    #[message = "ZQUIT unwinds here only because this procedure block has no private variables; one with any fails with <COMMAND>, so its error handling may not be what you expect"]
+    ZQuitWithoutPrivates,
+    #[code = "A1765"]
+    #[severity = Hint]
+    #[message = "A $ETRAP that only jumps to a label is what `Set $ZTrap = \"{label}\"` does; $ZTRAP is scoped to this frame, where $ETRAP is inherited by callees"]
+    ETrapGoto { label: String },
 }
 
 // The conditional parts of messages, each rendering nothing or a fragment of its kind's message.
@@ -1124,6 +1157,10 @@ impl TypeError {
 
     // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
     // yet to attach one lazily this early (during macro expansion).
+    pub fn label_in_block(label: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::LabelInBlock { label }, range)
+    }
+
     pub(crate) fn cannot_find_class(cls: String, range: Range) -> Self {
         Self::at(TypeErrorKind::CannotFindClass { cls }, range)
     }
@@ -1373,6 +1410,43 @@ impl TypeError {
 
     pub fn unrecognized_class_keyword(entry: String, range: Range) -> Self {
         Self::at(TypeErrorKind::UnrecognizedClassKeyword { entry }, range)
+    }
+
+    pub fn not_allowed_in(
+        what: impl Into<String>,
+        context: &'static str,
+        iris: &'static str,
+        range: Range,
+    ) -> Self {
+        let what = what.into();
+        Self::at(
+            TypeErrorKind::NotAllowedIn {
+                what,
+                context,
+                iris,
+            },
+            range,
+        )
+    }
+
+    pub fn zquit_argument(value: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::ZQuitArgument { value }, range)
+    }
+
+    pub fn trap_reenters(var: &'static str, range: Range) -> Self {
+        Self::at(TypeErrorKind::TrapReenters { var }, range)
+    }
+
+    pub fn not_checked(what: &'static str, range: Range) -> Self {
+        Self::at(TypeErrorKind::NotChecked { what }, range)
+    }
+
+    pub fn etrap_goto(label: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::ETrapGoto { label }, range)
+    }
+
+    pub fn zquit_without_privates(range: Range) -> Self {
+        Self::at(TypeErrorKind::ZQuitWithoutPrivates, range)
     }
 
     pub fn unrecognized_type_param(
