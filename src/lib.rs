@@ -55,6 +55,8 @@ mod macro_expand;
 mod mask;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
+#[cfg(not(target_arch = "wasm32"))]
+mod prebuilt;
 mod render;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sarif;
@@ -63,7 +65,10 @@ pub mod style;
 pub use atelier::RawAtelier;
 pub use atelier::{Atelier, AtelierContext};
 #[cfg(not(target_arch = "wasm32"))]
-pub use iris::{DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, open as open_iris};
+pub use iris::{
+    DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, LATEST as LATEST_IRIS, NONE as NO_IRIS,
+    open as open_iris,
+};
 pub(crate) use macro_expand::MacroDefinitions;
 pub(crate) use macro_expand::SourceMap;
 use tygr_objectscript::cos::ClassDefinitionHeader;
@@ -755,19 +760,20 @@ fn drop_derived(cell: &RefCell<DocCache>, expansion: bool) {
     }
 }
 
+// A declaration file that doesn't read is no environment at all, the strictest check; the host
+// is expected to pass the asset it bundles unchanged.
 fn iris_handle(env: Option<bindings::Env>) -> Option<IrisHandle> {
-    #[cfg(target_arch = "wasm32")]
-    return env.map(|env| -> IrisHandle {
-        match env {
-            bindings::Env::Context(context) => Box::new(context),
-            bindings::Env::Atelier(atelier) => Box::new(AtelierContext::from(atelier)),
-        }
-    });
-    // Never carries a real connection natively -- use `native` for that.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = env;
-        None
+    match env? {
+        bindings::Env::Declarations(bytes) => declared::Declarations::from_bytes(&bytes)
+            .ok()
+            .map(|declarations| Box::new(declarations) as IrisHandle),
+        #[cfg(target_arch = "wasm32")]
+        bindings::Env::Context(context) => Some(Box::new(context)),
+        #[cfg(target_arch = "wasm32")]
+        bindings::Env::Atelier(atelier) => Some(Box::new(AtelierContext::from(atelier))),
+        // Never carries a real connection natively -- use `native` for that.
+        #[cfg(not(target_arch = "wasm32"))]
+        _ => None,
     }
 }
 
@@ -1411,8 +1417,43 @@ mod tests {
         assert!(diagnostics[0].message.contains("App.NotOpen"));
     }
 
+    // The host hands over a declaration file's bytes, gzipped as the pre-built asset ships or not;
+    // one another ascot wrote is no environment at all.
     #[test]
-    fn property_declared_type_outside_workspace_gets_a_hint() {
+    fn a_declaration_file_passed_as_bytes_is_the_environment() {
+        use std::io::Write;
+        let file = |version: &str| {
+            format!(
+                r#"{{"version":"{version}","namespace":"%SYS","classes":{{"Demo.Base":{{"header":"Class Demo.Base","members":[{{"header":"ClassMethod Hello() As %String"}}]}}}},"includes":{{}},"routines":{{}}}}"#
+            )
+        };
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(file(declared::DECLARATIONS_VERSION).as_bytes())
+            .unwrap();
+        let source = "Class Test.Use {\nClassMethod M() As %String {\n Quit ##class(Demo.Base).Hello()\n}\n}\n";
+        for bytes in [
+            gz.finish().unwrap(),
+            file(declared::DECLARATIONS_VERSION).into_bytes(),
+        ] {
+            let workspace = Workspace::new(Some(bindings::Env::Declarations(bytes)), None);
+            workspace.open("Use.cls".to_string(), source.to_string());
+            let diagnostics = workspace.diagnostics("Use.cls".to_string());
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
+        let incompatible = bindings::Env::Declarations(file("0.1.0").into_bytes());
+        let workspace = Workspace::new(Some(incompatible), None);
+        workspace.open("Use.cls".to_string(), source.to_string());
+        let diagnostics = workspace.diagnostics("Use.cls".to_string());
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("Cannot find class 'Demo.Base'")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn without_iris_a_property_type_outside_the_workspace_is_an_error() {
         let workspace = Workspace::new(None, None);
         let uri = "Owner.cls".to_string();
         workspace.open(
@@ -1422,7 +1463,7 @@ mod tests {
         );
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Error);
         assert!(diagnostics[0].message.contains("App.NotOpen"));
     }
 
@@ -1453,12 +1494,11 @@ mod tests {
     }
 
     #[test]
-    fn unverifiable_member_reference_gets_a_hint() {
+    fn without_iris_a_member_past_the_workspace_is_an_error() {
         let workspace = Workspace::new(None, None);
         let uri = "Probe.cls".to_string();
-        // `%RegisteredObject` is outside the workspace and there's no IRIS connection, so its
-        // members can't be confirmed — intentionally not an error, but should surface as a hint
-        // right at this reference, rather than silently accepting anything.
+        // With no IRIS there is no environment: `%RegisteredObject` doesn't exist, so neither
+        // does anything inherited from it. The strictest reading, rather than trust.
         workspace.open(
             uri.clone(),
             "Class Test.Probe Extends %RegisteredObject {\nMethod Foo() {\n do ..SomeInheritedMethod()\n quit\n}\n}\n".to_string(),
@@ -1466,7 +1506,7 @@ mod tests {
 
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Error);
         assert!(diagnostics[0].message.contains("SomeInheritedMethod"));
         assert_eq!(diagnostics[0].range.start.line, 2);
     }
@@ -1922,7 +1962,11 @@ mod tests {
 
     #[test]
     fn row_instance_percent_accesses_property_like_instance_percent() {
-        let workspace = Workspace::new(None, None);
+        let iris = MockIrisClient {
+            is_datatype: Some(true),
+            mem: None,
+        };
+        let workspace = Workspace::native(Some(Box::new(iris)), None);
         let uri = "RPercent.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -2614,7 +2658,7 @@ mod tests {
     }
 
     // Every diagnostic carries its kind's code and a link to that kind's docs, including the ones
-    // raised outside the checker proper, such as the unconfirmed-class hint.
+    // raised outside the checker proper, such as a declared type's missing class.
     #[test]
     fn diagnostics_carry_their_kinds_code_and_docs_link() {
         let diagnostics = class_diagnostics(
@@ -2636,14 +2680,9 @@ mod tests {
                 "UndefinedMacro",
             ),
             (
-                find("Cannot confirm class"),
-                check::TypeErrorKind::UnconfirmedClass {
-                    lookup: check::ClassLookup {
-                        cls: String::new(),
-                        has_iris: false,
-                    },
-                },
-                "UnconfirmedClass",
+                find("Cannot find class"),
+                check::TypeErrorKind::CannotFindClass { cls: String::new() },
+                "CannotFindClass",
             ),
         ];
         for (diagnostic, kind, variant) in cases {

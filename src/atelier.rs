@@ -871,7 +871,7 @@ impl RawAtelier {
             return Err(err);
         }
         Ok(Declarations {
-            version: DECLARATIONS_VERSION,
+            version: DECLARATIONS_VERSION.to_string(),
             namespace,
             iris_version,
             classes: classes.into_inner().unwrap(),

@@ -528,6 +528,9 @@ interface imported {
     variant env {
         context(iris-context),
         atelier(atelier),
+        // A declaration file's content, gzipped or not: what `ascot declare` writes, or a release's
+        // pre-built asset as the host bundles it.
+        declarations(list<u8>),
     }
 }
 

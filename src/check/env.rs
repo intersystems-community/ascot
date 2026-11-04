@@ -360,12 +360,13 @@ fn iris_found<N: Namespace>(mut member: bindings::MemberInfo, cls: &str) -> Opti
     })
 }
 
-// A class as a check run sees it; `None` from `resolve` means IRIS has none by that name.
+// A class as a check run sees it; `None` from `resolve` means no class by that name exists: IRIS
+// has none, or there is no IRIS at all and the class isn't in the workspace.
 enum Class {
     Workspace(String, Arc<crate::ClassDetails>),
     Iris(Arc<bindings::ClassInfo>),
-    // One nobody can see: no IRIS, an IRIS lookup that failed (with its reason), or a workspace
-    // file that doesn't parse. Taken as present, with whatever members anyone asks of it.
+    // One nobody can see: an IRIS lookup that failed (with its reason), or a workspace file that
+    // doesn't parse. Taken as present, with whatever members anyone asks of it.
     Unknown(Option<String>),
 }
 
@@ -1127,9 +1128,9 @@ impl<'a> WorkspaceEnv<'a> {
                 Err(_) => Class::Unknown(None),
             });
         }
-        let Some(iris) = self.workspace.iris.as_ref() else {
-            return Some(Class::Unknown(None));
-        };
+        // Without IRIS there is no environment: a class outside the workspace doesn't exist,
+        // and every reference to one is an error rather than something taken on trust.
+        let iris = self.workspace.iris.as_ref()?;
         // Once per check run: IRIS's answer is large, and a chain is walked many times over.
         if let Some(known) = self.iris_classes.borrow().get(cls) {
             return known.clone().map(Class::Iris);
@@ -1243,24 +1244,25 @@ impl<'a> WorkspaceEnv<'a> {
         yes.or((!unknown).then_some(false))
     }
 
-    // `%`-prefixed system classes are assumed valid unconditionally, since they're essentially
-    // never opened as workspace files.
-    // Every `%`-prefixed name is trusted, a misspelled one (`%Sting`) included: only an IRIS
-    // connection could confirm or deny it.
+    // With IRIS, a `%`-prefixed system class is trusted, a misspelled one (`%Sting`) included:
+    // IRIS lists them all, and the system ones are essentially never workspace files. Without
+    // IRIS nothing is, and a class outside the workspace is an error.
     pub(crate) fn check_declared_class_exists(&self, cls: &str, range: bindings::Range) {
-        if cls.starts_with('%') {
+        let has_iris = self.workspace.iris.is_some();
+        if cls.starts_with('%') && has_iris {
             return;
         }
-        let hint = match self.resolve(cls) {
+        let diagnostic = match self.resolve(cls) {
             Some(Class::Workspace(..) | Class::Iris(_)) => return,
             Some(Class::Unknown(Some(reason))) => {
                 TypeError::iris_lookup_failed(DocKind::Cls, cls.to_string(), reason, range)
             }
+            None if !has_iris => TypeError::cannot_find_class(cls.to_string(), range),
             Some(Class::Unknown(None)) | None => {
-                TypeError::unconfirmed_class(cls.to_string(), self.workspace.iris.is_some(), range)
+                TypeError::unconfirmed_class(cls.to_string(), has_iris, range)
             }
         };
-        self.add_soft_diagnostic(hint.into());
+        self.add_soft_diagnostic(diagnostic.into());
     }
 
     // Where the include file `name` is declared, for go-to-definition on an `Include`.

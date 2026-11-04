@@ -183,11 +183,15 @@ struct StyleArgs {
 
 #[derive(Args)]
 struct IrisArgs {
-    /// An IRIS instance, or a declaration file from `ascot declare`
+    /// An IRIS Community release, an IRIS instance, a declaration file from `ascot declare`, or
+    /// `none`
     ///
-    /// The instance is given as http://user:password@host:port[/prefix]. Resolves the classes,
-    /// include files and routines outside the workspace; without it, they are left unconfirmed.
-    #[arg(long, value_name = "URL|FILE")]
+    /// Resolves the classes, include files and routines outside the workspace. A release, as
+    /// 2026.2, is its pre-built declarations, downloaded into ~/.ascot the first time; `latest`
+    /// is the newest this ascot knows. An instance is given as
+    /// http://user:password@host:port[/prefix]. With `none`, nothing outside the workspace
+    /// exists: every reference to such a class, routine or include is an error. [default: latest]
+    #[arg(long, value_name = "RELEASE|URL|FILE|none")]
     iris: Option<String>,
     /// The namespace to use [default: %SYS]
     ///
@@ -251,12 +255,14 @@ fn main() {
 }
 
 impl IrisArgs {
-    /// Opens the connection or declaration file, if `--iris` was given.
+    /// Opens the release's declarations, the connection or the declaration file; `none` is no
+    /// environment. Whatever can't be opened or fetched ends the run.
     fn open(self) -> Option<Box<dyn IrisContext>> {
-        match ascot::open_iris(&self.iris?, self.iris_namespace.as_deref()) {
-            Ok(iris) => Some(iris),
+        let iris = (self.iris).unwrap_or_else(|| ascot::LATEST_IRIS.to_string());
+        match ascot::open_iris(&iris, self.iris_namespace.as_deref()) {
+            Ok(iris) => iris,
             Err(err) => {
-                eprintln!("--iris: {err}");
+                eprintln!("--iris {iris}: {err}");
                 exit(1);
             }
         }

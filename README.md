@@ -203,59 +203,34 @@ claude plugin install ascot-lsp@ascot-plugins
 
 ### Connecting to IRIS
 
-Every command can use a live IRIS instance, reached through the Atelier REST
-API, to resolve the system and library classes and routines that aren't part
-of the local workspace. Without a connection, such a class or routine is left
-unconfirmed (a hint, not an error) rather than checked against real IRIS
-metadata. The commands take the connection differently:
+Classes, routines and include files outside the workspace are resolved against
+IRIS. `--iris` says which IRIS, for `analyze`, `analyze-workspace` and `lsp`;
+`mcp` takes the same in the `iris` argument of `create_workspace`; a wasm host
+passes the same through `env`:
 
-- `analyze`, `analyze-workspace` and `lsp` take `--iris <url>` and
-  `--iris-namespace <namespace>` (default `%SYS`) on the command line. The URL
-  carries the credentials and, if the instance is served under one, its path
-  prefix (`/iris` below):
+- `--iris latest` (default): the newest declaration-only snapshot of IRIS this
+  ascot knows, downloaded once (4 MB) from this repository's
+  [`declarations` release](https://github.com/intersystems-community/ascot/releases/tag/declarations)
+  into `~/.ascot`.
+- `--iris <YYYY>.<N>`: the snapshot of that IRIS release.
+- `--iris http://user:password@host:port[/prefix]` with `--iris-namespace`
+  (default `%SYS`): a live connection to IRIS through the Atelier REST API.
+- `--iris path/to/declarations.d.json`: a declaration file, a released one or
+  one you [built yourself](#build-your-own-declaration-files). No REST
+  requests, and no instance needed.
+- `--iris none`: no environment, so every class, routine or include outside the
+  workspace is an error.
 
-  ```sh
-  ascot analyze --iris http://user:password@localhost:8080/iris --iris-namespace USER src/
-  ```
+#### Build Your Own Declaration Files
 
-  An `https` instance's certificate is checked against the operating system's
-  trust store, so one it trusts, such as a company CA's, works.
-
-  The `ascot-lsp` plugin starts `ascot lsp` with no flags, so it never connects
-  to IRIS.
-
-- `mcp` takes no flags. The connection is set per workspace, through the
-  `iris` and `iris_namespace` (default `%SYS`) arguments of the
-  `create_workspace` tool call.
-
-#### Declaration files
-
-Not every workflow has a live instance at hand, for example CI or analysis of
-code exported from another system, and a live connection costs one round of
-REST requests per class or routine looked up, every run. A declaration file
-holds everything a connection would be asked for, fetched once:
+`ascot declare` saves what a live connection would be asked for, so CI and
+machines without the instance can check against it:
 
 ```sh
-ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER user.d.json
+ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER path/to/declaration.d.json
 ```
 
-Without the file argument, it writes to
-`~/.ascot/<host>-<port>-<namespace>.d.json` and says so.
-
-Wherever `--iris` (or the MCP `iris` argument) takes a URL, it also takes the
-path of such a file, and no REST request is made:
-
-```sh
-ascot analyze --iris user.d.json src/
-```
-
-`--iris-namespace` is then optional; if given, it must match the namespace the
-file declares. The file holds every class's superclasses, members and their
-signatures and types, as a live connection would report them (no method code),
-the full source of every `.inc` file, and the labels and their arguments of every
-routine, or, for a routine without source (e.g. only its OBJ), that it exists, along
-with the instance's version.
-Regenerate it after the instance's code changes.
+Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
 
 ### Style
 

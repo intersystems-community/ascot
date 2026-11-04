@@ -2,10 +2,87 @@
 //! class syntax, with the docs alongside. Read back through the parser a workspace class goes
 //! through, so the file holds what the source would, and no more.
 
+use std::collections::{BTreeMap, HashMap};
+use std::io::Read;
+use std::sync::Mutex;
+
 use serde::{Deserialize, Serialize};
 
-use crate::bindings::{ClassInfo, IndexSubscript, MemberInfo, MemberKind, RefMode, Signature};
+use crate::IrisContext;
+use crate::bindings::{
+    ClassInfo, IndexSubscript, MemberInfo, MemberKind, RefMode, RoutineInfo, Signature, Source,
+};
 use crate::details::ClassDetails;
+
+/// The declaration format's version, semver: a file is readable while its major part matches.
+pub(crate) const DECLARATIONS_VERSION: &str = "1.0.0";
+
+/// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
+/// argument to its answer. A class holds only its own members; ascot walks its superclasses.
+#[derive(Serialize, Deserialize, Default)]
+pub struct Declarations {
+    pub version: String,
+    pub namespace: String,
+    /// The instance's `$ZVERSION`; empty in a file from before it was recorded.
+    #[serde(default)]
+    pub iris_version: String,
+    pub classes: BTreeMap<String, DeclaredClass>,
+    // Each class parsed once per `Declarations`, on first lookup.
+    #[serde(skip)]
+    pub(crate) parsed: Mutex<HashMap<String, Option<ClassInfo>>>,
+    /// `.inc` files by name without the extension.
+    pub includes: BTreeMap<String, Source>,
+    /// Routines by name without the extension.
+    pub routines: BTreeMap<String, RoutineInfo>,
+}
+
+impl Declarations {
+    /// A declaration file's content, gzipped or not, as `ascot declare` or the pre-built assets
+    /// hold it.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let mut text = Vec::new();
+        if bytes.starts_with(&[0x1f, 0x8b]) {
+            flate2::read::GzDecoder::new(bytes)
+                .read_to_end(&mut text)
+                .map_err(|e| format!("not a gzip file: {e}"))?;
+        }
+        let text = if text.is_empty() { bytes } else { &text[..] };
+        let declarations: Self = serde_json::from_slice(text)
+            .map_err(|e| format!("not an ascot declaration file: {e}"))?;
+        let major = |v: &str| v.split('.').next().unwrap_or_default().to_string();
+        if major(&declarations.version) != major(DECLARATIONS_VERSION) {
+            return Err(format!(
+                "written by an incompatible ascot (format {}, this one reads {}); regenerate it \
+                 with `ascot declare`",
+                declarations.version, DECLARATIONS_VERSION
+            ));
+        }
+        Ok(declarations)
+    }
+}
+
+/// A class as a declaration file stores it: its header and each member's, in the class syntax,
+/// with the docs alongside. Read back through the parser a workspace class goes through, so the
+/// file holds what the source would, and no more.
+impl IrisContext for Declarations {
+    fn get_cls(&self, cls: &str) -> Result<Option<ClassInfo>, String> {
+        let mut parsed = self.parsed.lock().unwrap();
+        if let Some(info) = parsed.get(cls) {
+            return Ok(info.clone());
+        }
+        let info = self.classes.get(cls).and_then(|c| c.to_class_info(cls));
+        parsed.insert(cls.to_string(), info.clone());
+        Ok(info)
+    }
+
+    fn get_inc(&self, name: &str) -> Result<Option<Source>, String> {
+        Ok(self.includes.get(name).cloned())
+    }
+
+    fn get_rtn(&self, name: &str) -> Result<Option<RoutineInfo>, String> {
+        Ok(self.routines.get(name).cloned())
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct DeclaredClass {
