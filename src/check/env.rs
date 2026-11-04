@@ -29,7 +29,6 @@ pub use crate::details::Positions;
 use crate::details::{
     MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
 };
-use crate::mask::Correction;
 use crate::{DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos};
 use std::marker::PhantomData;
 
@@ -52,10 +51,7 @@ pub(crate) trait Namespace {
     // The type of a member a workspace class declares, and whether it's instance-only.
     fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(Self::Ty, bool)>;
     // Likewise for one IRIS reports, corrected by the mask.
-    fn reported(
-        member: bindings::MemberInfo,
-        correction: Option<&Correction>,
-    ) -> Option<(Self::Ty, bool)>;
+    fn reported(member: bindings::MemberInfo) -> Option<(Self::Ty, bool)>;
     // A method as this namespace sees it: the generated members, and those taken as present past
     // a class nobody can see, are all methods.
     fn method(_proc: TyProcedureOrAny) -> Option<Self::Ty> {
@@ -130,7 +126,7 @@ impl Namespace for Parameters {
         Some((ty.clone().unwrap_or_default(), false))
     }
 
-    fn reported(member: bindings::MemberInfo, _: Option<&Correction>) -> Option<(Ty, bool)> {
+    fn reported(member: bindings::MemberInfo) -> Option<(Ty, bool)> {
         let MemberKind::Parameter(p) = member.kind else {
             return None;
         };
@@ -171,10 +167,7 @@ impl<A: Access> Namespace for Properties<A> {
         Some((ty, true))
     }
 
-    fn reported(
-        member: bindings::MemberInfo,
-        _: Option<&Correction>,
-    ) -> Option<(PropertyTy, bool)> {
+    fn reported(member: bindings::MemberInfo) -> Option<(PropertyTy, bool)> {
         let ty = match member.kind {
             MemberKind::Property(info) if info.multidimensional => {
                 PropertyTy::Multidimensional(ty_from_declared(info.t).unwrap_or_default())
@@ -250,10 +243,7 @@ impl Namespace for Methods {
         ))
     }
 
-    fn reported(
-        member: bindings::MemberInfo,
-        correction: Option<&Correction>,
-    ) -> Option<(TyProcedureOrAny, bool)> {
+    fn reported(member: bindings::MemberInfo) -> Option<(TyProcedureOrAny, bool)> {
         let location = location(&member);
         let (m, is_instance_only) = match member.kind {
             MemberKind::Method(m) => (m, true),
@@ -263,9 +253,6 @@ impl Namespace for Methods {
         let mut proc = TyProcedure::from(m);
         proc.uri = location.as_ref().map(|location| location.uri.clone());
         proc.declared_at = location.map(|location| location.range);
-        if let Some(correction) = correction {
-            correction.apply(&mut proc);
-        }
         Some((
             TyProcedureOrAny::Procedure(Arc::new(proc)),
             is_instance_only,
@@ -326,16 +313,12 @@ fn generated_procedure(
 }
 
 // Where a host-reported member is declared: only known when the host could map it to a uri
-// (e.g. not a bare IRIS system class).
+// (e.g. not a bare IRIS system class), and then only as far as the document.
 fn location(member: &bindings::MemberInfo) -> Option<bindings::Location> {
-    let range = bindings::Range {
-        start: member.before,
-        end: member.after,
-    };
     member
         .uri
         .clone()
-        .map(|uri| bindings::Location::new(uri, range))
+        .map(|uri| bindings::Location::new(uri, bindings::Range::default()))
 }
 
 // The `IDKEY` index IRIS gives a persistent class that declares no id key: no `On` clause, so
@@ -360,14 +343,16 @@ fn default_id_key() -> bindings::IndexInfo {
 }
 
 // An IRIS-reported member of `cls`, typed and masked by its declaring class.
-fn iris_found<N: Namespace>(member: bindings::MemberInfo, cls: &str) -> Option<Found<N::Ty>> {
+fn iris_found<N: Namespace>(mut member: bindings::MemberInfo, cls: &str) -> Option<Found<N::Ty>> {
     let origin = member.origin.clone().unwrap_or_else(|| cls.to_string());
-    if crate::mask::dropped(&origin, &member.name.content) {
+    if crate::mask::dropped(&origin, &member.name) {
         return None;
     }
-    let correction = crate::mask::correction(&origin, &member.name.content);
+    if let Some(masked) = crate::mask::replacement(&origin, &member.name, &member.kind) {
+        member.kind = masked.kind.clone();
+    }
     let location = location(&member);
-    let (ty, is_instance_only) = N::reported(member, correction)?;
+    let (ty, is_instance_only) = N::reported(member)?;
     Some(Found {
         member: Member { ty, location },
         is_instance_only,
@@ -384,29 +369,108 @@ enum Class {
     Unknown(Option<String>),
 }
 
-// `Query Q`'s `QFunc` (its result set) and `QExecute`/`QFetch`/... family; the query's own
-// arguments aren't tracked.
-fn query_methods() -> Vec<(String, Generated)> {
-    let method = |suffix: &str, out: &str| {
-        let proc = generated_procedure(vec![], true, Some(Ty::from(out)));
-        (suffix.to_string(), (proc, false))
-    };
-    std::iter::once(method("Func", "%SQL.StatementResult"))
-        .chain(
-            [
-                "Execute",
-                "Fetch",
-                "FetchRows",
-                "Close",
-                "GetInfo",
-                "GetODBCInfo",
-                "Prepare",
-                "SendODBC",
-            ]
-            .into_iter()
-            .map(|suffix| method(suffix, "%Status")),
+// `Query Q(args)`'s generated family, in the shapes IRIS gives them (`QUERY_METHOD_SUFFIXES`):
+// `QFunc(args)` is its result set; `QExecute` takes a handle out and the query's arguments;
+// `QFetch`, `QFetchRows`, `QClose`, `QGetInfo` and `QGetODBCInfo` are fixed; `QPrepare` and
+// `QSendODBC` are left loose.
+fn query_methods(
+    normal: Vec<NormalArg>,
+    variadic: Option<VariadicArg>,
+) -> Vec<(String, Generated)> {
+    let (by_ref, output) = (Some(RefMode::ByRef), Some(RefMode::Output));
+    let arg = |mode, name: &str, ty: &str, default: Option<&str>| {
+        NormalArg::new(
+            mode,
+            name.into(),
+            Some(Ty::from(ty)),
+            default.map(str::to_string),
         )
-        .collect()
+    };
+    let handle = |mode| arg(mode, "qHandle", "%Binary", None);
+    let status = || Some(Ty::from("%Status"));
+    let proc = |args, variadic, out| {
+        Arc::new(TyProcedure {
+            normal_args: args,
+            variadic_arg: variadic,
+            out,
+            procedure_block: Some(vec![]),
+            formal_list: true,
+            uri: None,
+            declared_at: None,
+        })
+    };
+    let execute = std::iter::once(handle(output))
+        .chain(normal.iter().cloned())
+        .collect();
+    [
+        (
+            "Func",
+            proc(
+                normal,
+                variadic.clone(),
+                Some(Ty::from("%SQL.StatementResult")),
+            ),
+        ),
+        ("Execute", proc(execute, variadic, status())),
+        (
+            "Fetch",
+            proc(
+                vec![
+                    handle(by_ref),
+                    arg(output, "Row", "%List", None),
+                    arg(output, "AtEnd", "%Integer", Some("0")),
+                ],
+                None,
+                status(),
+            ),
+        ),
+        (
+            "FetchRows",
+            proc(
+                vec![
+                    handle(by_ref),
+                    arg(None, "FetchCount", "%Integer", Some("0")),
+                    arg(output, "RowSet", "%List", None),
+                    arg(output, "ReturnCount", "%Integer", None),
+                    arg(output, "AtEnd", "%Integer", None),
+                ],
+                None,
+                status(),
+            ),
+        ),
+        ("Close", proc(vec![handle(by_ref)], None, status())),
+        (
+            "GetInfo",
+            proc(
+                vec![
+                    arg(output, "colinfo", "%List", None),
+                    arg(output, "parminfo", "%List", None),
+                    arg(output, "idinfo", "%List", None),
+                    handle(by_ref),
+                    arg(None, "extoption", "%Integer", Some("0")),
+                    arg(output, "extinfo", "%List", None),
+                ],
+                None,
+                status(),
+            ),
+        ),
+        (
+            "GetODBCInfo",
+            proc(
+                vec![
+                    arg(output, "colinfo", "%List", None),
+                    arg(output, "parminfo", "%List", None),
+                ],
+                None,
+                status(),
+            ),
+        ),
+        ("Prepare", generated_procedure(vec![], true, status())),
+        ("SendODBC", generated_procedure(vec![], true, status())),
+    ]
+    .into_iter()
+    .map(|(suffix, proc)| (suffix.to_string(), (proc, false)))
+    .collect()
 }
 
 // A generated property method: suffix, argument, result (`Prop`: the property's type), instance-only.
@@ -520,12 +584,9 @@ impl<'a> WorkspaceEnv<'a> {
                     (info.members.iter())
                         .filter(|m| MemberNs::of_info(&m.kind) == N::NS)
                         .filter(|m| {
-                            !crate::mask::dropped(
-                                m.origin.as_deref().unwrap_or(&cls),
-                                &m.name.content,
-                            )
+                            !crate::mask::dropped(m.origin.as_deref().unwrap_or(&cls), &m.name)
                         })
-                        .map(|m| m.name.content.clone()),
+                        .map(|m| m.name.clone()),
                 ),
                 Some(Class::Unknown(_)) | None => continue,
             }
@@ -603,8 +664,17 @@ impl<'a> WorkspaceEnv<'a> {
                 if !declares_id_key && self.is_persistent(cls) {
                     add("IDKEY", self.index_methods(cls, &default_id_key()));
                 }
-                for name in details.members.query.keys() {
-                    add(name, query_methods());
+                for (name, query) in &details.members.query {
+                    if let MemberKindSpecificDetails::Query {
+                        normal_args,
+                        variadic_arg,
+                        ..
+                    } = &query.kind
+                    {
+                        let normal = normal_args.iter().map(|arg| arg.it.clone()).collect();
+                        let variadic = variadic_arg.as_ref().map(|arg| arg.it.clone());
+                        add(name, query_methods(normal, variadic));
+                    }
                 }
                 add(
                     "",
@@ -613,7 +683,7 @@ impl<'a> WorkspaceEnv<'a> {
             }
             Some(Class::Iris(info)) => {
                 for member in &info.members {
-                    let name = member.name.content.as_str();
+                    let name = member.name.as_str();
                     match &member.kind {
                         MemberKind::Property(_) | MemberKind::Relationship(_) => {
                             let found = iris_found::<Properties<Read>>(member.clone(), cls);
@@ -624,7 +694,10 @@ impl<'a> WorkspaceEnv<'a> {
                             add(name, self.property_methods(ty));
                         }
                         MemberKind::Index(index) => add(name, self.index_methods(cls, index)),
-                        MemberKind::Query => add(name, query_methods()),
+                        MemberKind::Query(sig) => {
+                            let proc = TyProcedure::from(sig.clone());
+                            add(name, query_methods(proc.normal_args, proc.variadic_arg));
+                        }
                         MemberKind::Method(_) | MemberKind::ClassMethod(_) if name == "%OnNew" => {
                             add("", new(iris_found::<Methods>(member.clone(), cls)));
                         }
@@ -703,7 +776,7 @@ impl<'a> WorkspaceEnv<'a> {
                             && let Some(proc) = found.member.ty.procedure()
                         {
                             methods
-                                .entry(member.name.content.clone())
+                                .entry(member.name.clone())
                                 .or_insert((proc.clone(), false));
                         }
                     }
@@ -958,7 +1031,7 @@ impl<'a> WorkspaceEnv<'a> {
             }
             Some(Class::Iris(info)) => {
                 let named = |m: &&bindings::MemberInfo| {
-                    m.name.content.eq_ignore_ascii_case(mem)
+                    m.name.eq_ignore_ascii_case(mem)
                         || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
                 };
                 let member = (info.members.iter())
@@ -1230,10 +1303,12 @@ impl<'a> WorkspaceEnv<'a> {
             .labels
             .ok_or_else(|| QuasiTypeError::routine_without_source(name.into()))?;
         let labels = labels.into_iter().map(|label| {
-            let name = label.name.clone();
+            let proc = label
+                .signature
+                .map(|signature| Arc::new(TyProcedure::from_label(signature, info.uri.clone())));
             (
-                name,
-                Arc::new(TyProcedure::from_label(label, info.uri.clone())),
+                label.name,
+                proc.map_or(TyProcedureOrAny::Any, TyProcedureOrAny::Procedure),
             )
         });
         Ok(Some(labels.collect()))
@@ -1547,7 +1622,8 @@ impl<'a> DocumentEnv<'a> {
 /// label -> signature, for the subroutines/procedures declared in a routine. Plain data: built
 /// once per routine and memoized on the workspace (which the MCP server needs to be `Send`), for
 /// resolving `label^routine` calls into it.
-pub type Labels = HashMap<String, Arc<TyProcedure>>;
+// A routine's labels: a signature where one is known, else Any for a label known by name only.
+pub type Labels = HashMap<String, TyProcedureOrAny>;
 
 /// The labels in scope while checking one body: the signatures plus per-entry state that exists
 /// only during checking (`LabelEntry::output` is a live `Rc` cell, so this map isn't `Send`).
@@ -1603,7 +1679,7 @@ pub(crate) fn labels_of(olc: &OLC, routine: &cos::Routine, uri: Option<&str>) ->
         .map(|details| {
             (
                 details.name.it.clone(),
-                Arc::new(details.to_ty_procedure(uri)),
+                TyProcedureOrAny::Procedure(Arc::new(details.to_ty_procedure(uri))),
             )
         })
         .collect()
@@ -1771,18 +1847,24 @@ impl<'a> CodeEnv<'a> {
             // or via IRIS (see `resolve_rtn_labels`).
             Some(routine) => match label {
                 Some(label) => match self.resolve_rtn_labels(&routine) {
+                    // A routine IRIS has without source: the curated signatures still cover the
+                    // labels the system macros call.
                     Err(
                         err @ QuasiTypeError::WithoutRange(
                             TypeErrorKind::RoutineWithoutSource { .. }
                             | TypeErrorKind::IrisLookupFailed { .. },
                             _,
                         ),
-                    ) => crate::mask::label(&routine, &label)
-                        .map(TyProcedureOrAny::Procedure)
+                    ) => crate::mask::curated_label(&routine, &label)
+                        .map(|signature| {
+                            TyProcedureOrAny::Procedure(Arc::new(TyProcedure::from_label(
+                                signature, None,
+                            )))
+                        })
                         .ok_or(err),
                     labels => match labels? {
                         Some(labels) => match labels.get(&label) {
-                            Some(proc) => Ok(TyProcedureOrAny::Procedure(proc.clone())),
+                            Some(proc) => Ok(proc.clone()),
                             None => Err(QuasiTypeError::cannot_find_label(label, Some(routine))),
                         },
                         None => Ok(TyProcedureOrAny::Any),
@@ -1869,30 +1951,20 @@ mod tests {
 
     #[test]
     fn a_many_relationship_from_iris_binds_its_element_type() {
-        let zero = bindings::Position {
-            line: 0,
-            character: 0,
-        };
         let children = bindings::MemberInfo {
             doc: String::new(),
-            before: zero,
-            name: bindings::NameInfo {
-                before: zero,
-                content: "Children".to_string(),
-                after: zero,
-            },
+            name: "Children".to_string(),
             aliases: vec![],
             deprecated: false,
             kind: MemberKind::Relationship(bindings::RelationshipInfo {
                 t: Some("Ext.Child".to_string()),
                 cardinality: Some(bindings::Cardinality::Many),
             }),
-            after: zero,
             uri: None,
             origin: None,
         };
         let Some((PropertyTy::Value(Ty::OREF(ClsOrIns::Ins(cls))), _)) =
-            Properties::<Read>::reported(children, None)
+            Properties::<Read>::reported(children)
         else {
             panic!("not an instance")
         };

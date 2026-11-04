@@ -14,7 +14,7 @@ use tygr::{Grammar, GrammarRule, Prefix, Raw, StringEq, StringOf1, VecSep};
 #[cfg(not(target_arch = "wasm32"))]
 use {
     crate::DocKind,
-    crate::iris::{DECLARATIONS_VERSION, Declarations},
+    crate::iris::{DECLARATIONS_VERSION, Declarations, DeclaredClass},
     base64::Engine,
     percent_encoding::percent_decode_str,
     std::collections::BTreeMap,
@@ -25,8 +25,8 @@ use {
 use crate::IrisContext;
 use crate::bindings::{
     Cardinality, ClassInfo, CollectionKind, IndexInfo, IndexKey, IndexSubscript, MemberInfo,
-    MemberKind, MethodInfo, NameInfo, NormalArg, ParameterInfo, Position, PropertyInfo, Range,
-    RefMode, RelationshipInfo, RoutineInfo, Source, VariadicArg,
+    MemberKind, NormalArg, ParameterInfo, PropertyInfo, RefMode, RelationshipInfo, RoutineInfo,
+    Signature, Source, VariadicArg,
 };
 use crate::cos::{self, LocalVariableName, OSString, Space, Type};
 
@@ -249,7 +249,9 @@ fn assemble(
                 .push(member_row_to_info(row));
         }
     }
-    let zero = Position::default();
+    for members in members.values_mut() {
+        drop_query_methods(members);
+    }
     class_rows
         .into_iter()
         .filter_map(|row| {
@@ -260,11 +262,7 @@ fn assemble(
             }
             let info = ClassInfo {
                 doc: str_field("Description").to_string(),
-                name: NameInfo {
-                    before: zero,
-                    content: cls.clone(),
-                    after: zero,
-                },
+                name: cls.clone(),
                 extends: split_classes(str_field("Super")),
                 storage: storages.get(&cls).cloned(),
                 members: members.remove(&cls).unwrap_or_default(),
@@ -281,6 +279,41 @@ fn assemble(
             Some((cls, info))
         })
         .collect()
+}
+
+// The methods IRIS generates from each `Query` have fixed shapes the checker knows, so they go;
+// the query itself keeps `QExecute`'s view of its arguments, which has the defaults the
+// query's own `FormalSpec` drops.
+fn drop_query_methods(members: &mut Vec<MemberInfo>) {
+    let queries: Vec<String> = members
+        .iter()
+        .filter(|m| matches!(m.kind, MemberKind::Query(_)))
+        .map(|m| m.name.clone())
+        .collect();
+    for query in &queries {
+        let execute = members.iter().find(|m| m.name == format!("{query}Execute"));
+        let Some(MemberKind::ClassMethod(sig) | MemberKind::Method(sig)) = execute.map(|m| &m.kind)
+        else {
+            continue;
+        };
+        let (normal, variadic) = (sig.normal[1..].to_vec(), sig.variadic.clone());
+        let Some(MemberKind::Query(sig)) = members
+            .iter_mut()
+            .find(|m| &m.name == query)
+            .map(|m| &mut m.kind)
+        else {
+            continue;
+        };
+        (sig.normal, sig.variadic) = (normal, variadic);
+    }
+    members.retain(|m| {
+        matches!(m.kind, MemberKind::Query(_))
+            || !queries.iter().any(|q| {
+                crate::details::QUERY_METHOD_SUFFIXES
+                    .iter()
+                    .any(|suffix| m.name == format!("{q}{suffix}"))
+            })
+    });
 }
 
 // A compiled keyword value, read by the grammar's spelling of it into the host's enum.
@@ -441,19 +474,12 @@ fn member_row_to_info(row: MemberRow) -> MemberInfo {
     let name = row.name.clone();
     let aliases = split_aliases(row.aliases.as_deref());
     let origin = row.origin.clone();
-    let zero = Position::default();
     MemberInfo {
         doc: row.description.clone().unwrap_or_default(),
-        before: zero,
-        name: NameInfo {
-            before: zero,
-            content: name,
-            after: zero,
-        },
+        name,
         aliases,
         deprecated: is_truthy(&row.deprecated),
         kind: row_to_member_kind(&row),
-        after: zero,
         uri: None,
         origin,
     }
@@ -530,15 +556,22 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
                 .and_then(|t| crate::details::index_type(&t)),
             unique: is_truthy(&row.index_unique),
         }),
-        "query" => MemberKind::Query,
-        _ => {
+        "query" => {
             let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
-            let info = MethodInfo {
+            MemberKind::Query(Signature {
                 normal,
                 variadic,
                 t: row.return_type.clone(),
                 procedure_block: None,
-                body: Range::default(),
+            })
+        }
+        _ => {
+            let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
+            let info = Signature {
+                normal,
+                variadic,
+                t: row.return_type.clone(),
+                procedure_block: None,
             };
             if is_truthy(&row.class_method) {
                 MemberKind::ClassMethod(info)
@@ -609,19 +642,13 @@ fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
         let name = formal.name.print();
         let t = formal.as_type.as_ref().map(|t| t.deref().print());
         if formal.variadic.is_some() {
-            variadic = Some(VariadicArg {
-                mode,
-                name,
-                t,
-                declared_at: None,
-            });
+            variadic = Some(VariadicArg { mode, name, t });
         } else {
             normal.push(NormalArg {
                 mode,
                 name,
                 t,
                 default: formal.default.as_ref().map(|d| d.deref().print()),
-                declared_at: None,
             });
         }
     }
@@ -806,8 +833,16 @@ impl RawAtelier {
                             DocKind::Cls => {
                                 let params: Vec<&str> = batch.iter().map(String::as_str).collect();
                                 let filter = format!("IN ({})", vec!["?"; params.len()].join(","));
-                                class_infos(ctx, &filter, &params)
-                                    .map(|found| classes.lock().unwrap().extend(found))
+                                class_infos(ctx, &filter, &params).map(|found| {
+                                    let found = found.into_iter().map(|(name, info)| {
+                                        let (declared, dropped) = DeclaredClass::validated(&info);
+                                        for header in dropped {
+                                            eprintln!("declare: {name}: left out `{header}`, which the class parser rejects");
+                                        }
+                                        (name, declared)
+                                    });
+                                    classes.lock().unwrap().extend(found)
+                                })
                             }
                             DocKind::Inc => sources(ctx, batch, &["inc"])
                                 .map(|found| includes.lock().unwrap().extend(found)),
@@ -842,6 +877,7 @@ impl RawAtelier {
             classes: classes.into_inner().unwrap(),
             includes: includes.into_inner().unwrap(),
             routines: routines.into_inner().unwrap(),
+            ..Default::default()
         })
     }
 
@@ -1016,14 +1052,14 @@ mod tests {
         assert!(classes["A.C"].storage.is_none());
         assert_eq!(b.class_type, None);
         assert_eq!(b.members.len(), 1, "the nameless row is dropped");
-        assert_eq!(b.members[0].name.content, "M");
+        assert_eq!(b.members[0].name, "M");
         assert!(matches!(b.members[0].kind, MemberKind::ClassMethod(_)));
         let c = &classes["A.C"];
         assert!(c.deprecated);
         assert_eq!(c.class_type, Some(crate::bindings::ClassType::Datatype));
         assert_eq!(c.inheritance, Some(crate::bindings::Inheritance::Right));
         assert_eq!(b.inheritance, None);
-        assert_eq!(c.members[0].name.content, "P");
+        assert_eq!(c.members[0].name, "P");
         let key = |property: &str, subscript, collation: Option<&str>| IndexKey {
             property: property.to_string(),
             subscript,

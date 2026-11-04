@@ -726,12 +726,12 @@ impl MemberRef {
 
 pub type Field = Prefix<StringEq!("."), Range<MemberRef>>;
 
-// A type in ascot's mask: `This` (the receiver's class), a class parameter, or a class name.
+// A type's class: a class name (`This` among them, for the receiver's class) or a class
+// parameter's value `..#NAME`. IRIS takes only the first; ascot's declarations use the others.
 #[derive(Grammar)]
 pub enum SignatureType {
-    This(StringEq!("This")),
-    Parameter(StringEq!("..#"), ClassMemberName),
     Class(ClassName),
+    Parameter(StringEq!("..#"), ClassMemberName),
 }
 
 #[derive(Grammar)]
@@ -2288,7 +2288,7 @@ char_class!(pub IsDataSafe, "xdata_safe", |ch| !matches!(
 
 #[derive(Grammar)]
 pub struct Type {
-    pub class_name: ClassName,
+    pub class_name: SignatureType,
     pub params: Option<TypeParamList>,
 }
 
@@ -3239,8 +3239,8 @@ impl Property {
 pub struct Query {
     keyword: Raw<(StringEqCI!("Query"), Space1)>,
     pub name: QuotableClassMemberName,
-    formal_spec: Option<FormalSpec>,
-    return_type: Option<As<Type>>,
+    pub formal_spec: Option<FormalSpec>,
+    pub return_type: Option<As<Type>>,
     pub keywords: Option<KeywordList<FailableKeyword<QueryKeyword>>>,
     body: MemberBody,
 }
@@ -7139,10 +7139,6 @@ mod regression_tests {
     #[test]
     fn signature_types() {
         assert!(matches!(
-            SignatureType::parse("This"),
-            Ok(SignatureType::This(_))
-        ));
-        assert!(matches!(
             SignatureType::parse("..#ELEMENTTYPE"),
             Ok(SignatureType::Parameter(_, name)) if name.print() == "ELEMENTTYPE"
         ));
@@ -7150,6 +7146,7 @@ mod regression_tests {
             SignatureType::parse("%Library.ObjectHandle"),
             Ok(SignatureType::Class(_))
         ));
+        assert!(Type::parse("..#ELEMENTTYPE").is_ok());
     }
 
     #[test]

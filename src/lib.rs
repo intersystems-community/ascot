@@ -44,6 +44,7 @@
 mod atelier;
 pub mod bindings;
 pub mod check;
+mod declared;
 mod details;
 pub mod diagnostic_filter;
 #[cfg(not(target_arch = "wasm32"))]
@@ -78,7 +79,7 @@ use details::Positions;
 use tygr::{Grammar, OLC};
 
 use crate::{
-    bindings::{Diagnostic, InlayHint, Location, MemberInfo, NameInfo, Position, Style},
+    bindings::{Diagnostic, InlayHint, Location, MemberInfo, Position, Style},
     check::WorkspaceEnv,
     cos::Routine,
     details::{ClassDetails, MemberKindSpecificDetails, WithRange, with_range_name},
@@ -733,7 +734,7 @@ pub(crate) fn routine_info(text: &str, uri: Option<String>) -> bindings::Routine
     let labels = expanded.ok().map(|(routine, map, _)| {
         let mut labels: Vec<_> = check::labels_of(&map.expanded_olc, &routine, uri.as_deref())
             .iter()
-            .map(|(name, label)| label.to_label(name.clone()))
+            .filter_map(|(name, label)| Some(label.procedure()?.to_label(name.clone())))
             .collect();
         labels.sort_by(|a, b| a.name.cmp(&b.name));
         labels
@@ -993,11 +994,11 @@ impl bindings::GuestWorkspace for Workspace {
     fn query_mem(&self, cls: String, query: String) -> Vec<(String, MemberInfo)> {
         self.query_cls(cls.clone())
             .into_iter()
-            .filter(|(_, info)| info.name.content == cls)
+            .filter(|(_, info)| info.name == cls)
             .flat_map(|(uri, info)| {
                 info.members
                     .into_iter()
-                    .filter(|member| member.name.content.starts_with(&query))
+                    .filter(|member| member.name.starts_with(&query))
                     .map(move |member| (uri.clone(), member))
                     .collect::<Vec<_>>()
             })
@@ -1049,12 +1050,6 @@ impl bindings::GuestWorkspace for Workspace {
     // their members/labels.
     #[allow(async_fn_in_trait)]
     fn workspace_symbol(&self, query: String) -> Vec<bindings::WorkspaceSymbol> {
-        fn name_range(name: &NameInfo) -> bindings::Range {
-            bindings::Range {
-                start: name.before,
-                end: name.after,
-            }
-        }
         fn symbol_in(uri: &str, symbol: bindings::SymbolInfo) -> bindings::WorkspaceSymbol {
             bindings::WorkspaceSymbol {
                 name: symbol.name,
@@ -1063,32 +1058,32 @@ impl bindings::GuestWorkspace for Workspace {
                 location: bindings::Location::new(uri.to_string(), symbol.selection_range),
             }
         }
-        let cls_symbols =
-            self.query_cls(query.clone())
-                .into_iter()
-                .flat_map(|(uri, info)| {
-                    let cls_symbol = bindings::WorkspaceSymbol {
-                        name: info.name.content.clone(),
-                        kind: bindings::SymbolKind::Class,
-                        deprecated: info.deprecated,
-                        location: bindings::Location::new(uri.clone(), name_range(&info.name)),
-                    };
-                    std::iter::once(cls_symbol)
-                        .chain(info.members.into_iter().map(move |member| {
-                            bindings::WorkspaceSymbol {
-                                name: member.name.content.clone(),
-                                kind: bindings::member_kind_to_symbol_kind(&member.kind),
-                                deprecated: member.deprecated,
-                                location: bindings::Location::new(
-                                    uri.clone(),
-                                    name_range(&member.name),
-                                ),
-                            }
-                        }))
-                        .collect::<Vec<_>>()
-                });
-
         let this = self.borrow();
+        let cls_symbols = this
+            .uris_with_prefix(DocKind::Cls, &query)
+            .into_iter()
+            .filter_map(|uri| Some((uri.clone(), this.cls_details(&uri).ok()?)))
+            .flat_map(|(uri, details)| {
+                let cls_symbol = bindings::WorkspaceSymbol {
+                    name: details.name.to_string(),
+                    kind: bindings::SymbolKind::Class,
+                    deprecated: details.keywords.deprecated,
+                    location: bindings::Location::new(uri.clone(), details.name.range),
+                };
+                std::iter::once(cls_symbol)
+                    .chain(details.members.in_order().into_iter().map(move |member| {
+                        bindings::WorkspaceSymbol {
+                            name: member.it.name.to_string(),
+                            kind: bindings::member_kind_to_symbol_kind(
+                                &bindings::MemberKind::from(&member.it.kind),
+                            ),
+                            deprecated: member.it.deprecated,
+                            location: bindings::Location::new(uri.clone(), member.it.name.range),
+                        }
+                    }))
+                    .collect::<Vec<_>>()
+            });
+
         let rtn_symbols = this
             .uris_with_prefix(DocKind::Rtn, &query)
             .into_iter()
@@ -1438,17 +1433,9 @@ mod tests {
 
     impl crate::IrisContext for MockIrisClient {
         fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
-            let zero = bindings::Position {
-                line: 0,
-                character: 0,
-            };
             Ok(Some(bindings::ClassInfo {
                 doc: String::new(),
-                name: bindings::NameInfo {
-                    before: zero,
-                    content: String::new(),
-                    after: zero,
-                },
+                name: String::new(),
                 members: self.mem.clone().into_iter().collect(),
                 class_type: self
                     .is_datatype
@@ -1687,13 +1674,10 @@ mod tests {
         let classes = workspace.query_cls("Test.".to_string());
         assert_eq!(classes.len(), 1);
         assert_eq!(classes[0].0, "Test.Foo.cls");
-        assert_eq!(classes[0].1.name.content, "Test.Foo");
+        assert_eq!(classes[0].1.name, "Test.Foo");
 
         let members = workspace.query_mem("Test.Foo".to_string(), "Ba".to_string());
-        let mut names: Vec<&str> = members
-            .iter()
-            .map(|(_, m)| m.name.content.as_str())
-            .collect();
+        let mut names: Vec<&str> = members.iter().map(|(_, m)| m.name.as_str()).collect();
         names.sort();
         assert_eq!(names, ["Bar", "Baz"]);
         assert!(members.iter().all(|(uri, _)| uri == "Test.Foo.cls"));
@@ -1838,7 +1822,7 @@ mod tests {
                 },
             )
             .expect("expected a member at that position");
-        assert_eq!(member.name.content, "Bar");
+        assert_eq!(member.name, "Bar");
     }
 
     #[test]
@@ -1858,7 +1842,7 @@ mod tests {
                 },
             )
             .expect("expected a member at that position");
-        assert_eq!(member.name.content, "Foo");
+        assert_eq!(member.name, "Foo");
         assert!(
             workspace
                 .hover_member(
@@ -1990,17 +1974,9 @@ mod tests {
         struct ExternalClassIris;
         impl crate::IrisContext for ExternalClassIris {
             fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
-                let zero = bindings::Position {
-                    line: 0,
-                    character: 0,
-                };
                 Ok((cls == "Test.External").then(|| bindings::ClassInfo {
                     doc: String::new(),
-                    name: bindings::NameInfo {
-                        before: zero,
-                        content: cls.to_string(),
-                        after: zero,
-                    },
+                    name: cls.to_string(),
                     uri: Some("mock:///External.cls".to_string()),
                     ..Default::default()
                 }))
@@ -2420,9 +2396,10 @@ mod tests {
         without_hints(workspace.diagnostics(uri.to_string()))
     }
 
+    // A declaration may type a method's result as `This`: the receiver's class.
     #[test]
-    fn only_the_mask_says_this() {
-        let mut mem = external_method("getNextResultSet", vec![], Some("This"));
+    fn a_declared_this_is_the_receiver() {
+        let mut mem = external_method("nextResultSet", vec![], Some("This"));
         mem.origin = Some("%Library.SQLGatewayConnection".to_string());
         let workspace = Workspace::native(
             Some(Box::new(MockIrisClient {
@@ -2434,13 +2411,13 @@ mod tests {
         let diagnostics = errors_in(
             &workspace,
             "T.cls",
-            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Quit c.getNextResultSet().Next()\n}\n}\n",
+            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Quit c.nextResultSet().Next()\n}\n}\n",
         );
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
             diagnostics[0]
                 .message
-                .contains("Cannot find member 'Next' in This"),
+                .contains("Cannot find member 'Next' in %SQLGatewayConnection"),
             "{diagnostics:?}"
         );
     }
@@ -2449,11 +2426,11 @@ mod tests {
     // Without its own `%OnNew`, `%New` takes its own arguments: an optional `initvalue`.
     #[test]
     fn an_unmasked_object_handle_stays_one() {
-        let workspace = masked_iris("getNextResultSet", "%Library.SQLGatewayConnection", vec![]);
+        let workspace = masked_iris("nextResultSet", "%Library.SQLGatewayConnection", vec![]);
         let diagnostics = errors_in(
             &workspace,
             "T.cls",
-            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Set rs = c.getNextResultSet()\n Quit rs.Next()\n}\n}\n",
+            "Class Test.T Extends %RegisteredObject {\nMethod M(c As %SQLGatewayConnection) As %String {\n Set rs = c.nextResultSet()\n Quit rs.Next()\n}\n}\n",
         );
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
@@ -2469,31 +2446,17 @@ mod tests {
         normal: Vec<bindings::NormalArg>,
         t: Option<&str>,
     ) -> bindings::MemberInfo {
-        let zero = bindings::Position {
-            line: 0,
-            character: 0,
-        };
         bindings::MemberInfo {
             doc: String::new(),
-            before: zero,
-            name: bindings::NameInfo {
-                before: zero,
-                content: name.to_string(),
-                after: zero,
-            },
+            name: name.to_string(),
             aliases: vec![],
             deprecated: false,
-            kind: bindings::MemberKind::Method(bindings::MethodInfo {
+            kind: bindings::MemberKind::Method(bindings::Signature {
                 normal,
                 variadic: None,
                 t: t.map(str::to_string),
                 procedure_block: None,
-                body: bindings::Range {
-                    start: zero,
-                    end: zero,
-                },
             }),
-            after: zero,
             uri: None,
             origin: None,
         }

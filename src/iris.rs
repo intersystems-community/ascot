@@ -1,14 +1,16 @@
 //! `open`, which answers an `--iris` argument with a live `RawAtelier` (a URL) or a
 //! `Declarations` file `ascot declare` wrote (a path), which never connects to anything.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
 use crate::IrisContext;
 use crate::atelier::{AtelierContext, RawAtelier};
 use crate::bindings::{ClassInfo, RoutineInfo, Source};
+pub use crate::declared::DeclaredClass;
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
@@ -31,18 +33,21 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Box<dyn IrisContext>,
     Ok(Box::new(declarations))
 }
 
-pub(crate) const DECLARATIONS_VERSION: u32 = 4;
+pub(crate) const DECLARATIONS_VERSION: u32 = 5;
 
 /// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
 /// argument to its answer. A class holds only its own members; ascot walks its superclasses.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Declarations {
     pub version: u32,
     pub namespace: String,
     /// The instance's `$ZVERSION`; empty in a file from before it was recorded.
     #[serde(default)]
     pub iris_version: String,
-    pub classes: BTreeMap<String, ClassInfo>,
+    pub classes: BTreeMap<String, DeclaredClass>,
+    // Each class parsed once per `Declarations`, on first lookup.
+    #[serde(skip)]
+    pub(crate) parsed: Mutex<HashMap<String, Option<ClassInfo>>>,
     /// `.inc` files by name without the extension.
     pub includes: BTreeMap<String, Source>,
     /// Routines by name without the extension.
@@ -76,9 +81,18 @@ impl Declarations {
     }
 }
 
+/// A class as a declaration file stores it: its header and each member's, in the class syntax,
+/// with the docs alongside. Read back through the parser a workspace class goes through, so the
+/// file holds what the source would, and no more.
 impl IrisContext for Declarations {
     fn get_cls(&self, cls: &str) -> Result<Option<ClassInfo>, String> {
-        Ok(self.classes.get(cls).cloned())
+        let mut parsed = self.parsed.lock().unwrap();
+        if let Some(info) = parsed.get(cls) {
+            return Ok(info.clone());
+        }
+        let info = self.classes.get(cls).and_then(|c| c.to_class_info(cls));
+        parsed.insert(cls.to_string(), info.clone());
+        Ok(info)
     }
 
     fn get_inc(&self, name: &str) -> Result<Option<Source>, String> {
@@ -93,20 +107,11 @@ impl IrisContext for Declarations {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bindings::{NameInfo, Position};
 
     fn class_info(name: &str) -> ClassInfo {
-        let zero = Position {
-            line: 0,
-            character: 0,
-        };
         ClassInfo {
             doc: String::new(),
-            name: NameInfo {
-                before: zero,
-                content: name.to_string(),
-                after: zero,
-            },
+            name: name.to_string(),
             extends: vec!["%RegisteredObject".to_string()],
             ..Default::default()
         }
@@ -131,7 +136,7 @@ mod tests {
             version: DECLARATIONS_VERSION,
             namespace: "USER".to_string(),
             iris_version: "IRIS for UNIX 2026.1".to_string(),
-            classes: [("A.B".to_string(), class_info("A.B"))].into(),
+            classes: [("A.B".to_string(), DeclaredClass::from(&class_info("A.B")))].into(),
             includes: [(
                 "MyInc".to_string(),
                 source("ROUTINE MyInc [Type=INC]\n#define FIVE 5\n"),
@@ -160,10 +165,10 @@ mod tests {
                 ),
             ]
             .into(),
+            ..Default::default()
         };
         let path = declaration_file("round-trip", &declarations);
         let loaded = Declarations::load(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
         assert_eq!(loaded.namespace, "USER");
         assert_eq!(loaded.iris_version, "IRIS for UNIX 2026.1");
         assert_eq!(loaded.get_cls("A.B"), Ok(Some(class_info("A.B"))));
@@ -177,7 +182,8 @@ mod tests {
 
         use crate::bindings::{DiagnosticSeverity, GuestWorkspace};
         let check = |body: &str| {
-            let workspace = crate::Workspace::native(Some(Box::new(loaded.clone())), None);
+            let loaded = Declarations::load(&path).unwrap();
+            let workspace = crate::Workspace::native(Some(Box::new(loaded)), None);
             let uri = "Test.mac".to_string();
             workspace.open(
                 uri.clone(),
@@ -213,6 +219,7 @@ mod tests {
         );
         // Only a hint, which `check` leaves out.
         assert_eq!(check(" Do Plain^Compiled(1)"), Vec::<String>::new());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -224,6 +231,7 @@ mod tests {
             classes: BTreeMap::new(),
             includes: BTreeMap::new(),
             routines: BTreeMap::new(),
+            ..Default::default()
         };
         let path = declaration_file("open", &declarations);
         let arg = path.to_str().unwrap();

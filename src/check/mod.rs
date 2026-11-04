@@ -3813,7 +3813,7 @@ fn member_keyword_issue(
         Property { .. } => "a property",
         Parameter { .. } => "a parameter",
         Index(_) => "an index",
-        Query => "a query",
+        Query { .. } => "a query",
         Trigger => "a trigger",
         ForeignKey => "a foreign key",
         XData => "an XData",
