@@ -2708,34 +2708,39 @@ fn check_member<'a>(
             Ok(Some(referenced(env, mem, property)?.to_ty()))
         }
         // A method anywhere in the chain before a property anywhere, as IRIS resolves it.
-        (false, Some(args)) => match env.resolve_mem::<Methods>(&ty, name.clone(), range, true) {
-            Ok(method) => {
+        (false, Some(args)) => match env.lookup_mem::<Methods>(&ty, &name, range, true)? {
+            Some(method) => {
                 let method = referenced(env, mem, Ok(method))?;
                 check_call(env, flow, method, args.items(env), range)
             }
             // `..Prop(subs)`: a property, which IRIS requires to be multidimensional, its node
             // typed like the property; a `%DispatchMethod` takes the name when nothing else does.
-            Err(miss) if matches!(miss.kind, TypeErrorKind::CannotFindMember { .. }) => {
-                let property =
-                    env.resolve_mem::<Properties<Called>>(&ty, name.clone(), range, true);
-                match referenced(env, mem, property) {
-                    Ok(PropertyTy::Multidimensional(_)) if args.items(env).all(|a| a.is_none()) => {
+            None => {
+                let property = env.lookup_mem::<Properties<Called>>(&ty, &name, range, true)?;
+                let property = match property {
+                    Some(property) => referenced(env, mem, Ok(property))?,
+                    // Neither: reported as a missing method.
+                    None => {
+                        env.resolve_mem::<Methods>(&ty, name.clone(), range, true)?;
+                        PropertyTy::default()
+                    }
+                };
+                match property {
+                    PropertyTy::Multidimensional(_) if args.items(env).all(|a| a.is_none()) => {
                         Err(QuasiTypeError::node_without_subscripts(name))
                     }
-                    Ok(PropertyTy::Multidimensional(ty)) => {
+                    PropertyTy::Multidimensional(ty) => {
                         builtins::check_args_any(env, flow, args.items(env))?;
                         Ok(Some(ty))
                     }
                     // Unknown, so taken as present and untyped: it may well be one.
-                    Ok(PropertyTy::Value(Ty::Any)) => {
+                    PropertyTy::Value(Ty::Any) => {
                         builtins::check_args_any(env, flow, args.items(env))?;
                         Ok(Some(Ty::Any))
                     }
-                    Ok(_) => Err(QuasiTypeError::not_multidimensional(name)),
-                    Err(_) => Err(miss.into()),
+                    _ => Err(QuasiTypeError::not_multidimensional(name)),
                 }
             }
-            Err(err) => Err(err.into()),
         },
     }
 }
@@ -3875,41 +3880,37 @@ fn check_property_or_parameter_declaration(
                     // Probed quietly: a candidate nobody can see resolves the parameter on trust,
                     // and offline that is every system type class.
                     let was_suppressed = env.base.suppress_soft_diagnostics();
-                    let results: Vec<_> = candidate_classes
-                        .iter()
-                        .map(|cls| {
-                            let cls = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.to_string())));
-                            env.base.resolve_mem::<Parameters>(
-                                &cls,
-                                name.clone(),
-                                member.range,
-                                true,
-                            )
-                        })
-                        .collect();
+                    let mut found = false;
+                    let mut absent = vec![];
+                    for cls in &candidate_classes {
+                        let ty = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.to_string())));
+                        match env
+                            .base
+                            .lookup_mem::<Parameters>(&ty, name, member.range, true)
+                        {
+                            Ok(Some(_)) => found = true,
+                            Ok(None) => absent.push(*cls),
+                            // A missing class is reported on its own and says nothing about
+                            // the parameter.
+                            Err(_) => {}
+                        }
+                    }
                     env.base.restore_soft_diagnostics(was_suppressed);
-                    let found = results.iter().any(Result::is_ok);
-                    // Each absent candidate's own "did you mean"; a missing class is reported
-                    // on its own and says nothing about the parameter.
-                    let absent: Vec<&Suggestions> = results
-                        .iter()
-                        .filter_map(|result| match result {
-                            Err(TypeError {
-                                kind: TypeErrorKind::CannotFindMember { suggestions, .. },
-                                ..
-                            }) => Some(suggestions),
-                            _ => None,
-                        })
-                        .collect();
                     let confirmed_absent = !found && !absent.is_empty();
                     if is_property_keyword || confirmed_absent {
                         let class = type_class
                             .clone()
                             .unwrap_or_else(|| "this property's type".to_string());
+                        // Each absent candidate's own "did you mean".
                         let mut suggestions: Vec<String> = if is_property_keyword {
                             vec![]
                         } else {
-                            absent.iter().flat_map(|s| s.0.iter().cloned()).collect()
+                            (absent.iter())
+                                .flat_map(|cls| {
+                                    let names = env.base.names::<Parameters>(cls);
+                                    top_similar(name, names.iter().map(String::as_str), 5)
+                                })
+                                .collect()
                         };
                         suggestions.dedup();
                         diagnostics.push(
