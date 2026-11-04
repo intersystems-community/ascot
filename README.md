@@ -207,13 +207,13 @@ Classes, routines and include files outside the workspace are resolved against
 IRIS. `--iris` says which IRIS, for `analyze`, `analyze-workspace` and `lsp`;
 `mcp` takes the same in the `iris` argument of `create_workspace`:
 
-- `--iris 2026.2`, the default: the pre-built declarations of that IRIS
-  Community release. The first run downloads them (4 MB) from this repository's
+- `--iris <release>`, as `--iris 2026.2`: the pre-built declarations of that
+  IRIS Community release, downloaded once (4 MB) from this repository's
   [`declarations` release](https://github.com/intersystems-community/ascot/releases/tag/declarations)
-  into `~/.ascot/iris-community-2026.2.d.json`, checksum verified, and says so;
-  later runs read that file. They hold the classes as IRIS reports them,
-  corrected by [`src/mask.json`](src/mask.json). `ASCOT_DECLARATIONS_URL` names
-  a mirror.
+  into `~/.ascot/iris-community-<release>.d.json` and read from there after.
+  Without `--iris`, the newest release at the time ascot was released. The
+  classes are as IRIS reports them, corrected by
+  [`src/mask.json`](src/mask.json). `ASCOT_DECLARATIONS_URL` names a mirror.
 - Your own instance, with its classes, its version and its changes to the
   system ones:
   - live, as `--iris http://user:password@host:port[/prefix]` with
