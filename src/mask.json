@@ -2637,6 +2637,11 @@
     { "header": "ClassMethod GenerateImportInternal(class As %String, indent As %String, mappingName As %String, ByRef mapping As %String, Output needRequired As %Boolean, Output needTestInvalidField As %Boolean) As %Status" }
    ]
   },
+  "%Library.AbstractList": {
+   "header": "Class %AbstractList",
+   "members": [],
+   "type": "%Collection.AbstractList"
+  },
   "%Library.AbstractResultSet": {
    "header": "Class %Library.AbstractResultSet",
    "members": [

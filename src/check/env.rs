@@ -1109,10 +1109,24 @@ impl<'a> WorkspaceEnv<'a> {
             if let Some((package, _)) = context.rsplit_once('.') {
                 candidates.push(format!("{package}.{name}"));
             }
-            if let Some(uri) = self.resolve_uri(DocKind::Cls, context)
-                && let Ok(details) = self.workspace.cls_details(&uri)
-            {
-                candidates.extend(details.imports.iter().map(|p| format!("{p}.{name}")));
+            // The `Import`s of the context, then of the ancestors it inherits them from. Finding
+            // the ancestors resolves the context's `Extends`, so while that is under way only its
+            // own apply.
+            let classes: Vec<Option<Class>> =
+                if self.qualifying.borrow_mut().insert(context.to_string()) {
+                    let classes = self.ancestry(context).map(|(_, class)| class).collect();
+                    self.qualifying.borrow_mut().remove(context);
+                    classes
+                } else {
+                    vec![self.resolve(context)]
+                };
+            for class in classes.into_iter().flatten() {
+                let imports = match &class {
+                    Class::Workspace(_, details) => details.imports.clone(),
+                    Class::Iris(info) => info.import.clone().unwrap_or_default(),
+                    Class::Unknown(_) => vec![],
+                };
+                candidates.extend(imports.iter().map(|p| format!("{p}.{name}")));
             }
         }
         candidates.push(format!("User.{name}"));
@@ -1475,6 +1489,7 @@ impl<'a> WorkspaceEnv<'a> {
             generated: RefCell::new(HashMap::new()),
             iris_classes: RefCell::new(HashMap::new()),
             suppress_soft_diagnostics: Cell::new(false),
+            qualifying: RefCell::new(HashSet::new()),
         }
     }
 
@@ -1599,6 +1614,9 @@ pub struct WorkspaceEnv<'a> {
     // Set during a loop's throwaway priming pass (see `Flow::with_loop`) — its findings reflect
     // pre-loop bindings only, not real, so every soft diagnostic raised meanwhile is dropped.
     suppress_soft_diagnostics: Cell<bool>,
+    // The classes whose `Extends` are being resolved, whose ancestors `qualify_class_name` can't
+    // consult yet.
+    qualifying: RefCell<HashSet<String>>,
 }
 
 pub struct ClassDocument {

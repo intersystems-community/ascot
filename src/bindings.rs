@@ -300,6 +300,7 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
                 .map(wit_bind::MemberInfo::from)
                 .collect(),
             include: details.include_names.iter().map(|i| i.it.clone()).collect(),
+            import: Some(details.imports.clone()).filter(|imports| !imports.is_empty()),
             // `exported.workspace.query-cls` already returns this class's real uri as its own
             // tuple element -- redundant to repeat it here.
             uri: None,
@@ -325,6 +326,7 @@ impl Default for wit_bind::ClassInfo {
             storage: None,
             members: vec![],
             include: vec![],
+            import: None,
             uri: None,
             class_type: None,
             deprecated: false,
