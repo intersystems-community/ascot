@@ -1113,6 +1113,25 @@ fn check_legacy_label_call<'a>(
 }
 
 // `Goto $CASE(selector, v1:label1, ..., :default)`: every arm names a label of this routine.
+// `Do $Case(x, value:entry, ..., :entry)`: the selector and each value are expressions, each
+// entry a `Do` argument.
+fn check_do_case<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    case: &cos::DoCase,
+) -> Result<(), QuasiTypeError> {
+    report_style(env, [case.kw.spelled()], &[]);
+    let _ = case.target.wrapped.to_power_ty(env, flow)?;
+    for arm in &case.arms {
+        let arm = arm.prefixed.wrapped.deref();
+        if let Some(value) = &arm.case {
+            let _ = value.to_power_ty(env, flow)?;
+        }
+        arm.entry_ref.check(env, flow)?;
+    }
+    Ok(())
+}
+
 fn check_goto_case<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1267,9 +1286,19 @@ impl CheckCommandInner for cos::Command {
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.items(env) {
                         report_argument_postconditional(env, "do", &arg.pc);
-                        check_pc(&arg.pc, env, flow, |flow| {
-                            Ok(arg.entry_ref.check(env, flow)?)
+                        check_pc(&arg.pc, env, flow, |flow| match &arg.entry_ref {
+                            cos::DoTarget::Plain(entry_ref) => Ok(entry_ref.check(env, flow)?),
+                            cos::DoTarget::Case(case) => check_do_case(env, flow, case),
                         })?;
+                    }
+                    Ok(())
+                })
+            }
+            cos::Command::User(cos::UserCommand { name, pc, args }) => {
+                flow.add_soft_diagnostic(QuasiTypeError::user_command(name.print()));
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.iter().flat_map(|args| args.items(env)) {
+                        let _ = arg.to_power_ty(env, flow)?;
                     }
                     Ok(())
                 })
@@ -2241,10 +2270,19 @@ impl CheckCommandInner for cos::MergeArgument {
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
     ) -> Result<(), QuasiTypeError> {
-        let ty = self.source.to_ranged_power_ty(env, flow)?;
-        // `MergeArgument.target` carries no range of its own; anchor on the source instead.
-        let range = env.range(&ty);
-        check_merge_target(&self.target, ty.into_inner(), range, env, flow)
+        match self {
+            cos::MergeArgument::Pair { target, source, .. } => {
+                let ty = source.to_ranged_power_ty(env, flow)?;
+                // The target carries no range of its own; anchor on the source instead.
+                let range = env.range(&ty);
+                check_merge_target(target, ty.into_inner(), range, env, flow)
+            }
+            // The target is whatever the text names: every binding may have changed.
+            cos::MergeArgument::Indirect(indirection) => {
+                let _ = indirection.to_ty(env, flow)?;
+                Ok(flow.invalidate_all()?)
+            }
+        }
     }
 }
 
@@ -3575,12 +3613,25 @@ impl CheckExprInner for AtomicExpr {
             // other string-to-`Ty` conversion here, which always produces an instance. A class
             // that doesn't exist is reported here, at the `##class(...)`, not at whatever member
             // is then accessed on it; only an IRIS connection can say so for sure.
-            AtomicExpr::Class { cls, .. } => {
+            AtomicExpr::Class { cls, oref, .. } => {
                 let name = env.qualify_class_name(&cls.deref().print());
                 if !env.class_exists(&name) {
                     return Err(QuasiTypeError::cannot_find_class(name));
                 }
-                Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(ClassTy::from(name)))))
+                let cls = ClassTy::from(name);
+                // `##class(C)oref.M()` runs `C`'s `M` on `oref`: an instance of `C` for the call.
+                let obj = match oref {
+                    None => ClsOrIns::Cls(cls),
+                    Some(cos::CastReceiver::This(..)) => {
+                        check_this(env, flow);
+                        ClsOrIns::Ins(cls)
+                    }
+                    Some(cos::CastReceiver::Local(var)) => {
+                        flow.read(&var.print())?;
+                        ClsOrIns::Ins(cls)
+                    }
+                };
+                Ok(PowerTy::plain(Ty::OREF(obj)))
             }
             AtomicExpr::Member { member, args } => {
                 let obj = env.this_ty(flow);

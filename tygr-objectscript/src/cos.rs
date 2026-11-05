@@ -675,7 +675,7 @@ pub enum DAOElem {
     True(StringEq!("true")),
     False(StringEq!("false")),
     Null(StringEq!("null")),
-    Str(OSString),
+    Str(JSONString),
     Num(Option<StringEq!("-")>, Number),
     OS {
         open: StringEq!("("),
@@ -686,10 +686,27 @@ pub enum DAOElem {
 
 #[derive(Grammar)]
 pub struct DAOBind {
-    pub key: OSString,
+    pub key: JSONString,
     pub colon: MGapXMGap<StringEq!(":")>,
     pub value: Range<DAOElem>,
 }
+
+// A JSON string: backslash escapes and no doubled quotes, as JSON spells it ("any valid JSON
+// literal string is also a valid ObjectScript expression").
+#[derive(Grammar)]
+pub struct JSONString(Wrap<DQ, Raw<Vec<JSONStringUnit>>, DQ>);
+
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum JSONStringUnit {
+    Escape(BS, CharOf<IsNotNL>),
+    Plain(CharOf<IsNotDQOrBSOrNL>),
+}
+
+char_class!(pub IsNotDQOrBSOrNL, "not_doublequote_backslash_or_newline", |ch| !matches!(
+    ch,
+    '"' | '\\' | '\n' | '\r'
+));
 
 #[derive(Grammar)]
 #[grammar(inline)]
@@ -732,6 +749,12 @@ pub type Field = Prefix<StringEq!("."), Range<MemberRef>>;
 pub enum SignatureType {
     Class(ClassName),
     Parameter(StringEq!("..#"), ClassMemberName),
+}
+
+#[derive(Grammar)]
+pub enum CastReceiver {
+    This(StringEq!("$"), StringEqCI!("this")),
+    Local(LocalVariableName),
 }
 
 #[derive(Grammar)]
@@ -1150,16 +1173,45 @@ impl Deref for CatchTarget {
 }
 
 #[derive(Grammar)]
-pub struct MergeArgument {
-    pub target: SetTarget,
-    eq: LGapXLGap<StringEq!("=")>,
-    pub source: Range<Expr>,
+pub enum MergeArgument {
+    Pair {
+        target: SetTarget,
+        eq: LGapXLGap<StringEq!("=")>,
+        source: Range<Expr>,
+    },
+    // `Merge @x`: argument indirection, `x` holding the whole `target=source` (documented).
+    Indirect(Range<Box<Indirection>>),
 }
 
 #[derive(Grammar)]
 pub struct DoArgument {
-    pub entry_ref: Range<EntryRefAndArgs>,
+    pub entry_ref: DoTarget,
     pub pc: Option<PostCondition>,
+}
+
+// What `Do` runs: an entry reference, or `$Case(x, value:entry, ..., :entry)` choosing one, each
+// value a `Do` argument (documented for `$CASE`).
+#[derive(Grammar)]
+pub enum DoTarget {
+    Plain(Range<EntryRefAndArgs>),
+    Case(DoCase),
+}
+
+#[derive(Grammar)]
+pub struct DoCase {
+    pub dollar: StringEq!("$"),
+    pub kw: Range<FnCase>,
+    pub open: StringEq!("("),
+    pub target: ArgOf<Expr>,
+    pub arms: Vec<More<ArgOf<DoCaseArm>>>,
+    pub close: StringEq!(")"),
+}
+
+#[derive(Grammar)]
+pub struct DoCaseArm {
+    pub case: Option<Range<Expr>>,
+    pub colon: StringEq!(":"),
+    pub entry_ref: Range<EntryRefAndArgs>,
 }
 
 #[derive(Grammar)]
@@ -2233,7 +2285,8 @@ pub enum HTMLUnit {
 pub enum HTMLTagContentUnit {
     Embeded1(HashEmbededOS),
     Embeded2(AngularEmbededOS),
-    Str(JSString<HashEmbededOS>),
+    // A quote is plain text: IRIS ends the block at the first balancing `>`, quoted or not.
+    Quote(Either<DQ, SQ>),
     Sym(CharOf<IsHTMLContentSafe>),
 }
 
@@ -3838,6 +3891,42 @@ pub enum Command {
     ),
     HTML(StringEqCI!("&html<"), HTML, StringEq!(">")),
     JS(JSCommand),
+    // `ZNAME args`: a user-defined command (`^%ZLANGC00`), documented, unknown to this checker.
+    User(UserCommand),
+}
+
+#[derive(Grammar)]
+pub struct UserCommand {
+    pub name: Range<UserCommandName>,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<VecSep<Range<Expr>, CommaSep<LGap>>>>,
+}
+
+// `Z` and letters, and not a command IRIS has.
+#[derive(GrammarFromStr)]
+pub struct UserCommandName(pub String);
+
+impl GrammarFrom for UserCommandName {
+    type Source = StringOf1<IsAlphabetic>;
+
+    fn print_to(&self, buf: &mut String) {
+        buf.push_str(&self.0);
+    }
+}
+
+impl FromStr for UserCommandName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        let known = COMMAND_NAMES
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case(s));
+        if s.len() > 1 && s.starts_with(['Z', 'z']) && !known {
+            Ok(Self(s.to_string()))
+        } else {
+            Err(format!("'{s}' is not a user-defined command"))
+        }
+    }
 }
 
 macro_rules! keyword_command {
@@ -4023,7 +4112,11 @@ impl Command {
             Command::MVC(command) => command,
             Command::ElseIf(branch) => branch,
             Command::Else(branch) => branch,
-            Command::CallMacro(_) | Command::ESQL(..) | Command::HTML(..) | Command::JS(_) => {
+            Command::CallMacro(_)
+            | Command::ESQL(..)
+            | Command::HTML(..)
+            | Command::JS(_)
+            | Command::User(_) => {
                 return None;
             }
         })
@@ -6644,6 +6737,9 @@ pub enum AtomicExpr {
     Class {
         kw: StringEqCI!("##class"),
         cls: Paren<QuotableClassName>,
+        // `##class(C)oref.M()` casts `M` to `C`'s on `oref`, a variable or `$this` (documented as
+        // "Casting a Method"); a parenthesized `oref` is not.
+        oref: Option<CastReceiver>,
     },
     QuoteExpression {
         kw: StringEqCI!("##quoteExp"),
