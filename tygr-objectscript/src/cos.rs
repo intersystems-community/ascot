@@ -6992,8 +6992,25 @@ pub enum RoutineElement {
 pub struct Routine {
     pub header: RoutineHeader,
     pub main: RoutineMain,
-    pub subroutines: Option<Prefix<Raw<Vec1<NL>>, VecSep<RoutineElement, Raw<Vec1<NL>>>>>,
+    pub subroutines: Option<Subroutines>,
     end: Raw<(VecSep<SGap, NL>, Option<LineComment>)>,
+}
+
+// The labels after the main body, each behind the newlines, comment lines among them, that part
+// it from what precedes it.
+#[derive(Grammar)]
+#[grammar(inline)]
+pub struct Subroutines {
+    pub gap: Raw<Vec1<NL>>,
+    pub list: VecSep<RoutineElement, Raw<Vec1<NL>>>,
+}
+
+impl Deref for Subroutines {
+    type Target = VecSep<RoutineElement, Raw<Vec1<NL>>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.list
+    }
 }
 
 #[derive(Grammar)]

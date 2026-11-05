@@ -344,6 +344,9 @@ pub enum RoutineElementKind {
 
 pub struct RoutineElementDetails {
     pub name: WithRange<String>,
+    // The comment lines right above the label, their markers dropped: its description, as a
+    // method's `///` lines are. Filled in by `routine_elements`.
+    pub doc: String,
     pub normal_args: Vec<WithRange<NormalArg>>,
     pub variadic_arg: Option<WithRange<VariadicArg>>,
     pub kind: RoutineElementKind,
@@ -471,6 +474,7 @@ fn element(
     let (normal_args, variadic_arg) = import_args(pos, params);
     RoutineElementDetails {
         name: with_range_name(label, pos),
+        doc: String::new(),
         kind,
         normal_args,
         variadic_arg,
@@ -514,6 +518,40 @@ pub fn routine_element_kind(
         cos::RoutineElement::Subroutine(subroutine) => subroutine_kind(pos, subroutine),
         cos::RoutineElement::Procedure(procedure) => procedure_kind(pos, procedure),
     }
+}
+
+/// The routine's labels in order, each with its details, description included.
+pub fn routine_elements<'r>(
+    pos: &impl Positions,
+    subroutines: Option<&'r cos::Subroutines>,
+) -> Vec<(&'r cos::RoutineElement, Option<RoutineElementDetails>)> {
+    let Some(subroutines) = subroutines else {
+        return vec![];
+    };
+    let gaps = std::iter::once(&subroutines.gap).chain(&subroutines.seps);
+    (subroutines.items.iter().zip(gaps))
+        .map(|(element, gap)| {
+            let details = routine_element_kind(pos, element).map(|mut details| {
+                details.doc = label_doc(&gap.print());
+                details
+            });
+            (element, details)
+        })
+        .collect()
+}
+
+// The trailing comment lines of the text before a label, their markers dropped.
+fn label_doc(gap: &str) -> String {
+    let mut lines: Vec<&str> = (gap.lines().rev())
+        .map_while(|line| {
+            let line = line.trim_start();
+            ["##;", "#;", "//", ";"]
+                .iter()
+                .find_map(|marker| line.strip_prefix(marker))
+        })
+        .collect();
+    lines.reverse();
+    lines.join("\n")
 }
 
 pub(crate) fn with_range_name<T: Grammar>(

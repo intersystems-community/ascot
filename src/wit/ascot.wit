@@ -236,8 +236,8 @@ interface common {
 
     record require-description {
         // A method, or a routine label with a parameter list, whose body has at least this many
-        // lines must carry a description: `///` lines right above the method, a `;` or `#;` line
-        // right above the label. `0` means every one. Private methods are exempt.
+        // lines must carry a description: `///` lines right above the method, comment lines right
+        // above the label. `0` means every one. Private methods are exempt.
         min-body-lines: u32,
     }
 

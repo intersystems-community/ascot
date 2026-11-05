@@ -4051,12 +4051,7 @@ pub(crate) fn check_rtn(
     definitions: &crate::MacroDefinitions,
 ) -> Vec<bindings::Diagnostic> {
     let olc = env.olc();
-    let elements: Vec<(&cos::RoutineElement, Option<details::RoutineElementDetails>)> = rtn
-        .subroutines
-        .iter()
-        .flat_map(|srs| srs.items.iter())
-        .map(|elem| (elem, details::routine_element_kind(olc, elem)))
-        .collect();
+    let elements = details::routine_elements(olc, rtn.subroutines.as_ref());
     let labels: Vec<_> = elements
         .iter()
         .filter_map(|(elem, details)| {
@@ -4065,7 +4060,6 @@ pub(crate) fn check_rtn(
         })
         .collect();
     let min_description_lines = min_description_lines(env);
-    let text = min_description_lines.map(|_| rtn.print());
     let env = env.for_routine(env::scoped_labels(env.uri(), &labels), definitions);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a
@@ -4092,21 +4086,15 @@ pub(crate) fn check_rtn(
     }
     for (elem, details) in &elements {
         let Some(details) = details else { continue };
-        if let (Some(min), Some(text)) = (min_description_lines, &text)
+        if let Some(min) = min_description_lines
             && details.formal_list
+            && details.doc.is_empty()
         {
             let body = match elem {
                 cos::RoutineElement::Procedure(procedure) => procedure.body.print(),
                 cos::RoutineElement::Subroutine(subroutine) => subroutine.body.print(),
             };
-            // The line right above the label, in the text checked, which keeps comment lines.
-            let line = details.name.range.start.line as usize;
-            let described = line > 0
-                && text.lines().nth(line - 1).is_some_and(|above| {
-                    let above = above.trim_start();
-                    above.starts_with(';') || above.starts_with("#;")
-                });
-            if !described && body_lines(&body) >= min {
+            if body_lines(&body) >= min {
                 let lines = body_lines(&body);
                 diagnostics.push(TypeError::undescribed("label", lines, details.name.range).into());
             }
