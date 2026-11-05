@@ -181,17 +181,31 @@ VS Code (`.vscode/mcp.json`):
 ### `ascot` as an LSP server
 
 ```sh
-ascot lsp
+ascot lsp [--iris IRIS] [--iris-namespace NS] [--style FILE] [-d VERB:TARGETS] [--shared-fs]
 ```
 
-Starts the LSP server (stdio).
+Starts the LSP server (stdio). The flags are defaults: the client's
+`initializationOptions` override them, and a `workspace/didChangeConfiguration`
+changes them while the server runs, both as an object with the same names,
+`{"iris": ..., "iris_namespace": ..., "style": ..., "diagnostics": ...}` (the
+MCP `create_workspace` takes the same). A new `iris` re-checks the open
+documents without re-reading them; a setting that can't be applied is reported
+with `window/showMessage` and left as it was.
+
+The server doesn't assume it shares a file system with the client. When it does,
+`--shared-fs` (or `"shared_fs": true` in `initializationOptions`) has it load
+the workspace roots from disk at startup, so cross-file references resolve
+before their files are opened, and lets `style` be a file's path; without it,
+the server knows the documents the client opens, and `style` is the object
+itself.
 
 ### Claude Code plugins
 
 This repository is a Claude Code plugin marketplace with two plugins, both
 expecting `ascot` on `PATH`: `ascot-mcp` registers the MCP server above, and
 `ascot-lsp` runs the LSP server and feeds its diagnostics back into the
-conversation after every edit.
+conversation after every edit; it asks for the `iris`, `iris_namespace`,
+`style` and `diagnostics` settings above when enabled.
 
 ```sh
 claude plugin marketplace add intersystems-community/ascot
@@ -234,8 +248,8 @@ Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
 
 ### Style
 
-A JSON file passed with `--style <file>` (or as the `style` of the MCP
-`create_workspace` and the JavaScript `createWorkspace`) says how code should be
+A JSON file passed with `--style <file>` (or as the `style` setting of the LSP
+and MCP servers and of the JavaScript `createWorkspace`) says how code should be
 written; only what's set is checked, as a warning. For example, with
 
 ```json
@@ -253,9 +267,10 @@ Every rule is described in [STYLE.md](STYLE.md).
 ### Diagnostics Filter
 
 `analyze`, `analyze-workspace` and `lsp` take `-d VERB:TARGETS` (long form
-`--diagnostics`), repeatable, to choose which codes are reported and at what
-severity; the MCP `create_workspace` call takes the same strings as its
-`diagnostics` list. VERB is `off`, `on` (the code's own severity) or a severity
+`--diagnostics`), repeatable or several in one value separated by spaces, to
+choose which codes are reported and at what severity; the LSP settings and the
+MCP `create_workspace` take the same strings as `diagnostics`, a list or one
+string. VERB is `off`, `on` (the code's own severity) or a severity
 (`error`, `warning`, `information`, `hint`); TARGETS is a comma-separated list
 of codes, severities (every code currently reported at one), or `all`. Values
 apply in order, a later one overriding an earlier one:

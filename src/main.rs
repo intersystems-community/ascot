@@ -11,8 +11,9 @@ use ascot::bindings::GuestWorkspace;
 use ascot::bindings::Style;
 use ascot::cos;
 use ascot::cos::Routine;
-use ascot::diagnostic_filter::{Batch, Filter};
+use ascot::diagnostic_filter::Filter;
 use ascot::mcp::{DiagnosticsResult, FileDiagnostics};
+use ascot::settings::{Diagnostics, Settings, StyleSetting};
 use ascot::style;
 use std::collections::HashSet;
 use std::fs;
@@ -116,6 +117,9 @@ enum Command {
         shared_fs: bool,
     },
     /// Run the LSP server on stdio, for editors and AI agents
+    ///
+    /// The flags are defaults: the client's `initializationOptions` override them, with the same
+    /// names, and a `workspace/didChangeConfiguration` changes them while the server runs.
     Lsp {
         #[command(flatten)]
         iris: IrisArgs,
@@ -123,6 +127,10 @@ enum Command {
         style: StyleArgs,
         #[command(flatten)]
         filter: FilterArgs,
+        /// The server shares the client's file system: the workspace roots are read from disk
+        /// at startup, and a `style` setting may be a file's path
+        #[arg(long)]
+        shared_fs: bool,
     },
 }
 
@@ -158,13 +166,20 @@ struct FilterArgs {
         help = "Which codes are reported, and at what severity",
         long_help = diagnostics_help()
     )]
-    diagnostics: Vec<Batch>,
+    diagnostics: Vec<Filter>,
+}
+
+impl FilterArgs {
+    fn filter(self) -> Filter {
+        Filter(self.diagnostics.into_iter().flat_map(|f| f.0).collect())
+    }
 }
 
 fn diagnostics_help() -> String {
     format!(
-        "Which codes are reported, and at what severity\n\nRepeatable and applied in order, a later \
-         value overriding an earlier one; `on` is the code's own severity. A target is a code, a \
+        "Which codes are reported, and at what severity\n\nRepeatable, or several in one value \
+         separated by spaces, and applied in order, a later value overriding an earlier one; `on` \
+         is the code's own severity. A target is a code, a \
          severity (every code currently reported at it), or `all`. For example `-d off:A5579`, \
          `-d off:hint,information`, `-d off:all -d on:A7095,A6851`, or `-d hint:A4471`. The exit \
          code follows what is reported.\n\n{}",
@@ -212,7 +227,7 @@ fn main() {
             paths.iter().map(PathBuf::as_path),
             iris.open(),
             style.load(),
-            Filter(filter.diagnostics),
+            filter.filter(),
             output.format,
         ),
         Command::AnalyzeWorkspace {
@@ -227,7 +242,7 @@ fn main() {
             paths.iter().map(PathBuf::as_path),
             iris.open(),
             style.load(),
-            Filter(filter.diagnostics),
+            filter.filter(),
             output.format,
         ),
         Command::Parse { file } => scan_file(&file),
@@ -244,9 +259,17 @@ fn main() {
             iris,
             style,
             filter,
+            shared_fs,
         } => {
-            if let Err(err) = ascot::lsp::run(iris.open(), style.load(), Filter(filter.diagnostics))
-            {
+            let settings = Settings {
+                iris: iris.iris,
+                iris_namespace: iris.iris_namespace,
+                style: style.load().map(StyleSetting::from),
+                diagnostics: Some(Diagnostics::List(
+                    filter.filter().0.iter().map(Grammar::print).collect(),
+                )),
+            };
+            if let Err(err) = ascot::lsp::run(settings, shared_fs) {
                 eprintln!("LSP server error: {err}");
                 exit(1);
             }
@@ -273,7 +296,7 @@ impl StyleArgs {
     /// Reads and parses `--style`, if given. Like `--iris`, a file that can't be read or parsed is
     /// an error up front, not a silent fallback to no style.
     fn load(self) -> Option<Style> {
-        let path = self.style?;
+        let path = self.style.filter(|path| !path.as_os_str().is_empty())?;
         let fail = |err: String| -> ! {
             eprintln!("--style: {}: {err}", path.display());
             exit(1)

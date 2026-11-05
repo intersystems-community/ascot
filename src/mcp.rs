@@ -26,7 +26,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     Workspace,
     bindings::{Diagnostic, GuestWorkspace, InlayHint, Location, Position, Range},
-    iris, style,
+    settings::Settings,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -39,27 +39,8 @@ pub struct WorkspaceIdRequest {
 pub struct CreateWorkspaceRequest {
     /// An id of your choice; every other tool names the workspace by it.
     pub workspace: String,
-    /// Where lookups that can't be resolved from documents in this workspace (e.g. a class that
-    /// isn't open here) go: an IRIS Community release such as `2026.2`, whose pre-built
-    /// declarations ascot downloads once; an IRIS instance, `scheme://user:pass@host:port`,
-    /// queried via the Atelier REST API; or the path of a declaration file written by
-    /// `ascot declare`. Defaults to the newest release ascot was built for.
-    pub iris: Option<String>,
-    /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
-    /// for a URL; for a declaration file it must match the namespace it declares.
-    pub iris_namespace: Option<String>,
-    /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
-    /// have every command keyword but `Do`'s written in full; `function` and `function_<name>` do
-    /// the same for intrinsic functions. Applies to every document. The keys are documented at
-    /// https://github.com/intersystems-community/ascot/blob/main/STYLE.md.
-    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
-    pub style: Option<serde_json::Value>,
-    /// Which codes are reported, and at what severity: `VERB:TARGETS` strings applied in order, a
-    /// later one overriding an earlier one. VERB is `off`, `on` (at the code's own severity) or a
-    /// severity (`error`, `warning`, `information`, `hint`); TARGETS is a comma-separated list of
-    /// codes, severities (every code currently reported at one), or `all`. For example
-    /// `["off:A5579,A4043"]`, `["off:hint,information"]`, or `["off:all", "on:A7095,A6851"]`.
-    pub diagnostics: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub settings: Settings,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -234,30 +215,16 @@ impl Server {
         &self,
         Parameters(CreateWorkspaceRequest {
             workspace,
-            iris,
-            iris_namespace,
-            style,
-            diagnostics,
+            settings,
         }): Parameters<CreateWorkspaceRequest>,
     ) -> Result<String, String> {
         let mut workspaces = self.workspaces.write().await;
         if workspaces.contains_key(&workspace) {
             return Err(format!("workspace already exists: {workspace:?}"));
         }
-        let style = style
-            .map(style::from_value)
-            .transpose()
-            .map_err(|err| format!("style: {err}"))?;
-        let filter = diagnostics
-            .unwrap_or_default()
-            .iter()
-            .map(|batch| batch.parse())
-            .collect::<Result<_, _>>()
-            .map(crate::diagnostic_filter::Filter)
-            .map_err(|err| format!("diagnostics: {err}"))?;
-        let iris_name = iris.unwrap_or_else(|| iris::LATEST.to_string());
-        let iris = iris::open(&iris_name, iris_namespace.as_deref())
-            .map_err(|err| format!("iris {iris_name}: {err}"))?;
+        let style = settings.style(self.shared_fs)?;
+        let filter = settings.filter()?;
+        let iris = settings.open_iris()?;
         workspaces.insert(
             workspace.clone(),
             Arc::new(Mutex::new({

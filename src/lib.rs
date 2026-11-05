@@ -60,6 +60,8 @@ mod prebuilt;
 mod render;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sarif;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod settings;
 pub mod style;
 #[cfg(not(target_arch = "wasm32"))]
 pub use atelier::RawAtelier;
@@ -842,6 +844,16 @@ impl Workspace {
     }
 }
 
+impl Workspace {
+    /// [`GuestWorkspace::set_env`](bindings::GuestWorkspace::set_env) with the environment open:
+    /// the documents stay, what was learned from the old one goes, and the uris returned are stale.
+    pub fn set_iris(&self, iris: Option<IrisHandle>) -> Vec<String> {
+        let mut this = self.borrow_mut();
+        this.iris = iris;
+        this.forget(true)
+    }
+}
+
 impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn new(env: Option<bindings::Env>, style: Option<Style>) -> Self {
@@ -863,9 +875,7 @@ impl bindings::GuestWorkspace for Workspace {
 
     #[allow(async_fn_in_trait)]
     fn set_env(&self, env: Option<bindings::Env>) -> Vec<String> {
-        let mut this = self.borrow_mut();
-        this.iris = iris_handle(env);
-        this.forget(true)
+        self.set_iris(iris_handle(env))
     }
 
     #[allow(async_fn_in_trait)]

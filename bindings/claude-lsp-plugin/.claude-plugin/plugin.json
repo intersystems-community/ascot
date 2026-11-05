@@ -2,11 +2,47 @@
     "name": "ascot-lsp",
     "version": "0.4.3",
     "description": "ascot as an LSP server for InterSystems ObjectScript",
+    "userConfig": {
+        "iris": {
+            "type": "string",
+            "title": "IRIS",
+            "description": "Where classes, routines and includes outside the workspace are resolved: an IRIS Community release such as 2026.2, an instance as http://user:password@host:port, a declaration file written by `ascot declare`, or `none`. Leave empty for the newest release ascot knows.",
+            "default": "",
+            "sensitive": true
+        },
+        "iris_namespace": {
+            "type": "string",
+            "title": "IRIS namespace",
+            "description": "The namespace of the instance or declaration file. Leave empty for %SYS.",
+            "default": ""
+        },
+        "style": {
+            "type": "file",
+            "title": "Style file",
+            "description": "A JSON file of style rules, as documented in STYLE.md. Leave empty to check no style.",
+            "default": ""
+        },
+        "diagnostics": {
+            "type": "string",
+            "title": "Diagnostics filter",
+            "description": "Which codes are reported, and at what severity: VERB:TARGETS values separated by spaces, such as `off:hint on:A5579`. Leave empty for every code at its own severity.",
+            "default": ""
+        }
+    },
     "lspServers": {
         "objectscript": {
             "command": "ascot",
             "args": [
-                "lsp"
+                "lsp",
+                "--shared-fs",
+                "--iris",
+                "${user_config.iris}",
+                "--iris-namespace",
+                "${user_config.iris_namespace}",
+                "--style",
+                "${user_config.style}",
+                "--diagnostics",
+                "${user_config.diagnostics}"
             ],
             "extensionToLanguage": {
                 ".cls": "objectscript",
