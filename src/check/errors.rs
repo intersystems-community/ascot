@@ -786,6 +786,10 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "The style allows {max} command(s) per line; this is one more"]
     CommandsPerLine { max: u32 },
+    #[code = "S7126"]
+    #[severity = Warning]
+    #[message = "Describe this {kind}: its body is {lines} lines"]
+    Undescribed { kind: String, lines: usize },
     #[code = "S8215"]
     #[severity = Warning]
     #[message = "Put {wanted} before `{{`"]
@@ -1287,6 +1291,16 @@ impl TypeError {
 
     pub fn new_per_block(max: u32, range: Range) -> Self {
         Self::at(TypeErrorKind::NewPerBlock { max }, range)
+    }
+
+    pub fn undescribed(kind: &str, lines: usize, range: Range) -> Self {
+        Self::at(
+            TypeErrorKind::Undescribed {
+                kind: kind.to_string(),
+                lines,
+            },
+            range,
+        )
     }
 
     pub fn commands_per_line(max: u32, range: Range) -> Self {
