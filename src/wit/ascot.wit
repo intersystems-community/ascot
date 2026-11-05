@@ -553,6 +553,10 @@ interface exported {
         set-env: func(env: option<env>) -> list<string>;
         // Replaces the keyword style; returns every uri, since every check applied the old one.
         set-style: func(style: option<style>) -> list<string>;
+        // Replaces which codes `diagnostics` reports, and at what severity: `VERB:TARGETS` values
+        // applied in order, as `ascot analyze -d` takes them; returns every uri, since every
+        // report may change. An invalid value is the error, and the filter stays as it was.
+        set-diagnostics: func(diagnostics: list<string>) -> result<list<string>, string>;
         diagnostics: func(uri: string) -> list<diagnostic>;
         inlay-hint: func(uri: string, range: range) -> list<inlay-hint>;
         definition: func(uri: string, position: position) -> option<location>;

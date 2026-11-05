@@ -79,13 +79,20 @@ const connected = await createWorkspace(new MyAtelier());
 const strict = await createWorkspace(undefined, { command: { form: "long" }, function: { case: "pascal" }, commandDo: { form: "short" } });
 ```
 
+and an optional third, the diagnostics filter as `ascot analyze -d` takes it, `VERB:TARGETS`
+values applied in order:
+
+```ts
+const quiet = await createWorkspace(undefined, undefined, ["off:hint,information"]);
+```
+
 Load every file of a project into one `Workspace` so cross-file references resolve, and
 call `open` again on each edit. `close(uri)` removes a document; a closed editor tab is
 usually not a removal, so keep the on-disk text open instead.
 
 ## API
 
-`createWorkspace(iris?, style?)` returns a `Workspace` whose methods mirror the engine's
+`createWorkspace(iris?, style?, diagnostics?)` returns a `Workspace` whose methods mirror the engine's
 exports, all returning promises. Positions and ranges are zero-based line/character pairs,
 as in the Language Server Protocol.
 
@@ -95,6 +102,7 @@ as in the Language Server Protocol.
 | `close(uri)`                                    | uris whose analysis is now stale                      |
 | `setEnv(iris?)`                                 | every uri: a new server stales all analysis           |
 | `setStyle(style?)`                              | every uri: a new style stales every check             |
+| `setDiagnostics(filter)`                        | every uri: a new filter may change every report       |
 | `diagnostics(uri)`                              | `Diagnostic[]`                                        |
 | `inlayHint(uri, range)`                         | `InlayHint[]`                                         |
 | `definition(uri, position)`                     | `Location \| undefined`                               |

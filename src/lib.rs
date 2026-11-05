@@ -60,6 +60,8 @@ mod prebuilt;
 mod render;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sarif;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod settings;
 pub mod style;
 #[cfg(not(target_arch = "wasm32"))]
 pub use atelier::RawAtelier;
@@ -801,11 +803,6 @@ impl Workspace {
         Workspace(RefCell::new(build_workspace_struct(iris, style)))
     }
 
-    /// Which codes `diagnostics` reports, and at what severity.
-    pub fn set_diagnostic_filter(&self, filter: diagnostic_filter::Filter) {
-        self.borrow_mut().diagnostic_filter = filter;
-    }
-
     /// Opens `path` if it is a `.cls`/`.mac`/`.int`/`.inc` file, or every such file under it if it
     /// is a directory, each keyed by its `file:` url. Returns the uris opened, and the uris whose
     /// analysis is now stale.
@@ -835,10 +832,25 @@ impl Workspace {
             opened.push(uri.to_string());
         }
     }
+}
+
+impl Workspace {
+    /// Which codes `diagnostics` reports, and at what severity.
+    pub fn set_diagnostic_filter(&self, filter: diagnostic_filter::Filter) {
+        self.borrow_mut().diagnostic_filter = filter;
+    }
 
     /// Every document's uri.
     pub fn uris(&self) -> Vec<String> {
         self.borrow().doc_cache.keys().cloned().collect()
+    }
+
+    /// [`GuestWorkspace::set_env`](bindings::GuestWorkspace::set_env) with the environment open:
+    /// the documents stay, what was learned from the old one goes, and the uris returned are stale.
+    pub fn set_iris(&self, iris: Option<IrisHandle>) -> Vec<String> {
+        let mut this = self.borrow_mut();
+        this.iris = iris;
+        this.forget(true)
     }
 }
 
@@ -863,9 +875,7 @@ impl bindings::GuestWorkspace for Workspace {
 
     #[allow(async_fn_in_trait)]
     fn set_env(&self, env: Option<bindings::Env>) -> Vec<String> {
-        let mut this = self.borrow_mut();
-        this.iris = iris_handle(env);
-        this.forget(true)
+        self.set_iris(iris_handle(env))
     }
 
     #[allow(async_fn_in_trait)]
@@ -873,6 +883,12 @@ impl bindings::GuestWorkspace for Workspace {
         let mut this = self.borrow_mut();
         this.style = style.as_ref().map(style::Styles::new);
         this.forget(false)
+    }
+
+    #[allow(async_fn_in_trait)]
+    fn set_diagnostics(&self, diagnostics: Vec<String>) -> Result<Vec<String>, String> {
+        self.set_diagnostic_filter(diagnostics.join(" ").parse()?);
+        Ok(self.uris())
     }
 
     #[allow(async_fn_in_trait)]

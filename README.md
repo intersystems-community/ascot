@@ -18,12 +18,12 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
   assigned-but-never-read locals, argument count/mode mismatches, missing
   `QUIT`/`RETURN`, inconsistent variable declarations across branches, and
   more.
-- **Hover**: type and signature info, or macro expansion (`.mac`/`.int` only) on
-  hover.
-- **Go to Definition**/**Find References**: for classes, class members, and
-  same-routine labels/gotos.
 - **Document/Workspace Symbols**: navigate classes and class members within a
   file or across the workspace.
+- **Go to Definition**/**Find References**: for classes, class members, and
+  same-routine labels/gotos.
+- **Hover**: type and signature info, or macro expansion (`.mac`/`.int` only) on
+  hover.
 - **Inlay Hints**: inferred types, argument names, and parameter default
   values shown inline.
 
@@ -58,7 +58,7 @@ brew trust intersystems-community/tap # if Homebrew 5.1.15 or later
 brew install intersystems-community/tap/ascot
 ```
 
-### Rust
+### Rust (crates.io)
 
 From [crates.io/crates/ascot](https://crates.io/crates/ascot):
 
@@ -71,53 +71,44 @@ rustup installers offer to set up; a build failing on `link.exe` or
 `kernel32.lib` is missing them, see rustup's
 [MSVC prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html).
 
-### JavaScript binding
+### TypeScript/JavaScript (npm)
 
-A library for Node 24+ and other JS consumers; it does not provide an `ascot`
-executable. From
+From
 [npmjs.com/package/@intersystems-community/ascot](https://www.npmjs.com/package/@intersystems-community/ascot):
 
 ```sh
 npm install @intersystems-community/ascot
 ```
 
+A library; it does not provide an `ascot` executable.
+
 ## Usage
+
+```sh
+ascot help
+```
+
+Lists the commands, and `ascot help <COMMAND>` (or
+`ascot <COMMAND> --help`) shows one's options; the IRIS, style and diagnostics
+ones are the [settings](#settings) described under Advanced Usage.
 
 ### `ascot` as a CLI tool
 
-`ascot help` lists the commands, and `ascot help <COMMAND>` (or
-`ascot <COMMAND> --help`) shows one's options; the IRIS and style ones are
-described under [Advanced Usage](#advanced-usage).
-
 ```sh
-ascot analyze <PATH>...
+ascot analyze [--root DIR] <PATH>...
 ```
 
 Loads every `.cls`/`.mac`/`.int`/`.inc` file under each `PATH` into one
-workspace and prints diagnostics for all of them. Exits non-zero if any error
-or warning was found, or if a `PATH` doesn't exist.
-Both `analyze` commands also print JSON instead of text: `--format lsp` gives
-the LSP diagnostic records per file, as the language server publishes and the
-MCP `check` tool returns them, and `--format sarif` one SARIF 2.1.0 document
-for code scanning. The summary stays on stderr and the exit code is the same.
+workspace and prints diagnostics for all of them. With `--root`, the workspace
+is every file under `DIR` instead, so cross-file references resolve, and the
+`PATH`s choose whose diagnostics are printed; one outside `DIR` is skipped with
+a warning. Exits non-zero if any error or warning was found, or if a `PATH`
+doesn't exist.
 
-```sh
-ascot analyze-workspace <WORKSPACE-ROOT> <PATH>...
-```
-
-Loads every `.cls`/`.mac`/`.int`/`.inc` file under `WORKSPACE-ROOT` into a single
-workspace, so cross-file references resolve, but only prints diagnostics for
-files under the given `PATH`(s). Useful for checking a subset of a large
-workspace without losing cross-file context. Each `PATH` must exist and be
-inside `WORKSPACE-ROOT`; a nonexistent one is an error, and one outside the
-root is skipped with a warning.
-
-```sh
-ascot parse FILE
-```
-
-Only parses `FILE` (no type checking) and prints the syntax error, if any.
-Exits non-zero on a syntax error.
+`--format lsp` prints the LSP diagnostic records per file instead of text, as
+the language server publishes and the MCP `check` tool returns them, and
+`--format sarif` one SARIF 2.1.0 document for code scanning. The summary stays
+on stderr and the exit code is the same.
 
 ### `ascot` as an MCP server
 
@@ -126,24 +117,10 @@ ascot mcp
 ```
 
 Starts the MCP server (stdio), exposing workspace analysis as tools an AI agent
-calls on demand. Any MCP client that can launch a stdio server works: the
-command is `ascot` (or its full path) and the single argument is `mcp`.
-
-The `insert` tool takes each document's text, since the server can't assume it
-shares a file system with the agent. When it does, start it with
-`ascot mcp --shared-fs`: `insert` then reads a `file://` uri given without
-`src` from disk, a single file or a whole directory of `.cls`/`.mac`/`.int`/`.inc`
-files, and inserting a directory again re-reads it and drops the files no longer
-there.
-
-The tools and their parameters are documented on
-[docs.rs](https://docs.rs/ascot/latest/ascot/mcp/struct.Server.html).
-To try them by hand, the [MCP Inspector](https://github.com/modelcontextprotocol/inspector)
-lists them and calls them from a browser:
-
-```sh
-npx @modelcontextprotocol/inspector ascot mcp
-```
+calls on demand: `create_workspace` takes the [settings](#settings), `insert`
+each document's text (or, with a [shared file system](#shared-file-system), its
+`file://` uri). Any MCP client that can launch a stdio server works: the command
+is `ascot` (or its full path) and the single argument is `mcp`.
 
 Claude Code:
 
@@ -178,13 +155,28 @@ VS Code (`.vscode/mcp.json`):
 }
 ```
 
+The tools and their parameters are documented on
+[docs.rs](https://docs.rs/ascot/latest/ascot/mcp/struct.Server.html).
+To try them by hand, the [MCP Inspector](https://github.com/modelcontextprotocol/inspector)
+lists them and calls them from a browser:
+
+```sh
+npx @modelcontextprotocol/inspector ascot mcp
+```
+
 ### `ascot` as an LSP server
 
 ```sh
 ascot lsp
 ```
 
-Starts the LSP server (stdio).
+Starts the LSP server (stdio). Its flags are the [settings](#settings) as
+defaults: the client overrides them with `initializationOptions` and changes
+them with `workspace/didChangeConfiguration`. A new `iris` re-checks the open
+documents without re-reading them; a setting that can't be applied is reported
+with `window/showMessage` and left as it was. With a
+[shared file system](#shared-file-system), the workspace roots are loaded from
+disk at startup.
 
 ### Claude Code plugins
 
@@ -201,12 +193,21 @@ claude plugin install ascot-lsp@ascot-plugins
 
 ## Advanced Usage
 
-### Connecting to IRIS
+### Settings
+
+Which IRIS to ask, the style to check and the diagnostics to report are the same
+three settings everywhere; the `ascot-lsp` plugin asks for them when enabled.
+
+| | [IRIS](#documents-on-iris) | [Style](#style) | [Diagnostics](#diagnostics-filter) |
+| --- | --- | --- | --- |
+| [CLI](#ascot-as-a-cli-tool), [LSP](#ascot-as-an-lsp-server) | `--iris`, `--iris-namespace` | `--style FILE` | `-d VERB:TARGETS` |
+| [MCP](#ascot-as-an-mcp-server) (`create_workspace`), [LSP](#ascot-as-an-lsp-server) (`initializationOptions` and `workspace/didChangeConfiguration`) | `iris`, `iris_namespace` | `style` | `diagnostics` |
+| [TS/JS](#typescriptjavascript-npm) (`createWorkspace`) | `env` | `style` | `diagnostics` |
+
+### Documents on IRIS
 
 Classes, routines and include files outside the workspace are resolved against
-IRIS. `--iris` says which IRIS, for `analyze`, `analyze-workspace` and `lsp`;
-`mcp` takes the same in the `iris` argument of `create_workspace`; a wasm host
-passes the same through `env`:
+IRIS; `iris` says which:
 
 - `--iris latest` (default): the newest declaration-only snapshot of IRIS this
   ascot knows, downloaded once (4 MB) from this repository's
@@ -234,9 +235,8 @@ Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
 
 ### Style
 
-A JSON file passed with `--style <file>` (or as the `style` of the MCP
-`create_workspace` and the JavaScript `createWorkspace`) says how code should be
-written; only what's set is checked, as a warning. For example, with
+`style` is a JSON object (for `--style`, a file holding it) saying how code
+should be written; only what's set is checked, as a warning. For example, with
 
 ```json
 { "command": { "form": "Long", "case": "Pascal" }, "allow_quit_for_return": false }
@@ -252,13 +252,12 @@ Every rule is described in [STYLE.md](STYLE.md).
 
 ### Diagnostics Filter
 
-`analyze`, `analyze-workspace` and `lsp` take `-d VERB:TARGETS` (long form
-`--diagnostics`), repeatable, to choose which codes are reported and at what
-severity; the MCP `create_workspace` call takes the same strings as its
-`diagnostics` list. VERB is `off`, `on` (the code's own severity) or a severity
-(`error`, `warning`, `information`, `hint`); TARGETS is a comma-separated list
-of codes, severities (every code currently reported at one), or `all`. Values
-apply in order, a later one overriding an earlier one:
+`diagnostics` is `VERB:TARGETS` values, as a list or separated by spaces (`-d`,
+long form `--diagnostics`, is also repeatable), choosing which codes are
+reported and at what severity. VERB is `off`, `on` (the code's own severity) or
+a severity (`error`, `warning`, `information`, `hint`); TARGETS is a
+comma-separated list of codes, severities (every code currently reported at
+one), or `all`. Values apply in order, a later one overriding an earlier one:
 
 ```sh
 ascot analyze -d off:A5579,A4043 src/            # drop two codes
@@ -269,6 +268,16 @@ ascot analyze -d hint:A4471 src/                 # report one as a hint
 
 The exit code follows what is reported, so a dropped or downgraded warning no
 longer fails a build.
+
+### Shared file system
+
+Neither server assumes it shares a file system with its client; `--shared-fs`
+says it does. `mcp`'s `insert` then reads a `file://` uri given without `src`
+from disk, a single file or a whole directory of `.cls`/`.mac`/`.int`/`.inc`
+files, and inserting a directory again re-reads it and drops the files no longer
+there. `lsp` then loads the workspace roots from disk at startup, so cross-file
+references resolve before their files are opened, and its `style` may be a
+file's path.
 
 ## Contributing
 
