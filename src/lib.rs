@@ -1435,8 +1435,7 @@ mod tests {
         let uri = "Owner.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.Owner Extends %RegisteredObject {\nProperty P As App.NotOpen;\n}\n"
-                .to_string(),
+            "Class Test.Owner {\nProperty P As App.NotOpen;\n}\n".to_string(),
         );
         assert!(workspace.diagnostics(uri.clone()).is_empty());
         assert_eq!(workspace.set_env(None), std::slice::from_ref(&uri));
@@ -1486,8 +1485,7 @@ mod tests {
         let uri = "Owner.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.Owner Extends %RegisteredObject {\nProperty P As App.NotOpen;\n}\n"
-                .to_string(),
+            "Class Test.Owner {\nProperty P As App.NotOpen;\n}\n".to_string(),
         );
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
@@ -1522,21 +1520,25 @@ mod tests {
     }
 
     #[test]
-    fn without_iris_a_member_past_the_workspace_is_an_error() {
+    fn without_iris_a_superclass_outside_the_workspace_is_an_error_at_the_extends() {
         let workspace = Workspace::new(None, None);
         let uri = "Probe.cls".to_string();
-        // With no IRIS there is no environment: `%RegisteredObject` doesn't exist, so neither
-        // does anything inherited from it. The strictest reading, rather than trust.
+        // With no IRIS there is no environment: `%RegisteredObject` doesn't exist, which is
+        // reported where it is named; past it the hierarchy is unknown, so a member nobody
+        // declares is unconfirmed rather than missing.
         workspace.open(
             uri.clone(),
             "Class Test.Probe Extends %RegisteredObject {\nMethod Foo() {\n do ..SomeInheritedMethod()\n quit\n}\n}\n".to_string(),
         );
 
         let diagnostics = workspace.diagnostics(uri);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
         assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Error);
-        assert!(diagnostics[0].message.contains("SomeInheritedMethod"));
-        assert_eq!(diagnostics[0].range.start.line, 2);
+        assert!(diagnostics[0].message.contains("%Library.RegisteredObject"));
+        assert_eq!(diagnostics[0].range.start.line, 0);
+        assert_eq!(diagnostics[1].severity, bindings::DiagnosticSeverity::Hint);
+        assert!(diagnostics[1].message.contains("SomeInheritedMethod"));
+        assert_eq!(diagnostics[1].range.start.line, 2);
     }
 
     #[test]
@@ -2660,7 +2662,7 @@ mod tests {
         let uri = "T.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.T Extends %RegisteredObject {\nClassMethod M(x) As %String [ CodeMode = expression ] {\n$Piece(x,\",\")\n}\n}\n".to_string(),
+            "Class Test.T {\nClassMethod M(x) As %String [ CodeMode = expression ] {\n$Piece(x,\",\")\n}\n}\n".to_string(),
         );
         assert_eq!(
             style_messages(&workspace, &uri),
@@ -2678,7 +2680,7 @@ mod tests {
         let uri = "T.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.T Extends %RegisteredObject {\nClassMethod M() {\n Set x=1\n Write x\n Quit\n}\n}\n".to_string(),
+            "Class Test.T {\nClassMethod M() {\n Set x=1\n Write x\n Quit\n}\n}\n".to_string(),
         );
         assert_eq!(
             style_messages(&workspace, &uri),
@@ -2763,7 +2765,8 @@ mod tests {
         let diagnostics = class_diagnostics(
             "ClassMethod Z() As %String {\n #define LATE 1\n Quit $$$LATE\n}\nClassMethod A() As %String {\n #define REPORT(%x) Write %x\n $$$REPORT(1)\n Quit $$$LATE\n}\nClassMethod B() As %String {\n $$$REPORT(2)\n Quit \"\"\n}\n",
         );
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        // Two about the macros, and the superclass no environment can confirm.
+        assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
         let undefined = diagnostics
             .iter()
             .find(|d| d.message.contains("'LATE' is undefined"));
