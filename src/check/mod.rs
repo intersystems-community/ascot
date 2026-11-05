@@ -4065,7 +4065,7 @@ pub(crate) fn check_rtn(
         })
         .collect();
     let min_description_lines = min_description_lines(env);
-    let doc = env;
+    let text = min_description_lines.map(|_| rtn.print());
     let env = env.for_routine(env::scoped_labels(env.uri(), &labels), definitions);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a
@@ -4092,16 +4092,17 @@ pub(crate) fn check_rtn(
     }
     for (elem, details) in &elements {
         let Some(details) = details else { continue };
-        if let Some(min) = min_description_lines
+        if let (Some(min), Some(text)) = (min_description_lines, &text)
             && details.formal_list
         {
             let body = match elem {
                 cos::RoutineElement::Procedure(procedure) => procedure.body.print(),
                 cos::RoutineElement::Subroutine(subroutine) => subroutine.body.print(),
             };
-            let described = doc
-                .source_line_above(details.name.range.start)
-                .is_some_and(|above| {
+            // The line right above the label, in the text checked, which keeps comment lines.
+            let line = details.name.range.start.line as usize;
+            let described = line > 0
+                && text.lines().nth(line - 1).is_some_and(|above| {
                     let above = above.trim_start();
                     above.starts_with(';') || above.starts_with("#;")
                 });

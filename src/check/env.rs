@@ -1653,20 +1653,6 @@ impl<'a> DocumentEnv<'a> {
         self
     }
 
-    // The document's line right above the one `position` (in the checked text) comes from. A
-    // comment there is read from the document itself, since the expansion drops `#;` lines.
-    pub(crate) fn source_line_above(&self, position: bindings::Position) -> Option<String> {
-        let line = match self.source_map {
-            Some(map) => map.relocate_position(position)?.line,
-            None => position.line,
-        };
-        let cell = self.base.workspace.doc_cache.get(self.uri)?.as_ref().ok()?;
-        let text = &cell.borrow().text;
-        text.lines()
-            .nth((line as usize).checked_sub(1)?)
-            .map(str::to_string)
-    }
-
     pub fn olc(&self) -> &'a OLC {
         self.olc
     }

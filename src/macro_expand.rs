@@ -793,7 +793,8 @@ impl WorkspaceStruct {
                         }
                     }
                     MacroRedex::Lit(_, text, _) => dones.push(&text.print(), &origin, precise),
-                    MacroRedex::LC(..) => (),
+                    // A comment included: matched whole, nothing in it expands, and a check may
+                    // read it.
                     unit => dones.push(&unit.print(), &origin, precise),
                 },
             }
