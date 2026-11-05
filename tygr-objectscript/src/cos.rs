@@ -2450,14 +2450,7 @@ pub struct Valued<Name, Value> {
     after: KeywordEnd,
 }
 
-// Spelled as IRIS accepts them: `ClassType` in lowercase only, the rest in any case. `""` is how
-// IRIS writes "no class type", on every non-persistent class it exports.
-#[derive(Grammar)]
-#[grammar(inline)]
-pub enum ClassTypeValue {
-    Named(ClassType),
-    None(StringEq!("\"\"")),
-}
+// Spelled as IRIS accepts them: `ClassType` in lowercase only, the rest in any case.
 
 #[derive(Grammar)]
 #[grammar(inline)]
@@ -2484,7 +2477,8 @@ pub enum Inheritance {
 #[derive(Grammar)]
 pub enum ClassKeyword {
     Abstract(Flag<StringEqCI!("Abstract")>),
-    ClassType(Valued<StringEqCI!("ClassType"), ClassTypeValue>),
+    // `""` is how IRIS writes "no class type", on every non-persistent class it exports.
+    ClassType(Valued<StringEqCI!("ClassType"), Either<ClassType, StringEq!("\"\"")>>),
     ClientDataType(Valued<StringEqCI!("ClientDataType"), KeywordValue>),
     ClientName(Valued<StringEqCI!("ClientName"), KeywordValue>),
     CompileAfter(Valued<StringEqCI!("CompileAfter"), KeywordValue>),

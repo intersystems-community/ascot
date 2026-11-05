@@ -684,10 +684,7 @@ impl TryFrom<&str> for ClassDetails {
             use cos::ClassKeyword::*;
             match keyword {
                 ClassType(v) => {
-                    keywords.class_type = match &v.value {
-                        cos::ClassTypeValue::Named(t) => Some(t.into()),
-                        cos::ClassTypeValue::None(_) => None,
-                    }
+                    keywords.class_type = v.value.as_ref().left().map(bindings::ClassType::from)
                 }
                 Deprecated(flag) => keywords.deprecated = flag.is_set(),
                 Inheritance(v) => keywords.inheritance = Some((&v.value).into()),
