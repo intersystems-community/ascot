@@ -246,7 +246,7 @@ fn handle_request(workspace: &Workspace, req: Request) -> Response {
                             uri: symbol.location.uri.parse().ok()?,
                             range: to_lsp_range(symbol.location.range),
                         },
-                        container_name: None,
+                        container_name: symbol.container_name,
                     })
                 })
                 .collect::<Vec<_>>();

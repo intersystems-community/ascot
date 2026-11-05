@@ -1072,12 +1072,17 @@ impl bindings::GuestWorkspace for Workspace {
     // their members/labels.
     #[allow(async_fn_in_trait)]
     fn workspace_symbol(&self, query: String) -> Vec<bindings::WorkspaceSymbol> {
-        fn symbol_in(uri: &str, symbol: bindings::SymbolInfo) -> bindings::WorkspaceSymbol {
+        fn symbol_in(
+            uri: &str,
+            symbol: bindings::SymbolInfo,
+            container_name: Option<String>,
+        ) -> bindings::WorkspaceSymbol {
             bindings::WorkspaceSymbol {
                 name: symbol.name,
                 kind: symbol.kind,
                 deprecated: symbol.deprecated,
                 location: bindings::Location::new(uri.to_string(), symbol.selection_range),
+                container_name,
             }
         }
         let this = self.borrow();
@@ -1091,34 +1096,41 @@ impl bindings::GuestWorkspace for Workspace {
                     kind: bindings::SymbolKind::Class,
                     deprecated: details.keywords.deprecated,
                     location: bindings::Location::new(uri.clone(), details.name.range),
+                    container_name: None,
                 };
+                let class_name = details.name.to_string();
                 std::iter::once(cls_symbol)
                     .chain(details.members.in_order().into_iter().map(move |member| {
+                        let kind = bindings::MemberKind::from(&member.it.kind);
                         bindings::WorkspaceSymbol {
                             name: member.it.name.to_string(),
-                            kind: bindings::member_kind_to_symbol_kind(
-                                &bindings::MemberKind::from(&member.it.kind),
-                            ),
+                            kind: bindings::member_kind_to_symbol_kind(&kind),
                             deprecated: member.it.deprecated,
                             location: bindings::Location::new(uri.clone(), member.it.name.range),
+                            container_name: Some(format!(
+                                "{} • {class_name}",
+                                bindings::member_keyword(&kind)
+                            )),
                         }
                     }))
                     .collect::<Vec<_>>()
             });
 
-        let rtn_symbols = this
-            .uris_with_prefix(DocKind::Rtn, &query)
-            .into_iter()
-            .flat_map(|uri| {
-                let Some(symbol) = this.routine_symbol(&uri) else {
-                    return vec![];
-                };
-                std::iter::once(symbol.root)
-                    .chain(symbol.members)
-                    .map(|symbol| symbol_in(&uri, symbol))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+        let rtn_symbols =
+            this.uris_with_prefix(DocKind::Rtn, &query)
+                .into_iter()
+                .flat_map(|uri| {
+                    let Some(symbol) = this.routine_symbol(&uri) else {
+                        return vec![];
+                    };
+                    let routine = symbol.root.name.clone();
+                    std::iter::once(symbol_in(&uri, symbol.root, None))
+                        .chain((symbol.members.into_iter()).map(|label| {
+                            symbol_in(&uri, label, Some(format!("Label • {routine}")))
+                        }))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
 
         cls_symbols.chain(rtn_symbols).collect()
     }
@@ -1789,6 +1801,11 @@ mod tests {
         let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Test.Foo", "Bar"]);
         assert!(symbols.iter().all(|s| s.location.uri == "Test.Foo.cls"));
+        let containers: Vec<Option<&str>> = symbols
+            .iter()
+            .map(|s| s.container_name.as_deref())
+            .collect();
+        assert_eq!(containers, [None, Some("ClassMethod • Test.Foo")]);
     }
 
     #[test]

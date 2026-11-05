@@ -254,6 +254,25 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
     }
 }
 
+// The keyword the member is declared with.
+pub(crate) fn member_keyword(kind: &wit_bind::MemberKind) -> &'static str {
+    match kind {
+        MemberKind::Method(_) => "Method",
+        MemberKind::ClassMethod(_) => "ClassMethod",
+        MemberKind::ClientMethod(_) => "ClientMethod",
+        MemberKind::Property(_) => "Property",
+        MemberKind::Relationship(_) => "Relationship",
+        MemberKind::Parameter(_) => "Parameter",
+        MemberKind::ForeignKey => "ForeignKey",
+        MemberKind::Index(_) => "Index",
+        MemberKind::Projection => "Projection",
+        MemberKind::Trigger => "Trigger",
+        MemberKind::XData => "XData",
+        MemberKind::Storage => "Storage",
+        MemberKind::Query(_) => "Query",
+    }
+}
+
 pub(crate) fn member_kind_to_symbol_kind(kind: &wit_bind::MemberKind) -> wit_bind::SymbolKind {
     match kind {
         MemberKind::Method(_) | MemberKind::ClassMethod(_) | MemberKind::ClientMethod(_) => {
