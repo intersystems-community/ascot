@@ -2317,7 +2317,8 @@ type WithSpace<X> = (X, Space);
 
 #[derive(Grammar)]
 pub enum KeywordValueEnum {
-    Atom(StringOf1<IsKeywordValue>),
+    // `Data = (Tags(ELEMENTS))` names a collection's subvalues as an index key does.
+    Atom(StringOf1<IsKeywordValue>, Option<IndexPropertyKind>),
     String(OSString),
     OS(StringEq!("{"), OSText, StringEq!("}")),
     Paren(
@@ -2875,11 +2876,21 @@ pub struct IndexPropertyMultiple {
 pub struct IndexProperty {
     // Quoted when it has a character outside the identifier set, like any member name.
     pub name: QuotableClassMemberName,
+    // `Home.State`: a property of the embedded object `Home` holds.
+    path: Vec<(StringEq!("."), ClassMemberName)>,
     pub kind: Option<IndexPropertyKind>,
     as_collation: Option<AsCollation>,
 }
 
 impl IndexProperty {
+    // The property indexed, `Home.State` for one of an embedded object.
+    pub fn property(&self) -> String {
+        std::iter::once(self.name.name())
+            .chain(self.path.iter().map(|(_, segment)| segment.print()))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
     // The `As collation`, as written.
     pub fn collation(&self) -> Option<String> {
         self.as_collation.as_ref().map(|c| c.collation.print())
@@ -2903,27 +2914,22 @@ pub struct AsCollation {
 #[derive(Grammar)]
 pub enum CollationType {
     Exact(StringEqCI!("EXACT")),
-    SqlString(StringEqCI!("SQLSTRING")),
-    SqlUpper(SqlUpperCollation),
-    Truncate(StringEqCI!("TRUNCATE")),
+    SqlString(Truncating<StringEqCI!("SQLSTRING")>),
+    SqlUpper(Truncating<StringEqCI!("SQLUPPER")>),
+    Truncate(Truncating<StringEqCI!("TRUNCATE")>),
     Plus(StringEqCI!("PLUS")),
     Minus(StringEqCI!("MINUS")),
 }
 
+// A collation that may truncate to a length: `SQLUPPER(250)`.
 #[derive(Grammar)]
 #[grammar(inline)]
-pub struct SqlUpperCollation {
-    keyword: StringEqCI!("SQLUPPER"),
-    param: Option<SqlUpperParam>,
+pub struct Truncating<K> {
+    keyword: K,
+    length: Option<(StringEq!("("), StringOf1<IsDigit>, StringEq!(")"))>,
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub struct SqlUpperParam {
-    open: StringEq!("("),
-    expr: OSText,
-    close: StringEq!(")"),
-}
+char_class!(pub IsDigit, "digit", |c| c.is_ascii_digit());
 
 #[derive(Grammar)]
 pub struct MethodHeader {

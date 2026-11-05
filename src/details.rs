@@ -765,7 +765,7 @@ fn process_member(
                 on: index.on_properties().map(|keys| {
                     keys.into_iter()
                         .map(|key| IndexKey {
-                            property: olc.with_range(key.name.0.as_ref().map(|_| key.name.name())),
+                            property: olc.with_range(key.name.0.as_ref().map(|_| key.property())),
                             subscript: key.kind.as_ref().map(|kind| match kind {
                                 cos::IndexPropertyKind::Keys(_) => bindings::IndexSubscript::Keys,
                                 cos::IndexPropertyKind::Elements(_) => {

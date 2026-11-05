@@ -263,9 +263,11 @@ fn member_header(member: &MemberInfo) -> Option<String> {
                             None => "",
                         };
                         let collation = k.collation.as_deref().map(|c| format!(" As {c}"));
+                        let property: Vec<String> =
+                            k.property.split('.').map(member_name).collect();
                         format!(
                             "{}{subscript}{}",
-                            member_name(&k.property),
+                            property.join("."),
                             collation.unwrap_or_default()
                         )
                     })

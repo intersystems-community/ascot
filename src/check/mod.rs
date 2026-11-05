@@ -4179,12 +4179,12 @@ pub(crate) fn check_cls(
                 .filter(|key| key.subscript.is_none());
             for key in plain_keys.map(|key| &key.property) {
                 let key_range = key.range;
-                match env.base.resolve_mem::<Properties<Indexed>>(
-                    &this,
-                    key.it.clone(),
-                    key_range,
-                    true,
-                ) {
+                // Of a path into an embedded object (`Home.State`), this class's own property.
+                let property = key.it.split('.').next().unwrap_or_default().to_string();
+                match env
+                    .base
+                    .resolve_mem::<Properties<Indexed>>(&this, property, key_range, true)
+                {
                     Ok(property) => {
                         if let Some(location) = property.location {
                             env.base.reference(key.range, location);
