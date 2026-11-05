@@ -86,8 +86,8 @@ npm install @intersystems-community/ascot
 ### `ascot` as a CLI tool
 
 `ascot help` lists the commands, and `ascot help <COMMAND>` (or
-`ascot <COMMAND> --help`) shows one's options; the IRIS and style ones are
-described under [Advanced Usage](#advanced-usage).
+`ascot <COMMAND> --help`) shows one's options; the IRIS, style and diagnostics
+ones are the [settings](#settings) described under Advanced Usage.
 
 ```sh
 ascot analyze <PATH>...
@@ -126,15 +126,10 @@ ascot mcp
 ```
 
 Starts the MCP server (stdio), exposing workspace analysis as tools an AI agent
-calls on demand. Any MCP client that can launch a stdio server works: the
-command is `ascot` (or its full path) and the single argument is `mcp`.
-
-The `insert` tool takes each document's text, since the server can't assume it
-shares a file system with the agent. When it does, start it with
-`ascot mcp --shared-fs`: `insert` then reads a `file://` uri given without
-`src` from disk, a single file or a whole directory of `.cls`/`.mac`/`.int`/`.inc`
-files, and inserting a directory again re-reads it and drops the files no longer
-there.
+calls on demand: `create_workspace` takes the [settings](#settings), `insert`
+each document's text (or, with a [shared file system](#shared-file-system), its
+`file://` uri). Any MCP client that can launch a stdio server works: the command
+is `ascot` (or its full path) and the single argument is `mcp`.
 
 The tools and their parameters are documented on
 [docs.rs](https://docs.rs/ascot/latest/ascot/mcp/struct.Server.html).
@@ -184,25 +179,20 @@ VS Code (`.vscode/mcp.json`):
 ascot lsp
 ```
 
-Starts the LSP server (stdio). Its `--iris`, `--style` and `-d` flags, described
-under [Advanced Usage](#advanced-usage), are defaults: the client overrides them
-with `initializationOptions` and changes them with
-`workspace/didChangeConfiguration`, both as
-`{"iris": ..., "iris_namespace": ..., "style": ..., "diagnostics": ...}`. A new
-`iris` re-checks the open documents without re-reading them; a setting that
-can't be applied is reported with `window/showMessage` and left as it was.
-
-Like `mcp`, the server doesn't assume it shares a file system with the client.
-`ascot lsp --shared-fs` (or `"shared_fs": true` in `initializationOptions`) says
-it does: the workspace roots are then loaded from disk at startup, and `style`
-may be a file's path.
+Starts the LSP server (stdio). Its flags are the [settings](#settings) as
+defaults: the client overrides them with `initializationOptions` and changes
+them with `workspace/didChangeConfiguration`. A new `iris` re-checks the open
+documents without re-reading them; a setting that can't be applied is reported
+with `window/showMessage` and left as it was. With a
+[shared file system](#shared-file-system), the workspace roots are loaded from
+disk at startup.
 
 ### Claude Code plugins
 
 This repository is a Claude Code plugin marketplace with two plugins, both
 expecting `ascot` on `PATH`: `ascot-mcp` registers the MCP server above, and
 `ascot-lsp` runs the LSP server and feeds its diagnostics back into the
-conversation after every edit, asking for the settings above when enabled.
+conversation after every edit.
 
 ```sh
 claude plugin marketplace add intersystems-community/ascot
@@ -212,12 +202,21 @@ claude plugin install ascot-lsp@ascot-plugins
 
 ## Advanced Usage
 
+### Settings
+
+Which IRIS to ask, the style to check and the diagnostics to report are the same
+three settings everywhere: `--iris`/`--iris-namespace`, `--style` and `-d` on
+`analyze`, `analyze-workspace` and `lsp`; one object,
+`{"iris": ..., "iris_namespace": ..., "style": ..., "diagnostics": ...}`, for
+the MCP `create_workspace` and the LSP `initializationOptions` and
+`workspace/didChangeConfiguration`, which the `ascot-lsp` plugin asks for when
+enabled. A wasm host passes `iris` through `env` and `style` to
+`createWorkspace`.
+
 ### Connecting to IRIS
 
 Classes, routines and include files outside the workspace are resolved against
-IRIS. `--iris` says which IRIS, for `analyze`, `analyze-workspace` and `lsp`;
-`mcp` takes the same in the `iris` argument of `create_workspace`; a wasm host
-passes the same through `env`:
+IRIS; `iris` says which:
 
 - `--iris latest` (default): the newest declaration-only snapshot of IRIS this
   ascot knows, downloaded once (4 MB) from this repository's
@@ -245,9 +244,8 @@ Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
 
 ### Style
 
-A JSON file passed with `--style <file>` (or as the `style` of the MCP
-`create_workspace` and the JavaScript `createWorkspace`) says how code should be
-written; only what's set is checked, as a warning. For example, with
+`style` is a JSON object (for `--style`, a file holding it) saying how code
+should be written; only what's set is checked, as a warning. For example, with
 
 ```json
 { "command": { "form": "Long", "case": "Pascal" }, "allow_quit_for_return": false }
@@ -263,13 +261,12 @@ Every rule is described in [STYLE.md](STYLE.md).
 
 ### Diagnostics Filter
 
-`analyze`, `analyze-workspace` and `lsp` take `-d VERB:TARGETS` (long form
-`--diagnostics`), repeatable, to choose which codes are reported and at what
-severity; the MCP `create_workspace` call takes the same strings as its
-`diagnostics` list. VERB is `off`, `on` (the code's own severity) or a severity
-(`error`, `warning`, `information`, `hint`); TARGETS is a comma-separated list
-of codes, severities (every code currently reported at one), or `all`. Values
-apply in order, a later one overriding an earlier one:
+`diagnostics` is `VERB:TARGETS` values, as a list or separated by spaces (`-d`,
+long form `--diagnostics`, is also repeatable), choosing which codes are
+reported and at what severity. VERB is `off`, `on` (the code's own severity) or
+a severity (`error`, `warning`, `information`, `hint`); TARGETS is a
+comma-separated list of codes, severities (every code currently reported at
+one), or `all`. Values apply in order, a later one overriding an earlier one:
 
 ```sh
 ascot analyze -d off:A5579,A4043 src/            # drop two codes
@@ -280,6 +277,16 @@ ascot analyze -d hint:A4471 src/                 # report one as a hint
 
 The exit code follows what is reported, so a dropped or downgraded warning no
 longer fails a build.
+
+### Shared file system
+
+Neither server assumes it shares a file system with its client; `--shared-fs`
+says it does. `mcp`'s `insert` then reads a `file://` uri given without `src`
+from disk, a single file or a whole directory of `.cls`/`.mac`/`.int`/`.inc`
+files, and inserting a directory again re-reads it and drops the files no longer
+there. `lsp` then loads the workspace roots from disk at startup, so cross-file
+references resolve before their files are opened, and its `style` may be a
+file's path; `"shared_fs": true` in `initializationOptions` says the same.
 
 ## Contributing
 
