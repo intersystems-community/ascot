@@ -45,7 +45,7 @@ type Generated = (Arc<TyProcedure>, bool);
 // One of the three member namespaces IRIS tells apart by syntax -- `..#X`, `..X`, `..X(...)` --
 // and the shape of what it holds.
 pub(crate) trait Namespace {
-    type Ty: Instantiate + Default;
+    type Ty: Instantiate + ClassNames + Default;
     // Where its members are declared.
     const NS: MemberNs;
     // The type of a member a workspace class declares, and whether it's instance-only.
@@ -65,8 +65,6 @@ pub(crate) trait Namespace {
     ) -> Option<Self::Ty> {
         None
     }
-    // The class names written in the type, to qualify against the declaring class.
-    fn class_names(ty: &mut Self::Ty, f: impl FnMut(&mut Ty));
 }
 
 pub(crate) struct Parameters;
@@ -131,10 +129,6 @@ impl Namespace for Parameters {
             return None;
         };
         Some((p.t.as_deref().map(parameter_ty).unwrap_or_default(), false))
-    }
-
-    fn class_names(ty: &mut Ty, mut f: impl FnMut(&mut Ty)) {
-        f(ty)
     }
 }
 
@@ -202,15 +196,6 @@ impl<A: Access> Namespace for Properties<A> {
         let out = hook.procedure().and_then(|hook| hook.out.clone());
         Some(PropertyTy::Dispatched(out.unwrap_or_default()))
     }
-
-    fn class_names(ty: &mut PropertyTy, mut f: impl FnMut(&mut Ty)) {
-        match ty {
-            PropertyTy::Value(ty)
-            | PropertyTy::Multidimensional(ty)
-            | PropertyTy::Dispatched(ty)
-            | PropertyTy::Collection { element: ty, .. } => f(ty),
-        }
-    }
 }
 
 impl Namespace for Methods {
@@ -262,14 +247,6 @@ impl Namespace for Methods {
 
     fn method(proc: TyProcedureOrAny) -> Option<TyProcedureOrAny> {
         Some(proc)
-    }
-
-    fn class_names(ty: &mut TyProcedureOrAny, mut f: impl FnMut(&mut Ty)) {
-        if let TyProcedureOrAny::Procedure(proc) = ty
-            && matches!(proc.out, Some(Ty::OREF(_)))
-        {
-            f(Arc::make_mut(proc).out.as_mut().unwrap());
-        }
     }
 }
 
@@ -1038,7 +1015,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let member = details.member(N::NS, mem)?;
                 let (mut ty, is_instance_only) = N::declared(member, uri)?;
                 // A member's declared type names are written relative to the declaring class.
-                N::class_names(&mut ty, |t| self.qualify_ty(t, &details.name.it));
+                ty.class_names(&mut |t| self.qualify_ty(t, &details.name.it));
                 let location = bindings::Location::new(uri.to_string(), member.range);
                 Some(Found {
                     member: Member {
