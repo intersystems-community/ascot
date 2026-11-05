@@ -71,7 +71,7 @@ rustup installers offer to set up; a build failing on `link.exe` or
 `kernel32.lib` is missing them, see rustup's
 [MSVC prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html).
 
-### npm package
+### JavaScript package
 
 A library for Node 24+ and other JS consumers; it does not provide an `ascot`
 executable. From
@@ -201,7 +201,7 @@ three settings everywhere; the `ascot-lsp` plugin asks for them when enabled.
 | --- | --- | --- | --- |
 | `analyze`, `lsp` | `--iris`, `--iris-namespace` | `--style FILE` | `-d VERB:TARGETS` |
 | [MCP](#ascot-as-an-mcp-server) `create_workspace`; [LSP](#ascot-as-an-lsp-server) `initializationOptions`, `workspace/didChangeConfiguration` | `iris`, `iris_namespace` | `style` | `diagnostics` |
-| [JavaScript](#npm-package) `createWorkspace` | `env` | `style` | |
+| [JavaScript](#javascript-package) `createWorkspace` | `env` | `style` | |
 
 ### Connecting to IRIS
 
