@@ -181,28 +181,28 @@ VS Code (`.vscode/mcp.json`):
 ### `ascot` as an LSP server
 
 ```sh
-ascot lsp [--shared-fs]
+ascot lsp
 ```
 
-Starts the LSP server (stdio). The `--iris`, `--style` and `-d` flags below are
-its defaults: the client's `initializationOptions` override them, and a
-`workspace/didChangeConfiguration` changes them while the server runs, both as
+Starts the LSP server (stdio). Its `--iris`, `--style` and `-d` flags, described
+under [Advanced Usage](#advanced-usage), are defaults: the client overrides them
+with `initializationOptions` and changes them with
+`workspace/didChangeConfiguration`, both as
 `{"iris": ..., "iris_namespace": ..., "style": ..., "diagnostics": ...}`. A new
 `iris` re-checks the open documents without re-reading them; a setting that
 can't be applied is reported with `window/showMessage` and left as it was.
 
-The server doesn't assume it shares a file system with the client. `--shared-fs`
-(or `"shared_fs": true` in `initializationOptions`) says it does: the workspace
-roots are loaded from disk at startup, and `style` may be a file's path instead
-of the object.
+Like `mcp`, the server doesn't assume it shares a file system with the client.
+`ascot lsp --shared-fs` (or `"shared_fs": true` in `initializationOptions`) says
+it does: the workspace roots are then loaded from disk at startup, and `style`
+may be a file's path.
 
 ### Claude Code plugins
 
 This repository is a Claude Code plugin marketplace with two plugins, both
 expecting `ascot` on `PATH`: `ascot-mcp` registers the MCP server above, and
 `ascot-lsp` runs the LSP server and feeds its diagnostics back into the
-conversation after every edit; it asks for the `iris`, `iris_namespace`,
-`style` and `diagnostics` settings above when enabled.
+conversation after every edit, asking for the settings above when enabled.
 
 ```sh
 claude plugin marketplace add intersystems-community/ascot
@@ -245,8 +245,8 @@ Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
 
 ### Style
 
-A JSON file passed with `--style <file>` (or as the `style` setting of the LSP
-and MCP servers and of the JavaScript `createWorkspace`) says how code should be
+A JSON file passed with `--style <file>` (or as the `style` of the MCP
+`create_workspace` and the JavaScript `createWorkspace`) says how code should be
 written; only what's set is checked, as a warning. For example, with
 
 ```json
@@ -264,10 +264,9 @@ Every rule is described in [STYLE.md](STYLE.md).
 ### Diagnostics Filter
 
 `analyze`, `analyze-workspace` and `lsp` take `-d VERB:TARGETS` (long form
-`--diagnostics`), repeatable or several in one value separated by spaces, to
-choose which codes are reported and at what severity; the LSP settings and the
-MCP `create_workspace` take the same strings as `diagnostics`, a list or one
-string. VERB is `off`, `on` (the code's own severity) or a severity
+`--diagnostics`), repeatable, to choose which codes are reported and at what
+severity; the MCP `create_workspace` call takes the same strings as its
+`diagnostics` list. VERB is `off`, `on` (the code's own severity) or a severity
 (`error`, `warning`, `information`, `hint`); TARGETS is a comma-separated list
 of codes, severities (every code currently reported at one), or `all`. Values
 apply in order, a later one overriding an earlier one:
