@@ -880,7 +880,11 @@ impl<'a> WorkspaceEnv<'a> {
                     }
                 }
             }
-            QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get)
+            if self.is_abstract(obj.name()) {
+                QuasiTypeError::cannot_find_member_on_abstract(obj.to_string(), mem, suggestions)
+            } else {
+                QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get)
+            }
         };
         self.add_soft_diagnostic(err.into_error(|| range).into());
         Ok(Member::undeclared(N::Ty::default()))
@@ -1212,6 +1216,15 @@ impl<'a> WorkspaceEnv<'a> {
         }
     }
 
+    // Whether `cls` is `[ Abstract ]`, so that a value of the type is some subclass's.
+    pub(crate) fn is_abstract(&self, cls: &str) -> bool {
+        match self.resolve(cls) {
+            Some(Class::Workspace(_, details)) => details.keywords.abstract_,
+            Some(Class::Iris(info)) => info.abstract_ || crate::mask::is_abstract(&info.name),
+            Some(Class::Unknown(_)) | None => false,
+        }
+    }
+
     // `None` for a plain registered object, or when nobody can see.
     fn class_type(&self, cls: &str) -> Option<bindings::ClassType> {
         self.ancestry(cls).find_map(|(_, resolved)| match resolved {
@@ -1371,11 +1384,21 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     pub(crate) fn assert_compatible(&self, source: Ty, target: &Ty) -> Result<(), Incompatible> {
-        if !self.can_assign_to(&source, target) {
-            Err(Incompatible::new(source, target.clone()))
-        } else {
-            Ok(())
+        if self.can_assign_to(&source, target) {
+            return Ok(());
         }
+        // Narrowing an abstract class to a subclass: the value is some subclass's already.
+        let downcast = match (&source, target) {
+            (Ty::OREF(ClsOrIns::Ins(s)), Ty::OREF(ClsOrIns::Ins(t))) => {
+                self.is_abstract(&s.name) && self.is_subclass(t, s)
+            }
+            _ => false,
+        };
+        Err(Incompatible {
+            source,
+            target: target.clone(),
+            downcast,
+        })
     }
 
     fn is_subclass(&self, source: &ClassTy, target: &ClassTy) -> bool {
@@ -1534,19 +1557,25 @@ impl<'a> WorkspaceEnv<'a> {
 pub(crate) struct Incompatible {
     source: Ty,
     target: Ty,
+    // The source is abstract and the target one of its subclasses: a warning, not an error.
+    downcast: bool,
 }
 
 impl Incompatible {
-    pub(crate) fn new(source: Ty, target: Ty) -> Self {
-        Self { source, target }
-    }
-
     pub(crate) fn assign(self, name: String) -> QuasiTypeError {
-        QuasiTypeError::assign_incompatible(name, self.source, self.target)
+        if self.downcast {
+            QuasiTypeError::downcast_from_abstract(name, self.source, self.target)
+        } else {
+            QuasiTypeError::assign_incompatible(name, self.source, self.target)
+        }
     }
 
     pub(crate) fn general(self) -> QuasiTypeError {
-        QuasiTypeError::type_incompatible(self.source, self.target)
+        if self.downcast {
+            QuasiTypeError::type_downcast(self.source, self.target)
+        } else {
+            QuasiTypeError::type_incompatible(self.source, self.target)
+        }
     }
 }
 

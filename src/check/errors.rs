@@ -112,6 +112,19 @@ impl QuasiTypeError {
         .into()
     }
 
+    pub fn downcast_from_abstract(name: String, source: Ty, target: Ty) -> Self {
+        TypeErrorKind::DowncastFromAbstract {
+            name,
+            source,
+            target,
+        }
+        .into()
+    }
+
+    pub fn type_downcast(source: Ty, target: Ty) -> Self {
+        TypeErrorKind::TypeDowncast { source, target }.into()
+    }
+
     pub fn access_instance_only_member_from_class_context(name: String) -> Self {
         TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name }.into()
     }
@@ -227,6 +240,19 @@ impl QuasiTypeError {
     ) -> Self {
         TypeErrorKind::CannotFindMember {
             dynamic: DynamicGet(has_get.then(|| mem.clone())),
+            cls,
+            mem,
+            suggestions: Suggestions(suggestions),
+        }
+        .into()
+    }
+
+    pub fn cannot_find_member_on_abstract(
+        cls: String,
+        mem: String,
+        suggestions: Vec<String>,
+    ) -> Self {
+        TypeErrorKind::CannotFindMemberOnAbstract {
             cls,
             mem,
             suggestions: Suggestions(suggestions),
@@ -437,6 +463,15 @@ type_error_kinds! {
         suggestions: Suggestions,
         dynamic: DynamicGet,
     },
+    /// The receiver's class is abstract, so the value is a subclass's, which may declare the member.
+    #[code = "A4718"]
+    #[severity = Warning]
+    #[message = "Cannot find member '{mem}' in {cls}, an abstract class: the value is a subclass's, which may have it{suggestions}"]
+    CannotFindMemberOnAbstract {
+        cls: String,
+        mem: String,
+        suggestions: Suggestions,
+    },
     #[code = "A9360"]
     #[severity = Hint]
     #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes a class {reason}"]
@@ -610,6 +645,19 @@ type_error_kinds! {
         source: Ty,
         target: Ty,
     },
+    /// Narrowing an abstract class to one of its subclasses: the value is some subclass's already.
+    #[code = "A6274"]
+    #[severity = Warning]
+    #[message = "Assigning {source}, an abstract class, to '{name}' declared as {target}: the value is a subclass's, which may be one"]
+    DowncastFromAbstract {
+        name: String,
+        source: Ty,
+        target: Ty,
+    },
+    #[code = "A8139"]
+    #[severity = Warning]
+    #[message = "{source} is abstract, so this value is a subclass's, which may be the {target} it is taken for"]
+    TypeDowncast { source: Ty, target: Ty },
     #[code = "A1203"]
     #[severity = Warning]
     #[message = "Unreachable code"]

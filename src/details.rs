@@ -215,6 +215,7 @@ pub(crate) struct ClassDetails {
 // The class keywords the checker reads; the rest of the list is parsed and dropped.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ClassKeywords {
+    pub(crate) abstract_: bool,
     pub(crate) class_type: Option<bindings::ClassType>,
     pub(crate) deprecated: bool,
     pub(crate) inheritance: Option<bindings::Inheritance>,
@@ -691,6 +692,7 @@ impl TryFrom<&str> for ClassDetails {
         for keyword in typed(cls.keyword_list.as_ref()) {
             use cos::ClassKeyword::*;
             match keyword {
+                Abstract(flag) => keywords.abstract_ = flag.is_set(),
                 ClassType(v) => {
                     keywords.class_type = v.value.as_ref().left().map(bindings::ClassType::from)
                 }

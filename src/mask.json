@@ -5310,6 +5310,7 @@
   },
   "%ZEN.Component.object": {
    "header": "Class %ZEN.Component.object",
+   "abstract": true,
    "members": [
     { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" }
