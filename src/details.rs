@@ -198,7 +198,7 @@ impl MemberNs {
 pub(crate) struct ClassDetails {
     pub(crate) doc: String,
     pub(crate) name: WithRange<String>,
-    pub(crate) extends: Vec<String>,
+    pub(crate) extends: Vec<WithRange<String>>,
     // The `Import` packages, for resolving unqualified class names in this class.
     pub(crate) imports: Vec<String>,
     pub(crate) keywords: ClassKeywords,
@@ -700,7 +700,7 @@ impl TryFrom<&str> for ClassDetails {
                 .class_list
                 .classes()
                 .into_iter()
-                .map(|class| class.print())
+                .map(|class| WithRange::new(class.print(), olc.range(class)))
                 .collect()
         });
         let imports = cls.import.as_ref().map_or(Vec::default(), |import| {

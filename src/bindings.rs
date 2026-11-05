@@ -291,7 +291,7 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
         Self {
             doc: details.doc.clone(),
             name: details.name.it.clone(),
-            extends: details.extends.clone(),
+            extends: details.extends.iter().map(|sup| sup.it.clone()).collect(),
             storage: None,
             members: details
                 .members

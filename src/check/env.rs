@@ -933,10 +933,14 @@ impl<'a> WorkspaceEnv<'a> {
             .skip(usize::from(!own))
             .find_map(|(cls, resolved)| {
                 let found = match &resolved {
-                    None => return None,
-                    // Past a class nobody can see, the member may be anything: taken on trust, with
-                    // a hint -- except what every object class has.
-                    Some(Class::Unknown(reason)) => {
+                    // Past a class nobody can see -- not in the environment, or unreadable -- the
+                    // member may be anything: taken on trust, with a hint -- except what every
+                    // object class has.
+                    None | Some(Class::Unknown(_)) => {
+                        let reason = match &resolved {
+                            Some(Class::Unknown(reason)) => reason.as_ref(),
+                            _ => None,
+                        };
                         // Past a class nobody can see, the methods every object class gets from
                         // `%SystemBase`/`%RegisteredObject` are taken as present and untyped --
                         // unless `cls` is another hierarchy root.
@@ -1159,7 +1163,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let supers = match &resolved {
                     Some(Class::Workspace(_, details)) => {
                         let mut supers: Vec<String> = (details.extends.iter())
-                            .map(|sup| self.qualify_class_name(sup, Some(&cls)))
+                            .map(|sup| self.qualify_class_name(&sup.it, Some(&cls)))
                             .collect();
                         if details.keywords.inheritance == Some(bindings::Inheritance::Right) {
                             supers.reverse();

@@ -4201,6 +4201,12 @@ pub(crate) fn check_cls(
     for issue in &cls.keyword_issues {
         diagnostics.push(class_keyword_issue(issue).into());
     }
+    // A superclass is checked where it is named, like a `##class()` or a declared type; past one
+    // nobody can see, a member lookup ends in a hint rather than an error (see `find`).
+    for sup in &cls.extends {
+        let name = env.base.qualify_class_name(&sup.it, Some(&cls.name.it));
+        env.base.check_declared_class_exists(&name, sup.range);
+    }
     // Available to every class without an explicit `Include` (see `CLASS_IMPLICIT_INCLUDES`) --
     // resolved silently (no diagnostic on failure, unlike an explicit `Include`).
     let mut macro_definitions = env.base.implicit_class_definitions();
