@@ -474,7 +474,7 @@ type_error_kinds! {
     #[message = "Label '{label}' is inside a block; a label belongs at the top level of the body"]
     LabelInBlock { label: String },
     #[code = "A3303"]
-    #[severity = Error]
+    #[severity = Warning]
     #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
     CannotFindRoutine { routine: String },
     #[code = "A4439"]
