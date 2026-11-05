@@ -468,10 +468,11 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
-    /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide.
+    /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide;
+    /// ascot reads it where it stands, so the block's flow after it is not what IRIS runs.
     #[code = "A7408"]
     #[severity = Warning]
-    #[message = "Label '{label}' is inside a block; a label belongs at the top level of the body"]
+    #[message = "Label '{label}' is inside nested braces; ascot only understands labels at the top level of a method or routine body, so the checks after it may be inaccurate or incomplete"]
     LabelInBlock { label: String },
     #[code = "A3303"]
     #[severity = Warning]
