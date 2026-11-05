@@ -65,6 +65,18 @@ const text = [
   "",
 ].join("\n");
 
+test("the diagnostics filter chooses what is reported", async () => {
+  const workspace = await createWorkspace("none", undefined, ["off:all"]);
+  await workspace.open("T.mac", "ROUTINE T\nTest() {\n Write x\n}\n");
+  assert.deepEqual(await workspace.diagnostics("T.mac"), []);
+  await workspace.setDiagnostics(["on:A7095"]);
+  assert.deepEqual(
+    (await workspace.diagnostics("T.mac")).map((d) => d.code),
+    ["A7095"],
+  );
+  await assert.rejects(workspace.setDiagnostics(["off:Z1"]));
+});
+
 async function check(atelier) {
   const workspace = await createWorkspace(atelier);
   await workspace.open(uri, text);

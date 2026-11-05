@@ -126,9 +126,15 @@ function serialize(instance: RawWorkspace): Workspace {
 }
 
 /** A workspace whose calls run one at a time, resolving what it doesn't contain through `iris`. */
-export async function createWorkspace(iris: Env = "latest", style?: Style): Promise<Workspace> {
+export async function createWorkspace(
+	iris: Env = "latest",
+	style?: Style,
+	diagnostics?: string[],
+): Promise<Workspace> {
 	const root = await wasm;
-	return serialize(new root.exported.Workspace(envOf(iris), style));
+	const workspace = serialize(new root.exported.Workspace(envOf(iris), style));
+	if (diagnostics) await workspace.setDiagnostics(diagnostics);
+	return workspace;
 }
 
 function envOf(iris: Env) {
