@@ -3910,7 +3910,7 @@
     { "header": "Method BeginSOAPEnvelope(bindingStyle As %String, bodyUse As %String, namespace As %String, typeNamespace As %String, forcePrefix As %Boolean, Output namespaces As %XML.Namespaces)" },
     { "header": "Method GetEncodedAttribute(tree As %Integer, node As %String, childlist As %String, soapenv As %Integer, Output attrs, Output status As %Status) As %Boolean" },
     { "header": "ClassMethod NormalizeName(pName, pMaxLen = \"\", isMethod As %Boolean = \"\") As %String" },
-    { "header": "ClassMethod WebMethod(Operation As %String, RequestTag As %String = \"\") As %SOAP.Descriptor" },
+    { "header": "ClassMethod WebMethod(Operation As %String, RequestTag As %String = \"\") As %SOAP.ProxyDescriptor" },
     { "header": "Property Transport As %Library.Any" }
    ]
   },
@@ -4421,7 +4421,7 @@
    "header": "Class %SYSTEM.AbstractWorkMgr",
    "members": [
     { "header": "Method %OnNew(ByRef qstruct As %String, numberjobs As %Integer, category = \"\", target = \"\") As %Status" },
-    { "header": "ClassMethod Initialize(qspec As %String = \"\", Output sc As %Status, numworkers As %Integer) As %SYSTEM.AbstractWorkMgr [ Deprecated ]" },
+    { "header": "ClassMethod Initialize(qspec As %String = \"\", Output sc As %Status, numworkers As %Integer = \"\") As This [ Deprecated ]" },
     { "header": "ClassMethod InitializeClass(iscname As %String, qspec As %String = \"\", Output sc As %Status, numworkers As %Integer) As This" }
    ]
   },
