@@ -22,7 +22,9 @@
   "files": [
     "dist",
     "generated",
-    "lib/*.wasm"
+    "lib/*.wasm",
+    "lib/*.d.json.gz",
+    "lib/declarations.json"
   ],
   "engines": {
     "node": ">=24"

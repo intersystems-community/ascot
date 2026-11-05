@@ -15,7 +15,7 @@ npm install @intersystems-community/ascot
 ````ts
 import { createWorkspace } from "@intersystems-community/ascot";
 
-const ws = await createWorkspace();
+const ws = await createWorkspace(); // checks against the bundled declarations of IRIS 2026.2
 
 // `open` is both open and edit: it stores the raw text (the kind comes from the uri's
 // extension: .cls, .mac, .int, .inc) and returns the uris whose cached analysis is now
@@ -40,8 +40,10 @@ await ws.hover("file:///T.cls", { line: 5, character: 7 }); // the `x` being wri
 // "```objectscript\n%DataType = 1\n```"
 ````
 
-To provide declarations for documents that aren't in the workspace, extend `IrisContext`,
-override the lookups you can answer, and pass an instance:
+Documents that aren't in the workspace resolve, by default, against the pre-built declarations
+of the newest IRIS Community release this package knows (`LATEST_RELEASE`), bundled with it
+(4 MB). To answer those lookups yourself instead, extend `IrisContext`, override the lookups
+you can answer, and pass an instance:
 
 ```ts
 import { IrisContext, type ClassInfo } from "@intersystems-community/ascot";

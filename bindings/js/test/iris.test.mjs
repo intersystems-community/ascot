@@ -83,8 +83,31 @@ test(
   },
 );
 
-// A declaration file's bytes stand in for a server: the pre-built asset, gzipped, as a host
-// would bundle it. Without any environment, a class outside the workspace is an error.
+// Without an env, the bundled pre-built declarations of the newest IRIS release stand in for a
+// server; `"none"` is no environment at all, and a class outside the workspace is an error.
+test("the bundled declarations are the default; none is the strictest check", async () => {
+  const source = [
+    "Class Demo.Status",
+    "{",
+    "ClassMethod M() As %Status",
+    "{",
+    " Quit $$$OK",
+    "}",
+    "}",
+    "",
+  ].join("\n");
+  const run = async (...env) => {
+    const workspace = await createWorkspace(...env);
+    await workspace.open("Demo.Status.cls", source);
+    return (await workspace.diagnostics("Demo.Status.cls")).map((d) => [d.severity, d.code]);
+  };
+  assert.match(ascot.LATEST_RELEASE, /^\d{4}\.\d+$/);
+  assert.deepEqual(await run(), []);
+  assert.deepEqual(await run("latest"), []);
+  assert.deepEqual(await run("none"), [["error", "A2797"]]);
+});
+
+// A declaration file's bytes stand in for a server too, gzipped as the asset ships or not.
 test("a declaration file's bytes are the environment; none is the strictest check", async () => {
   const declarations = JSON.stringify({
     version: "1.0.0",
@@ -115,7 +138,7 @@ test("a declaration file's bytes are the environment; none is the strictest chec
   };
   assert.deepEqual(await run(new Uint8Array(gzipSync(declarations))), []);
   assert.deepEqual(await run(new TextEncoder().encode(declarations)), []);
-  assert.deepEqual(await run(undefined), [["error", "A8061"]]);
+  assert.deepEqual(await run("none"), [["error", "A8061"]]);
 });
 
 test("a request that fails leaves what it was for taken on trust, saying why", async () => {
