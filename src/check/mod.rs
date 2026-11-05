@@ -3364,8 +3364,12 @@ fn check_call<'a, 'b>(
                     // A procedure block only ever sees exactly its own declared public names —
                     // it's otherwise isolated from the caller's other locals.
                     // A name never bound here isn't shadowed: the callee reaches the outer one.
+                    // A name the callee receives as a parameter comes from the call itself.
                     for name in names {
-                        if flow::is_percent_variable(name) || !flow.has_binding(name)? {
+                        if flow::is_percent_variable(name)
+                            || !flow.has_binding(name)?
+                            || base.normal_args.iter().any(|par| par.name == *name)
+                        {
                             continue;
                         }
                         if flow.is_public(name)? {
