@@ -45,7 +45,7 @@ type Generated = (Arc<TyProcedure>, bool);
 // One of the three member namespaces IRIS tells apart by syntax -- `..#X`, `..X`, `..X(...)` --
 // and the shape of what it holds.
 pub(crate) trait Namespace {
-    type Ty: Instantiate + Default;
+    type Ty: Instantiate + ClassNames + Default;
     // Where its members are declared.
     const NS: MemberNs;
     // The type of a member a workspace class declares, and whether it's instance-only.
@@ -65,8 +65,6 @@ pub(crate) trait Namespace {
     ) -> Option<Self::Ty> {
         None
     }
-    // The class names written in the type, to qualify against the declaring class.
-    fn class_names(ty: &mut Self::Ty, f: impl FnMut(&mut Ty));
 }
 
 pub(crate) struct Parameters;
@@ -131,10 +129,6 @@ impl Namespace for Parameters {
             return None;
         };
         Some((p.t.as_deref().map(parameter_ty).unwrap_or_default(), false))
-    }
-
-    fn class_names(ty: &mut Ty, mut f: impl FnMut(&mut Ty)) {
-        f(ty)
     }
 }
 
@@ -202,15 +196,6 @@ impl<A: Access> Namespace for Properties<A> {
         let out = hook.procedure().and_then(|hook| hook.out.clone());
         Some(PropertyTy::Dispatched(out.unwrap_or_default()))
     }
-
-    fn class_names(ty: &mut PropertyTy, mut f: impl FnMut(&mut Ty)) {
-        match ty {
-            PropertyTy::Value(ty)
-            | PropertyTy::Multidimensional(ty)
-            | PropertyTy::Dispatched(ty)
-            | PropertyTy::Collection { element: ty, .. } => f(ty),
-        }
-    }
 }
 
 impl Namespace for Methods {
@@ -262,14 +247,6 @@ impl Namespace for Methods {
 
     fn method(proc: TyProcedureOrAny) -> Option<TyProcedureOrAny> {
         Some(proc)
-    }
-
-    fn class_names(ty: &mut TyProcedureOrAny, mut f: impl FnMut(&mut Ty)) {
-        if let TyProcedureOrAny::Procedure(proc) = ty
-            && matches!(proc.out, Some(Ty::OREF(_)))
-        {
-            f(Arc::make_mut(proc).out.as_mut().unwrap());
-        }
     }
 }
 
@@ -903,7 +880,11 @@ impl<'a> WorkspaceEnv<'a> {
                     }
                 }
             }
-            QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get)
+            if self.is_abstract(obj.name()) {
+                QuasiTypeError::cannot_find_member_on_abstract(obj.to_string(), mem, suggestions)
+            } else {
+                QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get)
+            }
         };
         self.add_soft_diagnostic(err.into_error(|| range).into());
         Ok(Member::undeclared(N::Ty::default()))
@@ -1038,7 +1019,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let member = details.member(N::NS, mem)?;
                 let (mut ty, is_instance_only) = N::declared(member, uri)?;
                 // A member's declared type names are written relative to the declaring class.
-                N::class_names(&mut ty, |t| self.qualify_ty(t, &details.name.it));
+                ty.class_names(&mut |t| self.qualify_ty(t, &details.name.it));
                 let location = bindings::Location::new(uri.to_string(), member.range);
                 Some(Found {
                     member: Member {
@@ -1105,10 +1086,24 @@ impl<'a> WorkspaceEnv<'a> {
             if let Some((package, _)) = context.rsplit_once('.') {
                 candidates.push(format!("{package}.{name}"));
             }
-            if let Some(uri) = self.resolve_uri(DocKind::Cls, context)
-                && let Ok(details) = self.workspace.cls_details(&uri)
-            {
-                candidates.extend(details.imports.iter().map(|p| format!("{p}.{name}")));
+            // The `Import`s of the context, then of the ancestors it inherits them from. Finding
+            // the ancestors resolves the context's `Extends`, so while that is under way only its
+            // own apply.
+            let classes: Vec<Option<Class>> =
+                if self.qualifying.borrow_mut().insert(context.to_string()) {
+                    let classes = self.ancestry(context).map(|(_, class)| class).collect();
+                    self.qualifying.borrow_mut().remove(context);
+                    classes
+                } else {
+                    vec![self.resolve(context)]
+                };
+            for class in classes.into_iter().flatten() {
+                let imports = match &class {
+                    Class::Workspace(_, details) => details.imports.clone(),
+                    Class::Iris(info) => info.import.clone().unwrap_or_default(),
+                    Class::Unknown(_) => vec![],
+                };
+                candidates.extend(imports.iter().map(|p| format!("{p}.{name}")));
             }
         }
         candidates.push(format!("User.{name}"));
@@ -1218,6 +1213,15 @@ impl<'a> WorkspaceEnv<'a> {
                 self.is_subclass(source, target)
             }
             _ => false,
+        }
+    }
+
+    // Whether `cls` is `[ Abstract ]`, so that a value of the type is some subclass's.
+    pub(crate) fn is_abstract(&self, cls: &str) -> bool {
+        match self.resolve(cls) {
+            Some(Class::Workspace(_, details)) => details.keywords.abstract_,
+            Some(Class::Iris(info)) => info.abstract_ || crate::mask::is_abstract(&info.name),
+            Some(Class::Unknown(_)) | None => false,
         }
     }
 
@@ -1380,11 +1384,21 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     pub(crate) fn assert_compatible(&self, source: Ty, target: &Ty) -> Result<(), Incompatible> {
-        if !self.can_assign_to(&source, target) {
-            Err(Incompatible::new(source, target.clone()))
-        } else {
-            Ok(())
+        if self.can_assign_to(&source, target) {
+            return Ok(());
         }
+        // Narrowing an abstract class to a subclass: the value is some subclass's already.
+        let downcast = match (&source, target) {
+            (Ty::OREF(ClsOrIns::Ins(s)), Ty::OREF(ClsOrIns::Ins(t))) => {
+                self.is_abstract(&s.name) && self.is_subclass(t, s)
+            }
+            _ => false,
+        };
+        Err(Incompatible {
+            source,
+            target: target.clone(),
+            downcast,
+        })
     }
 
     fn is_subclass(&self, source: &ClassTy, target: &ClassTy) -> bool {
@@ -1452,6 +1466,7 @@ impl<'a> WorkspaceEnv<'a> {
             generated: RefCell::new(HashMap::new()),
             iris_classes: RefCell::new(HashMap::new()),
             suppress_soft_diagnostics: Cell::new(false),
+            qualifying: RefCell::new(HashSet::new()),
         }
     }
 
@@ -1542,19 +1557,25 @@ impl<'a> WorkspaceEnv<'a> {
 pub(crate) struct Incompatible {
     source: Ty,
     target: Ty,
+    // The source is abstract and the target one of its subclasses: a warning, not an error.
+    downcast: bool,
 }
 
 impl Incompatible {
-    pub(crate) fn new(source: Ty, target: Ty) -> Self {
-        Self { source, target }
-    }
-
     pub(crate) fn assign(self, name: String) -> QuasiTypeError {
-        QuasiTypeError::assign_incompatible(name, self.source, self.target)
+        if self.downcast {
+            QuasiTypeError::downcast_from_abstract(name, self.source, self.target)
+        } else {
+            QuasiTypeError::assign_incompatible(name, self.source, self.target)
+        }
     }
 
     pub(crate) fn general(self) -> QuasiTypeError {
-        QuasiTypeError::type_incompatible(self.source, self.target)
+        if self.downcast {
+            QuasiTypeError::type_downcast(self.source, self.target)
+        } else {
+            QuasiTypeError::type_incompatible(self.source, self.target)
+        }
     }
 }
 
@@ -1570,6 +1591,9 @@ pub struct WorkspaceEnv<'a> {
     // Set during a loop's throwaway priming pass (see `Flow::with_loop`) — its findings reflect
     // pre-loop bindings only, not real, so every soft diagnostic raised meanwhile is dropped.
     suppress_soft_diagnostics: Cell<bool>,
+    // The classes whose `Extends` are being resolved, whose ancestors `qualify_class_name` can't
+    // consult yet.
+    qualifying: RefCell<HashSet<String>>,
 }
 
 pub struct ClassDocument {

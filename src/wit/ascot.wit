@@ -159,10 +159,15 @@ interface common {
         members: list<member-info>,
         // Its own (not inherited) `Include` files; ascot unions them up `extends`.
         %include: list<string>,
+        // Its own (not inherited) `Import` packages; ascot unions them up `extends` to resolve a
+        // short class name.
+        %import: option<list<string>>,
         // A uri the host understands (e.g. `isfs://`), handed back for go-to-definition and hover.
         uri: option<string>,
         class-type: option<class-type>,
         deprecated: bool,
+        // `[ Abstract ]`: never instantiated itself, so a value of this type is some subclass's.
+        abstract: bool,
         inheritance: option<inheritance>,
         // The language of its methods unless they say otherwise; ObjectScript when absent.
         language: option<language>,

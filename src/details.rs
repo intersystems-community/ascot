@@ -215,6 +215,7 @@ pub(crate) struct ClassDetails {
 // The class keywords the checker reads; the rest of the list is parsed and dropped.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ClassKeywords {
+    pub(crate) abstract_: bool,
     pub(crate) class_type: Option<bindings::ClassType>,
     pub(crate) deprecated: bool,
     pub(crate) inheritance: Option<bindings::Inheritance>,
@@ -691,7 +692,10 @@ impl TryFrom<&str> for ClassDetails {
         for keyword in typed(cls.keyword_list.as_ref()) {
             use cos::ClassKeyword::*;
             match keyword {
-                ClassType(v) => keywords.class_type = Some((&v.value).into()),
+                Abstract(flag) => keywords.abstract_ = flag.is_set(),
+                ClassType(v) => {
+                    keywords.class_type = v.value.as_ref().left().map(bindings::ClassType::from)
+                }
                 Deprecated(flag) => keywords.deprecated = flag.is_set(),
                 Inheritance(v) => keywords.inheritance = Some((&v.value).into()),
                 Language(v) => keywords.language = Some((&v.value).into()),
@@ -765,7 +769,7 @@ fn process_member(
                 on: index.on_properties().map(|keys| {
                     keys.into_iter()
                         .map(|key| IndexKey {
-                            property: olc.with_range(key.name.0.as_ref().map(|_| key.name.name())),
+                            property: olc.with_range(key.name.0.as_ref().map(|_| key.property())),
                             subscript: key.kind.as_ref().map(|kind| match kind {
                                 cos::IndexPropertyKind::Keys(_) => bindings::IndexSubscript::Keys,
                                 cos::IndexPropertyKind::Elements(_) => {

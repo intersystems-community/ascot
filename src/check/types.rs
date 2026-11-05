@@ -933,6 +933,58 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     Ty::OREF(ClsOrIns::Ins(cls))
 }
 
+// Every class name a type holds, for qualifying what a class wrote relative to itself: a member's
+// own type, and for a method each argument's type as well as the result's. The one walk every
+// member type takes before it leaves its declaring class.
+pub(crate) trait ClassNames {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty));
+}
+
+impl ClassNames for Ty {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty)) {
+        f(self)
+    }
+}
+
+impl<T: ClassNames> ClassNames for Option<T> {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty)) {
+        if let Some(t) = self {
+            t.class_names(f);
+        }
+    }
+}
+
+impl ClassNames for TyProcedure {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty)) {
+        for arg in &mut self.normal_args {
+            arg.ty.class_names(f);
+        }
+        if let Some(arg) = &mut self.variadic_arg {
+            arg.ty.class_names(f);
+        }
+        self.out.class_names(f);
+    }
+}
+
+impl ClassNames for TyProcedureOrAny {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty)) {
+        if let TyProcedureOrAny::Procedure(proc) = self {
+            Arc::make_mut(proc).class_names(f);
+        }
+    }
+}
+
+impl ClassNames for PropertyTy {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty)) {
+        match self {
+            PropertyTy::Value(ty)
+            | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Dispatched(ty)
+            | PropertyTy::Collection { element: ty, .. } => ty.class_names(f),
+        }
+    }
+}
+
 // `This` is the receiver's class; `..#NAME` the receiver's argument for the parameter `NAME`
 // that `owner`, the member's declaring class, defines (its default when the receiver gives none).
 pub(crate) trait Instantiate {

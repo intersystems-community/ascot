@@ -2502,7 +2502,8 @@ fn check_trap_set<'a>(
         }
         _ => return Ok(()),
     };
-    if env.in_try() {
+    // Clearing the trap is allowed there; a value IRIS can't read is invalid there (#1058).
+    if env.in_try() && !matches!(value, PowerTy::Const(Const::String(text)) if text.is_empty()) {
         env.soft_diagnostic(TypeError::not_allowed_in(
             "An error trap",
             "a TRY block",
@@ -3402,8 +3403,12 @@ fn check_call<'a, 'b>(
                     // A procedure block only ever sees exactly its own declared public names —
                     // it's otherwise isolated from the caller's other locals.
                     // A name never bound here isn't shadowed: the callee reaches the outer one.
+                    // A name the callee receives as a parameter comes from the call itself.
                     for name in names {
-                        if flow::is_percent_variable(name) || !flow.has_binding(name)? {
+                        if flow::is_percent_variable(name)
+                            || !flow.has_binding(name)?
+                            || base.normal_args.iter().any(|par| par.name == *name)
+                        {
                             continue;
                         }
                         if flow.is_public(name)? {
@@ -4230,12 +4235,12 @@ pub(crate) fn check_cls(
                 .filter(|key| key.subscript.is_none());
             for key in plain_keys.map(|key| &key.property) {
                 let key_range = key.range;
-                match env.base.resolve_mem::<Properties<Indexed>>(
-                    &this,
-                    key.it.clone(),
-                    key_range,
-                    true,
-                ) {
+                // Of a path into an embedded object (`Home.State`), this class's own property.
+                let property = key.it.split('.').next().unwrap_or_default().to_string();
+                match env
+                    .base
+                    .resolve_mem::<Properties<Indexed>>(&this, property, key_range, true)
+                {
                     Ok(property) => {
                         if let Some(location) = property.location {
                             env.base.reference(key.range, location);

@@ -2637,6 +2637,11 @@
     { "header": "ClassMethod GenerateImportInternal(class As %String, indent As %String, mappingName As %String, ByRef mapping As %String, Output needRequired As %Boolean, Output needTestInvalidField As %Boolean) As %Status" }
    ]
   },
+  "%Library.AbstractList": {
+   "header": "Class %AbstractList",
+   "members": [],
+   "type": "%Collection.AbstractList"
+  },
   "%Library.AbstractResultSet": {
    "header": "Class %Library.AbstractResultSet",
    "members": [
@@ -5305,6 +5310,7 @@
   },
   "%ZEN.Component.object": {
    "header": "Class %ZEN.Component.object",
+   "abstract": true,
    "members": [
     { "header": "Method %ConstructClone(deep As %Boolean = 0, ByRef cloned As %String, location As %String) As This" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" }
