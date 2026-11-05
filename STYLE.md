@@ -1,6 +1,6 @@
 # Style rules
 
-A style is a JSON file passed with `--style <file>` to `analyze`, `analyze-workspace` and `lsp`; the MCP `create_workspace` call and the JavaScript `createWorkspace` take the same record directly. Its schema is the `style` record in [ascot.wit](src/wit/ascot.wit). Every key is optional, and only what's set is checked; what's written otherwise is reported as a warning whose code starts with `S`, so `-d off:S2839` or a severity filter sets style apart from the checker's own diagnostics.
+A style is a JSON file passed with `--style <file>` to `analyze` and `lsp`; the MCP `create_workspace` call and the JavaScript `createWorkspace` take the same record directly. Its schema is the `style` record in [ascot.wit](src/wit/ascot.wit). Every key is optional, and only what's set is checked; what's written otherwise is reported as a warning whose code starts with `S`, so `-d off:S2839` or a severity filter sets style apart from the checker's own diagnostics.
 
 ```json
 {
