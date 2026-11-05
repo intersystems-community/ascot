@@ -693,7 +693,9 @@ impl TryFrom<&str> for ClassDetails {
             use cos::ClassKeyword::*;
             match keyword {
                 Abstract(flag) => keywords.abstract_ = flag.is_set(),
-                ClassType(v) => keywords.class_type = Some((&v.value).into()),
+                ClassType(v) => {
+                    keywords.class_type = v.value.as_ref().left().map(bindings::ClassType::from)
+                }
                 Deprecated(flag) => keywords.deprecated = flag.is_set(),
                 Inheritance(v) => keywords.inheritance = Some((&v.value).into()),
                 Language(v) => keywords.language = Some((&v.value).into()),
@@ -767,7 +769,7 @@ fn process_member(
                 on: index.on_properties().map(|keys| {
                     keys.into_iter()
                         .map(|key| IndexKey {
-                            property: olc.with_range(key.name.0.as_ref().map(|_| key.name.name())),
+                            property: olc.with_range(key.name.0.as_ref().map(|_| key.property())),
                             subscript: key.kind.as_ref().map(|kind| match kind {
                                 cos::IndexPropertyKind::Keys(_) => bindings::IndexSubscript::Keys,
                                 cos::IndexPropertyKind::Elements(_) => {
