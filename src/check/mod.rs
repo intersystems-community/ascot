@@ -2464,7 +2464,8 @@ fn check_trap_set<'a>(
         }
         _ => return Ok(()),
     };
-    if env.in_try() {
+    // Clearing the trap is allowed there; a value IRIS can't read is invalid there (#1058).
+    if env.in_try() && !matches!(value, PowerTy::Const(Const::String(text)) if text.is_empty()) {
         env.soft_diagnostic(TypeError::not_allowed_in(
             "An error trap",
             "a TRY block",
