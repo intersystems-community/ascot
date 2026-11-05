@@ -912,6 +912,54 @@ impl<'a> WorkspaceEnv<'a> {
         Ok(found)
     }
 
+    // The value the nearest class up from `cls` gives the parameter `param`, when it is a class
+    // name: what `..#param` types a member as on this receiver.
+    fn parameter_value(&self, cls: &str, param: &str) -> Option<String> {
+        let declared = self
+            .ancestry(cls)
+            .find_map(|(cls, resolved)| match &resolved {
+                Some(Class::Workspace(_, details)) => {
+                    match &details.member(MemberNs::Parameter, param)?.kind {
+                        crate::details::MemberKindSpecificDetails::Parameter {
+                            default, ..
+                        } => Some(default.clone()),
+                        _ => None,
+                    }
+                }
+                Some(Class::Iris(info)) => {
+                    let own = (info.members.iter())
+                        .find(|m| {
+                            m.name.eq_ignore_ascii_case(param)
+                                && MemberNs::of_info(&m.kind) == MemberNs::Parameter
+                        })
+                        .cloned()
+                        .or_else(|| {
+                            crate::mask::declared(&cls, param, MemberNs::Parameter).cloned()
+                        })?;
+                    match own.kind {
+                        MemberKind::Parameter(p) => Some(p.v),
+                        _ => None,
+                    }
+                }
+                Some(Class::Unknown(_)) | None => None,
+            })?;
+        // A quoted class name binds; an `{expression}` or anything else binds to a class this
+        // checker can't name, so the member is unknown rather than the default.
+        let value = declared?;
+        let name = value.strip_prefix('"').and_then(|v| v.strip_suffix('"'));
+        Some(match name {
+            Some(name)
+                if !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'%') =>
+            {
+                name.to_string()
+            }
+            _ => "%Library.Any".to_string(),
+        })
+    }
+
     // Where IRIS finds `mem` on `obj`: each class along the chain in precedence order, its own
     // declared members then its generated ones, so the first match is the one IRIS compiles in.
     // The walk ends at a class nobody can see, since whatever it declares would shadow the rest;
@@ -1001,7 +1049,8 @@ impl<'a> WorkspaceEnv<'a> {
                     return Some(Err(FindError::InstanceOnly(mem.to_string())));
                 }
                 let mut member = found.member;
-                member.ty.instantiate(receiver, &found.origin);
+                let given = |param: &str| self.parameter_value(&receiver.name, param);
+                member.ty.instantiate(receiver, &found.origin, &given);
                 Some(Ok(Some(member)))
             });
         found.unwrap_or(Ok(None))
@@ -1202,7 +1251,8 @@ impl<'a> WorkspaceEnv<'a> {
 
     pub fn can_assign_to(&self, source: &Ty, target: &Ty) -> bool {
         match (source, target) {
-            (_, Ty::Any) | (Ty::Any, _) => true,
+            // A class parameter no class bound is as unknown as `Any`.
+            (_, Ty::Any | Ty::Param(_)) | (Ty::Any | Ty::Param(_), _) => true,
             // Anything coerces to a datatype via IRIS's implicit conversion.
             (_, Ty::OREF(ClsOrIns::Ins(target)))
                 if self.is_datatype(&target.name).unwrap_or(true) =>
