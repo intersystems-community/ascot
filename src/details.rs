@@ -521,6 +521,14 @@ pub(crate) fn with_range_name<T: Grammar>(
     pos.with_range(ranged.as_ref().map(|x| x.print()))
 }
 
+// A member's name without the quotes of a quoted one: `Method "_isLabeled"()` declares `_isLabeled`.
+fn with_range_member_name(
+    name: &cos::QuotableClassMemberName,
+    pos: &impl Positions,
+) -> WithRange<String> {
+    pos.with_range(name.0.as_ref().map(|_| name.name()))
+}
+
 fn extract_document_comments(doc: &str) -> String {
     doc.split('\n')
         .filter_map(|line| {
@@ -747,7 +755,7 @@ fn process_member(
     let member_start = member.start;
     match member.into_inner() {
         cos::Member::ForeignKey(fk) => (
-            with_range_name(&fk.name, olc),
+            with_range_member_name(&fk.name, olc),
             deprecated || is_deprecated(fk.keywords.as_ref()),
             keyword_issues_in(fk.keywords.as_ref(), olc),
             MemberKindSpecificDetails::ForeignKey,
@@ -801,14 +809,14 @@ fn process_member(
                 }
             }
             (
-                with_range_name(&index.name, olc),
+                with_range_member_name(&index.name, olc),
                 deprecated || is_deprecated(index.keywords.as_ref()),
                 keyword_issues_in(index.keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Index(details),
             )
         }
         cos::Member::Method(method) => {
-            let name = with_range_name(&method.name, olc);
+            let name = with_range_member_name(&method.name, olc);
             let deprecated = deprecated || is_deprecated(method.keywords.as_ref());
             let keyword_issues = keyword_issues_in(method.keywords.as_ref(), olc);
             let is_class_method = match &method.keyword {
@@ -834,7 +842,7 @@ fn process_member(
             (name, deprecated, keyword_issues, kind)
         }
         cos::Member::Parameter(parameter) => {
-            let name = with_range_name(&parameter.name, olc);
+            let name = with_range_member_name(&parameter.name, olc);
             let as_type = parameter.as_type.as_deref().map(Grammar::print);
             let ty = as_type.as_deref().map(parameter_ty);
             let default = parameter.default.as_ref().map(|v| v.deref().print());
@@ -850,7 +858,7 @@ fn process_member(
             )
         }
         cos::Member::Projection(projection) => (
-            with_range_name(&projection.name, olc),
+            with_range_member_name(&projection.name, olc),
             deprecated || is_deprecated(projection.keywords.as_ref()),
             keyword_issues_in(projection.keywords.as_ref(), olc),
             MemberKindSpecificDetails::Projection,
@@ -863,7 +871,7 @@ fn process_member(
                 keywords,
                 ..
             } => (
-                olc.with_range(name.0.as_ref().map(|_| name.name())),
+                with_range_member_name(&name, olc),
                 deprecated || is_deprecated(keywords.as_ref()),
                 keyword_issues_in(keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Property {
@@ -887,7 +895,7 @@ fn process_member(
                         if matches!(cardinality.value, cos::Cardinality::Many(_) | cos::Cardinality::Children(_)))
                 });
                 (
-                    olc.with_range(name.0.as_ref().map(|_| name.name())),
+                    with_range_member_name(&name, olc),
                     deprecated || is_deprecated(keywords.as_ref()),
                     keyword_issues_in(keywords.as_ref(), olc),
                     MemberKindSpecificDetails::Property {
@@ -908,7 +916,7 @@ fn process_member(
         cos::Member::Query(query) => {
             let (normal_args, variadic_arg) = formal_args(olc, query.formal_spec.as_ref());
             (
-                with_range_name(&query.name, olc),
+                with_range_member_name(&query.name, olc),
                 deprecated || is_deprecated(query.keywords.as_ref()),
                 keyword_issues_in(query.keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Query {
@@ -919,19 +927,19 @@ fn process_member(
             )
         }
         cos::Member::Storage(storage) => (
-            with_range_name(&storage.name, olc),
+            with_range_member_name(&storage.name, olc),
             deprecated,
             vec![],
             MemberKindSpecificDetails::Storage,
         ),
         cos::Member::Trigger(trigger) => (
-            with_range_name(&trigger.name, olc),
+            with_range_member_name(&trigger.name, olc),
             deprecated || is_deprecated(trigger.keywords.as_ref()),
             keyword_issues_in(trigger.keywords.as_ref(), olc),
             MemberKindSpecificDetails::Trigger,
         ),
         cos::Member::XData(xdata) => (
-            with_range_name(xdata.name(), olc),
+            with_range_member_name(xdata.name(), olc),
             deprecated || is_deprecated(xdata.keywords()),
             keyword_issues_in(xdata.keywords(), olc),
             MemberKindSpecificDetails::XData,

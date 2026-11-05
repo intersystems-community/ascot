@@ -471,7 +471,12 @@ fn split_aliases(aliases: Option<&str>) -> Vec<String> {
 }
 
 fn member_row_to_info(row: MemberRow) -> MemberInfo {
-    let name = row.name.clone();
+    // A dictionary may report a quoted name with its quotes, `"_isLabeled"`; the name is what
+    // is between them, a doubled quote standing for one.
+    let name = match row.name.strip_prefix('"').and_then(|n| n.strip_suffix('"')) {
+        Some(quoted) => quoted.replace("\"\"", "\""),
+        None => row.name.clone(),
+    };
     let aliases = split_aliases(row.aliases.as_deref());
     let origin = row.origin.clone();
     MemberInfo {
@@ -1025,6 +1030,13 @@ mod tests {
             property_type(None, Some("%String".into()), false).collection,
             None
         );
+    }
+
+    #[test]
+    fn a_quoted_member_name_is_what_is_between_the_quotes() {
+        let row = serde_json::json!({"parent": "A", "Name": "\"_isLabeled\"", "MemberType": "method", "Description": "", "FormalSpec": "", "ReturnType": "%Boolean", "ClassMethod": 0, "Deprecated": 0});
+        let info = member_row_to_info(serde_json::from_value(row).unwrap());
+        assert_eq!(info.name, "_isLabeled");
     }
 
     #[test]
