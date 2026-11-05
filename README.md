@@ -201,8 +201,8 @@ three settings everywhere; the `ascot-lsp` plugin asks for them when enabled.
 | | [IRIS](#connecting-to-iris) | [Style](#style) | [Diagnostics](#diagnostics-filter) |
 | --- | --- | --- | --- |
 | `analyze`, `analyze-workspace`, `lsp` | `--iris`, `--iris-namespace` | `--style FILE` | `-d VERB:TARGETS` |
-| MCP `create_workspace`; LSP `initializationOptions`, `workspace/didChangeConfiguration` | `iris`, `iris_namespace` | `style` | `diagnostics` |
-| JavaScript `createWorkspace` | `env` | `style` | |
+| [MCP](#ascot-as-an-mcp-server) `create_workspace`; [LSP](#ascot-as-an-lsp-server) `initializationOptions`, `workspace/didChangeConfiguration` | `iris`, `iris_namespace` | `style` | `diagnostics` |
+| [JavaScript](#javascript-binding) `createWorkspace` | `env` | `style` | |
 
 ### Connecting to IRIS
 
