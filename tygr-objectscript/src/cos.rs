@@ -2478,7 +2478,8 @@ pub enum Inheritance {
 #[derive(Grammar)]
 pub enum ClassKeyword {
     Abstract(Flag<StringEqCI!("Abstract")>),
-    ClassType(Valued<StringEqCI!("ClassType"), ClassType>),
+    // `""` is how IRIS writes "no class type", on every non-persistent class it exports.
+    ClassType(Valued<StringEqCI!("ClassType"), Either<ClassType, StringEq!("\"\"")>>),
     ClientDataType(Valued<StringEqCI!("ClientDataType"), KeywordValue>),
     ClientName(Valued<StringEqCI!("ClientName"), KeywordValue>),
     CompileAfter(Valued<StringEqCI!("CompileAfter"), KeywordValue>),
