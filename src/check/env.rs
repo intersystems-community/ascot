@@ -880,7 +880,8 @@ impl<'a> WorkspaceEnv<'a> {
                     }
                 }
             }
-            if self.is_abstract(obj.name()) {
+            // `##class(X)` names X itself, not some subclass's instance: what it lacks is missing.
+            if obj.is_ins() && self.is_abstract(obj.name()) {
                 QuasiTypeError::cannot_find_member_on_abstract(obj.to_string(), mem, suggestions)
             } else {
                 QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get)
