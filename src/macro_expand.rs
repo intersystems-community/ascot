@@ -1379,7 +1379,8 @@ fn macro_name_in(input: &cos::MacroInput) -> String {
 }
 
 // Joins a macro's (possibly multi-line, `##CONTINUE`-terminated) body into a single string
-// usable as the macro's expansion text.
+// usable as the macro's expansion text. Each continued line is kept as written, since IRIS emits
+// it as a line of its own: one starting with a label stays a label.
 fn import_macro_input(cos::MacroInput { line_i, line_z }: &cos::MacroInput) -> String {
     let mut result = String::new();
     for line in line_i {
@@ -1389,7 +1390,7 @@ fn import_macro_input(cos::MacroInput { line_i, line_z }: &cos::MacroInput) -> S
             .find("##continue")
             .unwrap_or(printed.len());
         result.push_str(&printed[..end]);
-        result.push_str("\n ");
+        result.push('\n');
     }
     result.push_str(&line_z.print());
     result.trim_start().to_string()
