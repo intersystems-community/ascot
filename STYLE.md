@@ -12,6 +12,7 @@ A style is a JSON file passed with `--style <file>` to `analyze` and `lsp`; the 
   "condition_and": "DoubleAmpersand",
   "max_new_per_block": 1,
   "max_commands_per_line": 1,
+  "require_description": { "min_body_lines": 5 },
   "open_brace": { "newline_before": false, "newline_after": true },
   "close_brace": { "newline_before": true, "newline_after": false },
   "space_after_comma": true
@@ -38,6 +39,7 @@ With `form` alone, any casing passes; with `case` alone, the form written is kep
 | `condition_and` | `DoubleAmpersand`, `Comma` | Conditions of `If`, `ElseIf` and `While` joined the other way: `If a, b` under `DoubleAmpersand`, `If a && b` under `Comma`. |
 | `max_new_per_block` | a count | Each `New` past the count in one block or routine body. A nested `{ }` block counts its own. |
 | `max_commands_per_line` | a count | Each command past the count on one line. A brace-less `If`, `Else` or `For` and the commands it governs count as one. |
+| `require_description.min_body_lines` | a count | A method, or a routine label with a parameter list, whose body has at least that many lines and no description: `///` lines right above the method, a `;` or `#;` comment line right above the label. `0` asks it of every one; private methods are exempt. |
 | `open_brace.newline_before` | `true`, `false` | A line break missing or present between a command and its block's `{`: `true` wants the `{` on its own line, `false` wants `If x {`. |
 | `open_brace.newline_after` | `true`, `false` | Likewise between a block's `{` and its first command: `true` wants the body to start on the next line. |
 | `close_brace.newline_before` | `true`, `false` | Likewise between a block's last command and its `}`: `true` wants the `}` on its own line. |

@@ -1643,9 +1643,28 @@ impl<'a> DocumentEnv<'a> {
         }
     }
 
+    // The workspace's style rules, if a style was given.
+    pub(crate) fn style(&self) -> Option<&crate::style::Styles> {
+        self.base.workspace.style.as_ref()
+    }
+
     pub fn with_source_map(mut self, source_map: &'a SourceMap) -> Self {
         self.source_map = Some(source_map);
         self
+    }
+
+    // The document's line right above the one `position` (in the checked text) comes from. A
+    // comment there is read from the document itself, since the expansion drops `#;` lines.
+    pub(crate) fn source_line_above(&self, position: bindings::Position) -> Option<String> {
+        let line = match self.source_map {
+            Some(map) => map.relocate_position(position)?.line,
+            None => position.line,
+        };
+        let cell = self.base.workspace.doc_cache.get(self.uri)?.as_ref().ok()?;
+        let text = &cell.borrow().text;
+        text.lines()
+            .nth((line as usize).checked_sub(1)?)
+            .map(str::to_string)
     }
 
     pub fn olc(&self) -> &'a OLC {
@@ -1790,9 +1809,8 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
-    // The workspace's style rules, if a style was given.
     pub(crate) fn style(&self) -> Option<&crate::style::Styles> {
-        self.base.base.workspace.style.as_ref()
+        self.base.style()
     }
 
     pub(crate) fn soft_diagnostic(&self, err: TypeError) {

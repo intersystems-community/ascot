@@ -316,6 +316,7 @@ pub struct MethodDetails {
     pub mode: Option<cos::CodeMode>,
     pub procedure_block: ProcedureBlock,
     pub is_abstract: bool,
+    pub is_private: bool,
     pub body: WithRange<String>,
     // Byte offset of the method's own declaration (`Method`/`ClassMethod` keyword).
     pub header_start: usize,
@@ -990,6 +991,7 @@ fn method_kind(
     let mut procedure_block = None;
     let mut public_list = Vec::new();
     let mut is_abstract = false;
+    let mut is_private = false;
     let keywords = method.header.keywords.take().into_iter();
     for entry in keywords
         .flat_map(|list| list.entries)
@@ -1009,6 +1011,7 @@ fn method_kind(
                     .collect()
             }
             Left(Abstract(flag)) => is_abstract = flag.is_set(),
+            Left(Private(flag)) => is_private = flag.is_set(),
             _ => {}
         }
     }
@@ -1030,5 +1033,6 @@ fn method_kind(
         mode,
         procedure_block,
         is_abstract,
+        is_private,
     }))
 }
