@@ -2384,10 +2384,12 @@ pub enum KeywordValueEnum {
 #[derive(Grammar)]
 pub struct KeywordValue(Raw<KeywordValueEnum>);
 
+// The class may be `..#NAME`, a class parameter's value, in ascot's declarations (see
+// `SignatureType`).
 #[derive(Grammar)]
 pub struct PropertyType {
     pub collection: Option<CollectionKind>,
-    pub class_name: Option<ClassName>,
+    pub class_name: Option<SignatureType>,
 }
 
 #[derive(Grammar)]

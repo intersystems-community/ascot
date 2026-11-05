@@ -213,7 +213,10 @@ IRIS; `iris` says which:
   ascot knows, downloaded once (4 MB) from this repository's
   [`declarations` release](https://github.com/intersystems-community/ascot/releases/tag/declarations)
   into `~/.ascot`.
-- `--iris <YYYY>.<N>`: the snapshot of that IRIS release.
+- `--iris <release>`: the snapshot of that IRIS release, the tag of its
+  `iris-community` image; `--iris irishealth-community:<release>:HSLIB` that of
+  IRIS for Health's `HS` and `Ens` classes (7 MB), the namespace after the tag
+  and `%SYS` when left out; `latest` serves as the tag there too.
 - `--iris http://user:password@host:port[/prefix]` with `--iris-namespace`
   (default `%SYS`): a live connection to IRIS through the Atelier REST API.
 - `--iris path/to/declarations.d.json`: a declaration file, a released one or

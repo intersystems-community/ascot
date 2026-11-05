@@ -52,7 +52,9 @@ syntax, plus `drop` (members the compiler doesn't accept), `type` (what the clas
 parameters that type members as `..#NAME`). A header may say `As This` for the
 receiver's class. The script checks that each override keeps the member's kind and argument
 names, so an override can only change types, modes, defaults and the return type. The same file
-is embedded in ascot and applied over a live instance.
+is embedded in ascot and applied over a live instance. Its `sources` name lines of include files
+the script replaces in the file by their decided form, for what IRIS decides at compile time and
+ascot can't, such as `#if $$$comClassDefined(...)`; an include the namespace lacks is skipped.
 
 The generated files are published as assets of the `declarations` GitHub Release, a prerelease
 on a fixed tag that is never GitHub's "latest" (which `releases/latest/download` must keep
