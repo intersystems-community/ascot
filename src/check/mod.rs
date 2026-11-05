@@ -4102,12 +4102,7 @@ pub(crate) fn check_rtn(
     definitions: &crate::MacroDefinitions,
 ) -> Vec<bindings::Diagnostic> {
     let olc = env.olc();
-    let elements: Vec<(&cos::RoutineElement, Option<details::RoutineElementDetails>)> = rtn
-        .subroutines
-        .iter()
-        .flat_map(|srs| srs.items.iter())
-        .map(|elem| (elem, details::routine_element_kind(olc, elem)))
-        .collect();
+    let elements = details::routine_elements(olc, rtn.subroutines.as_ref());
     let labels: Vec<_> = elements
         .iter()
         .filter_map(|(elem, details)| {
@@ -4115,6 +4110,7 @@ pub(crate) fn check_rtn(
             Some((details, matches!(elem, cos::RoutineElement::Procedure(_))))
         })
         .collect();
+    let min_description_lines = min_description_lines(env);
     let env = env.for_routine(env::scoped_labels(env.uri(), &labels), definitions);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a
@@ -4141,6 +4137,18 @@ pub(crate) fn check_rtn(
     }
     for (elem, details) in &elements {
         let Some(details) = details else { continue };
+        if let Some(min) = min_description_lines
+            && details.formal_list
+            && details.doc.is_empty()
+        {
+            let lines = match elem {
+                cos::RoutineElement::Procedure(p) => body_lines(env.range(&p.body), true),
+                cos::RoutineElement::Subroutine(s) => body_lines(env.range(&s.body), false),
+            };
+            if lines >= min {
+                diagnostics.push(TypeError::undescribed("label", lines, details.name.range).into());
+            }
+        }
         let result = match elem {
             cos::RoutineElement::Procedure(procedure) => check_procedure(procedure, details, &env),
             cos::RoutineElement::Subroutine(subroutine) => {
@@ -4156,6 +4164,22 @@ pub(crate) fn check_rtn(
         }
     }
     diagnostics
+}
+
+// The style's `require_description.min_body_lines`, if set.
+fn min_description_lines(env: &DocumentEnv) -> Option<usize> {
+    let rules = &env.style()?.rules;
+    Some(rules.require_description.as_ref()?.min_body_lines as usize)
+}
+
+// The lines a body spans, blank ones included; between the braces, for a body in them.
+fn body_lines(range: bindings::Range, braced: bool) -> usize {
+    let spanned = (range.end.line - range.start.line) as usize;
+    if braced {
+        spanned.saturating_sub(1)
+    } else {
+        spanned
+    }
 }
 
 // What IRIS does with a class keyword it can't place: refuse the class for a bad `ClassType`,
@@ -4222,10 +4246,21 @@ pub(crate) fn check_cls(
             Location::new(env.uri().to_string(), kept.range),
         )));
     }
+    let min_description_lines = min_description_lines(env);
     // In name order, as IRIS compiles them: a method body's `#define` reaches the methods after it.
     let mut members = cls.members.in_order();
     members.sort_by(|a, b| a.name.it.cmp(&b.name.it));
     for member in members {
+        if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
+            && let Some(min) = min_description_lines
+            && !method.is_private
+            && member.doc.is_empty()
+        {
+            let lines = body_lines(method.body.range, true);
+            if lines >= min {
+                diagnostics.push(TypeError::undescribed("method", lines, member.name.range).into());
+            }
+        }
         if let MemberKindSpecificDetails::Index(index) = &member.kind {
             let this = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.name.it.clone())));
             let plain_keys = index

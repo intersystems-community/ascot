@@ -1643,6 +1643,11 @@ impl<'a> DocumentEnv<'a> {
         }
     }
 
+    // The workspace's style rules, if a style was given.
+    pub(crate) fn style(&self) -> Option<&crate::style::Styles> {
+        self.base.workspace.style.as_ref()
+    }
+
     pub fn with_source_map(mut self, source_map: &'a SourceMap) -> Self {
         self.source_map = Some(source_map);
         self
@@ -1790,9 +1795,8 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
-    // The workspace's style rules, if a style was given.
     pub(crate) fn style(&self) -> Option<&crate::style::Styles> {
-        self.base.base.workspace.style.as_ref()
+        self.base.style()
     }
 
     pub(crate) fn soft_diagnostic(&self, err: TypeError) {

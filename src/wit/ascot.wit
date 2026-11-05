@@ -234,6 +234,13 @@ interface common {
         newline-after: option<bool>,
     }
 
+    record require-description {
+        // A method, or a routine label with a parameter list, whose body has at least this many
+        // lines must carry a description: `///` lines right above the method, comment lines right
+        // above the label. `0` means every one. Private methods are exempt.
+        min-body-lines: u32,
+    }
+
     // A field left out isn't checked. `command` applies to every command, and `command-<name>`
     // overrides it field by field for one; `function` and `function-<name>` do the same for
     // intrinsic functions.
@@ -244,6 +251,7 @@ interface common {
         condition-and: option<and-operator>,
         max-new-per-block: option<u32>,
         max-commands-per-line: option<u32>,
+        require-description: option<require-description>,
         // Around a block's `{`: between the command and it, and between it and the block's first
         // command.
         open-brace: option<brace-breaks>,
