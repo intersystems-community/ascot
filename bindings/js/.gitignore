@@ -3,3 +3,5 @@ generated/
 lib/*.wasm
 dist/
 *.tgz
+lib/*.d.json.gz
+lib/declarations.json
