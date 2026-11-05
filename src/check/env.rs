@@ -1018,7 +1018,7 @@ impl<'a> WorkspaceEnv<'a> {
                                         receiver.name.clone(),
                                         mem.to_string(),
                                         cls != receiver.name,
-                                        self.workspace.iris.is_some(),
+                                        cls.clone(),
                                         range,
                                     ),
                                 };
@@ -1333,10 +1333,10 @@ impl<'a> WorkspaceEnv<'a> {
             Some(Class::Unknown(Some(reason))) => {
                 TypeError::iris_lookup_failed(DocKind::Cls, cls.to_string(), reason, range)
             }
+            // Its file is in the workspace; the parse error is reported there.
+            Some(Class::Unknown(None)) => return,
             None if !has_iris => TypeError::cannot_find_class(cls.to_string(), range),
-            Some(Class::Unknown(None)) | None => {
-                TypeError::unconfirmed_class(cls.to_string(), has_iris, range)
-            }
+            None => TypeError::unconfirmed_class(cls.to_string(), has_iris, range),
         };
         self.add_soft_diagnostic(diagnostic.into());
     }

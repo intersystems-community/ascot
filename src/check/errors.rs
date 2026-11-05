@@ -478,12 +478,12 @@ type_error_kinds! {
     },
     #[code = "A9360"]
     #[severity = Hint]
-    #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes a class {reason}"]
+    #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes {unparsed}, whose file in the workspace doesn't parse"]
     UnconfirmedMember {
         cls: String,
         mem: String,
         on: SuperclassOf,
-        reason: UnconfirmedReason,
+        unparsed: String,
     },
     /// `##super()` binds to the superclass's version of the method at compile time; no
     /// `%DispatchMethod` and no same-named property stands in.
@@ -1043,22 +1043,6 @@ impl std::fmt::Display for SuperclassOf {
     }
 }
 
-/// Why a class in a hierarchy can't be checked, depending on whether IRIS was asked.
-#[derive(Debug)]
-pub struct UnconfirmedReason {
-    pub has_iris: bool,
-}
-
-impl std::fmt::Display for UnconfirmedReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.has_iris {
-            "that isn't on the IRIS instance"
-        } else {
-            "outside this workspace, with no IRIS connection to check it against"
-        })
-    }
-}
-
 /// "routine '…'", or "this routine" for a label looked up locally.
 #[derive(Debug)]
 pub struct InRoutine(pub Option<String>);
@@ -1243,7 +1227,7 @@ impl TypeError {
         cls: String,
         mem: String,
         superclass: bool,
-        has_iris: bool,
+        unparsed: String,
         range: Range,
     ) -> Self {
         Self::at(
@@ -1251,7 +1235,7 @@ impl TypeError {
                 cls,
                 mem,
                 on: SuperclassOf(superclass),
-                reason: UnconfirmedReason { has_iris },
+                unparsed,
             },
             range,
         )

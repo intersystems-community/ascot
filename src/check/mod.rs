@@ -36,7 +36,7 @@ use types::*;
 pub(crate) use env::{DocumentEnv, WorkspaceEnv, labels_of};
 pub use errors::{
     Available, ClassLookup, Declared, Detail, DynamicGet, InRoutine, Suggestions, SuperclassOf,
-    SyntaxErrorText, TypeErrorKind, TypeParamHint, UnconfirmedReason,
+    SyntaxErrorText, TypeErrorKind, TypeParamHint,
 };
 pub(crate) use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
