@@ -84,10 +84,11 @@ def key(header):
     kind, name, _ = shape(header)
     return NS.get(kind, kind), name.lower()
 replaced = added = 0
+missing = []
 for cls, masked in mask["classes"].items():
     base = d["classes"].get(cls)
     if base is None:  # a class of another namespace
-        print(f"mask.json: {cls} is not in {namespace}", file=sys.stderr)
+        missing.append(cls)
         continue
     members = {key(m["header"]): m for m in base["members"]}
     for m in masked["members"]:
@@ -106,6 +107,8 @@ for cls, masked in mask["classes"].items():
         if name.lower() not in names:
             sys.exit(f"mask.json: {cls}.{name} is not in the declaration")
     base["members"] = [m for m in base["members"] if shape(m["header"])[1].lower() not in {n.lower() for n in masked.get("drop", [])}]
+if missing:
+    print(f"mask.json: {len(missing)} class(es) are not in {namespace}, e.g. {missing[0]}", file=sys.stderr)
 json.dump(d, open(out, "w"), separators=(",", ":"))
 print(f"{named} of {len(compiled)} compiled-only routines got their label names; "
       f"{replaced} member(s) replaced, {added} added and {sum(len(c.get('drop', [])) for c in mask['classes'].values())} dropped by the mask")
