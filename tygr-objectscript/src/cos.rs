@@ -6952,7 +6952,7 @@ pub struct SubroutineHeader {
 #[derive(Grammar)]
 pub struct Subroutine {
     pub header: AllowMacro<SubroutineHeader>,
-    pub body: RoutineMain,
+    pub body: Range<RoutineMain>,
 }
 
 // https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=GCOS_procedures#GCOS_procedures_procsyntax

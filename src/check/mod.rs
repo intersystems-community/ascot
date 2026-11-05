@@ -4090,12 +4090,11 @@ pub(crate) fn check_rtn(
             && details.formal_list
             && details.doc.is_empty()
         {
-            let body = match elem {
-                cos::RoutineElement::Procedure(procedure) => procedure.body.print(),
-                cos::RoutineElement::Subroutine(subroutine) => subroutine.body.print(),
+            let lines = match elem {
+                cos::RoutineElement::Procedure(p) => body_lines(env.range(&p.body), true),
+                cos::RoutineElement::Subroutine(s) => body_lines(env.range(&s.body), false),
             };
-            if body_lines(&body) >= min {
-                let lines = body_lines(&body);
+            if lines >= min {
                 diagnostics.push(TypeError::undescribed("label", lines, details.name.range).into());
             }
         }
@@ -4122,9 +4121,14 @@ fn min_description_lines(env: &DocumentEnv) -> Option<usize> {
     Some(rules.require_description.as_ref()?.min_body_lines as usize)
 }
 
-// The lines of a body that hold something.
-fn body_lines(body: &str) -> usize {
-    body.lines().filter(|line| !line.trim().is_empty()).count()
+// The lines a body spans, blank ones included; between the braces, for a body in them.
+fn body_lines(range: bindings::Range, braced: bool) -> usize {
+    let spanned = (range.end.line - range.start.line) as usize;
+    if braced {
+        spanned.saturating_sub(1)
+    } else {
+        spanned
+    }
 }
 
 // What IRIS does with a class keyword it can't place: refuse the class for a bad `ClassType`,
@@ -4200,10 +4204,11 @@ pub(crate) fn check_cls(
             && let Some(min) = min_description_lines
             && !method.is_private
             && member.doc.is_empty()
-            && body_lines(&method.body.it) >= min
         {
-            let lines = body_lines(&method.body.it);
-            diagnostics.push(TypeError::undescribed("method", lines, member.name.range).into());
+            let lines = body_lines(method.body.range, true);
+            if lines >= min {
+                diagnostics.push(TypeError::undescribed("method", lines, member.name.range).into());
+            }
         }
         if let MemberKindSpecificDetails::Index(index) = &member.kind {
             let this = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.name.it.clone())));
