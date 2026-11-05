@@ -247,6 +247,10 @@ impl QuasiTypeError {
         .into()
     }
 
+    pub fn user_command(name: String) -> Self {
+        TypeErrorKind::UserCommand { name }.into()
+    }
+
     pub fn cannot_find_member_on_abstract(
         cls: String,
         mem: String,
@@ -694,6 +698,12 @@ type_error_kinds! {
     #[message = "{call} is not documented for IRIS; $ZUTIL was superseded by class methods and special variables"]
     UndocumentedZUtil { call: String },
     /// A `$Z` function IRIS compiles but doesn't document (`$ZOBJEXPORT`); per GOVERNANCE.md,
+    /// A `Z` command IRIS has no definition for is one `^%ZLANGC00` may define: noted, its
+    /// arguments checked, the call itself not.
+    #[code = "A5362"]
+    #[severity = Hint]
+    #[message = "'{name}' is a user-defined command (^%ZLANGC00), so the call is not checked"]
+    UserCommand { name: String },
     /// noted and left unchecked rather than refused.
     #[code = "A6037"]
     #[severity = Hint]
