@@ -518,6 +518,9 @@ interface common {
         kind: symbol-kind,
         deprecated: bool,
         location: location,
+        // LSP's `containerName`, shown after the name: the member's keyword and its class, as
+        // `ClassMethod • Demo.Lib`, or `Label` and its routine; none for the class or routine itself.
+        container-name: option<string>,
     }
 }
 
