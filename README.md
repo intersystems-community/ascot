@@ -80,8 +80,7 @@ From
 npm install @intersystems-community/ascot
 ```
 
-A library for Node 24+ and other TS/JS runtimes; it does not provide an `ascot`
-executable.
+A library; it does not provide an `ascot` executable.
 
 ## Usage
 
