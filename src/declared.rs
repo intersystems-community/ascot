@@ -117,7 +117,7 @@ fn member_name(name: &str) -> String {
     if plain {
         name.to_string()
     } else {
-        format!("\"{name}\"")
+        format!("\"{}\"", name.replace('"', "\"\""))
     }
 }
 
