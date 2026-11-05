@@ -159,10 +159,15 @@ interface common {
         members: list<member-info>,
         // Its own (not inherited) `Include` files; ascot unions them up `extends`.
         %include: list<string>,
+        // Its own (not inherited) `Import` packages; ascot unions them up `extends` to resolve a
+        // short class name.
+        %import: option<list<string>>,
         // A uri the host understands (e.g. `isfs://`), handed back for go-to-definition and hover.
         uri: option<string>,
         class-type: option<class-type>,
         deprecated: bool,
+        // `[ Abstract ]`: never instantiated itself, so a value of this type is some subclass's.
+        abstract: bool,
         inheritance: option<inheritance>,
         // The language of its methods unless they say otherwise; ObjectScript when absent.
         language: option<language>,
@@ -229,6 +234,13 @@ interface common {
         newline-after: option<bool>,
     }
 
+    record require-description {
+        // A method, or a routine label with a parameter list, whose body has at least this many
+        // lines must carry a description: `///` lines right above the method, comment lines right
+        // above the label. `0` means every one. Private methods are exempt.
+        min-body-lines: u32,
+    }
+
     // A field left out isn't checked. `command` applies to every command, and `command-<name>`
     // overrides it field by field for one; `function` and `function-<name>` do the same for
     // intrinsic functions.
@@ -239,6 +251,7 @@ interface common {
         condition-and: option<and-operator>,
         max-new-per-block: option<u32>,
         max-commands-per-line: option<u32>,
+        require-description: option<require-description>,
         // Around a block's `{`: between the command and it, and between it and the block's first
         // command.
         open-brace: option<brace-breaks>,
@@ -505,6 +518,9 @@ interface common {
         kind: symbol-kind,
         deprecated: bool,
         location: location,
+        // LSP's `containerName`, shown after the name: the member's keyword and its class, as
+        // `ClassMethod • Demo.Lib`, or `Label` and its routine; none for the class or routine itself.
+        container-name: option<string>,
     }
 }
 
@@ -553,6 +569,10 @@ interface exported {
         set-env: func(env: option<env>) -> list<string>;
         // Replaces the keyword style; returns every uri, since every check applied the old one.
         set-style: func(style: option<style>) -> list<string>;
+        // Replaces which codes `diagnostics` reports, and at what severity: `VERB:TARGETS` values
+        // applied in order, as `ascot analyze -d` takes them; returns every uri, since every
+        // report may change. An invalid value is the error, and the filter stays as it was.
+        set-diagnostics: func(diagnostics: list<string>) -> result<list<string>, string>;
         diagnostics: func(uri: string) -> list<diagnostic>;
         inlay-hint: func(uri: string, range: range) -> list<inlay-hint>;
         definition: func(uri: string, position: position) -> option<location>;

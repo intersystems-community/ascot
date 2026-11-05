@@ -211,7 +211,7 @@ fn class_infos(
     params: &[&str],
 ) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = format!(
-        "SELECT Name, Description, Super, IncludeCode, ClassType, Deprecated, Inheritance, \
+        "SELECT Name, Description, Super, IncludeCode, Import, ClassType, Deprecated, Abstract, Inheritance, \
          _Language, ProcedureBlock, PropertyClass FROM %Dictionary.CompiledClass WHERE Name {filter}"
     );
     let rows = conn.rows(&sql, params)?;
@@ -267,10 +267,12 @@ fn assemble(
                 storage: storages.get(&cls).cloned(),
                 members: members.remove(&cls).unwrap_or_default(),
                 include: split_classes(str_field("IncludeCode")),
+                import: Some(split_classes(str_field("Import"))).filter(|i| !i.is_empty()),
                 // The Atelier REST API has no uri scheme of its own to offer here.
                 uri: None,
                 class_type: parsed::<cos::ClassType, _>(str_field("ClassType")),
                 deprecated: row.get("Deprecated").is_some_and(is_truthy),
+                abstract_: row.get("Abstract").is_some_and(is_truthy),
                 inheritance: parsed::<cos::Inheritance, _>(str_field("Inheritance")),
                 language: parsed::<cos::MethodLanguage, _>(str_field("_Language")),
                 procedure_block: row.get("ProcedureBlock").map(is_truthy),
@@ -344,6 +346,9 @@ struct MemberRow {
     formal_spec: Option<String>,
     #[serde(deserialize_with = "empty_string_as_none")]
     return_type: Option<String>,
+    // A parameter's value as compiled: a literal, or what an `{expression}` evaluated to.
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    default_value: Option<String>,
     // A property's `list`/`array`, when it is a collection.
     #[serde(default, deserialize_with = "empty_string_as_none")]
     collection: Option<String>,
@@ -386,6 +391,19 @@ struct MemberRow {
     index_unique: Value,
 }
 
+// The dictionary holds a parameter's compiled value, bare; the header spells it as source, so a
+// non-number is quoted the way `Parameter P = "..."` writes it. A value with a line break has no
+// literal spelling (it came from an `{expression}`), so it is left out.
+fn parameter_source(value: &str) -> Option<String> {
+    if value.contains(['\n', '\r']) {
+        None
+    } else if value.parse::<f64>().is_ok() {
+        Some(value.to_string())
+    } else {
+        Some(format!("\"{}\"", value.replace('"', "\"\"")))
+    }
+}
+
 fn empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -412,16 +430,17 @@ fn all_mem_rows(
     let declared = format!(
         "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, Description, \
              FormalSpec, ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS \
-             Relationship, NULL AS Cardinality, ClassMethod, Deprecated, Origin FROM \
-             %Dictionary.CompiledMethod WHERE Parent {filter} AND Origin = Parent UNION ALL SELECT \
-             Parent, Name, Aliases, 'property' AS MemberType, Description, NULL AS FormalSpec, \
-             Type AS ReturnType, Collection, MultiDimensional, Relationship, Cardinality, 0 AS \
-             ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledProperty WHERE Parent \
-             {filter} AND Origin = Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, \
-             'parameter' AS MemberType, Description, NULL AS FormalSpec, Type AS ReturnType, \
-             NULL AS Collection, 0 AS MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 \
-             AS ClassMethod, Deprecated, Origin FROM %Dictionary.CompiledParameter WHERE Parent \
-             {filter} AND Origin = Parent"
+             Relationship, NULL AS Cardinality, ClassMethod, Deprecated, Origin, NULL AS \
+             DefaultValue FROM %Dictionary.CompiledMethod WHERE Parent {filter} AND Origin = \
+             Parent UNION ALL SELECT Parent, Name, Aliases, 'property' AS MemberType, Description, \
+             NULL AS FormalSpec, Type AS ReturnType, Collection, MultiDimensional, Relationship, \
+             Cardinality, 0 AS ClassMethod, Deprecated, Origin, NULL AS DefaultValue FROM \
+             %Dictionary.CompiledProperty WHERE Parent {filter} AND Origin = Parent UNION ALL \
+             SELECT Parent, Name, NULL AS Aliases, 'parameter' AS MemberType, Description, NULL AS \
+             FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS \
+             Relationship, NULL AS Cardinality, 0 AS ClassMethod, Deprecated, Origin, _Default AS \
+             DefaultValue FROM %Dictionary.CompiledParameter WHERE Parent {filter} AND Origin = \
+             Parent"
     );
     let generating = format!(
         "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, Description, \
@@ -471,7 +490,12 @@ fn split_aliases(aliases: Option<&str>) -> Vec<String> {
 }
 
 fn member_row_to_info(row: MemberRow) -> MemberInfo {
-    let name = row.name.clone();
+    // A dictionary may report a quoted name with its quotes, `"_isLabeled"`; the name is what
+    // is between them, a doubled quote standing for one.
+    let name = match row.name.strip_prefix('"').and_then(|n| n.strip_suffix('"')) {
+        Some(quoted) => quoted.replace("\"\"", "\""),
+        None => row.name.clone(),
+    };
     let aliases = split_aliases(row.aliases.as_deref());
     let origin = row.origin.clone();
     MemberInfo {
@@ -527,7 +551,7 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
         )),
         "parameter" => MemberKind::Parameter(ParameterInfo {
             t: row.return_type.clone(),
-            v: None,
+            v: row.default_value.as_deref().and_then(parameter_source),
         }),
         // `Properties` is `Name,Age`, a collated key `Name:Exact`, a collection key `Tags(ELEMENTS)`;
         // empty without an `On` clause. The compiled `SqlName` defaults to the index's own name.
@@ -1025,6 +1049,13 @@ mod tests {
             property_type(None, Some("%String".into()), false).collection,
             None
         );
+    }
+
+    #[test]
+    fn a_quoted_member_name_is_what_is_between_the_quotes() {
+        let row = serde_json::json!({"parent": "A", "Name": "\"_isLabeled\"", "MemberType": "method", "Description": "", "FormalSpec": "", "ReturnType": "%Boolean", "ClassMethod": 0, "Deprecated": 0});
+        let info = member_row_to_info(serde_json::from_value(row).unwrap());
+        assert_eq!(info.name, "_isLabeled");
     }
 
     #[test]

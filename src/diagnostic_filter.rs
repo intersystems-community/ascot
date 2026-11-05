@@ -9,8 +9,20 @@ use crate::bindings::{Diagnostic, DiagnosticSeverity};
 use crate::check::TypeErrorKind;
 
 /// The `VERB:TARGETS` values, applied in order; each later one overrides the earlier.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Filter(pub Vec<Batch>);
+
+impl FromStr for Filter {
+    type Err = String;
+
+    /// Batches separated by whitespace; none at all is every code at its own severity.
+    fn from_str(text: &str) -> Result<Self, String> {
+        text.split_whitespace()
+            .map(str::parse)
+            .collect::<Result<_, _>>()
+            .map(Filter)
+    }
+}
 
 #[derive(Clone, Grammar)]
 pub struct Batch {

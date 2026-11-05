@@ -1,5 +1,5 @@
-//! The `ascot` command-line binary: argument parsing (with `clap`) and the `analyze`,
-//! `analyze-workspace`, `parse`, `declare`, `mcp` and `lsp` subcommands documented in README.md.
+//! The `ascot` command-line binary: argument parsing (with `clap`) and the `analyze`, `parse`,
+//! `declare`, `mcp` and `lsp` subcommands documented in README.md.
 //!
 //! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
 //! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
@@ -11,10 +11,10 @@ use ascot::bindings::GuestWorkspace;
 use ascot::bindings::Style;
 use ascot::cos;
 use ascot::cos::Routine;
-use ascot::diagnostic_filter::{Batch, Filter};
+use ascot::diagnostic_filter::Filter;
 use ascot::mcp::{DiagnosticsResult, FileDiagnostics};
+use ascot::settings::{Diagnostics, Settings, StyleSetting};
 use ascot::style;
-use std::collections::HashSet;
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -43,8 +43,11 @@ enum Command {
     /// Check every .cls/.mac/.int/.inc file under the given paths
     ///
     /// Loads every .cls/.mac/.int/.inc file under each path into one workspace and prints the
-    /// diagnostics of all of them. Exits non-zero if any error or warning was found, or if a path
-    /// doesn't exist; hints don't affect the exit code. For example:
+    /// diagnostics of all of them. With --root, the workspace is every file under that directory
+    /// instead, so cross-file references resolve, and the paths choose whose diagnostics are
+    /// printed; one outside the root is skipped with a warning. Exits non-zero if any error or
+    /// warning was found, or if a path doesn't exist; hints don't affect the exit code. For
+    /// example:
     /// `ascot analyze --iris http://user:password@localhost:8080/iris --iris-namespace USER src/`.
     Analyze {
         #[command(flatten)]
@@ -55,27 +58,10 @@ enum Command {
         filter: FilterArgs,
         #[command(flatten)]
         output: OutputArgs,
+        /// Load every file under this directory, and print only the diagnostics of the paths
+        #[arg(long, value_name = "DIR")]
+        root: Option<PathBuf>,
         /// Files or directories to check
-        #[arg(required = true)]
-        paths: Vec<PathBuf>,
-    },
-    /// Check some paths, with a whole workspace loaded
-    ///
-    /// Loads every .cls/.mac/.int/.inc file under the root, so cross-file references resolve, but
-    /// prints diagnostics only for the files under the given paths. Each path must exist; one
-    /// outside the root is skipped with a warning. Exits like `ascot analyze`.
-    AnalyzeWorkspace {
-        #[command(flatten)]
-        iris: IrisArgs,
-        #[command(flatten)]
-        style: StyleArgs,
-        #[command(flatten)]
-        filter: FilterArgs,
-        #[command(flatten)]
-        output: OutputArgs,
-        /// The directory whose files are all loaded
-        root: PathBuf,
-        /// Files or directories under the root to check
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
@@ -116,6 +102,9 @@ enum Command {
         shared_fs: bool,
     },
     /// Run the LSP server on stdio, for editors and AI agents
+    ///
+    /// The flags are defaults: the client's `initializationOptions` override them, with the same
+    /// names, and a `workspace/didChangeConfiguration` changes them while the server runs.
     Lsp {
         #[command(flatten)]
         iris: IrisArgs,
@@ -123,6 +112,10 @@ enum Command {
         style: StyleArgs,
         #[command(flatten)]
         filter: FilterArgs,
+        /// The server shares the client's file system: the workspace roots are read from disk
+        /// at startup, and a `style` setting may be a file's path
+        #[arg(long)]
+        shared_fs: bool,
     },
 }
 
@@ -158,13 +151,20 @@ struct FilterArgs {
         help = "Which codes are reported, and at what severity",
         long_help = diagnostics_help()
     )]
-    diagnostics: Vec<Batch>,
+    diagnostics: Vec<Filter>,
+}
+
+impl FilterArgs {
+    fn filter(self) -> Filter {
+        Filter(self.diagnostics.into_iter().flat_map(|f| f.0).collect())
+    }
 }
 
 fn diagnostics_help() -> String {
     format!(
-        "Which codes are reported, and at what severity\n\nRepeatable and applied in order, a later \
-         value overriding an earlier one; `on` is the code's own severity. A target is a code, a \
+        "Which codes are reported, and at what severity\n\nRepeatable, or several in one value \
+         separated by spaces, and applied in order, a later value overriding an earlier one; `on` \
+         is the code's own severity. A target is a code, a \
          severity (every code currently reported at it), or `all`. For example `-d off:A5579`, \
          `-d off:hint,information`, `-d off:all -d on:A7095,A6851`, or `-d hint:A4471`. The exit \
          code follows what is reported.\n\n{}",
@@ -186,16 +186,18 @@ struct IrisArgs {
     /// An IRIS Community release, an IRIS instance, a declaration file from `ascot declare`, or
     /// `none`
     ///
-    /// Resolves the classes, include files and routines outside the workspace. A release, as
-    /// 2026.2, is its pre-built declarations, downloaded into ~/.ascot the first time; `latest`
-    /// is the newest this ascot knows. An instance is given as
-    /// http://user:password@host:port[/prefix]. With `none`, nothing outside the workspace
+    /// Resolves the classes, include files and routines outside the workspace. A release, the
+    /// tag of its Community image such as 2026.2, or `latest` for the newest this ascot knows, is
+    /// its pre-built declarations, downloaded into ~/.ascot the first time: `<image>:<tag>` for
+    /// another image's, `<image>:<tag>:<namespace>` for a namespace other than %SYS, as
+    /// irishealth-community:<tag>:HSLIB for IRIS for Health's HS and Ens classes. An instance is
+    /// given as http://user:password@host:port[/prefix]. With `none`, nothing outside the workspace
     /// exists: every reference to such a class, routine or include is an error. [default: latest]
     #[arg(long, value_name = "RELEASE|URL|FILE|none")]
     iris: Option<String>,
-    /// The namespace to use [default: %SYS]
+    /// The namespace of the live instance to use [default: %SYS]
     ///
-    /// With a declaration file, it must match the file's.
+    /// A release names its own after its tag, and a declaration file carries its own.
     #[arg(long, value_name = "NS", requires = "iris")]
     iris_namespace: Option<String>,
 }
@@ -207,27 +209,14 @@ fn main() {
             style,
             filter,
             output,
-            paths,
-        } => analyze(
-            paths.iter().map(PathBuf::as_path),
-            iris.open(),
-            style.load(),
-            Filter(filter.diagnostics),
-            output.format,
-        ),
-        Command::AnalyzeWorkspace {
-            iris,
-            style,
-            filter,
-            output,
             root,
             paths,
-        } => analyze_workspace(
-            &root,
+        } => analyze(
+            root.as_deref(),
             paths.iter().map(PathBuf::as_path),
             iris.open(),
             style.load(),
-            Filter(filter.diagnostics),
+            filter.filter(),
             output.format,
         ),
         Command::Parse { file } => scan_file(&file),
@@ -244,9 +233,17 @@ fn main() {
             iris,
             style,
             filter,
+            shared_fs,
         } => {
-            if let Err(err) = ascot::lsp::run(iris.open(), style.load(), Filter(filter.diagnostics))
-            {
+            let settings = Settings {
+                iris: iris.iris,
+                iris_namespace: iris.iris_namespace,
+                style: style.load().map(StyleSetting::from),
+                diagnostics: Some(Diagnostics::List(
+                    filter.filter().0.iter().map(Grammar::print).collect(),
+                )),
+            };
+            if let Err(err) = ascot::lsp::run(settings, shared_fs) {
                 eprintln!("LSP server error: {err}");
                 exit(1);
             }
@@ -273,7 +270,7 @@ impl StyleArgs {
     /// Reads and parses `--style`, if given. Like `--iris`, a file that can't be read or parsed is
     /// an error up front, not a silent fallback to no style.
     fn load(self) -> Option<Style> {
-        let path = self.style?;
+        let path = self.style.filter(|path| !path.as_os_str().is_empty())?;
         let fail = |err: String| -> ! {
             eprintln!("--style: {}: {err}", path.display());
             exit(1)
@@ -396,98 +393,66 @@ fn scan_file(file_path: &Path) {
     }
 }
 
-/// Add every `.cls`/`.mac`/`.int`/`.inc` file under each of `roots` to a workspace and report
-/// all diagnostics. A root that doesn't exist is an error, not an empty result: a typo'd path in
-/// a CI step must not pass forever.
+/// Add every `.cls`/`.mac`/`.int`/`.inc` file under each of `paths` to a workspace and report
+/// all diagnostics; under a `root`, the workspace is every file under it and `paths` choose which
+/// are reported. A path that doesn't exist is an error, not an empty result: a typo'd path in a
+/// CI step must not pass forever.
 fn analyze<'a>(
-    roots: impl Iterator<Item = &'a Path>,
-    iris: Option<Box<dyn IrisContext>>,
-    style: Option<Style>,
-    filter: Filter,
-    format: Format,
-) {
-    let mut files = Vec::new();
-    for root in roots {
-        if !root.exists() {
-            eprintln!("Error: {} does not exist", root.display());
-            exit(1);
-        }
-        collect_doc(root, &mut files);
-    }
-    files.sort();
-
-    let workspace = Workspace::native(iris, style);
-    workspace.set_diagnostic_filter(filter);
-    insert_files(&workspace, &files);
-
-    let count = report_diagnostics(&workspace, &files, format);
-    eprintln!("{} diagnostic(s) across {} file(s)", count, files.len());
-    // `exit` runs no destructors; dropping the workspace ends its IRIS session.
-    drop(workspace);
-    if count > 0 {
-        exit(1);
-    }
-}
-
-/// Add every `.cls`/`.mac`/`.int`/`.inc` file under `root` to a workspace (so cross-file
-/// references resolve), but only report diagnostics for files under the given `paths`.
-fn analyze_workspace<'a>(
-    root: &Path,
+    root: Option<&Path>,
     paths: impl Iterator<Item = &'a Path>,
     iris: Option<Box<dyn IrisContext>>,
     style: Option<Style>,
     filter: Filter,
     format: Format,
 ) {
-    let root = match fs::canonicalize(root) {
-        Ok(root) => root,
-        Err(e) => {
-            eprintln!("Error resolving workspace root {}: {}", root.display(), e);
+    // Under a root, the paths are looked up among its files, so both are made canonical.
+    let canonical = |path: &Path| {
+        fs::canonicalize(path).unwrap_or_else(|e| {
+            eprintln!("Error resolving {}: {}", path.display(), e);
+            exit(1)
+        })
+    };
+    let root = root.map(canonical);
+    let mut files = Vec::new();
+    for path in paths {
+        if root.is_some() {
+            collect_doc(&canonical(path), &mut files);
+        } else if path.exists() {
+            collect_doc(path, &mut files);
+        } else {
+            eprintln!("Error: {} does not exist", path.display());
             exit(1);
         }
-    };
-
-    let mut all_files = Vec::new();
-    collect_doc(&root, &mut all_files);
-    all_files.sort();
-
-    let mut diagnose_files = Vec::new();
-    for path in paths {
-        match fs::canonicalize(path) {
-            Ok(path) => collect_doc(&path, &mut diagnose_files),
-            Err(e) => {
-                eprintln!("Error resolving {}: {}", path.display(), e);
-                exit(1);
-            }
-        }
     }
-    diagnose_files.sort();
-    diagnose_files.dedup();
+    files.sort();
+    files.dedup();
+    let loaded = match &root {
+        Some(root) => {
+            let mut all = Vec::new();
+            collect_doc(root, &mut all);
+            all.sort();
+            files.retain(|file| {
+                let under_root = all.binary_search(file).is_ok();
+                if !under_root {
+                    eprintln!(
+                        "Warning: {} is not under workspace root {}; skipping",
+                        file.display(),
+                        root.display()
+                    );
+                }
+                under_root
+            });
+            all
+        }
+        None => files.clone(),
+    };
 
     let workspace = Workspace::native(iris, style);
     workspace.set_diagnostic_filter(filter);
-    insert_files(&workspace, &all_files);
+    insert_files(&workspace, &loaded);
 
-    let all_files_set: HashSet<&PathBuf> = all_files.iter().collect();
-    diagnose_files.retain(|file| {
-        let under_root = all_files_set.contains(file);
-        if !under_root {
-            eprintln!(
-                "Warning: {} is not under workspace root {}; skipping",
-                file.display(),
-                root.display()
-            );
-        }
-        under_root
-    });
-
-    let count = report_diagnostics(&workspace, &diagnose_files, format);
-    eprintln!(
-        "{} diagnostic(s) across {} file(s) (workspace: {} file(s))",
-        count,
-        diagnose_files.len(),
-        all_files.len()
-    );
+    let count = report_diagnostics(&workspace, &files, format);
+    eprintln!("{} diagnostic(s) across {} file(s)", count, files.len());
     // `exit` runs no destructors; dropping the workspace ends its IRIS session.
     drop(workspace);
     if count > 0 {

@@ -65,6 +65,18 @@ perl -0pi -e 's{^\s*if \(!getCoreModule\) getCoreModule = .*fetchCompile.*$}{   
 echo "moving wasm modules to lib/ ..."
 mv "$GEN"/*.wasm lib/
 
+# The pre-built declarations of the IRIS release this ascot defaults to, from the
+# `declarations` GitHub Release, checksum verified: what `createWorkspace()` checks against
+# when the host passes no env, as `--iris latest` does on the command line.
+RELEASE=$(sed -n 's/^pub const DEFAULT_RELEASE: &str = "\(.*\)";/\1/p' "$REPO_ROOT/src/prebuilt.rs")
+ASSET="iris-community-$RELEASE.d.json.gz"
+echo "fetching $ASSET ..."
+curl -sSLf --retry 3 --retry-all-errors "https://github.com/intersystems-community/ascot/releases/download/declarations/$ASSET" -o "lib/$ASSET"
+curl -sSLf --retry 3 --retry-all-errors "https://github.com/intersystems-community/ascot/releases/download/declarations/$ASSET.sha256" -o "lib/$ASSET.sha256"
+(cd lib && (sha256sum -c "$ASSET.sha256" 2>/dev/null || shasum -a 256 -c "$ASSET.sha256") >/dev/null)
+rm "lib/$ASSET.sha256"
+printf '{ "release": "%s", "file": "%s" }\n' "$RELEASE" "$ASSET" > lib/declarations.json
+
 echo "compiling TypeScript wrapper ..."
 npx tsc -p tsconfig.json
 

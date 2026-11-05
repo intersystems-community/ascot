@@ -198,7 +198,7 @@ impl MemberNs {
 pub(crate) struct ClassDetails {
     pub(crate) doc: String,
     pub(crate) name: WithRange<String>,
-    pub(crate) extends: Vec<String>,
+    pub(crate) extends: Vec<WithRange<String>>,
     // The `Import` packages, for resolving unqualified class names in this class.
     pub(crate) imports: Vec<String>,
     pub(crate) keywords: ClassKeywords,
@@ -215,6 +215,7 @@ pub(crate) struct ClassDetails {
 // The class keywords the checker reads; the rest of the list is parsed and dropped.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ClassKeywords {
+    pub(crate) abstract_: bool,
     pub(crate) class_type: Option<bindings::ClassType>,
     pub(crate) deprecated: bool,
     pub(crate) inheritance: Option<bindings::Inheritance>,
@@ -315,6 +316,7 @@ pub struct MethodDetails {
     pub mode: Option<cos::CodeMode>,
     pub procedure_block: ProcedureBlock,
     pub is_abstract: bool,
+    pub is_private: bool,
     pub body: WithRange<String>,
     // Byte offset of the method's own declaration (`Method`/`ClassMethod` keyword).
     pub header_start: usize,
@@ -342,6 +344,9 @@ pub enum RoutineElementKind {
 
 pub struct RoutineElementDetails {
     pub name: WithRange<String>,
+    // The comment lines right above the label, their markers dropped: its description, as a
+    // method's `///` lines are. Filled in by `routine_elements`.
+    pub doc: String,
     pub normal_args: Vec<WithRange<NormalArg>>,
     pub variadic_arg: Option<WithRange<VariadicArg>>,
     pub kind: RoutineElementKind,
@@ -469,6 +474,7 @@ fn element(
     let (normal_args, variadic_arg) = import_args(pos, params);
     RoutineElementDetails {
         name: with_range_name(label, pos),
+        doc: String::new(),
         kind,
         normal_args,
         variadic_arg,
@@ -514,11 +520,53 @@ pub fn routine_element_kind(
     }
 }
 
+/// The routine's labels in order, each with its details, description included.
+pub fn routine_elements<'r>(
+    pos: &impl Positions,
+    subroutines: Option<&'r cos::Subroutines>,
+) -> Vec<(&'r cos::RoutineElement, Option<RoutineElementDetails>)> {
+    let Some(subroutines) = subroutines else {
+        return vec![];
+    };
+    let gaps = std::iter::once(&subroutines.gap).chain(&subroutines.seps);
+    (subroutines.items.iter().zip(gaps))
+        .map(|(element, gap)| {
+            let details = routine_element_kind(pos, element).map(|mut details| {
+                details.doc = label_doc(&gap.print());
+                details
+            });
+            (element, details)
+        })
+        .collect()
+}
+
+// The trailing comment lines of the text before a label, their markers dropped.
+fn label_doc(gap: &str) -> String {
+    let mut lines: Vec<&str> = (gap.lines().rev())
+        .map_while(|line| {
+            let line = line.trim_start();
+            ["##;", "#;", "//", ";"]
+                .iter()
+                .find_map(|marker| line.strip_prefix(marker))
+        })
+        .collect();
+    lines.reverse();
+    lines.join("\n")
+}
+
 pub(crate) fn with_range_name<T: Grammar>(
     ranged: &Range<T>,
     pos: &impl Positions,
 ) -> WithRange<String> {
     pos.with_range(ranged.as_ref().map(|x| x.print()))
+}
+
+// A member's name without the quotes of a quoted one: `Method "_isLabeled"()` declares `_isLabeled`.
+fn with_range_member_name(
+    name: &cos::QuotableClassMemberName,
+    pos: &impl Positions,
+) -> WithRange<String> {
+    pos.with_range(name.0.as_ref().map(|_| name.name()))
 }
 
 fn extract_document_comments(doc: &str) -> String {
@@ -652,7 +700,7 @@ impl TryFrom<&str> for ClassDetails {
                 .class_list
                 .classes()
                 .into_iter()
-                .map(|class| class.print())
+                .map(|class| WithRange::new(class.print(), olc.range(class)))
                 .collect()
         });
         let imports = cls.import.as_ref().map_or(Vec::default(), |import| {
@@ -683,7 +731,10 @@ impl TryFrom<&str> for ClassDetails {
         for keyword in typed(cls.keyword_list.as_ref()) {
             use cos::ClassKeyword::*;
             match keyword {
-                ClassType(v) => keywords.class_type = Some((&v.value).into()),
+                Abstract(flag) => keywords.abstract_ = flag.is_set(),
+                ClassType(v) => {
+                    keywords.class_type = v.value.as_ref().left().map(bindings::ClassType::from)
+                }
                 Deprecated(flag) => keywords.deprecated = flag.is_set(),
                 Inheritance(v) => keywords.inheritance = Some((&v.value).into()),
                 Language(v) => keywords.language = Some((&v.value).into()),
@@ -747,7 +798,7 @@ fn process_member(
     let member_start = member.start;
     match member.into_inner() {
         cos::Member::ForeignKey(fk) => (
-            with_range_name(&fk.name, olc),
+            with_range_member_name(&fk.name, olc),
             deprecated || is_deprecated(fk.keywords.as_ref()),
             keyword_issues_in(fk.keywords.as_ref(), olc),
             MemberKindSpecificDetails::ForeignKey,
@@ -757,7 +808,7 @@ fn process_member(
                 on: index.on_properties().map(|keys| {
                     keys.into_iter()
                         .map(|key| IndexKey {
-                            property: olc.with_range(key.name.0.as_ref().map(|_| key.name.name())),
+                            property: olc.with_range(key.name.0.as_ref().map(|_| key.property())),
                             subscript: key.kind.as_ref().map(|kind| match kind {
                                 cos::IndexPropertyKind::Keys(_) => bindings::IndexSubscript::Keys,
                                 cos::IndexPropertyKind::Elements(_) => {
@@ -801,14 +852,14 @@ fn process_member(
                 }
             }
             (
-                with_range_name(&index.name, olc),
+                with_range_member_name(&index.name, olc),
                 deprecated || is_deprecated(index.keywords.as_ref()),
                 keyword_issues_in(index.keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Index(details),
             )
         }
         cos::Member::Method(method) => {
-            let name = with_range_name(&method.name, olc);
+            let name = with_range_member_name(&method.name, olc);
             let deprecated = deprecated || is_deprecated(method.keywords.as_ref());
             let keyword_issues = keyword_issues_in(method.keywords.as_ref(), olc);
             let is_class_method = match &method.keyword {
@@ -834,7 +885,7 @@ fn process_member(
             (name, deprecated, keyword_issues, kind)
         }
         cos::Member::Parameter(parameter) => {
-            let name = with_range_name(&parameter.name, olc);
+            let name = with_range_member_name(&parameter.name, olc);
             let as_type = parameter.as_type.as_deref().map(Grammar::print);
             let ty = as_type.as_deref().map(parameter_ty);
             let default = parameter.default.as_ref().map(|v| v.deref().print());
@@ -850,7 +901,7 @@ fn process_member(
             )
         }
         cos::Member::Projection(projection) => (
-            with_range_name(&projection.name, olc),
+            with_range_member_name(&projection.name, olc),
             deprecated || is_deprecated(projection.keywords.as_ref()),
             keyword_issues_in(projection.keywords.as_ref(), olc),
             MemberKindSpecificDetails::Projection,
@@ -863,7 +914,7 @@ fn process_member(
                 keywords,
                 ..
             } => (
-                olc.with_range(name.0.as_ref().map(|_| name.name())),
+                with_range_member_name(&name, olc),
                 deprecated || is_deprecated(keywords.as_ref()),
                 keyword_issues_in(keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Property {
@@ -887,7 +938,7 @@ fn process_member(
                         if matches!(cardinality.value, cos::Cardinality::Many(_) | cos::Cardinality::Children(_)))
                 });
                 (
-                    olc.with_range(name.0.as_ref().map(|_| name.name())),
+                    with_range_member_name(&name, olc),
                     deprecated || is_deprecated(keywords.as_ref()),
                     keyword_issues_in(keywords.as_ref(), olc),
                     MemberKindSpecificDetails::Property {
@@ -908,7 +959,7 @@ fn process_member(
         cos::Member::Query(query) => {
             let (normal_args, variadic_arg) = formal_args(olc, query.formal_spec.as_ref());
             (
-                with_range_name(&query.name, olc),
+                with_range_member_name(&query.name, olc),
                 deprecated || is_deprecated(query.keywords.as_ref()),
                 keyword_issues_in(query.keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Query {
@@ -919,19 +970,19 @@ fn process_member(
             )
         }
         cos::Member::Storage(storage) => (
-            with_range_name(&storage.name, olc),
+            with_range_member_name(&storage.name, olc),
             deprecated,
             vec![],
             MemberKindSpecificDetails::Storage,
         ),
         cos::Member::Trigger(trigger) => (
-            with_range_name(&trigger.name, olc),
+            with_range_member_name(&trigger.name, olc),
             deprecated || is_deprecated(trigger.keywords.as_ref()),
             keyword_issues_in(trigger.keywords.as_ref(), olc),
             MemberKindSpecificDetails::Trigger,
         ),
         cos::Member::XData(xdata) => (
-            with_range_name(xdata.name(), olc),
+            with_range_member_name(xdata.name(), olc),
             deprecated || is_deprecated(xdata.keywords()),
             keyword_issues_in(xdata.keywords(), olc),
             MemberKindSpecificDetails::XData,
@@ -978,6 +1029,7 @@ fn method_kind(
     let mut procedure_block = None;
     let mut public_list = Vec::new();
     let mut is_abstract = false;
+    let mut is_private = false;
     let keywords = method.header.keywords.take().into_iter();
     for entry in keywords
         .flat_map(|list| list.entries)
@@ -997,6 +1049,7 @@ fn method_kind(
                     .collect()
             }
             Left(Abstract(flag)) => is_abstract = flag.is_set(),
+            Left(Private(flag)) => is_private = flag.is_set(),
             _ => {}
         }
     }
@@ -1018,5 +1071,6 @@ fn method_kind(
         mode,
         procedure_block,
         is_abstract,
+        is_private,
     }))
 }

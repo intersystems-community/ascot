@@ -60,6 +60,8 @@ mod prebuilt;
 mod render;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sarif;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod settings;
 pub mod style;
 #[cfg(not(target_arch = "wasm32"))]
 pub use atelier::RawAtelier;
@@ -801,11 +803,6 @@ impl Workspace {
         Workspace(RefCell::new(build_workspace_struct(iris, style)))
     }
 
-    /// Which codes `diagnostics` reports, and at what severity.
-    pub fn set_diagnostic_filter(&self, filter: diagnostic_filter::Filter) {
-        self.borrow_mut().diagnostic_filter = filter;
-    }
-
     /// Opens `path` if it is a `.cls`/`.mac`/`.int`/`.inc` file, or every such file under it if it
     /// is a directory, each keyed by its `file:` url. Returns the uris opened, and the uris whose
     /// analysis is now stale.
@@ -835,10 +832,25 @@ impl Workspace {
             opened.push(uri.to_string());
         }
     }
+}
+
+impl Workspace {
+    /// Which codes `diagnostics` reports, and at what severity.
+    pub fn set_diagnostic_filter(&self, filter: diagnostic_filter::Filter) {
+        self.borrow_mut().diagnostic_filter = filter;
+    }
 
     /// Every document's uri.
     pub fn uris(&self) -> Vec<String> {
         self.borrow().doc_cache.keys().cloned().collect()
+    }
+
+    /// [`GuestWorkspace::set_env`](bindings::GuestWorkspace::set_env) with the environment open:
+    /// the documents stay, what was learned from the old one goes, and the uris returned are stale.
+    pub fn set_iris(&self, iris: Option<IrisHandle>) -> Vec<String> {
+        let mut this = self.borrow_mut();
+        this.iris = iris;
+        this.forget(true)
     }
 }
 
@@ -863,9 +875,7 @@ impl bindings::GuestWorkspace for Workspace {
 
     #[allow(async_fn_in_trait)]
     fn set_env(&self, env: Option<bindings::Env>) -> Vec<String> {
-        let mut this = self.borrow_mut();
-        this.iris = iris_handle(env);
-        this.forget(true)
+        self.set_iris(iris_handle(env))
     }
 
     #[allow(async_fn_in_trait)]
@@ -873,6 +883,12 @@ impl bindings::GuestWorkspace for Workspace {
         let mut this = self.borrow_mut();
         this.style = style.as_ref().map(style::Styles::new);
         this.forget(false)
+    }
+
+    #[allow(async_fn_in_trait)]
+    fn set_diagnostics(&self, diagnostics: Vec<String>) -> Result<Vec<String>, String> {
+        self.set_diagnostic_filter(diagnostics.join(" ").parse()?);
+        Ok(self.uris())
     }
 
     #[allow(async_fn_in_trait)]
@@ -1056,12 +1072,17 @@ impl bindings::GuestWorkspace for Workspace {
     // their members/labels.
     #[allow(async_fn_in_trait)]
     fn workspace_symbol(&self, query: String) -> Vec<bindings::WorkspaceSymbol> {
-        fn symbol_in(uri: &str, symbol: bindings::SymbolInfo) -> bindings::WorkspaceSymbol {
+        fn symbol_in(
+            uri: &str,
+            symbol: bindings::SymbolInfo,
+            container_name: Option<String>,
+        ) -> bindings::WorkspaceSymbol {
             bindings::WorkspaceSymbol {
                 name: symbol.name,
                 kind: symbol.kind,
                 deprecated: symbol.deprecated,
                 location: bindings::Location::new(uri.to_string(), symbol.selection_range),
+                container_name,
             }
         }
         let this = self.borrow();
@@ -1075,34 +1096,41 @@ impl bindings::GuestWorkspace for Workspace {
                     kind: bindings::SymbolKind::Class,
                     deprecated: details.keywords.deprecated,
                     location: bindings::Location::new(uri.clone(), details.name.range),
+                    container_name: None,
                 };
+                let class_name = details.name.to_string();
                 std::iter::once(cls_symbol)
                     .chain(details.members.in_order().into_iter().map(move |member| {
+                        let kind = bindings::MemberKind::from(&member.it.kind);
                         bindings::WorkspaceSymbol {
                             name: member.it.name.to_string(),
-                            kind: bindings::member_kind_to_symbol_kind(
-                                &bindings::MemberKind::from(&member.it.kind),
-                            ),
+                            kind: bindings::member_kind_to_symbol_kind(&kind),
                             deprecated: member.it.deprecated,
                             location: bindings::Location::new(uri.clone(), member.it.name.range),
+                            container_name: Some(format!(
+                                "{} • {class_name}",
+                                bindings::member_keyword(&kind)
+                            )),
                         }
                     }))
                     .collect::<Vec<_>>()
             });
 
-        let rtn_symbols = this
-            .uris_with_prefix(DocKind::Rtn, &query)
-            .into_iter()
-            .flat_map(|uri| {
-                let Some(symbol) = this.routine_symbol(&uri) else {
-                    return vec![];
-                };
-                std::iter::once(symbol.root)
-                    .chain(symbol.members)
-                    .map(|symbol| symbol_in(&uri, symbol))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+        let rtn_symbols =
+            this.uris_with_prefix(DocKind::Rtn, &query)
+                .into_iter()
+                .flat_map(|uri| {
+                    let Some(symbol) = this.routine_symbol(&uri) else {
+                        return vec![];
+                    };
+                    let routine = symbol.root.name.clone();
+                    std::iter::once(symbol_in(&uri, symbol.root, None))
+                        .chain((symbol.members.into_iter()).map(|label| {
+                            symbol_in(&uri, label, Some(format!("Label • {routine}")))
+                        }))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
 
         cls_symbols.chain(rtn_symbols).collect()
     }
@@ -1407,8 +1435,7 @@ mod tests {
         let uri = "Owner.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.Owner Extends %RegisteredObject {\nProperty P As App.NotOpen;\n}\n"
-                .to_string(),
+            "Class Test.Owner {\nProperty P As App.NotOpen;\n}\n".to_string(),
         );
         assert!(workspace.diagnostics(uri.clone()).is_empty());
         assert_eq!(workspace.set_env(None), std::slice::from_ref(&uri));
@@ -1458,8 +1485,7 @@ mod tests {
         let uri = "Owner.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.Owner Extends %RegisteredObject {\nProperty P As App.NotOpen;\n}\n"
-                .to_string(),
+            "Class Test.Owner {\nProperty P As App.NotOpen;\n}\n".to_string(),
         );
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
@@ -1494,21 +1520,25 @@ mod tests {
     }
 
     #[test]
-    fn without_iris_a_member_past_the_workspace_is_an_error() {
+    fn without_iris_a_superclass_outside_the_workspace_is_an_error_at_the_extends() {
         let workspace = Workspace::new(None, None);
         let uri = "Probe.cls".to_string();
-        // With no IRIS there is no environment: `%RegisteredObject` doesn't exist, so neither
-        // does anything inherited from it. The strictest reading, rather than trust.
+        // With no IRIS there is no environment: `%RegisteredObject` doesn't exist, which is
+        // reported where it is named; past it the hierarchy is unknown, so a member nobody
+        // declares is unconfirmed rather than missing.
         workspace.open(
             uri.clone(),
             "Class Test.Probe Extends %RegisteredObject {\nMethod Foo() {\n do ..SomeInheritedMethod()\n quit\n}\n}\n".to_string(),
         );
 
         let diagnostics = workspace.diagnostics(uri);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
         assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Error);
-        assert!(diagnostics[0].message.contains("SomeInheritedMethod"));
-        assert_eq!(diagnostics[0].range.start.line, 2);
+        assert!(diagnostics[0].message.contains("%Library.RegisteredObject"));
+        assert_eq!(diagnostics[0].range.start.line, 0);
+        assert_eq!(diagnostics[1].severity, bindings::DiagnosticSeverity::Hint);
+        assert!(diagnostics[1].message.contains("SomeInheritedMethod"));
+        assert_eq!(diagnostics[1].range.start.line, 2);
     }
 
     #[test]
@@ -1773,6 +1803,11 @@ mod tests {
         let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Test.Foo", "Bar"]);
         assert!(symbols.iter().all(|s| s.location.uri == "Test.Foo.cls"));
+        let containers: Vec<Option<&str>> = symbols
+            .iter()
+            .map(|s| s.container_name.as_deref())
+            .collect();
+        assert_eq!(containers, [None, Some("ClassMethod • Test.Foo")]);
     }
 
     #[test]
@@ -2627,7 +2662,7 @@ mod tests {
         let uri = "T.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.T Extends %RegisteredObject {\nClassMethod M(x) As %String [ CodeMode = expression ] {\n$Piece(x,\",\")\n}\n}\n".to_string(),
+            "Class Test.T {\nClassMethod M(x) As %String [ CodeMode = expression ] {\n$Piece(x,\",\")\n}\n}\n".to_string(),
         );
         assert_eq!(
             style_messages(&workspace, &uri),
@@ -2645,7 +2680,7 @@ mod tests {
         let uri = "T.cls".to_string();
         workspace.open(
             uri.clone(),
-            "Class Test.T Extends %RegisteredObject {\nClassMethod M() {\n Set x=1\n Write x\n Quit\n}\n}\n".to_string(),
+            "Class Test.T {\nClassMethod M() {\n Set x=1\n Write x\n Quit\n}\n}\n".to_string(),
         );
         assert_eq!(
             style_messages(&workspace, &uri),
@@ -2730,7 +2765,8 @@ mod tests {
         let diagnostics = class_diagnostics(
             "ClassMethod Z() As %String {\n #define LATE 1\n Quit $$$LATE\n}\nClassMethod A() As %String {\n #define REPORT(%x) Write %x\n $$$REPORT(1)\n Quit $$$LATE\n}\nClassMethod B() As %String {\n $$$REPORT(2)\n Quit \"\"\n}\n",
         );
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        // Two about the macros, and the superclass no environment can confirm.
+        assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
         let undefined = diagnostics
             .iter()
             .find(|d| d.message.contains("'LATE' is undefined"));

@@ -675,7 +675,7 @@ pub enum DAOElem {
     True(StringEq!("true")),
     False(StringEq!("false")),
     Null(StringEq!("null")),
-    Str(OSString),
+    Str(JSONString),
     Num(Option<StringEq!("-")>, Number),
     OS {
         open: StringEq!("("),
@@ -686,10 +686,27 @@ pub enum DAOElem {
 
 #[derive(Grammar)]
 pub struct DAOBind {
-    pub key: OSString,
+    pub key: JSONString,
     pub colon: MGapXMGap<StringEq!(":")>,
     pub value: Range<DAOElem>,
 }
+
+// A JSON string: backslash escapes and no doubled quotes, as JSON spells it ("any valid JSON
+// literal string is also a valid ObjectScript expression").
+#[derive(Grammar)]
+pub struct JSONString(Wrap<DQ, Raw<Vec<JSONStringUnit>>, DQ>);
+
+#[derive(Grammar)]
+#[grammar(inline)]
+pub enum JSONStringUnit {
+    Escape(BS, CharOf<IsNotNL>),
+    Plain(CharOf<IsNotDQOrBSOrNL>),
+}
+
+char_class!(pub IsNotDQOrBSOrNL, "not_doublequote_backslash_or_newline", |ch| !matches!(
+    ch,
+    '"' | '\\' | '\n' | '\r'
+));
 
 #[derive(Grammar)]
 #[grammar(inline)]
@@ -732,6 +749,12 @@ pub type Field = Prefix<StringEq!("."), Range<MemberRef>>;
 pub enum SignatureType {
     Class(ClassName),
     Parameter(StringEq!("..#"), ClassMemberName),
+}
+
+#[derive(Grammar)]
+pub enum CastReceiver {
+    This(StringEq!("$"), StringEqCI!("this")),
+    Local(LocalVariableName),
 }
 
 #[derive(Grammar)]
@@ -1150,16 +1173,45 @@ impl Deref for CatchTarget {
 }
 
 #[derive(Grammar)]
-pub struct MergeArgument {
-    pub target: SetTarget,
-    eq: LGapXLGap<StringEq!("=")>,
-    pub source: Range<Expr>,
+pub enum MergeArgument {
+    Pair {
+        target: SetTarget,
+        eq: LGapXLGap<StringEq!("=")>,
+        source: Range<Expr>,
+    },
+    // `Merge @x`: argument indirection, `x` holding the whole `target=source` (documented).
+    Indirect(Range<Box<Indirection>>),
 }
 
 #[derive(Grammar)]
 pub struct DoArgument {
-    pub entry_ref: Range<EntryRefAndArgs>,
+    pub entry_ref: DoTarget,
     pub pc: Option<PostCondition>,
+}
+
+// What `Do` runs: an entry reference, or `$Case(x, value:entry, ..., :entry)` choosing one, each
+// value a `Do` argument (documented for `$CASE`).
+#[derive(Grammar)]
+pub enum DoTarget {
+    Plain(Range<EntryRefAndArgs>),
+    Case(DoCase),
+}
+
+#[derive(Grammar)]
+pub struct DoCase {
+    pub dollar: StringEq!("$"),
+    pub kw: Range<FnCase>,
+    pub open: StringEq!("("),
+    pub target: ArgOf<Expr>,
+    pub arms: Vec<More<ArgOf<DoCaseArm>>>,
+    pub close: StringEq!(")"),
+}
+
+#[derive(Grammar)]
+pub struct DoCaseArm {
+    pub case: Option<Range<Expr>>,
+    pub colon: StringEq!(":"),
+    pub entry_ref: Range<EntryRefAndArgs>,
 }
 
 #[derive(Grammar)]
@@ -2233,7 +2285,8 @@ pub enum HTMLUnit {
 pub enum HTMLTagContentUnit {
     Embeded1(HashEmbededOS),
     Embeded2(AngularEmbededOS),
-    Str(JSString<HashEmbededOS>),
+    // A quote is plain text: IRIS ends the block at the first balancing `>`, quoted or not.
+    Quote(Either<DQ, SQ>),
     Sym(CharOf<IsHTMLContentSafe>),
 }
 
@@ -2317,7 +2370,8 @@ type WithSpace<X> = (X, Space);
 
 #[derive(Grammar)]
 pub enum KeywordValueEnum {
-    Atom(StringOf1<IsKeywordValue>),
+    // `Data = (Tags(ELEMENTS))` names a collection's subvalues as an index key does.
+    Atom(StringOf1<IsKeywordValue>, Option<IndexPropertyKind>),
     String(OSString),
     OS(StringEq!("{"), OSText, StringEq!("}")),
     Paren(
@@ -2330,10 +2384,12 @@ pub enum KeywordValueEnum {
 #[derive(Grammar)]
 pub struct KeywordValue(Raw<KeywordValueEnum>);
 
+// The class may be `..#NAME`, a class parameter's value, in ascot's declarations (see
+// `SignatureType`).
 #[derive(Grammar)]
 pub struct PropertyType {
     pub collection: Option<CollectionKind>,
-    pub class_name: Option<ClassName>,
+    pub class_name: Option<SignatureType>,
 }
 
 #[derive(Grammar)]
@@ -2477,7 +2533,8 @@ pub enum Inheritance {
 #[derive(Grammar)]
 pub enum ClassKeyword {
     Abstract(Flag<StringEqCI!("Abstract")>),
-    ClassType(Valued<StringEqCI!("ClassType"), ClassType>),
+    // `""` is how IRIS writes "no class type", on every non-persistent class it exports.
+    ClassType(Valued<StringEqCI!("ClassType"), Either<ClassType, StringEq!("\"\"")>>),
     ClientDataType(Valued<StringEqCI!("ClientDataType"), KeywordValue>),
     ClientName(Valued<StringEqCI!("ClientName"), KeywordValue>),
     CompileAfter(Valued<StringEqCI!("CompileAfter"), KeywordValue>),
@@ -2875,11 +2932,21 @@ pub struct IndexPropertyMultiple {
 pub struct IndexProperty {
     // Quoted when it has a character outside the identifier set, like any member name.
     pub name: QuotableClassMemberName,
+    // `Home.State`: a property of the embedded object `Home` holds.
+    path: Vec<(StringEq!("."), ClassMemberName)>,
     pub kind: Option<IndexPropertyKind>,
     as_collation: Option<AsCollation>,
 }
 
 impl IndexProperty {
+    // The property indexed, `Home.State` for one of an embedded object.
+    pub fn property(&self) -> String {
+        std::iter::once(self.name.name())
+            .chain(self.path.iter().map(|(_, segment)| segment.print()))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
     // The `As collation`, as written.
     pub fn collation(&self) -> Option<String> {
         self.as_collation.as_ref().map(|c| c.collation.print())
@@ -2903,27 +2970,22 @@ pub struct AsCollation {
 #[derive(Grammar)]
 pub enum CollationType {
     Exact(StringEqCI!("EXACT")),
-    SqlString(StringEqCI!("SQLSTRING")),
-    SqlUpper(SqlUpperCollation),
-    Truncate(StringEqCI!("TRUNCATE")),
+    SqlString(Truncating<StringEqCI!("SQLSTRING")>),
+    SqlUpper(Truncating<StringEqCI!("SQLUPPER")>),
+    Truncate(Truncating<StringEqCI!("TRUNCATE")>),
     Plus(StringEqCI!("PLUS")),
     Minus(StringEqCI!("MINUS")),
 }
 
+// A collation that may truncate to a length: `SQLUPPER(250)`.
 #[derive(Grammar)]
 #[grammar(inline)]
-pub struct SqlUpperCollation {
-    keyword: StringEqCI!("SQLUPPER"),
-    param: Option<SqlUpperParam>,
+pub struct Truncating<K> {
+    keyword: K,
+    length: Option<(StringEq!("("), StringOf1<IsDigit>, StringEq!(")"))>,
 }
 
-#[derive(Grammar)]
-#[grammar(inline)]
-pub struct SqlUpperParam {
-    open: StringEq!("("),
-    expr: OSText,
-    close: StringEq!(")"),
-}
+char_class!(pub IsDigit, "digit", |c| c.is_ascii_digit());
 
 #[derive(Grammar)]
 pub struct MethodHeader {
@@ -3838,6 +3900,42 @@ pub enum Command {
     ),
     HTML(StringEqCI!("&html<"), HTML, StringEq!(">")),
     JS(JSCommand),
+    // `ZNAME args`: a user-defined command (`^%ZLANGC00`), documented, unknown to this checker.
+    User(UserCommand),
+}
+
+#[derive(Grammar)]
+pub struct UserCommand {
+    pub name: Range<UserCommandName>,
+    pub pc: Option<PostCondition>,
+    pub args: Option<CommandArgument<VecSep<Range<Expr>, CommaSep<LGap>>>>,
+}
+
+// `Z` and letters, and not a command IRIS has.
+#[derive(GrammarFromStr)]
+pub struct UserCommandName(pub String);
+
+impl GrammarFrom for UserCommandName {
+    type Source = StringOf1<IsAlphabetic>;
+
+    fn print_to(&self, buf: &mut String) {
+        buf.push_str(&self.0);
+    }
+}
+
+impl FromStr for UserCommandName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        let known = COMMAND_NAMES
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case(s));
+        if s.len() > 1 && s.starts_with(['Z', 'z']) && !known {
+            Ok(Self(s.to_string()))
+        } else {
+            Err(format!("'{s}' is not a user-defined command"))
+        }
+    }
 }
 
 macro_rules! keyword_command {
@@ -4023,7 +4121,11 @@ impl Command {
             Command::MVC(command) => command,
             Command::ElseIf(branch) => branch,
             Command::Else(branch) => branch,
-            Command::CallMacro(_) | Command::ESQL(..) | Command::HTML(..) | Command::JS(_) => {
+            Command::CallMacro(_)
+            | Command::ESQL(..)
+            | Command::HTML(..)
+            | Command::JS(_)
+            | Command::User(_) => {
                 return None;
             }
         })
@@ -6644,6 +6746,9 @@ pub enum AtomicExpr {
     Class {
         kw: StringEqCI!("##class"),
         cls: Paren<QuotableClassName>,
+        // `##class(C)oref.M()` casts `M` to `C`'s on `oref`, a variable or `$this` (documented as
+        // "Casting a Method"); a parenthesized `oref` is not.
+        oref: Option<CastReceiver>,
     },
     QuoteExpression {
         kw: StringEqCI!("##quoteExp"),
@@ -6945,7 +7050,7 @@ pub struct SubroutineHeader {
 #[derive(Grammar)]
 pub struct Subroutine {
     pub header: AllowMacro<SubroutineHeader>,
-    pub body: RoutineMain,
+    pub body: Range<RoutineMain>,
 }
 
 // https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=GCOS_procedures#GCOS_procedures_procsyntax
@@ -6985,8 +7090,25 @@ pub enum RoutineElement {
 pub struct Routine {
     pub header: RoutineHeader,
     pub main: RoutineMain,
-    pub subroutines: Option<Prefix<Raw<Vec1<NL>>, VecSep<RoutineElement, Raw<Vec1<NL>>>>>,
+    pub subroutines: Option<Subroutines>,
     end: Raw<(VecSep<SGap, NL>, Option<LineComment>)>,
+}
+
+// The labels after the main body, each behind the newlines, comment lines among them, that part
+// it from what precedes it.
+#[derive(Grammar)]
+#[grammar(inline)]
+pub struct Subroutines {
+    pub gap: Raw<Vec1<NL>>,
+    pub list: VecSep<RoutineElement, Raw<Vec1<NL>>>,
+}
+
+impl Deref for Subroutines {
+    type Target = VecSep<RoutineElement, Raw<Vec1<NL>>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.list
+    }
 }
 
 #[derive(Grammar)]

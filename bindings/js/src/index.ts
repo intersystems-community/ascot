@@ -33,10 +33,28 @@ export type Workspace = {
 	setEnv(iris?: Env): Promise<string[]>;
 };
 
-/** Where ascot resolves what the workspace doesn't contain: the host's own lookups, an Atelier
- * connection, or a declaration file's bytes (gzipped or not), such as a release's pre-built
- * asset the host bundles. With none, everything outside the workspace is an error. */
-export type Env = IrisContext | Atelier | Uint8Array;
+/** Where ascot resolves what the workspace doesn't contain: `"latest"` (the default), the
+ * pre-built declarations of the newest IRIS release this package knows, bundled with it; the
+ * host's own lookups; an Atelier connection; a declaration file's bytes, gzipped or not; or
+ * `"none"`, no environment at all, so that everything outside the workspace is an error. */
+export type Env = "latest" | IrisContext | Atelier | Uint8Array | "none";
+
+type Manifest = { release: string; file: string };
+let cachedManifest: Manifest | undefined;
+function manifest(): Manifest {
+	cachedManifest ??= JSON.parse(
+		fs.readFileSync(path.resolve(__dirname, "../lib/declarations.json"), "utf-8"),
+	) as Manifest;
+	return cachedManifest;
+}
+let bundled: Uint8Array | undefined;
+function bundledDeclarations(): Uint8Array {
+	bundled ??= fs.readFileSync(path.resolve(__dirname, "../lib", manifest().file));
+	return bundled;
+}
+
+/** The IRIS release whose declarations `"latest"` stands for, e.g. `"2026.2"`. */
+export const LATEST_RELEASE: string = manifest().release;
 
 /** What ascot asks about code outside the workspace. A failed lookup throws; ascot then takes
  * what it looked for on trust and says why. */
@@ -92,7 +110,7 @@ function serialize(instance: RawWorkspace): Workspace {
 			const value = Reflect.get(target, prop, receiver);
 			if (typeof value !== "function") return value;
 			return async (...args: unknown[]) => {
-				if (prop === "setEnv") args = [envOf(args[0] as Env | undefined)];
+				if (prop === "setEnv") args = [envOf((args[0] as Env | undefined) ?? "latest")];
 				const prev = tail;
 				let release!: () => void;
 				tail = new Promise<void>((resolve) => (release = resolve));
@@ -108,12 +126,20 @@ function serialize(instance: RawWorkspace): Workspace {
 }
 
 /** A workspace whose calls run one at a time, resolving what it doesn't contain through `iris`. */
-export async function createWorkspace(iris?: Env, style?: Style): Promise<Workspace> {
+export async function createWorkspace(
+	iris: Env = "latest",
+	style?: Style,
+	diagnostics?: string[],
+): Promise<Workspace> {
 	const root = await wasm;
-	return serialize(new root.exported.Workspace(envOf(iris), style));
+	const workspace = serialize(new root.exported.Workspace(envOf(iris), style));
+	if (diagnostics) await workspace.setDiagnostics(diagnostics);
+	return workspace;
 }
 
-function envOf(iris?: Env) {
+function envOf(iris: Env) {
+	if (iris === "none") return undefined;
+	if (iris === "latest") return { tag: "declarations" as const, val: bundledDeclarations() };
 	if (iris instanceof Uint8Array) return { tag: "declarations" as const, val: iris };
 	return iris instanceof Atelier
 		? { tag: "atelier" as const, val: new FailingAtelier(iris) }

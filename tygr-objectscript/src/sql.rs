@@ -2010,7 +2010,7 @@ pub enum SelectOption {
     RowOffset((StringEqCI!("%ROWOFFSET"), Space), ValSpec, Space),
 }
 
-pub type SQLTopClause = Wrap<(StringEqCI!("TOP"), Space), TopSpec, Space>;
+pub type SQLTopClause = Wrap<(StringEqCI!("TOP"), Space1), TopSpec, Space>;
 
 #[derive(Grammar)]
 pub enum TopSpec {

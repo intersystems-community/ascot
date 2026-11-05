@@ -1,6 +1,6 @@
-//! Workspace-wide style rules (`bindings::Style`, declared in the WIT), fixed for an analysis
-//! session: `--style <file>` on the CLI, the `style` of an MCP `create_workspace`, or the
-//! second argument of a JS `createWorkspace`.
+//! Workspace-wide style rules (`bindings::Style`, declared in the WIT): `--style <file>` on the
+//! CLI, the `style` setting of the LSP and MCP servers, or the second argument of a JS
+//! `createWorkspace`.
 
 use crate::bindings::{CommandStyle, FunctionStyle, KeywordCase, KeywordForm, Style};
 use serde::de::DeserializeOwned;

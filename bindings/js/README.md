@@ -15,7 +15,7 @@ npm install @intersystems-community/ascot
 ````ts
 import { createWorkspace } from "@intersystems-community/ascot";
 
-const ws = await createWorkspace();
+const ws = await createWorkspace(); // checks against the bundled declarations of IRIS 2026.2
 
 // `open` is both open and edit: it stores the raw text (the kind comes from the uri's
 // extension: .cls, .mac, .int, .inc) and returns the uris whose cached analysis is now
@@ -40,8 +40,10 @@ await ws.hover("file:///T.cls", { line: 5, character: 7 }); // the `x` being wri
 // "```objectscript\n%DataType = 1\n```"
 ````
 
-To provide declarations for documents that aren't in the workspace, extend `IrisContext`,
-override the lookups you can answer, and pass an instance:
+Documents that aren't in the workspace resolve, by default, against the pre-built declarations
+of the newest IRIS Community release this package knows (`LATEST_RELEASE`), bundled with it
+(4 MB). To answer those lookups yourself instead, extend `IrisContext`, override the lookups
+you can answer, and pass an instance:
 
 ```ts
 import { IrisContext, type ClassInfo } from "@intersystems-community/ascot";
@@ -77,13 +79,20 @@ const connected = await createWorkspace(new MyAtelier());
 const strict = await createWorkspace(undefined, { command: { form: "long" }, function: { case: "pascal" }, commandDo: { form: "short" } });
 ```
 
+and an optional third, the diagnostics filter as `ascot analyze -d` takes it, `VERB:TARGETS`
+values applied in order:
+
+```ts
+const quiet = await createWorkspace(undefined, undefined, ["off:hint,information"]);
+```
+
 Load every file of a project into one `Workspace` so cross-file references resolve, and
 call `open` again on each edit. `close(uri)` removes a document; a closed editor tab is
 usually not a removal, so keep the on-disk text open instead.
 
 ## API
 
-`createWorkspace(iris?, style?)` returns a `Workspace` whose methods mirror the engine's
+`createWorkspace(iris?, style?, diagnostics?)` returns a `Workspace` whose methods mirror the engine's
 exports, all returning promises. Positions and ranges are zero-based line/character pairs,
 as in the Language Server Protocol.
 
@@ -93,6 +102,7 @@ as in the Language Server Protocol.
 | `close(uri)`                                    | uris whose analysis is now stale                      |
 | `setEnv(iris?)`                                 | every uri: a new server stales all analysis           |
 | `setStyle(style?)`                              | every uri: a new style stales every check             |
+| `setDiagnostics(filter)`                        | every uri: a new filter may change every report       |
 | `diagnostics(uri)`                              | `Diagnostic[]`                                        |
 | `inlayHint(uri, range)`                         | `InlayHint[]`                                         |
 | `definition(uri, position)`                     | `Location \| undefined`                               |

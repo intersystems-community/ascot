@@ -933,18 +933,82 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     Ty::OREF(ClsOrIns::Ins(cls))
 }
 
+// Every class name a type holds, for qualifying what a class wrote relative to itself: a member's
+// own type, and for a method each argument's type as well as the result's. The one walk every
+// member type takes before it leaves its declaring class.
+pub(crate) trait ClassNames {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty));
+}
+
+impl ClassNames for Ty {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty)) {
+        f(self)
+    }
+}
+
+impl<T: ClassNames> ClassNames for Option<T> {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty)) {
+        if let Some(t) = self {
+            t.class_names(f);
+        }
+    }
+}
+
+impl ClassNames for TyProcedure {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty)) {
+        for arg in &mut self.normal_args {
+            arg.ty.class_names(f);
+        }
+        if let Some(arg) = &mut self.variadic_arg {
+            arg.ty.class_names(f);
+        }
+        self.out.class_names(f);
+    }
+}
+
+impl ClassNames for TyProcedureOrAny {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty)) {
+        if let TyProcedureOrAny::Procedure(proc) = self {
+            Arc::make_mut(proc).class_names(f);
+        }
+    }
+}
+
+impl ClassNames for PropertyTy {
+    fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty)) {
+        match self {
+            PropertyTy::Value(ty)
+            | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Dispatched(ty)
+            | PropertyTy::Collection { element: ty, .. } => ty.class_names(f),
+        }
+    }
+}
+
 // `This` is the receiver's class; `..#NAME` the receiver's argument for the parameter `NAME`
-// that `owner`, the member's declaring class, defines (its default when the receiver gives none).
+// that `owner`, the member's declaring class, defines: the receiver type's own, else the value
+// `given` finds on the receiver's class, else `owner`'s default.
 pub(crate) trait Instantiate {
-    fn instantiate(&mut self, receiver: &ClassTy, owner: &str);
+    fn instantiate(
+        &mut self,
+        receiver: &ClassTy,
+        owner: &str,
+        given: &dyn Fn(&str) -> Option<String>,
+    );
 }
 
 impl Instantiate for Ty {
-    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
+    fn instantiate(
+        &mut self,
+        receiver: &ClassTy,
+        owner: &str,
+        given: &dyn Fn(&str) -> Option<String>,
+    ) {
         match self {
             Ty::This => *self = Ty::ins(receiver.clone()),
             Ty::Param(param) => {
                 let arg = (receiver.generics.get(param).cloned())
+                    .or_else(|| given(param))
                     .or_else(|| crate::mask::generic_default(owner, param));
                 if let Some(arg) = arg {
                     *self = Ty::from(arg);
@@ -956,22 +1020,32 @@ impl Instantiate for Ty {
 }
 
 impl<T: Instantiate> Instantiate for Option<T> {
-    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
+    fn instantiate(
+        &mut self,
+        receiver: &ClassTy,
+        owner: &str,
+        given: &dyn Fn(&str) -> Option<String>,
+    ) {
         if let Some(t) = self {
-            t.instantiate(receiver, owner);
+            t.instantiate(receiver, owner, given);
         }
     }
 }
 
 impl Instantiate for TyProcedure {
-    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
+    fn instantiate(
+        &mut self,
+        receiver: &ClassTy,
+        owner: &str,
+        given: &dyn Fn(&str) -> Option<String>,
+    ) {
         for arg in &mut self.normal_args {
-            arg.ty.instantiate(receiver, owner);
+            arg.ty.instantiate(receiver, owner, given);
         }
         if let Some(arg) = &mut self.variadic_arg {
-            arg.ty.instantiate(receiver, owner);
+            arg.ty.instantiate(receiver, owner, given);
         }
-        self.out.instantiate(receiver, owner);
+        self.out.instantiate(receiver, owner, given);
     }
 }
 
@@ -985,20 +1059,30 @@ impl TyProcedureOrAny {
 }
 
 impl Instantiate for TyProcedureOrAny {
-    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
+    fn instantiate(
+        &mut self,
+        receiver: &ClassTy,
+        owner: &str,
+        given: &dyn Fn(&str) -> Option<String>,
+    ) {
         if let TyProcedureOrAny::Procedure(proc) = self {
-            Arc::make_mut(proc).instantiate(receiver, owner);
+            Arc::make_mut(proc).instantiate(receiver, owner, given);
         }
     }
 }
 
 impl Instantiate for PropertyTy {
-    fn instantiate(&mut self, receiver: &ClassTy, owner: &str) {
+    fn instantiate(
+        &mut self,
+        receiver: &ClassTy,
+        owner: &str,
+        given: &dyn Fn(&str) -> Option<String>,
+    ) {
         match self {
             PropertyTy::Value(ty)
             | PropertyTy::Multidimensional(ty)
             | PropertyTy::Dispatched(ty)
-            | PropertyTy::Collection { element: ty, .. } => ty.instantiate(receiver, owner),
+            | PropertyTy::Collection { element: ty, .. } => ty.instantiate(receiver, owner, given),
         }
     }
 }
@@ -1092,10 +1176,10 @@ mod tests {
             .generics
             .insert("ELEMENTTYPE".to_string(), "Demo.Child".to_string());
         let mut element = Ty::from("..#ELEMENTTYPE");
-        element.instantiate(&receiver, "%Library.RelationshipObject");
+        element.instantiate(&receiver, "%Library.RelationshipObject", &|_| None);
         assert!(matches!(element, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "Demo.Child"));
         let mut this = Ty::from("This");
-        this.instantiate(&receiver, "%Library.RelationshipObject");
+        this.instantiate(&receiver, "%Library.RelationshipObject", &|_| None);
         assert!(
             matches!(this, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "%Library.RelationshipObject")
         );

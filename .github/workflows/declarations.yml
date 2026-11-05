@@ -1,14 +1,22 @@
 name: Declarations
 
-# Builds an IRIS Community release's pre-built declaration file and uploads it, with its
-# checksum, to the `declarations` release that `--iris <release>` downloads from.
+# Builds a Community release's pre-built declaration file and uploads it, with its checksum, to
+# the `declarations` release that `--iris <release>` downloads from.
 on:
   workflow_dispatch:
     inputs:
       release:
-        description: The iris-community image tag, e.g. 2026.2
+        description: The image tag, e.g. 2026.2
         required: true
         default: '2026.2'
+      image:
+        description: The image, iris-community or irishealth-community
+        required: true
+        default: 'iris-community'
+      namespace:
+        description: The namespace, %SYS or, for IRIS for Health's HS and Ens classes, HSLIB
+        required: true
+        default: '%SYS'
 
 permissions:
   contents: write
@@ -16,8 +24,6 @@ permissions:
 jobs:
   declare:
     runs-on: ubuntu-latest
-    env:
-      NAME: iris-community-${{ inputs.release }}.d.json
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -25,7 +31,10 @@ jobs:
       - run: cargo build --release
       - name: Declare
         run: |
-          scripts/prebuilt-declarations.sh ${{ inputs.release }} $NAME
+          NAME=${{ inputs.image }}-${{ inputs.release }}.d.json
+          [ "${{ inputs.namespace }}" = %SYS ] || NAME=${{ inputs.image }}-${{ inputs.release }}.${{ inputs.namespace }}.d.json
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          scripts/prebuilt-declarations.sh ${{ inputs.release }} $NAME ${{ inputs.image }} ${{ inputs.namespace }}
           gzip -9 $NAME
           sha256sum $NAME.gz > $NAME.gz.sha256
       - name: Upload

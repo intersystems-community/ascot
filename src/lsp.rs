@@ -7,38 +7,56 @@
 //! plugin (`bindings/claude-lsp-plugin`) launches. The InterSystems Language Server does not use
 //! it; it embeds the wasm build instead (see `bindings.rs`).
 
-use std::path::PathBuf;
+use std::{cell::RefCell, path::PathBuf};
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     CodeDescription, Diagnostic as LspDiagnostic,
     DiagnosticRelatedInformation as LspDiagnosticRelatedInformation,
-    DiagnosticSeverity as LspDiagnosticSeverity, DidChangeTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentSymbol as LspDocumentSymbol, DocumentSymbolParams,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
-    HoverProviderCapability, InitializeParams, InlayHint as LspInlayHint,
+    DiagnosticSeverity as LspDiagnosticSeverity, DidChangeConfigurationParams,
+    DidChangeTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbol as LspDocumentSymbol,
+    DocumentSymbolParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, InlayHint as LspInlayHint,
     InlayHintLabel as LspInlayHintLabel, InlayHintParams, Location as LspLocation, MarkupContent,
-    MarkupKind, NumberOrString, OneOf, Position as LspPosition, PublishDiagnosticsParams,
-    Range as LspRange, ReferenceParams, ServerCapabilities, SymbolInformation,
-    SymbolKind as LspSymbolKind, SymbolTag, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
-    WorkspaceSymbolParams,
+    MarkupKind, MessageType, NumberOrString, OneOf, Position as LspPosition,
+    PublishDiagnosticsParams, Range as LspRange, ReferenceParams, ServerCapabilities,
+    ShowMessageParams, SymbolInformation, SymbolKind as LspSymbolKind, SymbolTag,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkspaceSymbolParams,
 };
 
 use crate::{
-    IrisContext, Workspace,
+    Workspace,
     bindings::{
-        Diagnostic, DiagnosticSeverity, GuestWorkspace, InlayHint, Position, Range, Style,
-        SymbolInfo, SymbolKind,
+        Diagnostic, DiagnosticSeverity, GuestWorkspace, InlayHint, Position, Range, SymbolInfo,
+        SymbolKind,
     },
+    settings::Settings,
 };
 
-pub fn run(
-    iris: Option<Box<dyn IrisContext>>,
-    style: Option<Style>,
-    filter: crate::diagnostic_filter::Filter,
-) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
-    let (connection, io_threads) = Connection::stdio();
+type Fallible<T = ()> = Result<T, Box<dyn std::error::Error + Sync + Send>>;
 
+/// `settings` are the command line's; the client's `initializationOptions` override them, and a
+/// `workspace/didChangeConfiguration` changes them while the server runs. `shared_fs` says the
+/// client's `file:` uris are the server's own disk; otherwise the server knows the documents the
+/// client opens.
+pub fn run(settings: Settings, shared_fs: bool) -> Fallible {
+    let (connection, io_threads) = Connection::stdio();
+    serve(&connection, settings, shared_fs)?;
+    // `io_threads`'s writer only stops once every `Sender<Message>` clone is dropped — including
+    // `connection`'s own, so it must go out of scope before we can join.
+    drop(connection);
+    io_threads.join()?;
+    Ok(())
+}
+
+struct Server {
+    workspace: Workspace,
+    // In force; a change to `iris` alone, or to `iris_namespace` alone, is completed from them.
+    settings: RefCell<Settings>,
+    shared_fs: bool,
+}
+
+fn serve(connection: &Connection, mut settings: Settings, shared_fs: bool) -> Fallible {
     let capabilities = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         inlay_hint_provider: Some(OneOf::Left(true)),
@@ -50,8 +68,16 @@ pub fn run(
         ..Default::default()
     };
     let initialize_params = connection.initialize(serde_json::to_value(capabilities)?)?;
-    let params: InitializeParams = serde_json::from_value(initialize_params)?;
-
+    let mut params: InitializeParams = serde_json::from_value(initialize_params)?;
+    if let Some(options) = params.initialization_options.take() {
+        match serde_json::from_value(options) {
+            Ok(options) => settings = settings.overlay(options),
+            Err(err) => show_error(connection, format!("initializationOptions: {err}"))?,
+        }
+    }
+    let iris = applied(connection, settings.open_iris())?;
+    let style = applied(connection, settings.style(shared_fs))?;
+    let filter = applied(connection, settings.filter())?;
     let workspace = Workspace::native(iris, style);
     workspace.set_diagnostic_filter(filter);
     // Insert every `.cls`/`.mac`/`.int`/`.inc` file under the workspace root up front, so
@@ -60,16 +86,34 @@ pub fn run(
     // open, gets a real parse error instead of a diagnostic (the unresolved `#include` is left
     // as literal text in the expansion). This only runs once, at startup — a file added to the
     // workspace afterward needs to be opened individually to be picked up.
-    for root in workspace_roots(&params) {
-        workspace.open_directory(&root);
+    if shared_fs {
+        for root in workspace_roots(&params) {
+            workspace.open_directory(&root);
+        }
     }
+    let server = Server {
+        workspace,
+        settings: RefCell::new(settings),
+        shared_fs,
+    };
+    main_loop(connection, &server)
+}
 
-    main_loop(&connection, &workspace)?;
-    // `io_threads`'s writer only stops once every `Sender<Message>` clone is dropped — including
-    // `connection`'s own, so it must go out of scope before we can join.
-    drop(connection);
-    io_threads.join()?;
-    Ok(())
+// A setting that can't be applied is reported and left as it was, here as its default.
+fn applied<T: Default>(connection: &Connection, result: Result<T, String>) -> Fallible<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(err) => show_error(connection, err).map(|()| T::default()),
+    }
+}
+
+fn show_error(connection: &Connection, message: String) -> Fallible {
+    let params = ShowMessageParams {
+        typ: MessageType::ERROR,
+        message,
+    };
+    let notification = Notification::new("window/showMessage".to_string(), params);
+    Ok(connection.sender.send(notification.into())?)
 }
 
 // Every workspace root the client told us about — `workspaceFolders` (current) and `rootUri`
@@ -104,20 +148,17 @@ fn workspace_key(uri: &Uri) -> String {
         .unwrap_or_else(|| uri.as_str().to_string())
 }
 
-fn main_loop(
-    connection: &Connection,
-    workspace: &Workspace,
-) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
+fn main_loop(connection: &Connection, server: &Server) -> Fallible {
     for msg in &connection.receiver {
         match msg {
             Message::Request(req) => {
                 if connection.handle_shutdown(&req)? {
                     return Ok(());
                 }
-                let response = handle_request(workspace, req);
+                let response = handle_request(&server.workspace, req);
                 connection.sender.send(Message::Response(response))?;
             }
-            Message::Notification(not) => handle_notification(connection, workspace, not)?,
+            Message::Notification(not) => handle_notification(connection, server, not)?,
             Message::Response(_) => {}
         }
     }
@@ -205,7 +246,7 @@ fn handle_request(workspace: &Workspace, req: Request) -> Response {
                             uri: symbol.location.uri.parse().ok()?,
                             range: to_lsp_range(symbol.location.range),
                         },
-                        container_name: None,
+                        container_name: symbol.container_name,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -233,11 +274,8 @@ fn respond<P: serde::de::DeserializeOwned, R: serde::Serialize>(
     }
 }
 
-fn handle_notification(
-    connection: &Connection,
-    workspace: &Workspace,
-    not: Notification,
-) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
+fn handle_notification(connection: &Connection, server: &Server, not: Notification) -> Fallible {
+    let workspace = &server.workspace;
     match not.method.as_str() {
         "textDocument/didOpen" => {
             let params: DidOpenTextDocumentParams = serde_json::from_value(not.params)?;
@@ -257,16 +295,60 @@ fn handle_notification(
         // Leave the document in the workspace on close — other still-open files may reference
         // it, and a close isn't a delete (there's no watched-files support to tell those apart).
         "textDocument/didClose" => {}
+        "workspace/didChangeConfiguration" => {
+            let params: DidChangeConfigurationParams = serde_json::from_value(not.params)?;
+            match serde_json::from_value::<Settings>(params.settings) {
+                Ok(changes) => reconfigure(connection, server, changes)?,
+                Err(err) => show_error(connection, format!("settings: {err}"))?,
+            }
+        }
         _ => {}
     }
     Ok(())
 }
 
-fn publish_all(
-    connection: &Connection,
-    workspace: &Workspace,
-    uris: Vec<String>,
-) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
+// Each setting given is applied and the documents it stales republished; one that can't be is
+// reported and left as it was. A new environment keeps the documents: they are checked again, not
+// read again.
+fn reconfigure(connection: &Connection, server: &Server, changes: Settings) -> Fallible {
+    let workspace = &server.workspace;
+    if changes.has_style() {
+        match changes.style(server.shared_fs) {
+            Ok(style) => {
+                server.settings.borrow_mut().style = changes.style.clone();
+                publish_all(connection, workspace, workspace.set_style(style))?;
+            }
+            Err(err) => show_error(connection, err)?,
+        }
+    }
+    if changes.has_diagnostics() {
+        match changes.filter() {
+            Ok(filter) => {
+                server.settings.borrow_mut().diagnostics = changes.diagnostics.clone();
+                workspace.set_diagnostic_filter(filter);
+                publish_all(connection, workspace, workspace.uris())?;
+            }
+            Err(err) => show_error(connection, err)?,
+        }
+    }
+    if changes.iris().is_some() || changes.iris_namespace().is_some() {
+        let settings = server.settings.borrow().clone().overlay(Settings {
+            iris: changes.iris,
+            iris_namespace: changes.iris_namespace,
+            ..Default::default()
+        });
+        match settings.open_iris() {
+            Ok(iris) => {
+                *server.settings.borrow_mut() = settings;
+                publish_all(connection, workspace, workspace.set_iris(iris))?;
+            }
+            Err(err) => show_error(connection, err)?,
+        }
+    }
+    Ok(())
+}
+
+fn publish_all(connection: &Connection, workspace: &Workspace, uris: Vec<String>) -> Fallible {
     for uri in uris {
         let Ok(lsp_uri) = uri.parse::<Uri>() else {
             continue;
@@ -404,6 +486,92 @@ fn to_lsp_diagnostic(diagnostic: Diagnostic) -> LspDiagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{Value, json};
+
+    // Drives `serve` over an in-memory connection: `initialize` with `options`, then `messages`;
+    // returns what the server sent up to its `shutdown` answer.
+    fn session(options: Value, messages: Vec<Message>) -> Vec<Message> {
+        let (server, client) = Connection::memory();
+        let served = std::thread::spawn(move || serve(&server, Settings::default(), false));
+        let send = |message: Message| client.sender.send(message).unwrap();
+        let initialize = json!({"capabilities": {}, "initializationOptions": options});
+        send(Request::new(1.into(), "initialize".into(), initialize).into());
+        client.receiver.recv().unwrap();
+        send(notification("initialized", json!({})));
+        messages.into_iter().for_each(&send);
+        send(Request::new(2.into(), "shutdown".into(), Value::Null).into());
+        let mut sent = vec![];
+        loop {
+            match client.receiver.recv().unwrap() {
+                Message::Response(response) if response.id == 2.into() => break,
+                message => sent.push(message),
+            }
+        }
+        send(notification("exit", Value::Null));
+        served.join().unwrap().unwrap();
+        sent
+    }
+
+    fn notification(method: &str, params: Value) -> Message {
+        Notification::new(method.into(), params).into()
+    }
+
+    // `method`'s notifications among `sent`, as their params.
+    fn sent_as(sent: &[Message], method: &str) -> Vec<Value> {
+        sent.iter()
+            .filter_map(|message| match message {
+                Message::Notification(sent) if sent.method == method => Some(sent.params.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn settings_arrive_with_initialize_and_change_with_the_configuration() {
+        let uri = "file:///t/T.mac";
+        let text = "ROUTINE T\nTest() {\n Write x\n}\n";
+        let document =
+            json!({"uri": uri, "languageId": "objectscript", "version": 1, "text": text});
+        let sent = session(
+            json!({"iris": "none", "diagnostics": "off:A7095"}),
+            vec![
+                notification("textDocument/didOpen", json!({"textDocument": document})),
+                notification(
+                    "workspace/didChangeConfiguration",
+                    json!({"settings": {"diagnostics": ["on:all"]}}),
+                ),
+            ],
+        );
+        let codes: Vec<Vec<Value>> = sent_as(&sent, "textDocument/publishDiagnostics")
+            .iter()
+            .map(|params| {
+                assert_eq!(params["uri"], uri);
+                params["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|diagnostic| diagnostic["code"].clone())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(codes, [vec![], vec![json!("A7095")]]);
+    }
+
+    #[test]
+    fn a_style_path_is_refused_without_a_shared_file_system() {
+        let sent = session(
+            json!({"iris": "none", "style": "/no/such/style.json"}),
+            vec![],
+        );
+        let shown = sent_as(&sent, "window/showMessage");
+        assert_eq!(shown.len(), 1, "{shown:?}");
+        assert!(
+            shown[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("--shared-fs")
+        );
+    }
 
     #[test]
     fn client_and_scan_spellings_of_a_file_uri_share_one_key() {

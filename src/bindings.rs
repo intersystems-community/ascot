@@ -254,6 +254,25 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
     }
 }
 
+// The keyword the member is declared with.
+pub(crate) fn member_keyword(kind: &wit_bind::MemberKind) -> &'static str {
+    match kind {
+        MemberKind::Method(_) => "Method",
+        MemberKind::ClassMethod(_) => "ClassMethod",
+        MemberKind::ClientMethod(_) => "ClientMethod",
+        MemberKind::Property(_) => "Property",
+        MemberKind::Relationship(_) => "Relationship",
+        MemberKind::Parameter(_) => "Parameter",
+        MemberKind::ForeignKey => "ForeignKey",
+        MemberKind::Index(_) => "Index",
+        MemberKind::Projection => "Projection",
+        MemberKind::Trigger => "Trigger",
+        MemberKind::XData => "XData",
+        MemberKind::Storage => "Storage",
+        MemberKind::Query(_) => "Query",
+    }
+}
+
 pub(crate) fn member_kind_to_symbol_kind(kind: &wit_bind::MemberKind) -> wit_bind::SymbolKind {
     match kind {
         MemberKind::Method(_) | MemberKind::ClassMethod(_) | MemberKind::ClientMethod(_) => {
@@ -291,7 +310,7 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
         Self {
             doc: details.doc.clone(),
             name: details.name.it.clone(),
-            extends: details.extends.clone(),
+            extends: details.extends.iter().map(|sup| sup.it.clone()).collect(),
             storage: None,
             members: details
                 .members
@@ -300,11 +319,13 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
                 .map(wit_bind::MemberInfo::from)
                 .collect(),
             include: details.include_names.iter().map(|i| i.it.clone()).collect(),
+            import: Some(details.imports.clone()).filter(|imports| !imports.is_empty()),
             // `exported.workspace.query-cls` already returns this class's real uri as its own
             // tuple element -- redundant to repeat it here.
             uri: None,
             class_type: k.class_type,
             deprecated: k.deprecated,
+            abstract_: k.abstract_,
             inheritance: k.inheritance,
             language: k.language,
             procedure_block: k.procedure_block,
@@ -324,9 +345,11 @@ impl Default for wit_bind::ClassInfo {
             storage: None,
             members: vec![],
             include: vec![],
+            import: None,
             uri: None,
             class_type: None,
             deprecated: false,
+            abstract_: false,
             inheritance: None,
             language: None,
             procedure_block: None,

@@ -1,5 +1,7 @@
-//! The pre-built declarations of an IRIS Community release (`--iris 2026.2`): downloaded once
-//! from the project's GitHub Releases into `~/.ascot`, and read from there afterwards.
+//! The pre-built declarations of a Community release's namespace (`--iris 2026.2`, or
+//! `--iris irishealth-community:2026.2:HSLIB` for IRIS for Health's library):
+//! downloaded once from the project's GitHub Releases into `~/.ascot`, and read from there
+//! afterwards.
 
 use std::fs;
 use std::io::Read;
@@ -12,28 +14,91 @@ use sha2::{Digest, Sha256};
 pub const DEFAULT_RELEASE: &str = "2026.2";
 const RELEASES: &str = "https://github.com/intersystems-community/ascot/releases/download";
 
-/// Whether `iris` names a Community release, as `2026.2`, rather than a URL or a path.
-pub fn is_release(iris: &str) -> bool {
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    matches!(iris.split_once('.'), Some((year, minor)) if year.len() == 4 && digits(year) && digits(minor))
+/// A pre-built declaration file's coordinates as `--iris` names them, `[image:]tag[:namespace]`:
+/// the Community image, `iris-community` unless named; its tag, a release such as `2026.2`, or
+/// `latest` for the newest this ascot knows; the namespace, `%SYS` unless named
+/// (`irishealth-community:2026.2:HSLIB` for IRIS for Health's library).
+#[derive(Debug, PartialEq)]
+pub struct Release<'a> {
+    pub image: &'a str,
+    pub tag: &'a str,
+    pub namespace: Option<&'a str>,
 }
 
-/// The release's asset in the `declarations` GitHub Release.
-pub fn asset(release: &str) -> String {
-    format!("iris-community-{release}.d.json.gz")
+impl<'a> Release<'a> {
+    /// `None` for what isn't one: a URL, a path, `none`.
+    pub fn parse(iris: &'a str) -> Option<Self> {
+        let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        let is_tag = |s: &str| {
+            s == crate::iris::LATEST
+                || matches!(s.split_once('.'), Some((year, minor)) if year.len() == 4 && digits(year) && digits(minor))
+        };
+        let is_image = |s: &str| {
+            !s.is_empty()
+                && s.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        };
+        let mut parts = iris.split(':');
+        let first = parts.next()?;
+        let (image, tag) = if is_tag(first) {
+            ("iris-community", first)
+        } else if is_image(first) {
+            (first, parts.next().filter(|tag| is_tag(tag))?)
+        } else {
+            return None;
+        };
+        let namespace = parts.next().filter(|ns| !ns.is_empty());
+        if parts.next().is_some() {
+            return None;
+        }
+        let tag = if tag == crate::iris::LATEST {
+            DEFAULT_RELEASE
+        } else {
+            tag
+        };
+        Some(Release {
+            image,
+            tag,
+            namespace,
+        })
+    }
+
+    pub fn namespace(&self) -> &'a str {
+        self.namespace.unwrap_or(crate::iris::DEFAULT_NAMESPACE)
+    }
+
+    /// The asset in the `declarations` GitHub Release: image and tag dash-joined, then the
+    /// namespace unless it is `%SYS`.
+    pub fn asset(&self) -> String {
+        let namespace = match self.namespace() {
+            crate::iris::DEFAULT_NAMESPACE => String::new(),
+            other => format!(".{other}"),
+        };
+        format!("{}-{}{namespace}.d.json.gz", self.image, self.tag)
+    }
+}
+
+impl std::fmt::Display for Release<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.image, self.tag)?;
+        match self.namespace {
+            Some(namespace) => write!(f, ":{namespace}"),
+            None => Ok(()),
+        }
+    }
 }
 
 /// The cached declaration file of `release`, downloaded first if `~/.ascot` lacks it. A machine
 /// that can't reach GitHub gets the file put there by hand.
-pub fn fetch(release: &str) -> Result<PathBuf, String> {
+pub fn fetch(release: &Release<'_>) -> Result<PathBuf, String> {
     let dir = std::env::home_dir()
         .ok_or("cannot find the home directory to keep the declarations in")?
         .join(".ascot");
     fetch_into(release, &format!("{RELEASES}/declarations"), &dir)
 }
 
-pub(crate) fn fetch_into(release: &str, base: &str, dir: &Path) -> Result<PathBuf, String> {
-    let asset = asset(release);
+pub(crate) fn fetch_into(release: &Release<'_>, base: &str, dir: &Path) -> Result<PathBuf, String> {
+    let asset = release.asset();
     let path = dir.join(asset.trim_end_matches(".gz"));
     if path.exists() {
         return Ok(path);
@@ -143,11 +208,52 @@ mod tests {
         dir
     }
 
+    fn release(iris: &str) -> Release<'_> {
+        Release::parse(iris).unwrap()
+    }
+
     #[test]
-    fn a_release_is_four_digits_a_dot_and_more_digits() {
-        assert!(is_release("2026.2") && is_release("2025.10"));
-        assert!(!is_release("2026") && !is_release("v2026.2") && !is_release("user.d.json"));
-        assert!(!is_release("http://localhost:52773") && !is_release("2026.2.0"));
+    fn a_release_is_an_image_a_tag_and_a_namespace_the_first_and_last_optional() {
+        assert_eq!(
+            release("2026.2"),
+            Release {
+                image: "iris-community",
+                tag: "2026.2",
+                namespace: None
+            }
+        );
+        assert_eq!(release("2025.10").tag, "2025.10");
+        assert_eq!(
+            release("irishealth-community:2026.2:HSLIB"),
+            Release {
+                image: "irishealth-community",
+                tag: "2026.2",
+                namespace: Some("HSLIB")
+            }
+        );
+        assert_eq!(release("2026.2:USER").namespace, Some("USER"));
+        assert_eq!(release("latest").tag, DEFAULT_RELEASE);
+        assert_eq!(release("irishealth-community:latest").tag, DEFAULT_RELEASE);
+        assert_eq!(
+            release("iris-community:2026.2").asset(),
+            release("2026.2").asset()
+        );
+        assert_eq!(
+            release("irishealth-community:2026.2:HSLIB").asset(),
+            "irishealth-community-2026.2.HSLIB.d.json.gz"
+        );
+        for not_one in [
+            "2026",
+            "v2026.2",
+            "user.d.json",
+            "http://localhost:52773",
+            "2026.2.0",
+            "2026.2.d.json",
+            "a:b:c:d",
+            "irishealth-community:HSLIB",
+        ] {
+            assert!(Release::parse(not_one).is_none(), "{not_one}");
+        }
     }
 
     #[test]
@@ -158,17 +264,20 @@ mod tests {
             ..Default::default()
         };
         let gz = gzipped(&serde_json::to_string(&declarations).unwrap());
-        let sum = format!("{:x}  {}\n", Sha256::digest(&gz), asset("2026.2"));
+        let sum = format!("{:x}  {}\n", Sha256::digest(&gz), release("2026.2").asset());
         let (url, hits) = server(vec![
-            (format!("/{}", asset("2026.2")), gz),
-            (format!("/{}.sha256", asset("2026.2")), sum.into_bytes()),
+            (format!("/{}", release("2026.2").asset()), gz),
+            (
+                format!("/{}.sha256", release("2026.2").asset()),
+                sum.into_bytes(),
+            ),
         ]);
         let dir = temp_dir("ok");
-        let path = fetch_into("2026.2", &url, &dir).unwrap();
+        let path = fetch_into(&release("2026.2"), &url, &dir).unwrap();
         assert_eq!(path, dir.join("iris-community-2026.2.d.json"));
         assert_eq!(Declarations::load(&path).unwrap().namespace, "%SYS");
         assert_eq!(*hits.lock().unwrap(), 2);
-        assert_eq!(fetch_into("2026.2", &url, &dir).unwrap(), path);
+        assert_eq!(fetch_into(&release("2026.2"), &url, &dir).unwrap(), path);
         assert_eq!(
             *hits.lock().unwrap(),
             2,
@@ -181,16 +290,16 @@ mod tests {
     fn a_corrupt_or_missing_download_saves_nothing() {
         let gz = gzipped("{}");
         let (url, _) = server(vec![
-            (format!("/{}", asset("2026.1")), gz),
+            (format!("/{}", release("2026.1").asset()), gz),
             (
-                format!("/{}.sha256", asset("2026.1")),
+                format!("/{}.sha256", release("2026.1").asset()),
                 b"0000 wrong\n".to_vec(),
             ),
         ]);
         let dir = temp_dir("bad");
-        let err = fetch_into("2026.1", &url, &dir).unwrap_err();
+        let err = fetch_into(&release("2026.1"), &url, &dir).unwrap_err();
         assert!(err.contains("checksum"), "{err}");
-        let err = fetch_into("2024.1", &url, &dir).unwrap_err();
+        let err = fetch_into(&release("2024.1"), &url, &dir).unwrap_err();
         assert!(err.contains("404"), "{err}");
         assert!(!dir.exists(), "nothing is written for a failed download");
     }

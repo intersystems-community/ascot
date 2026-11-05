@@ -91,6 +91,8 @@ pub struct DeclaredClass {
     /// `Class Name Extends (A, B) [ keywords ]`.
     pub header: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub import: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<String>,
     /// The storage class a persistent class also inherits from, named by its storage definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,7 +119,7 @@ fn member_name(name: &str) -> String {
     if plain {
         name.to_string()
     } else {
-        format!("\"{name}\"")
+        format!("\"{}\"", name.replace('"', "\"\""))
     }
 }
 
@@ -263,9 +265,11 @@ fn member_header(member: &MemberInfo) -> Option<String> {
                             None => "",
                         };
                         let collation = k.collation.as_deref().map(|c| format!(" As {c}"));
+                        let property: Vec<String> =
+                            k.property.split('.').map(member_name).collect();
                         format!(
                             "{}{subscript}{}",
-                            member_name(&k.property),
+                            property.join("."),
                             collation.unwrap_or_default()
                         )
                     })
@@ -349,6 +353,9 @@ impl From<&ClassInfo> for DeclaredClass {
             many => format!(" Extends ({})", short(&many.join(", "))),
         };
         let mut keywords = vec![];
+        if info.abstract_ {
+            keywords.push("Abstract".to_string());
+        }
         if let Some(t) = info.class_type {
             keywords.push(format!("ClassType = {}", spelled(&t)));
         }
@@ -379,6 +386,7 @@ impl From<&ClassInfo> for DeclaredClass {
                 short(&info.name),
                 keyword_list(&keywords)
             ),
+            import: info.import.clone().unwrap_or_default(),
             include: info.include.clone(),
             storage: info.storage.clone(),
             members: info
@@ -411,10 +419,12 @@ impl DeclaredClass {
     pub fn source(&self) -> String {
         let mut text = String::new();
         doc_lines(&self.doc, &mut text);
-        match self.include.as_slice() {
-            [] => {}
-            [one] => text.push_str(&format!("Include {one}\n")),
-            many => text.push_str(&format!("Include ({})\n", many.join(", "))),
+        for (keyword, names) in [("Import", &self.import), ("Include", &self.include)] {
+            match names.as_slice() {
+                [] => {}
+                [one] => text.push_str(&format!("{keyword} {one}\n")),
+                many => text.push_str(&format!("{keyword} ({})\n", many.join(", "))),
+            }
         }
         text.push_str(&self.header);
         text.push_str("\n{\n\n");
@@ -568,9 +578,11 @@ mod tests {
             extends: vec!["%Persistent".to_string(), "%XML.Adaptor".to_string()],
             storage: Some("%Storage.Persistent".to_string()),
             include: vec!["%occInclude".to_string()],
+            import: None,
             uri: None,
             class_type: Some(ClassType::Persistent),
             deprecated: false,
+            abstract_: true,
             inheritance: Some(Inheritance::Right),
             language: None,
             procedure_block: Some(false),

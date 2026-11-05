@@ -36,7 +36,7 @@ use types::*;
 pub(crate) use env::{DocumentEnv, WorkspaceEnv, labels_of};
 pub use errors::{
     Available, ClassLookup, Declared, Detail, DynamicGet, InRoutine, Suggestions, SuperclassOf,
-    SyntaxErrorText, TypeErrorKind, TypeParamHint, UnconfirmedReason,
+    SyntaxErrorText, TypeErrorKind, TypeParamHint,
 };
 pub(crate) use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
@@ -1113,6 +1113,25 @@ fn check_legacy_label_call<'a>(
 }
 
 // `Goto $CASE(selector, v1:label1, ..., :default)`: every arm names a label of this routine.
+// `Do $Case(x, value:entry, ..., :entry)`: the selector and each value are expressions, each
+// entry a `Do` argument.
+fn check_do_case<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    case: &cos::DoCase,
+) -> Result<(), QuasiTypeError> {
+    report_style(env, [case.kw.spelled()], &[]);
+    let _ = case.target.wrapped.to_power_ty(env, flow)?;
+    for arm in &case.arms {
+        let arm = arm.prefixed.wrapped.deref();
+        if let Some(value) = &arm.case {
+            let _ = value.to_power_ty(env, flow)?;
+        }
+        arm.entry_ref.check(env, flow)?;
+    }
+    Ok(())
+}
+
 fn check_goto_case<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1267,9 +1286,19 @@ impl CheckCommandInner for cos::Command {
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.items(env) {
                         report_argument_postconditional(env, "do", &arg.pc);
-                        check_pc(&arg.pc, env, flow, |flow| {
-                            Ok(arg.entry_ref.check(env, flow)?)
+                        check_pc(&arg.pc, env, flow, |flow| match &arg.entry_ref {
+                            cos::DoTarget::Plain(entry_ref) => Ok(entry_ref.check(env, flow)?),
+                            cos::DoTarget::Case(case) => check_do_case(env, flow, case),
                         })?;
+                    }
+                    Ok(())
+                })
+            }
+            cos::Command::User(cos::UserCommand { name, pc, args }) => {
+                flow.add_soft_diagnostic(QuasiTypeError::user_command(name.print()));
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.iter().flat_map(|args| args.items(env)) {
+                        let _ = arg.to_power_ty(env, flow)?;
                     }
                     Ok(())
                 })
@@ -2241,10 +2270,19 @@ impl CheckCommandInner for cos::MergeArgument {
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
     ) -> Result<(), QuasiTypeError> {
-        let ty = self.source.to_ranged_power_ty(env, flow)?;
-        // `MergeArgument.target` carries no range of its own; anchor on the source instead.
-        let range = env.range(&ty);
-        check_merge_target(&self.target, ty.into_inner(), range, env, flow)
+        match self {
+            cos::MergeArgument::Pair { target, source, .. } => {
+                let ty = source.to_ranged_power_ty(env, flow)?;
+                // The target carries no range of its own; anchor on the source instead.
+                let range = env.range(&ty);
+                check_merge_target(target, ty.into_inner(), range, env, flow)
+            }
+            // The target is whatever the text names: every binding may have changed.
+            cos::MergeArgument::Indirect(indirection) => {
+                let _ = indirection.to_ty(env, flow)?;
+                Ok(flow.invalidate_all()?)
+            }
+        }
     }
 }
 
@@ -2464,7 +2502,8 @@ fn check_trap_set<'a>(
         }
         _ => return Ok(()),
     };
-    if env.in_try() {
+    // Clearing the trap is allowed there; a value IRIS can't read is invalid there (#1058).
+    if env.in_try() && !matches!(value, PowerTy::Const(Const::String(text)) if text.is_empty()) {
         env.soft_diagnostic(TypeError::not_allowed_in(
             "An error trap",
             "a TRY block",
@@ -3364,8 +3403,12 @@ fn check_call<'a, 'b>(
                     // A procedure block only ever sees exactly its own declared public names —
                     // it's otherwise isolated from the caller's other locals.
                     // A name never bound here isn't shadowed: the callee reaches the outer one.
+                    // A name the callee receives as a parameter comes from the call itself.
                     for name in names {
-                        if flow::is_percent_variable(name) || !flow.has_binding(name)? {
+                        if flow::is_percent_variable(name)
+                            || !flow.has_binding(name)?
+                            || base.normal_args.iter().any(|par| par.name == *name)
+                        {
                             continue;
                         }
                         if flow.is_public(name)? {
@@ -3575,12 +3618,25 @@ impl CheckExprInner for AtomicExpr {
             // other string-to-`Ty` conversion here, which always produces an instance. A class
             // that doesn't exist is reported here, at the `##class(...)`, not at whatever member
             // is then accessed on it; only an IRIS connection can say so for sure.
-            AtomicExpr::Class { cls, .. } => {
+            AtomicExpr::Class { cls, oref, .. } => {
                 let name = env.qualify_class_name(&cls.deref().print());
                 if !env.class_exists(&name) {
                     return Err(QuasiTypeError::cannot_find_class(name));
                 }
-                Ok(PowerTy::plain(Ty::OREF(ClsOrIns::Cls(ClassTy::from(name)))))
+                let cls = ClassTy::from(name);
+                // `##class(C)oref.M()` runs `C`'s `M` on `oref`: an instance of `C` for the call.
+                let obj = match oref {
+                    None => ClsOrIns::Cls(cls),
+                    Some(cos::CastReceiver::This(..)) => {
+                        check_this(env, flow);
+                        ClsOrIns::Ins(cls)
+                    }
+                    Some(cos::CastReceiver::Local(var)) => {
+                        flow.read(&var.print())?;
+                        ClsOrIns::Ins(cls)
+                    }
+                };
+                Ok(PowerTy::plain(Ty::OREF(obj)))
             }
             AtomicExpr::Member { member, args } => {
                 let obj = env.this_ty(flow);
@@ -4046,12 +4102,7 @@ pub(crate) fn check_rtn(
     definitions: &crate::MacroDefinitions,
 ) -> Vec<bindings::Diagnostic> {
     let olc = env.olc();
-    let elements: Vec<(&cos::RoutineElement, Option<details::RoutineElementDetails>)> = rtn
-        .subroutines
-        .iter()
-        .flat_map(|srs| srs.items.iter())
-        .map(|elem| (elem, details::routine_element_kind(olc, elem)))
-        .collect();
+    let elements = details::routine_elements(olc, rtn.subroutines.as_ref());
     let labels: Vec<_> = elements
         .iter()
         .filter_map(|(elem, details)| {
@@ -4059,6 +4110,7 @@ pub(crate) fn check_rtn(
             Some((details, matches!(elem, cos::RoutineElement::Procedure(_))))
         })
         .collect();
+    let min_description_lines = min_description_lines(env);
     let env = env.for_routine(env::scoped_labels(env.uri(), &labels), definitions);
     let mut diagnostics = Vec::new();
     // An empty main (no code before the first tag) is the normal, idiomatic way to write a
@@ -4085,6 +4137,18 @@ pub(crate) fn check_rtn(
     }
     for (elem, details) in &elements {
         let Some(details) = details else { continue };
+        if let Some(min) = min_description_lines
+            && details.formal_list
+            && details.doc.is_empty()
+        {
+            let lines = match elem {
+                cos::RoutineElement::Procedure(p) => body_lines(env.range(&p.body), true),
+                cos::RoutineElement::Subroutine(s) => body_lines(env.range(&s.body), false),
+            };
+            if lines >= min {
+                diagnostics.push(TypeError::undescribed("label", lines, details.name.range).into());
+            }
+        }
         let result = match elem {
             cos::RoutineElement::Procedure(procedure) => check_procedure(procedure, details, &env),
             cos::RoutineElement::Subroutine(subroutine) => {
@@ -4100,6 +4164,22 @@ pub(crate) fn check_rtn(
         }
     }
     diagnostics
+}
+
+// The style's `require_description.min_body_lines`, if set.
+fn min_description_lines(env: &DocumentEnv) -> Option<usize> {
+    let rules = &env.style()?.rules;
+    Some(rules.require_description.as_ref()?.min_body_lines as usize)
+}
+
+// The lines a body spans, blank ones included; between the braces, for a body in them.
+fn body_lines(range: bindings::Range, braced: bool) -> usize {
+    let spanned = (range.end.line - range.start.line) as usize;
+    if braced {
+        spanned.saturating_sub(1)
+    } else {
+        spanned
+    }
 }
 
 // What IRIS does with a class keyword it can't place: refuse the class for a bad `ClassType`,
@@ -4120,6 +4200,12 @@ pub(crate) fn check_cls(
     let mut diagnostics = Vec::new();
     for issue in &cls.keyword_issues {
         diagnostics.push(class_keyword_issue(issue).into());
+    }
+    // A superclass is checked where it is named, like a `##class()` or a declared type; past one
+    // nobody can see, a member lookup ends in a hint rather than an error (see `find`).
+    for sup in &cls.extends {
+        let name = env.base.qualify_class_name(&sup.it, Some(&cls.name.it));
+        env.base.check_declared_class_exists(&name, sup.range);
     }
     // Available to every class without an explicit `Include` (see `CLASS_IMPLICIT_INCLUDES`) --
     // resolved silently (no diagnostic on failure, unlike an explicit `Include`).
@@ -4166,10 +4252,21 @@ pub(crate) fn check_cls(
             Location::new(env.uri().to_string(), kept.range),
         )));
     }
+    let min_description_lines = min_description_lines(env);
     // In name order, as IRIS compiles them: a method body's `#define` reaches the methods after it.
     let mut members = cls.members.in_order();
     members.sort_by(|a, b| a.name.it.cmp(&b.name.it));
     for member in members {
+        if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
+            && let Some(min) = min_description_lines
+            && !method.is_private
+            && member.doc.is_empty()
+        {
+            let lines = body_lines(method.body.range, true);
+            if lines >= min {
+                diagnostics.push(TypeError::undescribed("method", lines, member.name.range).into());
+            }
+        }
         if let MemberKindSpecificDetails::Index(index) = &member.kind {
             let this = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.name.it.clone())));
             let plain_keys = index
@@ -4179,12 +4276,12 @@ pub(crate) fn check_cls(
                 .filter(|key| key.subscript.is_none());
             for key in plain_keys.map(|key| &key.property) {
                 let key_range = key.range;
-                match env.base.resolve_mem::<Properties<Indexed>>(
-                    &this,
-                    key.it.clone(),
-                    key_range,
-                    true,
-                ) {
+                // Of a path into an embedded object (`Home.State`), this class's own property.
+                let property = key.it.split('.').next().unwrap_or_default().to_string();
+                match env
+                    .base
+                    .resolve_mem::<Properties<Indexed>>(&this, property, key_range, true)
+                {
                     Ok(property) => {
                         if let Some(location) = property.location {
                             env.base.reference(key.range, location);

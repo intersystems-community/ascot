@@ -112,6 +112,19 @@ impl QuasiTypeError {
         .into()
     }
 
+    pub fn downcast_from_abstract(name: String, source: Ty, target: Ty) -> Self {
+        TypeErrorKind::DowncastFromAbstract {
+            name,
+            source,
+            target,
+        }
+        .into()
+    }
+
+    pub fn type_downcast(source: Ty, target: Ty) -> Self {
+        TypeErrorKind::TypeDowncast { source, target }.into()
+    }
+
     pub fn access_instance_only_member_from_class_context(name: String) -> Self {
         TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name }.into()
     }
@@ -227,6 +240,23 @@ impl QuasiTypeError {
     ) -> Self {
         TypeErrorKind::CannotFindMember {
             dynamic: DynamicGet(has_get.then(|| mem.clone())),
+            cls,
+            mem,
+            suggestions: Suggestions(suggestions),
+        }
+        .into()
+    }
+
+    pub fn user_command(name: String) -> Self {
+        TypeErrorKind::UserCommand { name }.into()
+    }
+
+    pub fn cannot_find_member_on_abstract(
+        cls: String,
+        mem: String,
+        suggestions: Vec<String>,
+    ) -> Self {
+        TypeErrorKind::CannotFindMemberOnAbstract {
             cls,
             mem,
             suggestions: Suggestions(suggestions),
@@ -437,14 +467,23 @@ type_error_kinds! {
         suggestions: Suggestions,
         dynamic: DynamicGet,
     },
+    /// The receiver's class is abstract, so the value is a subclass's, which may declare the member.
+    #[code = "A4718"]
+    #[severity = Warning]
+    #[message = "Cannot find member '{mem}' in {cls}, an abstract class: the value is a subclass's, which may have it{suggestions}"]
+    CannotFindMemberOnAbstract {
+        cls: String,
+        mem: String,
+        suggestions: Suggestions,
+    },
     #[code = "A9360"]
     #[severity = Hint]
-    #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes a class {reason}"]
+    #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes {unparsed}, whose file in the workspace doesn't parse"]
     UnconfirmedMember {
         cls: String,
         mem: String,
         on: SuperclassOf,
-        reason: UnconfirmedReason,
+        unparsed: String,
     },
     /// `##super()` binds to the superclass's version of the method at compile time; no
     /// `%DispatchMethod` and no same-named property stands in.
@@ -468,13 +507,14 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
-    /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide.
+    /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide;
+    /// ascot reads it where it stands, so the block's flow after it is not what IRIS runs.
     #[code = "A7408"]
     #[severity = Warning]
-    #[message = "Label '{label}' is inside a block; a label belongs at the top level of the body"]
+    #[message = "Label '{label}' is inside nested braces; ascot only understands labels at the top level of a method or routine body, so the checks after it may be inaccurate or incomplete"]
     LabelInBlock { label: String },
     #[code = "A3303"]
-    #[severity = Error]
+    #[severity = Warning]
     #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
     CannotFindRoutine { routine: String },
     #[code = "A4439"]
@@ -609,6 +649,19 @@ type_error_kinds! {
         source: Ty,
         target: Ty,
     },
+    /// Narrowing an abstract class to one of its subclasses: the value is some subclass's already.
+    #[code = "A6274"]
+    #[severity = Warning]
+    #[message = "Assigning {source}, an abstract class, to '{name}' declared as {target}: the value is a subclass's, which may be one"]
+    DowncastFromAbstract {
+        name: String,
+        source: Ty,
+        target: Ty,
+    },
+    #[code = "A8139"]
+    #[severity = Warning]
+    #[message = "{source} is abstract, so this value is a subclass's, which may be the {target} it is taken for"]
+    TypeDowncast { source: Ty, target: Ty },
     #[code = "A1203"]
     #[severity = Warning]
     #[message = "Unreachable code"]
@@ -645,6 +698,12 @@ type_error_kinds! {
     #[message = "{call} is not documented for IRIS; $ZUTIL was superseded by class methods and special variables"]
     UndocumentedZUtil { call: String },
     /// A `$Z` function IRIS compiles but doesn't document (`$ZOBJEXPORT`); per GOVERNANCE.md,
+    /// A `Z` command IRIS has no definition for is one `^%ZLANGC00` may define: noted, its
+    /// arguments checked, the call itself not.
+    #[code = "A5362"]
+    #[severity = Hint]
+    #[message = "'{name}' is a user-defined command (^%ZLANGC00), so the call is not checked"]
+    UserCommand { name: String },
     /// noted and left unchecked rather than refused.
     #[code = "A6037"]
     #[severity = Hint]
@@ -727,6 +786,10 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "The style allows {max} command(s) per line; this is one more"]
     CommandsPerLine { max: u32 },
+    #[code = "S7126"]
+    #[severity = Warning]
+    #[message = "Describe this {kind}: its body is {lines} lines"]
+    Undescribed { kind: String, lines: usize },
     #[code = "S8215"]
     #[severity = Warning]
     #[message = "Put {wanted} before `{{`"]
@@ -824,10 +887,11 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "{err}"]
     InvalidSyntax { err: SyntaxErrorText },
+    /// A document that doesn't parse at the class or routine level, worded like `InvalidSyntax`.
     #[code = "A1727"]
     #[severity = Warning]
-    #[message = "Syntax error, looking for:\n{err}"]
-    DocumentSyntaxError { err: tygr::Error },
+    #[message = "{err}"]
+    DocumentSyntaxError { err: SyntaxErrorText },
     #[code = "A7548"]
     #[severity = Warning]
     #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
@@ -979,22 +1043,6 @@ impl std::fmt::Display for SuperclassOf {
     }
 }
 
-/// Why a class in a hierarchy can't be checked, depending on whether IRIS was asked.
-#[derive(Debug)]
-pub struct UnconfirmedReason {
-    pub has_iris: bool,
-}
-
-impl std::fmt::Display for UnconfirmedReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.has_iris {
-            "that isn't on the IRIS instance"
-        } else {
-            "outside this workspace, with no IRIS connection to check it against"
-        })
-    }
-}
-
 /// "routine '…'", or "this routine" for a label looked up locally.
 #[derive(Debug)]
 pub struct InRoutine(pub Option<String>);
@@ -1120,7 +1168,8 @@ impl std::fmt::Display for SyntaxErrorText {
             .collect();
         friendly.dedup();
         if friendly.is_empty() {
-            write!(f, "Syntax error, looking for:\n{error}")
+            // The parser's own words: `parse error at ..., expected: ...`.
+            write!(f, "{error}")
         } else {
             write!(f, "{}", friendly.join("\n"))
         }
@@ -1178,7 +1227,7 @@ impl TypeError {
         cls: String,
         mem: String,
         superclass: bool,
-        has_iris: bool,
+        unparsed: String,
         range: Range,
     ) -> Self {
         Self::at(
@@ -1186,7 +1235,7 @@ impl TypeError {
                 cls,
                 mem,
                 on: SuperclassOf(superclass),
-                reason: UnconfirmedReason { has_iris },
+                unparsed,
             },
             range,
         )
@@ -1204,7 +1253,12 @@ impl TypeError {
     }
 
     pub(crate) fn document_syntax_error(range: Range, err: tygr::Error) -> Self {
-        Self::at(TypeErrorKind::DocumentSyntaxError { err }, range)
+        Self::at(
+            TypeErrorKind::DocumentSyntaxError {
+                err: SyntaxErrorText(err),
+            },
+            range,
+        )
     }
 
     pub fn cannot_find_include(name: String, range: Range) -> Self {
@@ -1221,6 +1275,16 @@ impl TypeError {
 
     pub fn new_per_block(max: u32, range: Range) -> Self {
         Self::at(TypeErrorKind::NewPerBlock { max }, range)
+    }
+
+    pub fn undescribed(kind: &str, lines: usize, range: Range) -> Self {
+        Self::at(
+            TypeErrorKind::Undescribed {
+                kind: kind.to_string(),
+                lines,
+            },
+            range,
+        )
     }
 
     pub fn commands_per_line(max: u32, range: Range) -> Self {
