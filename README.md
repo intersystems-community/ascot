@@ -73,13 +73,15 @@ rustup installers offer to set up; a build failing on `link.exe` or
 
 ### TypeScript/JavaScript (npm)
 
-A library for Node 24+ and other TS/JS consumers; it does not provide an `ascot`
-executable. From
+From
 [npmjs.com/package/@intersystems-community/ascot](https://www.npmjs.com/package/@intersystems-community/ascot):
 
 ```sh
 npm install @intersystems-community/ascot
 ```
+
+A library for Node 24+ and other TS/JS runtimes; it does not provide an `ascot`
+executable.
 
 ## Usage
 
