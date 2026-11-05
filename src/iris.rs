@@ -10,7 +10,8 @@ pub(crate) use crate::declared::{DECLARATIONS_VERSION, Declarations, DeclaredCla
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
 /// `--iris` as given: `none` is no environment at all, the strictest check; a Community release
-/// (`2026.2`) is its pre-built declarations, fetched if need be; a URL is a live connection
+/// (`2026.2`, `irishealth-community-2026.2`) is the pre-built declarations of its `namespace`,
+/// fetched if need be; a URL is a live connection
 /// (checked up front); anything else, `file://` included, a declaration file's path. `namespace`
 /// defaults to `%SYS` for a URL; for a file it must match the one declared.
 pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisContext>>, String> {
@@ -21,7 +22,8 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisCo
         return open(crate::prebuilt::DEFAULT_RELEASE, namespace);
     }
     if crate::prebuilt::is_release(iris) {
-        return open_file(&crate::prebuilt::fetch(iris)?, namespace).map(Some);
+        let file = crate::prebuilt::fetch(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
+        return open_file(&file, namespace).map(Some);
     }
     if let Some(path) = iris.strip_prefix("file://") {
         return open_file(Path::new(path), namespace).map(Some);

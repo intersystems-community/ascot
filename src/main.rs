@@ -188,7 +188,8 @@ struct IrisArgs {
     ///
     /// Resolves the classes, include files and routines outside the workspace. A release, as
     /// 2026.2, is its pre-built declarations, downloaded into ~/.ascot the first time; `latest`
-    /// is the newest this ascot knows. An instance is given as
+    /// is the newest this ascot knows, and irishealth-community:2026.2 names IRIS for Health's,
+    /// whose HS and Ens classes are in `--iris-namespace HSLIB`. An instance is given as
     /// http://user:password@host:port[/prefix]. With `none`, nothing outside the workspace
     /// exists: every reference to such a class, routine or include is an error. [default: latest]
     #[arg(long, value_name = "RELEASE|URL|FILE|none")]

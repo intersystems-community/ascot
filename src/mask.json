@@ -4177,7 +4177,8 @@
    "members": [
     { "header": "ClassMethod findExternalLanguageServers(Output pServers) As %Status" },
     { "header": "ClassMethod findMembers(pRole As %String, Output pUsers, Output pRolesAleadyExamined, Output pNewRolesToExamine) As %Status" },
-    { "header": "ClassMethod GetExternalLanguageServers(Output pServers) As %Status" }
+    { "header": "ClassMethod GetExternalLanguageServers(Output pServers) As %Status" },
+    { "header": "ClassMethod StartInteropJob(pCurrentNS, pConfigName, pDisableErrorTraps, pInterimJob) As %Any" }
    ]
   },
   "%SYS.FileSystemAccess": {
@@ -4415,6 +4416,12 @@
    "header": "Class %SYS.ZENReportPDFMerge",
    "members": [
     { "header": "ClassMethod %ServeTransform(rpt As %ZEN.Report.reportPage, ByRef pdffiles As %String, pdffile As %String, logfile As %String, Output ArrayLogFiles As %String)" }
+   ]
+  },
+  "%SYS.ZENReportServer": {
+   "header": "Class %SYS.ZENReportServer",
+   "members": [
+    { "header": "ClassMethod MakeFileName(Dir As %String, FileName As %String) As %String" }
    ]
   },
   "%SYSTEM.AbstractWorkMgr": {
@@ -5081,11 +5088,18 @@
     { "header": "Method IsItemDefined(ByRef namespace As %String, kind As %Integer, name As %String, class As %String, input As %Boolean, summary As %Boolean, Output status As %Status) As %Boolean" }
    ]
   },
+  "%XML.Security.DataReference": {
+   "header": "Class %XML.Security.DataReference",
+   "members": [
+    { "header": "ClassMethod Create(data As %XML.Security.EncryptedData) As %XML.Security.DataReference" }
+   ]
+  },
   "%XML.Security.EncryptedData": {
    "header": "Class %XML.Security.EncryptedData",
    "members": [
     { "header": "ClassMethod Create(keyElement As %XML.Security.EncryptedKey = \"\", elementToEncrypt As %SOAP.Security.Element = \"\", referenceOption As %Integer = \"\") As This" },
-    { "header": "ClassMethod CreateFromEncryptedKey(encryptedKey As %XML.Security.EncryptedKey, elementToEncrypt As %SOAP.Security.Element) As This" }
+    { "header": "ClassMethod CreateFromEncryptedKey(encryptedKey As %XML.Security.EncryptedKey, elementToEncrypt As %SOAP.Security.Element) As This" },
+    { "header": "ClassMethod ValidateDocument(ByRef document As %XML.Document, encryptedKeys As %Collection.AbstractListOfObj(ELEMENTTYPE=\"%XML.Security.EncryptedKey\")) As %Boolean" }
    ]
   },
   "%XML.Security.EncryptedKey": {
@@ -5112,7 +5126,7 @@
   "%XML.Security.Reference": {
    "header": "Class %XML.Security.Reference",
    "members": [
-    { "header": "ClassMethod Create(id As %String, algorithm As %String = \"\", prefixList As %String = \"\")" }
+    { "header": "ClassMethod Create(id As %String, algorithm As %String = \"\", prefixList As %String = \"\") As %XML.Security.Reference" }
    ]
   },
   "%XML.Security.Signature": {
@@ -5269,6 +5283,12 @@
     { "header": "ClassMethod ReadStringInnards(s As %String, Output value As %String, ByRef sp As %Integer = 1) As %Status" }
    ]
   },
+  "%ZEN.Auxiliary.QueryInfo": {
+   "header": "Class %ZEN.Auxiliary.QueryInfo",
+   "members": [
+    { "header": "ClassMethod QuoteSQL(pVal As %String, pType As %String = \"\") As %String" }
+   ]
+  },
   "%ZEN.Auxiliary.abstractController": {
    "header": "Class %ZEN.Auxiliary.abstractController",
    "members": [
@@ -5306,6 +5326,12 @@
    "header": "Class %ZEN.Component.abstractPage",
    "members": [
     { "header": "Method %Link(link As %String, ByRef query As %String = \"\", addQ As %Boolean = 0) As %String" }
+   ]
+  },
+  "%ZEN.Component.composite": {
+   "header": "Class %ZEN.Component.composite",
+   "members": [
+    { "header": "Method getChildById(id) As %ZEN.Component.object" }
    ]
   },
   "%ZEN.Component.object": {
@@ -5503,6 +5529,18 @@
     { "header": "ClassMethod %Create(pState As %String) As This" },
     { "header": "ClassMethod OpenDocument(pWhere As %ZEN.Datatype.string, pDocumentID As %ZEN.Datatype.string, Output pStatus As %Status = \"\") As This" },
     { "header": "ClassMethod OpenEmbeddedDocument(pWhere As %ZEN.Datatype.string, pDocumentID As %ZEN.Datatype.string, pObjectID As %ZEN.Datatype.string, Output pStatus As %Status = \"\") As This" }
+   ]
+  },
+  "%ZHSLIB.KitManager": {
+   "header": "Class %ZHSLIB.KitManager",
+   "members": [
+    { "header": "ClassMethod HasAccessTo(Output pErrorMessage As %String, pClassname As %Dictionary.Classname, pArguments...) As %Any" }
+   ]
+  },
+  "%ZHSLIB.SessionEventUtil": {
+   "header": "Class %ZHSLIB.SessionEventUtil",
+   "members": [
+    { "header": "ClassMethod GetHomePageForNamespace(pNamespace As %String = \"\") As %String" }
    ]
   },
   "%iFind.Filer.Basic": {
@@ -6044,6 +6082,1121 @@
    "header": "Class DataMove.Defaults",
    "members": [
     { "header": "ClassMethod Open(ByRef Status As %Status) As This" }
+   ]
+  },
+  "Ens.Alarm": {
+   "header": "Class Ens.Alarm",
+   "members": [
+    { "header": "Method CheckAlarmTasks(Output pResponseHeader As Ens.MessageHeader, Output pTimeToNextEvent As %Integer, Output pResponseHandle As %Integer) As %Status" }
+   ]
+  },
+  "Ens.BPL.Node": {
+   "header": "Class Ens.BPL.Node",
+   "members": [
+    { "header": "Method NormalizeAttribute(pAttr) As %String" }
+   ]
+  },
+  "Ens.BPL.UI.Diagram": {
+   "header": "Class Ens.BPL.UI.Diagram",
+   "members": [
+    { "header": "ClassMethod ArrangeShapes(xp As %Integer, yp As %Integer, shape As Shape, ByRef depthArray, ByRef widthArray) As %Any" }
+   ]
+  },
+  "Ens.Config.DefaultSettings": {
+   "header": "Class Ens.Config.DefaultSettings",
+   "members": [
+    { "header": "ClassMethod %ClearStudioDocuments(ByRef pIDsToKeep As %String = \"\") As %Status" }
+   ]
+  },
+  "Ens.Config.Production": {
+   "header": "Class Ens.Config.Production",
+   "members": [
+    { "header": "ClassMethod LoadFromClass(pClassName As %String) As %Status" }
+   ]
+  },
+  "Ens.DTL.Compiler": {
+   "header": "Class Ens.DTL.Compiler",
+   "members": [
+    { "header": "ClassMethod pyDefinedVariables(text) As %Any" }
+   ]
+  },
+  "Ens.DTL.Node": {
+   "header": "Class Ens.DTL.Node",
+   "members": [
+    { "header": "Method NormalizeAttribute(pAttr) As %String" }
+   ]
+  },
+  "Ens.Deployment.Deploy": {
+   "header": "Class Ens.Deployment.Deploy",
+   "members": [
+    { "header": "ClassMethod LoadAndCompileCode(ByRef pDeployDetails As %String, pFilename As %String, pRollbackFilename As %String, Output pErrors, Output pLoadedList, ByRef pStandardOBJLoadList As %String, Output pSingleFailure As %String, Output pRequiresManualIntervention As %String = \"\", pAutoRevert As %Boolean = 1) As %Status" }
+   ]
+  },
+  "Ens.Director": {
+   "header": "Class Ens.Director",
+   "members": [
+    { "header": "ClassMethod GetProductionSummary(ByRef pInfo, pNamespace As %String = {$namespace}) As %Status" }
+   ]
+  },
+  "Ens.Host": {
+   "header": "Class Ens.Host",
+   "members": [
+    { "header": "Property Adapter As ..#ADAPTER" }
+   ],
+   "generics": { "ADAPTER": "Ens.Adapter" }
+  },
+  "Ens.Job": {
+   "header": "Class Ens.Job",
+   "members": [
+    { "header": "ClassMethod MakeQuiescent(pTimeout As %Numeric = 10, Output pIsQuiescent As %Boolean) As %Status" },
+    { "header": "ClassMethod OpenTelnetDevice(pEventName, Output pDevice, Output pPort) As %Any" }
+   ]
+  },
+  "Ens.Rule.Assist": {
+   "header": "Class Ens.Rule.Assist",
+   "members": [
+    { "header": "ClassMethod GetValidActions() As %List" },
+    { "header": "ClassMethod GenerateActionDefinitionSchemas() As %Any" },
+    { "header": "ClassMethod GetValidConditionActions() As %Any" }
+   ]
+  },
+  "Ens.Util.Documentation": {
+   "header": "Class Ens.Util.Documentation",
+   "members": [
+    { "header": "ClassMethod CreateRulesFile(InFile As %String, OutFile As %String) As %Status" },
+    { "header": "ClassMethod CreateTransformsFile(InFile As %String, OutFile As %String) As %Status" }
+   ]
+  },
+  "Ens.Util.Error": {
+   "header": "Class Ens.Util.Error",
+   "members": [
+    { "header": "ClassMethod EnsError(pClassName As %String, pMethodName As %String, pErrorCode As %String, pMessage1 As %String, pMessage2 As %String, pMessage3 As %String, pFramesToHide As %Integer = 0) As %Status" }
+   ]
+  },
+  "Ens.Util.MessageBodyMethods": {
+   "header": "Class Ens.Util.MessageBodyMethods",
+   "members": [
+    { "header": "ClassMethod OutputFormattedJSON(pJSONStreamOrAET) As %Status" }
+   ]
+  },
+  "Ens.Util.Schedule": {
+   "header": "Class Ens.Util.Schedule",
+   "members": [
+    { "header": "ClassMethod %ClearStudioDocuments(ByRef pIDsToKeep As %String = \"\") As %Status" }
+   ]
+  },
+  "Ens.Util.Time": {
+   "header": "Class Ens.Util.Time",
+   "members": [
+    { "header": "ClassMethod FixCentury(yy) As %String" },
+    { "header": "ClassMethod getCExpansion(args As %String, ByRef nLength) As %String" }
+   ]
+  },
+  "Ens.Util.Trace": {
+   "header": "Class Ens.Util.Trace",
+   "members": [
+    { "header": "ClassMethod DoTrace() As %Boolean" },
+    { "header": "ClassMethod trail(string, width) As %Any" }
+   ]
+  },
+  "EnsLib.DICOM.Adapter.TCP": {
+   "header": "Class EnsLib.DICOM.Adapter.TCP",
+   "members": [
+    { "header": "Method PDU2EYE(pType As %Integer) As %String" },
+    { "header": "Method ComposeAssociationContext(pAssociationType As %Integer, ByRef pDataToInsert As %String, Output pBytes As %String) As %Status" },
+    { "header": "Method DecomposeAASSOCIATEAC(pType As %Integer, ByRef pBytes As %String, ByRef pExtractedData As %String) As %Any" },
+    { "header": "Method DecomposeAASSOCIATERQ(pType As %Integer, ByRef pBytes As %String, ByRef pExtractedData As %String) As %Any" }
+   ]
+  },
+  "EnsLib.DICOM.Util.Encoding": {
+   "header": "Class EnsLib.DICOM.Util.Encoding",
+   "members": [
+    { "header": "ClassMethod ABORTREASON2EYE(pSource As %Integer, pReason As %Integer) As %Any" },
+    { "header": "ClassMethod REJECTREASON2EYE(pSource As %Integer, pReason As %Integer) As %Any" }
+   ]
+  },
+  "EnsLib.EDI.ASTM.Adapter.TCPAdapter": {
+   "header": "Class EnsLib.EDI.ASTM.Adapter.TCPAdapter",
+   "members": [
+    { "header": "Method getOutQueueName() As %String" }
+   ]
+  },
+  "EnsLib.EDI.MsgRouter.SegmentedRuleAssist": {
+   "header": "Class EnsLib.EDI.MsgRouter.SegmentedRuleAssist",
+   "members": [
+    { "header": "ClassMethod GetValidActions() As %List" },
+    { "header": "ClassMethod GetValidRuleSetActions() As %Any" }
+   ]
+  },
+  "EnsLib.EDI.SEF.Parser": {
+   "header": "Class EnsLib.EDI.SEF.Parser",
+   "members": [
+    { "header": "Method ParseCode(pParent As EnsLib.EDI.SEF.Node, Output pNode As EnsLib.EDI.SEF.Node) As %Status" },
+    { "header": "Method ParseCodes(pElementID, pParent, Output pCodes As EnsLib.EDI.SEF.Codes) As %Status" }
+   ]
+  },
+  "EnsLib.EDI.X12.Scanner": {
+   "header": "Class EnsLib.EDI.X12.Scanner",
+   "members": [
+    { "header": "ClassMethod IsValidChar(pChar As %String) As %String" }
+   ]
+  },
+  "EnsLib.EDI.XML.DOM": {
+   "header": "Class EnsLib.EDI.XML.DOM",
+   "members": [
+    { "header": "Method equalElement(pIgnoreNamespaces As %Boolean = 0, pElem1 As %String, pElem2 As %String, ByRef pNSContext As %String) As %Boolean" },
+    { "header": "Method findIndex(pDSubs As %String, pCSubs As %String, pElem As %String, pIndex As %String, pIsNode As %Boolean, ByRef pStatus As %Status, ByRef pCHit As %Boolean, ByRef pDHit As %Boolean, ByRef pNode As %String, ByRef prevCNode As %String, Existing As %Boolean, ByRef pElemIndex As %String, ByRef pElemName As %String, isTypeElement As %Boolean, pRightType As %String, ByRef nFound As %Integer, Output isElementOut As %Boolean, Output pOutputType, Output pCount, pIgnoreNamespaces As %Boolean = 0, Output pMatchedElemName As %String, ByRef pNamespaces, ByRef pNSContext As %String, Output kReturn, pUnSorted As %Boolean = 0, pReturnRemoved As %Boolean = 0, ByRef kFinal As %String) As %Any" },
+    { "header": "Method findLast(pDSubs As %String, pCSubs As %String, pElem As %String, ByRef pCHit As %Boolean, ByRef pDHit As %Boolean, ByRef pNode As %String, ByRef prevCNode As %String, Existing As %Boolean, ByRef pElemIndex As %String, ByRef pElemName As %String, isTypeElement As %Boolean, pRightType As %String, Output pOutputType, pIgnoreNamespaces As %Boolean, Output pMatchedElemName As %String, ByRef pNSContext As %String, pElementFunctionInsert As %Boolean = 0) As %Any" },
+    { "header": "Method domElemNode(pDSubs As %String, pElemId As %String, Output pStatus As %Status) As %Any" },
+    { "header": "Method calcInsertIndex(pDSubs As %String, pElemAndIndex As %String) As %String" },
+    { "header": "Method NormalizeElementNamespacePrefix(pElem As %String, ByRef pStatus, pIgnoreNamespaces) As %String" },
+    { "header": "Method SchematizeNamespace(pFlag As %Boolean, pContentSubs As %Integer, pElem As %String, pNamespaceDef As NamespaceHelper, ByRef pSchemaPrefixes, ByRef pNSContext As %String) As %String" },
+    { "header": "ClassMethod nodesToList(ByRef array) As %Any" },
+    { "header": "Method ContentOnlyContainsText(pContentSubs As %String) As %Any" },
+    { "header": "Method DomOnlyContainsText(pDSubs As %String) As %Any" },
+    { "header": "Method setAllElementToAttribute(pDOMPath As %String, Output pTargetDOMPath As %String, Output pAttrName As %String, Output tSC) As %Any" }
+   ]
+  },
+  "EnsLib.EDI.XML.Schema": {
+   "header": "Class EnsLib.EDI.XML.Schema",
+   "members": [
+    { "header": "ClassMethod enrichDocStructureMap(pMetaArrayName As %String) As %Status" }
+   ]
+  },
+  "EnsLib.EMail.OutboundAdapter": {
+   "header": "Class EnsLib.EMail.OutboundAdapter",
+   "members": [
+    { "header": "ClassMethod AddBccRecipients(pMailMessage As %Net.MailMessage, pRecipients As %String) As %Status" },
+    { "header": "ClassMethod AddCcRecipients(pMailMessage As %Net.MailMessage, pRecipients As %String) As %Status" },
+    { "header": "ClassMethod AddRecipients(pMailMessage As %Net.MailMessage, pRecipients As %String) As %Status" }
+   ]
+  },
+  "EnsLib.FTP.Common": {
+   "header": "Class EnsLib.FTP.Common",
+   "members": [
+    { "header": "Method BetterParseMLSD(line As %String, ByRef name, ByRef type, ByRef size, ByRef modified, ByRef unique, ByRef created) As %Boolean" }
+   ]
+  },
+  "EnsLib.File.OutboundAdapter": {
+   "header": "Class EnsLib.File.OutboundAdapter",
+   "members": [
+    { "header": "ClassMethod isTemp(pStream) As %Boolean" }
+   ]
+  },
+  "EnsLib.Gateway.Service": {
+   "header": "Class EnsLib.Gateway.Service",
+   "members": [
+    { "header": "Method StartThisGateway() As %Status" }
+   ]
+  },
+  "EnsLib.HL7.Util.Generator": {
+   "header": "Class EnsLib.HL7.Util.Generator",
+   "members": [
+    { "header": "ClassMethod tableType(pType = \"\") As %Any" },
+    { "header": "ClassMethod getSigTypes(ByRef tSignatures, tSig) As %Any" }
+   ]
+  },
+  "EnsLib.HTTP.InboundAdapter": {
+   "header": "Class EnsLib.HTTP.InboundAdapter",
+   "members": [
+    { "header": "Method readXMLEncoding(ByRef tTable As %String, Output tHeader As %String) As %Status" }
+   ]
+  },
+  "EnsLib.HTTP.Service": {
+   "header": "Class EnsLib.HTTP.Service",
+   "members": [
+    { "header": "ClassMethod OnErrorStream(pStatus As %Status, pInstance As EnsLib.HTTP.Service) As %Any" },
+    { "header": "ClassMethod restoreMultipart(ByRef pBody As %Stream.Object = \"\", Output pBoundary As %String = \"\") As %Status" }
+   ]
+  },
+  "EnsLib.ITK.Framework.Service.SOAPServiceBase": {
+   "header": "Class EnsLib.ITK.Framework.Service.SOAPServiceBase",
+   "members": [
+    { "header": "ClassMethod ValidateDistributionEnvelope(pAction As %String, pDE As EnsLib.EDI.XML.Document, pServiceDefinition As EnsLib.ITK.Setup.ServiceDefinition) As %Status" }
+   ]
+  },
+  "EnsLib.ITK.Setup.ConsumerServiceRegistry": {
+   "header": "Class EnsLib.ITK.Setup.ConsumerServiceRegistry",
+   "members": [
+    { "header": "ClassMethod GetEndpoint(pAppName As %String, pServiceName As %String, pLogical As %Boolean = 0) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.CodeBuilder.Code": {
+   "header": "Class EnsLib.InteropTools.CodeBuilder.Code",
+   "members": [
+    { "header": "ClassMethod Count(Item, tLines) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.Cloverleaf": {
+   "header": "Class EnsLib.InteropTools.HL7.Cloverleaf",
+   "members": [
+    { "header": "ClassMethod TableImportFile(pFilename = \"\", pTableGroupName = \"\") As %Status" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.Cloverleaf.Parser": {
+   "header": "Class EnsLib.InteropTools.HL7.Cloverleaf.Parser",
+   "members": [
+    { "header": "Method instrTerm(pNode) As %String" },
+    { "header": "Method EvaluateValue(pValue, pSourceTarget) As %Any" },
+    { "header": "Method Math(pNode As %XML.Node, ByRef pCode, pText = \"\") As %Status" },
+    { "header": "ClassMethod GetPREPOST(pText, pType) As %Any" },
+    { "header": "Method CodeWalkopcopy(pNode As %XML.Node, ByRef pCode, pNodeData = \"{OPCOPY}\") As %Boolean" },
+    { "header": "Method TCLGetVariableProcessing(pVariable) As %Any" },
+    { "header": "Method TCLtrim(ByRef pParsedTCL, pThisExpr, pTrimWhere = \"<>\") As %Any" },
+    { "header": "Method UnknownNode(pNode As %XML.Node, ByRef pCode) As %Status" },
+    { "header": "Method GetVariable(pType, pArray = \"\", pCode As EnsLib.InteropTools.CodeBuilder.CodeItem, pSeparator = \"\") As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.Common": {
+   "header": "Class EnsLib.InteropTools.HL7.Common",
+   "members": [
+    { "header": "ClassMethod DTLClassname(pFileName) As %String" },
+    { "header": "ClassMethod GetClassName(pFileName, pClassName) As %String" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.GateSSC.Parser": {
+   "header": "Class EnsLib.InteropTools.HL7.GateSSC.Parser",
+   "members": [
+    { "header": "Method IsSegment(%top, pVersion, Output pBase, pDocType = \"\", ByRef pCouldBe) As %Boolean" },
+    { "header": "Method nameAndData(pNode, Output pName, Output pData, pStrip34 = 0) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Analysis.DistributeReport": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Analysis.DistributeReport",
+   "members": [
+    { "header": "ClassMethod MessageFileName(pIndex As %Integer, pNumberWidth As %Integer) As %String" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Analysis.MessageReport": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Analysis.MessageReport",
+   "members": [
+    { "header": "ClassMethod Check(Result As %Boolean, ErrorMessage As %String) As %Boolean" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Analysis.MultiMessageReport": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Analysis.MultiMessageReport",
+   "members": [
+    { "header": "Method GetMismatchingMessagesCount() As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Common": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Common",
+   "members": [
+    { "header": "ClassMethod Throw(pMessage As %String) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Common.ComparePatterns": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Common.ComparePatterns",
+   "members": [
+    { "header": "ClassMethod IndexOf(ByRef pReprArray, pRepr As %String, pStartIndex As %Integer = 1) As %Boolean" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Derive.DeriveTaskFix": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Derive.DeriveTaskFix",
+   "members": [
+    { "header": "ClassMethod AnyRepeated(pIsPrefix As %Boolean, ByRef pItems, ByRef pFirstOrLast) As %Any" },
+    { "header": "ClassMethod StripFirst(pIndex As %Integer, pPrefix As %String, pNewTree As Tree) As %List" },
+    { "header": "ClassMethod StripLast(pIndex As %Integer, pSuffix As %String, pNewTree As Tree) As %List" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Ensemble.GlobalInfo": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Ensemble.GlobalInfo",
+   "members": [
+    { "header": "ClassMethod Dlm(pLocation As %String) As %String" },
+    { "header": "ClassMethod GetSubscript(pRest As %String, ByRef pPos) As %Any" },
+    { "header": "ClassMethod GetSubscriptRange(pRest As %String) As %Any" },
+    { "header": "ClassMethod LastName(pLocation As %String) As %String" },
+    { "header": "Method DatabaseForSubscriptedGlobal(pGlobalName As %String, pFirstKey As %String) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Ensemble.SegmentStructures": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Ensemble.SegmentStructures",
+   "members": [
+    { "header": "Method PrepareOne(pName As %String) As %String" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Generate.Browser": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Generate.Browser",
+   "members": [
+    { "header": "Method CDocType(pArgsString As %String) As %Any" },
+    { "header": "Method CError(pCommand As %String, pArgsString As %String) As %Any" },
+    { "header": "Method CHelp(pArgsString As %String) As %Any" },
+    { "header": "Method CListAll(pArgsString As %String) As %Any" },
+    { "header": "Method CListSegments(pArgsString As %String) As %Any" },
+    { "header": "Method CValidate(pArgsString As %String) As %Any" },
+    { "header": "Method CVersion(pArgsString As %String) As %Any" },
+    { "header": "Method CXecute(pArgsString As %String) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.NFA.Control.ControlBase": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.NFA.Control.ControlBase",
+   "members": [
+    { "header": "Method GetElement(pElementName As %String) As %Boolean" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.NFA.Control.ScanningControl": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.NFA.Control.ScanningControl",
+   "members": [
+    { "header": "ClassMethod SameLeafName(pElementName1 As %String, pElementName2 As %String) As %Boolean" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.NFA.Element.ElementBase": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.NFA.Element.ElementBase",
+   "members": [
+    { "header": "ClassMethod DigraphLabel(pName As %String, pProvenance As %List, pDecoration As %String) As %String" },
+    { "header": "Method GetContextVar() As %String" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.NFA.Extend.DiffCollection": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.NFA.Extend.DiffCollection",
+   "members": [
+    { "header": "Method EquivalentCases(pCase1 As %Collection.AbstractListOfObj, pCase2 As %ListOfObjects) As %Boolean" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.NFA.Outcome.OutcomeBase": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.NFA.Outcome.OutcomeBase",
+   "members": [
+    { "header": "ClassMethod ExpandResyncingFor(pResyncing As %Integer) As %String" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Node.Base": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Node.Base",
+   "members": [
+    { "header": "ClassMethod IsSingleton(pNode As Base, pRequiredNodeTypeCode As %String, pRequiredChildTypeCode As %String) As %Boolean" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Validation.HL7Configuration": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Validation.HL7Configuration",
+   "members": [
+    { "header": "ClassMethod MakeCodeTableNameFor(pCodeTable As %String, pCode As %String) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Validation.PathUpdater": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Validation.PathUpdater",
+   "members": [
+    { "header": "ClassMethod MessageSegmentTypes(pHL7Message As Message) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.FolderType": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.FolderType",
+   "members": [
+    { "header": "ClassMethod IsContainerFolderFromFolder(pPath As %String, Output pSubType As %String, Output pSubTypeArgs) As %Boolean" },
+    { "header": "ClassMethod IsMessagesFolderFromFolder(pPath As %String) As %Boolean" },
+    { "header": "ClassMethod LoadSchemaSource(pSchemaFolder As %String) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Input": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Input",
+   "members": [
+    { "header": "ClassMethod Version2MakeCustom(pCustomSchemaVersion As %String) As %Any" },
+    { "header": "ClassMethod Version2MakeCustomFromLibrary(pLibrarySchemaVersion As %String) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Menu.CategorySelectionMenu": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Menu.CategorySelectionMenu",
+   "members": [
+    { "header": "ClassMethod ExpandCategory(pCategory As %String, pMaybePlural As %Boolean) As %String" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Workflow2": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Workflow2",
+   "members": [
+    { "header": "Method RunSchemaDerivation() As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Workflow2History": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Workflow2History",
+   "members": [
+    { "header": "Method ListAll() As %Any" },
+    { "header": "Method ListRange() As %Any" },
+    { "header": "Method ListToday() As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Workflow2Validation": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Workflow2Validation",
+   "members": [
+    { "header": "ClassMethod GetVStats(ByRef pStats) As %Any" },
+    { "header": "ClassMethod IsCustomVersion(pSchemaVersion As %String) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Workflow2ValidationByCategory": {
+   "header": "Class EnsLib.InteropTools.HL7.MessageAnalyzer.Workspace.Workflow2ValidationByCategory",
+   "members": [
+    { "header": "Method PercentageOfTotalMessages(pOperationMessageCount As %Integer) As %Any" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.ProductionGenerator": {
+   "header": "Class EnsLib.InteropTools.HL7.ProductionGenerator",
+   "members": [
+    { "header": "Method ValidateConfiguration() As %Status" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.Setup": {
+   "header": "Class EnsLib.InteropTools.HL7.Setup",
+   "members": [
+    { "header": "Method imJavaExecutableValidate(pJavaPath) As %Status" }
+   ]
+  },
+  "EnsLib.InteropTools.HL7.eGate.Parser": {
+   "header": "Class EnsLib.InteropTools.HL7.eGate.Parser",
+   "members": [
+    { "header": "Method GetCompare(pCompare, tCond1, tCond2) As %String" }
+   ]
+  },
+  "EnsLib.MsgRouter.RuleAssist": {
+   "header": "Class EnsLib.MsgRouter.RuleAssist",
+   "members": [
+    { "header": "ClassMethod GenerateDelegateSchema() As %Any" },
+    { "header": "ClassMethod GenerateReturnSchema() As %DynamicObject" },
+    { "header": "ClassMethod GenerateSendSchema() As %Any" },
+    { "header": "ClassMethod GetValidActions() As %List" }
+   ]
+  },
+  "EnsLib.SAP.Operation": {
+   "header": "Class EnsLib.SAP.Operation",
+   "members": [
+    { "header": "Method EasyConnect(ByRef tJavaGateway, ByRef tJCoDestination, ByRef tJCoRespository) As %Status" }
+   ]
+  },
+  "EnsLib.SAP.Utils": {
+   "header": "Class EnsLib.SAP.Utils",
+   "members": [
+    { "header": "Method CreateProperty(Output pProperty As %Dictionary.PropertyDefinition, pName As %String, pType As %String, pLength As %Integer = 0, pDescription As %String, pSequenceNumber As %Integer) As %Status" }
+   ]
+  },
+  "EnsLib.SOAP.GenericService": {
+   "header": "Class EnsLib.SOAP.GenericService",
+   "members": [
+    { "header": "ClassMethod OnErrorStream(pStatus As %Status, pInstance As EnsLib.SOAP.Service, pSOAPVer As %String = \"1.0\") As %Any" }
+   ]
+  },
+  "EnsLib.SOAP.Service": {
+   "header": "Class EnsLib.SOAP.Service",
+   "members": [
+    { "header": "ClassMethod ReturnStatusFault(pCode As %String, pStatus As %Status) As %Any" }
+   ]
+  },
+  "EnsLib.SQL.Snapshot": {
+   "header": "Class EnsLib.SQL.Snapshot",
+   "members": [
+    { "header": "Method GetColumnSize(pColumn As %Integer = 0) As %Boolean" }
+   ]
+  },
+  "EnsLib.UDDI.wsdl.BusinessService": {
+   "header": "Class EnsLib.UDDI.wsdl.BusinessService",
+   "members": [
+    { "header": "ClassMethod GetURIType(uri As %String) As %String" }
+   ]
+  },
+  "EnsPortal.SVG.MessageTrace": {
+   "header": "Class EnsPortal.SVG.MessageTrace",
+   "members": [
+    { "header": "ClassMethod IncludeEvents() As %Any" }
+   ]
+  },
+  "EnsPortal.SVG.VisualTrace": {
+   "header": "Class EnsPortal.SVG.VisualTrace",
+   "members": [
+    { "header": "ClassMethod CalculateDimensions(n As %String = \"0\", rows As %String = \"0\", cols As %String = \"0\", startN As %String = \"\", ByRef noHeight) As %String" },
+    { "header": "ClassMethod IncludeEvents() As %Any" }
+   ]
+  },
+  "HS.AU.HI.RemoteOperations": {
+   "header": "Class HS.AU.HI.RemoteOperations",
+   "members": [
+    { "header": "Method UpdateEndpoint() As %Status" }
+   ]
+  },
+  "HS.AU.HI.SignatureContainerType": {
+   "header": "Class HS.AU.HI.SignatureContainerType",
+   "members": [
+    { "header": "ClassMethod Create(service As %SOAP.WebBase, credentials As %SYS.X509Credentials) As %Any" }
+   ]
+  },
+  "HS.AU.PCEHR.SignatureContainerType": {
+   "header": "Class HS.AU.PCEHR.SignatureContainerType",
+   "members": [
+    { "header": "ClassMethod Create(service As %SOAP.WebBase, credentials As %SYS.X509Credentials) As %Any" }
+   ]
+  },
+  "HS.AU.SMD.Operations": {
+   "header": "Class HS.AU.SMD.Operations",
+   "members": [
+    { "header": "Method SetHeader(pAction) As %Status" }
+   ]
+  },
+  "HS.AU.SMD.Services": {
+   "header": "Class HS.AU.SMD.Services",
+   "members": [
+    { "header": "Method GetInboundMessage(pRequest As HS.Message.XMLMessage, Output pInboundMessage As HS.AU.Message.SMD.InboundMessageRequest, Output pSOAPFault) As %Status" }
+   ]
+  },
+  "HS.BulkFHIR.Fetch.ODS.GroupUCR": {
+   "header": "Class HS.BulkFHIR.Fetch.ODS.GroupUCR",
+   "members": [
+    { "header": "ClassMethod GetGroupJson(pProgramId As %String, pProgramName As %String, pProgramDescription As %String, pMemberCount As %Integer, pMemberArray As %DynamicArray = \"\") As %Any" }
+   ]
+  },
+  "HS.BulkFHIR.Fetch.Util.RestClient": {
+   "header": "Class HS.BulkFHIR.Fetch.Util.RestClient",
+   "members": [
+    { "header": "ClassMethod IsStatusCodeNon200(pStatusCode As %String) As %Boolean" }
+   ]
+  },
+  "HS.BulkFHIR.Storage.Ingestion.Adapter": {
+   "header": "Class HS.BulkFHIR.Storage.Ingestion.Adapter",
+   "members": [
+    { "header": "ClassMethod GetStreamGbl(pSessionId As %Integer) As %String" }
+   ]
+  },
+  "HS.BulkFHIR.UI.REST.v2": {
+   "header": "Class HS.BulkFHIR.UI.REST.v2",
+   "members": [
+    { "header": "ClassMethod GetLocalFHIREndpoints() As %Any" }
+   ]
+  },
+  "HS.BulkFHIR.Util": {
+   "header": "Class HS.BulkFHIR.Util",
+   "members": [
+    { "header": "ClassMethod ListOfStringToString(pListOfStrings As %Collection.AbstractListOfDT, pOutputDelimiter) As %String" }
+   ]
+  },
+  "HS.Data.OIDMap": {
+   "header": "Class HS.Data.OIDMap",
+   "members": [
+    { "header": "ClassMethod GetOIDCacheNamespace() As %String" }
+   ]
+  },
+  "HS.Doc.Mapping.CDAToSDAMapper": {
+   "header": "Class HS.Doc.Mapping.CDAToSDAMapper",
+   "members": [
+    { "header": "ClassMethod ParseSourceString(pSource As %String = \"\", Output Sources As %ListOfDataTypes, displayDetail As %Boolean = 0) As %Status" }
+   ]
+  },
+  "HS.Doc.Mapping.HL7ToSDAMapper": {
+   "header": "Class HS.Doc.Mapping.HL7ToSDAMapper",
+   "members": [
+    { "header": "ClassMethod Run(OutputPath As %String = \"\", displayDetail As %Boolean = 0) As %Status" }
+   ]
+  },
+  "HS.Doc.Mapping.ImportCDAToSDAMapping": {
+   "header": "Class HS.Doc.Mapping.ImportCDAToSDAMapping",
+   "members": [
+    { "header": "ClassMethod TrimPath(Path As %String) As %String" }
+   ]
+  },
+  "HS.Doc.Mapping.ImportHL7ToSDAMapping": {
+   "header": "Class HS.Doc.Mapping.ImportHL7ToSDAMapping",
+   "members": [
+    { "header": "ClassMethod TrimPath(Path As %String) As %String" }
+   ]
+  },
+  "HS.Doc.Mapping.ImportSDAToCDAMapping": {
+   "header": "Class HS.Doc.Mapping.ImportSDAToCDAMapping",
+   "members": [
+    { "header": "ClassMethod TrimPath(Path As %String) As %String" }
+   ]
+  },
+  "HS.Doc.Utility": {
+   "header": "Class HS.Doc.Utility",
+   "members": [
+    { "header": "ClassMethod GetCDATypes(ByRef pCDATypes) As %Status" }
+   ]
+  },
+  "HS.Doc.Utility.Setup": {
+   "header": "Class HS.Doc.Utility.Setup",
+   "members": [
+    { "header": "ClassMethod BuildAllMappingXMLs(pOutputDirectory As %String = {##class(%File).NormalizeDirectory(\"Temp\", $System.Util.ManagerDirectory())}, displayDetail As %Boolean = 0, tTempFiles) As %Status" }
+   ]
+  },
+  "HS.FHIR.DTL.Util.API.LookupTable": {
+   "header": "Class HS.FHIR.DTL.Util.API.LookupTable",
+   "members": [
+    { "header": "ClassMethod UpdateLookupObjectItem(pDynObj As %DynamicObject, pSourceSchema As %String, pTargetSchema As %String, pSourceValueSet As %String, pTargetValueSet As %String, pSourceValue As %String, pTargetValue As %String = \"\", pDeleteItem As %Boolean = 0) As %Status" }
+   ]
+  },
+  "HS.FHIR.DTL.Util.API.Transform.FHIRToSDA3": {
+   "header": "Class HS.FHIR.DTL.Util.API.Transform.FHIRToSDA3",
+   "members": [
+    { "header": "Method AssignId() As %Any" },
+    { "header": "Method HandleMissingResource(reference As HS.FHIR.DTL.vR4.Model.Base.Reference) As %String" }
+   ]
+  },
+  "HS.FHIR.DTL.Util.API.Transform.SDA3ToFHIR": {
+   "header": "Class HS.FHIR.DTL.Util.API.Transform.SDA3ToFHIR",
+   "members": [
+    { "header": "Method CreateReference(resourceType As %String, id As %String) As %Any" },
+    { "header": "Method GetBaseURL() As %String" }
+   ]
+  },
+  "HS.FHIR.DTL.Util.HC.SDA3.FHIR.Process": {
+   "header": "Class HS.FHIR.DTL.Util.HC.SDA3.FHIR.Process",
+   "members": [
+    { "header": "Method CreateAndSendFHIRMessage(pFHIRObj As %DynamicObject, pSchema As HS.FHIRServer.Schema, pLocalHostAndPort As %String, pContentType As %String, pFormatter As %JSON.Formatter, pIndentChars As %String, pLineTerminator As %String, pSessionApplication As %String, pSessionId As %String) As %Status" },
+    { "header": "Method CreateAndSendInteropMessage(pFHIRObj As %DynamicObject, pSchema As HS.FHIRServer.Schema, pContentType As %String, pFormatter As %JSON.Formatter, pIndentChars As %String, pLineTerminator As %String, pSessionApplication As %String, pSessionId As %String) As %Status" }
+   ]
+  },
+  "HS.FHIR.REST.Operation": {
+   "header": "Class HS.FHIR.REST.Operation",
+   "members": [
+    { "header": "Method GetByURL(pRequest As HS.Message.FHIR.Request, pResponse As HS.Message.FHIR.Response) As %Status [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.Utils": {
+   "header": "Class HS.FHIR.Utils",
+   "members": [
+    { "header": "ClassMethod URLParamStringToArray(pParametersString As %String, Output pParametersArray As %ArrayOfDataTypes) As %Status [ Deprecated ]" },
+    { "header": "ClassMethod JSONDynamicObjectToXML2(pJSONObject As %DynamicObject, pLevel As %Integer, ByRef pXMLStream, pHSFHIRClassName As %String) As %Status [ Deprecated ]" },
+    { "header": "ClassMethod XMLDocumentToDynamicObject2(pNode As %XML.Node, pHSFHIRClassName As %String, ByRef pDynObj As %DynamicObject, ByRef pResourceSchemaRoot As %String) As %Status [ Deprecated ]" },
+    { "header": "ClassMethod XMLDocumentToJSON2(pNode As %XML.Node, ByRef pJSONStream, pHSFHIRClassName As %String, pLevel As %Integer) As %Status [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.Validation.ResourceValidator": {
+   "header": "Class HS.FHIR.Validation.ResourceValidator",
+   "members": [
+    { "header": "ClassMethod ValidateDynamicObj2(pJSONObject As %DynamicObject, pHSFHIRClassName As %String, pPath As %String, ByRef pErrors As HS.Types.FHIR.Errors) As %Status [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.vDSTU2.MHD.Consumer.Operations": {
+   "header": "Class HS.FHIR.vDSTU2.MHD.Consumer.Operations",
+   "members": [
+    { "header": "Method AddURLTokenParam(pParamName As %String = \"\", pParamValues As %Collection.AbstractListOfDT, ByRef pMHDRequest As HS.Message.FHIR.Request) As %Status [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.vDSTU2.PDQm.Consumer.Operations": {
+   "header": "Class HS.FHIR.vDSTU2.PDQm.Consumer.Operations",
+   "members": [
+    { "header": "ClassMethod StringListToString(pList As %Collection.AbstractListOfDT) As %String [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.vDSTU2.PDQm.Supplier.Process": {
+   "header": "Class HS.FHIR.vDSTU2.PDQm.Supplier.Process",
+   "members": [
+    { "header": "Method GetPageLinks(pRequest As HS.Message.FHIR.Request, pQueryId As %String, pTotal As %Integer, pPageSize As %Integer, pPage As %Integer, ByRef pFirst As %String, ByRef pPrev As %String, ByRef pNext As %String, ByRef pLast As %String) As %Status [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.vDSTU2.Repository.Storage": {
+   "header": "Class HS.FHIR.vDSTU2.Repository.Storage",
+   "members": [
+    { "header": "ClassMethod GetStorageIdByTypeAndId(pResourceType As %String, pResourceId As %String, pResourceVId As %String = \"\", pSessionIdentifier As %String = \"\", Output pStorageId As %String) As %Status [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.vSTU3.MHD.Consumer.Operations": {
+   "header": "Class HS.FHIR.vSTU3.MHD.Consumer.Operations",
+   "members": [
+    { "header": "Method AddURLTokenParam(pParamName As %String = \"\", pParamValues As %Collection.AbstractListOfDT, ByRef pMHDRequest As HS.Message.FHIR.Request) As %Status [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.vSTU3.MHD.DocumentSource.Operations": {
+   "header": "Class HS.FHIR.vSTU3.MHD.DocumentSource.Operations",
+   "members": [
+    { "header": "ClassMethod XDSbFolderToList(pXDSbFolder As HS.Message.IHE.XDSb.Folder, pList As HS.FHIR.vSTU3.Model.Resource.List, pPatientResourceUrl As %String, pAssociations As %Collection.AbstractListOfDT, ByRef pDocumentFullUrlsByEntryUUID As %String) As %Status [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.vSTU3.PDQm.Consumer.Operations": {
+   "header": "Class HS.FHIR.vSTU3.PDQm.Consumer.Operations",
+   "members": [
+    { "header": "ClassMethod StringListToString(pList As %Collection.AbstractListOfDT) As %String [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.vSTU3.PDQm.Supplier.Process": {
+   "header": "Class HS.FHIR.vSTU3.PDQm.Supplier.Process",
+   "members": [
+    { "header": "Method GetPageLinks(pRequest As HS.Message.FHIR.Request, pQueryId As %String, pTotal As %Integer, pPageSize As %Integer, pPage As %Integer, ByRef pFirst As %String, ByRef pPrev As %String, ByRef pNext As %String, ByRef pLast As %String) As %Status [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIR.vSTU3.Repository.Storage": {
+   "header": "Class HS.FHIR.vSTU3.Repository.Storage",
+   "members": [
+    { "header": "ClassMethod GetStorageIdByTypeAndId(pResourceType As %String, pResourceId As %String, pResourceVId As %String = \"\", pSessionIdentifier As %String = \"\", Output pStorageId As %String) As %Status [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIRMeta.API": {
+   "header": "Class HS.FHIRMeta.API",
+   "members": [
+    { "header": "ClassMethod getInstance(packageList As %List, globalRoot As %String = \"\") As %Any" }
+   ]
+  },
+  "HS.FHIRMeta.Impl.SearchInfo": {
+   "header": "Class HS.FHIRMeta.Impl.SearchInfo",
+   "members": [
+    { "header": "ClassMethod sortList(list As %List) As %Any" }
+   ]
+  },
+  "HS.FHIRMeta.Impl.TypeInfo": {
+   "header": "Class HS.FHIRMeta.Impl.TypeInfo",
+   "members": [
+    { "header": "Method IsA(pTypeName As %String, pAncestorName As %String) As %Boolean [ Deprecated ]" }
+   ]
+  },
+  "HS.FHIRMeta.Load.JSONUtil": {
+   "header": "Class HS.FHIRMeta.Load.JSONUtil",
+   "members": [
+    { "header": "ClassMethod JFindExtensions(object As %DynamicObject, url As %String, Output result) As %Any" }
+   ]
+  },
+  "HS.FHIRMeta.SearchParam": {
+   "header": "Class HS.FHIRMeta.SearchParam",
+   "members": [
+    { "header": "ClassMethod fromSerial(ser) As %Any" }
+   ]
+  },
+  "HS.FHIRMeta.Storage.Package": {
+   "header": "Class HS.FHIRMeta.Storage.Package",
+   "members": [
+    { "header": "ClassMethod buildResultList(resultSet As %SQL.StatementResult) As %Any" }
+   ]
+  },
+  "HS.FHIRPath.Node": {
+   "header": "Class HS.FHIRPath.Node",
+   "members": [
+    { "header": "Method asString() As %Any" }
+   ]
+  },
+  "HS.FHIRServer.DefaultBundleProcessor": {
+   "header": "Class HS.FHIRServer.DefaultBundleProcessor",
+   "members": [
+    { "header": "ClassMethod GetFormatForContentType(mimeType As %String) As %Any" }
+   ]
+  },
+  "HS.FHIRServer.Installer": {
+   "header": "Class HS.FHIRServer.Installer",
+   "members": [
+    { "header": "ClassMethod InstallCSPAppInterop(pAppKey As %String = \"\") As %Status" }
+   ]
+  },
+  "HS.FHIRServer.RestHandler": {
+   "header": "Class HS.FHIRServer.RestHandler",
+   "members": [
+    { "header": "ClassMethod IsRequestAuthenticated() As %Boolean" }
+   ]
+  },
+  "HS.FHIRServer.Service": {
+   "header": "Class HS.FHIRServer.Service",
+   "members": [
+    { "header": "ClassMethod GetRequestURLNoQuery(pRequest As HS.FHIRServer.API.Data.Request) As %String" },
+    { "header": "ClassMethod GetFullRequestURL(pRequest As HS.FHIRServer.API.Data.Request) As %Any" },
+    { "header": "ClassMethod findItemByProperty(array As %DynamicArray, propName As %String, propValue) As %Any" },
+    { "header": "ClassMethod mapToKey(part As %String, num As %Integer) As %Any" }
+   ]
+  },
+  "HS.FHIRServer.Storage.Json.Interactions": {
+   "header": "Class HS.FHIRServer.Storage.Json.Interactions",
+   "members": [
+    { "header": "Method getSearchColumnsForType(resourceType As %String) As %Any" }
+   ]
+  },
+  "HS.FHIRServer.Storage.Json.SearchColumn": {
+   "header": "Class HS.FHIRServer.Storage.Json.SearchColumn",
+   "members": [
+    { "header": "ClassMethod CreateColumn(pRepoMgr As HS.FHIRServer.API.RepoManager, pServiceKey As %String, pSearchParam As HS.FHIRMeta.SearchParam, pNotUsed, pStrategy As HS.FHIRServer.API.InteractionsStrategy, pInteractions As HS.FHIRServer.API.Interactions) As %Any" }
+   ]
+  },
+  "HS.FHIRServer.Storage.JsonAdvSQL.Search": {
+   "header": "Class HS.FHIRServer.Storage.JsonAdvSQL.Search",
+   "members": [
+    { "header": "Method FGWhere(ByRef pParams, pResourceType As %String, pAlias As %String) As %Any" }
+   ]
+  },
+  "HS.FHIRServer.Tools.CapabilityStatementBuilder": {
+   "header": "Class HS.FHIRServer.Tools.CapabilityStatementBuilder",
+   "members": [
+    { "header": "ClassMethod getValue(pType As %String, name As %String, pConfigObj As %DynamicObject) As %Any" }
+   ]
+  },
+  "HS.FHIRServer.Util.ResourceValidator": {
+   "header": "Class HS.FHIRServer.Util.ResourceValidator",
+   "members": [
+    { "header": "Method ValidateObject(pFHIRObject As %DynamicObject, pFHIRTypename As %String, pPath As %String, pIsInTransaction As %Boolean = 0, pCodeableRefInfo As %String) As %Status" }
+   ]
+  },
+  "HS.HC.FHIRSQL.Data.Specification": {
+   "header": "Class HS.HC.FHIRSQL.Data.Specification",
+   "members": [
+    { "header": "ClassMethod GetClassName(pID As %String) As %String" }
+   ]
+  },
+  "HS.HC.FHIRSQL.Server.FHIRRepository": {
+   "header": "Class HS.HC.FHIRSQL.Server.FHIRRepository",
+   "members": [
+    { "header": "ClassMethod GetResourceClass(pPath = \"\") As %Any" },
+    { "header": "ClassMethod GetResourceTable(pPath = \"\") As %Any" }
+   ]
+  },
+  "HS.HC.FHIRSQL.Utils.AnalysisTask": {
+   "header": "Class HS.HC.FHIRSQL.Utils.AnalysisTask",
+   "members": [
+    { "header": "ClassMethod AnalysisTaskName(pScanId) As %String" }
+   ]
+  },
+  "HS.HC.FHIRSQL.Utils.ResourceCommon": {
+   "header": "Class HS.HC.FHIRSQL.Utils.ResourceCommon",
+   "members": [
+    { "header": "ClassMethod GetFHIRData(pParentID, pGlobal = {$parameter($classname(),\"GLOBAL\")}) As %Any" }
+   ]
+  },
+  "HS.HC.IHE.XDSb.Registry.Operations": {
+   "header": "Class HS.HC.IHE.XDSb.Registry.Operations",
+   "members": [
+    { "header": "ClassMethod PaddedDate(pDate, pEval) As %String" }
+   ]
+  },
+  "HS.HC.IHE.XUA.Creator": {
+   "header": "Class HS.HC.IHE.XUA.Creator",
+   "members": [
+    { "header": "Method AddAuthorizationStatement(pAssertion, pData) As %Status" }
+   ]
+  },
+  "HS.HC.InstanceConfig.Resource.Namespace": {
+   "header": "Class HS.HC.InstanceConfig.Resource.Namespace",
+   "members": [
+    { "header": "ClassMethod GetLogicalQueryParam() As %Any" }
+   ]
+  },
+  "HS.HC.MFE.V1.impl": {
+   "header": "Class HS.HC.MFE.V1.impl",
+   "members": [
+    { "header": "ClassMethod CheckMFEEndpointsAccess(pClientEndpointNeeds As %Collection.AbstractListOfObj, pClientEndpointPrivileged As %DynamicArray) As %Boolean" }
+   ]
+  },
+  "HS.HC.MPI.Manager": {
+   "header": "Class HS.HC.MPI.Manager",
+   "members": [
+    { "header": "ClassMethod OnMRNDelete(pMRN As %String, pAA As %String, pMPIID As %String, pPatientId As %String) As %Status" }
+   ]
+  },
+  "HS.HC.SystemConfig.Utils": {
+   "header": "Class HS.HC.SystemConfig.Utils",
+   "members": [
+    { "header": "ClassMethod RelativeToDefault() As %Any" }
+   ]
+  },
+  "HS.HC.Test.TestCase": {
+   "header": "Class HS.HC.Test.TestCase",
+   "members": [
+    { "header": "ClassMethod CreateTestClass(pTest, pClass, Output pNewClassName, pIsWebService = 0) As %Status" }
+   ]
+  },
+  "HS.HC.UI.Home": {
+   "header": "Class HS.HC.UI.Home",
+   "members": [
+    { "header": "Method AddProductsMenu(args...) As %Status" }
+   ]
+  },
+  "HS.HC.Util.Installer.OAuth2": {
+   "header": "Class HS.HC.Util.Installer.OAuth2",
+   "members": [
+    { "header": "ClassMethod GetOAuthConClientName() As %String" },
+    { "header": "ClassMethod GetOAuthRSClientName() As %String" }
+   ]
+  },
+  "HS.HC.Util.Installer.Upgrade.FHIR1503": {
+   "header": "Class HS.HC.Util.Installer.Upgrade.FHIR1503",
+   "members": [
+    { "header": "ClassMethod SetItemSetting(pConfigItemObj As Ens.Config.Item, pSettingName As %String, pSettingValue As %String, pTarget As %String) As %Status" }
+   ]
+  },
+  "HS.HC.Util.Trace.Helper": {
+   "header": "Class HS.HC.Util.Trace.Helper",
+   "members": [
+    { "header": "ClassMethod BuildTraceRequest(pCurrentClass, pMethod, pArgList...) As %Any" }
+   ]
+  },
+  "HS.IHE.ATNA.Repository.Aggregation": {
+   "header": "Class HS.IHE.ATNA.Repository.Aggregation",
+   "members": [
+    { "header": "ClassMethod GetPrimFac(pUserName) As %Any" }
+   ]
+  },
+  "HS.IHE.ATNA.Repository.AggregationToAuditMessage": {
+   "header": "Class HS.IHE.ATNA.Repository.AggregationToAuditMessage",
+   "members": [
+    { "header": "Method Event() As %Any" },
+    { "header": "ClassMethod GetEventInfo(pAgEvent) As %Any" }
+   ]
+  },
+  "HS.IHE.ATNA.Repository.AggregationToDICOMAuditMessage": {
+   "header": "Class HS.IHE.ATNA.Repository.AggregationToDICOMAuditMessage",
+   "members": [
+    { "header": "ClassMethod GetEventInfo(pAgEvent) As %Any" }
+   ]
+  },
+  "HS.IHE.ATNA.Repository.Exclusion": {
+   "header": "Class HS.IHE.ATNA.Repository.Exclusion",
+   "members": [
+    { "header": "ClassMethod ValidateInputDate(pDate As %TimeStamp) As %Any" },
+    { "header": "ClassMethod GetExcludedUsersList() As %String" }
+   ]
+  },
+  "HS.IHE.ATNA.SecureApplication.Utils": {
+   "header": "Class HS.IHE.ATNA.SecureApplication.Utils",
+   "members": [
+    { "header": "ClassMethod MakeInput(Output pInput, pRequest, pResponse, pStatus, pCurrentOutput = \"\") As %Status" }
+   ]
+  },
+  "HS.IHE.PIX.Manager.DomainsOfInterest": {
+   "header": "Class HS.IHE.PIX.Manager.DomainsOfInterest",
+   "members": [
+    { "header": "ClassMethod RegisteredOnlyConsumers(pIdentifiers As %Collection.AbstractListOfDT, ByRef pRegisteredOnlyConsumers As %String) As %Status" }
+   ]
+  },
+  "HS.IHE.XCAI.InitiatingGateway.Process": {
+   "header": "Class HS.IHE.XCAI.InitiatingGateway.Process",
+   "members": [
+    { "header": "Method XMLMessage(pRequest As HS.Message.XMLMessage, Output pResponse As HS.Message.XMLMessage) As %Status" }
+   ]
+  },
+  "HS.IHE.XCAI.RespondingGateway.Process": {
+   "header": "Class HS.IHE.XCAI.RespondingGateway.Process",
+   "members": [
+    { "header": "Method XMLMessage(pRequest As HS.Message.XMLMessage, Output pResponse As HS.Message.XMLMessage) As %Status" }
+   ]
+  },
+  "HS.IHE.XDM.FileOutputOperation": {
+   "header": "Class HS.IHE.XDM.FileOutputOperation",
+   "members": [
+    { "header": "Method SetAdapterFilePath(pDirectory) As %Status" }
+   ]
+  },
+  "HS.InteropTools.HL7.Compare.ProductionExtract": {
+   "header": "Class HS.InteropTools.HL7.Compare.ProductionExtract",
+   "members": [
+    { "header": "ClassMethod GetOperationNameList(pSessionId As %Integer, pOperationMessageBodyId As %Integer) As %Any" },
+    { "header": "ClassMethod BuildComparisonRecords(pTemplate, pGroup2 = \"Target\", pWorkerJobs = \"\") As %Status" },
+    { "header": "ClassMethod FindServiceOperations() As %Any" },
+    { "header": "ClassMethod ValidateTemplate(pIsOutput As %Boolean, pTemplate) As %Any" }
+   ]
+  },
+  "HS.InteropTools.HL7.GenerateDTL.Build": {
+   "header": "Class HS.InteropTools.HL7.GenerateDTL.Build",
+   "members": [
+    { "header": "Method IsLookupDT(pDataTypeData As %String, pField As %String) As %Any" }
+   ]
+  },
+  "HS.JSON.AdaptorFHIR": {
+   "header": "Class HS.JSON.AdaptorFHIR",
+   "members": [
+    { "header": "ClassMethod %FromFHIRJSON2(pJSONObject As %DynamicObject, pHSFHIRObj As %RegisteredObject) As %Status" }
+   ]
+  },
+  "HS.REST.Model.ResourceProjection": {
+   "header": "Class HS.REST.Model.ResourceProjection",
+   "members": [
+    { "header": "ClassMethod CheckClassValidity(resourceName As %String, mediaType As %String, productType As %String) As %Status" }
+   ]
+  },
+  "HS.Registry.Document.Conversion": {
+   "header": "Class HS.Registry.Document.Conversion",
+   "members": [
+    { "header": "ClassMethod ConvertSlots(pNewField, pDocument, pDocumentID, pOriginalField = \"\") As %Status" },
+    { "header": "ClassMethod ConvertDocumentClassifications(pNewField, pScheme = \"\", pDocument, pDocumentID) As %Status" },
+    { "header": "ClassMethod ConvertRPExternalIdentifiers(pNewField, pScheme = \"\", pRP, pRPID) As %Status" },
+    { "header": "ClassMethod ConvertExternalIdentifiers(pNewField, pScheme = \"\", pDocument, pDocumentID) As %Status" },
+    { "header": "ClassMethod ConvertDocument(pDoc As HS.Registry.Document, pDocID) As %Status" },
+    { "header": "ClassMethod ConvertRPClassificationNodes(pRP, pRPID) As %Status" },
+    { "header": "ClassMethod ConvertRPClassifications(pNewField, pScheme, pRP, pRPID) As %Status" },
+    { "header": "ClassMethod ConvertRPSlots(pNewField, pOriginalField = \"\", pRP, pRPID) As %Status" }
+   ]
+  },
+  "HS.Registry.Person.UserFacility": {
+   "header": "Class HS.Registry.Person.UserFacility",
+   "members": [
+    { "header": "ClassMethod GetPrimFac(pUserName, Output pFacility) As %Status" }
+   ]
+  },
+  "HS.Test.IHE.Base": {
+   "header": "Class HS.Test.IHE.Base",
+   "members": [
+    { "header": "Method Setup() As %Status" },
+    { "header": "ClassMethod SetupCSPNSApp(pNS) As %Status" }
+   ]
+  },
+  "HS.Test.UI.Main": {
+   "header": "Class HS.Test.UI.Main",
+   "members": [
+    { "header": "Method AddServiceEntries(pDefaultEntry = \"\", pRegistryCombo = \"cmbServiceRegistry\") As %Status" },
+    { "header": "ClassMethod GetDefaultTracePort(pName, pPort) As %Any" },
+    { "header": "Method AddServiceRegistryEntries(tDefaultEntry = \"\", tDeviceFunction = \"\") As %Status" }
+   ]
+  },
+  "HS.UI.Doc.Util": {
+   "header": "Class HS.UI.Doc.Util",
+   "members": [
+    { "header": "ClassMethod getComment(tComment As %String, notes As %ListOfDataTypes) As %Status" }
+   ]
+  },
+  "HS.UI.Hub.Facilities": {
+   "header": "Class HS.UI.Hub.Facilities",
+   "members": [
+    { "header": "ClassMethod GetTimezoneFormattedName(timezone As %String) As %String" }
+   ]
+  },
+  "HS.Util.BaseHost": {
+   "header": "Class HS.Util.BaseHost",
+   "members": [
+    { "header": "Method InvokeCustom(pMethod, args...) As %Status" }
+   ]
+  },
+  "HS.Util.Installer.ConfigItem": {
+   "header": "Class HS.Util.Installer.ConfigItem",
+   "members": [
+    { "header": "ClassMethod ConfigItemCount() As %Any" }
+   ]
+  },
+  "HS.Util.Installer.Kit.IHE.DSUBBroker": {
+   "header": "Class HS.Util.Installer.Kit.IHE.DSUBBroker",
+   "members": [
+    { "header": "ClassMethod AddHub(pNamespaces As HS.Util.Installer.Kit.Namespaces = \"\", pNS = {$Namespace}) As %Status" }
+   ]
+  },
+  "HS.Util.Installer.Kit.IHE.DSUBConsumer": {
+   "header": "Class HS.Util.Installer.Kit.IHE.DSUBConsumer",
+   "members": [
+    { "header": "ClassMethod AddHub(pNamespaces As HS.Util.Installer.Kit.Namespaces = \"\", pNS = {$Namespace}) As %Status" }
+   ]
+  },
+  "HS.Util.Installer.Kit.IHE.PIXPDQ": {
+   "header": "Class HS.Util.Installer.Kit.IHE.PIXPDQ",
+   "members": [
+    { "header": "ClassMethod AddHub(pNamespaces As HS.Util.Installer.Kit.Namespaces = \"\", pNS = {$namespace}) As %Status" }
+   ]
+  },
+  "HS.Util.Installer.Kit.IHE.PIXPDQv2": {
+   "header": "Class HS.Util.Installer.Kit.IHE.PIXPDQv2",
+   "members": [
+    { "header": "ClassMethod AddHub(pNamespaces As HS.Util.Installer.Kit.Namespaces = \"\", pNS = {$namespace}) As %Status" }
+   ]
+  },
+  "HS.Util.Installer.Kit.IHE.XCA": {
+   "header": "Class HS.Util.Installer.Kit.IHE.XCA",
+   "members": [
+    { "header": "ClassMethod AddBus(pNamespaces As HS.Util.Installer.Kit.Namespaces = {$$$NULLOREF}, pNS = {$Namespace}) As %Status" }
+   ]
+  },
+  "HS.Util.Installer.Kit.IHE.XCAI": {
+   "header": "Class HS.Util.Installer.Kit.IHE.XCAI",
+   "members": [
+    { "header": "ClassMethod AddBus(pNamespaces As HS.Util.Installer.Kit.Namespaces = {$$$NULLOREF}, pNS = {$Namespace}) As %Status" }
+   ]
+  },
+  "HS.Util.Installer.Kit.PostInstall.Demo.SetupFacilities": {
+   "header": "Class HS.Util.Installer.Kit.PostInstall.Demo.SetupFacilities",
+   "members": [
+    { "header": "ClassMethod SetupExternalDirect() As %Status" }
+   ]
+  },
+  "HS.Util.Installer.Upgrade.Loader": {
+   "header": "Class HS.Util.Installer.Upgrade.Loader",
+   "members": [
+    { "header": "ClassMethod GetCurrentVersion(pProduct = \"HSLIB\", pIncludeMinor As %Boolean = 0, pConfigItem As HS.Util.Installer.ConfigItem = \"\") As %Any" },
+    { "header": "ClassMethod GetVersion(pProduct = \"HSLIB\", pNS = {$namespace}) As %Any" },
+    { "header": "ClassMethod GetModuleInternalName(pModuleName) As %Any" }
+   ]
+  },
+  "HSMOD.REST.Async.Utils": {
+   "header": "Class HSMOD.REST.Async.Utils",
+   "members": [
+    { "header": "ClassMethod GetLockGlobalFromMethodCall(pClassname As %Dictionary.Classname, pMethodName As %Dictionary.Identifier, pArgumentList As %List) As %String" }
    ]
   },
   "Inventory.ComponentSet": {
