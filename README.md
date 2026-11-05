@@ -58,7 +58,7 @@ brew trust intersystems-community/tap # if Homebrew 5.1.15 or later
 brew install intersystems-community/tap/ascot
 ```
 
-### Rust crate
+### Rust (crates.io)
 
 From [crates.io/crates/ascot](https://crates.io/crates/ascot):
 
@@ -71,10 +71,10 @@ rustup installers offer to set up; a build failing on `link.exe` or
 `kernel32.lib` is missing them, see rustup's
 [MSVC prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html).
 
-### JavaScript npm
+### TypeScript/JavaScript (npm)
 
-A library for Node 24+ and other JS consumers, typed for TypeScript; it does not
-provide an `ascot` executable. From
+A library for Node 24+ and other TS/JS consumers; it does not provide an `ascot`
+executable. From
 [npmjs.com/package/@intersystems-community/ascot](https://www.npmjs.com/package/@intersystems-community/ascot):
 
 ```sh
@@ -201,7 +201,7 @@ three settings everywhere; the `ascot-lsp` plugin asks for them when enabled.
 | --- | --- | --- | --- |
 | `analyze`, `lsp` | `--iris`, `--iris-namespace` | `--style FILE` | `-d VERB:TARGETS` |
 | [MCP](#ascot-as-an-mcp-server) `create_workspace`; [LSP](#ascot-as-an-lsp-server) `initializationOptions`, `workspace/didChangeConfiguration` | `iris`, `iris_namespace` | `style` | `diagnostics` |
-| [JavaScript](#javascript-npm) `createWorkspace` | `env` | `style` | |
+| [TS/JS](#typescriptjavascript-npm) `createWorkspace` | `env` | `style` | |
 
 ### Connecting to IRIS
 
