@@ -198,13 +198,13 @@ claude plugin install ascot-lsp@ascot-plugins
 Which IRIS to ask, the style to check and the diagnostics to report are the same
 three settings everywhere; the `ascot-lsp` plugin asks for them when enabled.
 
-| | [IRIS](#connecting-to-iris) | [Style](#style) | [Diagnostics](#diagnostics-filter) |
+| | [IRIS](#documents-outside-the-workspace) | [Style](#style) | [Diagnostics](#diagnostics-filter) |
 | --- | --- | --- | --- |
 | `analyze`, `lsp` | `--iris`, `--iris-namespace` | `--style FILE` | `-d VERB:TARGETS` |
 | [MCP](#ascot-as-an-mcp-server) `create_workspace`; [LSP](#ascot-as-an-lsp-server) `initializationOptions`, `workspace/didChangeConfiguration` | `iris`, `iris_namespace` | `style` | `diagnostics` |
 | [TS/JS](#typescriptjavascript-npm) `createWorkspace` | `env` | `style` | |
 
-### Connecting to IRIS
+### Documents outside the workspace
 
 Classes, routines and include files outside the workspace are resolved against
 IRIS; `iris` says which:
