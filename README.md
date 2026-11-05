@@ -181,23 +181,20 @@ VS Code (`.vscode/mcp.json`):
 ### `ascot` as an LSP server
 
 ```sh
-ascot lsp [--iris IRIS] [--iris-namespace NS] [--style FILE] [-d VERB:TARGETS] [--shared-fs]
+ascot lsp [--shared-fs]
 ```
 
-Starts the LSP server (stdio). The flags are defaults: the client's
-`initializationOptions` override them, and a `workspace/didChangeConfiguration`
-changes them while the server runs, both as an object with the same names,
-`{"iris": ..., "iris_namespace": ..., "style": ..., "diagnostics": ...}` (the
-MCP `create_workspace` takes the same). A new `iris` re-checks the open
-documents without re-reading them; a setting that can't be applied is reported
-with `window/showMessage` and left as it was.
+Starts the LSP server (stdio). The `--iris`, `--style` and `-d` flags below are
+its defaults: the client's `initializationOptions` override them, and a
+`workspace/didChangeConfiguration` changes them while the server runs, both as
+`{"iris": ..., "iris_namespace": ..., "style": ..., "diagnostics": ...}`. A new
+`iris` re-checks the open documents without re-reading them; a setting that
+can't be applied is reported with `window/showMessage` and left as it was.
 
-The server doesn't assume it shares a file system with the client. When it does,
-`--shared-fs` (or `"shared_fs": true` in `initializationOptions`) has it load
-the workspace roots from disk at startup, so cross-file references resolve
-before their files are opened, and lets `style` be a file's path; without it,
-the server knows the documents the client opens, and `style` is the object
-itself.
+The server doesn't assume it shares a file system with the client. `--shared-fs`
+(or `"shared_fs": true` in `initializationOptions`) says it does: the workspace
+roots are loaded from disk at startup, and `style` may be a file's path instead
+of the object.
 
 ### Claude Code plugins
 
