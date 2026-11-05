@@ -200,9 +200,10 @@ three settings everywhere; the `ascot-lsp` plugin asks for them when enabled.
 
 | | [IRIS](#documents-on-iris) | [Style](#style) | [Diagnostics](#diagnostics-filter) |
 | --- | --- | --- | --- |
-| `analyze`, `lsp` | `--iris`, `--iris-namespace` | `--style FILE` | `-d VERB:TARGETS` |
-| [MCP](#ascot-as-an-mcp-server) `create_workspace`; [LSP](#ascot-as-an-lsp-server) `initializationOptions`, `workspace/didChangeConfiguration` | `iris`, `iris_namespace` | `style` | `diagnostics` |
-| [TS/JS](#typescriptjavascript-npm) `createWorkspace` | `env` | `style` | |
+| [CLI](#ascot-as-a-cli-tool) (`analyze`) | `--iris`, `--iris-namespace` | `--style FILE` | `-d VERB:TARGETS` |
+| [MCP](#ascot-as-an-mcp-server) (`create_workspace`) | `iris`, `iris_namespace` | `style` | `diagnostics` |
+| [LSP](#ascot-as-an-lsp-server) (flags, then `initializationOptions` and `workspace/didChangeConfiguration`) | `--iris`, `--iris-namespace`, then `iris`, `iris_namespace` | `--style FILE`, then `style` | `-d VERB:TARGETS`, then `diagnostics` |
+| [TS/JS](#typescriptjavascript-npm) (`createWorkspace`) | `env` | `style` | |
 
 ### Documents on IRIS
 
