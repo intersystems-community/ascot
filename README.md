@@ -18,12 +18,12 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
   assigned-but-never-read locals, argument count/mode mismatches, missing
   `QUIT`/`RETURN`, inconsistent variable declarations across branches, and
   more.
-- **Hover**: type and signature info, or macro expansion (`.mac`/`.int` only) on
-  hover.
-- **Go to Definition**/**Find References**: for classes, class members, and
-  same-routine labels/gotos.
 - **Document/Workspace Symbols**: navigate classes and class members within a
   file or across the workspace.
+- **Go to Definition**/**Find References**: for classes, class members, and
+  same-routine labels/gotos.
+- **Hover**: type and signature info, or macro expansion (`.mac`/`.int` only) on
+  hover.
 - **Inlay Hints**: inferred types, argument names, and parameter default
   values shown inline.
 
@@ -85,7 +85,11 @@ npm install @intersystems-community/ascot
 
 ### `ascot` as a CLI tool
 
-`ascot help` lists the commands, and `ascot help <COMMAND>` (or
+```sh
+ascot help
+```
+
+Lists the commands, and `ascot help <COMMAND>` (or
 `ascot <COMMAND> --help`) shows one's options; the IRIS, style and diagnostics
 ones are the [settings](#settings) described under Advanced Usage.
 
@@ -96,28 +100,15 @@ ascot analyze <PATH>...
 Loads every `.cls`/`.mac`/`.int`/`.inc` file under each `PATH` into one
 workspace and prints diagnostics for all of them. Exits non-zero if any error
 or warning was found, or if a `PATH` doesn't exist.
-Both `analyze` commands also print JSON instead of text: `--format lsp` gives
-the LSP diagnostic records per file, as the language server publishes and the
-MCP `check` tool returns them, and `--format sarif` one SARIF 2.1.0 document
-for code scanning. The summary stays on stderr and the exit code is the same.
 
 ```sh
-ascot analyze-workspace <WORKSPACE-ROOT> <PATH>...
+ascot analyze-workspace <ROOT-PATH> <SUB-PATH>...
 ```
 
-Loads every `.cls`/`.mac`/`.int`/`.inc` file under `WORKSPACE-ROOT` into a single
-workspace, so cross-file references resolve, but only prints diagnostics for
-files under the given `PATH`(s). Useful for checking a subset of a large
-workspace without losing cross-file context. Each `PATH` must exist and be
-inside `WORKSPACE-ROOT`; a nonexistent one is an error, and one outside the
-root is skipped with a warning.
-
-```sh
-ascot parse FILE
-```
-
-Only parses `FILE` (no type checking) and prints the syntax error, if any.
-Exits non-zero on a syntax error.
+Like `analyze ROOT-PATH`, but only prints diagnostics for the files under the
+given `SUB-PATH`(s): a subset of the workspace, checked with its cross-file
+references intact. Each `SUB-PATH` must exist; one outside `ROOT-PATH` is
+skipped with a warning.
 
 ### `ascot` as an MCP server
 
@@ -130,15 +121,6 @@ calls on demand: `create_workspace` takes the [settings](#settings), `insert`
 each document's text (or, with a [shared file system](#shared-file-system), its
 `file://` uri). Any MCP client that can launch a stdio server works: the command
 is `ascot` (or its full path) and the single argument is `mcp`.
-
-The tools and their parameters are documented on
-[docs.rs](https://docs.rs/ascot/latest/ascot/mcp/struct.Server.html).
-To try them by hand, the [MCP Inspector](https://github.com/modelcontextprotocol/inspector)
-lists them and calls them from a browser:
-
-```sh
-npx @modelcontextprotocol/inspector ascot mcp
-```
 
 Claude Code:
 
@@ -173,6 +155,15 @@ VS Code (`.vscode/mcp.json`):
 }
 ```
 
+The tools and their parameters are documented on
+[docs.rs](https://docs.rs/ascot/latest/ascot/mcp/struct.Server.html).
+To try them by hand, the [MCP Inspector](https://github.com/modelcontextprotocol/inspector)
+lists them and calls them from a browser:
+
+```sh
+npx @modelcontextprotocol/inspector ascot mcp
+```
+
 ### `ascot` as an LSP server
 
 ```sh
@@ -205,13 +196,13 @@ claude plugin install ascot-lsp@ascot-plugins
 ### Settings
 
 Which IRIS to ask, the style to check and the diagnostics to report are the same
-three settings everywhere: `--iris`/`--iris-namespace`, `--style` and `-d` on
-`analyze`, `analyze-workspace` and `lsp`; one object,
-`{"iris": ..., "iris_namespace": ..., "style": ..., "diagnostics": ...}`, for
-the MCP `create_workspace` and the LSP `initializationOptions` and
-`workspace/didChangeConfiguration`, which the `ascot-lsp` plugin asks for when
-enabled. A wasm host passes `iris` through `env` and `style` to
-`createWorkspace`.
+three settings everywhere; the `ascot-lsp` plugin asks for them when enabled.
+
+| | [IRIS](#connecting-to-iris) | [Style](#style) | [Diagnostics](#diagnostics-filter) |
+| --- | --- | --- | --- |
+| `analyze`, `analyze-workspace`, `lsp` | `--iris`, `--iris-namespace` | `--style FILE` | `-d VERB:TARGETS` |
+| MCP `create_workspace`; LSP `initializationOptions`, `workspace/didChangeConfiguration` | `iris`, `iris_namespace` | `style` | `diagnostics` |
+| JavaScript `createWorkspace` | `env` | `style` | |
 
 ### Connecting to IRIS
 
@@ -277,6 +268,16 @@ ascot analyze -d hint:A4471 src/                 # report one as a hint
 
 The exit code follows what is reported, so a dropped or downgraded warning no
 longer fails a build.
+
+### Analysis Output
+
+`analyze` and `analyze-workspace` also print JSON instead of text:
+
+- `--format lsp` gives the LSP diagnostic records per file, as the language
+  server publishes and the MCP `check` tool returns them.
+- `--format sarif` gives one SARIF 2.1.0 document for code scanning.
+
+The summary stays on stderr and the exit code is the same.
 
 ### Shared file system
 
