@@ -23,7 +23,6 @@ use lsp_types::{
     ShowMessageParams, SymbolInformation, SymbolKind as LspSymbolKind, SymbolTag,
     TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkspaceSymbolParams,
 };
-use serde::Deserialize;
 
 use crate::{
     Workspace,
@@ -50,15 +49,6 @@ pub fn run(settings: Settings, shared_fs: bool) -> Fallible {
     Ok(())
 }
 
-// What `initializationOptions` may hold: the settings, and the file system decision, which is a
-// startup one.
-#[derive(Deserialize)]
-struct Options {
-    #[serde(flatten)]
-    settings: Settings,
-    shared_fs: Option<bool>,
-}
-
 struct Server {
     workspace: Workspace,
     // In force; a change to `iris` alone, or to `iris_namespace` alone, is completed from them.
@@ -66,7 +56,7 @@ struct Server {
     shared_fs: bool,
 }
 
-fn serve(connection: &Connection, mut settings: Settings, mut shared_fs: bool) -> Fallible {
+fn serve(connection: &Connection, mut settings: Settings, shared_fs: bool) -> Fallible {
     let capabilities = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         inlay_hint_provider: Some(OneOf::Left(true)),
@@ -80,11 +70,8 @@ fn serve(connection: &Connection, mut settings: Settings, mut shared_fs: bool) -
     let initialize_params = connection.initialize(serde_json::to_value(capabilities)?)?;
     let mut params: InitializeParams = serde_json::from_value(initialize_params)?;
     if let Some(options) = params.initialization_options.take() {
-        match serde_json::from_value::<Options>(options) {
-            Ok(options) => {
-                settings = settings.overlay(options.settings);
-                shared_fs = options.shared_fs.unwrap_or(shared_fs);
-            }
+        match serde_json::from_value(options) {
+            Ok(options) => settings = settings.overlay(options),
             Err(err) => show_error(connection, format!("initializationOptions: {err}"))?,
         }
     }

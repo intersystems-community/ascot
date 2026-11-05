@@ -287,7 +287,7 @@ from disk, a single file or a whole directory of `.cls`/`.mac`/`.int`/`.inc`
 files, and inserting a directory again re-reads it and drops the files no longer
 there. `lsp` then loads the workspace roots from disk at startup, so cross-file
 references resolve before their files are opened, and its `style` may be a
-file's path; `"shared_fs": true` in `initializationOptions` says the same.
+file's path.
 
 ## Contributing
 
