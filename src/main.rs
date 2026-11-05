@@ -186,16 +186,18 @@ struct IrisArgs {
     /// An IRIS Community release, an IRIS instance, a declaration file from `ascot declare`, or
     /// `none`
     ///
-    /// Resolves the classes, include files and routines outside the workspace. A release, as
-    /// 2026.2, is its pre-built declarations, downloaded into ~/.ascot the first time; `latest`
-    /// is the newest this ascot knows. An instance is given as
-    /// http://user:password@host:port[/prefix]. With `none`, nothing outside the workspace
+    /// Resolves the classes, include files and routines outside the workspace. A release, the
+    /// tag of its Community image such as 2026.2, or `latest` for the newest this ascot knows, is
+    /// its pre-built declarations, downloaded into ~/.ascot the first time: `<image>:<tag>` for
+    /// another image's, `<image>:<tag>:<namespace>` for a namespace other than %SYS, as
+    /// irishealth-community:<tag>:HSLIB for IRIS for Health's HS and Ens classes. An instance is
+    /// given as http://user:password@host:port[/prefix]. With `none`, nothing outside the workspace
     /// exists: every reference to such a class, routine or include is an error. [default: latest]
     #[arg(long, value_name = "RELEASE|URL|FILE|none")]
     iris: Option<String>,
-    /// The namespace to use [default: %SYS]
+    /// The namespace of the live instance to use [default: %SYS]
     ///
-    /// With a declaration file, it must match the file's.
+    /// A release names its own after its tag, and a declaration file carries its own.
     #[arg(long, value_name = "NS", requires = "iris")]
     iris_namespace: Option<String>,
 }

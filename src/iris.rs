@@ -10,18 +10,24 @@ pub(crate) use crate::declared::{DECLARATIONS_VERSION, Declarations, DeclaredCla
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
 /// `--iris` as given: `none` is no environment at all, the strictest check; a Community release
-/// (`2026.2`) is its pre-built declarations, fetched if need be; a URL is a live connection
-/// (checked up front); anything else, `file://` included, a declaration file's path. `namespace`
-/// defaults to `%SYS` for a URL; for a file it must match the one declared.
+/// (`2026.2`, `irishealth-community:2026.2:HSLIB`) is the pre-built declarations it names, fetched
+/// if need be; a URL is a live connection (checked up front); anything else, `file://` included,
+/// a declaration file's path. `namespace` is a live instance's, `%SYS` by default; a release
+/// names its own after its tag, and a file carries its own.
 pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisContext>>, String> {
     if iris == NONE {
         return Ok(None);
     }
-    if iris == LATEST {
-        return open(crate::prebuilt::DEFAULT_RELEASE, namespace);
+    if let Some(namespace) = namespace
+        && !iris.contains("://")
+    {
+        return Err(format!(
+            "--iris-namespace {namespace} is for a live instance; a release names its namespace after its tag, and a declaration file carries its own"
+        ));
     }
-    if crate::prebuilt::is_release(iris) {
-        return open_file(&crate::prebuilt::fetch(iris)?, namespace).map(Some);
+    if let Some(release) = crate::prebuilt::Release::parse(iris) {
+        let file = crate::prebuilt::fetch(&release)?;
+        return open_file(&file, Some(release.namespace())).map(Some);
     }
     if let Some(path) = iris.strip_prefix("file://") {
         return open_file(Path::new(path), namespace).map(Some);
@@ -206,9 +212,10 @@ mod tests {
         let path = declaration_file("open", &declarations);
         let arg = path.to_str().unwrap();
         assert!(open(arg, None).unwrap().is_some());
-        assert!(open(arg, Some("USER")).unwrap().is_some());
+        let err = open(arg, Some("USER")).err().unwrap();
+        assert!(err.contains("live instance"), "{err}");
         assert!(open(NONE, None).unwrap().is_none());
-        let err = open(arg, Some("%SYS")).err().unwrap();
+        let err = open_file(Path::new(arg), Some("%SYS")).err().unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(
             err.contains("declares namespace 'USER', not '%SYS'"),
