@@ -1059,7 +1059,13 @@ fn substitute_macro_body<'a>(
             }
             let mut rest = span.text.as_str();
             loop {
-                match rest.find(name.as_str()) {
+                // Only the whole name: the `%m` that starts `%maps` is not the parameter.
+                let whole = rest.match_indices(name.as_str()).find(|(idx, _)| {
+                    let (before, after) = (&rest[..*idx], &rest[idx + name.len()..]);
+                    !before.ends_with(|c: char| c.is_alphanumeric())
+                        && !after.starts_with(|c: char| c.is_alphanumeric())
+                });
+                match whole.map(|(idx, _)| idx) {
                     None => {
                         if !rest.is_empty() {
                             next.push(Span {
