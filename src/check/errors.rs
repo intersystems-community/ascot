@@ -824,10 +824,11 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "{err}"]
     InvalidSyntax { err: SyntaxErrorText },
+    /// A document that doesn't parse at the class or routine level, worded like `InvalidSyntax`.
     #[code = "A1727"]
     #[severity = Warning]
-    #[message = "Syntax error, looking for:\n{err}"]
-    DocumentSyntaxError { err: tygr::Error },
+    #[message = "{err}"]
+    DocumentSyntaxError { err: SyntaxErrorText },
     #[code = "A7548"]
     #[severity = Warning]
     #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
@@ -1120,7 +1121,8 @@ impl std::fmt::Display for SyntaxErrorText {
             .collect();
         friendly.dedup();
         if friendly.is_empty() {
-            write!(f, "Syntax error, looking for:\n{error}")
+            // The parser's own words: `parse error at ..., expected: ...`.
+            write!(f, "{error}")
         } else {
             write!(f, "{}", friendly.join("\n"))
         }
@@ -1204,7 +1206,12 @@ impl TypeError {
     }
 
     pub(crate) fn document_syntax_error(range: Range, err: tygr::Error) -> Self {
-        Self::at(TypeErrorKind::DocumentSyntaxError { err }, range)
+        Self::at(
+            TypeErrorKind::DocumentSyntaxError {
+                err: SyntaxErrorText(err),
+            },
+            range,
+        )
     }
 
     pub fn cannot_find_include(name: String, range: Range) -> Self {
