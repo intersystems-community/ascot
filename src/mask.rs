@@ -30,6 +30,10 @@ struct MaskedClass {
     /// override reports it missing, MPP5386) -- the inert `%OnNew` and `%Dispatch*` defaults.
     #[serde(default)]
     drop: Vec<String>,
+    /// Abstract in effect though IRIS doesn't say so: the root of a hierarchy nothing instantiates
+    /// (`%ZEN.Component.object`).
+    #[serde(default, rename = "abstract")]
+    abstract_: bool,
     /// What the class stands for as a type: `"Any"`, or another class's name.
     #[serde(rename = "type")]
     ty: Option<String>,
@@ -65,6 +69,11 @@ pub(crate) fn class_type(cls: &str) -> Option<Ty> {
         "Any" => Some(Ty::Any),
         t => Some(Ty::from(t)),
     }
+}
+
+/// Whether the mask calls `cls` abstract.
+pub(crate) fn is_abstract(cls: &str) -> bool {
+    (RAW.classes.get(cls)).is_some_and(|c| c.abstract_)
 }
 
 // Whether the mask says `cls` has no member `member`, whatever the dictionary lists.

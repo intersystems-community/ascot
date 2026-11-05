@@ -211,7 +211,7 @@ fn class_infos(
     params: &[&str],
 ) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = format!(
-        "SELECT Name, Description, Super, IncludeCode, ClassType, Deprecated, Inheritance, \
+        "SELECT Name, Description, Super, IncludeCode, ClassType, Deprecated, Abstract, Inheritance, \
          _Language, ProcedureBlock, PropertyClass FROM %Dictionary.CompiledClass WHERE Name {filter}"
     );
     let rows = conn.rows(&sql, params)?;
@@ -271,6 +271,7 @@ fn assemble(
                 uri: None,
                 class_type: parsed::<cos::ClassType, _>(str_field("ClassType")),
                 deprecated: row.get("Deprecated").is_some_and(is_truthy),
+                abstract_: row.get("Abstract").is_some_and(is_truthy),
                 inheritance: parsed::<cos::Inheritance, _>(str_field("Inheritance")),
                 language: parsed::<cos::MethodLanguage, _>(str_field("_Language")),
                 procedure_block: row.get("ProcedureBlock").map(is_truthy),

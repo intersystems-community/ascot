@@ -349,6 +349,9 @@ impl From<&ClassInfo> for DeclaredClass {
             many => format!(" Extends ({})", short(&many.join(", "))),
         };
         let mut keywords = vec![];
+        if info.abstract_ {
+            keywords.push("Abstract".to_string());
+        }
         if let Some(t) = info.class_type {
             keywords.push(format!("ClassType = {}", spelled(&t)));
         }
@@ -571,6 +574,7 @@ mod tests {
             uri: None,
             class_type: Some(ClassType::Persistent),
             deprecated: false,
+            abstract_: true,
             inheritance: Some(Inheritance::Right),
             language: None,
             procedure_block: Some(false),

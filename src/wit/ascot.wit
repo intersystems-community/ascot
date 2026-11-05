@@ -163,6 +163,8 @@ interface common {
         uri: option<string>,
         class-type: option<class-type>,
         deprecated: bool,
+        // `[ Abstract ]`: never instantiated itself, so a value of this type is some subclass's.
+        abstract: bool,
         inheritance: option<inheritance>,
         // The language of its methods unless they say otherwise; ObjectScript when absent.
         language: option<language>,
