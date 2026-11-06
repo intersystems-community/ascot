@@ -478,12 +478,12 @@ type_error_kinds! {
     },
     #[code = "A9360"]
     #[severity = Hint]
-    #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes {unparsed}, whose file in the workspace doesn't parse"]
+    #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes {unseen}"]
     UnconfirmedMember {
         cls: String,
         mem: String,
         on: SuperclassOf,
-        unparsed: String,
+        unseen: UnseenClass,
     },
     /// `##super()` binds to the superclass's version of the method at compile time; no
     /// `%DispatchMethod` and no same-named property stands in.
@@ -1037,6 +1037,27 @@ impl std::fmt::Display for DynamicGet {
 #[derive(Debug)]
 pub struct SuperclassOf(pub bool);
 
+/// A class in a hierarchy that can't be read: its workspace file doesn't parse, or nothing holds it.
+#[derive(Debug)]
+pub enum UnseenClass {
+    Unparsed(String),
+    Missing(String),
+}
+
+impl std::fmt::Display for UnseenClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unparsed(cls) => write!(f, "{cls}, whose file in the workspace doesn't parse"),
+            Self::Missing(cls) => {
+                write!(
+                    f,
+                    "{cls}, which is not in the workspace or on the IRIS instance"
+                )
+            }
+        }
+    }
+}
+
 impl std::fmt::Display for SuperclassOf {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(if self.0 { "a superclass of " } else { "" })
@@ -1227,7 +1248,7 @@ impl TypeError {
         cls: String,
         mem: String,
         superclass: bool,
-        unparsed: String,
+        unseen: UnseenClass,
         range: Range,
     ) -> Self {
         Self::at(
@@ -1235,7 +1256,7 @@ impl TypeError {
                 cls,
                 mem,
                 on: SuperclassOf(superclass),
-                unparsed,
+                unseen,
             },
             range,
         )
