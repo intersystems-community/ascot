@@ -3911,30 +3911,22 @@ pub struct UserCommand {
     pub args: Option<CommandArgument<VecSep<Range<Expr>, CommaSep<LGap>>>>,
 }
 
-// `Z` and letters, and not a command IRIS has.
-#[derive(GrammarFromStr)]
-pub struct UserCommandName(pub String);
+// `Z` and letters, and not a command IRIS has. Validated rather than converted: a word that
+// isn't one is `UnknownCommand`'s to report, and a conversion failure's own message would be
+// appended to that report.
+#[derive(Grammar)]
+#[grammar(validated)]
+pub struct UserCommandName(pub StringOf1<IsAlphabetic>);
 
-impl GrammarFrom for UserCommandName {
-    type Source = StringOf1<IsAlphabetic>;
-
-    fn print_to(&self, buf: &mut String) {
-        buf.push_str(&self.0);
-    }
-}
-
-impl FromStr for UserCommandName {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        let known = COMMAND_NAMES
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case(s));
-        if s.len() > 1 && s.starts_with(['Z', 'z']) && !known {
-            Ok(Self(s.to_string()))
-        } else {
-            Err(format!("'{s}' is not a user-defined command"))
-        }
+impl Validate for UserCommandName {
+    const REQUIREMENT: &'static str = "be Z and letters, and not a command IRIS has";
+    fn validate(&self) -> bool {
+        let s = self.0.print();
+        s.len() > 1
+            && s.starts_with(['Z', 'z'])
+            && !COMMAND_NAMES
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(&s))
     }
 }
 
