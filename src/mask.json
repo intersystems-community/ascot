@@ -4607,17 +4607,27 @@
     { "header": "ClassMethod SQLInitialize(numberjobs As %Integer, checkdefault As %Boolean = 0, type As %Integer = 2, ByRef extable As %String, Output groupID As %String) As %SYSTEM.WorkMgr" }
    ]
   },
+  "%Stream.DynamicBinary": {
+   "header": "Class %Stream.DynamicBinary",
+   "members": [
+    { "header": "Method ReadLineIntoStream(Output sc As %Status) As %Stream.Object" }
+   ]
+  },
   "%Stream.DynamicCharacter": {
    "header": "Class %Stream.DynamicCharacter",
    "members": [
     { "header": "Method Read(ByRef len As %Integer = {..#READLEN}, Output sc As %Status) As %String" },
+    { "header": "Method ReadLine(ByRef len As %Integer = {..#READLEN}, Output sc As %Status, Output eol As %Boolean) As %String" },
     { "header": "Method ReadLineIntoStream(Output sc As %Status) As %Stream.Object" }
    ]
   },
   "%Stream.FileBinary": {
    "header": "Class %Stream.FileBinary",
    "members": [
-    { "header": "Method %SaveData(Output sid As %String) As %Status" }
+    { "header": "Method %SaveData(Output sid As %String) As %Status" },
+    { "header": "Method Read(ByRef len As %Integer = 32000, Output sc As %Status) As %Binary" },
+    { "header": "Method ReadLine(ByRef len As %Integer = 32000, Output sc As %Status, Output eol As %Boolean, Output term As %String) As %Binary" },
+    { "header": "Method ReadLineIntoStream(Output sc As %Status) As %AbstractStream" }
    ]
   },
   "%Stream.GlobalCharacter": {
@@ -4676,8 +4686,9 @@
   "%Stream.TmpCharacter": {
    "header": "Class %Stream.TmpCharacter",
    "members": [
-    { "header": "Method Read(ByRef len As %Integer, Output sc As %Status) As %String" },
-    { "header": "Method ReadLine(ByRef len As %Integer = 32000, Output sc As %Status, Output eol As %Boolean) As %String" }
+    { "header": "Method Read(ByRef len As %Integer = 32000, Output sc As %Status) As %String" },
+    { "header": "Method ReadLine(ByRef len As %Integer = 32000, Output sc As %Status, Output eol As %Boolean) As %String" },
+    { "header": "Method ReadLineIntoStream(Output sc As %Status) As %Stream.Object" }
    ]
   },
   "%Studio.AbstractDocument": {
