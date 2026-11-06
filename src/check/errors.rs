@@ -475,8 +475,10 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot find class '{cls}' in the workspace or on the IRIS instance"]
     CannotFindClass { cls: String },
-    /// A class that isn't open in the workspace. With an IRIS connection, the instance doesn't
-    /// have it either; without one, there's nothing to check it against.
+    /// A property's type or an `Extends` names a class that is neither open in the workspace nor
+    /// in the environment. IRIS refuses to compile a class whose property type or superclass does
+    /// not exist: check the name, or open the class's file in the workspace. Without an
+    /// environment the same reference is `CannotFindClass`.
     #[code = "A1054"]
     #[severity = Hint]
     #[message = "Cannot {lookup}"]
@@ -507,7 +509,26 @@ type_error_kinds! {
         suggestions: Suggestions,
         dynamic: DynamicGet,
     },
-    /// The receiver's class is abstract, so the value is a subclass's, which may declare the member.
+    /// The receiver's class is abstract and declares no such member, so the value, always some
+    /// subclass's, may still have it; the nearest declared names follow as suggestions. IRIS
+    /// compiles the call and resolves the member when it runs. Declare the member on the abstract
+    /// class, or type the value as the subclass that has it.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.CannotFindMemberOnAbstract Extends %RegisteredObject [ Abstract ]
+    /// {
+    ///
+    /// Method Area() As %Numeric [ Abstract ]
+    /// {
+    /// }
+    ///
+    /// ClassMethod Describe(shape As Demo.CannotFindMemberOnAbstract) As %String
+    /// {
+    ///     Quit "Perimeter: " _ shape.Perimeter() //! A4718
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A4718"]
     #[severity = Warning]
     #[message = "Cannot find member '{mem}' in {cls}, an abstract class: the value is a subclass's, which may have it{suggestions}"]
@@ -516,6 +537,23 @@ type_error_kinds! {
         mem: String,
         suggestions: Suggestions,
     },
+    /// No class ascot can see declares the member, and the receiver's hierarchy includes a class
+    /// it can't see: a superclass neither in the workspace nor in the environment, or one whose
+    /// workspace file doesn't parse. That class may well declare the member, so it is taken as
+    /// present and untyped. Without an environment (`--iris none`), every system superclass is
+    /// such a class, and the `Extends` naming it is a `CannotFindClass` error.
+    ///
+    /// ```objectscript env=none
+    /// Class Demo.UnconfirmedMember Extends %Persistent //! A8061
+    /// {
+    ///
+    /// Method Store() As %Status
+    /// {
+    ///     Quit ..%Save() //! A9360
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A9360"]
     #[severity = Hint]
     #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes {unseen}"]
@@ -525,8 +563,22 @@ type_error_kinds! {
         on: SuperclassOf,
         unseen: UnseenClass,
     },
-    /// `##super()` binds to the superclass's version of the method at compile time; no
-    /// `%DispatchMethod` and no same-named property stands in.
+    /// `##super()` binds to the superclass's version of the enclosing method at compile time, and
+    /// no superclass declares a method of that name; no `%DispatchMethod` and no same-named
+    /// property stands in. IRIS refuses to compile the method. Remove the call, or spell the
+    /// method as the superclass does.
+    ///
+    /// ```objectscript
+    /// Class Demo.SuperWithoutMethod Extends %RegisteredObject
+    /// {
+    ///
+    /// Method Describe() As %String
+    /// {
+    ///     Quit "Demo: " _ ##super() //! A7461
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A7461"]
     #[severity = Error]
     #[message = "Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call"]
@@ -626,6 +678,23 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "SET $VECTOR needs its third argument, the type"]
     SetVectorWithoutType,
+    /// A class method runs without an instance, so `..Name` has no object to read a property from
+    /// and `..Method()` none to call an instance method on; IRIS refuses to compile either. Make
+    /// the method an instance method, or reach the member through an object (`obj.Name`).
+    ///
+    /// ```objectscript
+    /// Class Demo.AccessInstanceOnlyMemberFromClassContext Extends %RegisteredObject
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// ClassMethod Show()
+    /// {
+    ///     Write ..Name, ! //! A8914
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A8914"]
     #[severity = Error]
     #[message = "Cannot reference instance-only member '{name}' in a class method"]
@@ -642,10 +711,37 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot NEW the private variable '{name}' in a procedure block, where every local variable is already NEW'd on entry"]
     NewInProcedureBlock { name: String },
+    /// An entry in the class's `[ ... ]` keyword list is no class keyword as written: misspelled,
+    /// or a member's keyword in the wrong list. IRIS compiles the class without the entry, so what
+    /// it was meant to do silently doesn't happen; worse, its loader (2026.1) drops the header's
+    /// `Extends` clause with it, leaving the class with no superclass. Fix the spelling, or move
+    /// the keyword to the member it belongs to.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UnrecognizedClassKeyword Extends %RegisteredObject [ Abstact ] //! A6203
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// }
+    /// ```
     #[code = "A6203"]
     #[severity = Warning]
     #[message = "'{entry}' is not a class keyword as written, though IRIS compiles it"]
     UnrecognizedClassKeyword { entry: String },
+    /// A property type's `( ... )` parameters are the type class's own (`%String(MAXLEN = 50)`),
+    /// and this name is none of them: misspelled, with the nearest declared names as suggestions,
+    /// or a property keyword that belongs in the `[ ... ]` list. IRIS refuses to compile the class
+    /// (`Property parameter not declared`).
+    ///
+    /// ```objectscript
+    /// Class Demo.UnrecognizedTypeParam Extends %RegisteredObject
+    /// {
+    ///
+    /// Property Name As %String(MAXLN = 50); //! A2357
+    ///
+    /// }
+    /// ```
     #[code = "A2357"]
     #[severity = Error]
     #[message = "'{name}' is not a parameter of {class}{hint}"]
@@ -654,10 +750,34 @@ type_error_kinds! {
         class: String,
         hint: TypeParamHint,
     },
+    /// An entry in a member's `[ ... ]` keyword list is no keyword of that kind of member as
+    /// written (misspelled, or another kind's), or the class's `ClassType` names no class type.
+    /// IRIS refuses to compile the class.
+    ///
+    /// ```objectscript
+    /// Class Demo.UnrecognizedKeyword Extends %RegisteredObject
+    /// {
+    ///
+    /// Property Name As %String [ Requried ]; //! A9322
+    ///
+    /// }
+    /// ```
     #[code = "A9322"]
     #[severity = Error]
     #[message = "'{entry}' is not {kind} keyword IRIS accepts"]
     UnrecognizedKeyword { kind: &'static str, entry: String },
+    /// A class parameter's `As` clause takes a compiler meta-type (`STRING`, `INTEGER`,
+    /// `BOOLEAN`, `CLASSNAME`, ...), not a datatype class, and this name is none of them. IRIS
+    /// compiles the parameter all the same; pick the listed name that fits, or drop the clause.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UnrecognizedParameterType Extends %RegisteredObject
+    /// {
+    ///
+    /// Parameter GREETING As %String = "hello"; //! A8317
+    ///
+    /// }
+    /// ```
     #[code = "A8317"]
     #[severity = Warning]
     #[message = "'{meta_type}' is not a recognized parameter type; available: {available}"]
@@ -976,10 +1096,28 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "CONTINUE is not within a loop"]
     ContinueNotInLoop,
+    /// Two members of one kind share a name (two properties `Name`, say), so one would silently
+    /// replace the other. IRIS refuses to load the class (`Element name conflict`). The later
+    /// declaration is marked: rename it, or merge the two.
+    ///
+    /// ```objectscript
+    /// Class Demo.DuplicatedMemberName Extends %RegisteredObject
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// Property Name As %String(MAXLEN = 100); //! A3119
+    ///
+    /// }
+    /// ```
     #[code = "A3119"]
     #[severity = Error]
     #[message = "The member name {name} is defined twice"]
     DuplicatedMemberName { name: String },
+    /// Another open document declares a class of this name, so the workspace holds two definitions
+    /// and whichever claimed the name last answers for it wherever the class is looked up. IRIS
+    /// keeps one definition per class name, so loading both makes the second overwrite the first.
+    /// Keep one file, or rename one class.
     #[code = "A3717"]
     #[severity = Warning]
     #[message = "Class '{name}' is also declared in {other_uri}"]
