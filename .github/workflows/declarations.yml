@@ -42,4 +42,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view declarations >/dev/null 2>&1 || gh release create declarations --prerelease --latest=false --title "Pre-built IRIS declarations" --notes-file .github/declarations-release.md
+          gh release edit declarations --notes-file .github/declarations-release.md
           gh release upload declarations "$NAME.gz" "$NAME.gz.sha256" --clobber
