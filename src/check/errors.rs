@@ -1990,6 +1990,22 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "The procedure call requires the private variable '{name}' to be public"]
     RequirePrivateVariable { name: String },
+    /// A construct ascot doesn't model: an argumentless `Do` and its dotted block, a stand-alone
+    /// `Else` or `ElseIf`, a `Goto` without an argument or with several, a `Break` with an
+    /// argument, a `Kill` of a macro, a `#Dim` type it can't read, the legacy COM binding
+    /// `_obj!sub` and `##quoteExp(...)`. IRIS compiles them; ascot skips the statement and goes on
+    /// after it, so what it does is unseen. The modern form (an `If` with a block, a `Do` of a
+    /// label) is checked.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.Unimplemented
+    /// Main
+    ///     Set count = 0
+    ///     Do //! A4043
+    ///     . Set count = count + 1
+    ///     Write count, !
+    ///     Quit
+    /// ```
     #[code = "A4043"]
     #[severity = Information]
     #[message = "Type checking not implemented for '{what}'"]
@@ -2089,14 +2105,30 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Class '{name}' is also declared in {other_uri}"]
     DuplicateClassName { name: String, other_uri: String },
-    /// Code that doesn't parse. Where the grammar knows what went wrong, such as an unknown
-    /// command or a function given the wrong arguments, the message says so; otherwise it lists
-    /// what the parser was looking for.
+    /// A method body, or an argument default in `{braces}`, that doesn't parse; the rest of the
+    /// body goes unchecked. Where the grammar knows what went wrong, such as an unknown command or
+    /// a function given the wrong arguments, the message says so; otherwise it lists what the
+    /// parser was looking for. IRIS refuses to compile the class.
+    ///
+    /// ```objectscript
+    /// Class Demo.InvalidSyntax
+    /// {
+    ///
+    /// ClassMethod Greet(name As %String)
+    /// {
+    ///     Wrte "Hello, ", name, ! //! A8073
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A8073"]
     #[severity = Error]
     #[message = "{err}"]
     InvalidSyntax { err: SyntaxErrorText },
-    /// A document that doesn't parse at the class or routine level, worded like `InvalidSyntax`.
+    /// A document that doesn't parse at the class or routine level, worded like `InvalidSyntax`:
+    /// a class header or member declaration, or a line of a routine or include file, where a
+    /// method body's error is `InvalidSyntax`. Nothing else in the document is checked. IRIS
+    /// refuses to compile such a document as well.
     #[code = "A1727"]
     #[severity = Warning]
     #[message = "{err}"]
@@ -2119,6 +2151,31 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
     MissingQuit,
+    /// A form IRIS refuses where it stands, named with IRIS's own error: an error trap set inside
+    /// a `Try` block, a `*` or routine-qualified `$ZTRAP` value in a procedure block, an offset in
+    /// a trap label, a `New` of a special variable other than `$ESTACK`, `$ETRAP`, `$NAMESPACE`
+    /// and `$ROLES`. `ZQUIT` in a procedure block with private variables is the one IRIS compiles,
+    /// to raise `<COMMAND>` when it runs. In the example the `Catch` already handles the error, so
+    /// the trap goes.
+    ///
+    /// ```objectscript
+    /// Class Demo.NotAllowedIn
+    /// {
+    ///
+    /// ClassMethod Parse(text As %String) As %Integer
+    /// {
+    ///     Try {
+    ///         Set $ZTrap = "Fail" //! A4304
+    ///         Return +text
+    ///     } Catch ex {
+    ///         Return -1
+    ///     }
+    /// Fail
+    ///     Return 0
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A4304"]
     #[severity = Error]
     #[message = "{what} is not allowed in {context} (IRIS: {iris})"]
@@ -2127,22 +2184,107 @@ type_error_kinds! {
         context: &'static str,
         iris: &'static str,
     },
+    /// `ZQUIT` takes an integer of 1 or more; a literal below 1, such as `0`, a negative or a
+    /// non-number, acts as a bare `ZQUIT` and clears the whole stack, and a fraction is truncated,
+    /// so `1.5` is `1`. IRIS compiles it. Write the integer meant, or a bare `ZQUIT` if clearing
+    /// the stack is.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.ZQuitArgument
+    /// Main
+    ///     Set $ZTrap = "Fail"
+    ///     Do Work
+    ///     Write "done", !
+    ///     Quit
+    /// Work
+    ///     Set value = ^Demo.ZQuitArgument("missing")
+    ///     Write value, !
+    ///     Quit
+    /// Fail
+    ///     Write "failed: ", $ZError, !
+    ///     ZQuit 0 //! A6613
+    ///     Quit
+    /// ```
     #[code = "A6613"]
     #[severity = Warning]
     #[message = "ZQUIT wants an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack"]
     ZQuitArgument { value: String },
+    /// An error raised on purpose (`ZTrap`, `Throw` outside a `Try`, a non-empty `$ECODE`) inside
+    /// the handler the trap still names, or a `$ETRAP` command that raises one. IRIS compiles it,
+    /// and the error enters the same handler again, and so on without end. Set the trap to `""`
+    /// first, and the error goes up to the caller.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.TrapReenters
+    /// Main
+    ///     Set $ZTrap = "Fail"
+    ///     Set rate = ^Demo.TrapReenters("rate")
+    ///     Write rate, !
+    ///     Quit
+    /// Fail
+    ///     Write "no rate: ", $ZError, !
+    ///     ZTrap "RATE" //! A4344
+    /// ```
     #[code = "A4344"]
     #[severity = Warning]
     #[message = "An error here re-enters the handler {var} still names; set {var} to \"\" first"]
     TrapReenters { var: &'static str },
+    /// Error handling ascot doesn't read: a `$ETRAP` command beyond a plain `Goto Label`, or a
+    /// `$ZTRAP`, `$ETRAP`, `$ECODE` or `ZQUIT` value that isn't a literal. The line is taken on
+    /// trust, so what happens when an error comes goes unchecked; IRIS compiles the `$ETRAP` code
+    /// only when it runs. A `Try`/`Catch` or a literal `$ZTRAP` label is checked in full.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.NotChecked
+    /// Main
+    ///     Set $ETrap = "Do Report Quit" //! A3913
+    ///     Set rate = ^Demo.NotChecked("rate")
+    ///     Write rate, !
+    ///     Quit
+    /// Report
+    ///     Write "no rate: ", $ZError, !
+    ///     Quit
+    /// ```
     #[code = "A3913"]
     #[severity = Hint]
     #[message = "{what} is not checked"]
     NotChecked { what: &'static str },
+    /// `ZQUIT` in a procedure block without private variables, where IRIS lets it unwind; the same
+    /// block with any, an argument or a local, fails with `<COMMAND>` when it runs, so a variable
+    /// added later changes its error handling. Keep `ZQUIT` to code outside procedure blocks.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.ZQuitWithoutPrivates
+    /// {
+    ///
+    /// ClassMethod Unwind()
+    /// {
+    ///     Write "unwinding", !
+    ///     ZQuit 1 //! A5780
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A5780"]
     #[severity = Hint]
     #[message = "ZQUIT unwinds here only because this procedure block has no private variables; one with any fails with <COMMAND>, so its error handling may not be what you expect"]
     ZQuitWithoutPrivates,
+    /// A `$ETRAP` whose code is a single `Goto Label` is the handler `Set $ZTRAP = "Label"` arms,
+    /// and is checked as that handler; the two differ in scope, as the message says: `$ZTRAP` is
+    /// this frame's, `$ETRAP` is inherited by the frames it calls. IRIS compiles and runs either;
+    /// `$ZTRAP` says what is meant when this frame alone is.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.ETrapGoto
+    /// Main
+    ///     Set $ETrap = "Goto Fail" //! A1765
+    ///     Set rate = ^Demo.ETrapGoto("rate")
+    ///     Write rate, !
+    ///     Quit
+    /// Fail
+    ///     Write "no rate: ", $ZError, !
+    ///     Quit
+    /// ```
     #[code = "A1765"]
     #[severity = Hint]
     #[message = "A $ETRAP that only jumps to a label is what `Set $ZTrap = \"{label}\"` does; $ZTRAP is scoped to this frame, where $ETRAP is inherited by callees"]
