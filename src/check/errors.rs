@@ -682,6 +682,28 @@ type_error_kinds! {
     #[severity = Hint]
     #[message = "'{name}' is read before it is assigned; `ByRef` fits better than `Output`"]
     OutputReadFirst { name: String },
+    /// Two branches that join here each `#Dim` the variable, as different types, so it has no one
+    /// declared type past the join. IRIS compiles and runs the code regardless: a `#Dim` type binds
+    /// nothing at run time. Declare the variable once, before the branches, with a type both fit.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.InconsistentDeclaration
+    /// {
+    ///
+    /// ClassMethod Describe(asNumber As %Boolean) As %String
+    /// {
+    ///     If asNumber { //! A8892
+    ///         #Dim value As %Integer
+    ///         Set value = 42
+    ///     } Else {
+    ///         #Dim value As %String
+    ///         Set value = "forty-two"
+    ///     }
+    ///     Quit value
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A8892"]
     #[severity = Error]
     #[message = "Variable '{name}' is {ty1} in one branch but {ty2} in another"]
@@ -734,6 +756,23 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Unreachable: every path before this statement has quit, returned or thrown"]
     Unreachable,
+    /// Every value the condition can hold decides it the same way, so one of its branches never
+    /// runs. IRIS compiles and runs the code as written. A loop's own condition is exempt, since
+    /// `While 1 { ... Quit }` is an idiom; for an `If`, remove the test or let the value vary.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.ConditionAlways
+    /// {
+    ///
+    /// ClassMethod Save() As %String
+    /// {
+    ///     Set verbose = 1
+    ///     If verbose Write "saving", ! //! A8456
+    ///     Quit "saved"
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A8456"]
     #[severity = Warning]
     #[message = "This condition is always {value}"]
@@ -925,6 +964,23 @@ type_error_kinds! {
         wanted: Mode,
         actual: Mode,
     },
+    /// The variable has a value on some of the paths that reach this use and none on the others:
+    /// an assignment under a condition, or a `Kill` on one branch. IRIS compiles the code and raises
+    /// `<UNDEFINED>` when it runs along a path without the value. Assign it on every path, or read
+    /// it through `$Get`.
+    ///
+    /// ```objectscript raises=<UNDEFINED> do ##class(Demo.MaybeUndefined).Label(1)
+    /// Class Demo.MaybeUndefined
+    /// {
+    ///
+    /// ClassMethod Label(count As %Integer) As %String
+    /// {
+    ///     If count > 1 Set suffix = "s"
+    ///     Quit "item" _ suffix //! A6826
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A6826"]
     #[severity = Warning]
     #[message = "This '{ty}' value may be undefined{expr}"]
@@ -949,10 +1005,40 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "This value is undefined{expr}"]
     Undefined { expr: Detail },
+    /// `..Member` or `$this` in a routine, which has no class to resolve the member against, so the
+    /// value is taken as `Any`. IRIS compiles it and binds `$this` when it runs, to the object of a
+    /// method that called the routine, if one did; with no current object, `..Member` raises
+    /// `<NO CURRENT OBJECT>`. Pass the object in as an argument instead.
+    ///
+    /// ```objectscript raises=<NO CURRENT OBJECT> do Main^Demo.NotInClass
+    /// ROUTINE Demo.NotInClass
+    /// Main
+    ///     Write ..Name, ! //! A1368
+    ///     Quit
+    /// ```
     #[code = "A1368"]
     #[severity = Warning]
     #[message = "Not in a class context; this relies on `$this` being set when it runs"]
     NotInClass,
+    /// The callee, a procedure, names the variable in its public list, but here it is private, as
+    /// every local of a method or `Label() { }` block is, so the callee reaches the public variable
+    /// of that name instead. IRIS compiles the call and runs it against that other variable,
+    /// undefined unless something outside the block set it (`<UNDEFINED>`). Name the variable in
+    /// this block's own public list, or pass it as an argument.
+    ///
+    /// ```objectscript raises=<UNDEFINED> do Main^Demo.RequirePrivateVariable
+    /// ROUTINE Demo.RequirePrivateVariable
+    /// Main() Public {
+    ///     Set total = 0
+    ///     Do Add(5) //! A4025
+    ///     Write total, !
+    ///     Quit
+    /// }
+    /// Add(n) [total] {
+    ///     Set total = total + n
+    ///     Quit
+    /// }
+    /// ```
     #[code = "A4025"]
     #[severity = Error]
     #[message = "The procedure call requires the private variable '{name}' to be public"]
@@ -972,6 +1058,22 @@ type_error_kinds! {
         name: String,
         suggestions: Suggestions,
     },
+    /// `Continue` starts the next iteration of the `For`, `While` or `Do ... While` loop around it,
+    /// and none is around this one: an `If` or a `Try` block alone is no loop. IRIS refuses to
+    /// compile the code (`CONTINUE is not within a loop`); `Quit` or `Return` leaves the method.
+    ///
+    /// ```objectscript
+    /// Class Demo.ContinueNotInLoop
+    /// {
+    ///
+    /// ClassMethod Keep(item As %String) As %Boolean
+    /// {
+    ///     If item = "" Continue //! A5789
+    ///     Quit 1
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A5789"]
     #[severity = Error]
     #[message = "CONTINUE is not within a loop"]
@@ -996,6 +1098,20 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "{err}"]
     DocumentSyntaxError { err: SyntaxErrorText },
+    /// The body of a label, or a routine's main body, runs off its end without a `Quit` or
+    /// `Return`, and no label follows for it to fall into: it is the last, or a procedure block
+    /// comes next. IRIS compiles it and quits there implicitly, so the code runs; an explicit `Quit`
+    /// says the body ends on purpose.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.MissingQuit
+    /// Main
+    ///     Do Report
+    ///     Write "done", !
+    ///     Quit
+    /// Report
+    ///     Write "reporting", ! //! A7548
+    /// ```
     #[code = "A7548"]
     #[severity = Warning]
     #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
