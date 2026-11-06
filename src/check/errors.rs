@@ -548,36 +548,140 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>); `{label}()` would make it a function"]
     LabelNotAFunction { label: String },
+    /// `Do Label`, `$$Label()`, `Goto Label` or `Set $ZTRAP = "Label"` names a label the routine
+    /// or body doesn't declare, or `Label^Routine` names one that routine lacks. IRIS refuses to
+    /// compile a reference to a label the routine itself lacks, and raises `<NOLINE>` when a call
+    /// into another routine reaches one it lacks; spell the label as it is declared.
+    ///
+    /// ```objectscript
+    /// ROUTINE Demo.MissingLabel
+    /// Main
+    ///     Do Reprot //! A6851
+    ///     Quit
+    /// Report
+    ///     Write "report", !
+    ///     Quit
+    /// ```
     #[code = "A6851"]
     #[severity = Error]
     #[message = "Cannot find label '{label}' in {routine}"]
     CannotFindLabel { label: String, routine: InRoutine },
+    /// `Label+n` enters the label's code `n` lines down, where its formal list no longer applies
+    /// and which line that is depends on the compiled routine. ascot confirms the label exists,
+    /// leaves the call untyped and the offset unchecked; IRIS compiles and runs it. A call without
+    /// the offset is checked in full.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.LabelOffset
+    /// Main
+    ///     Do Report+1 //! A5213
+    ///     Quit
+    /// Report
+    ///     Write "heading", !
+    ///     Write "details", !
+    ///     Quit
+    /// ```
     #[code = "A5213"]
     #[severity = Hint]
     #[message = "The label is confirmed, but not where its offset lands: the call is checked as untyped and the offset is not checked"]
     LabelOffset,
+    /// A `Goto` inside a procedure block, `Label() { }`, or a `$ZTRAP` set there, names one of
+    /// the routine's labels outside the block, where a block's `Goto` cannot jump. IRIS refuses to
+    /// compile the routine (`<NOLINE>`); `Do Label` may still call the label, or the block can
+    /// `Quit` and leave what follows to its caller.
+    ///
+    /// ```objectscript
+    /// ROUTINE Demo.GotoOutOfBlock
+    /// Main(count) {
+    ///     If count < 1 Goto Empty //! A1073
+    ///     Write count, " items", !
+    ///     Quit
+    /// }
+    /// Empty
+    ///     Write "nothing to report", !
+    ///     Quit
+    /// ```
     #[code = "A1073"]
     #[severity = Error]
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
     /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide;
-    /// ascot reads it where it stands, so the block's flow after it is not what IRIS runs.
+    /// ascot reads it where it stands, so the block's flow after it is not what IRIS runs. The
+    /// routine compiles; move the label, and the lines it heads, to the top level of the body.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.LabelInBlock
+    /// Main(count)
+    ///     If count > 0 {
+    /// Next //! A7408
+    ///         Write count, !
+    ///         Set count = count - 1
+    ///         If count > 0 Goto Next
+    ///         Quit
+    ///     }
+    ///     Quit
+    /// ```
     #[code = "A7408"]
     #[severity = Warning]
     #[message = "Label '{label}' is inside nested braces; ascot only understands labels at the top level of a method or routine body, so the checks after it may be inaccurate or incomplete"]
     LabelInBlock { label: String },
+    /// `Label^Routine` or `^Routine` names a routine that isn't open in the workspace, and there is
+    /// no environment (`--iris none`) to look it up in, so the call is checked as untyped. IRIS
+    /// compiles a call into any routine, and raises `<NOROUTINE>` when it runs if the routine
+    /// doesn't exist; open the routine in the workspace, or check against an IRIS instance or its
+    /// declarations.
+    ///
+    /// ```objectscript env=none compiles
+    /// ROUTINE Demo.UnknownRoutine
+    /// Main
+    ///     Do Nightly^Demo.Reports //! A3303
+    ///     Quit
+    /// ```
     #[code = "A3303"]
     #[severity = Warning]
     #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
     CannotFindRoutine { routine: String },
+    /// `Label^Routine` or `^Routine` names a routine that is neither open in the workspace nor on
+    /// the IRIS instance (or in its declarations), so the call can only fail: IRIS compiles it and
+    /// raises `<NOROUTINE>` when it runs. Fix the name, or open the routine in the workspace.
+    ///
+    /// ```objectscript raises=<NOROUTINE> do Main^Demo.MissingRoutine
+    /// ROUTINE Demo.MissingRoutine
+    /// Main
+    ///     Do Cleanup^Demo.Housekeeping //! A4439
+    ///     Quit
+    /// ```
     #[code = "A4439"]
     #[severity = Error]
     #[message = "Cannot find routine '{routine}' in the workspace or on the IRIS instance"]
     RoutineNotOnIris { routine: String },
+    /// `Label^Routine` or `^Routine` calls into a routine that isn't open in the workspace and
+    /// that the IRIS instance holds as object code only, without source (or with source ascot
+    /// cannot parse), so its labels and their arguments are unknown and the call is checked as
+    /// untyped. IRIS compiles and runs such a call like any other; open the routine's source in the
+    /// workspace to have calls into it checked.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.CompiledRoutine
+    /// Main
+    ///     Do ^%SYS.LICENSE //! A3794
+    ///     Quit
+    /// ```
     #[code = "A3794"]
     #[severity = Hint]
     #[message = "The labels of routine '{routine}' aren't known, so calls into it can't be checked precisely"]
     RoutineWithoutSource { routine: String },
+    /// `#include Name` in a routine or method body, or `Include Name` before a class, names an
+    /// include file that is neither open in the workspace nor known to the environment. IRIS
+    /// refuses to compile (`MPP5635: No include file`); open the file in the workspace, or fix the
+    /// name.
+    ///
+    /// ```objectscript
+    /// ROUTINE Demo.MissingInclude
+    /// #include Demo.ReportMacros //! A7831
+    /// Main
+    ///     Quit
+    /// ```
     #[code = "A7831"]
     #[severity = Error]
     #[message = "Include file '{name}' is not defined in the current workspace"]
