@@ -458,7 +458,9 @@ type_error_kinds! {
     /// `##class(X)`, a declared type or an `Extends` names a class that is neither open in the
     /// workspace nor known to the environment, so the reference can only fail: IRIS reports
     /// `<CLASS DOES NOT EXIST>` when the call runs. Without an environment (`--iris none`), every
-    /// class outside the workspace is such a class, the system ones included.
+    /// class outside the workspace is such a class, the system ones included. Fix the name or open
+    /// the class's file in the workspace; for a system class, check against an IRIS instance or its
+    /// declarations.
     ///
     /// ```objectscript raises=<CLASS DOES NOT EXIST> do ##class(Demo.MissingClass).Call()
     /// Class Demo.MissingClass
@@ -478,7 +480,7 @@ type_error_kinds! {
     /// A property's type or an `Extends` names a class that is neither open in the workspace nor
     /// in the environment. IRIS refuses to compile a class whose property type or superclass does
     /// not exist: check the name, or open the class's file in the workspace. Without an
-    /// environment the same reference is `CannotFindClass`.
+    /// environment (`--iris none`) the same reference is A8061.
     ///
     /// ```objectscript rejected
     /// Class Demo.UnconfirmedClass
@@ -494,7 +496,8 @@ type_error_kinds! {
     UnconfirmedClass { lookup: ClassLookup },
     /// No class along the receiver's hierarchy declares the member, nor does IRIS generate one
     /// with that name; the nearest declared names follow as suggestions. IRIS refuses to compile
-    /// `..Name` for a property or method the class doesn't have.
+    /// `..Name` for a property or method the class doesn't have. Spell the member as the class
+    /// declares it, or declare it.
     ///
     /// ```objectscript
     /// Class Demo.MissingMember
@@ -549,8 +552,9 @@ type_error_kinds! {
     /// No class ascot can see declares the member, and the receiver's hierarchy includes a class
     /// it can't see: a superclass neither in the workspace nor in the environment, or one whose
     /// workspace file doesn't parse. That class may well declare the member, so it is taken as
-    /// present and untyped. Without an environment (`--iris none`), every system superclass is
-    /// such a class, and the `Extends` naming it is a `CannotFindClass` error.
+    /// present and untyped; open the superclass in the workspace, or check against an IRIS
+    /// instance or its declarations, to have it confirmed. Without an environment (`--iris none`),
+    /// every system superclass is such a class, and the `Extends` naming it is A8061.
     ///
     /// ```objectscript env=none
     /// Class Demo.UnconfirmedMember Extends %Persistent //! A8061
@@ -593,8 +597,9 @@ type_error_kinds! {
     #[message = "Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call"]
     SuperWithoutMethod { method: String, cls: String },
     /// `$$Label` calls a label as a function, which a label is only when it declares a formal
-    /// parameter list, even an empty `()`. `Do Label` reaches any label; `$$` of a bare one
-    /// compiles and raises `<PARAMETER>` when it runs.
+    /// parameter list, even an empty `()`. `Do Label` reaches any label, but `$$` of a bare one
+    /// compiles and raises `<PARAMETER>` when it runs. Give the label a parameter list, or call it
+    /// with `Do`.
     ///
     /// ```objectscript raises=<PARAMETER> do Main^Demo.Labels
     /// ROUTINE Demo.Labels
@@ -627,7 +632,7 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot find label '{label}' in {routine}"]
     CannotFindLabel { label: String, routine: InRoutine },
-    /// `Label+n` enters the label's code `n` lines down, where its formal list no longer applies
+    /// `Label+n` enters the label's code `n` lines down, where its formal list no longer applies,
     /// and which line that is depends on the compiled routine. ascot confirms the label exists,
     /// leaves the call untyped and the offset unchecked; IRIS compiles and runs it. A call without
     /// the offset is checked in full.
@@ -667,8 +672,9 @@ type_error_kinds! {
     #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
     GotoOutOfBlock { label: String },
     /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide;
-    /// ascot reads it where it stands, so the block's flow after it is not what IRIS runs. The
-    /// routine compiles; move the label, and the lines it heads, to the top level of the body.
+    /// ascot reads it where it stands, so its checks of the lines after the label may not match
+    /// what IRIS runs. The routine compiles; move the label, and the lines it heads, to the top
+    /// level of the body.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.LabelInBlock
@@ -747,7 +753,7 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Include file '{name}' is not defined in the current workspace"]
     CannotFindInclude { name: String },
-    /// An `#if` or `#elseif` whose condition is not the literal `1` or `0` once its macros are
+    /// The condition of an `#if` or `#elseif` is not the literal `1` or `0` once its macros are
     /// expanded. IRIS evaluates any expression at compile time and compiles the branch it picks;
     /// ascot does not evaluate, so it checks the first branch and skips the rest, which may not be
     /// what IRIS compiles. A macro that expands to `1` or `0` (`#define DEBUG 1`, `#if $$$DEBUG`)
@@ -815,7 +821,7 @@ type_error_kinds! {
     ///
     /// ```objectscript
     /// ROUTINE Demo.MacroTooFewArguments
-    /// #define BETWEEN(%x,%lo,%hi) ((%x>=%lo)&&(%x<=%hi))
+    /// #define BETWEEN(%value,%lo,%hi) ((%value>=%lo)&&(%value<=%hi))
     /// Main()
     ///     Write $$$BETWEEN(7,1), ! //! A6127
     ///     Quit
@@ -863,10 +869,9 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "{function} takes no by-reference argument"]
     ByRefArgumentNotAllowed { function: String },
-    /// The argument between two commas is empty where the function takes no empty argument:
-    /// `$FNUMBER(x,,2)` is fine, `$JUSTIFY(x,,2)` is not (which function takes an empty argument
-    /// in which position was measured on IRIS), and IRIS refuses to compile the call. Spell the
-    /// argument out.
+    /// An argument between two commas is left empty where the function takes no empty argument:
+    /// `$FNUMBER(amount,,2)` is fine, `$JUSTIFY(amount,,2)` is not. IRIS refuses to compile the
+    /// call. Spell the argument out.
     ///
     /// ```objectscript
     /// Class Demo.OmittedArgument
@@ -914,9 +919,9 @@ type_error_kinds! {
     ///
     /// ClassMethod Sum() As %Integer
     /// {
-    ///     Set $VECTOR(v, 1, "integer") = 3
-    ///     Set $VECTOR(v, 2) = 4 //! A8820
-    ///     Quit $VECTOR(v, 1) + $VECTOR(v, 2)
+    ///     Set $VECTOR(scores, 1, "integer") = 3
+    ///     Set $VECTOR(scores, 2) = 4 //! A8820
+    ///     Quit $VECTOR(scores, 1) + $VECTOR(scores, 2)
     /// }
     ///
     /// }
@@ -993,10 +998,10 @@ type_error_kinds! {
     /// Class Demo.NewInProcedureBlock
     /// {
     ///
-    /// ClassMethod Total(a As %Integer, b As %Integer) As %Integer
+    /// ClassMethod Total(hours As %Integer, overtime As %Integer) As %Integer
     /// {
     ///     New sum //! A6866
-    ///     Set sum = a + b
+    ///     Set sum = hours + overtime
     ///     Quit sum
     /// }
     ///
@@ -1027,7 +1032,8 @@ type_error_kinds! {
     /// A property type's `( ... )` parameters are the type class's own (`%String(MAXLEN = 50)`),
     /// and this name is none of them: misspelled, with the nearest declared names as suggestions,
     /// or a property keyword that belongs in the `[ ... ]` list. IRIS refuses to compile the class
-    /// (`Property parameter not declared`).
+    /// (`Property parameter not declared`). Fix the spelling, or move the keyword to the `[ ... ]`
+    /// list.
     ///
     /// ```objectscript
     /// Class Demo.UnrecognizedTypeParam Extends %RegisteredObject
@@ -1047,7 +1053,8 @@ type_error_kinds! {
     },
     /// An entry in a member's `[ ... ]` keyword list is no keyword of that kind of member as
     /// written (misspelled, or another kind's), or the class's `ClassType` names no class type.
-    /// IRIS refuses to compile the class.
+    /// IRIS refuses to compile the class. Fix the spelling, move the keyword to the member it
+    /// belongs to, or give `ClassType` a class type IRIS knows.
     ///
     /// ```objectscript
     /// Class Demo.UnrecognizedKeyword Extends %RegisteredObject
@@ -1077,11 +1084,12 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "'{meta_type}' is not a recognized parameter type; available: {available}"]
     UnrecognizedParameterType { meta_type: String, available: Available },
-    /// ObjectScript has no operator precedence: `a + b * c` is `(a + b) * c`. Fires where an
-    /// operator that convention binds loosely is directly followed by one it binds tightly (`+`
-    /// then `*`, `=` then `+`, `&&` then `=`), the order in which left-to-right evaluation departs
-    /// from the conventional reading; `a * b + c` comes out the same either way. IRIS compiles and
-    /// computes the expression as written; parentheses say which reading is meant.
+    /// ObjectScript has no operator precedence: `a + b * c` is `(a + b) * c`. The warning marks an
+    /// expression in which an operator that convention binds loosely is directly followed by one it
+    /// binds tightly (`+` then `*`, `=` then `+`, `&&` then `=`), since that is where left-to-right
+    /// evaluation departs from the conventional reading; `a * b + c` comes out the same either way.
+    /// IRIS compiles and computes the expression as written; add parentheses to say which reading
+    /// is meant.
     ///
     /// ```objectscript compiles
     /// Class Demo.MixedPrecedence
@@ -1099,7 +1107,7 @@ type_error_kinds! {
     #[message = "ObjectScript has no operator precedence and evaluates strictly left-to-right; this may not compute what you expect"]
     MixedPrecedence,
     /// A `Set` whose value no path reads before the variable is assigned again, killed or out of
-    /// scope. A parameter the body never reads is reported the same way, its value being the
+    /// scope; a parameter the body never reads is reported the same way, its value being the
     /// caller's assignment. IRIS compiles and runs the code; the assignment is dead. Delete it, or
     /// read the variable where it was meant to be read.
     ///
@@ -1342,7 +1350,8 @@ type_error_kinds! {
     #[message = "{source} is abstract, so this value is a subclass's, which may be the {target} it is taken for"]
     TypeDowncast { source: Ty, target: Ty },
     /// Every path to this statement has already quit, returned or thrown, so it never runs. IRIS
-    /// compiles it all the same.
+    /// compiles it all the same. Delete the statement, or move it before the exit that precedes
+    /// it.
     ///
     /// ```objectscript compiles
     /// Class Demo.Unreachable
@@ -1425,10 +1434,9 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Property '{name}' is MultiDimensional, so `{name}()` names no node: give it a subscript"]
     NodeWithoutSubscripts { name: String },
-    /// `$ZF(-1, command)` with more arguments than the documentation names, the one `$`-function
-    /// whose extra arguments reach the checker (any other function's are refused as the call is
-    /// parsed): IRIS compiles and runs the call, as measured, and the documentation gives the
-    /// extra argument no meaning. Drop it.
+    /// `$ZF(-1, command)` is called with more arguments than its documentation names. IRIS
+    /// compiles and runs the call all the same, and the documentation gives the extra argument
+    /// no meaning. Drop it.
     ///
     /// ```objectscript
     /// Class Demo.UndocumentedArgument
@@ -1507,9 +1515,9 @@ type_error_kinds! {
     #[message = "'{name}' is a user-defined command (^%ZLANGC00), so the call is not checked"]
     UserCommand { name: String },
     /// A `$Z` function IRIS compiles and runs but does not document (`$ZOBJEXPORT`, `$ZOBJVAL`,
-    /// `$ZOBJNEW`, `$ZOBJNEXT`): the object-system internals its own classes call. Per
-    /// GOVERNANCE.md ascot models documented ObjectScript only, so the arguments are checked, the
-    /// call is not, and its result is Any.
+    /// `$ZOBJNEW`, `$ZOBJNEXT`): the object-system internals its own classes call. ascot models
+    /// documented ObjectScript only, so the arguments are checked, the call is not, and its
+    /// result is Any.
     ///
     /// ```objectscript compiles
     /// Class Demo.UndocumentedFunction
@@ -1572,17 +1580,18 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional."]
     TooFewArguments { next_arg: String },
-    /// Fewer arguments than this are declared, and the callee has no `args...` to take the rest.
-    /// IRIS compiles the call and raises `<PARAMETER>` when it runs. The first argument beyond
-    /// the declared ones is marked.
+    /// The call passes more arguments than the callee declares, and the callee has no `args...`
+    /// to take the rest. IRIS compiles the call and raises `<PARAMETER>` when it runs. The first
+    /// argument beyond the declared ones is marked; drop the extra arguments, or declare the
+    /// parameters they are meant for.
     ///
     /// ```objectscript raises=<PARAMETER> do ##class(Demo.TooManyArguments).Call()
     /// Class Demo.TooManyArguments
     /// {
     ///
-    /// ClassMethod Add(a As %Integer, b As %Integer) As %Integer
+    /// ClassMethod Add(left As %Integer, right As %Integer) As %Integer
     /// {
-    ///     Quit a + b
+    ///     Quit left + right
     /// }
     ///
     /// ClassMethod Call() As %Integer
@@ -1680,8 +1689,8 @@ type_error_kinds! {
     InvalidMacroArgument { reason: String },
     /// `$ZSTRIP`'s action is `*`, or some of `<`, `>` and `=`, then mask codes from
     /// `E A P C N L U W`, a `'` before each one to negate, the negated after the plain; this
-    /// constant action breaks that grammar. IRIS compiles the call and raises `<FUNCTION>` when
-    /// it runs.
+    /// constant action does not fit that form. IRIS compiles the call and raises `<FUNCTION>`
+    /// when it runs. Spell the action from those codes.
     ///
     /// ```objectscript raises=<FUNCTION> do ##class(Demo.InvalidZStripAction).Trim(" x ")
     /// Class Demo.InvalidZStripAction
@@ -2020,7 +2029,7 @@ type_error_kinds! {
     /// `$FNUMBER`'s format is a string of the codes `+ - , . D E G L N O P T`, in any combination
     /// but the pairs IRIS forbids (such as `,` with `.`); this constant format has a character
     /// that is no code, or such a pair. IRIS compiles the call and raises `<FUNCTION>` when it
-    /// runs.
+    /// runs. Drop the stray character, or one code of the pair.
     ///
     /// ```objectscript raises=<FUNCTION> do ##class(Demo.InvalidFNumberFormat).Amount(1234.5)
     /// Class Demo.InvalidFNumberFormat
@@ -2078,11 +2087,12 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Unexpected return value of type '{actual}'"]
     ReturnXForNothing { actual: Ty },
-    /// `Quit` inside a `For`, `While`, `Do ... While`, `Try` or `Catch` block leaves the block,
-    /// not the method, so it has no caller to hand a value to. IRIS refuses to compile an
-    /// argumented one in a `While`, `Do ... While`, `Try` or `Catch` block (`QUIT argument not
-    /// allowed`), and compiles one in a `For` loop but raises `<COMMAND>` when it runs. Leave the
-    /// block with a bare `Quit` and return the value after it, or `Return` it from inside.
+    /// This `Quit` carries a value inside a `For`, `While`, `Do ... While`, `Try` or `Catch`
+    /// block, which it leaves instead of the method, so it has no caller to hand the value to.
+    /// IRIS refuses to compile it in a `While`, `Do ... While`, `Try` or `Catch` block (`QUIT
+    /// argument not allowed`), and compiles it in a `For` loop but raises `<COMMAND>` when it
+    /// runs. Leave the block with a bare `Quit` and return the value after it, or `Return` it
+    /// from inside.
     ///
     /// ```objectscript raises=<COMMAND> do ##class(Demo.QuitXInControl).FirstNegative($ListBuild(1, -2, 3))
     /// Class Demo.QuitXInControl
@@ -2103,11 +2113,12 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Quit with {actual} inside control structure"]
     QuitXInControl { actual: Ty },
-    /// The caller's `.` alone makes an argument by-reference; `ByRef` and `Output` on the
-    /// parameter only declare the intent. Here the two disagree: a plain argument where the
-    /// parameter is `ByRef` or `Output`, so the callee's assignments never reach the caller, or
-    /// a dotted one where the parameter is neither, so they do without the signature saying so.
-    /// IRIS compiles and runs both. Add or drop the `.`, or correct the declaration.
+    /// The argument and the parameter disagree on by-reference passing: a plain argument where
+    /// the parameter is `ByRef` or `Output`, so the callee's assignments never reach the caller,
+    /// or a dotted one where the parameter is neither, so they do without the signature saying
+    /// so. Only the caller's `.` passes by reference; `ByRef` and `Output` just declare the
+    /// intent, so IRIS compiles and runs either way. Add or drop the `.`, or correct the
+    /// declaration.
     ///
     /// ```objectscript compiles
     /// Class Demo.MismatchArgumentAndArgumentMode
@@ -2156,9 +2167,9 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "This '{ty}' value may be undefined{expr}"]
     MaybeUndefined { ty: Ty, expr: Detail },
-    /// The variable has no value on any path that reaches this use: nothing assigned it, or
-    /// everything that did was killed or never ran. IRIS compiles the code and raises
-    /// `<UNDEFINED>` when it runs.
+    /// The variable has no value on any path that reaches this use: nothing assigns it, or every
+    /// assignment is killed or skipped on the way here. IRIS compiles the code and raises
+    /// `<UNDEFINED>` when it runs. Assign it first, or read it through `$Get`.
     ///
     /// ```objectscript raises=<UNDEFINED> do ##class(Demo.Undefined).Total()
     /// Class Demo.Undefined
@@ -2330,9 +2341,9 @@ type_error_kinds! {
     #[message = "Class '{name}' is also declared in {other_uri}"]
     DuplicateClassName { name: String, other_uri: String },
     /// A method body, or an argument default in `{braces}`, that doesn't parse; the rest of the
-    /// body goes unchecked. Where the grammar knows what went wrong, such as an unknown command or
-    /// a function given the wrong arguments, the message says so; otherwise it lists what the
-    /// parser was looking for. IRIS refuses to compile the class.
+    /// body goes unchecked. IRIS refuses to compile the class. The message names the mistake where
+    /// it is clear, such as an unknown command or a function given the wrong arguments, and
+    /// otherwise lists what could come next at that point; correct the marked line.
     ///
     /// ```objectscript
     /// Class Demo.InvalidSyntax
@@ -2349,10 +2360,10 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "{err}"]
     InvalidSyntax { err: SyntaxErrorText },
-    /// A document that doesn't parse at the class or routine level, worded like `InvalidSyntax`:
-    /// a class header or member declaration, or a line of a routine or include file, where a
-    /// method body's error is `InvalidSyntax`. Nothing else in the document is checked. IRIS
-    /// refuses to compile such a document as well.
+    /// A class header or member declaration, or a line of a routine or include file, that doesn't
+    /// parse; a method body that doesn't is A8073 instead, and the message reads the same way.
+    /// Nothing else in the document is checked, and IRIS refuses to compile it. Correct the marked
+    /// line.
     ///
     /// ```objectscript rejected
     /// Class Demo.DocumentSyntaxError
