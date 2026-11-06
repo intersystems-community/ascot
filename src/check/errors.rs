@@ -755,24 +755,83 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "${function} is documented to take at most {documented} argument(s), but was given {given}; IRIS tolerates the extra"]
     UndocumentedArgument { function: String, documented: usize, given: usize },
-    /// IRIS still runs the call; the replacement is from the `$ZUTIL` replacement list.
+    /// The leading literal arguments make this `$ZUTIL` (`$ZU`) call one that the "Replacements
+    /// for ObjectScript $ZUTIL Functions" list supersedes or deprecates. IRIS compiles and runs it
+    /// all the same; use the replacement the message names. A `$ZU` a macro expands to is not
+    /// reported.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.LegacyZUtil
+    /// {
+    ///
+    /// ClassMethod Namespace() As %String
+    /// {
+    ///     Quit $ZU(5) //! A4418
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A4418"]
     #[severity = Warning]
     #[message = "{call} {replacement}"]
     LegacyZUtil { call: String, replacement: Replacement },
-    /// Nothing in the `$ZUTIL` replacement list covers this call, and IRIS documents no `$ZUTIL` function.
+    /// The leading literal arguments of this `$ZUTIL` (`$ZU`) call match nothing in the
+    /// "Replacements for ObjectScript $ZUTIL Functions" list, and IRIS documents no `$ZUTIL`
+    /// function. IRIS compiles any `$ZU` call: one its kernel still has runs, one it has not
+    /// raises `<FUNCTION>`. The arguments are checked and the result is Any; prefer the class
+    /// method or special variable that does the job. A `$ZU` a macro expands to is not reported.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UndocumentedZUtil
+    /// {
+    ///
+    /// ClassMethod Setting() As %String
+    /// {
+    ///     Quit $ZU(115, 5) //! A5847
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A5847"]
     #[severity = Hint]
     #[message = "{call} is not documented for IRIS; $ZUTIL was superseded by class methods and special variables"]
     UndocumentedZUtil { call: String },
-    /// A `$Z` function IRIS compiles but doesn't document (`$ZOBJEXPORT`); per GOVERNANCE.md,
-    /// A `Z` command IRIS has no definition for is one `^%ZLANGC00` may define: noted, its
-    /// arguments checked, the call itself not.
+    /// A command spelled `Z` and letters that IRIS has none of is a user-defined command, for the
+    /// instance's `^%ZLANGC00` routine to implement. IRIS compiles it and looks the definition up
+    /// when it runs, raising `<SYNTAX>` where the routine has none. The arguments are checked,
+    /// the command itself is not.
+    ///
+    /// ```objectscript raises=<SYNTAX> do ##class(Demo.UserCommand).Log("started")
+    /// Class Demo.UserCommand
+    /// {
+    ///
+    /// ClassMethod Log(message As %String)
+    /// {
+    ///     ZLog message //! A5362
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A5362"]
     #[severity = Hint]
     #[message = "'{name}' is a user-defined command (^%ZLANGC00), so the call is not checked"]
     UserCommand { name: String },
-    /// noted and left unchecked rather than refused.
+    /// A `$Z` function IRIS compiles and runs but does not document (`$ZOBJEXPORT`, `$ZOBJVAL`,
+    /// `$ZOBJNEW`, `$ZOBJNEXT`): the object-system internals its own classes call. Per
+    /// GOVERNANCE.md ascot models documented ObjectScript only, so the arguments are checked, the
+    /// call is not, and its result is Any.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UndocumentedFunction
+    /// {
+    ///
+    /// ClassMethod Export(text As %String) As %String
+    /// {
+    ///     Quit $ZOBJEXPORT(text, 5) //! A6037
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A6037"]
     #[severity = Hint]
     #[message = "${name} is not documented for IRIS, so the call is not checked"]
@@ -820,6 +879,22 @@ type_error_kinds! {
         name: String,
         suggestions: Suggestions,
     },
+    /// `$NAME` without an argument list is a special variable, and IRIS has none of this name, so
+    /// the compiler refuses the code (`Invalid special variable`); the message suggests the
+    /// nearest names. A `$Z` name is the exception IRIS compiles, for `^%ZLANGV00` to define:
+    /// undefined, it raises `<SYNTAX>` when it runs.
+    ///
+    /// ```objectscript
+    /// Class Demo.UnknownSpecialVariable
+    /// {
+    ///
+    /// ClassMethod Owner() As %String
+    /// {
+    ///     Quit $USER //! A9399
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A9399"]
     #[severity = Error]
     #[message = "${name} is not a recognized special variable{suggestions}"]
@@ -831,6 +906,22 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Invalid macro argument: {reason}"]
     InvalidMacroArgument { reason: String },
+    /// `$ZSTRIP`'s action is `*`, or some of `<`, `>` and `=`, then mask codes from
+    /// `E A P C N L U W`, a `'` before each one to negate, the negated after the plain; this
+    /// constant action breaks that grammar. IRIS compiles the call and raises `<FUNCTION>` when
+    /// it runs.
+    ///
+    /// ```objectscript raises=<FUNCTION> do ##class(Demo.InvalidZStripAction).Trim(" x ")
+    /// Class Demo.InvalidZStripAction
+    /// {
+    ///
+    /// ClassMethod Trim(text As %String) As %String
+    /// {
+    ///     Quit $ZSTRIP(text, "<>S") //! A3286
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A3286"]
     #[severity = Error]
     #[message = "'{action}' is not a valid $ZSTRIP action: {reason}"]
@@ -838,6 +929,22 @@ type_error_kinds! {
         action: String,
         reason: &'static str,
     },
+    /// `$ZSTRIP`'s action and `$FNUMBER`'s format are strings with a grammar of their own, and
+    /// this one is a bare number, which IRIS turns into its string form when the call runs. No
+    /// number spells a valid action or format, so A3286 or A7895 comes with this and IRIS raises
+    /// `<FUNCTION>`; write the action or format as a quoted string.
+    ///
+    /// ```objectscript raises=<FUNCTION> do ##class(Demo.NumberImplicitlyConvertedToString).Amount(1234.5)
+    /// Class Demo.NumberImplicitlyConvertedToString
+    /// {
+    ///
+    /// ClassMethod Amount(value As %Numeric) As %String
+    /// {
+    ///     Quit $FNUMBER(value, 2) //! A9421 A7895
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A9421"]
     #[severity = Warning]
     #[message = "{value} is a number here, implicitly converted to the string \"{value}\""]
@@ -901,6 +1008,22 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Put {wanted}"]
     CommaSpacing { wanted: CommaSpace },
+    /// `$FNUMBER`'s format is a string of the codes `+ - , . D E G L N O P T`, in any combination
+    /// but the pairs IRIS forbids (such as `,` with `.`); this constant format has a character
+    /// that is no code, or such a pair. IRIS compiles the call and raises `<FUNCTION>` when it
+    /// runs.
+    ///
+    /// ```objectscript raises=<FUNCTION> do ##class(Demo.InvalidFNumberFormat).Amount(1234.5)
+    /// Class Demo.InvalidFNumberFormat
+    /// {
+    ///
+    /// ClassMethod Amount(value As %Numeric) As %String
+    /// {
+    ///     Quit $FNUMBER(value, ",.", 2) //! A7895
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A7895"]
     #[severity = Error]
     #[message = "'{format}' is not a valid $FNUMBER format: {reason}"]
