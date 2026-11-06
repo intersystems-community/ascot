@@ -630,14 +630,62 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Cannot reference instance-only member '{name}' in a class method"]
     AccessInstanceOnlyMemberFromClassContext { name: String },
+    /// A method's or label's formal parameter list declares the same name twice, so one parameter
+    /// would shadow the other. IRIS refuses to compile it: `#1050 Duplicate variable names in
+    /// parameter list`. Give each parameter its own name.
+    ///
+    /// ```objectscript
+    /// Class Demo.RedeclareVariable
+    /// {
+    ///
+    /// ClassMethod Area(width As %Integer, width As %Integer) As %Integer //! A4983
+    /// {
+    ///     Quit width * width
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A4983"]
     #[severity = Error]
     #[message = "Variable '{name}' is already declared"]
     RedeclareVariable { name: String },
+    /// A `New` of a variable the same body has already `New`'d. IRIS compiles and runs it; all it
+    /// does is leave the variable undefined until it is set again, its current value gone, which
+    /// `Kill` says outright. Delete the second `New`, or write the `Kill` it stands for.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.RedundantNew
+    /// Main
+    ///     New count
+    ///     Set count = 1
+    ///     Write count, !
+    ///     New count //! A1817
+    ///     Set count = 2
+    ///     Write count, !
+    ///     Quit
+    /// ```
     #[code = "A1817"]
     #[severity = Warning]
     #[message = "Variable '{name}' is already NEW'd; this NEW resets it to undefined, discarding its current value — `Kill {name}` says that explicitly"]
     RedundantNew { name: String },
+    /// `New` names a variable private to the procedure block: a parameter, or a local the body
+    /// creates, which the block already scopes to itself on entry. IRIS refuses to compile it:
+    /// `#1038 Private variable not allowed`. Delete the `New`, or `Kill` the variable if its value
+    /// is to go; only a variable of the block's public list can be `New`'d.
+    ///
+    /// ```objectscript
+    /// Class Demo.NewInProcedureBlock
+    /// {
+    ///
+    /// ClassMethod Total(a As %Integer, b As %Integer) As %Integer
+    /// {
+    ///     New sum //! A6866
+    ///     Set sum = a + b
+    ///     Quit sum
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A6866"]
     #[severity = Error]
     #[message = "Cannot NEW the private variable '{name}' in a procedure block, where every local variable is already NEW'd on entry"]
@@ -666,18 +714,84 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "ObjectScript has no operator precedence and evaluates strictly left-to-right; this may not compute what you expect"]
     MixedPrecedence,
+    /// A `Set` whose value no path reads before the variable is assigned again, killed or out of
+    /// scope. A parameter the body never reads is reported the same way, its value being the
+    /// caller's assignment. IRIS compiles and runs the code; the assignment is dead. Delete it, or
+    /// read the variable where it was meant to be read.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UnreadAssignment
+    /// {
+    ///
+    /// ClassMethod Greet(name As %String) As %String
+    /// {
+    ///     Set greeting = "Hello, " _ name //! A5718
+    ///     Quit "Hi, " _ name
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A5718"]
     #[severity = Warning]
     #[message = "Variable '{name}' is assigned but never read"]
     UnreadAssignment { name: String },
+    /// An `Output` parameter no path of the body assigns. The caller passes a variable to receive a
+    /// value and gets none, so its first read of the variable raises `<UNDEFINED>`; IRIS compiles
+    /// the method all the same, since `Output` only documents intent. Assign the parameter on every
+    /// path, or take it out of the signature.
+    ///
+    /// ```objectscript raises=<UNDEFINED> do ##class(Demo.OutputNeverAssigned).Double(5, .result) write result
+    /// Class Demo.OutputNeverAssigned
+    /// {
+    ///
+    /// ClassMethod Double(value As %Integer, Output result As %Integer) As %Integer //! A4476
+    /// {
+    ///     Quit value * 2
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A4476"]
     #[severity = Warning]
     #[message = "Output parameter '{name}' is never assigned; its caller will get an undefined value"]
     OutputNeverAssigned { name: String },
+    /// A `ByRef` parameter whose incoming value no path reads before writing it: the body only
+    /// produces the value, so the caller need not pass one, which is what `Output` declares and
+    /// what lets a caller leave the argument out. IRIS compiles either; the caller's `.` alone
+    /// passes by reference, and the mode documents intent. Declare the parameter `Output`.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.ByRefNeverRead
+    /// {
+    ///
+    /// ClassMethod Defaults(ByRef timeout As %Integer) //! A7762
+    /// {
+    ///     Set timeout = 30
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A7762"]
     #[severity = Hint]
     #[message = "'{name}' is never read before it is assigned; `Output` fits better than `ByRef`"]
     ByRefNeverRead { name: String },
+    /// An `Output` parameter read before any path writes it: the body depends on the value passed
+    /// in, which `Output` disclaims, since a caller may leave the argument out or pass an undefined
+    /// variable; ascot takes the parameter as undefined on entry, so the read is also reported as
+    /// undefined. IRIS compiles either; the caller's `.` alone passes by reference, and the mode
+    /// documents intent. Declare the parameter `ByRef`, or assign it before reading it.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.OutputReadFirst
+    /// {
+    ///
+    /// ClassMethod Tally(count As %Integer, Output total As %Integer) //! A7781
+    /// {
+    ///     Set total = total + count //! A7095
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A7781"]
     #[severity = Hint]
     #[message = "'{name}' is read before it is assigned; `ByRef` fits better than `Output`"]
