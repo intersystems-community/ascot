@@ -690,10 +690,56 @@ type_error_kinds! {
         ty1: Declared,
         ty2: Declared,
     },
+    /// A `Quit` or `Return` value's class is neither the method's declared return class nor a
+    /// subclass of it; a variable or a parameter given such a value is A9180, which names it.
+    /// IRIS compiles the method all the same, and the caller, trusting the declaration, fails on
+    /// using the value as that class, here with `<METHOD DOES NOT EXIST>`. Return an instance of
+    /// the declared class, or declare the class the method returns.
+    ///
+    /// ```objectscript raises=<METHOD DOES NOT EXIST> do ##class(Demo.TypeIncompatible).Call()
+    /// Class Demo.TypeIncompatible
+    /// {
+    ///
+    /// ClassMethod Names() As %ListOfDataTypes
+    /// {
+    ///     Quit ##class(%ArrayOfDataTypes).%New() //! A5967
+    /// }
+    ///
+    /// ClassMethod Call() As %Status
+    /// {
+    ///     Set names = ..Names()
+    ///     Quit names.Insert("Ann")
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A5967"]
     #[severity = Error]
     #[message = "{source} is incompatible with {target}"]
     TypeIncompatible { source: Ty, target: Ty },
+    /// `Set` gives a `#Dim`'d variable, or a call gives a typed parameter, a value whose class is
+    /// neither the declared class nor a subclass of it (a datatype takes any value, and `""` is
+    /// the null OREF). IRIS compiles the assignment all the same, and the code that trusts the
+    /// declaration fails on using the value as that class, here with `<METHOD DOES NOT EXIST>`.
+    /// Pass or assign an instance of the declared class, or declare the class the value has.
+    ///
+    /// ```objectscript raises=<METHOD DOES NOT EXIST> do ##class(Demo.AssignIncompatible).Call()
+    /// Class Demo.AssignIncompatible
+    /// {
+    ///
+    /// ClassMethod Fill(list As %ListOfDataTypes) As %Status
+    /// {
+    ///     Quit list.Insert("one")
+    /// }
+    ///
+    /// ClassMethod Call() As %Status
+    /// {
+    ///     Set array = ##class(%ArrayOfDataTypes).%New()
+    ///     Quit ..Fill(array) //! A9180
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A9180"]
     #[severity = Error]
     #[message = "Cannot assign {source} to '{name}' declared as {target}"]
@@ -702,7 +748,39 @@ type_error_kinds! {
         source: Ty,
         target: Ty,
     },
-    /// Narrowing an abstract class to one of its subclasses: the value is some subclass's already.
+    /// `Set` gives a `#Dim`'d variable, or a call gives a typed parameter, a value typed as an
+    /// abstract class where a subclass of it is declared. No instance is of the abstract class
+    /// itself, so the value is some subclass's, which may be the declared one: IRIS compiles and
+    /// runs the code, and it fails only when another subclass's instance arrives. Test `%IsA`
+    /// first where one can.
+    ///
+    /// ```objectscript
+    /// Class Demo.DowncastFromAbstract Extends %RegisteredObject [ Abstract ]
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript
+    /// Class Demo.DowncastFromAbstractCircle Extends Demo.DowncastFromAbstract
+    /// {
+    ///
+    /// Property Radius As %Numeric;
+    ///
+    /// ClassMethod Diameter(circle As Demo.DowncastFromAbstractCircle) As %Numeric
+    /// {
+    ///     Quit circle.Radius * 2
+    /// }
+    ///
+    /// ClassMethod Call(shape As Demo.DowncastFromAbstract) As %Numeric
+    /// {
+    ///     Quit ..Diameter(shape) //! A6274
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A6274"]
     #[severity = Warning]
     #[message = "Assigning {source}, an abstract class, to '{name}' declared as {target}: the value is a subclass's, which may be one"]
@@ -711,6 +789,34 @@ type_error_kinds! {
         source: Ty,
         target: Ty,
     },
+    /// A `Quit` or `Return` value typed as an abstract class leaves a method whose declared return
+    /// class is a subclass of it; a variable or a parameter given such a value is A6274, which
+    /// names it. No instance is of the abstract class itself, so the value is some subclass's,
+    /// which may be the declared one: IRIS compiles and runs the code, and the caller fails only
+    /// when another subclass's instance arrives. Test `%IsA` first where one can.
+    ///
+    /// ```objectscript
+    /// Class Demo.TypeDowncast Extends %RegisteredObject [ Abstract ]
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript
+    /// Class Demo.TypeDowncastCircle Extends Demo.TypeDowncast
+    /// {
+    ///
+    /// Property Radius As %Numeric;
+    ///
+    /// ClassMethod AsCircle(shape As Demo.TypeDowncast) As Demo.TypeDowncastCircle
+    /// {
+    ///     Quit shape //! A8139
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A8139"]
     #[severity = Warning]
     #[message = "{source} is abstract, so this value is a subclass's, which may be the {target} it is taken for"]
@@ -738,14 +844,46 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "This condition is always {value}"]
     ConditionAlways { value: bool },
-    /// IRIS compiles `..X(subs)` for any property but, unless `X` is `MultiDimensional`, throws
-    /// `<OBJECT DISPATCH>` on reaching it, whatever `X`'s type.
+    /// `..X(subs)` addresses a node of the property `X`, which only a `MultiDimensional` property
+    /// has. IRIS compiles `..X(subs)` for any property but throws `<OBJECT DISPATCH>` on reaching
+    /// it, whatever `X`'s type. A collection's element is `..X.GetAt(key)`; a property meant to
+    /// hold nodes is declared `[ MultiDimensional ]`.
+    ///
+    /// ```objectscript raises=<OBJECT DISPATCH> do ##class(Demo.NotMultidimensional).%New().Call()
+    /// Class Demo.NotMultidimensional Extends %RegisteredObject
+    /// {
+    ///
+    /// Property Tags As list Of %String;
+    ///
+    /// Method Call() As %String
+    /// {
+    ///     Quit ..Tags(1) //! A8496
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A8496"]
     #[severity = Error]
     #[message = "Property '{name}' is not MultiDimensional, so it takes no subscripts"]
     NotMultidimensional { name: String },
-    /// IRIS throws `<OBJECT DISPATCH>` "missing subscripts" on reading `..X()`, and refuses to
-    /// compile `Set ..X() = v`.
+    /// `..X()` names a node of the `MultiDimensional` property `X` without the subscripts that
+    /// pick one; `..X` without parentheses is the property's own value. IRIS throws
+    /// `<OBJECT DISPATCH>` ("missing subscripts") on reading `..X()`, and refuses to compile
+    /// `Set ..X() = v`. Give it a subscript, or drop the parentheses.
+    ///
+    /// ```objectscript raises=<OBJECT DISPATCH> do ##class(Demo.NodeWithoutSubscripts).%New().Call()
+    /// Class Demo.NodeWithoutSubscripts Extends %RegisteredObject
+    /// {
+    ///
+    /// Property Cache As %String [ MultiDimensional ];
+    ///
+    /// Method Call() As %String
+    /// {
+    ///     Quit ..Cache() //! A3942
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A3942"]
     #[severity = Error]
     #[message = "Property '{name}' is MultiDimensional, so `{name}()` names no node: give it a subscript"]
@@ -777,6 +915,23 @@ type_error_kinds! {
     #[severity = Hint]
     #[message = "${name} is not documented for IRIS, so the call is not checked"]
     UndocumentedFunction { name: String },
+    /// `..#NAME(args)` calls the class parameter `NAME`, or `Set ..#NAME = v` assigns it, and a
+    /// parameter is a compile-time constant that does neither. IRIS refuses to compile both. Read
+    /// the parameter bare, as `..#NAME`; a value that varies belongs in a property or a method.
+    ///
+    /// ```objectscript
+    /// Class Demo.ParameterIsConstant
+    /// {
+    ///
+    /// Parameter LIMIT = 10;
+    ///
+    /// ClassMethod Call(limit As %Integer)
+    /// {
+    ///     Set ..#LIMIT = limit //! A6319
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A6319"]
     #[severity = Error]
     #[message = "Parameter '{name}' is a constant: it takes no arguments and can't be assigned"]
