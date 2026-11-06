@@ -2516,7 +2516,7 @@ type_error_kinds! {
     /// A `$ETRAP` whose code is a single `Goto Label` is the handler `Set $ZTRAP = "Label"` arms,
     /// and is checked as that handler; the two differ in scope, as the message says: `$ZTRAP` is
     /// this frame's, `$ETRAP` is inherited by the frames it calls. IRIS compiles and runs either;
-    /// `$ZTRAP` says what is meant when this frame alone is.
+    /// `$ZTRAP` says so when this frame alone is meant.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.ETrapGoto
