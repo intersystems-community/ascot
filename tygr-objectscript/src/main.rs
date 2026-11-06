@@ -61,20 +61,23 @@ fn check_class(path: &str, content: &str) -> bool {
 }
 
 fn check_method_body(method: &cos::Method) -> Result<(), (usize, tygr::Error)> {
-    let keyword = |name| {
-        method.header.keywords.as_ref().and_then(|keywords| {
-            let cos::KeywordEntry::Assign { value, .. } = keywords.get(name)? else {
-                return None;
-            };
-            Some(value.print())
-        })
-    };
-    let language = keyword("Language").and_then(|v| cos::MethodLanguage::parse(&v).ok());
-    let mode = keyword("CodeMode").and_then(|v| cos::CodeMode::parse(&v).ok());
+    let (mut language, mut mode) = (None, None);
+    for entry in method
+        .header
+        .keywords
+        .iter()
+        .flat_map(cos::KeywordList::items)
+    {
+        match (***entry).as_ref().left() {
+            Some(cos::MethodKeyword::Language(v)) => language = Some(&v.value),
+            Some(cos::MethodKeyword::CodeMode(v)) => mode = Some(&v.value),
+            _ => {}
+        }
+    }
     let body = &method.body.prefixed.wrapped;
     let text = body.print();
 
-    match (&language, &mode) {
+    match (language, mode) {
         (
             None | Some(cos::MethodLanguage::ObjectScript(..)),
             None | Some(cos::CodeMode::Code(..)),
