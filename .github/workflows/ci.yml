@@ -68,6 +68,10 @@ jobs:
         env:
           ASCOT_TEST_IRIS: http://_SYSTEM:SYS@localhost:52773
 
+      # What each diagnostic's message claims about IRIS, tried on the examples in its doc comment.
+      - name: Verify the diagnostics' examples against IRIS
+        run: python3 -I scripts/verify-examples.py --iris http://_SYSTEM:SYS@localhost:52773 --run "docker exec -i iris iris session IRIS -U USER"
+
       - uses: actions/setup-node@v7
         with:
           node-version: 24

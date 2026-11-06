@@ -172,8 +172,11 @@ impl QuasiTypeError {
         )
     }
 
-    pub fn too_many_arguments() -> Self {
-        TypeErrorKind::TooManyArguments.into()
+    pub fn too_many_arguments(takes: usize) -> Self {
+        TypeErrorKind::TooManyArguments {
+            takes: ArgCount(takes),
+        }
+        .into()
     }
 
     pub fn case_default_not_last() -> Self {
@@ -417,6 +420,10 @@ macro_rules! type_error_kinds {
         impl TypeErrorKind {
             pub const CODES: &[&str] = &[$($code,)*];
 
+            /// Every kind's code and doc comment, whose ```` ```objectscript ```` blocks are the
+            /// examples `tests/examples.rs` and `scripts/verify-examples.py` check.
+            pub const DOCS: &[(&str, &str)] = &[$(($code, concat!($($doc, "\n",)*)),)*];
+
             /// This kind's diagnostic code.
             pub fn code(&self) -> &'static str {
                 match self {
@@ -448,6 +455,22 @@ macro_rules! type_error_kinds {
 }
 
 type_error_kinds! {
+    /// `##class(X)`, a declared type or an `Extends` names a class that is neither open in the
+    /// workspace nor known to the environment, so the reference can only fail: IRIS reports
+    /// `<CLASS DOES NOT EXIST>` when the call runs. Without an environment (`--iris none`), every
+    /// class outside the workspace is such a class, the system ones included.
+    ///
+    /// ```objectscript raises=<CLASS DOES NOT EXIST> do ##class(Demo.MissingClass).Call()
+    /// Class Demo.MissingClass
+    /// {
+    ///
+    /// ClassMethod Call() As %String
+    /// {
+    ///     Quit ##class(Nope.Missing).Hello() //! A8061
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A8061"]
     #[severity = Error]
     #[message = "Cannot find class '{cls}' in the workspace or on the IRIS instance"]
@@ -458,6 +481,23 @@ type_error_kinds! {
     #[severity = Hint]
     #[message = "Cannot {lookup}"]
     UnconfirmedClass { lookup: ClassLookup },
+    /// No class along the receiver's hierarchy declares the member, nor does IRIS generate one
+    /// with that name; the nearest declared names follow as suggestions. IRIS refuses to compile
+    /// `..Name` for a property or method the class doesn't have.
+    ///
+    /// ```objectscript
+    /// Class Demo.MissingMember
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// Method Greet() As %String
+    /// {
+    ///     Quit "Hello, " _ ..Nmae //! A3139
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A3139"]
     #[severity = Error]
     #[message = "Cannot find member '{mem}' in {cls}{suggestions}{dynamic}"]
@@ -491,6 +531,19 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call"]
     SuperWithoutMethod { method: String, cls: String },
+    /// `$$Label` calls a label as a function, which a label is only when it declares a formal
+    /// parameter list, even an empty `()`. `Do Label` reaches any label; `$$` of a bare one
+    /// compiles and raises `<PARAMETER>` when it runs.
+    ///
+    /// ```objectscript raises=<PARAMETER> do Main^Demo.Labels
+    /// ROUTINE Demo.Labels
+    /// Greet
+    ///     Write "hi", !
+    ///     Quit
+    /// Main
+    ///     Write $$Greet() //! A7604
+    ///     Quit
+    /// ```
     #[code = "A7604"]
     #[severity = Error]
     #[message = "Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>); `{label}()` would make it a function"]
@@ -662,9 +715,24 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "{source} is abstract, so this value is a subclass's, which may be the {target} it is taken for"]
     TypeDowncast { source: Ty, target: Ty },
+    /// Every path to this statement has already quit, returned or thrown, so it never runs. IRIS
+    /// compiles it all the same.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.Unreachable
+    /// {
+    ///
+    /// ClassMethod Answer(verbose As %Boolean) As %Integer
+    /// {
+    ///     Quit 42
+    ///     If verbose Write "never printed", ! //! A1203
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A1203"]
     #[severity = Warning]
-    #[message = "Unreachable code"]
+    #[message = "Unreachable: every path before this statement has quit, returned or thrown"]
     Unreachable,
     #[code = "A8456"]
     #[severity = Warning]
@@ -717,10 +785,30 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional."]
     TooFewArguments { next_arg: String },
+    /// Fewer arguments than this are declared, and the callee has no `args...` to take the rest.
+    /// IRIS compiles the call and raises `<PARAMETER>` when it runs. The first argument beyond
+    /// the declared ones is marked.
+    ///
+    /// ```objectscript raises=<PARAMETER> do ##class(Demo.TooManyArguments).Call()
+    /// Class Demo.TooManyArguments
+    /// {
+    ///
+    /// ClassMethod Add(a As %Integer, b As %Integer) As %Integer
+    /// {
+    ///     Quit a + b
+    /// }
+    ///
+    /// ClassMethod Call() As %Integer
+    /// {
+    ///     Quit ..Add(1, 2, 3) //! A5523
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A5523"]
     #[severity = Error]
-    #[message = "Too many arguments"]
-    TooManyArguments,
+    #[message = "Too many arguments: the callee takes {takes}, and this one is extra"]
+    TooManyArguments { takes: ArgCount },
     #[code = "A7139"]
     #[severity = Error]
     #[message = "$CASE's `:default` must be its last argument"]
@@ -841,6 +929,22 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "This '{ty}' value may be undefined{expr}"]
     MaybeUndefined { ty: Ty, expr: Detail },
+    /// The variable has no value on any path that reaches this use: nothing assigned it, or
+    /// everything that did was killed or never ran. IRIS compiles the code and raises
+    /// `<UNDEFINED>` when it runs.
+    ///
+    /// ```objectscript raises=<UNDEFINED> do ##class(Demo.Undefined).Total()
+    /// Class Demo.Undefined
+    /// {
+    ///
+    /// ClassMethod Total() As %Integer
+    /// {
+    ///     Set sum = 0
+    ///     Quit sum + count //! A7095
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A7095"]
     #[severity = Error]
     #[message = "This value is undefined{expr}"]
@@ -1114,6 +1218,20 @@ impl std::fmt::Display for Declared {
 #[derive(Debug)]
 pub struct Detail(pub Option<String>);
 
+/// "no arguments", "1 argument", "2 arguments".
+#[derive(Debug)]
+pub struct ArgCount(pub usize);
+
+impl std::fmt::Display for ArgCount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            0 => f.write_str("no arguments"),
+            1 => f.write_str("1 argument"),
+            n => write!(f, "{n} arguments"),
+        }
+    }
+}
+
 impl std::fmt::Display for Detail {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
@@ -1221,8 +1339,8 @@ impl TypeError {
         Self::new(kind, range, vec![])
     }
 
-    pub fn too_many_arguments(range: Range) -> Self {
-        QuasiTypeError::too_many_arguments().into_error(|| range)
+    pub fn too_many_arguments(takes: usize, range: Range) -> Self {
+        QuasiTypeError::too_many_arguments(takes).into_error(|| range)
     }
 
     // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
