@@ -1,7 +1,8 @@
 //! "Did you mean" ranking: the closest names to a misspelled one, by Jaro-Winkler similarity.
 
-// The `n` closest candidates, case-insensitively. Jaro-Winkler rewards a shared prefix, which
-// is what a typo like `ISERROR` for `ISERR` is; plain edit distance wouldn't.
+// The `n` closest candidates but the name itself; one differing only in case is the closest.
+// Jaro-Winkler rewards a shared prefix, which is what a typo like `ISERROR` for `ISERR` is; plain
+// edit distance wouldn't.
 pub(crate) fn top_similar<'a>(
     name: &str,
     candidates: impl Iterator<Item = &'a str>,
@@ -9,7 +10,7 @@ pub(crate) fn top_similar<'a>(
 ) -> Vec<String> {
     let target = name.to_lowercase();
     let mut scored: Vec<(f64, &str)> = candidates
-        .filter(|candidate| !candidate.eq_ignore_ascii_case(name))
+        .filter(|candidate| *candidate != name)
         .map(|candidate| (jaro_winkler(&target, &candidate.to_lowercase()), candidate))
         .collect();
     scored.sort_by(|(s1, n1), (s2, n2)| s2.total_cmp(s1).then_with(|| n1.cmp(n2)));

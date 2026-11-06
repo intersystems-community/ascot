@@ -42,8 +42,8 @@ struct MaskedClass {
     generics: BTreeMap<String, String>,
 }
 
-// The classes' members as `MemberInfo`s, by class and lower-cased name (a property and a method
-// may share one). Parsing them types their signatures, which reads `RAW` through `class_type`,
+// The classes' members as `MemberInfo`s, by class and name (a property and a method may share
+// one). Parsing them types their signatures, which reads `RAW` through `class_type`,
 // so the two stay separate statics.
 static RAW: LazyLock<Mask> =
     LazyLock::new(|| serde_json::from_str(include_str!("mask.json")).expect("a valid mask.json"));
@@ -54,10 +54,7 @@ static MEMBERS: LazyLock<HashMap<String, HashMap<String, Vec<MemberInfo>>>> = La
                 .unwrap_or_else(|| panic!("mask.json: {name} does not parse"));
             let mut members: HashMap<String, Vec<MemberInfo>> = HashMap::new();
             for m in info.members {
-                members
-                    .entry(m.name.to_ascii_lowercase())
-                    .or_default()
-                    .push(m);
+                members.entry(m.name.clone()).or_default().push(m);
             }
             (name.clone(), members)
         })
@@ -78,7 +75,7 @@ pub(crate) fn is_abstract(cls: &str) -> bool {
 
 // Whether the mask says `cls` has no member `member`, whatever the dictionary lists.
 pub(crate) fn dropped(cls: &str, member: &str) -> bool {
-    (RAW.classes.get(cls)).is_some_and(|c| c.drop.iter().any(|d| d.eq_ignore_ascii_case(member)))
+    (RAW.classes.get(cls)).is_some_and(|c| c.drop.iter().any(|d| d == member))
 }
 
 /// The member of `cls` named `member` in `kind`'s namespace as the mask declares it, if it does.
@@ -92,17 +89,12 @@ pub(crate) fn replacement(
 
 /// The member of `cls` named `member` in namespace `ns` as the mask declares it, if it does.
 pub(crate) fn declared(cls: &str, member: &str, ns: MemberNs) -> Option<&'static MemberInfo> {
-    (MEMBERS.get(cls)?.get(&member.to_ascii_lowercase())?.iter())
-        .find(|m| MemberNs::of_info(&m.kind) == ns)
+    (MEMBERS.get(cls)?.get(member)?.iter()).find(|m| MemberNs::of_info(&m.kind) == ns)
 }
 
 /// The default of `cls`'s generic parameter `param`, if the mask names it as one.
 pub(crate) fn generic_default(cls: &str, param: &str) -> Option<String> {
-    let generics = &RAW.classes.get(cls)?.generics;
-    generics
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case(param))
-        .map(|(_, default)| default.clone())
+    RAW.classes.get(cls)?.generics.get(param).cloned()
 }
 
 /// A label's signature in a routine the mask covers.

@@ -82,7 +82,7 @@ def shape(header):
 NS = {"ClassMethod": "Method", "ClientMethod": "Method", "Relationship": "Property"}
 def key(header):
     kind, name, _ = shape(header)
-    return NS.get(kind, kind), name.lower()
+    return NS.get(kind, kind), name
 # A line of an include file the mask replaces by its decided form: what IRIS decides at compile
 # time and ascot can't (`#if $$$comClassDefined(...)`). An include of another namespace is skipped.
 for doc, edits in mask.get("sources", {}).items():
@@ -107,6 +107,9 @@ for cls, masked in mask["classes"].items():
         kind, mname, args = shape(m["header"])
         target = members.get(key(m["header"]))
         if target is None:
+            miscased = [h for k, h in members.items() if k[0] == key(m["header"])[0] and k[1].lower() == mname.lower()]
+            if miscased:
+                sys.exit(f"mask.json: {cls}.{mname} differs from IRIS in case:\n  {miscased[0]['header']}\n  {m['header']}")
             base["members"].append(m)
             added += 1
             continue
