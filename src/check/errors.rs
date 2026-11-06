@@ -738,25 +738,79 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Include file '{name}' is not defined in the current workspace"]
     CannotFindInclude { name: String },
-    /// An `#if` whose condition isn't a literal `1` or `0` once its macros are expanded. IRIS
-    /// evaluates any expression at compile time; ascot doesn't, and goes on with the first branch.
+    /// An `#if` or `#elseif` whose condition is not the literal `1` or `0` once its macros are
+    /// expanded. IRIS evaluates any expression at compile time and compiles the branch it picks;
+    /// ascot does not evaluate, so it checks the first branch and skips the rest, which may not be
+    /// what IRIS compiles. A macro that expands to `1` or `0` (`#define DEBUG 1`, `#if $$$DEBUG`)
+    /// makes the choice visible to ascot.
+    ///
+    /// ```objectscript compiles
+    /// ROUTINE Demo.UndecidedIf
+    /// #define MODE "DEBUG"
+    /// Main()
+    ///     #if $$$MODE="DEBUG" //! A5540
+    ///     Write "tracing on", !
+    ///     #else
+    ///     Write "tracing off", !
+    ///     #endif
+    ///     Quit
+    /// ```
     #[code = "A5540"]
     #[severity = Hint]
     #[message = "Cannot decide `#if {condition}`{expansion} at compile time, so its first branch is assumed"]
     UndecidedIf { condition: String, expansion: Expansion },
-    /// A lookup the IRIS context couldn't answer, so what it looked for is taken on trust.
+    /// The IRIS connection failed to answer a lookup: a class, routine or include file the
+    /// workspace doesn't hold was asked of the instance, and the request itself failed (the
+    /// instance is down, the credentials are refused), as opposed to the instance not having it.
+    /// The name is taken to exist and nothing about it is checked. The code may well be fine;
+    /// restore the connection, or check without one (`--iris none`), for a verdict on it.
     #[code = "A4471"]
     #[severity = Hint]
     #[message = "Cannot look up {lookup} on the IRIS instance ({reason}), so it is taken on trust"]
     IrisLookupFailed { lookup: IrisLookup, reason: String },
+    /// A macro's body invokes the macro itself, directly or through other macros, so expanding it
+    /// never ends; ascot gives up after 200 substitutions and leaves the call as written. IRIS
+    /// refuses to compile the line (MPP5649, too many macros referenced on one line). Have the
+    /// body name the macro it meant.
+    ///
+    /// ```objectscript
+    /// ROUTINE Demo.MacroExpansionTooDeep
+    /// #define VERSION "1.0"
+    /// #define BANNER "Demo "_$$$BANNER
+    /// Main()
+    ///     Write $$$BANNER, ! //! A5090
+    ///     Quit
+    /// ```
     #[code = "A5090"]
     #[severity = Error]
     #[message = "The macro '{name}' expands recursively without end"]
     MacroExpansionTooDeep { name: String },
+    /// A macro is called with more arguments than its `#define` declares parameters. IRIS refuses
+    /// to compile the line (MPP5613); ascot leaves the call unexpanded. Drop the extra arguments,
+    /// or declare the parameters the macro needs (`#def1arg` takes the whole argument text as one).
+    ///
+    /// ```objectscript
+    /// ROUTINE Demo.MacroTooManyArguments
+    /// #define MAX(%a,%b) $SELECT(%a>%b:%a,1:%b)
+    /// Main()
+    ///     Write $$$MAX(1,2,3), ! //! A2716
+    ///     Quit
+    /// ```
     #[code = "A2716"]
     #[severity = Error]
     #[message = "Too many arguments to the macro '{name}', which takes {expected}"]
     MacroTooManyArguments { name: String, expected: usize },
+    /// A macro is called with fewer arguments than its `#define` declares parameters. IRIS refuses
+    /// to compile the line (MPP5614); ascot leaves the call unexpanded. Pass every parameter the
+    /// definition declares.
+    ///
+    /// ```objectscript
+    /// ROUTINE Demo.MacroTooFewArguments
+    /// #define BETWEEN(%x,%lo,%hi) ((%x>=%lo)&&(%x<=%hi))
+    /// Main()
+    ///     Write $$$BETWEEN(7,1), ! //! A6127
+    ///     Quit
+    /// ```
     #[code = "A6127"]
     #[severity = Error]
     #[message = "Not enough arguments to the macro '{name}', which takes {expected}"]
@@ -1051,6 +1105,22 @@ type_error_kinds! {
         name: String,
         suggestions: Suggestions,
     },
+    /// An argument of a compile-time macro (one IRIS evaluates with `##expression` or
+    /// `##safeexpression`, such as `$$$ERROR`) that doesn't parse as an expression, typically a
+    /// message that lost its quotes. IRIS pastes the evaluated body in and refuses to compile the
+    /// result. Quote the text, or pass an expression.
+    ///
+    /// ```objectscript
+    /// Class Demo.InvalidMacroArgument
+    /// {
+    ///
+    /// ClassMethod Save() As %Status
+    /// {
+    ///     Quit $$$ERROR($$$GeneralError, Not implemented) //! A6587
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A6587"]
     #[severity = Error]
     #[message = "Invalid macro argument: {reason}"]
@@ -1185,10 +1255,48 @@ type_error_kinds! {
     #[severity = Information]
     #[message = "Type checking not implemented for '{what}'"]
     Unimplemented { what: String },
+    /// A `#define` in one method's body is used from another method. IRIS compiles a class's
+    /// methods in name order into one routine and keeps a body's definitions for the rest of it,
+    /// so the macro reaches the methods after it alphabetically and no other, and renaming either
+    /// method changes what compiles. Define it in an include file the class `Include`s.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.MacroFromMethodBody
+    /// {
+    ///
+    /// ClassMethod Greet() As %String
+    /// {
+    ///     #define GREETING "Hello"
+    ///     Quit $$$GREETING
+    /// }
+    ///
+    /// ClassMethod Shout() As %String
+    /// {
+    ///     Quit $$$GREETING_"!" //! A3904
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A3904"]
     #[severity = Warning]
     #[message = "The macro '{name}' is defined in the body of method '{method}'; IRIS keeps it for the methods compiled after it (alphabetically), but it belongs in an include file or at class level"]
     MacroFromMethodBody { name: String, method: String },
+    /// `$$$Name` names a macro no `#define` in reach declares: not in the file, its `#include`s,
+    /// nor, for a class, the system include files every class gets; the nearest known names
+    /// follow as suggestions. IRIS refuses to compile the line (MPP5610). Fix the name, or
+    /// `#include` (in a routine) or `Include` (in a class) the file that defines it.
+    ///
+    /// ```objectscript
+    /// Class Demo.UndefinedMacro
+    /// {
+    ///
+    /// ClassMethod Check(sc As %Status) As %Boolean
+    /// {
+    ///     Quit $$$ISOKAY(sc) //! A2797
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A2797"]
     #[severity = Error]
     #[message = "The macro '{name}' is undefined{suggestions}"]
