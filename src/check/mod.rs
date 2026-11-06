@@ -35,8 +35,8 @@ use types::*;
 
 pub(crate) use env::{DocumentEnv, WorkspaceEnv, labels_of};
 pub use errors::{
-    Available, ClassLookup, Declared, Detail, DynamicGet, InRoutine, Suggestions, SuperclassOf,
-    SyntaxErrorText, TypeErrorKind, TypeParamHint,
+    ArgCount, Available, ClassLookup, Declared, Detail, DynamicGet, InRoutine, Suggestions,
+    SuperclassOf, SyntaxErrorText, TypeErrorKind, TypeParamHint,
 };
 pub(crate) use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
@@ -3367,7 +3367,10 @@ fn check_call<'a, 'b>(
                 } else if arg.is_none() {
                     continue;
                 } else {
-                    flow.add_soft_diagnostic(TypeError::too_many_arguments(env.range(arg)).into());
+                    flow.add_soft_diagnostic(
+                        TypeError::too_many_arguments(base.normal_args.len(), env.range(arg))
+                            .into(),
+                    );
                     builtins::check_args_any(env, flow, args[i..].iter().copied())?;
                     break;
                 };

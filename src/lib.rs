@@ -2217,7 +2217,11 @@ mod tests {
                     "The labels of routine 'Compiled' aren't known, so calls into it can't be checked precisely"
                         .to_string()
                 ),
-                (Error, "Too many arguments".to_string()),
+                (
+                    Error,
+                    "Too many arguments: the callee takes no arguments, and this one is extra"
+                        .to_string()
+                ),
             ]
         );
     }
