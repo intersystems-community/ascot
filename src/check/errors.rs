@@ -2431,7 +2431,7 @@ type_error_kinds! {
     /// `ZQUIT` takes an integer of 1 or more; a literal below 1, such as `0`, a negative or a
     /// non-number, acts as a bare `ZQUIT` and clears the whole stack, and a fraction is truncated,
     /// so `1.5` is `1`. IRIS compiles it. Write the integer meant, or a bare `ZQUIT` if clearing
-    /// the stack is.
+    /// the stack is what is meant.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.ZQuitArgument
