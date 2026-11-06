@@ -179,21 +179,29 @@ fn the_examples_in_the_docs_hold() {
     assert!(failures.is_empty(), "\n{}\n", failures.join("\n"));
 }
 
-// Lower this as examples are written; it never goes up.
-const WITHOUT_EXAMPLE: usize = 92;
+/// The kinds no example can show, each with why.
+const NO_EXAMPLE: &[(&str, &str)] = &[
+    (
+        "A4471",
+        "fires only when an IRIS lookup itself fails: a refused connection, a bad password",
+    ),
+    (
+        "A3717",
+        "needs two documents declaring one class name, and an example's documents are named after their class",
+    ),
+];
 
 #[test]
-fn every_kind_gets_an_example() {
+fn every_kind_has_an_example_or_a_reason_not_to() {
     let with: BTreeSet<&str> = all_examples().iter().map(|e| e.code).collect();
-    let without: Vec<&str> = TypeErrorKind::DOCS
+    let without: BTreeSet<&str> = TypeErrorKind::DOCS
         .iter()
         .map(|(code, _)| *code)
         .filter(|code| !with.contains(code))
         .collect();
-    assert!(
-        without.len() <= WITHOUT_EXAMPLE,
-        "{} kinds have no example (at most {WITHOUT_EXAMPLE} may): {}",
-        without.len(),
-        without.join(" ")
+    let excused: BTreeSet<&str> = NO_EXAMPLE.iter().map(|(code, _)| *code).collect();
+    assert_eq!(
+        without, excused,
+        "kinds without an example must be exactly those `NO_EXAMPLE` excuses"
     );
 }

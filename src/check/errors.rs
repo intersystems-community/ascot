@@ -479,6 +479,15 @@ type_error_kinds! {
     /// in the environment. IRIS refuses to compile a class whose property type or superclass does
     /// not exist: check the name, or open the class's file in the workspace. Without an
     /// environment the same reference is `CannotFindClass`.
+    ///
+    /// ```objectscript rejected
+    /// Class Demo.UnconfirmedClass
+    /// {
+    ///
+    /// Property Owner As Demo.Nobody; //! A1054
+    ///
+    /// }
+    /// ```
     #[code = "A1054"]
     #[severity = Hint]
     #[message = "Cannot {lookup}"]
@@ -2344,6 +2353,15 @@ type_error_kinds! {
     /// a class header or member declaration, or a line of a routine or include file, where a
     /// method body's error is `InvalidSyntax`. Nothing else in the document is checked. IRIS
     /// refuses to compile such a document as well.
+    ///
+    /// ```objectscript rejected
+    /// Class Demo.DocumentSyntaxError
+    /// {
+    ///
+    /// Property Name As %String [ Required ; //! A1727
+    ///
+    /// }
+    /// ```
     #[code = "A1727"]
     #[severity = Warning]
     #[message = "{err}"]

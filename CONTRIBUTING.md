@@ -42,12 +42,13 @@ one marker per diagnostic the line gets. Two checks hold the example to its word
   declarations of the newest IRIS release (`ASCOT_TEST_IRIS` names a live instance instead;
   ```` ```objectscript env=none ```` checks the block without one, as `--iris none` would) and
   requires the marked lines to get exactly those diagnostics and every other line none. A style
-  rule's block names its rules: ```` ```objectscript style={"command":{"case":"Upper"}} ````.
+  rule's block names its rules, as one word: ```` ```objectscript style={"command":{"case":"Upper"}} ````.
 - `scripts/verify-examples.py --iris <url>` loads each example into an IRIS instance. An
   error's example must be rejected by the compiler, or, when its block reads
   ```` ```objectscript raises=<ERROR> statement ````, compile and raise that error when the
   statement runs; a warning's or hint's example, and a block marked
-  ```` ```objectscript compiles ````, must compile. CI runs it in the `iris` job.
+  ```` ```objectscript compiles ````, must compile; ```` ```objectscript rejected ```` says IRIS
+  refuses the example although ascot only warns or hints. CI runs it in the `iris` job.
 
 A private corpus of annotated ObjectScript pins what ascot reports on every file, hints and
 all. It is not run in CI, so a PR that changes what is reported should say so in its

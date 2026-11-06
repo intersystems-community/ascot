@@ -9,7 +9,8 @@ routine whose offending lines end in `//! A1234` (`tests/examples.rs` checks tho
 error's example must be rejected by the compiler, unless its block says `raises=<ERROR> statement`:
 then it must compile, and the statement, fed to `--run` (an `iris session`, through `docker exec -i`
 when IRIS runs in a container), must raise that error. A warning's or hint's example, and a block
-marked `compiles`, must compile. Exits 1 on any disagreement.
+marked `compiles`, must compile; one marked `rejected` says IRIS refuses it although ascot only
+warns or hints. Exits 1 on any disagreement.
 """
 import argparse, base64, json, os, re, shlex, subprocess, sys, urllib.parse, urllib.request
 
@@ -33,9 +34,12 @@ def call(method, path, body=None):
     except urllib.error.HTTPError as e:
         return json.load(e)
 
+# A refused PUT (a class with two members of one name) reports only in `result.status`.
 def errors(resp):
+    status = resp.get('result', {}).get('status', '') if isinstance(resp.get('result'), dict) else ''
     return [e['error'] for e in resp.get('status', {}).get('errors', [])] + \
-        [l.strip() for l in resp.get('console', []) if l.startswith('ERROR') and not l.strip().endswith('.cls')]
+        [l.strip() for l in resp.get('console', []) if l.startswith('ERROR') and not l.strip().endswith('.cls')] + \
+        ([status.strip()] if status.startswith('ERROR') else [])
 
 # The kinds: (code, severity, doc lines) from `type_error_kinds!`.
 def kinds():
@@ -76,6 +80,7 @@ def example(docs):
 def expectation(severity, info):
     for inf in info:
         if m := re.match(r'raises=(<[A-Z ]+>)\s+(.+)$', inf): return 'raises', m.group(1), m.group(2)
+    if any('rejected' in inf.split() for inf in info): return 'rejected', None, None
     if any('compiles' in inf.split() for inf in info) or severity != 'Error': return 'compiles', None, None
     return 'rejected', None, None
 
