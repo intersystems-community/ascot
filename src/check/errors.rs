@@ -815,23 +815,103 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Not enough arguments to the macro '{name}', which takes {expected}"]
     MacroTooFewArguments { name: String, expected: usize },
+    /// `$NAME` and `$QUERY` take a variable the code can reach by name at run time, which a
+    /// procedure block's private locals are not: IRIS refuses to compile either on a local the
+    /// method has not listed as public. Add the variable to the method's `PublicList`, or use a
+    /// global.
+    ///
+    /// ```objectscript
+    /// Class Demo.PrivateVariableNotAllowed
+    /// {
+    ///
+    /// ClassMethod Path() As %String
+    /// {
+    ///     Set data("a", 1) = "x"
+    ///     Quit $NAME(data("a", 1)) //! A3485
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A3485"]
     #[severity = Error]
     #[message = "{function} can't take '{name}', which is private to this procedure block"]
     PrivateVariableNotAllowed { function: String, name: String },
+    /// `$ZF(-3)` has no by-reference arguments: a `.x` in the call is a syntax error IRIS refuses
+    /// to compile. Pass the value itself and take what the function returns.
+    ///
+    /// ```objectscript
+    /// Class Demo.ByRefArgumentNotAllowed
+    /// {
+    ///
+    /// ClassMethod Call() As %Integer
+    /// {
+    ///     Quit $ZF(-3, "mylib", "Func", .out) //! A5268
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A5268"]
     #[severity = Error]
     #[message = "{function} takes no by-reference argument"]
     ByRefArgumentNotAllowed { function: String },
+    /// The argument between two commas is empty where the function takes no empty argument:
+    /// `$FNUMBER(x,,2)` is fine, `$JUSTIFY(x,,2)` is not (which function takes an empty argument
+    /// in which position was measured on IRIS), and IRIS refuses to compile the call. Spell the
+    /// argument out.
+    ///
+    /// ```objectscript
+    /// Class Demo.OmittedArgument
+    /// {
+    ///
+    /// ClassMethod Cents(amount As %Numeric) As %String
+    /// {
+    ///     Quit $JUSTIFY(amount, , 2) //! A7342
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A7342"]
     #[severity = Error]
     #[message = "Argument {position} of {function} can't be left empty"]
     OmittedArgument { function: String, position: usize },
-    /// The handle a conversion keeps its state in has to be a plain local variable.
+    /// `$ZCONVERT(string, mode, table, handle)` keeps the state of an I/O translation cut
+    /// mid-character in its fourth argument, and IRIS takes nothing but a plain local variable
+    /// there: a subscripted node, a global or a literal is a compile error. Give it an
+    /// unsubscripted local.
+    ///
+    /// ```objectscript
+    /// Class Demo.HandleNotALocal
+    /// {
+    ///
+    /// ClassMethod ToUtf8(text As %String) As %String
+    /// {
+    ///     Quit $ZCONVERT(text, "O", "UTF8", state(1)) //! A4652
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A4652"]
     #[severity = Error]
     #[message = "{function} takes only a plain local variable as its handle"]
     HandleNotALocal { function: String },
+    /// `Set $VECTOR(v, position) = value` leaves out the element type, which the settable form
+    /// always takes as its third argument: IRIS refuses to compile it, a vector that already
+    /// exists included. Write `$VECTOR(v, position, "integer")`, or whichever type the vector
+    /// holds.
+    ///
+    /// ```objectscript
+    /// Class Demo.SetVectorWithoutType
+    /// {
+    ///
+    /// ClassMethod Sum() As %Integer
+    /// {
+    ///     Set $VECTOR(v, 1, "integer") = 3
+    ///     Set $VECTOR(v, 2) = 4 //! A8820
+    ///     Quit $VECTOR(v, 1) + $VECTOR(v, 2)
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A8820"]
     #[severity = Error]
     #[message = "SET $VECTOR needs its third argument, the type"]
@@ -1028,7 +1108,22 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Property '{name}' is MultiDimensional, so `{name}()` names no node: give it a subscript"]
     NodeWithoutSubscripts { name: String },
-    /// IRIS compiles and runs the call, but the documentation gives the extra argument no meaning.
+    /// `$ZF(-1, command)` with more arguments than the documentation names, the one `$`-function
+    /// whose extra arguments reach the checker (any other function's are refused as the call is
+    /// parsed): IRIS compiles and runs the call, as measured, and the documentation gives the
+    /// extra argument no meaning. Drop it.
+    ///
+    /// ```objectscript
+    /// Class Demo.UndocumentedArgument
+    /// {
+    ///
+    /// ClassMethod Shell() As %Integer
+    /// {
+    ///     Quit $ZF(-1, "ls", 1) //! A5156
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A5156"]
     #[severity = Warning]
     #[message = "${function} is documented to take at most {documented} argument(s), but was given {given}; IRIS tolerates the extra"]
@@ -1087,10 +1182,38 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Too many arguments: the callee takes {takes}, and this one is extra"]
     TooManyArguments { takes: ArgCount },
+    /// `$CASE` takes its `:default` as the last argument only; an arm after it is a syntax error
+    /// IRIS refuses to compile. Move the `:default` to the end.
+    ///
+    /// ```objectscript
+    /// Class Demo.CaseDefaultNotLast
+    /// {
+    ///
+    /// ClassMethod Name(code As %Integer) As %String
+    /// {
+    ///     Quit $CASE(code, 1:"one", :"many", 2:"two") //! A7139
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A7139"]
     #[severity = Error]
     #[message = "$CASE's `:default` must be its last argument"]
     CaseDefaultNotLast,
+    /// A `$` function with a name ObjectScript has no function for, usually a misspelling; the
+    /// nearest names follow as suggestions. IRIS refuses to compile the call.
+    ///
+    /// ```objectscript
+    /// Class Demo.UnknownFunction
+    /// {
+    ///
+    /// ClassMethod Size(text As %String) As %Integer
+    /// {
+    ///     Quit $LENGHT(text) //! A3850
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A3850"]
     #[severity = Error]
     #[message = "${name} is not a recognized function{suggestions}"]
