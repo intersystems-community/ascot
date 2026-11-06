@@ -2,7 +2,7 @@
 """Load every example in the diagnostics' doc comments into IRIS and check what each message claims.
 
 Usage: scripts/verify-examples.py --iris http://user:pass@host:port[/prefix] [--namespace USER]
-                                  [--run "iris session IRIS -U USER"]
+                                  [--run "iris session IRIS -U USER"] [--only A1234,A5678]
 
 An example is a ```objectscript block in a kind's doc comment in src/check/errors.rs: a class or
 routine whose offending lines end in `//! A1234` (`tests/examples.rs` checks those). Here, an
@@ -17,6 +17,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument('--iris', required=True)
 ap.add_argument('--namespace', default='USER')
 ap.add_argument('--run', default='iris session IRIS -U USER')
+ap.add_argument('--only', default=None, help='comma-separated codes; the rest are skipped')
 args = ap.parse_args()
 ROOT = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
@@ -87,7 +88,9 @@ def run(statement):
     return f'? ({out.strip()[-200:]})'
 
 bad = total = 0
+only = set(args.only.split(',')) if args.only else None
 for code, severity, docs in kinds():
+    if only and code not in only: continue
     documents, info = example(docs)
     if not documents: continue
     total += 1

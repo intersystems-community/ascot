@@ -22,6 +22,8 @@ struct Document {
 struct Example {
     code: &'static str,
     style: Option<String>,
+    /// ```` ```objectscript env=none ````: checked without an environment, as `--iris none`.
+    no_environment: bool,
     documents: Vec<Document>,
 }
 
@@ -29,6 +31,7 @@ struct Example {
 fn examples(code: &'static str, doc: &str) -> Option<Example> {
     let mut documents = Vec::new();
     let mut style = None;
+    let mut no_environment = false;
     let mut lines = doc.lines();
     while let Some(line) = lines.next() {
         let Some(info) = line.trim().strip_prefix("```objectscript") else {
@@ -38,6 +41,7 @@ fn examples(code: &'static str, doc: &str) -> Option<Example> {
             if let Some(json) = word.strip_prefix("style=") {
                 style = Some(json.to_string());
             }
+            no_environment |= word == "env=none";
         }
         let mut text = Vec::new();
         let mut expected = BTreeSet::new();
@@ -64,6 +68,7 @@ fn examples(code: &'static str, doc: &str) -> Option<Example> {
     (!documents.is_empty()).then_some(Example {
         code,
         style,
+        no_environment,
         documents,
     })
 }
@@ -136,8 +141,9 @@ fn the_examples_in_the_docs_hold() {
         let style = example.style.as_deref().map(|json| {
             ascot::style::parse(json).unwrap_or_else(|e| panic!("{}: {e}", example.code))
         });
-        let workspace =
-            ascot::Workspace::native(Some(Box::new(Shared(environment.clone()))), style);
+        let iris: Option<Box<dyn IrisContext>> =
+            (!example.no_environment).then(|| Box::new(Shared(environment.clone())) as _);
+        let workspace = ascot::Workspace::native(iris, style);
         for document in &example.documents {
             workspace.open(document.uri.clone(), document.text.clone());
         }
