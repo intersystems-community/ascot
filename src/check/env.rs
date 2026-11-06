@@ -1023,7 +1023,11 @@ impl<'a> WorkspaceEnv<'a> {
                                         receiver.name.clone(),
                                         mem.to_string(),
                                         cls != receiver.name,
-                                        cls.clone(),
+                                        if matches!(resolved, Some(Class::Unknown(None))) {
+                                            UnseenClass::Unparsed(cls.clone())
+                                        } else {
+                                            UnseenClass::Missing(cls.clone())
+                                        },
                                         range,
                                     ),
                                 };
