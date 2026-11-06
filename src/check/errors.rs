@@ -1068,6 +1068,23 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "'{meta_type}' is not a recognized parameter type; available: {available}"]
     UnrecognizedParameterType { meta_type: String, available: Available },
+    /// ObjectScript has no operator precedence: `a + b * c` is `(a + b) * c`. Fires where an
+    /// operator that convention binds loosely is directly followed by one it binds tightly (`+`
+    /// then `*`, `=` then `+`, `&&` then `=`), the order in which left-to-right evaluation departs
+    /// from the conventional reading; `a * b + c` comes out the same either way. IRIS compiles and
+    /// computes the expression as written; parentheses say which reading is meant.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.MixedPrecedence
+    /// {
+    ///
+    /// ClassMethod Total(price As %Numeric, quantity As %Integer, shipping As %Numeric) As %Numeric
+    /// {
+    ///     Quit shipping + price * quantity //! A7155
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A7155"]
     #[severity = Warning]
     #[message = "ObjectScript has no operator precedence and evaluates strictly left-to-right; this may not compute what you expect"]
@@ -1521,6 +1538,27 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Parameter '{name}' is a constant: it takes no arguments and can't be assigned"]
     ParameterIsConstant { name: String },
+    /// The call leaves out a parameter that has no default and isn't `Output`, so the callee
+    /// finds it undefined, and reading it raises `<UNDEFINED>` unless the callee tests `$Data`
+    /// first. IRIS compiles the call, as it does any call with fewer arguments than parameters.
+    /// Pass the argument, or give the parameter a default.
+    ///
+    /// ```objectscript raises=<UNDEFINED> do ##class(Demo.TooFewArguments).Call()
+    /// Class Demo.TooFewArguments
+    /// {
+    ///
+    /// ClassMethod Greet(name As %String) As %String
+    /// {
+    ///     Quit "Hello, " _ name
+    /// }
+    ///
+    /// ClassMethod Call() As %String
+    /// {
+    ///     Quit ..Greet() //! A6705
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A6705"]
     #[severity = Warning]
     #[message = "Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional."]
@@ -1674,6 +1712,28 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "{value} is a number here, implicitly converted to the string \"{value}\""]
     NumberImplicitlyConvertedToString { value: String },
+    /// `Do` runs the call and drops its value, which for a `%Status` or `%Boolean` return is the
+    /// callee's report of whether it worked: the caller goes on as if it had. IRIS compiles and
+    /// runs the call. `Set sc = ..Save(...)` followed by `$$$ISERR(sc)`, or `If ..Save(...)`,
+    /// puts the result to use.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.DiscardedReturnValue
+    /// {
+    ///
+    /// ClassMethod Save(name As %String) As %Status
+    /// {
+    ///     Set ^Demo.Names(name) = $Horolog
+    ///     Quit $$$OK
+    /// }
+    ///
+    /// ClassMethod Call()
+    /// {
+    ///     Do ..Save("Ann") //! A4556
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A4556"]
     #[severity = Warning]
     #[message = "This call returns {class}, which Do discards -- consider Set to capture it, or checking it directly"]
@@ -1753,18 +1813,96 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "'{format}' is not a valid $FNUMBER format: {reason}"]
     InvalidFNumberFormat { format: String, reason: String },
+    /// The method declares a return type, and this `Quit` or `Return` has no value to give it.
+    /// IRIS compiles the method, and a caller that takes the value (`Set x = ..Half(3)`) raises
+    /// `<COMMAND>` when this `Quit` runs; `Do` tolerates it. Return a value of the declared type,
+    /// or drop the `As` clause if the method has nothing to return.
+    ///
+    /// ```objectscript raises=<COMMAND> write ##class(Demo.ReturnNothingForX).Half(3)
+    /// Class Demo.ReturnNothingForX
+    /// {
+    ///
+    /// ClassMethod Half(n As %Integer) As %Integer
+    /// {
+    ///     If n # 2 Quit //! A6781
+    ///     Quit n / 2
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A6781"]
     #[severity = Error]
     #[message = "Expected return value of type '{wanted}' but got nothing"]
     ReturnNothingForX { wanted: Ty },
+    /// The method declares no return type, and this `Quit` or `Return` carries a value: a caller
+    /// that asks for one gets it, but nothing in the signature says so. IRIS compiles and runs
+    /// it. Declare the type with `As`, or drop the value.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.ReturnXForNothing
+    /// {
+    ///
+    /// ClassMethod Log(message As %String)
+    /// {
+    ///     Write message, !
+    ///     Quit 1 //! A8997
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A8997"]
     #[severity = Warning]
     #[message = "Unexpected return value of type '{actual}'"]
     ReturnXForNothing { actual: Ty },
+    /// `Quit` inside a `For`, `While`, `Do ... While`, `Try` or `Catch` block leaves the block,
+    /// not the method, so it has no caller to hand a value to. IRIS refuses to compile an
+    /// argumented one in a `While`, `Do ... While`, `Try` or `Catch` block (`QUIT argument not
+    /// allowed`), and compiles one in a `For` loop but raises `<COMMAND>` when it runs. Leave the
+    /// block with a bare `Quit` and return the value after it, or `Return` it from inside.
+    ///
+    /// ```objectscript raises=<COMMAND> do ##class(Demo.QuitXInControl).FirstNegative($ListBuild(1, -2, 3))
+    /// Class Demo.QuitXInControl
+    /// {
+    ///
+    /// ClassMethod FirstNegative(list As %List) As %Integer
+    /// {
+    ///     For i = 1:1:$ListLength(list) {
+    ///         Set item = $List(list, i)
+    ///         If item < 0 Quit item //! A4963
+    ///     }
+    ///     Quit 0
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A4963"]
     #[severity = Error]
     #[message = "Quit with {actual} inside control structure"]
     QuitXInControl { actual: Ty },
+    /// The caller's `.` alone makes an argument by-reference; `ByRef` and `Output` on the
+    /// parameter only declare the intent. Here the two disagree: a plain argument where the
+    /// parameter is `ByRef` or `Output`, so the callee's assignments never reach the caller, or
+    /// a dotted one where the parameter is neither, so they do without the signature saying so.
+    /// IRIS compiles and runs both. Add or drop the `.`, or correct the declaration.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.MismatchArgumentAndArgumentMode
+    /// {
+    ///
+    /// ClassMethod Increment(ByRef counter As %Integer)
+    /// {
+    ///     Set counter = counter + 1
+    /// }
+    ///
+    /// ClassMethod Call() As %Integer
+    /// {
+    ///     Set counter = 0
+    ///     Do ..Increment(counter) //! A5579
+    ///     Quit counter
+    /// }
+    ///
+    /// }
+    /// ```
     #[code = "A5579"]
     #[severity = Warning]
     #[message = "Passing {actual} argument to '{name}', {wanted} parameter"]
