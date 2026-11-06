@@ -1542,6 +1542,36 @@ mod tests {
     }
 
     #[test]
+    fn with_an_environment_a_superclass_it_lacks_is_a_hint_at_the_extends() {
+        let empty = format!(
+            r#"{{"version":"{}","namespace":"%SYS","classes":{{}},"includes":{{}},"routines":{{}}}}"#,
+            declared::DECLARATIONS_VERSION
+        );
+        let workspace = Workspace::new(Some(bindings::Env::Declarations(empty.into_bytes())), None);
+        let uri = "Probe.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Probe Extends Nope.Missing {\nMethod Foo() {\n do ..SomeInheritedMethod()\n quit\n}\n}\n".to_string(),
+        );
+
+        let diagnostics = workspace.diagnostics(uri);
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d.severity == bindings::DiagnosticSeverity::Hint)
+        );
+        assert!(diagnostics[0].message.contains("Nope.Missing"));
+        let range = diagnostics[0].range;
+        assert_eq!(
+            (range.start.character, range.end.character),
+            (25, 37),
+            "{range:?}"
+        );
+        assert!(diagnostics[1].message.contains("SomeInheritedMethod"));
+    }
+
+    #[test]
     fn open_ignores_a_file_with_an_unrecognized_extension() {
         let workspace = Workspace::new(None, None);
         let uri = "notes.txt".to_string();
