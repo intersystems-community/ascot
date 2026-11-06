@@ -561,7 +561,7 @@ impl<'a> WorkspaceEnv<'a> {
                 Some(Class::Workspace(_, details)) => names.extend(details.names(N::NS).cloned()),
                 Some(Class::Iris(info)) => names.extend(
                     (info.members.iter())
-                        .filter(|m| MemberNs::of_info(&m.kind) == N::NS)
+                        .filter(|m| MemberNs::of_info(&m.kind) == N::NS && !m.name.starts_with('*'))
                         .filter(|m| {
                             !crate::mask::dropped(m.origin.as_deref().unwrap_or(&cls), &m.name)
                         })
@@ -905,12 +905,40 @@ impl<'a> WorkspaceEnv<'a> {
         };
         let at = |err: FindError| QuasiTypeError::from(err).into_error(|| range);
         let mut found = self.find::<N>(obj, mem, own, range).map_err(at)?;
+        // `obj.nameGet()` on a dynamic object: the mask's `*Get` member takes every longer name
+        // ending in `Get` that no class declares, as `%DispatchMethod` there does (`suffix_names`).
+        if found.is_none() {
+            found = self.find_by_suffix::<N>(obj, mem, own, range).map_err(at)?;
+        }
         // Dynamic dispatch: a class overriding the hook takes any member name no class has.
         if found.is_none() {
             let hook = |hook: &str| Some(self.find::<Methods>(obj, hook, own, range).ok()??.ty);
             found = N::dispatched(obj, hook).map(Member::undeclared);
         }
         Ok(found)
+    }
+
+    fn find_by_suffix<N: Namespace>(
+        &self,
+        obj: &ClsOrIns,
+        mem: &str,
+        own: bool,
+        range: bindings::Range,
+    ) -> Result<Option<Member<N::Ty>>, FindError> {
+        let named = |err: FindError| match err {
+            FindError::InstanceOnly(_) => FindError::InstanceOnly(mem.to_string()),
+            err => err,
+        };
+        for &name in crate::mask::suffix_names() {
+            let suffix = &name[1..];
+            if mem.len() > suffix.len()
+                && mem.ends_with(suffix)
+                && let Some(member) = self.find::<N>(obj, name, own, range).map_err(named)?
+            {
+                return Ok(Some(member));
+            }
+        }
+        Ok(None)
     }
 
     // The value the nearest class up from `cls` gives the parameter `param`, when it is a class

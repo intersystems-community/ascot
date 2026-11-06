@@ -2816,6 +2816,8 @@
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
     { "header": "Method %Push(value As %Any, type As %String = \"\") As %DynamicAbstractObject" },
     { "header": "Method %Set(key As %Integer, value As %Any, type As %String = \"\") As %DynamicAbstractObject" },
+    { "header": "Method \"*Get\"() As %Any" },
+    { "header": "Method \"*Set\"(value As %Any) As This" },
     { "header": "Method add(value As %Any) As This" },
     { "header": "Method addAll(value As %AbstractSet) As This" },
     { "header": "ClassMethod fromObject(source = \"\", returnValue = \"\", laxMode As %Integer = 1) As This" }
@@ -2840,7 +2842,9 @@
    "members": [
     { "header": "Method %Get(key As %String, default As %Any = \"\", type As %String = \"\") As %Any" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
-    { "header": "Method %Set(key As %String, value As %Any, type As %String = \"\") As %DynamicAbstractObject" }
+    { "header": "Method %Set(key As %String, value As %Any, type As %String = \"\") As %DynamicAbstractObject" },
+    { "header": "Method \"*Get\"() As %Any" },
+    { "header": "Method \"*Set\"(value As %Any) As This" }
    ]
   },
   "%Library.EnsembleMgr": {

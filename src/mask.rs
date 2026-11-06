@@ -2,7 +2,7 @@
 //! the declaration format (`declared`). `scripts/prebuilt-declarations.sh` composes it into the
 //! pre-built declarations, and a live instance is read through it here.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::LazyLock;
 
 use serde::Deserialize;
@@ -90,6 +90,21 @@ pub(crate) fn replacement(
 /// The member of `cls` named `member` in namespace `ns` as the mask declares it, if it does.
 pub(crate) fn declared(cls: &str, member: &str, ns: MemberNs) -> Option<&'static MemberInfo> {
     (MEMBERS.get(cls)?.get(member)?.iter()).find(|m| MemberNs::of_info(&m.kind) == ns)
+}
+
+/// The `*Suffix` names the mask declares members under: `*Get` and `*Set` on `%DynamicObject`
+/// and `%DynamicArray`, whose `%DispatchMethod` serves `nameGet()` and `nameSet(value)` for any
+/// property name. A name no class declares resolves to the `*Suffix` member when it is longer
+/// than the suffix and ends in it.
+pub(crate) fn suffix_names() -> &'static [&'static str] {
+    static NAMES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+        let names: BTreeSet<&str> = (MEMBERS.values().flat_map(|members| members.keys()))
+            .filter(|name| name.starts_with('*'))
+            .map(String::as_str)
+            .collect();
+        names.into_iter().collect()
+    });
+    &NAMES
 }
 
 /// The default of `cls`'s generic parameter `param`, if the mask names it as one.
