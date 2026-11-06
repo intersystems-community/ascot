@@ -58,7 +58,8 @@ ascot can't, such as `#if $$$comClassDefined(...)`; an include the namespace lac
 
 The generated files are published as assets of the `declarations` GitHub Release, a prerelease
 on a fixed tag that is never GitHub's "latest" (which `releases/latest/download` must keep
-resolving to an ascot build); its notes are `.github/declarations-release.md`. The assets are named
+resolving to an ascot build); its notes are `.github/declarations-release.md`, re-applied by each run.
+The assets are named
 `iris-community-<release>.d.json.gz` with a `.sha256` beside each, which is where
 `--iris <release>` downloads from. The `Declarations` workflow builds and uploads one
 (`Run workflow`, with the release), or by hand:
