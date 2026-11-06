@@ -1541,6 +1541,35 @@ mod tests {
         assert_eq!(diagnostics[1].range.start.line, 2);
     }
 
+    // The user-command alternative's failure is not appended to the command report: one line,
+    // as before `ZNAME args` could be parsed, and `ZNAME args` itself still is.
+    #[test]
+    fn an_unrecognized_command_is_reported_in_one_line() {
+        for (body, start) in [
+            (
+                "ClassMethod M(x) {\n Ydummyword x\n}\n",
+                "'Ydummyword' is not a recognized command",
+            ),
+            (
+                "ClassMethod M() {\n ZKill\n}\n",
+                "'ZKill' is not a recognized command",
+            ),
+        ] {
+            let diagnostics = class_diagnostics(body);
+            let error = diagnostics
+                .iter()
+                .find(|d| d.code == "A8073")
+                .expect("A8073");
+            assert!(error.message.starts_with(start), "{}", error.message);
+            assert!(!error.message.contains('\n'), "{}", error.message);
+        }
+        let diagnostics = class_diagnostics("ClassMethod M(x) {\n ZFoo x\n Quit\n}\n");
+        assert!(
+            diagnostics.iter().any(|d| d.code == "A5362"),
+            "{diagnostics:?}"
+        );
+    }
+
     #[test]
     fn with_an_environment_a_superclass_it_lacks_is_a_hint_at_the_extends() {
         let empty = format!(
