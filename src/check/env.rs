@@ -872,7 +872,7 @@ impl<'a> WorkspaceEnv<'a> {
                 // Every `%Get`-style accessor regardless of score: a misspelled property is
                 // often one, and a `%Get` means the class may take any name.
                 for name in self.names::<Methods>(obj.name()) {
-                    has_get |= name.eq_ignore_ascii_case("%Get");
+                    has_get |= name == "%Get";
                     if name.starts_with("%Get")
                         && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(&name))
                     {
@@ -930,8 +930,7 @@ impl<'a> WorkspaceEnv<'a> {
                 Some(Class::Iris(info)) => {
                     let own = (info.members.iter())
                         .find(|m| {
-                            m.name.eq_ignore_ascii_case(param)
-                                && MemberNs::of_info(&m.kind) == MemberNs::Parameter
+                            m.name == param && MemberNs::of_info(&m.kind) == MemberNs::Parameter
                         })
                         .cloned()
                         .or_else(|| {
@@ -1089,10 +1088,8 @@ impl<'a> WorkspaceEnv<'a> {
                 })
             }
             Some(Class::Iris(info)) => {
-                let named = |m: &&bindings::MemberInfo| {
-                    m.name.eq_ignore_ascii_case(mem)
-                        || m.aliases.iter().any(|a| a.eq_ignore_ascii_case(mem))
-                };
+                let named =
+                    |m: &&bindings::MemberInfo| m.name == mem || m.aliases.iter().any(|a| a == mem);
                 let member = (info.members.iter())
                     .find(|m| named(m) && MemberNs::of_info(&m.kind) == N::NS)
                     .cloned()
