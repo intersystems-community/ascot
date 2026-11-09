@@ -17,7 +17,9 @@ use either::Either::{self, Left, Right};
 use tygr::{Grammar, IntoInner, OLC, Prefix, Range, StringOf};
 
 use crate::bindings::{self, RefMode};
-use crate::check::types::{NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty};
+use crate::check::types::{
+    Const, NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty, with_pattern,
+};
 use crate::cos::{self, AllowMacro, FailableKeyword, HasMemberKeyword, KeywordList};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -204,6 +206,8 @@ pub(crate) struct ClassDetails {
     pub(crate) keywords: ClassKeywords,
     // What in the keyword list is no class keyword as written; `check_cls` reports it.
     pub(crate) keyword_issues: Vec<WithRange<KeywordIssue>>,
+    // Forms the documentation doesn't give, which IRIS compiles; `check_cls` reports them.
+    pub(crate) undocumented: Vec<WithRange<String>>,
     pub(crate) members: Members,
     pub(crate) include_names: Vec<WithRange<String>>,
     // The `Include (...)` clause's own span, for pointing a "cannot find include" diagnostic at
@@ -245,6 +249,8 @@ pub struct MemberDetails {
     pub deprecated: bool,
     // What in its keyword list is no keyword of its kind as written; `check_cls` reports it.
     pub keyword_issues: Vec<WithRange<KeywordIssue>>,
+    // Forms the documentation doesn't give, which IRIS compiles; `check_cls` reports them.
+    pub undocumented: Vec<WithRange<String>>,
     pub kind: MemberKindSpecificDetails,
 }
 
@@ -285,6 +291,8 @@ pub enum MemberKindSpecificDetails {
         type_param_names: Vec<String>,
         // For a collection property, the element class (see `element_ty`).
         element_ty: Option<Ty>,
+        // `[ InitialExpression = v ]` when `v` is a constant.
+        initial: Option<WithRange<Const>>,
     },
     Parameter {
         ty: Option<Ty>,
@@ -643,6 +651,21 @@ fn element_ty(property_type: &cos::PropertyType) -> Option<Ty> {
     Some(Ty::from(property_type.class_name.print()))
 }
 
+// `[ InitialExpression = v ]` with `v` a constant, a quoted string or a number; an expression in
+// braces is none.
+fn initial_expression(
+    keywords: Option<&KeywordList<FailableKeyword<cos::PropertyKeyword>>>,
+    olc: &OLC,
+) -> Option<WithRange<Const>> {
+    (keywords.into_iter().flat_map(KeywordList::items)).find_map(|entry| {
+        let cos::PropertyKeyword::InitialExpression(valued) = (***entry).as_ref().left()? else {
+            return None;
+        };
+        let constant = Const::from_literal(&valued.value.print())?;
+        Some(WithRange::new(constant, olc.range(entry)))
+    })
+}
+
 fn type_param_names(type_params: &Option<cos::TypeParamList>) -> Vec<String> {
     type_params
         .iter()
@@ -743,11 +766,24 @@ impl TryFrom<&str> for ClassDetails {
             }
         }
         let keyword_issues = keyword_issues_in(cls.keyword_list.as_ref(), &olc);
+        let lists = [
+            ("Extends", cls.extends.as_ref().map(|e| &e.class_list)),
+            ("Import", cls.import.as_ref().map(|i| &i.packages)),
+            ("Include", cls.include.as_ref().map(|i| &*i.files)),
+        ];
+        let mut undocumented = Vec::new();
+        for (clause, list) in lists {
+            for (start, end) in list.iter().flat_map(|list| list.empty_entries()) {
+                let what = format!("An empty entry in {clause}");
+                undocumented.push(WithRange::new(what, olc.span(start, end)));
+            }
+        }
         let class_procedure_block = keywords.procedure_block.unwrap_or(true);
         let mut members = Members::default();
         for (before_member, member) in cls.member_list.members.into_item_sep() {
             let doc = extract_document_comments(before_member.0.as_str());
             let range = olc.range(&member);
+            let undocumented_member = undocumented_in(&member, &olc);
             let (name, deprecated, keyword_issues, kind) = process_member(
                 &olc,
                 src,
@@ -761,6 +797,7 @@ impl TryFrom<&str> for ClassDetails {
                     doc,
                     deprecated,
                     keyword_issues,
+                    undocumented: undocumented_member,
                     kind,
                 },
                 range,
@@ -772,11 +809,30 @@ impl TryFrom<&str> for ClassDetails {
             extends,
             keywords,
             keyword_issues,
+            undocumented,
             members,
             include_names,
             imports,
             include_range,
         })
+    }
+}
+
+// A form of the member the documentation doesn't give, which IRIS compiles: `list Of` before a
+// relationship's class, which it ignores.
+fn undocumented_in(member: &Range<cos::Member>, olc: &OLC) -> Vec<WithRange<String>> {
+    match member.deref() {
+        cos::Member::Property(cos::Property::Relationship {
+            as_type: Some(as_type),
+            ..
+        }) if let Some(collection) = &as_type.collection => vec![WithRange::new(
+            format!(
+                "`{}` before a relationship's class",
+                collection.print().trim()
+            ),
+            olc.range(member),
+        )],
+        _ => vec![],
     }
 }
 
@@ -915,8 +971,14 @@ fn process_member(
                 deprecated || is_deprecated(keywords.as_ref()),
                 keyword_issues_in(keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Property {
-                    ty: as_type.as_deref().map(Ty::from),
-                    element_ty: as_type.as_deref().and_then(element_ty),
+                    // `list Of X(PATTERN=...)`: the parameters describe the element.
+                    ty: as_type.as_deref().map(|t| match t.collection {
+                        Some(_) => Ty::from(t),
+                        None => with_pattern(Ty::from(t), type_params.as_ref()),
+                    }),
+                    element_ty: (as_type.as_deref().and_then(element_ty))
+                        .map(|element| with_pattern(element, type_params.as_ref())),
+                    initial: initial_expression(keywords.as_ref(), olc),
                     multidimensional: typed(keywords.as_ref()).any(|keyword| {
                         matches!(keyword, cos::PropertyKeyword::MultiDimensional(flag) if flag.is_set())
                     }),
@@ -944,9 +1006,10 @@ fn process_member(
                                 as_type.as_deref().map(|t| t.class_name.print()),
                             ))
                         } else {
-                            as_type.as_deref().map(Ty::from)
+                            as_type.as_deref().map(|t| Ty::from(t.class_name.print()))
                         },
                         element_ty: None,
+                        initial: None,
                         multidimensional: false,
                         type_param_names: vec![],
                     },

@@ -2825,10 +2825,14 @@ pub struct Import {
 #[derive(Grammar)]
 pub enum ClassList {
     Single(Range<ClassName>),
+    // An entry may be empty, `(, A)` or `(A, , B)`: IRIS compiles the list with it.
     Multiple {
-        open: Raw<(StringEq!("("), Space)>,
-        first: Range<ClassName>,
-        rest: Vec<(Raw<(Space, StringEq!(","), Space)>, Range<ClassName>)>,
+        open: Range<Raw<(StringEq!("("), Space)>>,
+        first: Option<Range<ClassName>>,
+        rest: Vec<(
+            Range<Raw<(Space, StringEq!(","), Space)>>,
+            Option<Range<ClassName>>,
+        )>,
         close: Raw<(Space, StringEq!(")"))>,
     },
 }
@@ -2837,13 +2841,27 @@ impl ClassList {
     pub fn classes(&self) -> Vec<&Range<ClassName>> {
         match self {
             ClassList::Single(id) => vec![id],
-            ClassList::Multiple { first, rest, .. } => {
-                let mut ids = vec![first];
-                for (_, id) in rest {
-                    ids.push(id);
-                }
-                ids
-            }
+            ClassList::Multiple { first, rest, .. } => (first.iter())
+                .chain(rest.iter().filter_map(|(_, id)| id.as_ref()))
+                .collect(),
+        }
+    }
+
+    /// The byte span of the `(` or `,` before each empty entry.
+    pub fn empty_entries(&self) -> Vec<(usize, usize)> {
+        match self {
+            ClassList::Single(_) => vec![],
+            ClassList::Multiple {
+                open, first, rest, ..
+            } => (first
+                .is_none()
+                .then_some((open.start, open.end))
+                .into_iter())
+            .chain(
+                (rest.iter().filter(|(_, id)| id.is_none()))
+                    .map(|(comma, _)| (comma.start, comma.end)),
+            )
+            .collect(),
         }
     }
 }
@@ -2925,6 +2943,8 @@ impl Index {
 pub struct IndexOn {
     keyword: Raw<(Space1, StringEqCI!("On"), Space1)>,
     properties: IndexPropertyList,
+    // A functional index's class, with its parameters: `As %iFind.Index.Basic(LANGUAGE = "en")`.
+    index_class: Option<As<Type>>,
 }
 
 #[derive(Grammar)]
@@ -3289,10 +3309,12 @@ pub enum Property {
         keywords: Option<KeywordList<FailableKeyword<PropertyKeyword>>>,
         semicolon: Raw<(Space, StringEq!(";"))>,
     },
+    // IRIS compiles `As list Of C`, a property's collection, and ignores the collection.
     Relationship {
         keyword: Raw<(StringEqCI!("Relationship"), Space1)>,
         name: QuotableClassMemberName,
-        as_type: Option<As<Type>>,
+        as_type: Option<As<PropertyType>>,
+        type_params: Option<TypeParamList>,
         keywords: Option<KeywordList<FailableKeyword<PropertyKeyword>>>,
         semicolon: Raw<(Space, StringEq!(";"))>,
     },
@@ -5286,7 +5308,7 @@ fun_args!("$CLASSMETHOD" ClassMethodArgs {
 });
 
 fun_args!("$COMPILE" CompileArgs {
-    source: ArgOf<Variable>,
+    source: ArgOf<AllowIndirection<Variable>>,
     qspec: More<ArgOf<Expr>>,
     errors: More<ArgOf<Option<Variable>>>,
     object: Option<More<ArgOf<Option<Variable>>>>,
@@ -6386,6 +6408,15 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
     },
 ];
 
+// Arguments past the documented ones that IRIS takes, and the checker reports (A5156): a fourth
+// of `$VIEW` and of `$ZBITSET`, which IRIS's own routines pass.
+fn undocumented_extra(function: &SimpleFunction) -> usize {
+    match function.names[0] {
+        "View" | "ZBitSet" => 1,
+        _ => 0,
+    }
+}
+
 pub fn simple_function(name: &str) -> Option<&'static SimpleFunction> {
     SIMPLE_FUNCTIONS
         .iter()
@@ -6464,16 +6495,14 @@ impl TryFrom<SimpleFunctionCallSource> for SimpleFunctionCall {
         } else {
             items.len()
         };
-        if given > function.max {
-            let extra = items[function.max..]
+        let max = function.max + undocumented_extra(function);
+        if given > max {
+            let extra = items[max..]
                 .iter()
                 .enumerate()
-                .map(|(i, arg)| (function.max + i + 1, arg.print().trim().to_string()))
+                .map(|(i, arg)| (max + i + 1, arg.print().trim().to_string()))
                 .collect();
-            return Err(named(FunArgError::TooMany {
-                max: function.max,
-                extra,
-            }));
+            return Err(named(FunArgError::TooMany { max, extra }));
         }
         if given < function.min {
             return Err(named(FunArgError::TooFew {
@@ -7091,6 +7120,17 @@ pub struct Procedure {
     gap: Raw<VecSep<SGap, NL>>,
     pub body: Range<Brace<ProcedureBody>>,
     end: Raw<EndOfLine>,
+    pub trailer: Option<ProcedureTrailer>,
+}
+
+// Command lines after a procedure's `}` and before the next label: IRIS compiles them, though only
+// an offset reaches them. The lookahead for a line keeps an empty main from taking the newlines
+// the next label is parted by.
+#[derive(Grammar)]
+#[grammar(inline)]
+pub struct ProcedureTrailer {
+    gap: Raw<(Vec1<NL>, NotFollowedBy<NotFollowedBy<SGap1>>)>,
+    pub lines: Range<RoutineMain>,
 }
 
 #[derive(Grammar)]

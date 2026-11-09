@@ -15,7 +15,7 @@ use tygr::Grammar;
 
 use crate::bindings::{self, RefMode};
 use crate::check::{WorkspaceEnv, errors::*};
-use crate::cos::{CallType, CollectionKind, Formal, PropertyType, Type};
+use crate::cos::{CallType, CollectionKind, Formal, OSExpr, PropertyType, Type, TypeParamList};
 use crate::details::WithRange;
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -73,6 +73,17 @@ impl Const {
         match self {
             Const::Integer(u32) => format!("{}", u32),
             Const::String(s) => s.clone(),
+        }
+    }
+
+    // The constant a literal spells, `"ab"` or `12`; `None` for anything else.
+    pub fn from_literal(text: &str) -> Option<Const> {
+        match text.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+            Some(inner) if !inner.replace("\"\"", "").contains('"') => {
+                Some(Const::String(inner.replace("\"\"", "\"")))
+            }
+            Some(_) => None,
+            None => text.parse().ok().map(Const::Integer),
         }
     }
 }
@@ -532,6 +543,9 @@ pub struct ClassTy {
     pub name: String,
     // By parameter name.
     pub generics: BTreeMap<String, String>,
+    // `PATTERN` of a datatype, `%String(PATTERN="1N")`: the one type parameter the checker reads,
+    // as the shape a value must have.
+    pub pattern: Option<String>,
 }
 
 pub fn normalize_class_name(name: &mut String) {
@@ -542,10 +556,46 @@ pub fn normalize_class_name(name: &mut String) {
 
 impl From<String> for ClassTy {
     fn from(mut name: String) -> Self {
+        // `%String(MAXLEN=50)`, as a declaration read from IRIS writes it.
+        let mut pattern = None;
+        if let Some(i) = name.find('(') {
+            pattern = TypeParamList::parse(&name[i..])
+                .ok()
+                .as_ref()
+                .and_then(pattern_param);
+            name.truncate(name[..i].trim_end().len());
+        }
         normalize_class_name(&mut name);
         ClassTy {
             name,
             generics: BTreeMap::new(),
+            pattern,
+        }
+    }
+}
+
+// The `PATTERN` among a declared type's parameters, its quotes removed.
+fn pattern_param(params: &TypeParamList) -> Option<String> {
+    let param = params.items.iter().find(|p| p.name.print() == "PATTERN")?;
+    Some(match &param.value {
+        OSExpr::String(literal) => super::pattern::unquote(literal),
+        other => other.print(),
+    })
+}
+
+// `ty` with the `PATTERN` its declaration's type parameters carry, if any.
+pub(crate) fn with_pattern(mut ty: Ty, params: Option<&TypeParamList>) -> Ty {
+    if let (Ty::OREF(ClsOrIns::Ins(cls)), Some(params)) = (&mut ty, params) {
+        cls.pattern = pattern_param(params);
+    }
+    ty
+}
+
+impl Ty {
+    pub(crate) fn pattern(&self) -> Option<&str> {
+        match self {
+            Ty::OREF(ClsOrIns::Ins(cls) | ClsOrIns::Cls(cls)) => cls.pattern.as_deref(),
+            _ => None,
         }
     }
 }
@@ -556,12 +606,15 @@ impl std::fmt::Display for ClassTy {
             Some(this) => write!(f, "%{}", this)?,
             None => write!(f, "{}", self.name)?,
         }
-        if !self.generics.is_empty() {
-            let args: Vec<_> = self
-                .generics
-                .iter()
-                .map(|(name, arg)| format!("{name} = \"{arg}\""))
-                .collect();
+        let mut args: Vec<_> = self
+            .generics
+            .iter()
+            .map(|(name, arg)| format!("{name} = \"{arg}\""))
+            .collect();
+        if let Some(pattern) = &self.pattern {
+            args.push(format!("PATTERN = \"{}\"", pattern.replace('"', "\"\"")));
+        }
+        if !args.is_empty() {
             write!(f, "({})", args.join(", "))?;
         }
         Ok(())
@@ -607,7 +660,7 @@ pub enum PropertyTy {
     Collection { kind: CollectionClass, element: Ty },
     // `Property X [ MultiDimensional ]`: `..X(subs)` addresses a node typed like the property.
     Multidimensional(Ty),
-    // A name a `%Dispatch*` hook serves, with any arguments or subscripts, typed by the hook.
+    // A name a property hook serves, with any subscripts, typed by the hook.
     Dispatched(Ty),
 }
 
@@ -710,7 +763,7 @@ impl From<&str> for Ty {
 
 impl From<&Type> for Ty {
     fn from(value: &Type) -> Self {
-        Self::from(value.class_name.print())
+        with_pattern(Self::from(value.class_name.print()), value.params.as_ref())
     }
 }
 

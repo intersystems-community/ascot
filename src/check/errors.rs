@@ -112,6 +112,10 @@ impl QuasiTypeError {
         .into()
     }
 
+    pub fn pattern_mismatch(value: String, what: String) -> Self {
+        TypeErrorKind::PatternMismatch { value, what }.into()
+    }
+
     pub fn downcast_from_abstract(name: String, source: Ty, target: Ty) -> Self {
         TypeErrorKind::DowncastFromAbstract {
             name,
@@ -1049,6 +1053,32 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "A Caché Direct callback, `_name` or `_form!control`, raises <_CALLBACK SYNTAX> in IRIS, which has no client to call"]
     CacheDirectCallback,
+    /// A form the documentation doesn't give, which IRIS compiles all the same: `list Of` before a
+    /// relationship's class, which it ignores, or an empty entry in `Extends`, `Import` or
+    /// `Include`, which it drops. Write the documented form; what the extra was meant to do
+    /// doesn't happen.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UndocumentedSyntax Extends (, %Persistent) //! A6194
+    /// {
+    ///
+    /// Relationship Items As list Of Demo.UndocumentedSyntaxItem [ Cardinality = many, Inverse = Parent ]; //! A6194
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UndocumentedSyntaxItem Extends %Persistent
+    /// {
+    ///
+    /// Relationship Parent As Demo.UndocumentedSyntax [ Cardinality = one, Inverse = Items ];
+    ///
+    /// }
+    /// ```
+    #[code = "A6194"]
+    #[severity = Warning]
+    #[message = "{what} is not documented, though IRIS compiles it"]
+    UndocumentedSyntax { what: String },
     /// A property type's `( ... )` parameters are the type class's own (`%String(MAXLEN = 50)`),
     /// and this name is none of them: misspelled, with the nearest declared names as suggestions,
     /// or a property keyword that belongs in the `[ ... ]` list. IRIS refuses to compile the class
@@ -1299,6 +1329,37 @@ type_error_kinds! {
         source: Ty,
         target: Ty,
     },
+    /// A constant that doesn't match the `PATTERN` of the type it is assigned to, passed as or
+    /// returned as, or declared as a property's `InitialExpression` or a parameter's default:
+    /// `"12"` for a `%String(PATTERN = "3N")`. IRIS holds a property to its pattern
+    /// only when the object is validated or saved, which fails with ERROR #7209, and a method
+    /// argument, a local or a return value never, so the value goes through. Match the pattern, or
+    /// widen it where it is declared.
+    ///
+    /// ```objectscript
+    /// Class Demo.PatternMismatch Extends %RegisteredObject
+    /// {
+    ///
+    /// Property Code As %String(PATTERN = "3N") [ InitialExpression = "1" ]; //! A7731
+    ///
+    /// ClassMethod Take(code As %String(PATTERN = "3N")) As %String
+    /// {
+    ///     Return code
+    /// }
+    ///
+    /// ClassMethod Call() As %String
+    /// {
+    ///     Set me = ..%New()
+    ///     Set me.Code = "12" //! A7731
+    ///     Return ..Take("abc") //! A7731
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A7731"]
+    #[severity = Warning]
+    #[message = "{value} doesn't match the pattern of {what}"]
+    PatternMismatch { value: String, what: String },
     /// `Set` gives a `#Dim`'d variable, or a call gives a typed parameter, a value typed as an
     /// abstract class where a subclass of it is declared. No instance is of the abstract class
     /// itself, so the value is some subclass's, which may be the declared one: IRIS compiles and
@@ -1457,9 +1518,9 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Property '{name}' is MultiDimensional, so `{name}()` names no node: give it a subscript"]
     NodeWithoutSubscripts { name: String },
-    /// `$ZF(-1, command)` is called with more arguments than its documentation names. IRIS
-    /// compiles and runs the call all the same, and the documentation gives the extra argument
-    /// no meaning. Drop it.
+    /// A function is called with more arguments than its documentation names: `$ZF(-1, command)`
+    /// with a third, `$VIEW` or `$ZBITSET` with a fourth. IRIS compiles and runs the call all the
+    /// same, and the documentation gives the extra argument no meaning. Drop it.
     ///
     /// ```objectscript
     /// Class Demo.UndocumentedArgument
@@ -2420,12 +2481,13 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
     MissingQuit,
-    /// A form IRIS refuses where it stands, named with IRIS's own error: an error trap set inside
-    /// a `Try` block, a `*` or routine-qualified `$ZTRAP` value in a procedure block, an offset in
-    /// a trap label, a `New` of a special variable other than `$ESTACK`, `$ETRAP`, `$NAMESPACE`
-    /// and `$ROLES`. `ZQUIT` in a procedure block with private variables is the one IRIS compiles,
-    /// to raise `<COMMAND>` when it runs. In the example the `Catch` already handles the error, so
-    /// the trap goes.
+    /// A form IRIS refuses where it stands, named with IRIS's own error: an error trap set inside a
+    /// `Try` block, a `*` or routine-qualified `$ZTRAP` value in a procedure block, an offset in a
+    /// trap label, a `Goto` in a procedure block whose label is indirect (`Goto @target`) or
+    /// carries an offset (`Goto Done+1`), a `New` of a special variable other than `$ESTACK`,
+    /// `$ETRAP`, `$NAMESPACE` and `$ROLES`. `ZQUIT` in a procedure block with private variables is
+    /// the one IRIS compiles, to raise `<COMMAND>` when it runs. In the example the `Catch` already
+    /// handles the error, so the trap goes.
     ///
     /// ```objectscript
     /// Class Demo.NotAllowedIn
@@ -3148,6 +3210,10 @@ impl TypeError {
 
     pub fn unrecognized_class_keyword(entry: String, range: Range) -> Self {
         Self::at(TypeErrorKind::UnrecognizedClassKeyword { entry }, range)
+    }
+
+    pub fn undocumented_syntax(what: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::UndocumentedSyntax { what }, range)
     }
 
     pub fn not_allowed_in(
