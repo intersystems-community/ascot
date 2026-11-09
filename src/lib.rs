@@ -45,36 +45,40 @@
 mod atelier;
 pub mod bindings;
 pub mod check;
+#[cfg(all(not(target_arch = "wasm32"), feature = "declare"))]
+mod declare;
 mod declared;
 mod details;
 pub mod diagnostic_filter;
+#[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+mod download;
 #[cfg(not(target_arch = "wasm32"))]
 mod iris;
+#[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+mod iris_connection;
 #[cfg(all(not(target_arch = "wasm32"), feature = "lsp"))]
 pub mod lsp;
 mod macro_expand;
 mod mask;
 #[cfg(all(not(target_arch = "wasm32"), feature = "mcp"))]
 pub mod mcp;
-#[cfg(all(not(target_arch = "wasm32"), feature = "prebuilt"))]
-mod prebuilt;
 #[cfg(not(target_arch = "wasm32"))]
 mod release;
 mod render;
 pub mod report;
-#[cfg(all(not(target_arch = "wasm32"), feature = "sarif"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "analyze"))]
 pub mod sarif;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod settings;
 pub mod style;
-#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
-pub use atelier::RawAtelier;
 pub use atelier::{Atelier, AtelierContext};
 #[cfg(not(target_arch = "wasm32"))]
 pub use iris::{
     DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, LATEST as LATEST_IRIS, NONE as NO_IRIS,
     open as open_iris,
 };
+#[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+pub use iris_connection::RawAtelier;
 pub(crate) use macro_expand::MacroDefinitions;
 pub(crate) use macro_expand::SourceMap;
 use tygr_objectscript::cos::ClassDefinitionHeader;

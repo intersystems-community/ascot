@@ -4,11 +4,13 @@
 use std::path::Path;
 
 use crate::IrisContext;
-#[cfg(feature = "atelier")]
-use crate::atelier::{AtelierContext, RawAtelier};
+#[cfg(feature = "network")]
+use crate::atelier::AtelierContext;
 pub(crate) use crate::declared::Declarations;
-#[cfg(any(feature = "atelier", test))]
+#[cfg(any(feature = "declare", test))]
 pub(crate) use crate::declared::{DECLARATIONS_VERSION, DeclaredClass};
+#[cfg(feature = "network")]
+use crate::iris_connection::RawAtelier;
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
@@ -31,13 +33,12 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisCo
     if let Some(release) = crate::release::Release::parse(iris) {
         let file = release.cached_file()?;
         if !file.exists() {
-            #[cfg(feature = "prebuilt")]
-            crate::prebuilt::download(&release)?;
-            #[cfg(not(feature = "prebuilt"))]
+            #[cfg(feature = "network")]
+            crate::download::fetch(&release)?;
+            #[cfg(not(feature = "network"))]
             return Err(format!(
-                "--iris {release} names pre-built declarations, which this build of ascot cannot \
-                 download (it lacks the `prebuilt` feature): put the file at {}, or give a \
-                 declaration file's path",
+                "pre-built declarations this build of ascot cannot download (it lacks the \
+                 `network` feature): put the file at {}, or give a declaration file's path",
                 file.display()
             ));
         }
@@ -47,16 +48,17 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisCo
         return open_file(Path::new(path), namespace).map(Some);
     }
     if iris.contains("://") {
-        #[cfg(feature = "atelier")]
+        #[cfg(feature = "network")]
         {
             let raw = RawAtelier::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
             return Ok(Some(Box::new(AtelierContext::from(raw))));
         }
-        #[cfg(not(feature = "atelier"))]
-        return Err(format!(
-            "--iris {iris} is a live instance, which this build of ascot cannot reach (it lacks \
-             the `atelier` feature); give a declaration file's path"
-        ));
+        #[cfg(not(feature = "network"))]
+        return Err(
+            "a live instance, which this build of ascot cannot reach (it lacks the \
+                    `network` feature); give a declaration file's path"
+                .to_string(),
+        );
     }
     open_file(Path::new(iris), namespace).map(Some)
 }
@@ -93,7 +95,7 @@ impl Declarations {
         Self::from_bytes(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    #[cfg(any(feature = "atelier", test))]
+    #[cfg(any(feature = "declare", test))]
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let text = serde_json::to_string(self).map_err(|e| e.to_string())?;
         std::fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))

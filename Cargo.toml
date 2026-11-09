@@ -16,26 +16,25 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "ascot"
 path = "src/main.rs"
-required-features = ["cli"]
+required-features = ["analyze"]
 
-# A host that uses ascot as a library takes the checker alone (`default-features = false`) and
-# adds the modes it needs; the binary needs them all.
+# A host that uses ascot as a library takes the checker alone (`default-features = false`): a
+# workspace, declaration files, releases already in `~/.ascot`, and the `Atelier` trait for a
+# connection of its own. Each flag adds one subcommand of the CLI, or the network.
 [features]
-default = ["cli"]
-# The `ascot` binary: every mode below, and its argument parser.
-cli = ["dep:clap", "lsp", "mcp", "sarif", "atelier", "prebuilt"]
-# `ascot::lsp`, the stdio Language Server; its default environment is the newest release's declarations.
-lsp = ["dep:lsp-server", "dep:lsp-types", "prebuilt"]
-# `ascot::mcp`, the stdio MCP server; its default environment is the newest release's declarations.
-mcp = ["dep:rmcp", "dep:tokio", "prebuilt"]
-# `ascot::sarif`, diagnostics as a SARIF 2.1.0 log.
-sarif = []
-# `RawAtelier`, ascot's own connection to a live IRIS instance over its Atelier REST API
-# (`--iris http://...`); a host's own connection implements `Atelier` without it.
-atelier = ["dep:ureq", "dep:base64", "dep:percent-encoding"]
-# Downloading a release's pre-built declarations into `~/.ascot` (`--iris 2026.2`, `--iris latest`);
-# without it a release's file already there is still read.
-prebuilt = ["dep:ureq", "dep:sha2"]
+default = ["analyze", "declare", "lsp", "mcp", "network"]
+# `ascot analyze`: the CLI, with SARIF output and the JSON report.
+analyze = ["dep:clap"]
+# `ascot declare`: writing a declaration file from a live instance, which needs the network.
+declare = ["dep:clap", "network"]
+# `ascot lsp`, the stdio Language Server (`ascot::lsp`).
+lsp = ["dep:clap", "dep:lsp-server", "dep:lsp-types"]
+# `ascot mcp`, the stdio MCP server (`ascot::mcp`).
+mcp = ["dep:clap", "dep:rmcp", "dep:tokio"]
+# ascot reaching the network itself: a live IRIS instance over its Atelier REST API (`RawAtelier`,
+# `--iris http://...`) and a release's pre-built declarations from the project's GitHub release
+# (`--iris latest`). A host with its own transport implements `Atelier` without it.
+network = ["dep:ureq", "dep:sha2", "dep:base64", "dep:percent-encoding"]
 
 [package.metadata.docs.rs]
 all-features = true

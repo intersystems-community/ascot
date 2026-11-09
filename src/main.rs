@@ -9,21 +9,23 @@
 use ascot::Workspace;
 use ascot::bindings::GuestWorkspace;
 use ascot::bindings::Style;
-use ascot::cos;
-use ascot::cos::Routine;
 use ascot::diagnostic_filter::Filter;
 use ascot::report::{DiagnosticsResult, FileDiagnostics};
+#[cfg(feature = "lsp")]
 use ascot::settings::{Diagnostics, Settings, StyleSetting};
 use ascot::style;
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process;
 use std::process::exit;
+#[cfg(feature = "declare")]
 use std::time::Instant;
+#[cfg(feature = "lsp")]
 use tygr::Grammar;
 
-use ascot::{DocKind, IrisContext, RawAtelier};
+use ascot::IrisContext;
+#[cfg(feature = "declare")]
+use ascot::{DocKind, RawAtelier};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 /// A type checker and code intelligence engine for InterSystems ObjectScript.
@@ -67,12 +69,7 @@ enum Command {
     },
     /// Report a file's syntax error, if any
     ///
-    /// Parses the file without type checking and prints its syntax error, if any. Exits non-zero
-    /// on a syntax error.
-    Parse {
-        /// A .cls, .mac, .int or .inc file
-        file: PathBuf,
-    },
+    #[cfg(feature = "declare")]
     /// Save an IRIS namespace's declarations to a file
     ///
     /// Fetches everything the other commands would ask a live instance for and writes it to the
@@ -90,6 +87,7 @@ enum Command {
         /// [default: ~/.ascot/<host>-<port>-<namespace>.d.json]
         file: Option<PathBuf>,
     },
+    #[cfg(feature = "mcp")]
     /// Run the MCP server on stdio, for AI agents
     ///
     /// Exposes workspace analysis as tools an AI agent calls on demand. A workspace's IRIS
@@ -101,6 +99,7 @@ enum Command {
         #[arg(long)]
         shared_fs: bool,
     },
+    #[cfg(feature = "lsp")]
     /// Run the LSP server on stdio, for editors and AI agents
     ///
     /// The flags are defaults: the client's `initializationOptions` override them, with the same
@@ -219,16 +218,18 @@ fn main() {
             filter.filter(),
             output.format,
         ),
-        Command::Parse { file } => scan_file(&file),
+        #[cfg(feature = "declare")]
         Command::Declare {
             iris,
             iris_namespace,
             file,
         } => declare(&iris, iris_namespace.as_deref(), file.as_deref()),
+        #[cfg(feature = "mcp")]
         Command::Mcp { shared_fs } => {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
             rt.block_on(run_mcp_server(shared_fs));
         }
+        #[cfg(feature = "lsp")]
         Command::Lsp {
             iris,
             style,
@@ -281,6 +282,7 @@ impl StyleArgs {
 }
 
 /// Writes the declarations of the namespace at `url` to `out`, for a later `--iris <out>`.
+#[cfg(feature = "declare")]
 fn declare(url: &str, namespace: Option<&str>, out: Option<&Path>) {
     let namespace = namespace.unwrap_or(ascot::DEFAULT_IRIS_NAMESPACE);
     let conn = match RawAtelier::connect(url, namespace) {
@@ -328,6 +330,7 @@ fn declare(url: &str, namespace: Option<&str>, out: Option<&Path>) {
 }
 
 /// `~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json`, its directory created.
+#[cfg(feature = "declare")]
 fn default_declaration_file(url: &str, namespace: &str) -> Result<PathBuf, String> {
     let dir = std::env::home_dir()
         .ok_or("cannot find the home directory; give the file to write")?
@@ -357,6 +360,7 @@ fn default_declaration_file(url: &str, namespace: &str) -> Result<PathBuf, Strin
     Ok(dir.join(format!("{name}.d.json")))
 }
 
+#[cfg(feature = "mcp")]
 async fn run_mcp_server(shared_fs: bool) {
     use ascot::mcp::Server;
     use rmcp::ServiceExt;
@@ -370,25 +374,6 @@ async fn run_mcp_server(shared_fs: bool) {
     };
     if let Err(err) = server.waiting().await {
         eprintln!("MCP server error: {err:?}");
-        exit(1);
-    }
-}
-
-fn scan_file(file_path: &Path) {
-    let content = match fs::read_to_string(file_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error reading file: {}", e);
-            process::exit(1);
-        }
-    };
-    let result = if file_path.extension().is_some_and(|ext| ext == "cls") {
-        cos::ClassDefinition::scan(&content)
-    } else {
-        Routine::scan(&content)
-    };
-    if let Err(err) = result {
-        eprintln!("{err}");
         exit(1);
     }
 }
@@ -461,11 +446,13 @@ fn analyze<'a>(
 }
 
 #[derive(Default)]
+#[cfg(feature = "declare")]
 struct ProgressBars {
     counts: [(usize, usize); 3],
     drawn: bool,
 }
 
+#[cfg(feature = "declare")]
 impl ProgressBars {
     const LABELS: [&str; 3] = ["classes", "include files", "routines"];
     const WIDTH: usize = 30;

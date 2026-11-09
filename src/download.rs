@@ -1,5 +1,6 @@
-//! Downloading a release's pre-built declarations from the project's GitHub Releases into
-//! `~/.ascot`, checksum verified, where [`crate::release`] then finds them.
+//! Downloading a release's pre-built declarations from the project's GitHub release into
+//! `~/.ascot`, checksum verified, where [`crate::release`] then finds them. Part of the `network`
+//! feature.
 
 use std::fs;
 use std::io::Read;
@@ -14,7 +15,7 @@ const RELEASES: &str = "https://github.com/intersystems-community/ascot/releases
 
 /// Downloads `release`'s declaration file into `~/.ascot` and returns its path; one already there
 /// is returned as is.
-pub(crate) fn download(release: &Release<'_>) -> Result<PathBuf, String> {
+pub(crate) fn fetch(release: &Release<'_>) -> Result<PathBuf, String> {
     fetch_into(release, &format!("{RELEASES}/declarations"), &cache_dir()?)
 }
 
