@@ -78,14 +78,19 @@ needs only the checker turns them off and adds the modes it uses:
 cargo add ascot --no-default-features --features atelier
 ```
 
-- `atelier`: a live IRIS instance over its Atelier REST API (`RawAtelier`).
-- `prebuilt`: downloading a release's pre-built declarations into `~/.ascot`.
-- `lsp`, `mcp`: the stdio Language Server and MCP server (`ascot::lsp`, `ascot::mcp`).
+- `atelier`: ascot's own connection to a live IRIS instance over its Atelier REST API
+  (`RawAtelier`, `--iris http://...`).
+- `prebuilt`: downloading a release's pre-built declarations into `~/.ascot`
+  (`--iris 2026.2`, `--iris latest`).
+- `lsp`, `mcp`: the stdio Language Server and MCP server (`ascot::lsp`, `ascot::mcp`); each
+  includes `prebuilt`, their default environment.
 - `sarif`: diagnostics as a SARIF 2.1.0 log (`ascot::sarif`).
 - `cli`: all of the above and the `ascot` binary.
 
-Without any, the checker reads a workspace and a declaration file (`Workspace`,
-`open_iris` with a path or `none`) and nothing else.
+Without any, the checker still reads a workspace, a declaration file (`open_iris` with a path,
+or a release whose file is already in `~/.ascot`) and a live instance the host connects to
+itself, by implementing the `Atelier` trait over its own transport, as the VS Code extension's
+server does.
 
 ### TypeScript/JavaScript (npm)
 

@@ -22,8 +22,9 @@
 //!
 //! For lower-level access — parsing a class/routine into an AST directly, without the
 //! workspace/caching layer — see [`cos`] (grammar) and [`check`] (the type checker built on it).
-//! [`lsp`] and [`mcp`] wrap the same [`Workspace`] as a stdio LSP server and an MCP server,
-//! respectively; both are also available as `ascot lsp`/`ascot mcp` from the CLI binary.
+//! `lsp` and `mcp` (modules behind the features of those names) wrap the same [`Workspace`] as a
+//! stdio LSP server and an MCP server, respectively; both are also available as `ascot lsp`/`ascot mcp`
+//! from the CLI binary.
 //!
 //! # Where things live
 //!

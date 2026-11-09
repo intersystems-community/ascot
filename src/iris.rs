@@ -29,16 +29,8 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisCo
         ));
     }
     if let Some(release) = crate::prebuilt::Release::parse(iris) {
-        #[cfg(feature = "prebuilt")]
-        {
-            let file = crate::prebuilt::fetch(&release)?;
-            return open_file(&file, Some(release.namespace())).map(Some);
-        }
-        #[cfg(not(feature = "prebuilt"))]
-        return Err(format!(
-            "--iris {release} names pre-built declarations, which this build of ascot cannot \
-             download (it lacks the `prebuilt` feature); give a declaration file's path"
-        ));
+        let file = crate::prebuilt::fetch(&release)?;
+        return open_file(&file, Some(release.namespace())).map(Some);
     }
     if let Some(path) = iris.strip_prefix("file://") {
         return open_file(Path::new(path), namespace).map(Some);

@@ -8,7 +8,8 @@ use std::fs;
 #[cfg(feature = "prebuilt")]
 use std::io::Read;
 #[cfg(feature = "prebuilt")]
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 #[cfg(feature = "prebuilt")]
 use std::time::Duration;
 
@@ -69,14 +70,12 @@ impl<'a> Release<'a> {
         })
     }
 
-    #[cfg(feature = "prebuilt")]
     pub fn namespace(&self) -> &'a str {
         self.namespace.unwrap_or(crate::iris::DEFAULT_NAMESPACE)
     }
 
     /// The asset in the `declarations` GitHub Release: image and tag dash-joined, then the
     /// namespace unless it is `%SYS`.
-    #[cfg(feature = "prebuilt")]
     pub fn asset(&self) -> String {
         let namespace = match self.namespace() {
             crate::iris::DEFAULT_NAMESPACE => String::new(),
@@ -97,13 +96,24 @@ impl std::fmt::Display for Release<'_> {
 }
 
 /// The cached declaration file of `release`, downloaded first if `~/.ascot` lacks it. A machine
-/// that can't reach GitHub gets the file put there by hand.
-#[cfg(feature = "prebuilt")]
+/// that can't reach GitHub, or a build without the `prebuilt` feature, gets the file put there by
+/// hand.
 pub fn fetch(release: &Release<'_>) -> Result<PathBuf, String> {
     let dir = std::env::home_dir()
         .ok_or("cannot find the home directory to keep the declarations in")?
         .join(".ascot");
-    fetch_into(release, &format!("{RELEASES}/declarations"), &dir)
+    let path = dir.join(release.asset().trim_end_matches(".gz"));
+    if path.exists() {
+        return Ok(path);
+    }
+    #[cfg(feature = "prebuilt")]
+    return fetch_into(release, &format!("{RELEASES}/declarations"), &dir);
+    #[cfg(not(feature = "prebuilt"))]
+    Err(format!(
+        "--iris {release} names pre-built declarations, which this build of ascot cannot download \
+         (it lacks the `prebuilt` feature): put the file at {}, or give a declaration file's path",
+        path.display()
+    ))
 }
 
 #[cfg(feature = "prebuilt")]
@@ -165,13 +175,17 @@ fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("{url}: {e}"))
 }
 
-#[cfg(all(test, feature = "prebuilt"))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "prebuilt")]
     use crate::iris::Declarations;
+    #[cfg(feature = "prebuilt")]
     use std::io::Write;
+    #[cfg(feature = "prebuilt")]
     use std::sync::{Arc, Mutex};
 
+    #[cfg(feature = "prebuilt")]
     fn gzipped(text: &str) -> Vec<u8> {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         encoder.write_all(text.as_bytes()).unwrap();
@@ -179,6 +193,7 @@ mod tests {
     }
 
     // Serves `routes` (path, body) over HTTP, counting the requests.
+    #[cfg(feature = "prebuilt")]
     fn server(routes: Vec<(String, Vec<u8>)>) -> (String, Arc<Mutex<usize>>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -212,6 +227,7 @@ mod tests {
         (url, hits)
     }
 
+    #[cfg(feature = "prebuilt")]
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("ascot-prebuilt-{name}-{}", std::process::id()));
@@ -267,6 +283,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "prebuilt")]
     #[test]
     fn a_release_is_downloaded_checked_unpacked_and_then_read_from_the_cache() {
         let declarations = Declarations {
@@ -297,6 +314,7 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(feature = "prebuilt")]
     #[test]
     fn a_corrupt_or_missing_download_saves_nothing() {
         let gz = gzipped("{}");
