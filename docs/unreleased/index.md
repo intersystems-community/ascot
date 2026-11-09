@@ -37,6 +37,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A6866](A6866.md) | Cannot NEW the private variable '{name}' in a procedure block, where every local variable is already NEW'd on entry |
 | [A7095](A7095.md) | This value is undefined{expr} |
 | [A7139](A7139.md) | $CASE's `:default` must be its last argument |
+| [A7217](A7217.md) | Label '{label}' is a procedure block, which an offset cannot enter (IRIS: <NOLINE> when the call runs) |
 | [A7342](A7342.md) | Argument {position} of {function} can't be left empty |
 | [A7461](A7461.md) | Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call |
 | [A7604](A7604.md) | Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>); `{label}()` would make it a function |
