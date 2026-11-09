@@ -5,6 +5,8 @@
 //! `~/.ascot`), or the live instance `ASCOT_TEST_IRIS` names. `scripts/verify-examples.py` checks
 //! the other half of each message, what IRIS itself does with the example.
 
+#![cfg(feature = "network")]
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 

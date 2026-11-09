@@ -25,7 +25,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     Workspace,
-    bindings::{Diagnostic, GuestWorkspace, InlayHint, Location, Position, Range},
+    bindings::{GuestWorkspace, InlayHint, Location, Position, Range},
     settings::Settings,
 };
 
@@ -101,16 +101,7 @@ pub struct PositionRequest {
 // MCP requires `outputSchema` to describe an object at the top level, so results that are
 // naturally an array or an enum get wrapped in a single-field struct rather than returned bare.
 
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct FileDiagnostics {
-    pub uri: String,
-    pub diagnostics: Vec<Diagnostic>,
-}
-
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct DiagnosticsResult {
-    pub files: Vec<FileDiagnostics>,
-}
+pub use crate::report::{DiagnosticsResult, FileDiagnostics};
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct InlayHintsResult {

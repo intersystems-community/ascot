@@ -22,8 +22,9 @@
 //!
 //! For lower-level access — parsing a class/routine into an AST directly, without the
 //! workspace/caching layer — see [`cos`] (grammar) and [`check`] (the type checker built on it).
-//! [`lsp`] and [`mcp`] wrap the same [`Workspace`] as a stdio LSP server and an MCP server,
-//! respectively; both are also available as `ascot lsp`/`ascot mcp` from the CLI binary.
+//! `lsp` and `mcp` (modules behind the features of those names) wrap the same [`Workspace`] as a
+//! stdio LSP server and an MCP server, respectively; both are also available as `ascot lsp`/`ascot mcp`
+//! from the CLI binary.
 //!
 //! # Where things live
 //!
@@ -44,33 +45,40 @@
 mod atelier;
 pub mod bindings;
 pub mod check;
+#[cfg(all(not(target_arch = "wasm32"), feature = "declare"))]
+mod declare;
 mod declared;
 mod details;
 pub mod diagnostic_filter;
+#[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+mod download;
 #[cfg(not(target_arch = "wasm32"))]
 mod iris;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+mod iris_connection;
+#[cfg(all(not(target_arch = "wasm32"), feature = "lsp"))]
 pub mod lsp;
 mod macro_expand;
 mod mask;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "mcp"))]
 pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
-mod prebuilt;
+mod release;
 mod render;
-#[cfg(not(target_arch = "wasm32"))]
+pub mod report;
+#[cfg(all(not(target_arch = "wasm32"), feature = "analyze"))]
 pub mod sarif;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod settings;
 pub mod style;
-#[cfg(not(target_arch = "wasm32"))]
-pub use atelier::RawAtelier;
 pub use atelier::{Atelier, AtelierContext};
 #[cfg(not(target_arch = "wasm32"))]
 pub use iris::{
     DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, LATEST as LATEST_IRIS, NONE as NO_IRIS,
     open as open_iris,
 };
+#[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+pub use iris_connection::RawAtelier;
 pub(crate) use macro_expand::MacroDefinitions;
 pub(crate) use macro_expand::SourceMap;
 use tygr_objectscript::cos::ClassDefinitionHeader;

@@ -17,6 +17,17 @@ cargo clippy --all-targets -- -D warnings
 
 `ascot lsp` runs the stdio LSP server natively.
 
+Each subcommand is a Cargo feature (`analyze`, `declare`, `lsp`, `mcp`), and `network` is
+ascot's own access to a live instance and to the pre-built declarations; all are on by default,
+and the binary needs only `analyze`. Code that one of them alone uses lives in a module gated
+whole (`sarif`, `declare`, `lsp`, `mcp`, `iris_connection`, `download`); CI builds and lints the
+library with no features and with each one, and the binary with `analyze` alone, so run the same
+before pushing a change near a gate:
+
+```sh
+cargo clippy --lib --no-default-features --features lsp -- -D warnings
+```
+
 ### Against IRIS
 
 `tests/iris.rs` and the JavaScript binding's `npm test` run against the instance in

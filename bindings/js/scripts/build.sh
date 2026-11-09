@@ -17,7 +17,8 @@ trap 'rm -f "$COMPONENT"' EXIT
 mkdir -p lib
 
 echo "building $CORE from source ..."
-(cd "$REPO_ROOT" && cargo build --target=wasm32-unknown-unknown --release --lib)
+# No features: the modes are native-only anyway, and the package is the checker alone.
+(cd "$REPO_ROOT" && cargo build --target=wasm32-unknown-unknown --release --lib --no-default-features)
 cp "$REPO_ROOT/target/wasm32-unknown-unknown/release/ascot.wasm" "$CORE"
 
 echo "componentizing $CORE ..."
@@ -68,7 +69,7 @@ mv "$GEN"/*.wasm lib/
 # The pre-built declarations of the IRIS release this ascot defaults to, from the
 # `declarations` GitHub Release, checksum verified: what `createWorkspace()` checks against
 # when the host passes no env, as `--iris latest` does on the command line.
-RELEASE=$(sed -n 's/^pub const DEFAULT_RELEASE: &str = "\(.*\)";/\1/p' "$REPO_ROOT/src/prebuilt.rs")
+RELEASE=$(sed -n 's/^pub const DEFAULT_RELEASE: &str = "\(.*\)";/\1/p' "$REPO_ROOT/src/release.rs")
 ASSET="iris-community-$RELEASE.d.json.gz"
 echo "fetching $ASSET ..."
 curl -sSLf --retry 3 --retry-all-errors "https://github.com/intersystems-community/ascot/releases/download/declarations/$ASSET" -o "lib/$ASSET"

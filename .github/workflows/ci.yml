@@ -40,12 +40,21 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-targets
 
+      # A library host takes the checker alone, or with any one flag; the CLI can be `analyze` alone.
+      - name: Feature gates
+        run: |
+          for features in "" analyze declare lsp mcp network; do
+            cargo clippy --lib --no-default-features ${features:+--features "$features"} -- -D warnings
+          done
+          cargo clippy --bin ascot --no-default-features --features analyze -- -D warnings
+          cargo test --lib --no-default-features
+
       # `--all-targets` above skips doctests (a cargo quirk, not an oversight) — run them too.
       - name: Doc tests
         run: cargo test --doc
 
       - name: WASM build
-        run: cargo build --target=wasm32-unknown-unknown --release --lib
+        run: cargo build --target=wasm32-unknown-unknown --release --lib --no-default-features
 
   iris:
     runs-on: ubuntu-latest
