@@ -633,9 +633,9 @@ type_error_kinds! {
     #[message = "Cannot find label '{label}' in {routine}"]
     CannotFindLabel { label: String, routine: InRoutine },
     /// `Label+n` enters the label's code `n` lines down, where its formal list no longer applies,
-    /// and which line that is depends on the compiled routine. ascot confirms the label exists,
-    /// leaves the call untyped and the offset unchecked; IRIS compiles and runs it. A call without
-    /// the offset is checked in full.
+    /// and which line that is depends on the compiled routine. ascot confirms the label exists but
+    /// leaves the call untyped and the offset unchecked; IRIS compiles and runs it. The code is not
+    /// in question, only how far ascot can check it; a call without the offset is checked in full.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.LabelOffset
@@ -673,8 +673,8 @@ type_error_kinds! {
     GotoOutOfBlock { label: String },
     /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide;
     /// ascot reads it where it stands, so its checks of the lines after the label may not match
-    /// what IRIS runs. The routine compiles; move the label, and the lines it heads, to the top
-    /// level of the body.
+    /// what IRIS runs. The routine compiles and runs as IRIS reads it: the warning is about ascot's
+    /// reading, and a label at the top level of the body is read alike by both.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.LabelInBlock
@@ -756,8 +756,8 @@ type_error_kinds! {
     /// The condition of an `#if` or `#elseif` is not the literal `1` or `0` once its macros are
     /// expanded. IRIS evaluates any expression at compile time and compiles the branch it picks;
     /// ascot does not evaluate, so it checks the first branch and skips the rest, which may not be
-    /// what IRIS compiles. A macro that expands to `1` or `0` (`#define DEBUG 1`, `#if $$$DEBUG`)
-    /// makes the choice visible to ascot.
+    /// what IRIS compiles. The code is fine as far as IRIS is concerned; a macro that expands to
+    /// `1` or `0` (`#define DEBUG 1`, `#if $$$DEBUG`) would make the choice visible to ascot.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.UndecidedIf
@@ -1150,7 +1150,9 @@ type_error_kinds! {
     /// A `ByRef` parameter whose incoming value no path reads before writing it: the body only
     /// produces the value, so the caller need not pass one, which is what `Output` declares and
     /// what lets a caller leave the argument out. IRIS compiles either; the caller's `.` alone
-    /// passes by reference, and the mode documents intent. Declare the parameter `Output`.
+    /// passes by reference, and the mode documents intent. If the parameter is indeed only
+    /// produced, `Output` says so; if a caller is meant to pass a value the body reads in a case
+    /// ascot doesn't see, `ByRef` is right.
     ///
     /// ```objectscript compiles
     /// Class Demo.ByRefNeverRead
@@ -1171,7 +1173,8 @@ type_error_kinds! {
     /// in, which `Output` disclaims, since a caller may leave the argument out or pass an undefined
     /// variable; ascot takes the parameter as undefined on entry, so the read is also reported as
     /// undefined. IRIS compiles either; the caller's `.` alone passes by reference, and the mode
-    /// documents intent. Declare the parameter `ByRef`, or assign it before reading it.
+    /// documents intent. If the body does rely on the incoming value, `ByRef` says so; assigning
+    /// the parameter before reading it keeps `Output`.
     ///
     /// ```objectscript compiles
     /// Class Demo.OutputReadFirst
@@ -1732,8 +1735,9 @@ type_error_kinds! {
     NumberImplicitlyConvertedToString { value: String },
     /// `Do` runs the call and drops its value, which for a `%Status` or `%Boolean` return is the
     /// callee's report of whether it worked: the caller goes on as if it had. IRIS compiles and
-    /// runs the call. `Set sc = ..Save(...)` followed by `$$$ISERR(sc)`, or `If ..Save(...)`,
-    /// puts the result to use.
+    /// runs the call. Where the outcome matters, `Set sc = ..Save(...)` followed by `$$$ISERR(sc)`,
+    /// or `If ..Save(...)`, puts the result to use; where it does not, the `Do` is a choice, not a
+    /// mistake.
     ///
     /// ```objectscript compiles
     /// Class Demo.DiscardedReturnValue
@@ -2189,8 +2193,9 @@ type_error_kinds! {
     Undefined { expr: Detail },
     /// `..Member` or `$this` in a routine, which has no class to resolve the member against, so the
     /// value is taken as `Any`. IRIS compiles it and binds `$this` when it runs, to the object of a
-    /// method that called the routine, if one did; with no current object, `..Member` raises
-    /// `<NO CURRENT OBJECT>`. Pass the object in as an argument instead.
+    /// method that called the routine, if one did; with no current object, `..Member` raises `<NO
+    /// CURRENT OBJECT>`. Called only from methods, the code works; passing the object in as an
+    /// argument makes the dependency explicit and lets ascot check the member.
     ///
     /// ```objectscript raises=<NO CURRENT OBJECT> do Main^Demo.NotInClass
     /// ROUTINE Demo.NotInClass
@@ -2455,8 +2460,8 @@ type_error_kinds! {
     ZQuitArgument { value: String },
     /// An error raised on purpose (`ZTrap`, `Throw` outside a `Try`, a non-empty `$ECODE`) inside
     /// the handler the trap still names, or a `$ETRAP` command that raises one. IRIS compiles it,
-    /// and the error enters the same handler again, and so on without end. Set the trap to `""`
-    /// first, and the error goes up to the caller.
+    /// and the error enters the same handler again, and so on without end. Clearing the trap first
+    /// (`Set $ZTrap = ""`) lets the error go up to the caller.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.TrapReenters
@@ -2473,10 +2478,13 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "An error here re-enters the handler {var} still names; set {var} to \"\" first"]
     TrapReenters { var: &'static str },
-    /// Error handling ascot doesn't read: a `$ETRAP` command beyond a plain `Goto Label`, or a
-    /// `$ZTRAP`, `$ETRAP`, `$ECODE` or `ZQUIT` value that isn't a literal. The line is taken on
-    /// trust, so what happens when an error comes goes unchecked; IRIS compiles the `$ETRAP` code
-    /// only when it runs. A `Try`/`Catch` or a literal `$ZTRAP` label is checked in full.
+    /// This marks a limit of ascot, not a fault in the code. ascot follows error handling only in
+    /// the forms it can read: a `Try`/`Catch`, a literal `$ZTRAP` label, a `$ETRAP` that is a plain
+    /// `Goto Label`. A `$ETRAP` command beyond that, or a `$ZTRAP`, `$ETRAP`, `$ECODE` or `ZQUIT`
+    /// value that isn't a literal, is taken on trust, so what happens when an error comes goes
+    /// unchecked. IRIS compiles `$ETRAP` code only when it runs, and in a procedure block refuses a
+    /// non-literal `$ZTRAP` value outright. Nothing here needs changing for IRIS; a literal label
+    /// or a `Try` block would let ascot check the handling.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.NotChecked
@@ -2494,8 +2502,9 @@ type_error_kinds! {
     #[message = "{what} is not checked"]
     NotChecked { what: &'static str },
     /// `ZQUIT` in a procedure block without private variables, where IRIS lets it unwind; the same
-    /// block with any, an argument or a local, fails with `<COMMAND>` when it runs, so a variable
-    /// added later changes its error handling. Keep `ZQUIT` to code outside procedure blocks.
+    /// block with any, an argument or a local, fails with `<COMMAND>` when it runs. The code works
+    /// as it stands; the hint points at that fragility, since a variable added later changes the
+    /// block's error handling.
     ///
     /// ```objectscript compiles
     /// Class Demo.ZQuitWithoutPrivates
@@ -2513,10 +2522,11 @@ type_error_kinds! {
     #[severity = Hint]
     #[message = "ZQUIT unwinds here only because this procedure block has no private variables; one with any fails with <COMMAND>, so its error handling may not be what you expect"]
     ZQuitWithoutPrivates,
-    /// A `$ETRAP` whose code is a single `Goto Label` is the handler `Set $ZTRAP = "Label"` arms,
-    /// and is checked as that handler; the two differ in scope, as the message says: `$ZTRAP` is
-    /// this frame's, `$ETRAP` is inherited by the frames it calls. IRIS compiles and runs either;
-    /// `$ZTRAP` says so when this frame alone is meant.
+    /// A `$ETRAP` whose code is a single `Goto Label` does what `Set $ZTRAP = "Label"` does, and
+    /// ascot checks it as that handler, which is how it can check it at all. The two differ in
+    /// scope: `$ZTRAP` is this frame's handler, `$ETRAP` is inherited by the frames it calls. IRIS
+    /// compiles and runs either. If the inherited scope is wanted, the code is right as it stands;
+    /// if only this frame is meant, `$ZTRAP` says so.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.ETrapGoto
