@@ -80,7 +80,7 @@ pub(crate) struct Read;
 pub(crate) struct Assign;
 // `Set ..X(subs) = v`, a node of a multidimensional property.
 pub(crate) struct AssignNode;
-// `..X(subs)` once no method is named `X`: a node, or whatever `%DispatchMethod` makes of it.
+// `..X(subs)` once no method is named `X`: a node of a multidimensional property.
 pub(crate) struct Called;
 // An index key: IRIS wants a declared property, hook or not.
 pub(crate) struct Indexed;
@@ -100,13 +100,19 @@ impl Access for AssignNode {
     }
 }
 impl Access for Called {
-    fn hook(obj: &ClsOrIns) -> Option<&'static str> {
-        Some(if obj.is_ins() {
-            "%DispatchMethod"
-        } else {
-            "%DispatchClassMethod"
-        })
+    fn hook(_: &ClsOrIns) -> Option<&'static str> {
+        None
     }
+}
+
+// Whether a hook serves `mem`: its name argument, the `name_arg`th, carries no PATTERN or one `mem`
+// matches (`%DispatchMethod(methodName As %String(PATTERN=...))`).
+fn serves(hook: &TyProcedure, name_arg: usize, mem: &str) -> bool {
+    (hook
+        .normal_args
+        .get(name_arg)
+        .and_then(|arg| arg.ty.as_ref()?.pattern()))
+    .is_none_or(|pattern| crate::check::pattern::matches(pattern, mem) != Some(false))
 }
 impl Access for Indexed {
     fn hook(_: &ClsOrIns) -> Option<&'static str> {
@@ -188,23 +194,15 @@ impl<A: Access> Namespace for Properties<A> {
         Some((ty, true))
     }
 
-    // Of the hook's signature, the PATTERN its name argument is declared with, if any
-    // (`%DispatchMethod(methodName As %String(PATTERN=...))`), decides which names it serves; its
-    // return type types them.
+    // Only the hook's return type matters.
     fn dispatched(
         obj: &ClsOrIns,
         mem: &str,
         find: impl FnOnce(&str) -> Option<TyProcedureOrAny>,
     ) -> Option<PropertyTy> {
-        let hook_name = A::hook(obj)?;
-        let hook = find(hook_name)?;
+        let hook = find(A::hook(obj)?)?;
         let hook = hook.procedure();
-        // `%DispatchClassMethod(Class, Method, Args...)` names the member second.
-        let name_arg = usize::from(hook_name == "%DispatchClassMethod");
-        let pattern = hook.and_then(|hook| hook.normal_args.get(name_arg)?.ty.as_ref()?.pattern());
-        if pattern
-            .is_some_and(|pattern| crate::check::pattern::matches(pattern, mem) == Some(false))
-        {
+        if hook.is_some_and(|hook| !serves(hook, 0, mem)) {
             return None;
         }
         let out = hook.and_then(|hook| hook.out.clone());
@@ -215,6 +213,38 @@ impl<A: Access> Namespace for Properties<A> {
 impl Namespace for Methods {
     type Ty = TyProcedureOrAny;
     const NS: MemberNs = MemberNs::Method;
+
+    // `obj.name(args)` once no class declares `name`: a call of `%DispatchMethod`, or of
+    // `%DispatchClassMethod(Class, Method, Args...)` on a class, with the hook's signature past the
+    // name, so the call is checked as any other.
+    fn dispatched(
+        obj: &ClsOrIns,
+        mem: &str,
+        find: impl FnOnce(&str) -> Option<TyProcedureOrAny>,
+    ) -> Option<TyProcedureOrAny> {
+        let (hook, skip) = if obj.is_ins() {
+            ("%DispatchMethod", 1)
+        } else {
+            ("%DispatchClassMethod", 2)
+        };
+        let hook = find(hook)?;
+        let Some(hook) = hook.procedure() else {
+            return Some(TyProcedureOrAny::Any);
+        };
+        if !serves(hook, skip - 1, mem) {
+            return None;
+        }
+        Some(TyProcedureOrAny::Procedure(Arc::new(TyProcedure {
+            normal_args: hook.normal_args.get(skip..).unwrap_or_default().to_vec(),
+            variadic_arg: hook.variadic_arg.clone(),
+            // A hook declared without a return type returns what it dispatches to: anything.
+            out: Some(hook.out.clone().unwrap_or_default()),
+            procedure_block: hook.procedure_block.clone(),
+            formal_list: true,
+            uri: hook.uri.clone(),
+            declared_at: hook.declared_at,
+        })))
+    }
 
     fn declared(member: &WithRange<MemberDetails>, uri: &str) -> Option<(TyProcedureOrAny, bool)> {
         let MemberKindSpecificDetails::MethodOrClassMethod(m) = &member.kind else {

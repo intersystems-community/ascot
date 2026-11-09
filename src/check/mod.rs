@@ -3175,7 +3175,7 @@ fn check_member<'a>(
                 check_call(env, flow, method, args.items(env), range)
             }
             // `..Prop(subs)`: a property, which IRIS requires to be multidimensional, its node
-            // typed like the property; a `%DispatchMethod` takes the name when nothing else does.
+            // typed like the property.
             None => {
                 let property = env.lookup_mem::<Properties<Called>>(&ty, &name, range, true)?;
                 let property = match property {
@@ -3190,11 +3190,9 @@ fn check_member<'a>(
                     PropertyTy::Multidimensional(_) if args.items(env).all(|a| a.is_none()) => {
                         Err(QuasiTypeError::node_without_subscripts(name))
                     }
-                    // A hook takes any arguments; an unknown property, taken as present and
-                    // untyped, may well be multidimensional.
-                    PropertyTy::Multidimensional(ty)
-                    | PropertyTy::Dispatched(ty)
-                    | PropertyTy::Value(ty @ Ty::Any) => {
+                    // An unknown property, taken as present and untyped, may well be
+                    // multidimensional.
+                    PropertyTy::Multidimensional(ty) | PropertyTy::Value(ty @ Ty::Any) => {
                         builtins::check_args_any(env, flow, args.items(env))?;
                         Ok(Some(ty))
                     }

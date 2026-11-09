@@ -649,7 +649,7 @@ pub enum PropertyTy {
     Collection { kind: CollectionClass, element: Ty },
     // `Property X [ MultiDimensional ]`: `..X(subs)` addresses a node typed like the property.
     Multidimensional(Ty),
-    // A name a `%Dispatch*` hook serves, with any arguments or subscripts, typed by the hook.
+    // A name a property hook serves, with any subscripts, typed by the hook.
     Dispatched(Ty),
 }
 
