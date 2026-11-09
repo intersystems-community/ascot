@@ -6997,8 +6997,28 @@ pub enum RoutineType {
     Mac(StringEqCI!("MAC")),
 }
 
-pub type RoutineTypeSpec =
-    Wrap<(StringEq!("["), StringEqCI!("Type"), StringEq!("=")), RoutineType, StringEq!("]")>;
+pub type RoutineTypeSpec = Wrap<StringEq!("["), RoutineAttributes, StringEq!("]")>;
+
+/// `[Type=INT]`, or with `Generated`, how IRIS exports a routine it generated: `[Type=INT,Generated]`
+/// from a namespace, `[Generated]` alone when the type is the file's. Undocumented, and parsed for
+/// what it is.
+#[derive(Grammar)]
+pub enum RoutineAttributes {
+    Typed {
+        routine_type: Prefix<Raw<(StringEqCI!("Type"), StringEq!("="))>, RoutineType>,
+        generated: Option<Raw<(StringEq!(","), StringEqCI!("Generated"))>>,
+    },
+    Generated(StringEqCI!("Generated")),
+}
+
+impl RoutineAttributes {
+    pub fn routine_type(&self) -> Option<&RoutineType> {
+        match self {
+            RoutineAttributes::Typed { routine_type, .. } => Some(routine_type),
+            RoutineAttributes::Generated(_) => None,
+        }
+    }
+}
 
 #[derive(Grammar)]
 pub struct RoutineHeader {
