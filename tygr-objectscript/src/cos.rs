@@ -2910,6 +2910,8 @@ impl Index {
 pub struct IndexOn {
     keyword: Raw<(Space1, StringEqCI!("On"), Space1)>,
     properties: IndexPropertyList,
+    // A functional index's class, with its parameters: `As %iFind.Index.Basic(LANGUAGE = "en")`.
+    index_class: Option<As<Type>>,
 }
 
 #[derive(Grammar)]
