@@ -67,8 +67,6 @@ enum Command {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
-    /// Report a file's syntax error, if any
-    ///
     #[cfg(feature = "declare")]
     /// Save an IRIS namespace's declarations to a file
     ///
