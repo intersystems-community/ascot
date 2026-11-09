@@ -1453,6 +1453,31 @@ impl<'a> WorkspaceEnv<'a> {
         self.assert_compatible(source, target)
     }
 
+    // A constant held to the PATTERN of the type it is assigned to or passed as `name`, or
+    // returned as: a warning, and checking goes on, since IRIS enforces a pattern late or never.
+    pub(crate) fn check_pattern(
+        &self,
+        source: &PowerTy,
+        target: &Ty,
+        range: bindings::Range,
+        name: Option<&str>,
+    ) {
+        if let (PowerTy::Const(value), Some(pattern)) = (source, target.pattern())
+            && let text = match value {
+                Const::String(text) => text.clone(),
+                Const::Integer(n) => n.to_string(),
+            }
+            && crate::check::pattern::matches(pattern, &text) == Some(false)
+        {
+            let what = match name {
+                Some(name) => format!("'{name}', declared as {target}"),
+                None => target.to_string(),
+            };
+            let err = QuasiTypeError::pattern_mismatch(value.to_string(), what);
+            self.add_soft_diagnostic(err.into_error(|| range).into());
+        }
+    }
+
     pub(crate) fn assert_compatible(&self, source: Ty, target: &Ty) -> Result<(), Incompatible> {
         if self.can_assign_to(&source, target) {
             return Ok(());

@@ -112,6 +112,10 @@ impl QuasiTypeError {
         .into()
     }
 
+    pub fn pattern_mismatch(value: String, what: String) -> Self {
+        TypeErrorKind::PatternMismatch { value, what }.into()
+    }
+
     pub fn downcast_from_abstract(name: String, source: Ty, target: Ty) -> Self {
         TypeErrorKind::DowncastFromAbstract {
             name,
@@ -1279,6 +1283,36 @@ type_error_kinds! {
         source: Ty,
         target: Ty,
     },
+    /// A constant that doesn't match the `PATTERN` of the type it is assigned to, passed as or
+    /// returned as, `"12"` for a `%String(PATTERN = "3N")`. IRIS holds a property to its pattern
+    /// only when the object is validated or saved, which fails with ERROR #7209, and a method
+    /// argument, a local or a return value never, so the value goes through. Match the pattern, or
+    /// widen it where it is declared.
+    ///
+    /// ```objectscript
+    /// Class Demo.PatternMismatch Extends %RegisteredObject
+    /// {
+    ///
+    /// Property Code As %String(PATTERN = "3N");
+    ///
+    /// ClassMethod Take(code As %String(PATTERN = "3N")) As %String
+    /// {
+    ///     Return code
+    /// }
+    ///
+    /// ClassMethod Call() As %String
+    /// {
+    ///     Set me = ..%New()
+    ///     Set me.Code = "12" //! A7731
+    ///     Return ..Take("abc") //! A7731
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A7731"]
+    #[severity = Warning]
+    #[message = "{value} doesn't match the pattern of {what}"]
+    PatternMismatch { value: String, what: String },
     /// `Set` gives a `#Dim`'d variable, or a call gives a typed parameter, a value typed as an
     /// abstract class where a subclass of it is declared. No instance is of the abstract class
     /// itself, so the value is some subclass's, which may be the declared one: IRIS compiles and

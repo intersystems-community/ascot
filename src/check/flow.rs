@@ -795,11 +795,11 @@ impl<'a> Flow<'a> {
             established
         });
         match (&established.it, it) {
-            (Some(wanted), Some(actual)) => self
-                .shared
-                .env
-                .assert_value_compatible(&actual, wanted)
-                .map_err(Incompatible::general),
+            (Some(wanted), Some(actual)) => {
+                self.shared.env.check_pattern(&actual, wanted, range, None);
+                (self.shared.env.assert_value_compatible(&actual, wanted))
+                    .map_err(Incompatible::general)
+            }
             (Some(wanted), None) => Err(QuasiTypeError::return_nothing_for_x(
                 wanted.clone(),
                 Location::new(self.shared.env.uri().to_string(), established.range),
@@ -1035,6 +1035,7 @@ impl<'a> Flow<'a> {
                 .declared
                 .as_ref()
                 .map_or(&Ty::Any, |declared| &declared.it);
+            env.check_pattern(&ty, declared, range, Some(&name));
             env.assert_value_compatible(&ty, declared)
                 .map_err(|err| err.assign(name.clone()))?;
             binding.assigned = ty;
