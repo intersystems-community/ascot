@@ -2400,12 +2400,13 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
     MissingQuit,
-    /// A form IRIS refuses where it stands, named with IRIS's own error: an error trap set inside
-    /// a `Try` block, a `*` or routine-qualified `$ZTRAP` value in a procedure block, an offset in
-    /// a trap label, a `New` of a special variable other than `$ESTACK`, `$ETRAP`, `$NAMESPACE`
-    /// and `$ROLES`. `ZQUIT` in a procedure block with private variables is the one IRIS compiles,
-    /// to raise `<COMMAND>` when it runs. In the example the `Catch` already handles the error, so
-    /// the trap goes.
+    /// A form IRIS refuses where it stands, named with IRIS's own error: an error trap set inside a
+    /// `Try` block, a `*` or routine-qualified `$ZTRAP` value in a procedure block, an offset in a
+    /// trap label, a `Goto` in a procedure block whose label is indirect (`Goto @target`) or
+    /// carries an offset (`Goto Done+1`), a `New` of a special variable other than `$ESTACK`,
+    /// `$ETRAP`, `$NAMESPACE` and `$ROLES`. `ZQUIT` in a procedure block with private variables is
+    /// the one IRIS compiles, to raise `<COMMAND>` when it runs. In the example the `Catch` already
+    /// handles the error, so the trap goes.
     ///
     /// ```objectscript
     /// Class Demo.NotAllowedIn
