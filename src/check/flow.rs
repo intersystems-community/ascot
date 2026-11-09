@@ -798,7 +798,7 @@ impl<'a> Flow<'a> {
             (Some(wanted), Some(actual)) => {
                 self.shared.env.check_pattern(&actual, wanted, range, None);
                 (self.shared.env.assert_value_compatible(&actual, wanted))
-                    .map_err(Incompatible::general)
+                    .or_else(|err| err.raise(self.shared.env, range, None))
             }
             (Some(wanted), None) => Err(QuasiTypeError::return_nothing_for_x(
                 wanted.clone(),
@@ -1036,8 +1036,8 @@ impl<'a> Flow<'a> {
                 .as_ref()
                 .map_or(&Ty::Any, |declared| &declared.it);
             env.check_pattern(&ty, declared, range, Some(&name));
-            env.assert_value_compatible(&ty, declared)
-                .map_err(|err| err.assign(name.clone()))?;
+            (env.assert_value_compatible(&ty, declared))
+                .or_else(|err| err.raise(env, range, Some(name.clone())))?;
             binding.assigned = ty;
             binding.assigned_at = HashSet::from([range]);
             binding.incoming = false;

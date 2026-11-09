@@ -74,7 +74,9 @@ pub(crate) struct Methods;
 
 // How `..X` is used, which decides the `%Dispatch*` hook a missing property falls back to.
 pub(crate) trait Access {
-    fn hook(obj: &ClsOrIns) -> Option<&'static str>;
+    fn hook() -> Option<&'static str> {
+        None
+    }
 }
 pub(crate) struct Read;
 pub(crate) struct Assign;
@@ -85,39 +87,32 @@ pub(crate) struct Called;
 // An index key: IRIS wants a declared property, hook or not.
 pub(crate) struct Indexed;
 impl Access for Read {
-    fn hook(_: &ClsOrIns) -> Option<&'static str> {
+    fn hook() -> Option<&'static str> {
         Some("%DispatchGetProperty")
     }
 }
 impl Access for Assign {
-    fn hook(_: &ClsOrIns) -> Option<&'static str> {
+    fn hook() -> Option<&'static str> {
         Some("%DispatchSetProperty")
     }
 }
 impl Access for AssignNode {
-    fn hook(_: &ClsOrIns) -> Option<&'static str> {
+    fn hook() -> Option<&'static str> {
         Some("%DispatchSetMultidimProperty")
     }
 }
-impl Access for Called {
-    fn hook(_: &ClsOrIns) -> Option<&'static str> {
-        None
-    }
-}
+impl Access for Called {}
+impl Access for Indexed {}
 
-// Whether a hook serves `mem`: its name argument, the `name_arg`th, carries no PATTERN or one `mem`
-// matches (`%DispatchMethod(methodName As %String(PATTERN=...))`).
+// Whether a hook serves `mem`: its name argument, the `name_arg`th, carries no PATTERN, or one
+// `mem` matches or that can't be evaluated here (`%DispatchMethod(methodName As
+// %String(PATTERN=...))`).
 fn serves(hook: &TyProcedure, name_arg: usize, mem: &str) -> bool {
     (hook
         .normal_args
         .get(name_arg)
         .and_then(|arg| arg.ty.as_ref()?.pattern()))
     .is_none_or(|pattern| crate::check::pattern::matches(pattern, mem) != Some(false))
-}
-impl Access for Indexed {
-    fn hook(_: &ClsOrIns) -> Option<&'static str> {
-        None
-    }
 }
 
 impl Namespace for Parameters {
@@ -196,11 +191,11 @@ impl<A: Access> Namespace for Properties<A> {
 
     // Only the hook's return type matters.
     fn dispatched(
-        obj: &ClsOrIns,
+        _obj: &ClsOrIns,
         mem: &str,
         find: impl FnOnce(&str) -> Option<TyProcedureOrAny>,
     ) -> Option<PropertyTy> {
-        let hook = find(A::hook(obj)?)?;
+        let hook = find(A::hook()?)?;
         let hook = hook.procedure();
         if hook.is_some_and(|hook| !serves(hook, 0, mem)) {
             return None;
@@ -234,15 +229,19 @@ impl Namespace for Methods {
         if !serves(hook, skip - 1, mem) {
             return None;
         }
+        let normal_args = hook.normal_args.get(skip..).unwrap_or_default().to_vec();
+        // The compiler gives a hook declaring no more than its name arguments the canonical
+        // `Args...`; one declared without a return type returns what it dispatches to: anything.
+        let variadic_arg = (hook.variadic_arg.clone()).or_else(|| {
+            normal_args
+                .is_empty()
+                .then(|| VariadicArg::new(None, "args".into(), None))
+        });
         Some(TyProcedureOrAny::Procedure(Arc::new(TyProcedure {
-            normal_args: hook.normal_args.get(skip..).unwrap_or_default().to_vec(),
-            variadic_arg: hook.variadic_arg.clone(),
-            // A hook declared without a return type returns what it dispatches to: anything.
+            normal_args,
+            variadic_arg,
             out: Some(hook.out.clone().unwrap_or_default()),
-            procedure_block: hook.procedure_block.clone(),
-            formal_list: true,
-            uri: hook.uri.clone(),
-            declared_at: hook.declared_at,
+            ..TyProcedure::clone(hook)
         })))
     }
 
@@ -944,17 +943,40 @@ impl<'a> WorkspaceEnv<'a> {
         range: bindings::Range,
         own: bool,
     ) -> Result<Option<Member<N::Ty>>, TypeError> {
+        match self.find_mem::<N>(ty, mem, range, own)? {
+            Some(found) => Ok(Some(found)),
+            None => Ok(self.dispatched_mem::<N>(ty, mem, range, own)),
+        }
+    }
+
+    // `lookup_mem` short of the dispatch: what a class declares.
+    pub(crate) fn find_mem<N: Namespace>(
+        &self,
+        ty: &Ty,
+        mem: &str,
+        range: bindings::Range,
+        own: bool,
+    ) -> Result<Option<Member<N::Ty>>, TypeError> {
         let Ty::OREF(obj) = ty else {
             return Ok(Some(Member::undeclared(N::Ty::default())));
         };
         let at = |err: FindError| QuasiTypeError::from(err).into_error(|| range);
-        let mut found = self.find::<N>(obj, mem, own, range).map_err(at)?;
-        // Dynamic dispatch: a class overriding the hook takes any member name no class has.
-        if found.is_none() {
-            let hook = |hook: &str| Some(self.find::<Methods>(obj, hook, own, range).ok()??.ty);
-            found = N::dispatched(obj, mem, hook).map(Member::undeclared);
-        }
-        Ok(found)
+        self.find::<N>(obj, mem, own, range).map_err(at)
+    }
+
+    // Dynamic dispatch: what a class overriding the hook makes of a member name no class has.
+    pub(crate) fn dispatched_mem<N: Namespace>(
+        &self,
+        ty: &Ty,
+        mem: &str,
+        range: bindings::Range,
+        own: bool,
+    ) -> Option<Member<N::Ty>> {
+        let Ty::OREF(obj) = ty else {
+            return None;
+        };
+        let hook = |hook: &str| Some(self.find::<Methods>(obj, hook, own, range).ok()??.ty);
+        N::dispatched(obj, mem, hook).map(Member::undeclared)
     }
 
     // The value the nearest class up from `cls` gives the parameter `param`, when it is a class
@@ -1493,11 +1515,7 @@ impl<'a> WorkspaceEnv<'a> {
         name: Option<&str>,
     ) {
         if let (PowerTy::Const(value), Some(pattern)) = (source, target.pattern())
-            && let text = match value {
-                Const::String(text) => text.clone(),
-                Const::Integer(n) => n.to_string(),
-            }
-            && crate::check::pattern::matches(pattern, &text) == Some(false)
+            && crate::check::pattern::matches(pattern, &value.as_string()) == Some(false)
         {
             let what = match name {
                 Some(name) => format!("'{name}', declared as {target}"),
@@ -1692,7 +1710,27 @@ pub(crate) struct Incompatible {
 }
 
 impl Incompatible {
-    pub(crate) fn assign(self, name: String) -> QuasiTypeError {
+    // Reports the incompatibility of a value assigned to or passed as `name`, or returned (none):
+    // a downcast is a warning, reported softly so that checking goes on; anything else is raised.
+    pub(crate) fn raise(
+        self,
+        env: &WorkspaceEnv<'_>,
+        range: bindings::Range,
+        name: Option<String>,
+    ) -> Result<(), QuasiTypeError> {
+        let downcast = self.downcast;
+        let err = match name {
+            Some(name) => self.assign(name),
+            None => self.general(),
+        };
+        if downcast {
+            env.add_soft_diagnostic(err.into_error(|| range).into());
+            return Ok(());
+        }
+        Err(err)
+    }
+
+    fn assign(self, name: String) -> QuasiTypeError {
         if self.downcast {
             QuasiTypeError::downcast_from_abstract(name, self.source, self.target)
         } else {

@@ -2438,7 +2438,7 @@ fn check_merge_target<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
-    if let (Some(local), _) = check_target(target, env, flow)? {
+    if let Some(Left(local)) = check_target(target, env, flow)? {
         flow.handle_merge(local, source, range)?;
     }
     Ok(())
@@ -2451,48 +2451,47 @@ fn check_set_target<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
-    let (local, declared) = check_target(target, env, flow)?;
-    if let Some((name, declared)) = declared {
-        env.check_pattern(&source, &declared, range, Some(&name));
-        env.assert_value_compatible(&source, &declared)
-            .map_err(|err| err.assign(name))?;
+    match check_target(target, env, flow)? {
+        Some(Left(local)) => flow.handle_set(local, source, range),
+        Some(Right((name, declared))) => {
+            env.check_pattern(&source, &declared, range, Some(&name));
+            (env.assert_value_compatible(&source, &declared))
+                .or_else(|err| err.raise(env, range, Some(name)))
+        }
+        None => Ok(()),
     }
-    if let Some(local) = local {
-        flow.handle_set(local, source, range)?;
-    }
-    Ok(())
 }
 
-// The property a target names, with its declared type.
-type AssignedProperty = Option<(String, Ty)>;
+// What a `Set` target names: a tracked local, or a property with its declared type.
+type Assigned = Either<Local, (String, Ty)>;
 
-// Checks a target's parts and resolves it; the tracked local and the property it names, if any.
+// Checks a target's parts and resolves it; what it names, if either.
 fn check_target<'a>(
     target: &cos::SetTarget,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-) -> Result<(Option<Local>, AssignedProperty), QuasiTypeError> {
+) -> Result<Option<Assigned>, QuasiTypeError> {
     match target {
         SetTarget::Sub { obj, op } => {
             let obj = obj.to_ty(env, flow)?;
             let declared = check_set_member(env, flow, obj, op.mem.deref(), op.args.as_ref())?;
-            return Ok((None, declared.map(|ty| (op.mem.id(), ty))));
+            return Ok(declared.map(|ty| Right((op.mem.id(), ty))));
         }
         SetTarget::Member { member, args } => {
             let obj = env.this_ty(flow);
             let declared = check_set_member(env, flow, obj, member.deref(), args.as_ref())?;
-            return Ok((None, declared.map(|ty| (member.id(), ty))));
+            return Ok(declared.map(|ty| Right((member.id(), ty))));
         }
         SetTarget::Var(variable) => {
             return match variable.as_local(env, flow)? {
                 // Overwriting counts as reading the old value, but doesn't need it.
                 Left(local) => {
                     flow.handle_get(local.clone())?;
-                    Ok((Some(local), None))
+                    Ok(Some(Left(local)))
                 }
                 Right(_) => {
                     let _ = variable.to_maybe_ty(env, flow)?;
-                    Ok((None, None))
+                    Ok(None)
                 }
             };
         }
@@ -2506,7 +2505,7 @@ fn check_target<'a>(
         // binding), except the error traps, which `check_trap_set` has already seen to.
         SetTarget::Special(..) => {}
     }
-    Ok((None, None))
+    Ok(None)
 }
 
 // `Set $ZTRAP/$ETRAP/$ECODE = value`. A literal is checked -- IRIS compiles a literal trap value
@@ -3168,38 +3167,42 @@ fn check_member<'a>(
             let property = env.resolve_mem::<Properties<Read>>(&ty, name, range, true);
             Ok(Some(referenced(env, mem, property)?.to_ty()))
         }
-        // A method anywhere in the chain before a property anywhere, as IRIS resolves it.
-        (false, Some(args)) => match env.lookup_mem::<Methods>(&ty, &name, range, true)? {
-            Some(method) => {
-                let method = referenced(env, mem, Ok(method))?;
-                check_call(env, flow, method, args.items(env), range)
-            }
-            // `..Prop(subs)`: a property, which IRIS requires to be multidimensional, its node
-            // typed like the property.
-            None => {
-                let property = env.lookup_mem::<Properties<Called>>(&ty, &name, range, true)?;
-                let property = match property {
-                    Some(property) => referenced(env, mem, Ok(property))?,
-                    // Neither: reported as a missing method.
-                    None => {
-                        env.resolve_mem::<Methods>(&ty, name.clone(), range, true)?;
-                        PropertyTy::default()
+        // A method anywhere in the chain before a property anywhere, as IRIS resolves it, and the
+        // `%DispatchMethod` hook once neither has the name.
+        (false, Some(args)) => {
+            let method = match env.find_mem::<Methods>(&ty, &name, range, true)? {
+                Some(method) => Some(method),
+                // `..Prop(subs)`: a property, which IRIS requires to be multidimensional, its node
+                // typed like the property.
+                None => match env.lookup_mem::<Properties<Called>>(&ty, &name, range, true)? {
+                    Some(property) => {
+                        let property = referenced(env, mem, Ok(property))?;
+                        return match property {
+                            PropertyTy::Multidimensional(_)
+                                if args.items(env).all(|a| a.is_none()) =>
+                            {
+                                Err(QuasiTypeError::node_without_subscripts(name))
+                            }
+                            // An unknown property, taken as present and untyped, may well be
+                            // multidimensional.
+                            PropertyTy::Multidimensional(ty) | PropertyTy::Value(ty @ Ty::Any) => {
+                                builtins::check_args_any(env, flow, args.items(env))?;
+                                Ok(Some(ty))
+                            }
+                            _ => Err(QuasiTypeError::not_multidimensional(name)),
+                        };
                     }
-                };
-                match property {
-                    PropertyTy::Multidimensional(_) if args.items(env).all(|a| a.is_none()) => {
-                        Err(QuasiTypeError::node_without_subscripts(name))
-                    }
-                    // An unknown property, taken as present and untyped, may well be
-                    // multidimensional.
-                    PropertyTy::Multidimensional(ty) | PropertyTy::Value(ty @ Ty::Any) => {
-                        builtins::check_args_any(env, flow, args.items(env))?;
-                        Ok(Some(ty))
-                    }
-                    _ => Err(QuasiTypeError::not_multidimensional(name)),
-                }
-            }
-        },
+                    None => env.dispatched_mem::<Methods>(&ty, &name, range, true),
+                },
+            };
+            let method = match method {
+                Some(method) => Ok(method),
+                // Neither: reported as a missing method.
+                None => env.resolve_mem::<Methods>(&ty, name.clone(), range, true),
+            };
+            let method = referenced(env, mem, method)?;
+            check_call(env, flow, method, args.items(env), range)
+        }
     }
 }
 
@@ -3363,8 +3366,8 @@ fn check_param_arg<'a>(
             }
             flow.with_range(env.range(arg), |flow| flow.value(&source, || expr.print()))?;
             env.check_pattern(&source, &target, env.range(arg), Some(&par.name));
-            env.assert_value_compatible(&source, &target)
-                .map_err(|err| err.assign(par.name))?;
+            (env.assert_value_compatible(&source, &target))
+                .or_else(|err| err.raise(env, env.range(arg), Some(par.name)))?;
         }
         Some(cos::MthArg::ByRef { target, .. }) => {
             if par.mode.is_none() {
@@ -3374,7 +3377,7 @@ fn check_param_arg<'a>(
             // The callee may read the prior value before writing, so `invalidate` — not a
             // fresh, obligated write — models it: satisfies whatever was pending instead of
             // demanding another read.
-            if let (Some(local), _) = check_target(target, env, flow)? {
+            if let Some(Left(local)) = check_target(target, env, flow)? {
                 flow.invalidate(local, source)?;
             }
         }
