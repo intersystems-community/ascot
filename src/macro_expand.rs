@@ -546,9 +546,11 @@ impl WorkspaceStruct {
                 MacroedUnit::Redex(redex) => match redex {
                     MacroRedex::H(HMacro { command, input }) => match command.deref() {
                         HMacroCommand::Define { name, args, .. } => {
-                            let params = args
-                                .as_ref()
-                                .map(|args| args.items.iter().map(|arg| arg.print()).collect());
+                            let params = args.as_ref().map(|args| {
+                                (args.iter().flat_map(|list| list.items.iter()))
+                                    .map(|arg| arg.print())
+                                    .collect()
+                            });
                             define(definitions, name, params, false, input);
                         }
                         HMacroCommand::Def1arg { name, arg, .. } => {
@@ -638,6 +640,16 @@ impl WorkspaceStruct {
                                 false
                             }
                             Some(def) if def.is_compile_time() => false,
+                            // `$$$M` for an `M()` declared with no parameters: the parentheses
+                            // are optional at the call.
+                            Some(MacroDefinition {
+                                params: Some(pars),
+                                body,
+                                ..
+                            }) if pars.is_empty() && args.is_none() => {
+                                todos.push(<Vec<MacroedUnit>>::parse(body)?, origin.deeper());
+                                true
+                            }
                             // `$$$M(args)` on a parameterless `M` keeps the argument list: the
                             // body is typically a method name the arguments then call.
                             Some(MacroDefinition {
@@ -1060,11 +1072,11 @@ fn substitute_macro_body<'a>(
             }
             let mut rest = span.text.as_str();
             loop {
-                // Only the whole name: the `%m` that starts `%maps` is not the parameter.
+                // Only the whole name: the `%m` that starts `%maps` is not the parameter. What
+                // precedes it doesn't matter, since a name can't contain `%`: `%New%args` is
+                // `%New` and then the parameter.
                 let whole = rest.match_indices(name.as_str()).find(|(idx, _)| {
-                    let (before, after) = (&rest[..*idx], &rest[idx + name.len()..]);
-                    !before.ends_with(|c: char| c.is_alphanumeric())
-                        && !after.starts_with(|c: char| c.is_alphanumeric())
+                    !rest[idx + name.len()..].starts_with(|c: char| c.is_alphanumeric())
                 });
                 match whole.map(|(idx, _)| idx) {
                     None => {
@@ -1387,7 +1399,9 @@ fn macro_name_in(input: &cos::MacroInput) -> String {
 
 // Joins a macro's (possibly multi-line, `##CONTINUE`-terminated) body into a single string
 // usable as the macro's expansion text. Each continued line is kept as written, since IRIS emits
-// it as a line of its own: one starting with a label stays a label.
+// it as a line of its own: one starting with a label stays a label. A `##;` comment and the
+// whitespace a line ends with are the preprocessor's, not the macro's: `#define KB (2**7) ##;128`
+// expands to `(2**7)`, and a value ending in a tab doesn't put the tab into the code.
 fn import_macro_input(cos::MacroInput { line_i, line_z }: &cos::MacroInput) -> String {
     let mut result = String::new();
     for line in line_i {
@@ -1396,9 +1410,13 @@ fn import_macro_input(cos::MacroInput { line_i, line_z }: &cos::MacroInput) -> S
             .to_ascii_lowercase()
             .find("##continue")
             .unwrap_or(printed.len());
-        result.push_str(&printed[..end]);
+        result.push_str(without_comment(&printed[..end]));
         result.push('\n');
     }
-    result.push_str(&line_z.print());
+    result.push_str(without_comment(&line_z.print()));
     result.trim_start().to_string()
+}
+
+fn without_comment(line: &str) -> &str {
+    line[..line.find("##;").unwrap_or(line.len())].trim_end()
 }

@@ -136,13 +136,14 @@ pub struct HMacro {
 
 #[derive(Grammar, Clone)]
 pub enum HMacroCommand {
+    // `#define F()` declares no parameter, which the call may then write as `$$$F` or `$$$F()`.
     Define {
         kw: (StringEqCI!("define"), SGap1),
         name: MacroName,
         args: Option<
             Wrap<
                 (StringEq!("("), SGap),
-                VecSep<Prefix<StringEq!("%"), MacroName>, Wrap<SGap, StringEq!(","), SGap>>,
+                Option<VecSep<Prefix<StringEq!("%"), MacroName>, Wrap<SGap, StringEq!(","), SGap>>>,
                 (SGap, StringEq!(")")),
             >,
         >,
