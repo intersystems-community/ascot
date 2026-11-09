@@ -721,10 +721,7 @@ impl From<&PropertyType> for Ty {
                 CollectionKind::ListOf(..) => Self::from("%Collection.AbstractList"),
                 CollectionKind::ArrayOf(..) => Self::from("%Collection.AbstractArray"),
             },
-            None => match &value.class_name {
-                Some(class_name) => Self::from(class_name.print()),
-                None => Self::default(),
-            },
+            None => Self::from(value.class_name.print()),
         }
     }
 }

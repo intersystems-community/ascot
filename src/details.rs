@@ -640,10 +640,7 @@ fn class_list_text(value: &str) -> Vec<String> {
 // `list Of X` / `array Of X`: the element class `X`, which is what the type parameters describe.
 fn element_ty(property_type: &cos::PropertyType) -> Option<Ty> {
     property_type.collection.as_ref()?;
-    property_type
-        .class_name
-        .as_ref()
-        .map(|class_name| Ty::from(class_name.print()))
+    Some(Ty::from(property_type.class_name.print()))
 }
 
 fn type_param_names(type_params: &Option<cos::TypeParamList>) -> Vec<String> {
