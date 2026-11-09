@@ -71,6 +71,22 @@ rustup installers offer to set up; a build failing on `link.exe` or
 `kernel32.lib` is missing them, see rustup's
 [MSVC prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html).
 
+As a library, ascot's default features build everything the CLI has. A host that
+needs only the checker turns them off and adds the modes it uses:
+
+```sh
+cargo add ascot --no-default-features --features atelier
+```
+
+- `atelier`: a live IRIS instance over its Atelier REST API (`RawAtelier`).
+- `prebuilt`: downloading a release's pre-built declarations into `~/.ascot`.
+- `lsp`, `mcp`: the stdio Language Server and MCP server (`ascot::lsp`, `ascot::mcp`).
+- `sarif`: diagnostics as a SARIF 2.1.0 log (`ascot::sarif`).
+- `cli`: all of the above and the `ascot` binary.
+
+Without any, the checker reads a workspace and a declaration file (`Workspace`,
+`open_iris` with a path or `none`) and nothing else.
+
 ### TypeScript/JavaScript (npm)
 
 From

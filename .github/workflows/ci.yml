@@ -40,6 +40,14 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-targets
 
+      # A library host takes the checker alone, or with any one mode: each must build and lint clean.
+      - name: Feature gates
+        run: |
+          for features in "" lsp mcp sarif atelier prebuilt; do
+            cargo clippy --lib --no-default-features ${features:+--features "$features"} -- -D warnings
+          done
+          cargo test --lib --no-default-features
+
       # `--all-targets` above skips doctests (a cargo quirk, not an oversight) — run them too.
       - name: Doc tests
         run: cargo test --doc

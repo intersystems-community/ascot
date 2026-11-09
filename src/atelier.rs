@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tygr::{Grammar, GrammarRule, Prefix, Raw, StringEq, StringOf1, VecSep};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
 use {
     crate::DocKind,
     crate::iris::{DECLARATIONS_VERSION, Declarations, DeclaredClass},
@@ -31,9 +31,9 @@ use crate::bindings::{
 use crate::cos::{self, LocalVariableName, OSString, Space, Type};
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
 const BATCH: usize = 100;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
 const WORKERS: usize = 8;
 
 struct Cache<V: Clone>(Mutex<HashMap<String, (Option<Instant>, V)>>);
@@ -679,7 +679,7 @@ fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
     (normal, variadic)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
 /// ascot's own `Atelier`: a connection to IRIS over the Atelier REST API.
 pub struct RawAtelier {
     base_url: String,
@@ -693,7 +693,7 @@ pub struct RawAtelier {
     agent: Mutex<Result<ureq::Agent, String>>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
 impl RawAtelier {
     /// `url` is `scheme://user:pass@host:port`, optionally with a path prefix (e.g. `/iris`,
     /// when the web server routes IRIS instances by path). `namespace` is a plain name (e.g.
@@ -941,7 +941,7 @@ impl RawAtelier {
 }
 
 // Each of `names` that has source, read from the first of `exts` it exists as.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
 fn sources(
     ctx: &AtelierContext,
     names: &[String],
@@ -958,7 +958,7 @@ fn sources(
 
 // Every request without a session cookie opens a CSP session, which holds a license slot until
 // the web application's timeout. The agent keeps the cookie, so there's one session; this ends it.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
 impl Drop for RawAtelier {
     fn drop(&mut self) {
         if let Ok(agent) = self.agent() {
@@ -969,7 +969,7 @@ impl Drop for RawAtelier {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
 impl Atelier for RawAtelier {
     fn query(&self, sql: &str, params: &[&str]) -> Result<String, String> {
         let resp = self
@@ -1019,7 +1019,7 @@ impl Atelier for RawAtelier {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
 fn percent_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
@@ -1036,6 +1036,7 @@ fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "atelier")]
     use crate::iris::open;
 
     #[test]
@@ -1202,6 +1203,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn open_treats_anything_with_a_scheme_as_a_url() {
         let err = open("ftp://user:pass@localhost:8080", None).err().unwrap();
@@ -1211,6 +1213,7 @@ mod tests {
         assert!(err.contains("authentication failed"), "{err}");
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn connect_decodes_percent_encoded_credentials() {
         let url =
@@ -1220,6 +1223,7 @@ mod tests {
         assert_eq!(conn.auth_header, format!("Basic {expected}"));
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn connect_percent_encodes_the_namespace() {
         let url = stub_server(&[("", "200 OK", "{}")]);
@@ -1230,6 +1234,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn connect_keeps_a_path_prefix_before_api_atelier() {
         let url = stub_server(&[("", "200 OK", "{}")]);
@@ -1240,18 +1245,21 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "atelier")]
     fn host(url: &str) -> String {
         url.replace("user:pass@", "")
     }
 
     // An HTTP server answering each request with the first of `routes` whose path suffix
     // matches the request's path (`("", ...)` matches anything).
+    #[cfg(feature = "atelier")]
     fn stub_server(routes: &'static [(&str, &str, &str)]) -> String {
         recording_stub_server(routes).0
     }
 
     // `stub_server` that also sets a session cookie, and records each request as its first line
     // plus the cookie it carried, if any.
+    #[cfg(feature = "atelier")]
     fn recording_stub_server(
         routes: &'static [(&str, &str, &str)],
     ) -> (String, std::sync::Arc<Mutex<Vec<String>>>) {
@@ -1305,6 +1313,7 @@ mod tests {
         (url, requests)
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn one_session_is_kept_and_ended() {
         let (url, requests) =
@@ -1329,6 +1338,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn server_version_reads_the_api_listing() {
         let url = stub_server(&[
@@ -1346,6 +1356,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn check_names_the_available_namespaces_when_the_requested_one_is_missing() {
         // The listing lives at `/api/atelier/` (trailing slash); the namespace itself 404s.
@@ -1362,6 +1373,7 @@ mod tests {
         assert!(err.contains("%SYS, USER"), "{err}");
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn check_blames_the_path_prefix_when_there_is_no_atelier_api_at_all() {
         let url = stub_server(&[("", "404 Not Found", "")]);
@@ -1369,6 +1381,7 @@ mod tests {
         assert!(err.contains("no Atelier API at"), "{err}");
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn check_reports_a_bad_password() {
         let url = stub_server(&[("", "401 Unauthorized", "")]);
@@ -1379,12 +1392,14 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn check_passes_on_a_reachable_namespace() {
         let url = stub_server(&[("", "200 OK", r#"{"result":{"content":{"name":"USER"}}}"#)]);
         RawAtelier::connect(&url, "USER").unwrap();
     }
 
+    #[cfg(feature = "atelier")]
     #[test]
     fn connect_strips_a_trailing_slash_from_the_path_prefix() {
         let url = stub_server(&[("", "200 OK", "{}")]);

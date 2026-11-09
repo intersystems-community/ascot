@@ -463,6 +463,7 @@ impl DeclaredClass {
     /// `info` as declared, minus any member whose header the class parser rejects, named in the
     /// second value, so that the rest of the class stays loadable.
     #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(feature = "atelier")]
     pub fn validated(info: &ClassInfo) -> (Self, Vec<String>) {
         let mut declared = Self::from(info);
         if declared.to_class_info(&info.name).is_some() {

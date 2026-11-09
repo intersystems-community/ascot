@@ -6,7 +6,7 @@ use std::fmt;
 use serde::Serialize;
 
 use crate::bindings::{Diagnostic, DiagnosticSeverity, Location, Range};
-use crate::mcp::FileDiagnostics;
+use crate::report::FileDiagnostics;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

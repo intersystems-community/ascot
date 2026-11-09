@@ -49,21 +49,22 @@ mod details;
 pub mod diagnostic_filter;
 #[cfg(not(target_arch = "wasm32"))]
 mod iris;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "lsp"))]
 pub mod lsp;
 mod macro_expand;
 mod mask;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "mcp"))]
 pub mod mcp;
 #[cfg(not(target_arch = "wasm32"))]
 mod prebuilt;
 mod render;
-#[cfg(not(target_arch = "wasm32"))]
+pub mod report;
+#[cfg(all(not(target_arch = "wasm32"), feature = "sarif"))]
 pub mod sarif;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod settings;
 pub mod style;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "atelier"))]
 pub use atelier::RawAtelier;
 pub use atelier::{Atelier, AtelierContext};
 #[cfg(not(target_arch = "wasm32"))]

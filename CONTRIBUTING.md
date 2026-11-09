@@ -17,6 +17,15 @@ cargo clippy --all-targets -- -D warnings
 
 `ascot lsp` runs the stdio LSP server natively.
 
+The modes are Cargo features (`lsp`, `mcp`, `sarif`, `atelier`, `prebuilt`; `cli` is all of them
+and the binary, and the default), so a library host can leave out what it doesn't need. Code
+that one mode alone uses goes behind its feature; CI builds and lints the library with no features
+and with each one, so run the same before pushing a change near a gate:
+
+```sh
+cargo clippy --lib --no-default-features --features lsp -- -D warnings
+```
+
 ### Against IRIS
 
 `tests/iris.rs` and the JavaScript binding's `npm test` run against the instance in

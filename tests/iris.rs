@@ -2,6 +2,8 @@
 //! (`http://user:password@host:port`); each test passes without doing anything when it's unset.
 //! CONTRIBUTING.md shows how to run one in Docker.
 
+#![cfg(feature = "atelier")]
+
 use ascot::IrisContext;
 use ascot::bindings::MemberKind;
 

@@ -13,6 +13,31 @@ exclude = [".github", ".claude-plugin", "bindings"]
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "ascot"
+path = "src/main.rs"
+required-features = ["cli"]
+
+# A host that uses ascot as a library takes the checker alone (`default-features = false`) and
+# adds the modes it needs; the binary needs them all.
+[features]
+default = ["cli"]
+# The `ascot` binary: every mode below, and its argument parser.
+cli = ["dep:clap", "lsp", "mcp", "sarif", "atelier", "prebuilt"]
+# `ascot::lsp`, the stdio Language Server.
+lsp = ["dep:lsp-server", "dep:lsp-types"]
+# `ascot::mcp`, the stdio MCP server.
+mcp = ["dep:rmcp", "dep:tokio"]
+# `ascot::sarif`, diagnostics as a SARIF 2.1.0 log.
+sarif = []
+# `RawAtelier`, a live IRIS instance over its Atelier REST API (`--iris http://...`).
+atelier = ["dep:ureq", "dep:base64", "dep:percent-encoding"]
+# Downloading a release's pre-built declarations into `~/.ascot` (`--iris 2026.2`, `--iris latest`).
+prebuilt = ["dep:ureq", "dep:sha2"]
+
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 either = "1.15.0"
 tygr = "0.6.0"
@@ -24,13 +49,13 @@ schemars = "1.2.2"
 flate2 = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rmcp = { version = "3.1.2", features = ["server", "macros", "transport-io"] }
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-std"] }
-lsp-server = "0.10"
-lsp-types = "0.97"
+rmcp = { version = "3.1.2", features = ["server", "macros", "transport-io"], optional = true }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-std"], optional = true }
+lsp-server = { version = "0.10", optional = true }
+lsp-types = { version = "0.97", optional = true }
 url = "2"
-percent-encoding = "2"
-ureq = { version = "3", features = ["json", "platform-verifier", "cookies"] }
-sha2 = "0.10"
-base64 = "0.23"
-clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
+percent-encoding = { version = "2", optional = true }
+ureq = { version = "3", features = ["json", "platform-verifier", "cookies"], optional = true }
+sha2 = { version = "0.10", optional = true }
+base64 = { version = "0.23", optional = true }
+clap = { version = "4.6.7", features = ["derive", "wrap_help"], optional = true }

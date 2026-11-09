@@ -12,7 +12,7 @@ use ascot::bindings::Style;
 use ascot::cos;
 use ascot::cos::Routine;
 use ascot::diagnostic_filter::Filter;
-use ascot::mcp::{DiagnosticsResult, FileDiagnostics};
+use ascot::report::{DiagnosticsResult, FileDiagnostics};
 use ascot::settings::{Diagnostics, Settings, StyleSetting};
 use ascot::style;
 use std::fs;

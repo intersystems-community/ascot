@@ -4,8 +4,11 @@
 use std::path::Path;
 
 use crate::IrisContext;
+#[cfg(feature = "atelier")]
 use crate::atelier::{AtelierContext, RawAtelier};
-pub(crate) use crate::declared::{DECLARATIONS_VERSION, Declarations, DeclaredClass};
+pub(crate) use crate::declared::Declarations;
+#[cfg(any(feature = "atelier", test))]
+pub(crate) use crate::declared::{DECLARATIONS_VERSION, DeclaredClass};
 
 pub const DEFAULT_NAMESPACE: &str = "%SYS";
 
@@ -26,15 +29,31 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisCo
         ));
     }
     if let Some(release) = crate::prebuilt::Release::parse(iris) {
-        let file = crate::prebuilt::fetch(&release)?;
-        return open_file(&file, Some(release.namespace())).map(Some);
+        #[cfg(feature = "prebuilt")]
+        {
+            let file = crate::prebuilt::fetch(&release)?;
+            return open_file(&file, Some(release.namespace())).map(Some);
+        }
+        #[cfg(not(feature = "prebuilt"))]
+        return Err(format!(
+            "--iris {release} names pre-built declarations, which this build of ascot cannot \
+             download (it lacks the `prebuilt` feature); give a declaration file's path"
+        ));
     }
     if let Some(path) = iris.strip_prefix("file://") {
         return open_file(Path::new(path), namespace).map(Some);
     }
     if iris.contains("://") {
-        let raw = RawAtelier::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
-        return Ok(Some(Box::new(AtelierContext::from(raw))));
+        #[cfg(feature = "atelier")]
+        {
+            let raw = RawAtelier::connect(iris, namespace.unwrap_or(DEFAULT_NAMESPACE))?;
+            return Ok(Some(Box::new(AtelierContext::from(raw))));
+        }
+        #[cfg(not(feature = "atelier"))]
+        return Err(format!(
+            "--iris {iris} is a live instance, which this build of ascot cannot reach (it lacks \
+             the `atelier` feature); give a declaration file's path"
+        ));
     }
     open_file(Path::new(iris), namespace).map(Some)
 }
@@ -71,6 +90,7 @@ impl Declarations {
         Self::from_bytes(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     }
 
+    #[cfg(any(feature = "atelier", test))]
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let text = serde_json::to_string(self).map_err(|e| e.to_string())?;
         std::fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))

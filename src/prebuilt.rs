@@ -3,15 +3,21 @@
 //! downloaded once from the project's GitHub Releases into `~/.ascot`, and read from there
 //! afterwards.
 
+#[cfg(feature = "prebuilt")]
 use std::fs;
+#[cfg(feature = "prebuilt")]
 use std::io::Read;
+#[cfg(feature = "prebuilt")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "prebuilt")]
 use std::time::Duration;
 
+#[cfg(feature = "prebuilt")]
 use sha2::{Digest, Sha256};
 
 /// The release `--iris` means when it isn't given: the newest one ascot was built for.
 pub const DEFAULT_RELEASE: &str = "2026.2";
+#[cfg(feature = "prebuilt")]
 const RELEASES: &str = "https://github.com/intersystems-community/ascot/releases/download";
 
 /// A pre-built declaration file's coordinates as `--iris` names them, `[image:]tag[:namespace]`:
@@ -63,12 +69,14 @@ impl<'a> Release<'a> {
         })
     }
 
+    #[cfg(feature = "prebuilt")]
     pub fn namespace(&self) -> &'a str {
         self.namespace.unwrap_or(crate::iris::DEFAULT_NAMESPACE)
     }
 
     /// The asset in the `declarations` GitHub Release: image and tag dash-joined, then the
     /// namespace unless it is `%SYS`.
+    #[cfg(feature = "prebuilt")]
     pub fn asset(&self) -> String {
         let namespace = match self.namespace() {
             crate::iris::DEFAULT_NAMESPACE => String::new(),
@@ -90,6 +98,7 @@ impl std::fmt::Display for Release<'_> {
 
 /// The cached declaration file of `release`, downloaded first if `~/.ascot` lacks it. A machine
 /// that can't reach GitHub gets the file put there by hand.
+#[cfg(feature = "prebuilt")]
 pub fn fetch(release: &Release<'_>) -> Result<PathBuf, String> {
     let dir = std::env::home_dir()
         .ok_or("cannot find the home directory to keep the declarations in")?
@@ -97,6 +106,7 @@ pub fn fetch(release: &Release<'_>) -> Result<PathBuf, String> {
     fetch_into(release, &format!("{RELEASES}/declarations"), &dir)
 }
 
+#[cfg(feature = "prebuilt")]
 pub(crate) fn fetch_into(release: &Release<'_>, base: &str, dir: &Path) -> Result<PathBuf, String> {
     let asset = release.asset();
     let path = dir.join(asset.trim_end_matches(".gz"));
@@ -144,6 +154,7 @@ pub(crate) fn fetch_into(release: &Release<'_>, base: &str, dir: &Path) -> Resul
     Ok(path)
 }
 
+#[cfg(feature = "prebuilt")]
 fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
     let mut response = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
     response
@@ -154,7 +165,7 @@ fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("{url}: {e}"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "prebuilt"))]
 mod tests {
     use super::*;
     use crate::iris::Declarations;
