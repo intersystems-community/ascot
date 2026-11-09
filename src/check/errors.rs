@@ -1519,8 +1519,8 @@ type_error_kinds! {
     #[message = "Property '{name}' is MultiDimensional, so `{name}()` names no node: give it a subscript"]
     NodeWithoutSubscripts { name: String },
     /// A function is called with more arguments than its documentation names: `$ZF(-1, command)`
-    /// with a third, `$VIEW` or `$ZBITSET` with a fourth. IRIS compiles and runs the call all the
-    /// same, and the documentation gives the extra argument no meaning. Drop it.
+    /// with a third, `$ZBITSET` or `$VIEW` in mode -7 with a fourth. IRIS compiles and runs the call
+    /// all the same, and the documentation gives the extra argument no meaning. Drop it.
     ///
     /// ```objectscript
     /// Class Demo.UndocumentedArgument

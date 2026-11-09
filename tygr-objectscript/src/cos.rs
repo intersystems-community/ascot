@@ -6409,10 +6409,12 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
 ];
 
 // Arguments past the documented ones that IRIS takes, and the checker reports (A5156): a fourth
-// of `$VIEW` and of `$ZBITSET`, which IRIS's own routines pass.
-fn undocumented_extra(function: &SimpleFunction) -> usize {
+// of `$ZBITSET`, and of `$VIEW` in mode -7 alone, which IRIS's own routines pass; in any other mode
+// a fourth raises <FUNCTION>.
+fn undocumented_extra(function: &SimpleFunction, args: &[Range<Option<Expr>>]) -> usize {
     match function.names[0] {
-        "View" | "ZBitSet" => 1,
+        "ZBitSet" => 1,
+        "View" if args.get(1).is_some_and(|mode| mode.print().trim() == "-7") => 1,
         _ => 0,
     }
 }
@@ -6495,7 +6497,7 @@ impl TryFrom<SimpleFunctionCallSource> for SimpleFunctionCall {
         } else {
             items.len()
         };
-        let max = function.max + undocumented_extra(function);
+        let max = function.max + undocumented_extra(function, items);
         if given > max {
             let extra = items[max..]
                 .iter()
