@@ -641,8 +641,9 @@ type_error_kinds! {
     CannotFindLabel { label: String, routine: InRoutine },
     /// `Label+n` enters the label's code `n` lines down, where its formal list no longer applies,
     /// and which line that is depends on the compiled routine. ascot confirms the label exists but
-    /// leaves the call untyped and the offset unchecked; IRIS compiles and runs it. The code is not
-    /// in question, only how far ascot can check it; a call without the offset is checked in full.
+    /// leaves the call untyped and the offset unchecked; IRIS compiles and runs it, unless the line
+    /// is a procedure block's (A7217). The code is not in question, only how far ascot can check
+    /// it; a call without the offset is checked in full.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.LabelOffset
@@ -658,6 +659,26 @@ type_error_kinds! {
     #[severity = Hint]
     #[message = "The label is confirmed, but not where its offset lands: the call is checked as untyped and the offset is not checked"]
     LabelOffset,
+    /// `Label+n` names the line `n` lines after `Label`, and `Label() { }` is a procedure block,
+    /// whose lines only the label itself enters. IRIS compiles the call and raises `<NOLINE>` when
+    /// it runs. ascot flags every offset from a block's label, including one large enough to land
+    /// past its closing brace, which IRIS would run.
+    ///
+    /// ```objectscript raises=<NOLINE> Do Main^Demo.OffsetIntoBlock
+    /// ROUTINE Demo.OffsetIntoBlock
+    /// Main
+    ///     Do Report+1 //! A7217
+    ///     Quit
+    /// Report() public {
+    ///     Write "heading", !
+    ///     Write "details", !
+    ///     Quit
+    /// }
+    /// ```
+    #[code = "A7217"]
+    #[severity = Error]
+    #[message = "Label '{label}' is a procedure block, which an offset cannot enter (IRIS: <NOLINE> when the call runs)"]
+    OffsetIntoProcedureBlock { label: String },
     /// A `Goto` inside a procedure block, `Label() { }`, or a `$ZTRAP` set there, names one of
     /// the routine's labels outside the block, where a block's `Goto` cannot jump. IRIS refuses to
     /// compile the routine (`<NOLINE>`); `Do Label` may still call the label, or the block can
@@ -3209,6 +3230,10 @@ impl TypeError {
 
     pub fn label_offset(range: Range) -> Self {
         Self::at(TypeErrorKind::LabelOffset, range)
+    }
+
+    pub fn offset_into_procedure_block(label: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::OffsetIntoProcedureBlock { label }, range)
     }
 
     pub fn unrecognized_class_keyword(entry: String, range: Range) -> Self {
