@@ -68,8 +68,8 @@ served by GitHub Pages as the reference the code at the end of a message links t
 - `docs/unreleased/` is the reference of `main`. After a change to `type_error_kinds!`, run
   `cargo run -- diagnostics docs/unreleased` and commit the result; CI fails when it is stale.
 - A release PR copies it, `cp -r docs/unreleased docs/<version>`, and adds the version to
-  `docs/index.md`. A release's binary links to `/<version>/<CODE>`, so the directory must exist
-  when the tag is pushed; the Release workflow checks it.
+  `docs/index.md`. A release's binary links to `/<version>/<CODE>`, so CI fails a PR that bumps
+  the version without the directory, and the Release workflow refuses a tag without it.
 - The generated pages are never edited by hand; the doc comment is the place to write.
 
 A private corpus of annotated ObjectScript pins what ascot reports on every file, hints and

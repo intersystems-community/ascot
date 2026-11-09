@@ -43,6 +43,18 @@ jobs:
           diff -r /tmp/unreleased docs/unreleased \
             || { echo 'docs/unreleased is stale: run `cargo run -- diagnostics docs/unreleased` and commit it'; exit 1; }
 
+      # A release PR bumps the version; the same PR ships that version's reference.
+      - name: A version bump ships its diagnostics reference
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          git fetch -q --depth=1 origin main
+          base=$(git show origin/main:Cargo.toml | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
+          [ "$version" = "$base" ] && exit 0
+          test -d "docs/$version" || { echo "docs/$version is missing: cp -r docs/unreleased docs/$version, and list it in docs/index.md"; exit 1; }
+          diff -r docs/unreleased "docs/$version"
+          grep -q "($version/)" docs/index.md || { echo "docs/index.md does not list $version"; exit 1; }
+
       - name: Test
         run: cargo test --workspace --all-targets
 
