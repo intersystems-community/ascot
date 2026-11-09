@@ -418,6 +418,16 @@ impl TryFrom<Range<ExprOps<()>>> for GetTarget {
     }
 }
 
+/// `_name` or `_form!control`: an object of a Caché Direct client, the VisM control of a Visual
+/// Basic form, called back to. IRIS compiles the form and, having no client, raises
+/// `<_CALLBACK SYNTAX>` where it runs.
+#[derive(Grammar)]
+pub struct CacheDirectCallback {
+    u: StringEq!("_"),
+    obj: Identifier,
+    sub: Option<Prefix<StringEq!("!"), Identifier>>,
+}
+
 #[derive(GrammarTryFromOther)]
 pub enum SetTarget {
     Var(Variable),
@@ -432,6 +442,7 @@ pub enum SetTarget {
         obj: Range<ExprOps<()>>,
         op: SufOp,
     },
+    CacheDirectCallback(CacheDirectCallback),
 }
 
 pub enum SetTargetFun {
@@ -472,6 +483,7 @@ impl GrammarFrom for SetTarget {
                 buf.push('$');
                 Grammar::print_to(var, buf);
             }
+            SetTarget::CacheDirectCallback(callback) => Grammar::print_to(callback, buf),
             SetTarget::Sub { obj: base, op } => {
                 base.print_to(buf);
                 op.print_to(buf);
@@ -499,6 +511,9 @@ impl TryFrom<SetTargetSource> for SetTarget {
                     AtomicExpr::Member { member, args } => Ok(SetTarget::Member { member, args }),
                     AtomicExpr::Indirection(ind) => Ok(SetTarget::Indirection(ind)),
                     AtomicExpr::SpecialVariable { var, .. } => Ok(SetTarget::Special(var)),
+                    AtomicExpr::CacheDirectCallback(callback) => {
+                        Ok(SetTarget::CacheDirectCallback(callback))
+                    }
                     AtomicExpr::FunctionCall(call) => {
                         match SetTargetFun::try_from(call.into_inner()) {
                             Ok(fun) => Ok(SetTarget::Fun(fun)),
@@ -6716,11 +6731,7 @@ pub enum AtomicExpr {
     DAO(DAO),
     Number(Number),
     Variable(Variable),
-    LegacyCOM {
-        u: StringEq!("_"),
-        obj: Identifier,
-        sub: Option<Prefix<StringEq!("!"), Identifier>>,
-    },
+    CacheDirectCallback(CacheDirectCallback),
     String(OSString),
     CallSubroutine {
         prefix: StringEq!("$$"),

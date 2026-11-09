@@ -2397,7 +2397,7 @@ impl TypeUnclear for AtomicExpr {
             AtomicExpr::DAO(..)
             | AtomicExpr::Number(..)
             | AtomicExpr::Variable(..)
-            | AtomicExpr::LegacyCOM { .. }
+            | AtomicExpr::CacheDirectCallback(..)
             | AtomicExpr::String(..)
             | AtomicExpr::SpecialVariable { .. }
             | AtomicExpr::This(..)
@@ -2489,6 +2489,7 @@ fn check_target<'a>(
             let _ = indirection.expr.to_ty(env, flow)?;
             flow.invalidate_all()?;
         }
+        SetTarget::CacheDirectCallback(..) => return Err(TypeErrorKind::CacheDirectCallback.into()),
         // Every variant is a bare keyword (see `SpecialVariable`) -- nothing to type-check, and
         // setting one has no effect this checker tracks (unlike a local variable's `Flow`
         // binding), except the error traps, which `check_trap_set` has already seen to.
@@ -3701,9 +3702,7 @@ impl CheckExprInner for AtomicExpr {
                 env.range(label),
                 true,
             )?),
-            AtomicExpr::LegacyCOM { .. } => Err(QuasiTypeError::unimplemented(
-                "Legacy COM binding ('_obj!sub')".to_string(),
-            )),
+            AtomicExpr::CacheDirectCallback(..) => Err(TypeErrorKind::CacheDirectCallback.into()),
             AtomicExpr::QuoteExpression { .. } => Err(QuasiTypeError::unimplemented(
                 "'##quoteExp(...)'".to_string(),
             )),

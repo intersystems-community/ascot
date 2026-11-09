@@ -1029,6 +1029,26 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "'{entry}' is not a class keyword as written, though IRIS compiles it"]
     UnrecognizedClassKeyword { entry: String },
+    /// `_name`, `_name.Property` and `_form!control.Property` call back to a Caché Direct client,
+    /// the VisM control of a Visual Basic form. IRIS compiles them but has no such client, and
+    /// raises `<_CALLBACK SYNTAX>` where the line runs. Keep the value in a local variable or a
+    /// property instead.
+    ///
+    /// ```objectscript raises=<_CALLBACK SYNTAX> do ##class(Demo.CacheDirectCallback).Call()
+    /// Class Demo.CacheDirectCallback
+    /// {
+    ///
+    /// ClassMethod Call()
+    /// {
+    ///     Set _txtStatus = "done" //! A5431
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A5431"]
+    #[severity = Error]
+    #[message = "A Caché Direct callback, `_name` or `_form!control`, raises <_CALLBACK SYNTAX> in IRIS, which has no client to call"]
+    CacheDirectCallback,
     /// A property type's `( ... )` parameters are the type class's own (`%String(MAXLEN = 50)`),
     /// and this name is none of them: misspelled, with the nearest declared names as suggestions,
     /// or a property keyword that belongs in the `[ ... ]` list. IRIS refuses to compile the class
