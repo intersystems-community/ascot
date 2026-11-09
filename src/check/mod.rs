@@ -1366,6 +1366,28 @@ impl CheckCommandInner for cos::Command {
                                 if let LegacyEntryRef::Label(lor) = location.deref()
                                     && lor.routine.is_none()
                                 {
+                                    // A block's Goto must name a line the compiler can place: a
+                                    // label of the block, or another routine's entry. An indirect
+                                    // name or an offset is known only when the line runs.
+                                    let refused = match (lor.label.deref(), &lor.offset) {
+                                        (AllowIndirection::Indirection(_), _) => {
+                                            Some(("An indirect GOTO", "ERROR #1049"))
+                                        }
+                                        (_, Some(_)) => {
+                                            Some(("A GOTO with a line offset", "<NOLINE>"))
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some((what, iris)) = refused
+                                        && env.in_procedure_block()
+                                    {
+                                        env.soft_diagnostic(TypeError::not_allowed_in(
+                                            what,
+                                            "a procedure block",
+                                            iris,
+                                            flow.range(),
+                                        ));
+                                    }
                                     let label = lor.label.print();
                                     if env.goto_leaves_block(&label) {
                                         return Err(QuasiTypeError::goto_out_of_block(label));
