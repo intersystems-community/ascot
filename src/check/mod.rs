@@ -2303,7 +2303,8 @@ impl CheckCommandInner for cos::SetArgument {
         }
         let target_range = env.range(&self.target);
         if let cos::AssignTarget::Single(SetTarget::Special(special)) = self.target.deref() {
-            check_trap_set(env, flow, special, &ty, env.range(&self.value))?;
+            let literal = cos::OSString::parse(&self.value.print()).is_ok();
+            check_trap_set(env, flow, special, &ty, literal, env.range(&self.value))?;
         }
         match self.target.deref() {
             cos::AssignTarget::Multi(multi_set_target) => {
@@ -2476,12 +2477,15 @@ fn check_target<'a>(
 
 // `Set $ZTRAP/$ETRAP/$ECODE = value`. A literal is checked -- IRIS compiles a literal trap value
 // and refuses one it can't use -- and a handler of this body is armed; a non-empty `$ECODE`
-// raises. Anything else is a hint.
+// raises. Anything else is a hint, but a `$ZTRAP` in a procedure block, whose label IRIS
+// resolves at compile time (#1058): only a string literal names it there, not a variable or
+// expression a literal flows into.
 fn check_trap_set<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     special: &SpecialVariable,
     value: &PowerTy,
+    literal: bool,
     range: bindings::Range,
 ) -> Result<(), QuasiTypeError> {
     let var = match special {
@@ -2510,6 +2514,16 @@ fn check_trap_set<'a>(
             "ERROR #1064",
             range,
         ));
+    }
+    if var == TrapVar::ZTrap && !literal && env.in_procedure_block() {
+        env.soft_diagnostic(TypeError::not_allowed_in(
+            "A non-literal trap value",
+            "a procedure block",
+            "ERROR #1058",
+            range,
+        ));
+        flow.disarm_trap(var);
+        return Ok(());
     }
     let text = match value {
         PowerTy::Const(Const::String(text)) => text.clone(),
