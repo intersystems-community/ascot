@@ -6371,6 +6371,15 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
     },
 ];
 
+// Arguments past the documented ones that IRIS takes, and the checker reports (A5156): a fourth
+// of `$VIEW` and of `$ZBITSET`, which IRIS's own routines pass.
+fn undocumented_extra(function: &SimpleFunction) -> usize {
+    match function.names[0] {
+        "View" | "ZBitSet" => 1,
+        _ => 0,
+    }
+}
+
 pub fn simple_function(name: &str) -> Option<&'static SimpleFunction> {
     SIMPLE_FUNCTIONS
         .iter()
@@ -6449,16 +6458,14 @@ impl TryFrom<SimpleFunctionCallSource> for SimpleFunctionCall {
         } else {
             items.len()
         };
-        if given > function.max {
-            let extra = items[function.max..]
+        let max = function.max + undocumented_extra(function);
+        if given > max {
+            let extra = items[max..]
                 .iter()
                 .enumerate()
-                .map(|(i, arg)| (function.max + i + 1, arg.print().trim().to_string()))
+                .map(|(i, arg)| (max + i + 1, arg.print().trim().to_string()))
                 .collect();
-            return Err(named(FunArgError::TooMany {
-                max: function.max,
-                extra,
-            }));
+            return Err(named(FunArgError::TooMany { max, extra }));
         }
         if given < function.min {
             return Err(named(FunArgError::TooFew {
