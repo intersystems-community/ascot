@@ -188,7 +188,10 @@ mod tests {
             check(" Do Nope^Lib"),
             vec!["Cannot find label 'Nope' in routine 'Lib'"]
         );
-        assert_eq!(check(" Do Proc^Lib(1,2,3)"), vec!["Too many arguments"]);
+        assert_eq!(
+            check(" Do Proc^Lib(1,2,3)"),
+            vec!["Too many arguments: the callee takes 2 arguments, and this one is extra"]
+        );
         assert_eq!(
             check(" Do Plain^NoSuchRoutine"),
             vec!["Cannot find routine 'NoSuchRoutine' in the workspace or on the IRIS instance"]
