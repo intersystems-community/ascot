@@ -1,122 +1,23 @@
-//! The pre-built declarations of a Community release's namespace (`--iris 2026.2`, or
-//! `--iris irishealth-community:2026.2:HSLIB` for IRIS for Health's library):
-//! downloaded once from the project's GitHub Releases into `~/.ascot`, and read from there
-//! afterwards.
+//! Downloading a release's pre-built declarations from the project's GitHub Releases into
+//! `~/.ascot`, checksum verified, where [`crate::release`] then finds them.
 
-#[cfg(feature = "prebuilt")]
 use std::fs;
-#[cfg(feature = "prebuilt")]
 use std::io::Read;
-#[cfg(feature = "prebuilt")]
-use std::path::Path;
-use std::path::PathBuf;
-#[cfg(feature = "prebuilt")]
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[cfg(feature = "prebuilt")]
 use sha2::{Digest, Sha256};
 
-/// The release `--iris` means when it isn't given: the newest one ascot was built for.
-pub const DEFAULT_RELEASE: &str = "2026.2";
-#[cfg(feature = "prebuilt")]
+use crate::release::{Release, cache_dir};
+
 const RELEASES: &str = "https://github.com/intersystems-community/ascot/releases/download";
 
-/// A pre-built declaration file's coordinates as `--iris` names them, `[image:]tag[:namespace]`:
-/// the Community image, `iris-community` unless named; its tag, a release such as `2026.2`, or
-/// `latest` for the newest this ascot knows; the namespace, `%SYS` unless named
-/// (`irishealth-community:2026.2:HSLIB` for IRIS for Health's library).
-#[derive(Debug, PartialEq)]
-pub struct Release<'a> {
-    pub image: &'a str,
-    pub tag: &'a str,
-    pub namespace: Option<&'a str>,
+/// Downloads `release`'s declaration file into `~/.ascot` and returns its path; one already there
+/// is returned as is.
+pub(crate) fn download(release: &Release<'_>) -> Result<PathBuf, String> {
+    fetch_into(release, &format!("{RELEASES}/declarations"), &cache_dir()?)
 }
 
-impl<'a> Release<'a> {
-    /// `None` for what isn't one: a URL, a path, `none`.
-    pub fn parse(iris: &'a str) -> Option<Self> {
-        let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-        let is_tag = |s: &str| {
-            s == crate::iris::LATEST
-                || matches!(s.split_once('.'), Some((year, minor)) if year.len() == 4 && digits(year) && digits(minor))
-        };
-        let is_image = |s: &str| {
-            !s.is_empty()
-                && s.bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        };
-        let mut parts = iris.split(':');
-        let first = parts.next()?;
-        let (image, tag) = if is_tag(first) {
-            ("iris-community", first)
-        } else if is_image(first) {
-            (first, parts.next().filter(|tag| is_tag(tag))?)
-        } else {
-            return None;
-        };
-        let namespace = parts.next().filter(|ns| !ns.is_empty());
-        if parts.next().is_some() {
-            return None;
-        }
-        let tag = if tag == crate::iris::LATEST {
-            DEFAULT_RELEASE
-        } else {
-            tag
-        };
-        Some(Release {
-            image,
-            tag,
-            namespace,
-        })
-    }
-
-    pub fn namespace(&self) -> &'a str {
-        self.namespace.unwrap_or(crate::iris::DEFAULT_NAMESPACE)
-    }
-
-    /// The asset in the `declarations` GitHub Release: image and tag dash-joined, then the
-    /// namespace unless it is `%SYS`.
-    pub fn asset(&self) -> String {
-        let namespace = match self.namespace() {
-            crate::iris::DEFAULT_NAMESPACE => String::new(),
-            other => format!(".{other}"),
-        };
-        format!("{}-{}{namespace}.d.json.gz", self.image, self.tag)
-    }
-}
-
-impl std::fmt::Display for Release<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.image, self.tag)?;
-        match self.namespace {
-            Some(namespace) => write!(f, ":{namespace}"),
-            None => Ok(()),
-        }
-    }
-}
-
-/// The cached declaration file of `release`, downloaded first if `~/.ascot` lacks it. A machine
-/// that can't reach GitHub, or a build without the `prebuilt` feature, gets the file put there by
-/// hand.
-pub fn fetch(release: &Release<'_>) -> Result<PathBuf, String> {
-    let dir = std::env::home_dir()
-        .ok_or("cannot find the home directory to keep the declarations in")?
-        .join(".ascot");
-    let path = dir.join(release.asset().trim_end_matches(".gz"));
-    if path.exists() {
-        return Ok(path);
-    }
-    #[cfg(feature = "prebuilt")]
-    return fetch_into(release, &format!("{RELEASES}/declarations"), &dir);
-    #[cfg(not(feature = "prebuilt"))]
-    Err(format!(
-        "--iris {release} names pre-built declarations, which this build of ascot cannot download \
-         (it lacks the `prebuilt` feature): put the file at {}, or give a declaration file's path",
-        path.display()
-    ))
-}
-
-#[cfg(feature = "prebuilt")]
 pub(crate) fn fetch_into(release: &Release<'_>, base: &str, dir: &Path) -> Result<PathBuf, String> {
     let asset = release.asset();
     let path = dir.join(asset.trim_end_matches(".gz"));
@@ -164,7 +65,6 @@ pub(crate) fn fetch_into(release: &Release<'_>, base: &str, dir: &Path) -> Resul
     Ok(path)
 }
 
-#[cfg(feature = "prebuilt")]
 fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
     let mut response = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
     response
@@ -178,22 +78,16 @@ fn get(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "prebuilt")]
     use crate::iris::Declarations;
-    #[cfg(feature = "prebuilt")]
     use std::io::Write;
-    #[cfg(feature = "prebuilt")]
     use std::sync::{Arc, Mutex};
 
-    #[cfg(feature = "prebuilt")]
     fn gzipped(text: &str) -> Vec<u8> {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         encoder.write_all(text.as_bytes()).unwrap();
         encoder.finish().unwrap()
     }
 
-    // Serves `routes` (path, body) over HTTP, counting the requests.
-    #[cfg(feature = "prebuilt")]
     fn server(routes: Vec<(String, Vec<u8>)>) -> (String, Arc<Mutex<usize>>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -227,7 +121,6 @@ mod tests {
         (url, hits)
     }
 
-    #[cfg(feature = "prebuilt")]
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("ascot-prebuilt-{name}-{}", std::process::id()));
@@ -239,51 +132,6 @@ mod tests {
         Release::parse(iris).unwrap()
     }
 
-    #[test]
-    fn a_release_is_an_image_a_tag_and_a_namespace_the_first_and_last_optional() {
-        assert_eq!(
-            release("2026.2"),
-            Release {
-                image: "iris-community",
-                tag: "2026.2",
-                namespace: None
-            }
-        );
-        assert_eq!(release("2025.10").tag, "2025.10");
-        assert_eq!(
-            release("irishealth-community:2026.2:HSLIB"),
-            Release {
-                image: "irishealth-community",
-                tag: "2026.2",
-                namespace: Some("HSLIB")
-            }
-        );
-        assert_eq!(release("2026.2:USER").namespace, Some("USER"));
-        assert_eq!(release("latest").tag, DEFAULT_RELEASE);
-        assert_eq!(release("irishealth-community:latest").tag, DEFAULT_RELEASE);
-        assert_eq!(
-            release("iris-community:2026.2").asset(),
-            release("2026.2").asset()
-        );
-        assert_eq!(
-            release("irishealth-community:2026.2:HSLIB").asset(),
-            "irishealth-community-2026.2.HSLIB.d.json.gz"
-        );
-        for not_one in [
-            "2026",
-            "v2026.2",
-            "user.d.json",
-            "http://localhost:52773",
-            "2026.2.0",
-            "2026.2.d.json",
-            "a:b:c:d",
-            "irishealth-community:HSLIB",
-        ] {
-            assert!(Release::parse(not_one).is_none(), "{not_one}");
-        }
-    }
-
-    #[cfg(feature = "prebuilt")]
     #[test]
     fn a_release_is_downloaded_checked_unpacked_and_then_read_from_the_cache() {
         let declarations = Declarations {
@@ -314,7 +162,6 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[cfg(feature = "prebuilt")]
     #[test]
     fn a_corrupt_or_missing_download_saves_nothing() {
         let gz = gzipped("{}");

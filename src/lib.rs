@@ -56,8 +56,10 @@ mod macro_expand;
 mod mask;
 #[cfg(all(not(target_arch = "wasm32"), feature = "mcp"))]
 pub mod mcp;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "prebuilt"))]
 mod prebuilt;
+#[cfg(not(target_arch = "wasm32"))]
+mod release;
 mod render;
 pub mod report;
 #[cfg(all(not(target_arch = "wasm32"), feature = "sarif"))]

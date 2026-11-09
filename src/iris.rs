@@ -28,8 +28,19 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisCo
             "--iris-namespace {namespace} is for a live instance; a release names its namespace after its tag, and a declaration file carries its own"
         ));
     }
-    if let Some(release) = crate::prebuilt::Release::parse(iris) {
-        let file = crate::prebuilt::fetch(&release)?;
+    if let Some(release) = crate::release::Release::parse(iris) {
+        let file = release.cached_file()?;
+        if !file.exists() {
+            #[cfg(feature = "prebuilt")]
+            crate::prebuilt::download(&release)?;
+            #[cfg(not(feature = "prebuilt"))]
+            return Err(format!(
+                "--iris {release} names pre-built declarations, which this build of ascot cannot \
+                 download (it lacks the `prebuilt` feature): put the file at {}, or give a \
+                 declaration file's path",
+                file.display()
+            ));
+        }
         return open_file(&file, Some(release.namespace())).map(Some);
     }
     if let Some(path) = iris.strip_prefix("file://") {
