@@ -38,9 +38,10 @@ pub struct Exponential {
 
 #[derive(Grammar)]
 pub enum Number {
+    // `0.` is `0`: the point may end the number.
     FromDigit(
         Digits,
-        Option<(StringEq!("."), Digits)>,
+        Option<(StringEq!("."), Option<Digits>)>,
         Option<Exponential>,
     ),
     FromDot(StringEq!("."), Digits, Option<Exponential>),
@@ -259,13 +260,15 @@ pub enum MthArg {
 }
 
 #[derive(Grammar)]
+// The `:` may start a line of its own: `$select(cond ##continue\n : value, ...)`, and the same in
+// a method body.
 pub struct ExpColExp {
     pub e1: Range<Expr>,
-    kw: SGapXMGap<StringEq!(":")>,
+    kw: MGapXMGap<StringEq!(":")>,
     pub e2: Range<Expr>,
 }
 
-pub type ColExp = Prefix<SGapXMGap<StringEq!(":")>, Range<Expr>>;
+pub type ColExp = Prefix<MGapXMGap<StringEq!(":")>, Range<Expr>>;
 
 // The expression is parsed once and the `:expr` / `...` suffix decides the `FunArg` variant;
 // trying `ExpColExp` and then `Expr` as separate alternatives re-parsed every argument, doubling
@@ -279,7 +282,7 @@ pub enum FunArgSource {
     },
     Expr {
         expr: Range<Expr>,
-        tail: Option<Either<(SGapXMGap<StringEq!(":")>, Range<Expr>), StringEq!("...")>>,
+        tail: Option<Either<(MGapXMGap<StringEq!(":")>, Range<Expr>), StringEq!("...")>>,
     },
     ByRef {
         dot: StringEq!("."),
@@ -656,9 +659,10 @@ pub struct GlobalReference {
 
 #[derive(Grammar)]
 #[grammar(inline)]
+// The name may be a property or a method's value: `@obj.Name@(sub)`.
 pub struct Indirection {
     pub at: StringEq!("@"),
-    pub expr: Box<Range<ParenedExpr<()>>>,
+    pub expr: Box<Range<ExprOps<()>>>,
     pub subscript_indirection: Option<Prefix<StringEq!("@"), SubscriptList>>,
 }
 
@@ -770,6 +774,8 @@ pub enum SignatureType {
 pub enum CastReceiver {
     This(StringEq!("$"), StringEqCI!("this")),
     Local(LocalVariableName),
+    // `##class(C)($this).M()`: IRIS compiles the parenthesized receiver too.
+    Parenthesized(Range<Paren<Box<CastReceiver>>>),
 }
 
 #[derive(Grammar)]
@@ -1452,9 +1458,10 @@ pub enum JobLocation {
 #[derive(Grammar)]
 #[grammar(inline)]
 pub struct LocalJobAnnotation {
-    // todo the official document requires paren (https://docs.intersystems.com/iris20261/csp/docbook/Doc.View.cls?KEY=RCOS_cjob)
-    // but %SYS.Audit doesn't have paren ("j ##Class(%SYS.Audit).ConvertData()::5")
-    process_params: Prefix<StringEq!(":"), Option<AllowMacro<Paren<JobProcessParams>>>>,
+    // The document (RCOS_cjob) requires the parentheses, but %SYS.Audit passes a bare namespace
+    // and IRIS takes it, so that parses too and is reported as undocumented syntax.
+    pub process_params:
+        Prefix<StringEq!(":"), Option<AllowMacro<Either<Paren<JobProcessParams>, Range<Expr>>>>>,
     timeout: Option<Prefix<StringEq!(":"), Expr>>,
 }
 
@@ -1549,7 +1556,8 @@ pub type IOParameters = VecSep<IOParameter, StringEq!(":")>;
 pub struct IOParameter {
     pub key: Option<(StringEq!("/"), Identifier)>,
     pub eq: Option<StringEq!("=")>,
-    pub val: Option<Expr>,
+    // `/args="-c","%U:%G",File`: a list for a parameter that takes one.
+    pub val: Option<VecSep<Expr, StringEq!(",")>>,
     pub ddd: Option<StringEq!("...")>,
 }
 
@@ -3635,10 +3643,16 @@ pub struct ContinueCommand {
 pub struct DimCommand {
     pub kw: StringEqCI!("#dim"),
     pub g: SGap1,
+    // `#dim a, b As T, c As U`: each group of names has its type; one without takes the next's.
+    pub declarations: VecSep<DimDeclaration, CommaSep<SGap>>,
+    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
+}
+
+#[derive(Grammar)]
+pub struct DimDeclaration {
     pub name: VecSep<LocalVariableName, CommaSep<SGap>>,
     // The reference makes `As <Type>` mandatory; it is accepted as optional here.
     pub as_type: Range<Option<As<DimType>>>,
-    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
 }
 
 #[derive(Grammar)]
@@ -3796,7 +3810,7 @@ pub struct TRollbackCommand {
 pub struct ZWriteCommand {
     pub kw: KwZWrite,
     pub pc: Option<PostCondition>,
-    pub exp: Option<CommandArgument<Expr>>,
+    pub exp: Option<CommandArgument<VecSep<Expr, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
@@ -4840,7 +4854,7 @@ pub struct CondValue {
     pub value: Range<Expr>,
 }
 
-type CondPrefix = Suffix<Range<Expr>, SGapXMGap<StringEq!(":")>>;
+type CondPrefix = Suffix<Range<Expr>, MGapXMGap<StringEq!(":")>>;
 
 fun_args!("$LIST" ListRangeCallArgs {
     list: ArgOf<Expr>,
@@ -5225,12 +5239,13 @@ fun_args!("$LISTUPDATE" ListUpdateArgs {
     rest: Vec<More<ArgOf<CondValue>>>,
 });
 
+// An optional argument may be left out of the middle: `$LOCATE(s, re,, start)`.
 fun_args!("$LOCATE" LocateArgs {
     string: ArgOf<Expr>,
     regexp: More<ArgOf<Expr>>,
-    start: Option<More<ArgOf<Expr>>>,
-    end: Option<More<ArgOf<Variable>>>,
-    val: Option<More<ArgOf<Variable>>>,
+    start: Option<More<OptArgOf<Expr>>>,
+    end: Option<More<OptArgOf<Variable>>>,
+    val: Option<More<OptArgOf<Variable>>>,
 });
 
 fun_args!("$METHOD" MethodArgs {
@@ -5250,8 +5265,8 @@ fun_args!("$PARAMETER" ParameterArgs {
 });
 
 fun_args!("$PREFETCHOFF" PrefetchOffArgs {
-    first: Option<ArgOf<GlobalReference>>,
-    second: Option<More<ArgOf<GlobalReference>>>,
+    first: Option<ArgOf<AllowIndirection<GlobalReference>>>,
+    second: Option<More<ArgOf<AllowIndirection<GlobalReference>>>>,
 });
 
 fun_args!("$PREFETCHON" PrefetchOnArgs {
@@ -5271,11 +5286,11 @@ fun_args!("$SELECT" SelectArgs {
 });
 
 fun_args!("$SORTBEGIN" SortBeginArgs {
-    set_global: ArgOf<GlobalReference>,
+    set_global: ArgOf<AllowIndirection<GlobalReference>>,
 });
 
 fun_args!("$SORTEND" SortEndArgs {
-    first: Option<ArgOf<Option<GlobalReference>>>,
+    first: Option<ArgOf<Option<AllowIndirection<GlobalReference>>>>,
     dosort: Option<More<ArgOf<Expr>>>,
 });
 
@@ -5296,9 +5311,10 @@ fun_args!("$WCHAR" WCharArgs {
     rest: Vec<More<ArgOf<Expr>>>,
 });
 
+// A parameter may be passed by reference, `.var`, as to a method.
 fun_args!("$XECUTE" XecuteArgs {
     code: ArgOf<Expr>,
-    params: Vec<More<ArgOf<Expr>>>,
+    params: Vec<More<ArgOf<MthArg>>>,
 });
 
 fun_args!("$CLASSMETHOD" ClassMethodArgs {
@@ -5311,7 +5327,7 @@ fun_args!("$COMPILE" CompileArgs {
     source: ArgOf<AllowIndirection<Variable>>,
     qspec: More<ArgOf<Expr>>,
     errors: More<ArgOf<Option<Variable>>>,
-    object: Option<More<ArgOf<Option<Variable>>>>,
+    object: Option<More<ArgOf<Option<AllowIndirection<Variable>>>>>,
     arg5: Option<More<ArgOf<Option<Expr>>>>,
     arg6: Option<More<ArgOf<Option<Expr>>>>,
     rname: Option<More<ArgOf<Option<Expr>>>>,

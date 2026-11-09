@@ -1461,37 +1461,44 @@ impl CheckCommandInner for cos::Command {
                 check_pc(pc, env, flow, |flow| flow.handle_continue())
             }
             cos::Command::Dim(cos::DimCommand {
-                name,
-                as_type,
+                declarations,
                 default,
                 ..
             }) => {
-                let declared = match as_type.deref() {
-                    Some(ty) => {
-                        let ty = ty.deref();
-                        match ty {
-                            cos::DimType::Simple(ty) => Ty::from(ty.print()),
-                            _ => {
-                                return Err(QuasiTypeError::unimplemented(format!(
-                                    "Fancy #Dim type `{}`",
-                                    ty.print()
-                                )));
+                for cos::DimDeclaration { name, as_type } in declarations.items.iter() {
+                    let declared = match as_type.deref() {
+                        Some(ty) => {
+                            let ty = ty.deref();
+                            match ty {
+                                cos::DimType::Simple(ty) => Ty::from(ty.print()),
+                                _ => {
+                                    return Err(QuasiTypeError::unimplemented(format!(
+                                        "Fancy #Dim type `{}`",
+                                        ty.print()
+                                    )));
+                                }
                             }
                         }
+                        None => Ty::Any,
+                    };
+                    let declared = env.with_range(as_type.as_ref().map(|_| declared));
+                    for name in name.items(env) {
+                        flow.handle_dim(name.print(), declared.clone())?
                     }
-                    None => Ty::Any,
-                };
-                let declared = env.with_range(as_type.as_ref().map(|_| declared));
-                for name in name.items(env) {
-                    flow.handle_dim(name.print(), declared.clone())?
                 }
                 if let Some(default) = default {
                     // No per-name range exists in a `#Dim x,y=...` list; anchor on the
                     // default value's range instead.
                     let default_range = env.range(&default.prefixed);
                     let default = default.to_power_ty(env, flow)?;
-                    for name in name.items(env) {
-                        flow.handle_set(Local::bare(name.print()), default.clone(), default_range)?
+                    for declaration in declarations.items.iter() {
+                        for name in declaration.name.items(env) {
+                            flow.handle_set(
+                                Local::bare(name.print()),
+                                default.clone(),
+                                default_range,
+                            )?
+                        }
                     }
                 }
                 Ok(())
@@ -1706,7 +1713,7 @@ impl CheckCommandInner for cos::Command {
                             arg.parameters.as_deref()
                         {
                             for parameter in parameters.items.iter() {
-                                if let Some(val) = &parameter.val {
+                                for val in parameter.val.iter().flat_map(|v| v.items.iter()) {
                                     val.to_ty(env, flow)?;
                                 }
                             }
@@ -1729,8 +1736,28 @@ impl CheckCommandInner for cos::Command {
                 })
             }
             cos::Command::Lock(cos::LockCommand { .. })
-            | cos::Command::Hang(cos::HangCommand { .. })
-            | cos::Command::Job(cos::JobCommand { .. }) => Ok(()),
+            | cos::Command::Hang(cos::HangCommand { .. }) => Ok(()),
+            cos::Command::Job(cos::JobCommand { args, .. }) => {
+                for arg in args.items.iter() {
+                    let annotation = match arg {
+                        cos::JobArgument::ClassMethod(.., annotation)
+                        | cos::JobArgument::InstanceMethod(.., annotation)
+                        | cos::JobArgument::DollarClassMethod(.., annotation)
+                        | cos::JobArgument::RoutineWithLocation(.., annotation)
+                        | cos::JobArgument::RoutineLocal(.., annotation) => annotation,
+                    };
+                    if let Some(a) = annotation
+                        && let Some(cos::AllowMacro::Plain(Right(namespace))) =
+                            a.process_params.deref()
+                    {
+                        env.soft_diagnostic(TypeError::undocumented_syntax(
+                            "A Job namespace without parentheses".to_string(),
+                            env.range(namespace),
+                        ));
+                    }
+                }
+                Ok(())
+            }
             // The transaction level isn't tracked: it depends on the run-time conditions around
             // each `TSTART`/`TCOMMIT`, and a flow-insensitive count only produced false alarms.
             cos::Command::TStart(cos::TStartCommand { pc, .. })
@@ -1740,7 +1767,7 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::ZWrite(cos::ZWriteCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    if let Some(exp) = exp {
+                    for exp in exp.iter().flat_map(|exp| exp.items.iter()) {
                         let _ = exp.to_ty(env, flow)?;
                     }
                     Ok(())
@@ -2198,8 +2225,32 @@ fn check_io_parameters<'a>(
         Some(Right(one)) => vec![one],
     };
     for parameter in parameters {
-        if let Some(val) = &parameter.val {
+        for val in parameter.val.iter().flat_map(|v| v.items.iter()) {
             val.to_ty(env, flow)?;
+        }
+    }
+    Ok(())
+}
+
+// `##class(C)oref.M()`'s `oref`: `$this`, a local, or either in parentheses.
+fn check_cast_receiver<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    receiver: &cos::CastReceiver,
+) -> Result<(), QuasiTypeError> {
+    match receiver {
+        cos::CastReceiver::This(..) => {
+            check_this(env, flow);
+        }
+        cos::CastReceiver::Local(var) => {
+            flow.read(&var.print())?;
+        }
+        cos::CastReceiver::Parenthesized(inner) => {
+            env.soft_diagnostic(TypeError::undocumented_syntax(
+                "A receiver in parentheses after `##class(C)`".to_string(),
+                env.range(inner),
+            ));
+            check_cast_receiver(env, flow, inner)?
         }
     }
     Ok(())
@@ -3684,12 +3735,8 @@ impl CheckExprInner for AtomicExpr {
                 // `##class(C)oref.M()` runs `C`'s `M` on `oref`: an instance of `C` for the call.
                 let obj = match oref {
                     None => ClsOrIns::Cls(cls),
-                    Some(cos::CastReceiver::This(..)) => {
-                        check_this(env, flow);
-                        ClsOrIns::Ins(cls)
-                    }
-                    Some(cos::CastReceiver::Local(var)) => {
-                        flow.read(&var.print())?;
+                    Some(receiver) => {
+                        check_cast_receiver(env, flow, receiver)?;
                         ClsOrIns::Ins(cls)
                     }
                 };
