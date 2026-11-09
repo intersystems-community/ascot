@@ -206,6 +206,8 @@ pub(crate) struct ClassDetails {
     pub(crate) keywords: ClassKeywords,
     // What in the keyword list is no class keyword as written; `check_cls` reports it.
     pub(crate) keyword_issues: Vec<WithRange<KeywordIssue>>,
+    // Forms the documentation doesn't give, which IRIS compiles; `check_cls` reports them.
+    pub(crate) undocumented: Vec<WithRange<String>>,
     pub(crate) members: Members,
     pub(crate) include_names: Vec<WithRange<String>>,
     // The `Include (...)` clause's own span, for pointing a "cannot find include" diagnostic at
@@ -247,6 +249,8 @@ pub struct MemberDetails {
     pub deprecated: bool,
     // What in its keyword list is no keyword of its kind as written; `check_cls` reports it.
     pub keyword_issues: Vec<WithRange<KeywordIssue>>,
+    // Forms the documentation doesn't give, which IRIS compiles; `check_cls` reports them.
+    pub undocumented: Vec<WithRange<String>>,
     pub kind: MemberKindSpecificDetails,
 }
 
@@ -762,11 +766,24 @@ impl TryFrom<&str> for ClassDetails {
             }
         }
         let keyword_issues = keyword_issues_in(cls.keyword_list.as_ref(), &olc);
+        let lists = [
+            ("Extends", cls.extends.as_ref().map(|e| &e.class_list)),
+            ("Import", cls.import.as_ref().map(|i| &i.packages)),
+            ("Include", cls.include.as_ref().map(|i| &*i.files)),
+        ];
+        let mut undocumented = Vec::new();
+        for (clause, list) in lists {
+            for (start, end) in list.iter().flat_map(|list| list.empty_entries()) {
+                let what = format!("An empty entry in {clause}");
+                undocumented.push(WithRange::new(what, olc.span(start, end)));
+            }
+        }
         let class_procedure_block = keywords.procedure_block.unwrap_or(true);
         let mut members = Members::default();
         for (before_member, member) in cls.member_list.members.into_item_sep() {
             let doc = extract_document_comments(before_member.0.as_str());
             let range = olc.range(&member);
+            let undocumented_member = undocumented_in(&member, &olc);
             let (name, deprecated, keyword_issues, kind) = process_member(
                 &olc,
                 src,
@@ -780,6 +797,7 @@ impl TryFrom<&str> for ClassDetails {
                     doc,
                     deprecated,
                     keyword_issues,
+                    undocumented: undocumented_member,
                     kind,
                 },
                 range,
@@ -791,11 +809,30 @@ impl TryFrom<&str> for ClassDetails {
             extends,
             keywords,
             keyword_issues,
+            undocumented,
             members,
             include_names,
             imports,
             include_range,
         })
+    }
+}
+
+// A form of the member the documentation doesn't give, which IRIS compiles: `list Of` before a
+// relationship's class, which it ignores.
+fn undocumented_in(member: &Range<cos::Member>, olc: &OLC) -> Vec<WithRange<String>> {
+    match member.deref() {
+        cos::Member::Property(cos::Property::Relationship {
+            as_type: Some(as_type),
+            ..
+        }) if let Some(collection) = &as_type.collection => vec![WithRange::new(
+            format!(
+                "`{}` before a relationship's class",
+                collection.print().trim()
+            ),
+            olc.range(member),
+        )],
+        _ => vec![],
     }
 }
 
@@ -969,7 +1006,7 @@ fn process_member(
                                 as_type.as_deref().map(|t| t.class_name.print()),
                             ))
                         } else {
-                            as_type.as_deref().map(Ty::from)
+                            as_type.as_deref().map(|t| Ty::from(t.class_name.print()))
                         },
                         element_ty: None,
                         initial: None,

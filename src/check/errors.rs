@@ -1033,6 +1033,32 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "'{entry}' is not a class keyword as written, though IRIS compiles it"]
     UnrecognizedClassKeyword { entry: String },
+    /// A form the documentation doesn't give, which IRIS compiles all the same: `list Of` before a
+    /// relationship's class, which it ignores, or an empty entry in `Extends`, `Import` or
+    /// `Include`, which it drops. Write the documented form; what the extra was meant to do
+    /// doesn't happen.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UndocumentedSyntax Extends (, %Persistent) //! A6194
+    /// {
+    ///
+    /// Relationship Items As list Of Demo.UndocumentedSyntaxItem [ Cardinality = many, Inverse = Parent ]; //! A6194
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UndocumentedSyntaxItem Extends %Persistent
+    /// {
+    ///
+    /// Relationship Parent As Demo.UndocumentedSyntax [ Cardinality = one, Inverse = Items ];
+    ///
+    /// }
+    /// ```
+    #[code = "A6194"]
+    #[severity = Warning]
+    #[message = "{what} is not documented, though IRIS compiles it"]
+    UndocumentedSyntax { what: String },
     /// A property type's `( ... )` parameters are the type class's own (`%String(MAXLEN = 50)`),
     /// and this name is none of them: misspelled, with the nearest declared names as suggestions,
     /// or a property keyword that belongs in the `[ ... ]` list. IRIS refuses to compile the class
@@ -3164,6 +3190,10 @@ impl TypeError {
 
     pub fn unrecognized_class_keyword(entry: String, range: Range) -> Self {
         Self::at(TypeErrorKind::UnrecognizedClassKeyword { entry }, range)
+    }
+
+    pub fn undocumented_syntax(what: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::UndocumentedSyntax { what }, range)
     }
 
     pub fn not_allowed_in(
