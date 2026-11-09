@@ -15,7 +15,7 @@ use tygr::Grammar;
 
 use crate::bindings::{self, RefMode};
 use crate::check::{WorkspaceEnv, errors::*};
-use crate::cos::{CallType, CollectionKind, Formal, PropertyType, Type, TypeParamList};
+use crate::cos::{CallType, CollectionKind, Formal, OSExpr, PropertyType, Type, TypeParamList};
 use crate::details::WithRange;
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -548,11 +548,11 @@ impl From<String> for ClassTy {
         // `%String(MAXLEN=50)`, as a declaration read from IRIS writes it.
         let mut pattern = None;
         if let Some(i) = name.find('(') {
-            pattern =
-                (TypeParamList::parse(&name[i..]).ok()).and_then(|params| pattern_param(&params));
-            name.truncate(i);
-            let end = name.trim_end().len();
-            name.truncate(end);
+            pattern = TypeParamList::parse(&name[i..])
+                .ok()
+                .as_ref()
+                .and_then(pattern_param);
+            name.truncate(name[..i].trim_end().len());
         }
         normalize_class_name(&mut name);
         ClassTy {
@@ -564,16 +564,12 @@ impl From<String> for ClassTy {
 }
 
 // The `PATTERN` among a declared type's parameters, its quotes removed.
-pub(crate) fn pattern_param(params: &TypeParamList) -> Option<String> {
+fn pattern_param(params: &TypeParamList) -> Option<String> {
     let param = params.items.iter().find(|p| p.name.print() == "PATTERN")?;
-    let value = param.value.print();
-    let value = value.trim();
-    Some(
-        match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
-            Some(inner) => inner.replace("\"\"", "\""),
-            None => value.to_string(),
-        },
-    )
+    Some(match &param.value {
+        OSExpr::String(literal) => super::pattern::unquote(literal),
+        other => other.print(),
+    })
 }
 
 // `ty` with the `PATTERN` its declaration's type parameters carry, if any.

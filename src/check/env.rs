@@ -188,16 +188,20 @@ impl<A: Access> Namespace for Properties<A> {
         Some((ty, true))
     }
 
-    // The hook serves the names matching the pattern its name argument is declared with, if any
-    // (`%DispatchMethod(methodName As %String(PATTERN=...))`); only its return type matters.
+    // Of the hook's signature, the PATTERN its name argument is declared with, if any
+    // (`%DispatchMethod(methodName As %String(PATTERN=...))`), decides which names it serves; its
+    // return type types them.
     fn dispatched(
         obj: &ClsOrIns,
         mem: &str,
         find: impl FnOnce(&str) -> Option<TyProcedureOrAny>,
     ) -> Option<PropertyTy> {
-        let hook = find(A::hook(obj)?)?;
+        let hook_name = A::hook(obj)?;
+        let hook = find(hook_name)?;
         let hook = hook.procedure();
-        let pattern = hook.and_then(|hook| hook.normal_args.first()?.ty.as_ref()?.pattern());
+        // `%DispatchClassMethod(Class, Method, Args...)` names the member second.
+        let name_arg = usize::from(hook_name == "%DispatchClassMethod");
+        let pattern = hook.and_then(|hook| hook.normal_args.get(name_arg)?.ty.as_ref()?.pattern());
         if pattern
             .is_some_and(|pattern| crate::check::pattern::matches(pattern, mem) == Some(false))
         {
@@ -1501,9 +1505,11 @@ impl<'a> WorkspaceEnv<'a> {
             return ClassTy {
                 name: x.name.clone(),
                 generics,
-                pattern: (x.pattern == y.pattern)
-                    .then(|| x.pattern.clone())
-                    .flatten(),
+                pattern: if x.pattern == y.pattern {
+                    x.pattern.clone()
+                } else {
+                    None
+                },
             };
         }
         let y_ancestors: HashSet<String> = self.ancestors(&y.name).into_iter().collect();

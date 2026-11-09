@@ -917,8 +917,13 @@ fn process_member(
                 deprecated || is_deprecated(keywords.as_ref()),
                 keyword_issues_in(keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Property {
-                    ty: (as_type.as_deref()).map(|t| with_pattern(Ty::from(t), type_params.as_ref())),
-                    element_ty: as_type.as_deref().and_then(element_ty),
+                    // `list Of X(PATTERN=...)`: the parameters describe the element.
+                    ty: as_type.as_deref().map(|t| match t.collection {
+                        Some(_) => Ty::from(t),
+                        None => with_pattern(Ty::from(t), type_params.as_ref()),
+                    }),
+                    element_ty: (as_type.as_deref().and_then(element_ty))
+                        .map(|element| with_pattern(element, type_params.as_ref())),
                     multidimensional: typed(keywords.as_ref()).any(|keyword| {
                         matches!(keyword, cos::PropertyKeyword::MultiDimensional(flag) if flag.is_set())
                     }),
