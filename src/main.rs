@@ -67,6 +67,16 @@ enum Command {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
+    /// Write the reference of every diagnostic as Markdown pages
+    ///
+    /// An index and a page per code, with its severity, message, explanation and example, from
+    /// the checker's own definitions. In this repository `docs/unreleased` holds them for main and
+    /// `docs/<version>` for each release, published on GitHub Pages as the page the code at the
+    /// end of a message links to.
+    Diagnostics {
+        /// The directory to write; its other Markdown files are removed
+        dir: PathBuf,
+    },
     #[cfg(feature = "declare")]
     /// Save an IRIS namespace's declarations to a file
     ///
@@ -216,6 +226,12 @@ fn main() {
             filter.filter(),
             output.format,
         ),
+        Command::Diagnostics { dir } => {
+            if let Err(err) = ascot::reference::write(&dir) {
+                eprintln!("diagnostics: {}: {err}", dir.display());
+                exit(1);
+            }
+        }
         #[cfg(feature = "declare")]
         Command::Declare {
             iris,

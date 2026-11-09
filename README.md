@@ -111,6 +111,11 @@ Lists the commands, and `ascot help <COMMAND>` (or
 `ascot <COMMAND> --help`) shows one's options; the IRIS, style and diagnostics
 ones are the [settings](#settings) described under Advanced Usage.
 
+The code at the end of a message links to its page in the
+[diagnostics reference](https://intersystems-community.github.io/ascot/), one
+per release: severity, message, when it fires, what IRIS does with such code,
+and an example. `ascot diagnostics DIR` writes the pages.
+
 ### `ascot` as a CLI tool
 
 ```sh

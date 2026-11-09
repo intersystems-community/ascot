@@ -37,6 +37,12 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: The diagnostics reference in docs/unreleased is current
+        run: |
+          cargo run -q -- diagnostics /tmp/unreleased
+          diff -r /tmp/unreleased docs/unreleased \
+            || { echo 'docs/unreleased is stale: run `cargo run -- diagnostics docs/unreleased` and commit it'; exit 1; }
+
       - name: Test
         run: cargo test --workspace --all-targets
 
