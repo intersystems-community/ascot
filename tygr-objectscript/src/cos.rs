@@ -7080,6 +7080,17 @@ pub struct Procedure {
     gap: Raw<VecSep<SGap, NL>>,
     pub body: Range<Brace<ProcedureBody>>,
     end: Raw<EndOfLine>,
+    pub trailer: Option<ProcedureTrailer>,
+}
+
+// Command lines after a procedure's `}` and before the next label: IRIS compiles them, though only
+// an offset reaches them. The lookahead for a line keeps an empty main from taking the newlines
+// the next label is parted by.
+#[derive(Grammar)]
+#[grammar(inline)]
+pub struct ProcedureTrailer {
+    gap: Raw<(Vec1<NL>, NotFollowedBy<NotFollowedBy<SGap1>>)>,
+    pub lines: Range<RoutineMain>,
 }
 
 #[derive(Grammar)]

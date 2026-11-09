@@ -4135,6 +4135,32 @@ fn check_procedure(
     Ok(())
 }
 
+// The command lines before the first label, or after a procedure's `}`: in no block of their own,
+// falling through to `next`. An empty main (no code before the first tag) is the normal, idiomatic
+// way to write a tags-only routine -- there's no meaningful position to blame it falling through
+// on, so it isn't checked at all rather than flagged with a bogus range.
+fn check_loose_lines(
+    env: &CodeEnv<'_>,
+    lines: &RoutineMain,
+    next: Option<&env::LabelEntry>,
+) -> Option<bindings::Diagnostic> {
+    let range = body_end_range(env, lines)?;
+    match Flow::with_label(env, range, vec![], Default::default(), None, |flow| {
+        let checked = lines.check(env, flow);
+        env.deposit_traps(flow.take_traps());
+        checked?;
+        flow.tail_call(next.map(|next| &next.output), range)
+    }) {
+        Ok(effects) => {
+            if let Some(hint) = creates_hint(range.start, effects.creates) {
+                env.hint(hint);
+            }
+            None
+        }
+        Err(err) => Some(err.into()),
+    }
+}
+
 fn inputs_of(
     normal_args: &[WithRange<NormalArg>],
     variadic_arg: &Option<WithRange<VariadicArg>>,
@@ -4169,29 +4195,13 @@ pub(crate) fn check_rtn(
     let min_description_lines = min_description_lines(env);
     let env = env.for_routine(env::scoped_labels(env.uri(), &labels), definitions);
     let mut diagnostics = Vec::new();
-    // An empty main (no code before the first tag) is the normal, idiomatic way to write a
-    // tags-only routine — there's no meaningful position to blame it falling through on, so
-    // don't check it at all rather than flag every such routine with a bogus range.
-    if let Some(range) = body_end_range(&env, &rtn.main) {
-        let first = labels
-            .first()
-            .filter(|(_, is_procedure)| !is_procedure)
-            .and_then(|(details, _)| env.label_entry(&details.name.it));
-        match Flow::with_label(&env, range, vec![], Default::default(), None, |flow| {
-            let checked = rtn.main.check(&env, flow);
-            env.deposit_traps(flow.take_traps());
-            checked?;
-            flow.tail_call(first.map(|first| &first.output), range)
-        }) {
-            Ok(effects) => {
-                if let Some(hint) = creates_hint(range.start, effects.creates) {
-                    env.hint(hint);
-                }
-            }
-            Err(err) => diagnostics.push(err.into()),
-        }
-    }
-    for (elem, details) in &elements {
+    // The label loose lines fall through to: the element at `i`, when it is a label of the old kind.
+    let label_at = |i: usize| match elements.get(i)? {
+        (cos::RoutineElement::Subroutine(_), Some(details)) => env.label_entry(&details.name.it),
+        _ => None,
+    };
+    diagnostics.extend(check_loose_lines(&env, &rtn.main, label_at(0)));
+    for (i, (elem, details)) in elements.iter().enumerate() {
         let Some(details) = details else { continue };
         if let Some(min) = min_description_lines
             && details.formal_list
@@ -4206,7 +4216,12 @@ pub(crate) fn check_rtn(
             }
         }
         let result = match elem {
-            cos::RoutineElement::Procedure(procedure) => check_procedure(procedure, details, &env),
+            cos::RoutineElement::Procedure(procedure) => {
+                if let Some(trailer) = &procedure.trailer {
+                    diagnostics.extend(check_loose_lines(&env, &trailer.lines, label_at(i + 1)));
+                }
+                check_procedure(procedure, details, &env)
+            }
             cos::RoutineElement::Subroutine(subroutine) => {
                 check_label_body(&env, details, subroutine).map(|creates| {
                     if let Some(hint) = creates_hint(details.name.range.end, creates) {
