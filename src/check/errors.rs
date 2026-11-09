@@ -1284,7 +1284,8 @@ type_error_kinds! {
         target: Ty,
     },
     /// A constant that doesn't match the `PATTERN` of the type it is assigned to, passed as or
-    /// returned as, `"12"` for a `%String(PATTERN = "3N")`. IRIS holds a property to its pattern
+    /// returned as, or declared as a property's `InitialExpression` or a parameter's default:
+    /// `"12"` for a `%String(PATTERN = "3N")`. IRIS holds a property to its pattern
     /// only when the object is validated or saved, which fails with ERROR #7209, and a method
     /// argument, a local or a return value never, so the value goes through. Match the pattern, or
     /// widen it where it is declared.
@@ -1293,7 +1294,7 @@ type_error_kinds! {
     /// Class Demo.PatternMismatch Extends %RegisteredObject
     /// {
     ///
-    /// Property Code As %String(PATTERN = "3N");
+    /// Property Code As %String(PATTERN = "3N") [ InitialExpression = "1" ]; //! A7731
     ///
     /// ClassMethod Take(code As %String(PATTERN = "3N")) As %String
     /// {

@@ -367,6 +367,7 @@ impl<'a> Flow<'a> {
                     name,
                     ty,
                     variadic,
+                    default,
                     ..
                 },
             range,
@@ -375,6 +376,12 @@ impl<'a> Flow<'a> {
             known_names.insert(name.clone());
             if is_percent_variable(&name) {
                 continue;
+            }
+            // A default spelled as a constant is held to the parameter's PATTERN as an argument is.
+            if let (Some(default), Some(ty)) = (&default, &ty)
+                && let Some(constant) = Const::from_literal(default)
+            {
+                env.check_pattern(&PowerTy::Const(constant), ty, range, Some(&name));
             }
             let binding = {
                 let (assigned, subscript_assigned, new) = match mode {

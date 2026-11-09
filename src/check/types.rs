@@ -75,6 +75,17 @@ impl Const {
             Const::String(s) => s.clone(),
         }
     }
+
+    // The constant a literal spells, `"ab"` or `12`; `None` for anything else.
+    pub fn from_literal(text: &str) -> Option<Const> {
+        match text.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+            Some(inner) if !inner.replace("\"\"", "").contains('"') => {
+                Some(Const::String(inner.replace("\"\"", "\"")))
+            }
+            Some(_) => None,
+            None => text.parse().ok().map(Const::Integer),
+        }
+    }
 }
 
 // The numeric literal a string starts with, as ObjectScript reads it: signs, digits, a fraction,

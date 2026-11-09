@@ -4399,8 +4399,14 @@ fn check_property_or_parameter_declaration(
             ty,
             element_ty,
             type_param_names,
+            initial,
             ..
         } => {
+            if let (Some(ty), Some(initial)) = (ty, initial) {
+                let value = PowerTy::Const(initial.it.clone());
+                env.base
+                    .check_pattern(&value, ty, initial.range, Some(&member.name.it));
+            }
             if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = ty {
                 let name = env.base.qualify_class_name(&cty.name, Some(class_name));
                 env.base.check_declared_class_exists(&name, member.range);
