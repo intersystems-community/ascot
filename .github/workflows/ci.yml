@@ -53,7 +53,7 @@ jobs:
         run: cargo test --doc
 
       - name: WASM build
-        run: cargo build --target=wasm32-unknown-unknown --release --lib
+        run: cargo build --target=wasm32-unknown-unknown --release --lib --no-default-features
 
   iris:
     runs-on: ubuntu-latest

@@ -17,7 +17,8 @@ trap 'rm -f "$COMPONENT"' EXIT
 mkdir -p lib
 
 echo "building $CORE from source ..."
-(cd "$REPO_ROOT" && cargo build --target=wasm32-unknown-unknown --release --lib)
+# No features: the modes are native-only anyway, and the package is the checker alone.
+(cd "$REPO_ROOT" && cargo build --target=wasm32-unknown-unknown --release --lib --no-default-features)
 cp "$REPO_ROOT/target/wasm32-unknown-unknown/release/ascot.wasm" "$CORE"
 
 echo "componentizing $CORE ..."
