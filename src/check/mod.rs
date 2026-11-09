@@ -4240,6 +4240,9 @@ pub(crate) fn check_cls(
     for issue in &cls.keyword_issues {
         diagnostics.push(class_keyword_issue(issue).into());
     }
+    for what in &cls.undocumented {
+        diagnostics.push(TypeError::undocumented_syntax(what.it.clone(), what.range).into());
+    }
     // A superclass is checked where it is named, like a `##class()` or a declared type; past one
     // nobody can see, a member lookup ends in a hint rather than an error (see `find`).
     for sup in &cls.extends {
@@ -4332,6 +4335,9 @@ pub(crate) fn check_cls(
         }
         for issue in &member.keyword_issues {
             diagnostics.push(member_keyword_issue(member, issue).into());
+        }
+        for what in &member.undocumented {
+            diagnostics.push(TypeError::undocumented_syntax(what.it.clone(), what.range).into());
         }
         check_property_or_parameter_declaration(env, &cls.name.it, member, &mut diagnostics);
         // A missing `Include` (already reported once above) commonly leaves some macro

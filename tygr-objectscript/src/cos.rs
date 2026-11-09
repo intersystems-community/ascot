@@ -2810,10 +2810,14 @@ pub struct Import {
 #[derive(Grammar)]
 pub enum ClassList {
     Single(Range<ClassName>),
+    // An entry may be empty, `(, A)` or `(A, , B)`: IRIS compiles the list with it.
     Multiple {
-        open: Raw<(StringEq!("("), Space)>,
-        first: Range<ClassName>,
-        rest: Vec<(Raw<(Space, StringEq!(","), Space)>, Range<ClassName>)>,
+        open: Range<Raw<(StringEq!("("), Space)>>,
+        first: Option<Range<ClassName>>,
+        rest: Vec<(
+            Range<Raw<(Space, StringEq!(","), Space)>>,
+            Option<Range<ClassName>>,
+        )>,
         close: Raw<(Space, StringEq!(")"))>,
     },
 }
@@ -2822,13 +2826,27 @@ impl ClassList {
     pub fn classes(&self) -> Vec<&Range<ClassName>> {
         match self {
             ClassList::Single(id) => vec![id],
-            ClassList::Multiple { first, rest, .. } => {
-                let mut ids = vec![first];
-                for (_, id) in rest {
-                    ids.push(id);
-                }
-                ids
-            }
+            ClassList::Multiple { first, rest, .. } => (first.iter())
+                .chain(rest.iter().filter_map(|(_, id)| id.as_ref()))
+                .collect(),
+        }
+    }
+
+    /// The byte span of the `(` or `,` before each empty entry.
+    pub fn empty_entries(&self) -> Vec<(usize, usize)> {
+        match self {
+            ClassList::Single(_) => vec![],
+            ClassList::Multiple {
+                open, first, rest, ..
+            } => (first
+                .is_none()
+                .then_some((open.start, open.end))
+                .into_iter())
+            .chain(
+                (rest.iter().filter(|(_, id)| id.is_none()))
+                    .map(|(comma, _)| (comma.start, comma.end)),
+            )
+            .collect(),
         }
     }
 }
@@ -3274,10 +3292,12 @@ pub enum Property {
         keywords: Option<KeywordList<FailableKeyword<PropertyKeyword>>>,
         semicolon: Raw<(Space, StringEq!(";"))>,
     },
+    // IRIS compiles `As list Of C`, a property's collection, and ignores the collection.
     Relationship {
         keyword: Raw<(StringEqCI!("Relationship"), Space1)>,
         name: QuotableClassMemberName,
-        as_type: Option<As<Type>>,
+        as_type: Option<As<PropertyType>>,
+        type_params: Option<TypeParamList>,
         keywords: Option<KeywordList<FailableKeyword<PropertyKeyword>>>,
         semicolon: Raw<(Space, StringEq!(";"))>,
     },
