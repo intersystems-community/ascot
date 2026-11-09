@@ -2389,7 +2389,7 @@ pub struct KeywordValue(Raw<KeywordValueEnum>);
 #[derive(Grammar)]
 pub struct PropertyType {
     pub collection: Option<CollectionKind>,
-    pub class_name: Option<SignatureType>,
+    pub class_name: SignatureType,
 }
 
 #[derive(Grammar)]
