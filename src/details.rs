@@ -17,7 +17,9 @@ use either::Either::{self, Left, Right};
 use tygr::{Grammar, IntoInner, OLC, Prefix, Range, StringOf};
 
 use crate::bindings::{self, RefMode};
-use crate::check::types::{NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty};
+use crate::check::types::{
+    Const, NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty, with_pattern,
+};
 use crate::cos::{self, AllowMacro, FailableKeyword, HasMemberKeyword, KeywordList};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -285,6 +287,8 @@ pub enum MemberKindSpecificDetails {
         type_param_names: Vec<String>,
         // For a collection property, the element class (see `element_ty`).
         element_ty: Option<Ty>,
+        // `[ InitialExpression = v ]` when `v` is a constant.
+        initial: Option<WithRange<Const>>,
     },
     Parameter {
         ty: Option<Ty>,
@@ -643,6 +647,21 @@ fn element_ty(property_type: &cos::PropertyType) -> Option<Ty> {
     Some(Ty::from(property_type.class_name.print()))
 }
 
+// `[ InitialExpression = v ]` with `v` a constant, a quoted string or a number; an expression in
+// braces is none.
+fn initial_expression(
+    keywords: Option<&KeywordList<FailableKeyword<cos::PropertyKeyword>>>,
+    olc: &OLC,
+) -> Option<WithRange<Const>> {
+    (keywords.into_iter().flat_map(KeywordList::items)).find_map(|entry| {
+        let cos::PropertyKeyword::InitialExpression(valued) = (***entry).as_ref().left()? else {
+            return None;
+        };
+        let constant = Const::from_literal(&valued.value.print())?;
+        Some(WithRange::new(constant, olc.range(entry)))
+    })
+}
+
 fn type_param_names(type_params: &Option<cos::TypeParamList>) -> Vec<String> {
     type_params
         .iter()
@@ -915,8 +934,14 @@ fn process_member(
                 deprecated || is_deprecated(keywords.as_ref()),
                 keyword_issues_in(keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Property {
-                    ty: as_type.as_deref().map(Ty::from),
-                    element_ty: as_type.as_deref().and_then(element_ty),
+                    // `list Of X(PATTERN=...)`: the parameters describe the element.
+                    ty: as_type.as_deref().map(|t| match t.collection {
+                        Some(_) => Ty::from(t),
+                        None => with_pattern(Ty::from(t), type_params.as_ref()),
+                    }),
+                    element_ty: (as_type.as_deref().and_then(element_ty))
+                        .map(|element| with_pattern(element, type_params.as_ref())),
+                    initial: initial_expression(keywords.as_ref(), olc),
                     multidimensional: typed(keywords.as_ref()).any(|keyword| {
                         matches!(keyword, cos::PropertyKeyword::MultiDimensional(flag) if flag.is_set())
                     }),
@@ -947,6 +972,7 @@ fn process_member(
                             as_type.as_deref().map(Ty::from)
                         },
                         element_ty: None,
+                        initial: None,
                         multidimensional: false,
                         type_param_names: vec![],
                     },

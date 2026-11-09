@@ -19,6 +19,7 @@ mod builtins;
 mod env;
 mod errors;
 mod flow;
+mod pattern;
 mod similar;
 pub mod types;
 mod zutil;
@@ -2437,7 +2438,7 @@ fn check_merge_target<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
-    if let Some(local) = check_target(target, env, flow)? {
+    if let Some(Left(local)) = check_target(target, env, flow)? {
         flow.handle_merge(local, source, range)?;
     }
     Ok(())
@@ -2450,33 +2451,43 @@ fn check_set_target<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
-    if let Some(local) = check_target(target, env, flow)? {
-        flow.handle_set(local, source, range)?;
+    match check_target(target, env, flow)? {
+        Some(Left(local)) => flow.handle_set(local, source, range),
+        Some(Right((name, declared))) => {
+            env.check_pattern(&source, &declared, range, Some(&name));
+            (env.assert_value_compatible(&source, &declared))
+                .or_else(|err| err.raise(env, range, Some(name)))
+        }
+        None => Ok(()),
     }
-    Ok(())
 }
 
-// Checks a target's parts and resolves it; the tracked local it names, if any.
+// What a `Set` target names: a tracked local, or a property with its declared type.
+type Assigned = Either<Local, (String, Ty)>;
+
+// Checks a target's parts and resolves it; what it names, if either.
 fn check_target<'a>(
     target: &cos::SetTarget,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-) -> Result<Option<Local>, QuasiTypeError> {
+) -> Result<Option<Assigned>, QuasiTypeError> {
     match target {
         SetTarget::Sub { obj, op } => {
             let obj = obj.to_ty(env, flow)?;
-            check_set_member(env, flow, obj, op.mem.deref(), op.args.as_ref())?;
+            let declared = check_set_member(env, flow, obj, op.mem.deref(), op.args.as_ref())?;
+            return Ok(declared.map(|ty| Right((op.mem.id(), ty))));
         }
         SetTarget::Member { member, args } => {
             let obj = env.this_ty(flow);
-            check_set_member(env, flow, obj, member.deref(), args.as_ref())?;
+            let declared = check_set_member(env, flow, obj, member.deref(), args.as_ref())?;
+            return Ok(declared.map(|ty| Right((member.id(), ty))));
         }
         SetTarget::Var(variable) => {
             return match variable.as_local(env, flow)? {
                 // Overwriting counts as reading the old value, but doesn't need it.
                 Left(local) => {
                     flow.handle_get(local.clone())?;
-                    Ok(Some(local))
+                    Ok(Some(Left(local)))
                 }
                 Right(_) => {
                     let _ = variable.to_maybe_ty(env, flow)?;
@@ -3156,40 +3167,42 @@ fn check_member<'a>(
             let property = env.resolve_mem::<Properties<Read>>(&ty, name, range, true);
             Ok(Some(referenced(env, mem, property)?.to_ty()))
         }
-        // A method anywhere in the chain before a property anywhere, as IRIS resolves it.
-        (false, Some(args)) => match env.lookup_mem::<Methods>(&ty, &name, range, true)? {
-            Some(method) => {
-                let method = referenced(env, mem, Ok(method))?;
-                check_call(env, flow, method, args.items(env), range)
-            }
-            // `..Prop(subs)`: a property, which IRIS requires to be multidimensional, its node
-            // typed like the property; a `%DispatchMethod` takes the name when nothing else does.
-            None => {
-                let property = env.lookup_mem::<Properties<Called>>(&ty, &name, range, true)?;
-                let property = match property {
-                    Some(property) => referenced(env, mem, Ok(property))?,
-                    // Neither: reported as a missing method.
-                    None => {
-                        env.resolve_mem::<Methods>(&ty, name.clone(), range, true)?;
-                        PropertyTy::default()
+        // A method anywhere in the chain before a property anywhere, as IRIS resolves it, and the
+        // `%DispatchMethod` hook once neither has the name.
+        (false, Some(args)) => {
+            let method = match env.find_mem::<Methods>(&ty, &name, range, true)? {
+                Some(method) => Some(method),
+                // `..Prop(subs)`: a property, which IRIS requires to be multidimensional, its node
+                // typed like the property.
+                None => match env.lookup_mem::<Properties<Called>>(&ty, &name, range, true)? {
+                    Some(property) => {
+                        let property = referenced(env, mem, Ok(property))?;
+                        return match property {
+                            PropertyTy::Multidimensional(_)
+                                if args.items(env).all(|a| a.is_none()) =>
+                            {
+                                Err(QuasiTypeError::node_without_subscripts(name))
+                            }
+                            // An unknown property, taken as present and untyped, may well be
+                            // multidimensional.
+                            PropertyTy::Multidimensional(ty) | PropertyTy::Value(ty @ Ty::Any) => {
+                                builtins::check_args_any(env, flow, args.items(env))?;
+                                Ok(Some(ty))
+                            }
+                            _ => Err(QuasiTypeError::not_multidimensional(name)),
+                        };
                     }
-                };
-                match property {
-                    PropertyTy::Multidimensional(_) if args.items(env).all(|a| a.is_none()) => {
-                        Err(QuasiTypeError::node_without_subscripts(name))
-                    }
-                    // A hook takes any arguments; an unknown property, taken as present and
-                    // untyped, may well be multidimensional.
-                    PropertyTy::Multidimensional(ty)
-                    | PropertyTy::Dispatched(ty)
-                    | PropertyTy::Value(ty @ Ty::Any) => {
-                        builtins::check_args_any(env, flow, args.items(env))?;
-                        Ok(Some(ty))
-                    }
-                    _ => Err(QuasiTypeError::not_multidimensional(name)),
-                }
-            }
-        },
+                    None => env.dispatched_mem::<Methods>(&ty, &name, range, true),
+                },
+            };
+            let method = match method {
+                Some(method) => Ok(method),
+                // Neither: reported as a missing method.
+                None => env.resolve_mem::<Methods>(&ty, name.clone(), range, true),
+            };
+            let method = referenced(env, mem, method)?;
+            check_call(env, flow, method, args.items(env), range)
+        }
     }
 }
 
@@ -3250,7 +3263,7 @@ fn check_set_member<'a>(
     obj: Ty,
     mem: &Range<MemberRef>,
     subs: Option<&Range<MthArgList>>,
-) -> Result<(), QuasiTypeError> {
+) -> Result<Option<Ty>, QuasiTypeError> {
     let range = env.range(mem);
     let name = mem.id();
     if mem.is_parameter() {
@@ -3267,19 +3280,22 @@ fn check_set_member<'a>(
     };
     let property = referenced(env, mem, property)?;
     let Some(subs) = subs else {
-        return Ok(());
+        return Ok(match property {
+            PropertyTy::Value(ty) => Some(ty),
+            _ => None,
+        });
     };
     match property {
         PropertyTy::Multidimensional(_) => {}
         // A hook takes any subscripts; an unknown property, taken as present and untyped, may
         // well be multidimensional.
-        PropertyTy::Dispatched(_) | PropertyTy::Value(Ty::Any) => return Ok(()),
+        PropertyTy::Dispatched(_) | PropertyTy::Value(Ty::Any) => return Ok(None),
         _ => return Err(QuasiTypeError::not_multidimensional(name)),
     }
     if subs.items(env).all(|a| a.is_none()) {
         return Err(QuasiTypeError::node_without_subscripts(name));
     }
-    Ok(())
+    Ok(None)
 }
 
 fn check_param_arg<'a>(
@@ -3349,8 +3365,9 @@ fn check_param_arg<'a>(
                 return Ok(());
             }
             flow.with_range(env.range(arg), |flow| flow.value(&source, || expr.print()))?;
-            env.assert_value_compatible(&source, &target)
-                .map_err(|err| err.assign(par.name))?;
+            env.check_pattern(&source, &target, env.range(arg), Some(&par.name));
+            (env.assert_value_compatible(&source, &target))
+                .or_else(|err| err.raise(env, env.range(arg), Some(par.name)))?;
         }
         Some(cos::MthArg::ByRef { target, .. }) => {
             if par.mode.is_none() {
@@ -3360,7 +3377,7 @@ fn check_param_arg<'a>(
             // The callee may read the prior value before writing, so `invalidate` — not a
             // fresh, obligated write — models it: satisfies whatever was pending instead of
             // demanding another read.
-            if let Some(local) = check_target(target, env, flow)? {
+            if let Some(Left(local)) = check_target(target, env, flow)? {
                 flow.invalidate(local, source)?;
             }
         }
@@ -4382,8 +4399,14 @@ fn check_property_or_parameter_declaration(
             ty,
             element_ty,
             type_param_names,
+            initial,
             ..
         } => {
+            if let (Some(ty), Some(initial)) = (ty, initial) {
+                let value = PowerTy::Const(initial.it.clone());
+                env.base
+                    .check_pattern(&value, ty, initial.range, Some(&member.name.it));
+            }
             if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = ty {
                 let name = env.base.qualify_class_name(&cty.name, Some(class_name));
                 env.base.check_declared_class_exists(&name, member.range);

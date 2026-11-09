@@ -2810,8 +2810,9 @@
   },
   "%Library.DynamicArray": {
    "header": "Class %Library.DynamicArray",
-   "drop": ["%DispatchGetProperty", "%DispatchMethod", "%DispatchSetProperty"],
+   "drop": ["%DispatchGetProperty", "%DispatchSetProperty"],
    "members": [
+    { "header": "Method %DispatchMethod(methodName As %String(PATTERN=\"1.E1(1\"\"Get\"\",1\"\"Set\"\")\"), args As %Any = \"\") As %Any" },
     { "header": "Method %Get(key As %Integer, default As %Any = \"\", type As %String = \"\") As %Any" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
     { "header": "Method %Push(value As %Any, type As %String = \"\") As %DynamicAbstractObject" },
@@ -2836,8 +2837,9 @@
   },
   "%Library.DynamicObject": {
    "header": "Class %Library.DynamicObject",
-   "drop": ["%DispatchGetProperty", "%DispatchMethod", "%DispatchSetProperty"],
+   "drop": ["%DispatchGetProperty", "%DispatchSetProperty"],
    "members": [
+    { "header": "Method %DispatchMethod(methodName As %String(PATTERN=\"1.E1(1\"\"Get\"\",1\"\"Set\"\")\"), args As %Any = \"\") As %Any" },
     { "header": "Method %Get(key As %String, default As %Any = \"\", type As %String = \"\") As %Any" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
     { "header": "Method %Set(key As %String, value As %Any, type As %String = \"\") As %DynamicAbstractObject" }

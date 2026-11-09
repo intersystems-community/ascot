@@ -367,6 +367,7 @@ impl<'a> Flow<'a> {
                     name,
                     ty,
                     variadic,
+                    default,
                     ..
                 },
             range,
@@ -375,6 +376,12 @@ impl<'a> Flow<'a> {
             known_names.insert(name.clone());
             if is_percent_variable(&name) {
                 continue;
+            }
+            // A default spelled as a constant is held to the parameter's PATTERN as an argument is.
+            if let (Some(default), Some(ty)) = (&default, &ty)
+                && let Some(constant) = Const::from_literal(default)
+            {
+                env.check_pattern(&PowerTy::Const(constant), ty, range, Some(&name));
             }
             let binding = {
                 let (assigned, subscript_assigned, new) = match mode {
@@ -795,11 +802,11 @@ impl<'a> Flow<'a> {
             established
         });
         match (&established.it, it) {
-            (Some(wanted), Some(actual)) => self
-                .shared
-                .env
-                .assert_value_compatible(&actual, wanted)
-                .map_err(Incompatible::general),
+            (Some(wanted), Some(actual)) => {
+                self.shared.env.check_pattern(&actual, wanted, range, None);
+                (self.shared.env.assert_value_compatible(&actual, wanted))
+                    .or_else(|err| err.raise(self.shared.env, range, None))
+            }
             (Some(wanted), None) => Err(QuasiTypeError::return_nothing_for_x(
                 wanted.clone(),
                 Location::new(self.shared.env.uri().to_string(), established.range),
@@ -1035,8 +1042,9 @@ impl<'a> Flow<'a> {
                 .declared
                 .as_ref()
                 .map_or(&Ty::Any, |declared| &declared.it);
-            env.assert_value_compatible(&ty, declared)
-                .map_err(|err| err.assign(name.clone()))?;
+            env.check_pattern(&ty, declared, range, Some(&name));
+            (env.assert_value_compatible(&ty, declared))
+                .or_else(|err| err.raise(env, range, Some(name.clone())))?;
             binding.assigned = ty;
             binding.assigned_at = HashSet::from([range]);
             binding.incoming = false;
