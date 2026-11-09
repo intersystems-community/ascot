@@ -1033,6 +1033,26 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "'{entry}' is not a class keyword as written, though IRIS compiles it"]
     UnrecognizedClassKeyword { entry: String },
+    /// `_name`, `_name.Property` and `_form!control.Property` call back to a Caché Direct client,
+    /// the VisM control of a Visual Basic form. IRIS compiles them but has no such client, and
+    /// raises `<_CALLBACK SYNTAX>` where the line runs. Keep the value in a local variable or a
+    /// property instead.
+    ///
+    /// ```objectscript raises=<_CALLBACK SYNTAX> do ##class(Demo.CacheDirectCallback).Call()
+    /// Class Demo.CacheDirectCallback
+    /// {
+    ///
+    /// ClassMethod Call()
+    /// {
+    ///     Set _txtStatus = "done" //! A5431
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A5431"]
+    #[severity = Error]
+    #[message = "A Caché Direct callback, `_name` or `_form!control`, raises <_CALLBACK SYNTAX> in IRIS, which has no client to call"]
+    CacheDirectCallback,
     /// A form the documentation doesn't give, which IRIS compiles all the same: `list Of` before a
     /// relationship's class, which it ignores, or an empty entry in `Extends`, `Import` or
     /// `Include`, which it drops. Write the documented form; what the extra was meant to do

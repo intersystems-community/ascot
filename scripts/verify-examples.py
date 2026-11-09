@@ -79,7 +79,7 @@ def example(docs):
 
 def expectation(severity, info):
     for inf in info:
-        if m := re.match(r'raises=(<[A-Z ]+>)\s+(.+)$', inf): return 'raises', m.group(1), m.group(2)
+        if m := re.match(r'raises=(<[A-Z_ ]+>)\s+(.+)$', inf): return 'raises', m.group(1), m.group(2)
     if any('rejected' in inf.split() for inf in info): return 'rejected', None, None
     if any('compiles' in inf.split() for inf in info) or severity != 'Error': return 'compiles', None, None
     return 'rejected', None, None
