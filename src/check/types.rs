@@ -15,7 +15,7 @@ use tygr::Grammar;
 
 use crate::bindings::{self, RefMode};
 use crate::check::{WorkspaceEnv, errors::*};
-use crate::cos::{CallType, CollectionKind, Formal, PropertyType, Type};
+use crate::cos::{CallType, CollectionKind, Formal, PropertyType, Type, TypeParamList};
 use crate::details::WithRange;
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -532,6 +532,9 @@ pub struct ClassTy {
     pub name: String,
     // By parameter name.
     pub generics: BTreeMap<String, String>,
+    // `PATTERN` of a datatype, `%String(PATTERN="1N")`: the one type parameter the checker reads,
+    // as the shape a value must have.
+    pub pattern: Option<String>,
 }
 
 pub fn normalize_class_name(name: &mut String) {
@@ -542,10 +545,50 @@ pub fn normalize_class_name(name: &mut String) {
 
 impl From<String> for ClassTy {
     fn from(mut name: String) -> Self {
+        // `%String(MAXLEN=50)`, as a declaration read from IRIS writes it.
+        let mut pattern = None;
+        if let Some(i) = name.find('(') {
+            pattern =
+                (TypeParamList::parse(&name[i..]).ok()).and_then(|params| pattern_param(&params));
+            name.truncate(i);
+            let end = name.trim_end().len();
+            name.truncate(end);
+        }
         normalize_class_name(&mut name);
         ClassTy {
             name,
             generics: BTreeMap::new(),
+            pattern,
+        }
+    }
+}
+
+// The `PATTERN` among a declared type's parameters, its quotes removed.
+pub(crate) fn pattern_param(params: &TypeParamList) -> Option<String> {
+    let param = params.items.iter().find(|p| p.name.print() == "PATTERN")?;
+    let value = param.value.print();
+    let value = value.trim();
+    Some(
+        match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+            Some(inner) => inner.replace("\"\"", "\""),
+            None => value.to_string(),
+        },
+    )
+}
+
+// `ty` with the `PATTERN` its declaration's type parameters carry, if any.
+pub(crate) fn with_pattern(mut ty: Ty, params: Option<&TypeParamList>) -> Ty {
+    if let (Ty::OREF(ClsOrIns::Ins(cls)), Some(params)) = (&mut ty, params) {
+        cls.pattern = pattern_param(params);
+    }
+    ty
+}
+
+impl Ty {
+    pub(crate) fn pattern(&self) -> Option<&str> {
+        match self {
+            Ty::OREF(ClsOrIns::Ins(cls) | ClsOrIns::Cls(cls)) => cls.pattern.as_deref(),
+            _ => None,
         }
     }
 }
@@ -556,12 +599,15 @@ impl std::fmt::Display for ClassTy {
             Some(this) => write!(f, "%{}", this)?,
             None => write!(f, "{}", self.name)?,
         }
-        if !self.generics.is_empty() {
-            let args: Vec<_> = self
-                .generics
-                .iter()
-                .map(|(name, arg)| format!("{name} = \"{arg}\""))
-                .collect();
+        let mut args: Vec<_> = self
+            .generics
+            .iter()
+            .map(|(name, arg)| format!("{name} = \"{arg}\""))
+            .collect();
+        if let Some(pattern) = &self.pattern {
+            args.push(format!("PATTERN = \"{}\"", pattern.replace('"', "\"\"")));
+        }
+        if !args.is_empty() {
             write!(f, "({})", args.join(", "))?;
         }
         Ok(())
@@ -710,7 +756,7 @@ impl From<&str> for Ty {
 
 impl From<&Type> for Ty {
     fn from(value: &Type) -> Self {
-        Self::from(value.class_name.print())
+        with_pattern(Self::from(value.class_name.print()), value.params.as_ref())
     }
 }
 

@@ -19,6 +19,7 @@ mod builtins;
 mod env;
 mod errors;
 mod flow;
+mod pattern;
 mod similar;
 pub mod types;
 mod zutil;

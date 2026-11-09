@@ -17,7 +17,9 @@ use either::Either::{self, Left, Right};
 use tygr::{Grammar, IntoInner, OLC, Prefix, Range, StringOf};
 
 use crate::bindings::{self, RefMode};
-use crate::check::types::{NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty};
+use crate::check::types::{
+    NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty, with_pattern,
+};
 use crate::cos::{self, AllowMacro, FailableKeyword, HasMemberKeyword, KeywordList};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -915,7 +917,7 @@ fn process_member(
                 deprecated || is_deprecated(keywords.as_ref()),
                 keyword_issues_in(keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Property {
-                    ty: as_type.as_deref().map(Ty::from),
+                    ty: (as_type.as_deref()).map(|t| with_pattern(Ty::from(t), type_params.as_ref())),
                     element_ty: as_type.as_deref().and_then(element_ty),
                     multidimensional: typed(keywords.as_ref()).any(|keyword| {
                         matches!(keyword, cos::PropertyKeyword::MultiDimensional(flag) if flag.is_set())

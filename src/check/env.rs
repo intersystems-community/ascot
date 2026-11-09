@@ -61,6 +61,7 @@ pub(crate) trait Namespace {
     // from the hook's signature as `find` resolves it; `None` where no hook applies.
     fn dispatched(
         _obj: &ClsOrIns,
+        _mem: &str,
         _find: impl FnOnce(&str) -> Option<TyProcedureOrAny>,
     ) -> Option<Self::Ty> {
         None
@@ -187,13 +188,22 @@ impl<A: Access> Namespace for Properties<A> {
         Some((ty, true))
     }
 
-    // Only the hook's return type matters.
+    // The hook serves the names matching the pattern its name argument is declared with, if any
+    // (`%DispatchMethod(methodName As %String(PATTERN=...))`); only its return type matters.
     fn dispatched(
         obj: &ClsOrIns,
+        mem: &str,
         find: impl FnOnce(&str) -> Option<TyProcedureOrAny>,
     ) -> Option<PropertyTy> {
         let hook = find(A::hook(obj)?)?;
-        let out = hook.procedure().and_then(|hook| hook.out.clone());
+        let hook = hook.procedure();
+        let pattern = hook.and_then(|hook| hook.normal_args.first()?.ty.as_ref()?.pattern());
+        if pattern
+            .is_some_and(|pattern| crate::check::pattern::matches(pattern, mem) == Some(false))
+        {
+            return None;
+        }
+        let out = hook.and_then(|hook| hook.out.clone());
         Some(PropertyTy::Dispatched(out.unwrap_or_default()))
     }
 }
@@ -908,7 +918,7 @@ impl<'a> WorkspaceEnv<'a> {
         // Dynamic dispatch: a class overriding the hook takes any member name no class has.
         if found.is_none() {
             let hook = |hook: &str| Some(self.find::<Methods>(obj, hook, own, range).ok()??.ty);
-            found = N::dispatched(obj, hook).map(Member::undeclared);
+            found = N::dispatched(obj, mem, hook).map(Member::undeclared);
         }
         Ok(found)
     }
@@ -1491,6 +1501,9 @@ impl<'a> WorkspaceEnv<'a> {
             return ClassTy {
                 name: x.name.clone(),
                 generics,
+                pattern: (x.pattern == y.pattern)
+                    .then(|| x.pattern.clone())
+                    .flatten(),
             };
         }
         let y_ancestors: HashSet<String> = self.ancestors(&y.name).into_iter().collect();
