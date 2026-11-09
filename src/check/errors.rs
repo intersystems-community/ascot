@@ -2460,7 +2460,7 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A1727"]
-    #[severity = Warning]
+    #[severity = Error]
     #[message = "{err}"]
     DocumentSyntaxError { err: SyntaxErrorText },
     /// The body of a label, or a routine's main body, runs off its end without a `Quit` or
