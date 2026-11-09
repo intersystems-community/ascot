@@ -5271,7 +5271,7 @@ fun_args!("$CLASSMETHOD" ClassMethodArgs {
 });
 
 fun_args!("$COMPILE" CompileArgs {
-    source: ArgOf<Variable>,
+    source: ArgOf<AllowIndirection<Variable>>,
     qspec: More<ArgOf<Expr>>,
     errors: More<ArgOf<Option<Variable>>>,
     object: Option<More<ArgOf<Option<Variable>>>>,

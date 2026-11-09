@@ -1476,7 +1476,7 @@ fn check_classmethod<'a, 'b>(
 fn check_compile<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    source: &Range<Variable>,
+    source: &Range<cos::AllowIndirection<Variable>>,
     qspec: &Range<Expr>,
     errors: &Range<Option<Variable>>,
     object: Option<&Range<Option<Variable>>>,
@@ -1484,9 +1484,10 @@ fn check_compile<'a>(
     arg6: Option<&Range<Option<Expr>>>,
     rname: Option<&Range<Option<Expr>>>,
 ) -> Result<PowerTy, QuasiTypeError> {
-    // The array is handed over by reference, as `.source` would be.
-    if let Left(source) = source.as_local(env, flow)? {
-        flow.invalidate(source, Ty::Any.into())?;
+    // The array is handed over by reference, as `.source` would be; named by indirection, any may be.
+    match source.as_local(env, flow)? {
+        Left(source) => flow.invalidate(source, Ty::Any.into())?,
+        Right(_) => flow.invalidate_all()?,
     }
     let _ = qspec.to_ty(env, flow)?;
     for output in std::iter::once(errors).chain(object) {
