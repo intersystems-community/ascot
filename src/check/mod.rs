@@ -3780,8 +3780,14 @@ fn call_label<'a>(
     let proc = resolve_label_soft(env, label.clone(), routine, range)?;
     // `label+n` enters the procedure part-way, where its formal list no longer applies, and which
     // line that is depends on the compiled routine: the label is confirmed, the rest is untyped.
+    // A procedure block's lines only its label enters: IRIS raises <NOLINE> when the call runs.
     let proc = if offset {
-        env.soft_diagnostic(TypeError::label_offset(range));
+        match (&proc, &label) {
+            (TyProcedureOrAny::Procedure(proc), Some(label)) if proc.procedure_block.is_some() => {
+                env.soft_diagnostic(TypeError::offset_into_procedure_block(label.clone(), range));
+            }
+            _ => env.soft_diagnostic(TypeError::label_offset(range)),
+        }
         TyProcedureOrAny::Any
     } else {
         proc
