@@ -1045,6 +1045,24 @@ impl CheckCommandInner for cos::EntryRefAndArgs {
                 },
             },
             EntryRefAndArgs::Legacy { proc, args } => {
+                // A block's own label is a name alone to the compiler: `Do Inner+1` within the
+                // block fails to compile (IRIS: <NOLINE>), as `Goto Inner+1` does.
+                if let LegacyEntryRef::Label(lor) = proc.deref()
+                    && lor.routine.is_none()
+                    && lor.offset.is_some()
+                    && let AllowIndirection::Plain(label) = lor.label.deref()
+                    && env.in_procedure_block()
+                    && env
+                        .label_entry(&label.print())
+                        .is_some_and(|entry| entry.nested)
+                {
+                    env.soft_diagnostic(TypeError::not_allowed_in(
+                        "A DO with a line offset to a label of the block",
+                        "a procedure block",
+                        "<NOLINE>",
+                        env.range(proc),
+                    ));
+                }
                 check_legacy_label_call(env, flow, proc, args, false)?
             }
         };
