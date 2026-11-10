@@ -1804,7 +1804,7 @@ pub enum Cond {
         open: (StringEq!("("), Space),
         tables: Tables,
         close: (Space, StringEq!(")")),
-        condition: Option<Box<ForCnd>>,
+        condition: Option<(Space, Box<ForCnd>)>,
     },
     Comparison {
         noindex: Option<(StringEqCI!("%NOINDEX"), Space)>,
@@ -6829,6 +6829,14 @@ mod tests {
             "SELECT COUNT(ALL Name) FROM t",
             "SELECT ALLOWED FROM t",
             "SELECT COUNT(ALLOWED) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn for_some_with_blank_before_condition() {
+        all_ok(&[
+            "SELECT a FROM t WHERE FOR SOME (u AS e) (e.a = t.a)",
+            "SELECT a FROM t WHERE FOR SOME (u)(u.a = t.a)",
         ]);
     }
 }
