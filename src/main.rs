@@ -534,7 +534,8 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
                         (Information | Hint, true) => ("\x1b[2m", "\x1b[0m"),
                         (Error, false) => ("error: ", ""),
                         (Warning, false) => ("warning: ", ""),
-                        (Information | Hint, false) => ("hint: ", ""),
+                        (Information, false) => ("information: ", ""),
+                        (Hint, false) => ("hint: ", ""),
                     };
                     print!("{}{}{}{}", on, file.uri, diagnostic.describe(), off);
                 }
