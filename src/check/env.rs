@@ -2,9 +2,9 @@
 //! - `WorkspaceEnv`: one per check run. Resolves classes and members across every open document
 //!   (and IRIS, when connected), records cross-file references, and raises "soft" diagnostics
 //!   for anything it couldn't confirm.
-//! - `DocumentEnv`/`ClassDocument`: the file being checked, with its macros, labels and
-//!   `#include`s and, for a class, its inheritance chain and member tables.
-//! - `CodeEnv`: one method body or routine block, with `this`, formal arguments and local labels.
+//! - `DocumentEnv`/`ClassDocument`: the file being checked, with its macros and `#include`s
+//!   and, for a class, its name and language.
+//! - `CodeEnv`: one method body or routine block, with `this` and local labels.
 //!
 //! Reads `details.rs` and `lib.rs`'s `WorkspaceStruct`; produces `types.rs` values for
 //! `mod.rs`/`flow.rs` to check against. `lib.rs` also builds a `WorkspaceEnv` to resolve members
