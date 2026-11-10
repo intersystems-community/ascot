@@ -1105,12 +1105,17 @@ fn check_mv_call<'a>(
     flow: &mut Flow<'a>,
     c: &cos::MVCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    check_read_args(
-        env,
-        flow,
-        once(Some(c.record.deref())).chain(each_arg(&c.rest).map(Some)),
-        "%String",
-    )
+    let positions = c.rest.iter().map(|arg| arg.deref().deref());
+    let in_positions = positions.flat_map(|p| {
+        p.first
+            .iter()
+            .chain(p.more.iter().filter_map(|m| m.deref().deref().as_ref()))
+    });
+    for e in once(c.record.deref()).chain(in_positions) {
+        let _ = e.to_ty(env, flow)?;
+    }
+    flow.add_soft_diagnostic(QuasiTypeError::undocumented_function("MV".to_string()));
+    Ok(PowerTy::plain(Ty::Any))
 }
 
 impl CheckExprInner for PositionArg {
