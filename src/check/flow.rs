@@ -1153,9 +1153,11 @@ impl<'a> Flow<'a> {
     // touches `subscript_assigned`, regardless of whether the target itself was subscripted.
     pub(crate) fn handle_zkill(&mut self, local: Local) -> Result<(), QuasiTypeError> {
         self.note_ref_param(&local.name, RefUse::Set)?;
-        let binding = self.lookup(local.name)?;
-        binding.assigned = PowerTy::undefined();
-        binding.assigned_at = HashSet::new();
+        if local.subs.is_empty() {
+            let binding = self.lookup(local.name)?;
+            binding.assigned = PowerTy::undefined();
+            binding.assigned_at = HashSet::new();
+        }
         Ok(())
     }
 
