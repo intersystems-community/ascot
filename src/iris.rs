@@ -1,5 +1,6 @@
-//! `open`, which answers an `--iris` argument with a live `RawAtelier` (a URL) or a
-//! `Declarations` file `ascot declare` wrote (a path), which never connects to anything.
+//! `open`, which answers an `--iris` argument with a live `RawAtelier` (a URL), a Community
+//! release's pre-built declarations (a tag such as `2026.2` or `latest`, downloaded into `~/.ascot`
+//! once), or a `Declarations` file `ascot declare` wrote (a path).
 
 use std::path::Path;
 
