@@ -4652,7 +4652,7 @@ fn check_property_or_parameter_declaration(
                 env.base
                     .check_pattern(&value, ty, initial.range, Some(&member.name.it));
             }
-            if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = ty {
+            if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = element_ty.as_ref().or(ty.as_ref()) {
                 let name = env.base.qualify_class_name(&cty.name, Some(class_name));
                 env.base.check_declared_class_exists(&name, member.range);
             }
