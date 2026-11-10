@@ -263,7 +263,7 @@ impl std::fmt::Display for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Term::Target => write!(f, "%?"),
-            Term::Const(v) => write!(f, "\"{}\"", v),
+            Term::Const(v) => v.fmt(f),
             Term::Neg(inner) => write!(f, "'({})", inner),
             Term::Infix { l, o, r } => write!(f, "{} {} {}", l, o, r),
         }
