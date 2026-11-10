@@ -669,9 +669,13 @@ impl<'a> WorkspaceEnv<'a> {
         };
         match resolved {
             Some(Class::Workspace(_, details)) => {
+                // Written relative to the declaring class, as every declared member type is.
+                let mut qualify = |ty: &mut Ty| self.qualify_ty(ty, &details.name.it);
                 for (name, property) in &details.members.property {
                     if let MemberKindSpecificDetails::Property { ty, .. } = &property.kind {
-                        add(name, self.property_methods(ty.clone().unwrap_or_default()));
+                        let mut ty = ty.clone().unwrap_or_default();
+                        qualify(&mut ty);
+                        add(name, self.property_methods(ty));
                     }
                 }
                 for (name, index) in &details.members.index {
@@ -693,8 +697,18 @@ impl<'a> WorkspaceEnv<'a> {
                         ..
                     } = &query.kind
                     {
-                        let normal = normal_args.iter().map(|arg| arg.it.clone()).collect();
-                        let variadic = variadic_arg.as_ref().map(|arg| arg.it.clone());
+                        let normal = (normal_args.iter())
+                            .map(|arg| {
+                                let mut arg = arg.it.clone();
+                                arg.ty.class_names(&mut qualify);
+                                arg
+                            })
+                            .collect();
+                        let variadic = variadic_arg.as_ref().map(|arg| {
+                            let mut arg = arg.it.clone();
+                            arg.ty.class_names(&mut qualify);
+                            arg
+                        });
                         add(name, query_methods(normal, variadic));
                     }
                 }
