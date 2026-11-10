@@ -608,9 +608,14 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 Option::Some(cos::CodeMode::Expression(..)),
                 body,
             ) => {
-                let body_expr = <cos::ExprEntry>::parse(body)
+                let body_expr = <cos::ExprBody>::parse(body)
                     .map_err(|err| syntax_error(env, err))?
                     .into_inner();
+                // An empty body compiles; a caller that takes its value raises <COMMAND>, as
+                // after a `Quit` without one.
+                let Some(body_expr) = body_expr else {
+                    return flow.handle_return(body.as_ref().map(|_| None));
+                };
                 let body_type = body_expr.to_power_ty(env, flow)?;
                 flow.with_range(body.range, |flow| {
                     flow.value(&body_type, || body_expr.print())
@@ -3785,13 +3790,13 @@ impl MacroCallStructExt for MacroCallStruct {
         flow: &mut Flow<'a>,
     ) -> Result<(), QuasiTypeError> {
         let name = self.name.print();
-        if env.is_defined_macro(&name) {
-            self.check_args(env, flow)
-        } else {
-            Err(QuasiTypeError::undefined_macro(
+        match env.macro_definition(&name) {
+            Some(def) if def.splices_text() => Ok(()),
+            Some(_) => self.check_args(env, flow),
+            None => Err(QuasiTypeError::undefined_macro(
                 name.clone(),
                 similar_macro_names(&name, env.known_macro_names()),
-            ))
+            )),
         }
     }
 }
