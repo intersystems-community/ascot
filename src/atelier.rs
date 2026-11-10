@@ -401,9 +401,6 @@ fn is_truthy(v: &Value) -> bool {
     matches!(v, Value::Bool(true)) || v.as_str() == Some("1") || v.as_i64() == Some(1)
 }
 
-// Every member declared directly on the classes matching `Parent {filter}`, across all three
-// tables -- one query per batch instead of one per member, since `get_cls` always wants the
-// whole list at once.
 // A class's own members (`Origin = Parent`): methods, properties and parameters, then its indices
 // and queries, whose generated methods ascot synthesizes. Two requests: one `UNION` of all five
 // tables overflows IRIS's query stack for a batch of classes.
