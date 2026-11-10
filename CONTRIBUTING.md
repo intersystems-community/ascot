@@ -30,9 +30,9 @@ cargo clippy --lib --no-default-features --features lsp -- -D warnings
 
 ### Against IRIS
 
-`tests/iris.rs` and the JavaScript binding's `npm test` run against the instance in
-`ASCOT_TEST_IRIS`, and do nothing without it. To run one in Docker (its default passwords
-come expired):
+`tests/iris.rs` runs against the instance in `ASCOT_TEST_IRIS` and does nothing without it;
+the JavaScript binding's `npm test` skips only its live test. To run one in Docker (its default
+passwords come expired):
 
 ```sh
 docker run -d --name iris -p 52773:52773 containers.intersystems.com/intersystems/iris-community:2026.1
