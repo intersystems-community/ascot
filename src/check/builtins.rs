@@ -38,6 +38,7 @@ const NO_EMPTY_FIRST: &[&str] = &[
     "ListSame",
     "ListToString",
     "Locate",
+    "Lock",
     "MV",
     "Match",
     "NConvert",
@@ -46,6 +47,7 @@ const NO_EMPTY_FIRST: &[&str] = &[
     "Number",
     "Piece",
     "QSubscript",
+    "Replace",
     "SConvert",
     "Stack",
     "Translate",
@@ -62,8 +64,10 @@ const NO_EMPTY_FIRST: &[&str] = &[
     "ZBitFind",
     "ZBitGet",
     "ZBitOr",
+    "ZBitSet",
     "ZBitStr",
     "ZBitXor",
+    "ZBoolean",
     "ZConvert",
     "ZCrc",
     "ZDAscii",
@@ -120,6 +124,7 @@ const NO_EMPTY_SECOND: &[&str] = &[
     "ListSame",
     "ListUpdate",
     "Locate",
+    "Lock",
     "Match",
     "Method",
     "NConvert",
@@ -177,17 +182,31 @@ const NO_EMPTY_SECOND: &[&str] = &[
 const NO_EMPTY_LATER: &[&str] = &[
     "BitFind",
     "Char",
+    "Find",
+    "INumber",
+    "Justify",
+    "ListFind",
+    "ListFromString",
+    "ListToString",
     "Piece",
+    "Translate",
     "View",
     "WChar",
+    "WFind",
+    "ZBitFind",
+    "ZBitSet",
+    "ZBoolean",
     "ZConvert",
+    "ZCrc",
     "ZDChar",
     "ZF",
     "ZLChar",
+    "ZName",
     "ZPosition",
     "ZQChar",
     "ZUtil",
     "ZWChar",
+    "ZZenkaku",
 ];
 
 // Any `$`-function call, to see which of its arguments are empty.
@@ -449,6 +468,9 @@ impl CheckExprInner for cos::FunctionCall {
                 args,
                 ..
             } => {
+                if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
+                    return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
+                }
                 let _ = dll_id.to_ty(env, flow)?;
                 let _ = func_id.to_ty(env, flow)?;
                 Ok(check_args_any(env, flow, each_arg(args))?.into())
@@ -456,6 +478,9 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::ZFm6 {
                 dll_index, args, ..
             } => {
+                if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
+                    return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
+                }
                 let _ = dll_index.to_ty(env, flow)?;
                 Ok(check_args_any(env, flow, each_arg(args))?.into())
             }
@@ -770,7 +795,7 @@ impl CheckExprInner for cos::FunctionCall {
                     }
                     let _ = (&b.e2).to_ty(env, flow)?;
                 }
-                // $SELECT throws <ILLEGAL VALUE> at runtime if no condition matches;
+                // $SELECT throws <SELECT> at runtime if no condition matches;
                 // without a literal catch-all branch (`1:...`), that can't be ruled out.
                 Ok(if exhaustive {
                     MaybeTy::Plain(Ty::from("%DataType"))
@@ -904,8 +929,6 @@ impl CheckExprInner for cos::FunctionCall {
     }
 }
 
-/// Check a [`SetTargetFun`] -- the settable functions on the left of `SET`.
-/// Reuses the same per-function checks as the read positions.
 // `Set $PIECE(x, ..) = v` (likewise `$EXTRACT`, `$LIST`, `$BIT`, ...) on an undefined `x` is fine:
 // it starts from the empty string, so the target is defined from here on rather than read.
 fn define_set_target_base<'a>(
@@ -926,6 +949,8 @@ fn define_set_target_base<'a>(
     Ok(())
 }
 
+/// Check a [`SetTargetFun`] -- the settable functions on the left of `SET`.
+/// Reuses the same per-function checks as the read positions.
 pub(super) fn check_settarget_fun<'a>(
     fun: &cos::SetTargetFun,
     env: &CodeEnv<'a>,
@@ -1336,9 +1361,10 @@ fn check_out_var<'a>(
     Ok(())
 }
 
-/// `$LISTNEXT(list, ptr, value)` iterates a list. `ptr` becomes a defined
-/// integer unconditionally, but `value` receives an element only when the call
-/// returns true — mirroring `$ORDER`'s flow-sensitive target.
+/// `$LISTNEXT(list, ptr, value)` iterates a list. `ptr` is read (IRIS raises `<FUNCTION>` on an
+/// undefined or empty pointer), then becomes a defined integer unconditionally, but `value`
+/// receives an element only when the call returns true — mirroring `$ORDER`'s flow-sensitive
+/// target.
 fn check_listnext<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1347,6 +1373,7 @@ fn check_listnext<'a>(
     value: &Range<Variable>,
 ) -> Result<PowerTy, QuasiTypeError> {
     let _ = list.to_ty(env, flow)?;
+    let _ = ptr.to_ty(env, flow)?;
     check_out_var(env, flow, Some(ptr), "%Integer")?;
     if let Left(local) = value.as_local(env, flow)? {
         let range = env.range(value);
@@ -1750,7 +1777,9 @@ fn check_zstrip_action(action: &str) -> Result<(), &'static str> {
         }
         rest
     };
-    let mut has_plain = false;
+    if !rest.is_empty() && rest.len() == action.len() {
+        return Err("mask codes must follow an action code (*, <, > or =)");
+    }
     let mut has_negated = false;
     let mut chars = rest.chars();
     while let Some(c) = chars.next() {
@@ -1766,19 +1795,9 @@ fn check_zstrip_action(action: &str) -> Result<(), &'static str> {
             return Err("mask codes must be one of E, A, P, C, N, L, U, W");
         }
         if negated {
-            if !has_plain {
-                return Err(
-                    "a Unary Not (') mask code must follow at least one mask code without one",
-                );
-            }
             has_negated = true;
-        } else {
-            if has_negated {
-                return Err(
-                    "mask codes without a Unary Not (') must all precede the ones with one",
-                );
-            }
-            has_plain = true;
+        } else if has_negated {
+            return Err("mask codes without a Unary Not (') must all precede the ones with one");
         }
     }
     Ok(())

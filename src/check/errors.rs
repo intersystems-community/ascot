@@ -499,8 +499,8 @@ type_error_kinds! {
     /// ```
     #[code = "A1054"]
     #[severity = Hint]
-    #[message = "Cannot {lookup}"]
-    UnconfirmedClass { lookup: ClassLookup },
+    #[message = "Cannot find class '{cls}' in the workspace or on the IRIS instance"]
+    UnconfirmedClass { cls: String },
     /// No class along the receiver's hierarchy declares the member, nor does IRIS generate one
     /// with that name; the nearest declared names follow as suggestions. IRIS refuses to compile
     /// `..Name` for a property or method the class doesn't have. Spell the member as the class
@@ -779,12 +779,12 @@ type_error_kinds! {
     /// ```
     #[code = "A7831"]
     #[severity = Error]
-    #[message = "Include file '{name}' is not defined in the current workspace"]
+    #[message = "Cannot find include file '{name}' in the workspace or on the IRIS instance"]
     CannotFindInclude { name: String },
     /// The condition of an `#if` or `#elseif` is not the literal `1` or `0` once its macros are
     /// expanded. IRIS evaluates any expression at compile time and compiles the branch it picks;
-    /// ascot does not evaluate, so it checks the first branch and skips the rest, which may not be
-    /// what IRIS compiles. The code is fine as far as IRIS is concerned; a macro that expands to
+    /// ascot does not evaluate, so it checks that directive's branch and skips the rest, which may
+    /// not be what IRIS compiles. The code is fine as far as IRIS is concerned; a macro that expands to
     /// `1` or `0` (`#define DEBUG 1`, `#if $$$DEBUG`) would make the choice visible to ascot.
     ///
     /// ```objectscript compiles
@@ -800,8 +800,12 @@ type_error_kinds! {
     /// ```
     #[code = "A5540"]
     #[severity = Hint]
-    #[message = "Cannot decide `#if {condition}`{expansion} at compile time, so its first branch is assumed"]
-    UndecidedIf { condition: String, expansion: Expansion },
+    #[message = "Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken"]
+    UndecidedIf {
+        directive: &'static str,
+        condition: String,
+        expansion: Expansion,
+    },
     /// The IRIS connection failed to answer a lookup: a class, routine or include file the
     /// workspace doesn't hold was asked of the instance, and the request itself failed (the
     /// instance is down, the credentials are refused), as opposed to the instance not having it.
@@ -879,8 +883,9 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "{function} can't take '{name}', which is private to this procedure block"]
     PrivateVariableNotAllowed { function: String, name: String },
-    /// `$ZF(-3)` has no by-reference arguments: a `.x` in the call is a syntax error IRIS refuses
-    /// to compile. Pass the value itself and take what the function returns.
+    /// `$ZF(-3)`, `$ZF(-5)` and `$ZF(-6)` have no by-reference arguments: a `.x` in the call is a
+    /// syntax error IRIS refuses to compile. Pass the value itself and take what the function
+    /// returns.
     ///
     /// ```objectscript
     /// Class Demo.ByRefArgumentNotAllowed
@@ -2022,7 +2027,7 @@ type_error_kinds! {
     /// ```
     #[code = "S7126"]
     #[severity = Warning]
-    #[message = "Describe this {kind}: its body is {lines} lines"]
+    #[message = "Describe this {kind}: its body is {lines} line(s)"]
     Undescribed { kind: String, lines: usize },
     /// Under `{"open_brace":{"newline_before":false}}`, a block's `{` on a line of its own below its
     /// command; under `true`, one on the command's line, `If x {`. IRIS accepts either layout; move
@@ -2691,30 +2696,6 @@ impl std::fmt::Display for Replacement {
     }
 }
 
-/// What an unconfirmed class lookup couldn't do, depending on whether IRIS was asked.
-#[derive(Debug)]
-pub struct ClassLookup {
-    pub cls: String,
-    pub has_iris: bool,
-}
-
-impl std::fmt::Display for ClassLookup {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let cls = &self.cls;
-        if self.has_iris {
-            write!(
-                f,
-                "find class '{cls}' in the workspace or on the IRIS instance"
-            )
-        } else {
-            write!(
-                f,
-                "confirm class '{cls}' exists — it isn't open in this workspace, with no IRIS connection to check it against"
-            )
-        }
-    }
-}
-
 /// What a failed IRIS lookup was for.
 #[derive(Debug)]
 pub struct IrisLookup {
@@ -2975,13 +2956,8 @@ impl TypeError {
         Self::at(TypeErrorKind::CannotFindClass { cls }, range)
     }
 
-    pub(crate) fn unconfirmed_class(cls: String, has_iris: bool, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::UnconfirmedClass {
-                lookup: ClassLookup { cls, has_iris },
-            },
-            range,
-        )
+    pub(crate) fn unconfirmed_class(cls: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::UnconfirmedClass { cls }, range)
     }
 
     pub(crate) fn unconfirmed_member(
@@ -3077,9 +3053,15 @@ impl TypeError {
         Self::at(TypeErrorKind::CommaSpacing { wanted }, range)
     }
 
-    pub fn undecided_if(condition: String, expansion: Option<String>, range: Range) -> Self {
+    pub fn undecided_if(
+        directive: &'static str,
+        condition: String,
+        expansion: Option<String>,
+        range: Range,
+    ) -> Self {
         Self::at(
             TypeErrorKind::UndecidedIf {
+                directive,
                 condition,
                 expansion: Expansion(expansion),
             },

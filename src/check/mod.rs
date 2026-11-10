@@ -36,8 +36,8 @@ use types::*;
 
 pub(crate) use env::{DocumentEnv, WorkspaceEnv, labels_of};
 pub use errors::{
-    ArgCount, Available, ClassLookup, Declared, Detail, DynamicGet, InRoutine, Suggestions,
-    SuperclassOf, SyntaxErrorText, TypeErrorKind, TypeParamHint,
+    ArgCount, Available, Declared, Detail, DynamicGet, InRoutine, Suggestions, SuperclassOf,
+    SyntaxErrorText, TypeErrorKind, TypeParamHint,
 };
 pub(crate) use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
@@ -1693,10 +1693,24 @@ impl CheckCommandInner for cos::Command {
                                     ));
                                 }
                             }
-                            _ => env.soft_diagnostic(TypeError::not_checked(
-                                "A non-literal ZQUIT argument",
-                                flow.range(),
-                            )),
+                            // A negative or decimal literal is no `Const`, but a literal still.
+                            _ => {
+                                let text = exp.print();
+                                let text = text.trim();
+                                if numeric_prefix(text) == text {
+                                    if text.parse::<f64>().is_ok_and(|n| n < 1.0) {
+                                        env.soft_diagnostic(TypeError::zquit_argument(
+                                            text.to_string(),
+                                            flow.range(),
+                                        ));
+                                    }
+                                } else {
+                                    env.soft_diagnostic(TypeError::not_checked(
+                                        "A non-literal ZQUIT argument",
+                                        flow.range(),
+                                    ));
+                                }
+                            }
                         }
                     }
                     flow.detach()

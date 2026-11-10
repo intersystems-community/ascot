@@ -1382,7 +1382,7 @@ mod tests {
             assert!(
                 diagnostics
                     .iter()
-                    .any(|d| d.message.contains("Include file 'Shared' is not defined")),
+                    .any(|d| d.message.contains("Cannot find include file 'Shared'")),
                 "{diagnostics:?}"
             );
         }
@@ -2326,7 +2326,7 @@ mod tests {
         assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
         assert_eq!(
             diagnostics[0].message,
-            "Cannot decide `#if $$$MODE=\"OUTPUT\"` (`\"OUTPUT\"=\"OUTPUT\"`) at compile time, so its first branch is assumed"
+            "Cannot decide `#if $$$MODE=\"OUTPUT\"` (`\"OUTPUT\"=\"OUTPUT\"`) at compile time, so its branch is assumed taken"
         );
         assert_eq!(diagnostics[0].range.start.line, 3, "{diagnostics:?}");
     }

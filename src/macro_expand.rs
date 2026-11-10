@@ -892,8 +892,13 @@ impl WorkspaceStruct {
         dones: &mut DoneList,
         item: TodoItem<'_>,
     ) -> Result<(), tygr::Error> {
-        let MacroedUnit::Redex(MacroRedex::H(HMacro { input, .. })) = item.0.as_ref() else {
+        let MacroedUnit::Redex(MacroRedex::H(HMacro { command, input })) = item.0.as_ref() else {
             unreachable!("resolve_if is only handed an #if or #elseif");
+        };
+        let directive = if matches!(command.prefixed, HMacroCommand::Elseif(..)) {
+            "#elseif"
+        } else {
+            "#if"
         };
         // `#if 0 /* Maintenance */` -- a trailing comment is common and not part of the test.
         fn condition(text: &str) -> &str {
@@ -914,7 +919,12 @@ impl WorkspaceStruct {
                 let expansion = (expanded != written).then(|| expanded.to_string());
                 dones.note_unresolved(
                     move |written, range| {
-                        crate::check::TypeError::undecided_if(written, expansion.clone(), range)
+                        crate::check::TypeError::undecided_if(
+                            directive,
+                            written,
+                            expansion.clone(),
+                            range,
+                        )
                     },
                     written.to_string(),
                     &item.1,

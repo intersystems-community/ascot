@@ -41,7 +41,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A7342](A7342.md) | Argument {position} of {function} can't be left empty |
 | [A7461](A7461.md) | Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call |
 | [A7604](A7604.md) | Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>); `{label}()` would make it a function |
-| [A7831](A7831.md) | Include file '{name}' is not defined in the current workspace |
+| [A7831](A7831.md) | Cannot find include file '{name}' in the workspace or on the IRIS instance |
 | [A7895](A7895.md) | '{format}' is not a valid $FNUMBER format: {reason} |
 | [A8061](A8061.md) | Cannot find class '{cls}' in the workspace or on the IRIS instance |
 | [A8073](A8073.md) | {err} |
@@ -94,7 +94,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [S5260](S5260.md) | The style allows {max} command(s) per line; this is one more |
 | [S5583](S5583.md) | Put {wanted} |
 | [S6307](S6307.md) | Put the postconditional on the command keyword, not on its argument |
-| [S7126](S7126.md) | Describe this {kind}: its body is {lines} lines |
+| [S7126](S7126.md) | Describe this {kind}: its body is {lines} line(s) |
 | [S7442](S7442.md) | Join these conditions with `{wanted}` |
 | [S8215](S8215.md) | Put {wanted} before `{` |
 | [S9048](S9048.md) | Put {wanted} between `}` and `{keyword}` |
@@ -109,14 +109,14 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 
 | Code | Message |
 | --- | --- |
-| [A1054](A1054.md) | Cannot {lookup} |
+| [A1054](A1054.md) | Cannot find class '{cls}' in the workspace or on the IRIS instance |
 | [A1765](A1765.md) | A $ETRAP that only jumps to a label is what `Set $ZTrap = "{label}"` does; $ZTRAP is scoped to this frame, where $ETRAP is inherited by callees |
 | [A3794](A3794.md) | The labels of routine '{routine}' aren't known, so calls into it can't be checked precisely |
 | [A3913](A3913.md) | {what} is not checked |
 | [A4471](A4471.md) | Cannot look up {lookup} on the IRIS instance ({reason}), so it is taken on trust |
 | [A5213](A5213.md) | The label is confirmed, but not where its offset lands: the call is checked as untyped and the offset is not checked |
 | [A5362](A5362.md) | '{name}' is a user-defined command (^%ZLANGC00), so the call is not checked |
-| [A5540](A5540.md) | Cannot decide `#if {condition}`{expansion} at compile time, so its first branch is assumed |
+| [A5540](A5540.md) | Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken |
 | [A5780](A5780.md) | ZQUIT unwinds here only because this procedure block has no private variables; one with any fails with <COMMAND>, so its error handling may not be what you expect |
 | [A5847](A5847.md) | {call} is not documented for IRIS; $ZUTIL was superseded by class methods and special variables |
 | [A6037](A6037.md) | ${name} is not documented for IRIS, so the call is not checked |
