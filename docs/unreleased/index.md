@@ -109,7 +109,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 
 | Code | Message |
 | --- | --- |
-| [A1054](A1054.md) | Cannot {lookup} |
+| [A1054](A1054.md) | Cannot find class '{cls}' in the workspace or on the IRIS instance |
 | [A1765](A1765.md) | A $ETRAP that only jumps to a label is what `Set $ZTrap = "{label}"` does; $ZTRAP is scoped to this frame, where $ETRAP is inherited by callees |
 | [A3794](A3794.md) | The labels of routine '{routine}' aren't known, so calls into it can't be checked precisely |
 | [A3913](A3913.md) | {what} is not checked |

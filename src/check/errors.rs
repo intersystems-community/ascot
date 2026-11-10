@@ -499,8 +499,8 @@ type_error_kinds! {
     /// ```
     #[code = "A1054"]
     #[severity = Hint]
-    #[message = "Cannot {lookup}"]
-    UnconfirmedClass { lookup: ClassLookup },
+    #[message = "Cannot find class '{cls}' in the workspace or on the IRIS instance"]
+    UnconfirmedClass { cls: String },
     /// No class along the receiver's hierarchy declares the member, nor does IRIS generate one
     /// with that name; the nearest declared names follow as suggestions. IRIS refuses to compile
     /// `..Name` for a property or method the class doesn't have. Spell the member as the class
@@ -2696,30 +2696,6 @@ impl std::fmt::Display for Replacement {
     }
 }
 
-/// What an unconfirmed class lookup couldn't do, depending on whether IRIS was asked.
-#[derive(Debug)]
-pub struct ClassLookup {
-    pub cls: String,
-    pub has_iris: bool,
-}
-
-impl std::fmt::Display for ClassLookup {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let cls = &self.cls;
-        if self.has_iris {
-            write!(
-                f,
-                "find class '{cls}' in the workspace or on the IRIS instance"
-            )
-        } else {
-            write!(
-                f,
-                "confirm class '{cls}' exists — it isn't open in this workspace, with no IRIS connection to check it against"
-            )
-        }
-    }
-}
-
 /// What a failed IRIS lookup was for.
 #[derive(Debug)]
 pub struct IrisLookup {
@@ -2980,13 +2956,8 @@ impl TypeError {
         Self::at(TypeErrorKind::CannotFindClass { cls }, range)
     }
 
-    pub(crate) fn unconfirmed_class(cls: String, has_iris: bool, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::UnconfirmedClass {
-                lookup: ClassLookup { cls, has_iris },
-            },
-            range,
-        )
+    pub(crate) fn unconfirmed_class(cls: String, range: Range) -> Self {
+        Self::at(TypeErrorKind::UnconfirmedClass { cls }, range)
     }
 
     pub(crate) fn unconfirmed_member(

@@ -1410,7 +1410,7 @@ impl<'a> WorkspaceEnv<'a> {
             // Its file is in the workspace; the parse error is reported there.
             Some(Class::Unknown(None)) => return,
             None if !has_iris => TypeError::cannot_find_class(cls.to_string(), range),
-            None => TypeError::unconfirmed_class(cls.to_string(), has_iris, range),
+            None => TypeError::unconfirmed_class(cls.to_string(), range),
         };
         self.add_soft_diagnostic(diagnostic.into());
     }
