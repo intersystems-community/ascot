@@ -3591,7 +3591,6 @@ fn check_call<'a, 'b>(
             {
                 args.clear();
             }
-            // todo: add inlay hints
             let mut count = 0;
             for (i, &arg) in args.iter().enumerate() {
                 count += 1;
