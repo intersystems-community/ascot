@@ -4078,9 +4078,9 @@ impl Validate for UserCommandName {
         let s = self.0.print();
         s.len() > 1
             && s.starts_with(['Z', 'z'])
-            && !COMMAND_NAMES
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(&s))
+            && !COMMAND_NAMES.iter().any(|(name, abbr)| {
+                name.eq_ignore_ascii_case(&s) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(&s))
+            })
     }
 }
 
@@ -7424,6 +7424,13 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn z_command_abbreviation_without_its_argument_is_not_a_user_command() {
+        routine(" zk x\n zn \"USER\"\n ZDN x\n").expect("Ok");
+        routine(" zk\n").expect_err("ZKILL needs an argument");
+        routine(" zn\n").expect_err("ZNSPACE needs an argument");
     }
 
     #[test]
