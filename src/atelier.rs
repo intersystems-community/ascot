@@ -377,12 +377,22 @@ struct MemberRow {
 }
 
 // The dictionary holds a parameter's compiled value, bare; the header spells it as source, so a
-// non-number is quoted the way `Parameter P = "..."` writes it. A value with a line break has no
-// literal spelling (it came from an `{expression}`), so it is left out.
+// non-number is quoted the way `Parameter P = "..."` writes it. A number is what IRIS compiles
+// bare: digits, a sign, an exponent, and a `.` followed by a digit, so `inf`, `NaN` and `1.`,
+// which `f64` parses, are quoted. A value with a line break has no literal spelling (it came from
+// an `{expression}`), so it is left out.
 fn parameter_source(value: &str) -> Option<String> {
     if value.contains(['\n', '\r']) {
         None
-    } else if value.parse::<f64>().is_ok() {
+    } else if value.parse::<f64>().is_ok()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b"+-.eE".contains(&b))
+        && value
+            .split('.')
+            .skip(1)
+            .all(|s| s.starts_with(|c: char| c.is_ascii_digit()))
+    {
         Some(value.to_string())
     } else {
         Some(format!("\"{}\"", value.replace('"', "\"\"")))
