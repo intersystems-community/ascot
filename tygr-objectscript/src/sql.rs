@@ -4548,7 +4548,7 @@ pub enum FTPushdownType {
 
 #[derive(Grammar)]
 #[grammar(name = "index classname")]
-pub struct IndexClassName(Ident);
+pub struct IndexClassName(DottedIdent);
 
 #[derive(Grammar)]
 #[grammar(name = "qualified SPname")]
@@ -4556,7 +4556,7 @@ pub struct QualifiedSPName(DottedIdent);
 
 #[derive(Grammar)]
 #[grammar(name = "classname")]
-pub struct ClassName(Ident);
+pub struct ClassName(DottedIdent);
 
 #[derive(Grammar)]
 #[grammar(name = "trigger time")]
@@ -5056,7 +5056,7 @@ pub enum CollectionSpec {
 #[derive(Grammar)]
 #[grammar(name = "classname")]
 pub struct Classname {
-    first: Ident,
+    first: DottedIdent,
     rest: Vec<(Space, StringEq!(","), Space, Ident)>,
 }
 
@@ -6976,6 +6976,16 @@ mod tests {
             "ALTER TABLE t ALTER COLUMN b %String(MAXLEN=20)",
             "ALTER TABLE t ALTER COLUMN b %Library.String(MAXLEN=20)",
             "CREATE TABLE t (a %String(MAXLEN=20), n NUMERIC(10,2))",
+        ]);
+    }
+
+    #[test]
+    fn package_qualified_class_names() {
+        all_ok(&[
+            "CREATE INDEX i ON t (a) AS %iFind.Index.Basic",
+            "DROP PROCEDURE IF EXISTS P FROM Pkg.Cls",
+            "DROP FUNCTION f FROM Pkg.Cls",
+            "CREATE PROCEDURE P() FOR Pkg.Cls LANGUAGE OBJECTSCRIPT { QUIT }",
         ]);
     }
 }
