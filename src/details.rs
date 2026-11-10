@@ -392,9 +392,9 @@ impl RoutineElementDetails {
 
 type Args = (Vec<WithRange<NormalArg>>, Option<WithRange<VariadicArg>>);
 
-fn import_args(pos: &impl Positions, params: &Option<cos::SpaceThen<cos::ParameterList>>) -> Args {
+fn import_args(pos: &impl Positions, params: Option<&cos::SpaceThen<cos::ParameterList>>) -> Args {
     let args = params
-        .iter()
+        .into_iter()
         .flat_map(|x| &***x)
         .flat_map(|x| x.items.iter())
         .map(|entry| {
@@ -476,7 +476,7 @@ fn public_list(
 fn element(
     pos: &impl Positions,
     label: &Range<cos::Label>,
-    params: &Option<cos::SpaceThen<cos::ParameterList>>,
+    params: Option<&cos::SpaceThen<cos::ParameterList>>,
     kind: RoutineElementKind,
 ) -> RoutineElementDetails {
     let (normal_args, variadic_arg) = import_args(pos, params);
@@ -500,7 +500,7 @@ pub(crate) fn subroutine_kind(
     Some(element(
         pos,
         &header.label,
-        &header.params,
+        header.params.as_ref(),
         RoutineElementKind::Subroutine,
     ))
 }
@@ -515,7 +515,7 @@ fn procedure_kind(
     let kind = RoutineElementKind::Procedure {
         public_list: public_list(pos, &header.publics),
     };
-    Some(element(pos, &header.label, &header.params, kind))
+    Some(element(pos, &header.label, Some(&header.params), kind))
 }
 
 pub fn routine_element_kind(

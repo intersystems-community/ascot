@@ -7258,7 +7258,8 @@ pub struct Subroutine {
 #[derive(Grammar)]
 pub struct ProcedureHeader {
     pub label: Range<Label>,
-    pub params: Option<SpaceThen<ParameterList>>,
+    // `lab {` without one IRIS refuses (ERROR #1026).
+    pub params: SpaceThen<ParameterList>,
     pub publics: Option<Prefix<StringOf<IsWhitespace>, AllowMacro<PublicVarList>>>,
     pub scope: Option<SpaceThen<ScopeKeyword>>,
 }
@@ -7295,7 +7296,7 @@ pub struct ProcedureTrailer {
 pub struct ProcedureBody {
     // The first line needs no space and does not permit dots
     pub main: ProcedureMain,
-    pub subroutines: Option<Prefix<Raw<Vec1<NL>>, VecSep<Subroutine, Raw<Vec1<NL>>>>>,
+    pub subroutines: Option<Prefix<Raw<Vec1<NL>>, VecSep<RoutineElement, Raw<Vec1<NL>>>>>,
     end: Raw<VecSep<SGap, NL>>,
 }
 

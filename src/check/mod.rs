@@ -686,7 +686,7 @@ fn check_block_body<'a>(
         .subroutines
         .iter()
         .flat_map(|subs| subs.items.iter())
-        .filter_map(|sub| Some((sub, details::subroutine_kind(env, sub)?)))
+        .filter_map(|elem| Some((elem, details::routine_element_kind(env, elem)?)))
         .collect();
     if !is_body {
         for (_, details) in &subroutines {
@@ -699,7 +699,7 @@ fn check_block_body<'a>(
         env.uri(),
         &subroutines
             .iter()
-            .map(|(_, d)| (d, false))
+            .map(|(elem, d)| (d, matches!(elem, cos::RoutineElement::Procedure(_))))
             .collect::<Vec<_>>(),
     );
     // IRIS reaches a label inside a block from the whole body, so a `Goto` to one resolves; the
@@ -708,7 +708,7 @@ fn check_block_body<'a>(
         let mut inside = vec![];
         labels_in_blocks(body, &mut inside);
         let inside: Vec<_> = (inside.into_iter())
-            .filter_map(|sub| details::subroutine_kind(env, sub))
+            .filter_map(|elem| details::routine_element_kind(env, elem))
             .collect();
         let inside: Vec<_> = inside.iter().map(|d| (d, false)).collect();
         for (name, entry) in env::scoped_labels(env.uri(), &inside) {
@@ -733,8 +733,8 @@ fn check_block_body<'a>(
         primed.with_hints_suppressed(|| {
             for _ in 0..4 {
                 let before = primed.label_writes_total();
-                for (sub, details) in &subroutines {
-                    let _ = check_label_body(&primed, details, sub);
+                for (elem, details) in &subroutines {
+                    let _ = check_element_body(&primed, details, elem);
                 }
                 if primed.label_writes_total() == before {
                     break;
@@ -753,33 +753,51 @@ fn check_block_body<'a>(
     if body.subroutines.is_none() {
         return Ok(());
     }
-    let first = subroutines
-        .first()
-        .and_then(|(_, d)| env.label_entry(&d.name.it));
+    let first = match subroutines.first() {
+        Some((cos::RoutineElement::Subroutine(_), d)) => env.label_entry(&d.name.it),
+        _ => None,
+    };
     flow.tail_call(first.map(|first| &first.output), flow.range())?;
     // The labels read the body's variables from their own flows, so the deferred
     // "never read"/"never assigned" reports for the main body can't be trusted.
     flow.mark_incomplete();
-    for (sub, details) in &subroutines {
+    for (elem, details) in &subroutines {
         // Each label is checked on its own: one's hard error doesn't hide the next one's.
-        if let Err(err) = check_label_body(env, details, sub) {
+        if let Err(err) = check_element_body(env, details, elem) {
             env.add_soft_diagnostic(err.into());
         }
     }
     Ok(())
 }
 
+fn check_element_body<'a>(
+    env: &CodeEnv<'a>,
+    details: &details::RoutineElementDetails,
+    elem: &cos::RoutineElement,
+) -> Result<Vec<String>, TypeError> {
+    match elem {
+        cos::RoutineElement::Subroutine(sub) => check_label_body(env, details, sub),
+        cos::RoutineElement::Procedure(procedure) => {
+            check_procedure(procedure, details, env).map(|()| vec![])
+        }
+    }
+}
+
 // The labels inside the blocks of `body`, at any depth.
-fn labels_in_blocks<'b>(body: &'b ProcedureBody, out: &mut Vec<&'b Subroutine>) {
+fn labels_in_blocks<'b>(body: &'b ProcedureBody, out: &mut Vec<&'b cos::RoutineElement>) {
     let labels = body.subroutines.iter().flat_map(|subs| subs.items.iter());
-    let commands = (procedure_commands(&body.main))
-        .chain(labels.flat_map(|sub| sub.body.as_command_lines().flat_map(commands_of)));
+    let in_labels = labels.filter_map(|elem| match elem {
+        cos::RoutineElement::Subroutine(sub) => Some(sub.body.as_command_lines()),
+        cos::RoutineElement::Procedure(p) => Some(p.trailer.as_ref()?.lines.as_command_lines()),
+    });
+    let commands =
+        (procedure_commands(&body.main)).chain(in_labels.flatten().flat_map(commands_of));
     for command in commands {
         labels_in_command(command, out);
     }
 }
 
-fn labels_in_command<'b>(command: &'b Command, out: &mut Vec<&'b Subroutine>) {
+fn labels_in_command<'b>(command: &'b Command, out: &mut Vec<&'b cos::RoutineElement>) {
     let mut blocks: Vec<&'b cos::Block> = vec![];
     let mut bodies: Vec<&'b ProcedureBody> = vec![];
     match command {
