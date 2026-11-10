@@ -635,6 +635,35 @@ impl<'b> CheckCommand for MethodBody<'b> {
     }
 }
 
+fn declare_dims<'a>(
+    bare: &cos::BareDim,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+) -> Result<(), QuasiTypeError> {
+    for cos::DimDeclaration { name, as_type } in bare.declarations.items.iter() {
+        let declared = match as_type.deref() {
+            Some(ty) => {
+                let ty = ty.deref();
+                match ty {
+                    cos::DimType::Simple(ty) => Ty::from(ty.print()),
+                    _ => {
+                        return Err(QuasiTypeError::unimplemented(format!(
+                            "Fancy #Dim type `{}`",
+                            ty.print()
+                        )));
+                    }
+                }
+            }
+            None => Ty::Any,
+        };
+        let declared = env.with_range(as_type.as_ref().map(|_| declared));
+        for name in name.items(env) {
+            flow.handle_dim(name.print(), declared.clone())?
+        }
+    }
+    Ok(())
+}
+
 fn syntax_error(env: &CodeEnv<'_>, err: tygr::Error) -> TypeError {
     TypeError::syntax_error(
         env.span(err.pos(), err.pos() + 1),
@@ -771,7 +800,7 @@ fn labels_in_command<'b>(command: &'b Command, out: &mut Vec<&'b Subroutine>) {
         Command::Else(branch) => blocks.extend(branch.body.as_deref()),
         Command::For(cos::ForCommand { bdy: Some(bdy), .. }) => blocks.push(bdy),
         Command::Try(try_command) => {
-            blocks.push(&try_command.b1.it);
+            blocks.push(&try_command.b1);
             blocks.push(&try_command.b2);
         }
         Command::While(while_command) => bodies.push(&while_command.bdy.block.wrapped),
@@ -1491,32 +1520,9 @@ impl CheckCommandInner for cos::Command {
             cos::Command::Continue(cos::ContinueCommand { pc, .. }) => {
                 check_pc(pc, env, flow, |flow| flow.handle_continue())
             }
-            cos::Command::Dim(cos::DimCommand {
-                declarations,
-                default,
-                ..
-            }) => {
-                for cos::DimDeclaration { name, as_type } in declarations.items.iter() {
-                    let declared = match as_type.deref() {
-                        Some(ty) => {
-                            let ty = ty.deref();
-                            match ty {
-                                cos::DimType::Simple(ty) => Ty::from(ty.print()),
-                                _ => {
-                                    return Err(QuasiTypeError::unimplemented(format!(
-                                        "Fancy #Dim type `{}`",
-                                        ty.print()
-                                    )));
-                                }
-                            }
-                        }
-                        None => Ty::Any,
-                    };
-                    let declared = env.with_range(as_type.as_ref().map(|_| declared));
-                    for name in name.items(env) {
-                        flow.handle_dim(name.print(), declared.clone())?
-                    }
-                }
+            cos::Command::Dim(cos::DimCommand { bare, default }) => {
+                declare_dims(bare, env, flow)?;
+                let declarations = &bare.declarations;
                 if let Some(default) = default {
                     // No per-name range exists in a `#Dim x,y=...` list; anchor on the
                     // default value's range instead.
@@ -1650,6 +1656,7 @@ impl CheckCommandInner for cos::Command {
             }),
             cos::Command::Try(cos::TryCommand {
                 b1,
+                dims,
                 kw_catch,
                 catch_target,
                 b2,
@@ -1658,7 +1665,7 @@ impl CheckCommandInner for cos::Command {
                 if let Some(close) = close_brace_of(b1) {
                     report_chained_keyword(env, close, kw_catch, "Catch");
                 }
-                check_try(env, flow, b1.deref(), catch_target.as_ref(), b2)
+                check_try(env, flow, b1, dims.as_ref(), catch_target.as_ref(), b2)
             }
             cos::Command::Throw(cos::ThrowCommand { pc, e: exp, .. })
             | cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. }) => {
@@ -2135,16 +2142,32 @@ fn check_try<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     try_block: &Range<cos::Block>,
+    dims: Option<&cos::TryDims>,
     catch_target: Option<&cos::CatchTarget>,
     catch_block: &Range<cos::Block>,
 ) -> Result<(), QuasiTypeError> {
     let before = flow.split();
     let try_env = env.with_try();
     flow.with_block(env.range(try_block), |flow| try_block.check(&try_env, flow))?;
+    // The `#dim` lines between the block and its `Catch` declare for what follows them: the path
+    // out of the block, when there is one, and the catch block.
+    let declare = |flow: &mut Flow<'a>| -> Result<(), QuasiTypeError> {
+        for dim in dims.iter().flat_map(|dims| dims.lines.iter()) {
+            let range = env.range(&dim.prefixed);
+            flow.with_range(range, |flow| {
+                declare_dims(&dim.prefixed, env, flow).with_range(|| range)
+            })?;
+        }
+        Ok(())
+    };
+    if flow.is_live() {
+        declare(flow)?;
+    }
     // The exception may be thrown anywhere in the try block, so the catch block starts from
     // anything between its start and its end.
     let mut catch_flow = flow.split();
     catch_flow.merge(before)?;
+    declare(&mut catch_flow)?;
     if let Some(target) = catch_target
         && let Left(local) = target.deref().as_local(env, flow)?
     {
