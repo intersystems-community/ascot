@@ -1535,7 +1535,9 @@ impl CheckCommandInner for cos::Command {
                         match target.deref() {
                             cos::AllowMacro::Plain(arg) => match &arg {
                                 cos::KillArgument::Single(target) => {
-                                    if let Some(local) = target
+                                    if let cos::SetTarget::Indirection(indir) = target.deref() {
+                                        indir.expr.to_ty(env, flow)?;
+                                    } else if let Some(local) = target
                                         .as_variable()
                                         .and_then(|x| {
                                             x.as_local(env, flow).map(|x| x.left()).transpose()
@@ -1548,7 +1550,9 @@ impl CheckCommandInner for cos::Command {
                                 cos::KillArgument::Except(keep) => {
                                     let mut names = Vec::new();
                                     for target in keep.items(env) {
-                                        if let Some(variable) = target.as_variable()
+                                        if let cos::SetTarget::Indirection(indir) = target.deref() {
+                                            indir.expr.to_ty(env, flow)?;
+                                        } else if let Some(variable) = target.as_variable()
                                             && let Left(local) = variable.as_local(env, flow)?
                                         {
                                             names.push(local.name);
