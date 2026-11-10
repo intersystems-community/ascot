@@ -777,7 +777,7 @@ impl CheckExprInner for cos::FunctionCall {
                     }
                     let _ = (&b.e2).to_ty(env, flow)?;
                 }
-                // $SELECT throws <ILLEGAL VALUE> at runtime if no condition matches;
+                // $SELECT throws <SELECT> at runtime if no condition matches;
                 // without a literal catch-all branch (`1:...`), that can't be ruled out.
                 Ok(if exhaustive {
                     MaybeTy::Plain(Ty::from("%DataType"))
