@@ -664,11 +664,6 @@ fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
     (normal, variadic)
 }
 
-// Each of `names` that has source, read from the first of `exts` it exists as.
-
-// Every request without a session cookie opens a CSP session, which holds a license slot until
-// the web application's timeout. The agent keeps the cookie, so there's one session; this ends it.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -836,9 +831,4 @@ mod tests {
             [Some("$$$OK"), Some(r#"$lb(1,"a,b",$g(x))"#), Some("{{}}")]
         );
     }
-
-    // An HTTP server answering each request with the first of `routes` whose path suffix
-    // matches the request's path (`("", ...)` matches anything).
-    // `stub_server` that also sets a session cookie, and records each request as its first line
-    // plus the cookie it carried, if any.
 }
