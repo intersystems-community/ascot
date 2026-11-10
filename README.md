@@ -258,7 +258,7 @@ machines without the instance can check against it:
 ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER path/to/declaration.d.json
 ```
 
-Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
+Without the file argument it writes `~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json`.
 
 ### Style
 

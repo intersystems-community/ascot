@@ -92,7 +92,7 @@ enum Command {
         #[arg(long, value_name = "NS")]
         iris_namespace: Option<String>,
         /// The declaration file to write, for example user.d.json
-        /// [default: ~/.ascot/<host>-<port>-<namespace>.d.json]
+        /// [default: ~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json]
         file: Option<PathBuf>,
     },
     #[cfg(feature = "mcp")]
