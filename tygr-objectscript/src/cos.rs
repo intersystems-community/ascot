@@ -7436,6 +7436,12 @@ mod regression_tests {
     }
 
     #[test]
+    fn zseek_without_arguments() {
+        routine(" s p=$ZSEEK(),q=$ZSEEK(0,1),r=$ZSEEK(10)\n").expect("Ok");
+        routine(" s p=$ZSEEK(1,2,3)\n").expect_err("at most two");
+    }
+
+    #[test]
     fn zf_minus_4_takes_two_arguments() {
         routine(" s x=$ZF(-4,2),y=$ZF(-4,1,\"dll\"),z=$ZF(-4,2,id,1)\n").expect("Ok");
         routine(" s x=$ZF(-4)\n").expect_err("the utility number is required");
