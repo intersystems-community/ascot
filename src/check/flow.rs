@@ -929,19 +929,20 @@ impl<'a> Flow<'a> {
         }
         let uri = self.shared.env.uri().to_string();
         let binding = self.lookup(name.clone())?;
-        if let Some(previous) = binding.new_at {
-            return Err(QuasiTypeError::WithRange(TypeError::redundant_new(
-                name,
-                range,
-                Location::new(uri, previous),
-            )));
-        }
+        let previous = binding.new_at;
         binding.new = Some(true);
         binding.new_at = Some(range);
         // Like `Kill`: undefined until set again.
         binding.assigned = PowerTy::undefined();
         binding.assigned_at = HashSet::new();
         binding.subscript_assigned = None;
+        if let Some(previous) = previous {
+            self.add_soft_diagnostic(QuasiTypeError::WithRange(TypeError::redundant_new(
+                name,
+                range,
+                Location::new(uri, previous),
+            )));
+        }
         Ok(())
     }
 
