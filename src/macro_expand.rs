@@ -49,10 +49,18 @@ pub struct MacroDefinition {
 }
 
 impl MacroDefinition {
-    // `##safeexpression`/`##expression` run ObjectScript at compile time; `check::mod` knows the
-    // common ones (`$$$ERROR`, ...) by name instead.
+    // `##safeexpression`/`##expression`/`##function` run ObjectScript at compile time;
+    // `check::mod` knows the common ones (`$$$ERROR`, ...) by name instead.
     fn is_compile_time(&self) -> bool {
-        self.body.contains("##safeexpression") || self.body.contains("##expression")
+        ["##safeexpression", "##expression", "##function"]
+            .iter()
+            .any(|directive| self.body.contains(directive))
+    }
+
+    // `##function` splices the arguments into code it runs at compile time, inside a string as
+    // often as not (`"%s"="*"`), so they need not be expressions.
+    pub(crate) fn splices_text(&self) -> bool {
+        self.body.contains("##function")
     }
 }
 
@@ -814,6 +822,15 @@ impl WorkspaceStruct {
                     }
                     // Only `text` is pushed, so a precise origin is narrowed past the `##lit(`.
                     MacroRedex::Lit(open, text, _) => {
+                        let piece = if precise {
+                            let start = origin.range.start + open.print().len();
+                            origin.with_range(start..start + text.print().len())
+                        } else {
+                            origin.clone()
+                        };
+                        dones.push(&text.print(), &piece, precise)
+                    }
+                    MacroRedex::BeginLit(open, text, _) => {
                         let piece = if precise {
                             let start = origin.range.start + open.print().len();
                             origin.with_range(start..start + text.print().len())

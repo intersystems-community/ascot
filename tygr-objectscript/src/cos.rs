@@ -1901,6 +1901,8 @@ pub enum StructureSystemVariable {
 pub type Periods = Vec<(Vec1<StringEq!(".")>, SGap1)>;
 
 pub type ExprEntry = MGapXMGap<Range<Expr>>;
+// A `CodeMode = expression` body: IRIS compiles an empty one, comments alone included.
+pub type ExprBody = MGapXMGap<Option<Range<Expr>>>;
 
 #[derive(Grammar)]
 pub enum BitLogicOp {
@@ -7323,6 +7325,12 @@ pub enum MacroRedex {
         StringEqCI!("##lit("),
         StringOf<IsNotCloseParen>,
         StringEq!(")"),
+    ),
+    // `##beginlit text ##endlit`: the same, undocumented, in IRIS's own includes.
+    BeginLit(
+        StringEqCI!("##beginlit"),
+        Raw<Vec<(NotFollowedBy<StringEqCI!("##endlit")>, CharOf<AnyChar>)>>,
+        StringEqCI!("##endlit"),
     ),
     H(HMacro),
     // Passed through whole, so a `;` inside (`&nbsp;`, a JavaScript statement) isn't a comment.
