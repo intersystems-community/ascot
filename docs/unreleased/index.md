@@ -94,7 +94,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [S5260](S5260.md) | The style allows {max} command(s) per line; this is one more |
 | [S5583](S5583.md) | Put {wanted} |
 | [S6307](S6307.md) | Put the postconditional on the command keyword, not on its argument |
-| [S7126](S7126.md) | Describe this {kind}: its body is {lines} lines |
+| [S7126](S7126.md) | Describe this {kind}: its body is {lines} line(s) |
 | [S7442](S7442.md) | Join these conditions with `{wanted}` |
 | [S8215](S8215.md) | Put {wanted} before `{` |
 | [S9048](S9048.md) | Put {wanted} between `}` and `{keyword}` |

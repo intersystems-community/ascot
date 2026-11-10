@@ -2027,7 +2027,7 @@ type_error_kinds! {
     /// ```
     #[code = "S7126"]
     #[severity = Warning]
-    #[message = "Describe this {kind}: its body is {lines} lines"]
+    #[message = "Describe this {kind}: its body is {lines} line(s)"]
     Undescribed { kind: String, lines: usize },
     /// Under `{"open_brace":{"newline_before":false}}`, a block's `{` on a line of its own below its
     /// command; under `true`, one on the command's line, `If x {`. IRIS accepts either layout; move
