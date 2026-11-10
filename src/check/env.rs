@@ -908,18 +908,24 @@ impl<'a> WorkspaceEnv<'a> {
         // access is reported and the rest of the body still checked.
         let err = {
             let names = self.names::<N>(obj.name());
-            let mut suggestions =
-                crate::check::top_similar(&mem, names.iter().map(String::as_str), 5);
+            let mut suggestions = crate::check::top_similar(
+                &mem,
+                names.iter().map(String::as_str).filter(|n| !n.contains("%%")),
+                5,
+            );
             let mut has_get = false;
             if N::NS == MemberNs::Property {
-                // Every `%Get`-style accessor regardless of score: a misspelled property is
-                // often one, and a `%Get` means the class may take any name.
-                for name in self.names::<Methods>(obj.name()) {
-                    has_get |= name == "%Get";
-                    if name.starts_with("%Get")
-                        && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(&name))
-                    {
-                        suggestions.push(name);
+                // A `%Get` means the class may take any name, and a misspelled property is
+                // often one of its `%Get`-style accessors, offered regardless of score.
+                let methods = self.names::<Methods>(obj.name());
+                has_get = methods.iter().any(|n| n == "%Get");
+                if has_get {
+                    for name in methods {
+                        if name.starts_with("%Get")
+                            && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(&name))
+                        {
+                            suggestions.push(name);
+                        }
                     }
                 }
             }
