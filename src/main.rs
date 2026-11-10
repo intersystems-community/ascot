@@ -1,5 +1,5 @@
-//! The `ascot` command-line binary: argument parsing (with `clap`) and the `analyze`, `parse`,
-//! `declare`, `mcp` and `lsp` subcommands documented in README.md.
+//! The `ascot` command-line binary: argument parsing (with `clap`) and the `analyze`, `declare`,
+//! `diagnostics`, `mcp` and `lsp` subcommands documented in README.md.
 //!
 //! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
 //! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
