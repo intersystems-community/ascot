@@ -81,11 +81,11 @@ fn check_method_body(method: &cos::Method) -> Result<(), (usize, tygr::Error)> {
         (
             None | Some(cos::MethodLanguage::ObjectScript(..)),
             None | Some(cos::CodeMode::Code(..)),
-        ) => cos::ProcedureBody::scan(&text),
+        ) => <cos::ProcedureBody>::scan(&text),
         (
             None | Some(cos::MethodLanguage::ObjectScript(..)),
             Some(cos::CodeMode::Expression(..)),
-        ) => cos::ExprEntry::scan(&text),
+        ) => <cos::ExprBody>::scan(&text),
         // Other languages (Python, ...) and modes (Call, Generator, ...) aren't ObjectScript,
         // so there's nothing here to parse.
         _ => Ok(()),

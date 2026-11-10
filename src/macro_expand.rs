@@ -48,10 +48,18 @@ pub struct MacroDefinition {
 }
 
 impl MacroDefinition {
-    // `##safeexpression`/`##expression` run ObjectScript at compile time; `check::mod` knows the
-    // common ones (`$$$ERROR`, ...) by name instead.
+    // `##safeexpression`/`##expression`/`##function` run ObjectScript at compile time;
+    // `check::mod` knows the common ones (`$$$ERROR`, ...) by name instead.
     fn is_compile_time(&self) -> bool {
-        self.body.contains("##safeexpression") || self.body.contains("##expression")
+        ["##safeexpression", "##expression", "##function"]
+            .iter()
+            .any(|directive| self.body.contains(directive))
+    }
+
+    // `##function` splices the arguments into code it runs at compile time, inside a string as
+    // often as not (`"%s"="*"`), so they need not be expressions.
+    pub(crate) fn splices_text(&self) -> bool {
+        self.body.contains("##function")
     }
 }
 
@@ -805,6 +813,7 @@ impl WorkspaceStruct {
                         }
                     }
                     MacroRedex::Lit(_, text, _) => dones.push(&text.print(), &origin, precise),
+                    MacroRedex::BeginLit(_, text, _) => dones.push(&text.print(), &origin, precise),
                     // A comment included: matched whole, nothing in it expands, and a check may
                     // read it.
                     unit => dones.push(&unit.print(), &origin, precise),

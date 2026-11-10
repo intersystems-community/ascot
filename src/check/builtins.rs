@@ -1053,10 +1053,22 @@ fn check_mv_call<'a>(
     flow: &mut Flow<'a>,
     c: &cos::MVCall,
 ) -> Result<PowerTy, QuasiTypeError> {
+    let positions = || c.rest.iter().map(|(_, arg)| arg.deref().deref());
+    for position in positions() {
+        if let Some(colon) = position.more.first() {
+            env.soft_diagnostic(TypeError::undocumented_syntax(
+                "A `:` in a $MV position".to_string(),
+                env.range(colon),
+            ));
+        }
+    }
     check_read_args(
         env,
         flow,
-        once(Some(c.record.deref())).chain(each_arg(&c.rest).map(Some)),
+        once(Some(c.record.deref())).chain(positions().flat_map(|position| {
+            once(position.first.as_ref())
+                .chain(position.more.iter().map(|p| p.deref().deref().as_ref()))
+        })),
         "%String",
     )
 }

@@ -2068,9 +2068,11 @@ impl<'a> CodeEnv<'a> {
         self.trap_joins.borrow_mut().remove(label)
     }
 
-    pub(crate) fn is_defined_macro(&self, name: &str) -> bool {
-        self.macro_definitions
-            .is_some_and(|definitions| definitions.contains_key(name))
+    pub(crate) fn macro_definition(
+        &self,
+        name: &str,
+    ) -> Option<&crate::macro_expand::MacroDefinition> {
+        self.macro_definitions?.get(name)
     }
 
     pub(crate) fn known_macro_names(&self) -> impl Iterator<Item = &str> {

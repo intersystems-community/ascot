@@ -1374,6 +1374,9 @@ pub enum MacroArgUnit {
 #[derive(Grammar)]
 pub struct ZKillTarget {
     pub var: AllowIndirection<Variable>,
+    // `zkill x:2`, or `x: 2` but not `x :2`: IRIS compiles the suffix, which the document doesn't
+    // have.
+    pub level: Option<(StringEq!(":"), SGap, Range<Expr>)>,
 }
 
 #[derive(Grammar)]
@@ -1469,17 +1472,27 @@ pub struct LocalJobAnnotation {
 type JobProcessParams = VecSep<Option<Expr>, StringEq!(":")>;
 
 #[derive(Grammar)]
+// A `#dim` is one line, which IRIS splits at its first `=`: a type's parameters, `(MAXLEN=5)`,
+// make it a `Set` that fails, so the type takes none, and no gap inside it breaks the line.
 pub enum DimType {
-    ListOf(StringEqCI!("List"), Space1, StringEqCI!("Of"), Space1, Type),
+    ListOf(
+        StringEqCI!("List"),
+        Blank1,
+        StringEqCI!("Of"),
+        Blank1,
+        SignatureType,
+    ),
     ArrayOf(
         StringEqCI!("Array"),
-        Space1,
+        Blank1,
         StringEqCI!("Of"),
-        Space1,
-        Type,
+        Blank1,
+        SignatureType,
     ),
-    Simple(Type),
+    Simple(SignatureType),
 }
+
+pub type Blank1 = StringOf1<IsNotLineBreakingWhitespace>;
 
 #[derive(Grammar)]
 pub struct ForIterator {
@@ -1657,14 +1670,21 @@ pub enum Block {
 }
 
 char_class!(pub IsNotSpaceChar, "not_space", |ch| ch != ' ');
+char_class!(pub IsNotBlank, "not a space or tab", |ch| !ch.is_whitespace() || ch == '\n');
 
 #[derive(Grammar)]
 pub struct ElseIfBranch {
     pub kw: Range<KwElseIf>,
     // `ElseIf  (x)` with extra spaces: every space but the last is the keyword's, the last
-    // belongs to the condition (as after `If`). Unlike `If`, `ElseIf` is never argumentless.
-    kw_spaces: Raw<Vec<(StringEq!(" "), NotFollowedBy<CharOf<IsNotSpaceChar>>)>>,
-    pub cnds: IfConditions,
+    // belongs to the condition (as after `If`). Unlike `If`, `ElseIf` is never argumentless,
+    // and IRIS takes a tab after it where `If` wants a space.
+    kw_spaces: Raw<
+        Vec<(
+            CharOf<IsNotLineBreakingWhitespace>,
+            NotFollowedBy<CharOf<IsNotBlank>>,
+        )>,
+    >,
+    pub cnds: ElseIfConditions,
     pub thn: Range<Block>,
 }
 
@@ -1885,6 +1905,30 @@ pub enum StructureSystemVariable {
 pub type Periods = Vec<(Vec1<StringEq!(".")>, SGap1)>;
 
 pub type ExprEntry = MGapXMGap<Range<Expr>>;
+// A `CodeMode = expression` body is `Quit <text>`: the expression alone in blanks, no comment
+// beside it, or nothing but blanks and comments, which IRIS compiles as a bare `Quit`. A `#;`
+// comment is no comment there (it isn't at a line's start), so it stays a syntax error.
+#[derive(Grammar)]
+pub enum ExprBody {
+    Expr(Wrap<Blank, Range<Expr>, Blank>),
+    Blank(Raw<Vec<ExprBodyGapUnit>>),
+}
+
+pub type Blank = Raw<StringOf<IsWhitespace>>;
+
+#[derive(Grammar)]
+pub enum ExprBodyGapUnit {
+    Comment(RangeComment),
+    Line(ExprBodyLineComment, StringOf<IsNotNL>),
+    Space(CharOf<IsWhitespace>),
+}
+
+#[derive(Grammar)]
+pub enum ExprBodyLineComment {
+    LL(StringEq!("//")),
+    HHE(StringEq!("##;")),
+    E(StringEq!(";")),
+}
 
 #[derive(Grammar)]
 pub enum BitLogicOp {
@@ -2282,28 +2326,29 @@ pub struct HashEmbededOS(StringEq!("#("), StringEndsWith<StringEq!(")#")>);
 #[derive(Grammar)]
 pub struct AngularEmbededOS(StringEq!("<%"), StringEndsWith<StringEq!("%>")>);
 
+// `&html<...>` ends at the `>` that balances its `<`: IRIS counts every `<` and `>` of the text,
+// in a quoted attribute, a comment or a `#()#` expression as much as in a tag, and nothing else,
+// except that from any `<script` on the text is raw up to the next `</script>`, and the block
+// fails without one.
 #[derive(Grammar)]
 pub struct HTML(Raw<Vec<HTMLUnit>>);
 
 #[derive(Grammar)]
 pub enum HTMLUnit {
-    EmbededOS1(HashEmbededOS),
-    EmbededOS2(AngularEmbededOS),
-    Text(CharOf<IsHTMLContentSafe>),
-    // Quotes are safe outside of tags
-    DQ(DQ),
-    SQ(SQ),
-    JS(
-        Raw<(StringEqCI!("<script"), HTMLTagContent, StringEq!(">"))>,
+    Script(
+        Raw<(StringEqCI!("<script"), Vec<HTMLUnit>, StringEq!(">"))>,
         StringEndsWith<StringEqCI!("</script>")>,
     ),
-    CSS(
-        Raw<(StringEqCI!("<style"), HTMLTagContent, StringEq!(">"))>,
-        StringEndsWith<StringEqCI!("</style>")>,
+    Nested(
+        StringEq!("<"),
+        NotFollowedBy<StringEqCI!("script")>,
+        Vec<HTMLUnit>,
+        StringEq!(">"),
     ),
-    CMT(XMLComment),
-    Tag(StringEq!("<"), HTMLTagContent, StringEq!(">")),
+    Other(CharOf<IsNotAngleBracket>),
 }
+
+char_class!(pub IsNotAngleBracket, "not an angle bracket", |ch| !matches!(ch, '<' | '>'));
 
 #[derive(Grammar)]
 pub enum HTMLTagContentUnit {
@@ -3274,12 +3319,17 @@ impl Default for CallType {
 
 #[derive(Grammar)]
 #[grammar(inline)]
-pub struct As<Type: Grammar> {
-    as_kw: Raw<(Space1, StringEqCI!("As"), Space1)>,
+pub struct As<Type: Grammar, After: Grammar = AfterAs, Before: Grammar = Space1> {
+    as_kw: Raw<(Before, StringEqCI!("As"), After)>,
     pub ann: Type,
 }
 
-impl<T: Grammar> Deref for As<T> {
+// What follows `As`: a space, or nothing before a `%` type, `As%String`, which IRIS takes at class
+// level and in a `#dim` without a default; in a `#dim` the space can't break the line.
+pub type AfterAs = Either<Space1, NotFollowedBy<CharOf<IsLetterOrNumber>>>;
+pub type AfterAsInline = Either<Blank1, NotFollowedBy<CharOf<IsLetterOrNumber>>>;
+
+impl<T: Grammar, A: Grammar, B: Grammar> Deref for As<T, A, B> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -3539,6 +3589,12 @@ pub struct IfConditions {
     pub remaining: Vec<Conjunct>,
 }
 
+#[derive(Grammar)]
+pub struct ElseIfConditions {
+    pub first: Range<ExpressionAfterElseIf>,
+    pub remaining: Vec<Conjunct>,
+}
+
 // A condition after the first, behind its comma.
 #[derive(Grammar)]
 pub struct Conjunct {
@@ -3641,19 +3697,31 @@ pub struct ContinueCommand {
 }
 
 #[derive(Grammar)]
-pub struct DimCommand {
+// `#dim x As%String = 1` IRIS refuses: the default makes the line a `Set`, in which `As%String` is
+// no type; without the default the line is dropped, `As%String` and all.
+pub enum DimCommand {
+    WithDefault {
+        kw: StringEqCI!("#dim"),
+        g: SGap1,
+        declarations: VecSep<DimDeclaration<Blank1>, CommaSep<SGap>>,
+        default: Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>,
+    },
+    Bare(BareDim),
+}
+
+// `#dim a, b As T, c As U`: each group of names has its type; one without takes the next's.
+#[derive(Grammar)]
+pub struct BareDim {
     pub kw: StringEqCI!("#dim"),
     pub g: SGap1,
-    // `#dim a, b As T, c As U`: each group of names has its type; one without takes the next's.
     pub declarations: VecSep<DimDeclaration, CommaSep<SGap>>,
-    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
 }
 
 #[derive(Grammar)]
-pub struct DimDeclaration {
+pub struct DimDeclaration<After: Grammar = AfterAsInline> {
     pub name: VecSep<LocalVariableName, CommaSep<SGap>>,
     // The reference makes `As <Type>` mandatory; it is accepted as optional here.
-    pub as_type: Range<Option<As<DimType>>>,
+    pub as_type: Range<Option<As<DimType, After, Blank1>>>,
 }
 
 #[derive(Grammar)]
@@ -3687,7 +3755,9 @@ pub struct MergeCommand {
 #[derive(Grammar)]
 pub struct TryCommand {
     pub kw_try: KwTry,
-    pub b1: XMGap<Range<Block>>,
+    pub b1: Range<Block>,
+    pub dims: Option<TryDims>,
+    gap: MGap,
     pub kw_catch: Range<KwCatch>,
     pub g3: SGap,
     pub catch_target: Option<CatchTarget>,
@@ -4929,10 +4999,19 @@ impl Deref for PieceCall {
 // but used throughout the corpus for MultiValue-BASIC field/value/subvalue addressing, both as
 // a read and, like `$PIECE`, as a `SET` target. Modeled with an open-ended `rest` since real
 // usage runs from 1 up to 5 trailing positional args and its exact upper bound is unconfirmed.
-fun_args!("$MV" MVCallArgs {
-    record: ArgOf<Expr>,
-    rest: Vec<More<ArgOf<Expr>>>,
-});
+// Hand-written rather than through `fun_args!`, since `-1::1` separates positions with `:`, any
+// of them left empty.
+#[derive(Grammar)]
+pub struct MVCallArgs {
+    pub record: ArgOf<Expr>,
+    pub rest: Vec<(Range<StringEq!(",")>, ArgOf<MVPosition>)>,
+}
+
+#[derive(Grammar)]
+pub struct MVPosition {
+    pub first: Option<Range<Expr>>,
+    pub more: Vec<Range<Prefix<SGapXSGap<StringEq!(":")>, Option<Range<Expr>>>>>,
+}
 
 #[derive(Grammar)]
 pub struct MVCall {
@@ -5764,7 +5843,22 @@ impl FunctionCall {
             FunctionCall::ListNext { args, .. } => args.commas.clone(),
             FunctionCall::ListUpdate { args, .. } => args.commas.clone(),
             FunctionCall::Locate { args, .. } => args.commas.clone(),
-            FunctionCall::MV(call) => call.args.commas.clone(),
+            FunctionCall::MV(call) => {
+                let args = &call.args;
+                let mut prev_end = Some(args.record.wrapped.end);
+                (args.rest.iter())
+                    .filter_map(|(comma, arg)| {
+                        let present = arg.wrapped.start < arg.wrapped.end;
+                        let at = prev_end.filter(|_| present).map(|prev_end| CommaAt {
+                            start: comma.start,
+                            before: comma.start - prev_end,
+                            after: arg.wrapped.start - comma.end,
+                        });
+                        prev_end = present.then_some(arg.wrapped.end);
+                        at
+                    })
+                    .collect()
+            }
             FunctionCall::Method { args, .. } => args.commas.clone(),
             FunctionCall::Name { args, .. } => args.commas.clone(),
             FunctionCall::Parameter { args, .. } => args.commas.clone(),
@@ -6918,6 +7012,17 @@ impl Deref for ExpressionAfterIf {
 }
 
 #[derive(Grammar)]
+pub struct ExpressionAfterElseIf(GenericExpr<CharOf<IsNotLineBreakingWhitespace>>);
+
+impl Deref for ExpressionAfterElseIf {
+    type Target = GenericExpr<CharOf<IsNotLineBreakingWhitespace>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Grammar)]
 pub struct ExpressionAfterWhile(GenericExpr<LGap>);
 
 impl std::ops::DerefMut for ExpressionAfterWhile {
@@ -7128,7 +7233,8 @@ pub struct Subroutine {
 #[derive(Grammar)]
 pub struct ProcedureHeader {
     pub label: Range<Label>,
-    pub params: Option<SpaceThen<ParameterList>>,
+    // IRIS refuses a procedure label without its parameter list, `lab {` (ERROR #1026).
+    pub params: SpaceThen<ParameterList>,
     pub publics: Option<Prefix<StringOf<IsWhitespace>, AllowMacro<PublicVarList>>>,
     pub scope: Option<SpaceThen<ScopeKeyword>>,
 }
@@ -7142,6 +7248,15 @@ pub struct Procedure {
     pub trailer: Option<ProcedureTrailer>,
 }
 
+// Bare `#dim` lines between a Try block and its `Catch`, one to a line: the preprocessor drops
+// each, so IRIS takes them. A default would leave a `Set` there, and one on the block's own line
+// takes the `Catch` with it; IRIS refuses both, and neither parses.
+#[derive(Grammar)]
+pub struct TryDims {
+    pub lines: Vec1<Prefix<Raw<(Vec1<NL>, SGap)>, Range<BareDim>>>,
+    end: Raw<Vec1<NL>>,
+}
+
 // Command lines after a procedure's `}` and before the next label: IRIS compiles them, though only
 // an offset reaches them. The lookahead for a line keeps an empty main from taking the newlines
 // the next label is parted by.
@@ -7153,12 +7268,16 @@ pub struct ProcedureTrailer {
 }
 
 #[derive(Grammar)]
-pub struct ProcedureBody {
+pub struct ProcedureBody<Label: Grammar = Subroutine> {
     // The first line needs no space and does not permit dots
     pub main: ProcedureMain,
-    pub subroutines: Option<Prefix<Raw<Vec1<NL>>, VecSep<Subroutine, Raw<Vec1<NL>>>>>,
+    pub subroutines: Option<Prefix<Raw<Vec1<NL>>, VecSep<Label, Raw<Vec1<NL>>>>>,
     end: Raw<VecSep<SGap, NL>>,
 }
+
+// A `ProcedureBlock = 0` method's body: its labels may be procedures, `name(args) [publics]
+// public {`, which IRIS refuses in a procedure block and in any nested block (ERROR #1026).
+pub type LooseBody = ProcedureBody<RoutineElement>;
 
 // RoutineElements can't includes its ending \n because some files doesn't end with a newline
 #[derive(Grammar)]
@@ -7214,6 +7333,12 @@ pub enum MacroRedex {
         StringEqCI!("##lit("),
         StringOf<IsNotCloseParen>,
         StringEq!(")"),
+    ),
+    // `##beginlit text ##endlit`: the same, undocumented, in IRIS's own includes.
+    BeginLit(
+        StringEqCI!("##beginlit"),
+        Raw<Vec<(NotFollowedBy<StringEqCI!("##endlit")>, CharOf<AnyChar>)>>,
+        StringEqCI!("##endlit"),
     ),
     H(HMacro),
     // Passed through whole, so a `;` inside (`&nbsp;`, a JavaScript statement) isn't a comment.
@@ -7397,7 +7522,7 @@ mod regression_tests {
         let methods = methods(&cls);
         assert_eq!(methods.len(), 2);
         for method in methods {
-            ProcedureBody::scan(&method.body.prefixed.wrapped.print()).expect("Ok");
+            <ProcedureBody>::scan(&method.body.prefixed.wrapped.print()).expect("Ok");
         }
     }
 
@@ -7470,7 +7595,7 @@ mod regression_tests {
         )
         .expect("Ok");
         for method in methods(&cls) {
-            ProcedureBody::scan(&method.body.prefixed.wrapped.print()).expect("Ok");
+            <ProcedureBody>::scan(&method.body.prefixed.wrapped.print()).expect("Ok");
         }
     }
 

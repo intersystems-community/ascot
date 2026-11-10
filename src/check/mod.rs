@@ -598,18 +598,31 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 Option::None | Option::Some(cos::CodeMode::Code(..)),
                 body,
             ) => {
-                let body =
-                    <cos::ProcedureBody>::parse(body).map_err(|err| syntax_error(env, err))?;
-                check_block_body(&body, env, flow, true)
+                // A `ProcedureBlock = 0` method's labels may be procedures; a block's may not.
+                if flow.is_procedure_block() {
+                    let body =
+                        <cos::ProcedureBody>::parse(body).map_err(|err| syntax_error(env, err))?;
+                    check_block_body(&body, env, flow, true)
+                } else {
+                    let body =
+                        <cos::LooseBody>::parse(body).map_err(|err| syntax_error(env, err))?;
+                    check_block_body(&body, env, flow, true)
+                }
             }
             (
                 Option::None | Option::Some(bindings::Language::Objectscript),
                 Option::Some(cos::CodeMode::Expression(..)),
                 body,
             ) => {
-                let body_expr = <cos::ExprEntry>::parse(body)
-                    .map_err(|err| syntax_error(env, err))?
-                    .into_inner();
+                let body_expr =
+                    match <cos::ExprBody>::parse(body).map_err(|err| syntax_error(env, err))? {
+                        cos::ExprBody::Expr(expr) => expr.into_inner(),
+                        // An empty body compiles; a caller that takes its value raises <COMMAND>, as
+                        // after a `Quit` without one.
+                        cos::ExprBody::Blank(_) => {
+                            return flow.handle_return(body.as_ref().map(|_| None));
+                        }
+                    };
                 let body_type = body_expr.to_power_ty(env, flow)?;
                 flow.with_range(body.range, |flow| {
                     flow.value(&body_type, || body_expr.print())
@@ -627,12 +640,68 @@ fn syntax_error(env: &CodeEnv<'_>, err: tygr::Error) -> TypeError {
     TypeError::invalid_syntax(env.span(err.pos(), err.pos() + 1), err)
 }
 
+fn check_dim<'a>(
+    dim: &cos::DimCommand,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+) -> Result<(), QuasiTypeError> {
+    match dim {
+        cos::DimCommand::WithDefault {
+            declarations,
+            default,
+            ..
+        } => {
+            declare_dims(declarations.items.iter(), env, flow)?;
+            // No per-name range exists in a `#Dim x,y=...` list; anchor on the default value's
+            // range instead.
+            let default_range = env.range(&default.prefixed);
+            let default = default.to_power_ty(env, flow)?;
+            for declaration in declarations.items.iter() {
+                for name in declaration.name.items(env) {
+                    flow.handle_set(Local::bare(name.print()), default.clone(), default_range)?
+                }
+            }
+            Ok(())
+        }
+        cos::DimCommand::Bare(bare) => declare_dims(bare.declarations.items.iter(), env, flow),
+    }
+}
+
+fn declare_dims<'a, 'b, A: Grammar>(
+    declarations: impl Iterator<Item = &'b cos::DimDeclaration<A>>,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+) -> Result<(), QuasiTypeError> {
+    for cos::DimDeclaration { name, as_type } in declarations {
+        let declared = match as_type.deref() {
+            Some(ty) => {
+                let ty = ty.deref();
+                match ty {
+                    cos::DimType::Simple(ty) => Ty::from(ty.print()),
+                    _ => {
+                        return Err(QuasiTypeError::unimplemented(format!(
+                            "Fancy #Dim type `{}`",
+                            ty.print()
+                        )));
+                    }
+                }
+            }
+            None => Ty::Any,
+        };
+        let declared = env.with_range(as_type.as_ref().map(|_| declared));
+        for name in name.items(env) {
+            flow.handle_dim(name.print(), declared.clone())?
+        }
+    }
+    Ok(())
+}
+
 // A method body or routine procedure block, with its own labels (`Set $ZT="Trap"` handlers,
 // `Goto` targets, `Do`ne subroutines), checked the way a routine's labels are, falling through
 // into one another. A `Goto` target returns for the body; a `Do`ne one for its caller. `is_body`
 // is false for a control-flow block (`If {...}`), which a `Goto` may leave.
-fn check_block_body<'a>(
-    body: &cos::ProcedureBody,
+fn check_block_body<'a, L: BodyLabel>(
+    body: &cos::ProcedureBody<L>,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     is_body: bool,
@@ -641,7 +710,8 @@ fn check_block_body<'a>(
         .subroutines
         .iter()
         .flat_map(|subs| subs.items.iter())
-        .filter_map(|sub| Some((sub, details::subroutine_kind(env, sub)?)))
+        .map(BodyLabel::as_label)
+        .filter_map(|label| Some((label, label_details(env, label)?)))
         .collect();
     if !is_body {
         for (_, details) in &subroutines {
@@ -654,7 +724,7 @@ fn check_block_body<'a>(
         env.uri(),
         &subroutines
             .iter()
-            .map(|(_, d)| (d, false))
+            .map(|(label, d)| (d, matches!(label, LabelRef::Procedure(_))))
             .collect::<Vec<_>>(),
     );
     // IRIS reaches a label inside a block from the whole body, so a `Goto` to one resolves; the
@@ -688,8 +758,8 @@ fn check_block_body<'a>(
         primed.with_hints_suppressed(|| {
             for _ in 0..4 {
                 let before = primed.label_writes_total();
-                for (sub, details) in &subroutines {
-                    let _ = check_label_body(&primed, details, sub);
+                for (label, details) in &subroutines {
+                    let _ = check_element_body(&primed, details, *label);
                 }
                 if primed.label_writes_total() == before {
                     break;
@@ -708,27 +778,99 @@ fn check_block_body<'a>(
     if body.subroutines.is_none() {
         return Ok(());
     }
-    let first = subroutines
-        .first()
-        .and_then(|(_, d)| env.label_entry(&d.name.it));
-    flow.tail_call(first.map(|first| &first.output), flow.range())?;
+    // The main falls through into the first label, when it is one of the old kind; into a
+    // procedure label it can't, so its own commands end the path, as a routine's loose lines do.
+    let first = match subroutines.first() {
+        Some((LabelRef::Subroutine(_), d)) => env.label_entry(&d.name.it),
+        _ => None,
+    };
+    match (first, main_end_range(env, &body.main)) {
+        (Some(first), _) => flow.tail_call(Some(&first.output), flow.range())?,
+        (None, Some(range)) => flow.tail_call(None, range)?,
+        (None, None) => flow.handle_void()?,
+    }
     // The labels read the body's variables from their own flows, so the deferred
     // "never read"/"never assigned" reports for the main body can't be trusted.
     flow.mark_incomplete();
-    for (sub, details) in &subroutines {
+    for (i, (label, details)) in subroutines.iter().enumerate() {
         // Each label is checked on its own: one's hard error doesn't hide the next one's.
-        if let Err(err) = check_label_body(env, details, sub) {
+        if let Err(err) = check_element_body(env, details, *label) {
             env.add_soft_diagnostic(err.into());
+        }
+        // The lines after a procedure label's `}`, falling through to the next label of the old
+        // kind, as a routine's do.
+        if let LabelRef::Procedure(procedure) = label
+            && let Some(trailer) = &procedure.trailer
+        {
+            let next = match subroutines.get(i + 1) {
+                Some((LabelRef::Subroutine(_), d)) => env.label_entry(&d.name.it),
+                _ => None,
+            };
+            if let Some(diagnostic) = check_loose_lines(env, &trailer.lines, next) {
+                env.add_soft_diagnostic(diagnostic);
+            }
         }
     }
     Ok(())
 }
 
-// The labels inside the blocks of `body`, at any depth.
-fn labels_in_blocks<'b>(body: &'b ProcedureBody, out: &mut Vec<&'b Subroutine>) {
+// A body's label of either kind: a subroutine, or a procedure where the body is a
+// `ProcedureBlock = 0` method's.
+#[derive(Clone, Copy)]
+enum LabelRef<'b> {
+    Subroutine(&'b Subroutine),
+    Procedure(&'b Procedure),
+}
+
+trait BodyLabel: Grammar {
+    fn as_label(&self) -> LabelRef<'_>;
+}
+
+impl BodyLabel for Subroutine {
+    fn as_label(&self) -> LabelRef<'_> {
+        LabelRef::Subroutine(self)
+    }
+}
+
+impl BodyLabel for cos::RoutineElement {
+    fn as_label(&self) -> LabelRef<'_> {
+        match self {
+            cos::RoutineElement::Subroutine(sub) => LabelRef::Subroutine(sub),
+            cos::RoutineElement::Procedure(procedure) => LabelRef::Procedure(procedure),
+        }
+    }
+}
+
+fn label_details(env: &CodeEnv<'_>, label: LabelRef<'_>) -> Option<details::RoutineElementDetails> {
+    match label {
+        LabelRef::Subroutine(sub) => details::subroutine_kind(env, sub),
+        LabelRef::Procedure(procedure) => details::procedure_kind(env, procedure),
+    }
+}
+
+fn check_element_body<'a>(
+    env: &CodeEnv<'a>,
+    details: &details::RoutineElementDetails,
+    label: LabelRef<'_>,
+) -> Result<Vec<String>, TypeError> {
+    match label {
+        LabelRef::Subroutine(sub) => check_label_body(env, details, sub),
+        LabelRef::Procedure(procedure) => check_procedure(procedure, details, env).map(|()| vec![]),
+    }
+}
+
+// The labels inside the blocks of `body`, at any depth. A procedure label's own are its alone.
+fn labels_in_blocks<'b, L: BodyLabel>(body: &'b ProcedureBody<L>, out: &mut Vec<&'b Subroutine>) {
     let labels = body.subroutines.iter().flat_map(|subs| subs.items.iter());
-    let commands = (procedure_commands(&body.main))
-        .chain(labels.flat_map(|sub| sub.body.as_command_lines().flat_map(commands_of)));
+    let in_labels = labels.filter_map(|label| match label.as_label() {
+        LabelRef::Subroutine(sub) => Some(sub.body.as_command_lines()),
+        // A procedure label's own body is its alone; the lines after its `}` are the body's.
+        LabelRef::Procedure(procedure) => {
+            Some(procedure.trailer.as_ref()?.lines.as_command_lines())
+        }
+    });
+    let commands =
+        (procedure_commands(&body.main)).chain(in_labels.flatten().flat_map(commands_of));
     for command in commands {
         labels_in_command(command, out);
     }
@@ -755,7 +897,7 @@ fn labels_in_command<'b>(command: &'b Command, out: &mut Vec<&'b Subroutine>) {
         Command::Else(branch) => blocks.extend(branch.body.as_deref()),
         Command::For(cos::ForCommand { bdy: Some(bdy), .. }) => blocks.push(bdy),
         Command::Try(try_command) => {
-            blocks.push(&try_command.b1.it);
+            blocks.push(&try_command.b1);
             blocks.push(&try_command.b2);
         }
         Command::While(while_command) => bodies.push(&while_command.bdy.block.wrapped),
@@ -1478,49 +1620,7 @@ impl CheckCommandInner for cos::Command {
             cos::Command::Continue(cos::ContinueCommand { pc, .. }) => {
                 check_pc(pc, env, flow, |flow| flow.handle_continue())
             }
-            cos::Command::Dim(cos::DimCommand {
-                declarations,
-                default,
-                ..
-            }) => {
-                for cos::DimDeclaration { name, as_type } in declarations.items.iter() {
-                    let declared = match as_type.deref() {
-                        Some(ty) => {
-                            let ty = ty.deref();
-                            match ty {
-                                cos::DimType::Simple(ty) => Ty::from(ty.print()),
-                                _ => {
-                                    return Err(QuasiTypeError::unimplemented(format!(
-                                        "Fancy #Dim type `{}`",
-                                        ty.print()
-                                    )));
-                                }
-                            }
-                        }
-                        None => Ty::Any,
-                    };
-                    let declared = env.with_range(as_type.as_ref().map(|_| declared));
-                    for name in name.items(env) {
-                        flow.handle_dim(name.print(), declared.clone())?
-                    }
-                }
-                if let Some(default) = default {
-                    // No per-name range exists in a `#Dim x,y=...` list; anchor on the
-                    // default value's range instead.
-                    let default_range = env.range(&default.prefixed);
-                    let default = default.to_power_ty(env, flow)?;
-                    for declaration in declarations.items.iter() {
-                        for name in declaration.name.items(env) {
-                            flow.handle_set(
-                                Local::bare(name.print()),
-                                default.clone(),
-                                default_range,
-                            )?
-                        }
-                    }
-                }
-                Ok(())
-            }
+            cos::Command::Dim(dim) => check_dim(dim, env, flow),
             cos::Command::Set(cos::SetCommand {
                 pc, assignments, ..
             }) => check_pc(pc, env, flow, |flow: &mut Flow| {
@@ -1619,6 +1719,7 @@ impl CheckCommandInner for cos::Command {
             }),
             cos::Command::Try(cos::TryCommand {
                 b1,
+                dims,
                 kw_catch,
                 catch_target,
                 b2,
@@ -1627,7 +1728,7 @@ impl CheckCommandInner for cos::Command {
                 if let Some(close) = close_brace_of(b1) {
                     report_chained_keyword(env, close, kw_catch, "Catch");
                 }
-                check_try(env, flow, b1.deref(), catch_target.as_ref(), b2)
+                check_try(env, flow, b1, dims.as_ref(), catch_target.as_ref(), b2)
             }
             cos::Command::Throw(cos::ThrowCommand { pc, e: exp, .. })
             | cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. }) => {
@@ -1795,6 +1896,13 @@ impl CheckCommandInner for cos::Command {
                 check_pc(pc, env, flow, |flow| {
                     for target in targets.items(env) {
                         target.check(env, flow)?;
+                        if let Some((_, _, level)) = &target.level {
+                            env.soft_diagnostic(TypeError::undocumented_syntax(
+                                "A `:` suffix on a ZKILL argument".to_string(),
+                                env.range(level),
+                            ));
+                            let _ = level.to_ty(env, flow)?;
+                        }
                     }
                     Ok(())
                 })
@@ -2001,16 +2109,31 @@ fn check_try<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     try_block: &Range<cos::Block>,
+    dims: Option<&cos::TryDims>,
     catch_target: Option<&cos::CatchTarget>,
     catch_block: &Range<cos::Block>,
 ) -> Result<(), QuasiTypeError> {
     let before = flow.split();
     let try_env = env.with_try();
     flow.with_block(env.range(try_block), |flow| try_block.check(&try_env, flow))?;
+    // The `#dim` lines between the block and its `Catch` declare for what follows them: the path
+    // out of the block, and the catch block.
+    let declare = |flow: &mut Flow<'a>| -> Result<(), QuasiTypeError> {
+        for dim in dims.iter().flat_map(|dims| dims.lines.iter()) {
+            let dim = &dim.prefixed;
+            let range = env.range(dim);
+            flow.with_range(range, |flow| {
+                declare_dims(dim.declarations.items.iter(), env, flow).with_range(|| range)
+            })?;
+        }
+        Ok(())
+    };
+    declare(flow)?;
     // The exception may be thrown anywhere in the try block, so the catch block starts from
     // anything between its start and its end.
     let mut catch_flow = flow.split();
     catch_flow.merge(before)?;
+    declare(&mut catch_flow)?;
     if let Some(target) = catch_target
         && let Left(local) = target.deref().as_local(env, flow)?
     {
@@ -3590,13 +3713,26 @@ impl MacroCallStructExt for MacroCallStruct {
         flow: &mut Flow<'a>,
     ) -> Result<(), QuasiTypeError> {
         let name = self.name.print();
-        if env.is_defined_macro(&name) {
-            self.check_args(env, flow)
-        } else {
-            Err(QuasiTypeError::undefined_macro(
+        match env.macro_definition(&name) {
+            // The arguments are text, spliced into code run at compile time (`"%s"="*"`); one
+            // that names a bound local still reads it.
+            Some(def) if def.splices_text() => {
+                for arg in self.args.iter().flat_map(|args| args.items.iter()) {
+                    if let Ok(expr) = expr_from_macro_arg(arg)
+                        && let Some(var) = expr.as_variable()
+                        && let AllowMacro::Plain(VariableBase::Local(name)) = &var.base
+                        && flow.has_binding(&name.print())?
+                    {
+                        flow.read(&name.print())?;
+                    }
+                }
+                Ok(())
+            }
+            Some(_) => self.check_args(env, flow),
+            None => Err(QuasiTypeError::undefined_macro(
                 name.clone(),
                 similar_macro_names(&name, env.known_macro_names()),
-            ))
+            )),
         }
     }
 }
@@ -4148,6 +4284,17 @@ impl AsCommandLines<SGap1> for RoutineMain {
 }
 
 // The span of `main`'s commands, for highlighting the whole body in a "missing QUIT" diagnostic.
+// The main's commands of a braced body, first to last; `None` for a main of no commands.
+fn main_end_range(env: &CodeEnv<'_>, main: &ProcedureMain) -> Option<bindings::Range> {
+    let mut commands = procedure_commands(main);
+    let first = commands.next()?;
+    let end = commands.last().map_or(first.end, |last| last.end);
+    Some(bindings::Range {
+        start: env.position(first.start),
+        end: env.position(end),
+    })
+}
+
 fn body_end_range(env: &CodeEnv<'_>, main: &RoutineMain) -> Option<bindings::Range> {
     let mut commands = main.as_command_lines().flat_map(|line| {
         line.commands
