@@ -3941,7 +3941,7 @@ pub enum DDL {
         ),
         if_exists: Option<(StringEqCI!("IF"), Space, StringEqCI!("EXISTS"), Space)>,
         tname: TName,
-        cascade: (Space, CascadeOpt),
+        cascade: Option<(Space, CascadeOpt)>,
     },
     DropFunction {
         kw: (StringEqCI!("DROP"), Space, StringEqCI!("FUNCTION"), Space),
@@ -4043,7 +4043,7 @@ pub enum DDL {
         foreign: Option<(StringEqCI!("FOREIGN"), Space)>,
         server_kw: (StringEqCI!("SERVER"), Space),
         tname: TName,
-        cascade: (Space, CascadeOpt),
+        cascade: Option<(Space, CascadeOpt)>,
     },
     DropAggregate {
         kw: (StringEqCI!("DROP"), Space),
@@ -4143,9 +4143,11 @@ pub enum CreateServerConnection {
     Host {
         kw: (StringEqCI!("HOST"), Space),
         host: Literal,
-        open: (Space, StringEq!("("), Space),
-        options: DBServerOptions,
-        close: (Space, StringEq!(")")),
+        options: Option<(
+            (Space, StringEq!("("), Space),
+            DBServerOptions,
+            (Space, StringEq!(")")),
+        )>,
     },
 }
 
@@ -4922,13 +4924,7 @@ pub enum CodeBody {
 
 pub type SqlMethodBody = Wrap<
     StringEqCI!("BEGIN"),
-    Vec<(
-        Space,
-        Stat,
-        Space,
-        StringEq!(";"),
-        Option<(Space, ReturnStatement, Space, StringEq!(";"))>,
-    )>,
+    Vec<(Space, Either<ReturnStatement, Stat>, Space, StringEq!(";"))>,
     (Space, StringEqCI!("END")),
 >;
 
@@ -5679,6 +5675,11 @@ pub enum TableOptionList {
         first: TableOption,
         rest: Vec<(Space, StringEq!(","), Space, TableOption)>,
     },
+    Shard {
+        shard: Shard,
+        partition: Option<(Space, PartitionOption)>,
+    },
+    Partition(PartitionOption),
     InformixCompat(InformixCompatability),
 }
 
@@ -5911,7 +5912,7 @@ pub enum SqlCollation {
     PctTruncate {
         kw: StringEqCI!("%TRUNCATE"),
         arg: Option<(Space, StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-        alphaup: (Space, StringEqCI!("ALPHAUP")),
+        alphaup: Option<(Space, StringEqCI!("ALPHAUP"))>,
     },
     PctUpper(StringEqCI!("%UPPER")),
     Exact(StringEqCI!("EXACT")),
@@ -6986,6 +6987,27 @@ mod tests {
             "DROP PROCEDURE IF EXISTS P FROM Pkg.Cls",
             "DROP FUNCTION f FROM Pkg.Cls",
             "CREATE PROCEDURE P() FOR Pkg.Cls LANGUAGE OBJECTSCRIPT { QUIT }",
+        ]);
+    }
+
+    #[test]
+    fn optional_clauses() {
+        all_ok(&[
+            "CREATE TABLE t (a INT) SHARD KEY (a)",
+            "CREATE TABLE t (a INT) PARTITION BY RANGE (a) INTERVAL 10",
+            "CREATE TABLE t (a INT) SHARD KEY (a) PARTITION BY RANGE (a) INTERVAL 10",
+            "CREATE TABLE t (a INT) SHARD KEY (a) WITH %CLASSPARAMETER DEFAULTGLOBAL = '^x'",
+            "CREATE TABLE t (a INT) IN dbspace",
+            "CREATE TABLE t (a INT) EXTENT SIZE 16",
+            "DROP FOREIGN SERVER fs",
+            "DROP FOREIGN SERVER fs CASCADE",
+            "DROP FOREIGN TABLE ft",
+            "CREATE TABLE t (a VARCHAR(10) %TRUNCATE(5))",
+            "CREATE TABLE t (a VARCHAR(10) %TRUNCATE(5) ALPHAUP)",
+            "CREATE TABLE t (a VARCHAR(10) COLLATE %TRUNCATE(5))",
+            "CREATE FOREIGN SERVER fs FOREIGN DATA WRAPPER CSV HOST '/tmp'",
+            "CREATE FUNCTION f() RETURNS INT LANGUAGE SQL BEGIN RETURN 1; END",
+            "CREATE FUNCTION f() RETURNS INT LANGUAGE SQL BEGIN INSERT INTO log VALUES (1); RETURN 1; END",
         ]);
     }
 }
