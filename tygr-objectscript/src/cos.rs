@@ -1537,7 +1537,7 @@ pub enum WriteFChar {
 pub enum ReadFChar {
     NewLine(StringEq!("!")),
     FormFeed(StringEq!("#")),
-    Tab(StringEq!("?"), Digits),
+    Tab(StringEq!("?"), Range<Expr>),
 }
 
 #[derive(Grammar)]
@@ -7425,6 +7425,11 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn read_column_is_an_expression() {
+        routine(" r ?n,x:0 r ?(n+1),y:0 r ?$l(\"abc\"),z:0 r !?5,w\n").expect("Ok");
     }
 
     #[test]
