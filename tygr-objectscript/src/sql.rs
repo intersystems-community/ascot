@@ -1664,7 +1664,7 @@ pub type SQLForEachClause = Prefix<(Space, StringEqCI!("%FOREACH"), Space), List
 #[grammar(name = "window")]
 pub struct Window {
     pub fun: WindowFunc,
-    pub arg: Parenthesized<Option<Either<StringEq!("*"), Scalx>>>,
+    pub arg: Parenthesized<Option<Either<StringEq!("*"), VecSep<Scalx, ArgSep>>>>,
     pub over_kw: (Space, StringEqCI!("OVER"), Space),
     pub open: (StringEq!("("), Space),
     pub partition: Option<WindowPartition>,
@@ -1707,7 +1707,7 @@ pub type WindowPartition = Prefix<
 
 pub type WindowOrder = Prefix<
     (Space, StringEqCI!("ORDER"), Space, StringEqCI!("BY"), Space),
-    VecSep<Scalx, (Space, StringEq!(","), Space)>,
+    VecSep<Ordir, (Space, StringEq!(","), Space)>,
 >;
 
 #[derive(Grammar)]
@@ -6808,6 +6808,17 @@ mod tests {
             "SELECT Name INTO :x FROM t WHERE a < $HOROLOG",
             "SELECT $JOB, $TLEVEL, $ZHOROLOG, $ZJOB, $ZVERSION INTO :a, :b, :c, :d, :e",
             "SELECT $J, $TL, $ZH, $ZJ, $ZV INTO :a, :b, :c, :d, :e",
+        ]);
+    }
+
+    #[test]
+    fn window_order_direction_and_offsets() {
+        all_ok(&[
+            "SELECT ROW_NUMBER() OVER (ORDER BY Name DESC) FROM t",
+            "SELECT NTH_VALUE(Name, 2) OVER (ORDER BY Name) FROM t",
+            "SELECT LAG(Name, 1) OVER (ORDER BY Name) FROM t",
+            "SELECT LEAD(a, 1, 0) OVER (PARTITION BY Age ORDER BY Name ASC, a DESC) FROM t",
+            "SELECT COUNT(*) OVER (PARTITION BY Age) FROM t",
         ]);
     }
 }
