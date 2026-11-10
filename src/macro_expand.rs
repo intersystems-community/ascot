@@ -208,14 +208,14 @@ impl SourceMap {
             return None;
         }
         let offset = self.source_olc.offset(position);
+        // The innermost invocation holding `offset`: a nested call's argument is recorded too.
         let idx = self
             .invocations
-            .partition_point(|span| span.start <= offset)
-            .checked_sub(1)?;
-        let span = self.invocations.get(idx)?;
-        if offset >= span.end {
-            return None;
-        }
+            .partition_point(|span| span.start <= offset);
+        let span = self.invocations[..idx]
+            .iter()
+            .rev()
+            .find(|span| offset < span.end)?;
         let mut pieces: Vec<&(std::ops::Range<usize>, Origin, bool)> = self
             .vec
             .iter()
@@ -226,12 +226,19 @@ impl SourceMap {
             })
             .collect();
         pieces.sort_by_key(|(expanded, ..)| expanded.start);
-        (!pieces.is_empty()).then(|| {
-            pieces
-                .iter()
-                .map(|(expanded, ..)| &self.expanded_text[expanded.clone()])
-                .collect()
-        })
+        // The pieces tile the expansion, so a gap starts another copy of an argument the body
+        // pastes more than once.
+        let mut end = None;
+        let text: String = pieces
+            .iter()
+            .take_while(|(expanded, ..)| {
+                let next = end.is_none_or(|end| end == expanded.start);
+                end = Some(expanded.end);
+                next
+            })
+            .map(|(expanded, ..)| &self.expanded_text[expanded.clone()])
+            .collect();
+        (!text.is_empty()).then_some(text)
     }
 
     fn locate_idx(&self, pos: usize) -> Option<usize> {
