@@ -915,9 +915,10 @@ impl bindings::GuestWorkspace for Workspace {
     // Where the reference at `position` is declared, if any — one of the go-to-definition
     // edges discovered as a byproduct of the last check. Covers class references
     // (`##class(Name)`, `x.Foo`, `x.Foo()`), instance members (`i%Foo`), self-references
-    // (`..Method`), and same-routine label calls/gotos. Doesn't cover anything the checker
-    // resolves to no location (e.g. `%New`, unmapped IRIS system classes), computed/indirect
-    // `Goto`, or anything in SQL (which isn't type-checked yet).
+    // (`..Method`), label calls/gotos, in the same or another open routine, and
+    // `Include`/`#include` names. Doesn't cover anything the checker resolves to no location
+    // (e.g. `%New`, unmapped IRIS system classes), computed/indirect `Goto`, or anything in SQL
+    // (which isn't type-checked yet).
     #[allow(async_fn_in_trait)]
     fn definition(&self, uri: String, position: bindings::Position) -> Option<bindings::Location> {
         self.borrow()
