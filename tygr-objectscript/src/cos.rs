@@ -3042,6 +3042,12 @@ pub enum CollationType {
     Truncate(Truncating<StringEqCI!("TRUNCATE")>),
     Plus(StringEqCI!("PLUS")),
     Minus(StringEqCI!("MINUS")),
+    // The legacy collations: of these only `STRING` takes a length (`UPPER(50)` is IRIS #5177).
+    Upper(StringEqCI!("UPPER")),
+    Space(StringEqCI!("SPACE")),
+    AlphaUp(StringEqCI!("ALPHAUP")),
+    Mvr(StringEqCI!("MVR")),
+    String(Truncating<StringEqCI!("STRING")>),
 }
 
 // A collation that may truncate to a length: `SQLUPPER(250)`.
@@ -7414,6 +7420,37 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn legacy_index_collations() {
+        let index = |index: &str| {
+            let cls = ClassDefinition::parse(&format!(
+                "Class A.C Extends %Persistent\n{{\n\nProperty Name As %String;\n\n{index}\n\n}}\n"
+            ))?;
+            let collations: Vec<_> = cls
+                .member_list
+                .members
+                .seps
+                .iter()
+                .filter_map(|member| match member.deref() {
+                    Member::Index(index) => Some(index),
+                    _ => None,
+                })
+                .flat_map(|index| index.on_properties().unwrap_or_default())
+                .map(|key| key.collation())
+                .collect();
+            Ok::<_, Error>(collations)
+        };
+        assert_eq!(
+            index("Index A On Name As Upper;\n\nIndex B On Name As String(50);").expect("Ok"),
+            [Some("Upper".to_string()), Some("String(50)".to_string())]
+        );
+        index(
+            "Index A On Name As Space;\n\nIndex B On Name As AlphaUp;\n\nIndex C On Name As Mvr;",
+        )
+        .expect("Ok");
+        index("Index A On Name As Upper(50);").expect_err("only STRING takes a length");
     }
 
     #[test]
