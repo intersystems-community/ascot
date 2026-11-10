@@ -200,7 +200,15 @@ struct AnyCall(
 
 // `$Z` functions IRIS compiles but doesn't document: the object-system internals the kernel's
 // own classes call. Noted with a hint and typed as Any, per GOVERNANCE.md.
-const UNDOCUMENTED_FUNCTIONS: &[&str] = &["ZOBJEXPORT", "ZOBJVAL", "ZOBJNEW", "ZOBJNEXT"];
+const UNDOCUMENTED_FUNCTIONS: &[&str] = &[
+    "ZOBJEXPORT",
+    "ZOBJVAL",
+    "ZOBJNEW",
+    "ZOBJNEXT",
+    "ZOBJOID",
+    "ZOBJMOD",
+    "ZOBJMODS",
+];
 
 fn check_empty_args(call: &cos::FunctionCall) -> Result<(), QuasiTypeError> {
     let Some(name) = call.name() else {
@@ -209,6 +217,13 @@ fn check_empty_args(call: &cos::FunctionCall) -> Result<(), QuasiTypeError> {
     let Ok(AnyCall(_, _, args)) = AnyCall::parse(&call.print()) else {
         return Ok(());
     };
+    // `$ZSEEK()`: no argument at all, not an empty one, for a function that takes none.
+    if args.items.len() == 1
+        && args.items[0].is_none()
+        && cos::simple_function(name.full).is_some_and(|f| f.min == 0)
+    {
+        return Ok(());
+    }
     for (i, arg) in args.items.iter().enumerate() {
         let table = match i {
             0 => NO_EMPTY_FIRST,
@@ -292,29 +307,7 @@ impl CheckExprInner for cos::FunctionCall {
             ),
             FunctionCall::Simple(call) => check_simple_function(env, flow, call),
             FunctionCall::Generic(_) => unreachable!("never converts"),
-            FunctionCall::Unknown(call) => {
-                for arg in call.args.items(env) {
-                    if let Some(cos::FunArg::Normal { expr, .. }) = arg.deref() {
-                        let _ = expr.to_ty(env, flow)?;
-                    }
-                }
-                let name = call.name.print();
-                if UNDOCUMENTED_FUNCTIONS
-                    .iter()
-                    .any(|f| f.eq_ignore_ascii_case(&name))
-                {
-                    flow.add_soft_diagnostic(QuasiTypeError::undocumented_function(name));
-                    return Ok(PowerTy::plain(Ty::Any));
-                }
-                let names = cos::FUNCTION_NAMES.iter().copied().chain(
-                    cos::SIMPLE_FUNCTIONS
-                        .iter()
-                        .flat_map(|f| f.names.iter().copied()),
-                );
-                let suggestions = crate::check::top_similar(&name, names, 5);
-                flow.add_soft_diagnostic(QuasiTypeError::unknown_function(name, suggestions));
-                Ok(PowerTy::plain(Ty::Any))
-            }
+            FunctionCall::Unknown(call) => check_unknown_call(env, flow, call),
             FunctionCall::Data {
                 args: DataArgs {
                     variable, target, ..
@@ -938,7 +931,7 @@ pub(super) fn check_settarget_fun<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
-    super::report_style(env, [fun.name()], &[]);
+    super::report_style(env, fun.name(), &[]);
     use cos::SetTargetFun::*;
     match fun {
         Piece(c) => {
@@ -979,8 +972,46 @@ pub(super) fn check_settarget_fun<'a>(
         MV(c) => {
             let _ = check_mv_call(env, flow, c)?;
         }
+        Undocumented(c) => {
+            let _ = check_unknown_call(env, flow, c)?;
+        }
+        Simple(c) => {
+            env.soft_diagnostic(TypeError::undocumented_syntax(
+                format!("`${}` as a Set target", c.name.print()),
+                env.range(&c.name),
+            ));
+            let _ = check_simple_function(env, flow, c)?;
+        }
     };
     Ok(())
+}
+
+fn check_unknown_call<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    call: &cos::UnknownFunctionCall,
+) -> Result<PowerTy, QuasiTypeError> {
+    for arg in call.args.items(env) {
+        if let Some(cos::FunArg::Normal { expr, .. }) = arg.deref() {
+            let _ = expr.to_ty(env, flow)?;
+        }
+    }
+    let name = call.name.print();
+    if UNDOCUMENTED_FUNCTIONS
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(&name))
+    {
+        flow.add_soft_diagnostic(QuasiTypeError::undocumented_function(name));
+        return Ok(PowerTy::plain(Ty::Any));
+    }
+    let names = cos::FUNCTION_NAMES.iter().copied().chain(
+        cos::SIMPLE_FUNCTIONS
+            .iter()
+            .flat_map(|f| f.names.iter().copied()),
+    );
+    let suggestions = crate::check::top_similar(&name, names, 5);
+    flow.add_soft_diagnostic(QuasiTypeError::unknown_function(name, suggestions));
+    Ok(PowerTy::plain(Ty::Any))
 }
 
 // One variable slot of `SET $LISTBUILD(a,,b)=` / `SET $LISTGET(a,,b)=`, empty for a placeholder.

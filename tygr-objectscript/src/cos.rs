@@ -461,6 +461,10 @@ pub enum SetTargetFun {
     Property(PropertyCall),
     Sequence(SequenceCall),
     MV(MVCall),
+    // `$zobjval(...)`, `$zobjmod(...)`: the undocumented object internals IRIS's own classes set.
+    Undocumented(UnknownFunctionCall),
+    // `$mvv(n)`, a MultiValue system value: IRIS's own classes assign it, undocumented as a target.
+    Simple(SimpleFunctionCall),
 }
 
 // A SET target is an expression of a settable shape -- except `$LISTGET(var1,var2,...)`, which
@@ -548,6 +552,8 @@ impl TryFrom<FunctionCall> for SetTargetFun {
             FunctionCall::Sequence(c) => Ok(SetTargetFun::Sequence(c)),
             FunctionCall::ListBuild(c) => Ok(SetTargetFun::ListBuild(c.try_into()?)),
             FunctionCall::MV(c) => Ok(SetTargetFun::MV(c)),
+            FunctionCall::Unknown(c) if c.is_settable() => Ok(SetTargetFun::Undocumented(c)),
+            FunctionCall::Simple(c) if c.is_settable() => Ok(SetTargetFun::Simple(c)),
             _ => Err(()),
         }
     }
@@ -613,6 +619,8 @@ impl SetTargetFun {
             SetTargetFun::Sequence(c) => c.print_to(buf),
             SetTargetFun::MV(c) => c.print_to(buf),
             SetTargetFun::ListBuild(c) => c.print_to(buf),
+            SetTargetFun::Undocumented(c) => c.print_to(buf),
+            SetTargetFun::Simple(c) => Grammar::print_to(c, buf),
         }
     }
 }
@@ -1864,6 +1872,10 @@ char_class!(pub IsClassMemberNameRemaining, "letter or number", |c| c
 pub enum VariableBase {
     Instance(Prefix<StringEq!("i%"), Range<QuotableClassMemberName>>),
     RowInstance(Prefix<StringEq!("r%"), Range<ClassMemberName>>),
+    // `m%Prop`, a property's modified flag, and `s%Prop`: two more prefixes of IRIS's own classes,
+    // undocumented; the quotes of `i%"%%OID"` go here too.
+    ModifiedInstance(Range<Prefix<StringEq!("m%"), Range<QuotableClassMemberName>>>),
+    SInstance(Range<Prefix<StringEq!("s%"), Range<QuotableClassMemberName>>>),
     Public(Prefix<StringEq!("%"), LocalVariableName>),
     Local(LocalVariableName),
     StructureSystemVariable {
@@ -3062,6 +3074,8 @@ pub enum MethodLanguage {
     ObjectScript(StringEqCI!("ObjectScript")),
     TSQL(StringEqCI!("TSQL")),
     ISPL(StringEqCI!("ISPL")),
+    // Not among the document's values; IRIS's own `%MV` classes compile with it.
+    MVBasic(StringEqCI!("MVBasic")),
 }
 
 impl Default for MethodLanguage {
@@ -5884,8 +5898,9 @@ impl FunctionCall {
 }
 
 impl SetTargetFun {
-    pub fn name(&self) -> KeywordUse {
-        match self {
+    // An undocumented function has no spelling to hold it to.
+    pub fn name(&self) -> Option<KeywordUse> {
+        Some(match self {
             SetTargetFun::Piece(call) => call.kw.spelled(),
             SetTargetFun::Extract(call) => call.kw.spelled(),
             SetTargetFun::List(call) => call.kw.spelled(),
@@ -5897,7 +5912,9 @@ impl SetTargetFun {
             SetTargetFun::Property(call) => call.kw.spelled(),
             SetTargetFun::Sequence(call) => call.kw.spelled(),
             SetTargetFun::MV(call) => call.kw.spelled(),
-        }
+            SetTargetFun::Simple(call) => call.spelled(),
+            SetTargetFun::Undocumented(_) => return None,
+        })
     }
 }
 
@@ -6399,9 +6416,10 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
         max: 1,
         ret: "%String",
     },
+    // `$ZSEEK()` reads the position without moving.
     SimpleFunction {
         names: &["ZSeek"],
-        min: 1,
+        min: 0,
         max: 2,
         ret: "%Integer",
     },
@@ -6466,6 +6484,12 @@ pub struct SimpleFunctionCallSource {
 pub struct SimpleFunctionCall {
     pub name: Range<SimpleFunctionName>,
     pub args: ExprArgList,
+}
+
+impl SimpleFunctionCall {
+    pub fn is_settable(&self) -> bool {
+        self.name.print().eq_ignore_ascii_case("MVV")
+    }
 }
 
 impl Spelled for SimpleFunctionCall {
@@ -6614,6 +6638,16 @@ impl Validate for UnknownFunctionName {
 pub struct UnknownFunctionCall {
     pub name: UnknownFunctionName,
     pub args: FunArgList,
+}
+
+impl UnknownFunctionCall {
+    // The object internals IRIS's own classes assign to, undocumented like the rest of `$ZOBJ*`.
+    pub fn is_settable(&self) -> bool {
+        let name = self.name.print();
+        ["ZOBJVAL", "ZOBJOID", "ZOBJMOD", "ZOBJMODS"]
+            .iter()
+            .any(|settable| settable.eq_ignore_ascii_case(&name))
+    }
 }
 
 // Every full function name (including nested Bit/Extract/DText/Z*Kw calls) -- kept in sync by

@@ -371,6 +371,14 @@ impl MethodDetails {
         if language == Some(bindings::Language::Python) {
             return Ok(());
         }
+        // Not a documented value of `Language`; the body is MultiValue Basic, unchecked.
+        if language == Some(bindings::Language::Mvbasic) {
+            env.base.add_soft_diagnostic(
+                TypeError::undocumented_syntax("`Language = mvbasic`".to_string(), self.body.range)
+                    .into(),
+            );
+            return Ok(());
+        }
         let body_macros = cls.body_macros.borrow().clone();
         let (expanded, source_map, definitions) = match env.base.expand_method_body(
             env.uri(),
@@ -4093,10 +4101,27 @@ impl VariableExt for Variable {
                 VariableBase::RowInstance(mem) => {
                     check_instance_member(env, flow, env.range(mem.deref()), mem.deref().print())
                 }
+                VariableBase::ModifiedInstance(var) => undocumented_instance(env, flow, "m%", var),
+                VariableBase::SInstance(var) => undocumented_instance(env, flow, "s%", var),
             },
             AllowMacro::Macro(macro_call) => macro_call.to_power_ty(env, flow).map(Either::Right),
         }
     }
+}
+
+// `m%Prop`/`s%Prop`: the member as `i%Prop` names it, and a note that the prefix is IRIS's own.
+fn undocumented_instance<'a, P>(
+    env: &CodeEnv<'a>,
+    flow: &Flow<'a>,
+    prefix: &str,
+    var: &Range<Prefix<P, Range<QuotableClassMemberName>>>,
+) -> Result<Either<Local, PowerTy>, QuasiTypeError> {
+    env.soft_diagnostic(TypeError::undocumented_syntax(
+        format!("The `{prefix}` property prefix"),
+        env.range(var),
+    ));
+    let mem = &var.prefixed;
+    check_instance_member(env, flow, env.range(mem), quotable_name(mem))
 }
 
 // `i%"%%OID"` names the member without its quotes.
