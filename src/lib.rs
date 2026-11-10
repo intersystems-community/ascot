@@ -630,10 +630,6 @@ impl WorkspaceStruct {
         if !self.doc_cache.contains_key(uri) {
             return empty;
         }
-        // A `.inc` file can't be macro-expanded (or checked) on its own -- see `DocDetails::Inc`.
-        if DocKind::from_uri(uri) == Some(DocKind::Inc) {
-            return empty;
-        }
         let details = match self.ensure_details(uri) {
             Ok(details) => details,
             Err(diagnostics) => {
@@ -724,7 +720,8 @@ impl WorkspaceStruct {
                     hover_types,
                 }
             }
-            DocDetails::Inc(_) => unreachable!("DocKind::Inc already returned above"),
+            // An include that parses has nothing to check on its own -- see `DocDetails::Inc`.
+            DocDetails::Inc(_) => return empty,
         };
         self.store_check(uri, result.clone());
         result
