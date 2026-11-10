@@ -25,13 +25,14 @@ impl RawAtelier {
         let namespace = self.namespace().to_string();
         let iris_version = self.server_version()?;
         let ctx = AtelierContext::from(self);
-        // `%sqlcq.*` are SQL cached queries; `declare`'s own queries create some, so without this
-        // each run would add classes to the next run's file.
+        // `%sqlcq.*` are SQL cached queries and `%SYS.sqlcq.*` embedded SQL cached statements;
+        // `declare`'s own queries create some, so without this each run would add classes to the
+        // next run's file.
         let mut class_names: Vec<String> = ctx
             .rows("SELECT Name FROM %Dictionary.CompiledClass", &[])?
             .into_iter()
             .filter_map(|row| Some(row.get("Name")?.as_str()?.to_string()))
-            .filter(|name| !name.starts_with("%sqlcq."))
+            .filter(|name| !name.starts_with("%sqlcq.") && !name.starts_with("%SYS.sqlcq."))
             .collect();
         class_names.sort();
         let inc_names: Vec<String> = routine_names(&ctx, "*.inc")?.into_iter().collect();
