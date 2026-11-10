@@ -444,10 +444,6 @@ impl MethodDetails {
             .collect();
         let local_out = self.out.clone().map(|out| Some(qualified(out)));
         let local_out = WithRange::new(local_out.it, shifter.unrange(local_out.range));
-        let is_generator = matches!(
-            mode,
-            Some(cos::CodeMode::Generator(..) | cos::CodeMode::ObjectGenerator(..))
-        );
         let in_doc_coordinates = std::cell::RefCell::new((Vec::new(), Vec::new()));
         // `?` is deferred until after relocation below, so an early return doesn't skip
         // relocating diagnostics/references/hints already recorded before the error.
@@ -471,9 +467,6 @@ impl MethodDetails {
                     mode,
                     body: WithRange::new(&body_text, self.body.range),
                 };
-                if is_generator {
-                    flow.mark_incomplete();
-                }
                 // Checked against the class document itself, in argument order, before the body;
                 // their diagnostics need no relocation, so they're set aside until that's done.
                 let marks = (env.base.soft_diagnostics_mark(), env.base.references_mark());
@@ -626,7 +619,10 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 flow.handle_return(body.as_ref().map(|_| Some(body_type)))
             }
             // todo: check other kinds of ObjectScript methods
-            _ => flow.handle_void(),
+            _ => {
+                flow.mark_incomplete();
+                flow.handle_void()
+            }
         }
     }
 }
@@ -1236,7 +1232,6 @@ impl CheckCommandInner for cos::Block {
     }
 }
 
-// How each keyword in `keywords` is written, if a style was given.
 // What a node spells out, against the style: how its keywords are written, how its commas are
 // spaced.
 pub(crate) fn report_style(
@@ -1336,22 +1331,20 @@ impl CheckCommandInner for cos::Command {
                 })?;
                 check_do_while(env, flow, env.range(iter.deref()), iter, cnds)
             }
-            cos::Command::If(cos::IfCommand {
-                cnds: Some(cnds),
-                branches,
-                ..
-            }) => check_if(env, flow, cnds, branches),
-            // Legacy argumentless `If` tests `$TEST`, which isn't tracked: an optional branch.
-            cos::Command::If(cos::IfCommand {
-                cnds: None,
-                branches,
-                ..
-            }) => {
-                let mut branch = flow.split();
-                if let Some(cos::IfBranches { thn, .. }) = branches {
-                    check_branch(env, &mut branch, thn);
+            cos::Command::If(cos::IfCommand { cnds, branches, .. }) => {
+                // An argumentless `If` takes commands on its line, not a block (ERROR #1026).
+                if cnds.is_none()
+                    && let Some(cos::IfBranches { thn, .. }) = branches
+                    && let cos::Block::Curry(_) = thn.deref()
+                {
+                    env.soft_diagnostic(TypeError::not_allowed_in(
+                        "A block in braces",
+                        "an argumentless If",
+                        "ERROR #1026",
+                        env.range(thn),
+                    ));
                 }
-                flow.merge(branch)
+                check_if(env, flow, cnds.as_ref(), branches)
             }
             cos::Command::While(cos::WhileCommand { cnds, bdy, .. }) => {
                 let cnds = cnds.as_ref().ok_or_else(|| {
@@ -1518,7 +1511,7 @@ impl CheckCommandInner for cos::Command {
                     let default_range = env.range(&default.prefixed);
                     let default = default.to_power_ty(env, flow)?;
                     for declaration in declarations.items.iter() {
-                        for name in declaration.name.items(env) {
+                        for name in declaration.name.items.iter() {
                             flow.handle_set(
                                 Local::bare(name.print()),
                                 default.clone(),
@@ -1543,7 +1536,9 @@ impl CheckCommandInner for cos::Command {
                         match target.deref() {
                             cos::AllowMacro::Plain(arg) => match &arg {
                                 cos::KillArgument::Single(target) => {
-                                    if let Some(local) = target
+                                    if let cos::SetTarget::Indirection(indir) = target.deref() {
+                                        indir.expr.to_ty(env, flow)?;
+                                    } else if let Some(local) = target
                                         .as_variable()
                                         .and_then(|x| {
                                             x.as_local(env, flow).map(|x| x.left()).transpose()
@@ -1556,7 +1551,9 @@ impl CheckCommandInner for cos::Command {
                                 cos::KillArgument::Except(keep) => {
                                     let mut names = Vec::new();
                                     for target in keep.items(env) {
-                                        if let Some(variable) = target.as_variable()
+                                        if let cos::SetTarget::Indirection(indir) = target.deref() {
+                                            indir.expr.to_ty(env, flow)?;
+                                        } else if let Some(variable) = target.as_variable()
                                             && let Left(local) = variable.as_local(env, flow)?
                                         {
                                             names.push(local.name);
@@ -1601,13 +1598,27 @@ impl CheckCommandInner for cos::Command {
                                         ));
                                     }
                                 }
+                                cos::NewArgument::Single(cos::AllowMacro::Plain(
+                                    cos::AllowIndirection::Indirection(indir),
+                                )) => {
+                                    indir.to_ty(env, flow)?;
+                                }
                                 cos::NewArgument::Single(name) => {
                                     flow.handle_new(name.print(), env.range(target))?;
                                 }
                                 cos::NewArgument::Except(keep) => {
-                                    let keep: Vec<String> =
-                                        keep.items(env).map(|name| name.print()).collect();
-                                    flow.handle_new_except(&keep, env.range(target))?;
+                                    let mut names = Vec::new();
+                                    for name in keep.items(env) {
+                                        match name {
+                                            cos::AllowMacro::Plain(
+                                                cos::AllowIndirection::Indirection(indir),
+                                            ) => {
+                                                indir.to_ty(env, flow)?;
+                                            }
+                                            _ => names.push(name.print()),
+                                        }
+                                    }
+                                    flow.handle_new_except(&names, env.range(target))?;
                                 }
                             }
                         }
@@ -1761,28 +1772,106 @@ impl CheckCommandInner for cos::Command {
                     Ok(())
                 })
             }
-            cos::Command::Lock(cos::LockCommand { .. })
-            | cos::Command::Hang(cos::HangCommand { .. }) => Ok(()),
-            cos::Command::Job(cos::JobCommand { args, .. }) => {
-                for arg in args.items.iter() {
-                    let annotation = match arg {
-                        cos::JobArgument::ClassMethod(.., annotation)
-                        | cos::JobArgument::InstanceMethod(.., annotation)
-                        | cos::JobArgument::DollarClassMethod(.., annotation)
-                        | cos::JobArgument::RoutineWithLocation(.., annotation)
-                        | cos::JobArgument::RoutineLocal(.., annotation) => annotation,
-                    };
-                    if let Some(a) = annotation
-                        && let Some(cos::AllowMacro::Plain(Right(namespace))) =
-                            a.process_params.deref()
-                    {
-                        env.soft_diagnostic(TypeError::undocumented_syntax(
-                            "A Job namespace without parentheses".to_string(),
-                            env.range(namespace),
-                        ));
+            cos::Command::Lock(cos::LockCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.iter().flat_map(|args| args.items(env)) {
+                        let cos::AllowMacro::Plain((cos::AllowMacro::Plain(arg), timeout)) = arg
+                        else {
+                            continue;
+                        };
+                        let entries: Vec<_> = match &arg.lock_entry {
+                            cos::AllowMacro::Plain(cos::LockEntry::One(entry)) => vec![entry],
+                            cos::AllowMacro::Plain(cos::LockEntry::Many { entries, .. }) => {
+                                entries.items(env).collect()
+                            }
+                            cos::AllowMacro::Macro(..) => vec![],
+                        };
+                        for entry in entries {
+                            let cos::AllowIndirection::Plain(cos::LockNameType { n, t }) = entry
+                            else {
+                                continue;
+                            };
+                            // The lock name's subscripts are read; its value is not.
+                            match n {
+                                cos::AllowIndirection::Plain(cos::AllowMacro::Plain(var)) => {
+                                    var.as_local(env, flow)?;
+                                }
+                                cos::AllowIndirection::Indirection(indir) => {
+                                    indir.to_ty(env, flow)?;
+                                }
+                                cos::AllowIndirection::Plain(cos::AllowMacro::Macro(..)) => {}
+                            }
+                            if let Some(t) = t {
+                                t.to_ty(env, flow)?;
+                            }
+                        }
+                        if let Some(timeout) = timeout {
+                            timeout.timeout.to_ty(env, flow)?;
+                        }
                     }
-                }
+                    Ok(())
+                })
+            }
+            cos::Command::Hang(cos::HangCommand { pc, e, .. }) => check_pc(pc, env, flow, |flow| {
+                e.to_ty(env, flow)?;
                 Ok(())
+            }),
+            cos::Command::Job(cos::JobCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.items(env) {
+                        let (params, location, annotation) = match arg {
+                            cos::JobArgument::ClassMethod(_, _, _, params, annotation)
+                            | cos::JobArgument::DollarClassMethod(_, params, annotation)
+                            | cos::JobArgument::InstanceMethod(_, _, params, annotation) => {
+                                (Some(params), None, annotation)
+                            }
+                            cos::JobArgument::RoutineWithLocation(
+                                _,
+                                params,
+                                location,
+                                annotation,
+                            ) => (params.as_ref(), Some(location), annotation),
+                            cos::JobArgument::RoutineLocal(_, params, annotation) => {
+                                (params.as_ref(), None, annotation)
+                            }
+                        };
+                        if let Some(params) = params {
+                            builtins::check_args_any(env, flow, params.items(env))?;
+                        }
+                        match location {
+                            Some(cos::JobLocation::Brackets(_, exprs, _)) => {
+                                for part in exprs.items.iter().flatten().flat_map(|e| &e.items) {
+                                    part.to_ty(env, flow)?;
+                                }
+                            }
+                            Some(cos::JobLocation::Bars(_, e, _)) => {
+                                e.to_ty(env, flow)?;
+                            }
+                            None => {}
+                        }
+                        if let Some(annotation) = annotation {
+                            match annotation.process_params.deref() {
+                                Some(cos::AllowMacro::Plain(Left(params))) => {
+                                    for param in params.items.iter().flatten() {
+                                        param.to_ty(env, flow)?;
+                                    }
+                                }
+                                Some(cos::AllowMacro::Plain(Right(namespace))) => {
+                                    env.soft_diagnostic(TypeError::undocumented_syntax(
+                                        "A Job namespace without parentheses".to_string(),
+                                        env.range(namespace),
+                                    ));
+                                    namespace.to_ty(env, flow)?;
+                                }
+                                _ => {}
+                            }
+                            if let Some(timeout) = &annotation.timeout {
+                                timeout.to_ty(env, flow)?;
+                            }
+                        }
+                    }
+                    Ok(())
+                })
             }
             // The transaction level isn't tracked: it depends on the run-time conditions around
             // each `TSTART`/`TCOMMIT`, and a flow-insensitive count only produced false alarms.
@@ -1964,11 +2053,15 @@ fn check_branch<'a>(env: &CodeEnv<'a>, flow: &mut Flow<'a>, block: &Range<cos::B
 fn check_if<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    cnds: &IfConditions,
+    cnds: Option<&IfConditions>,
     branches: &Option<cos::IfBranches>,
 ) -> Result<(), QuasiTypeError> {
-    // todo: I am not sure the range here is accurate
-    let mut if_false = check_and(&cnds.first, &cnds.remaining, env, flow, true)?;
+    let mut if_false = match cnds {
+        // todo: I am not sure the range here is accurate
+        Some(cnds) => check_and(&cnds.first, &cnds.remaining, env, flow, true)?,
+        // Legacy argumentless `If` tests `$TEST`, which isn't tracked: every branch is possible.
+        None => flow.split(),
+    };
     let mut others = vec![];
     match branches {
         None => {
@@ -2393,6 +2486,19 @@ impl CheckCommandInner for cos::SetArgument {
         flow: &mut Flow<'a>,
     ) -> Result<(), QuasiTypeError> {
         let ty = self.value.to_ranged_power_ty(env, flow)?.into_inner();
+        // A maybe-undefined value is reported here, where IRIS raises <UNDEFINED>, and the
+        // target holds the type it has when defined: a later read of the target is not the place.
+        let ty = match ty.to_maybe_ty(env) {
+            MaybeTy::Maybe(defined) => {
+                env.soft_diagnostic(
+                    QuasiTypeError::maybe_undefined(defined.clone())
+                        .with_expr_text(|| self.value.print())
+                        .into_error(|| env.range(&self.value)),
+                );
+                PowerTy::plain(defined)
+            }
+            _ => ty,
+        };
         if self.value.deref().type_unclear() {
             env.hint(bindings::InlayHint {
                 position: env.position(self.target.end),
@@ -2402,21 +2508,32 @@ impl CheckCommandInner for cos::SetArgument {
             });
         }
         let target_range = env.range(&self.target);
-        if let cos::AssignTarget::Single(SetTarget::Special(special)) = self.target.deref() {
-            let literal = cos::OSString::parse(&self.value.print()).is_ok();
-            check_trap_set(env, flow, special, &ty, literal, env.range(&self.value))?;
+        let (targets, multi): (Vec<&SetTarget>, bool) = match self.target.deref() {
+            cos::AssignTarget::Multi(multi) => (multi.targets.items(env).collect(), true),
+            cos::AssignTarget::Single(target) => (vec![target], false),
+        };
+        for target in &targets {
+            check_set_target(target, ty.clone(), target_range, env, flow)?;
         }
-        match self.target.deref() {
-            cos::AssignTarget::Multi(multi_set_target) => {
-                for target in multi_set_target.targets.items(env) {
-                    check_set_target(target, ty.clone(), target_range, env, flow)?;
+        for target in targets {
+            match target {
+                // IRIS compiles `Set ($ZTRAP, x) = ...` and fails it when run, label or none.
+                SetTarget::Special(SpecialVariable::ZTRAP(_)) if multi => {
+                    env.soft_diagnostic(TypeError::not_allowed_in(
+                        "$ZTRAP",
+                        "a multiple Set target",
+                        "<UNIMPLEMENTED>",
+                        target_range,
+                    ));
                 }
-                Ok(())
-            }
-            cos::AssignTarget::Single(set_target) => {
-                check_set_target(set_target, ty, target_range, env, flow)
+                SetTarget::Special(special) => {
+                    let literal = cos::OSString::parse(&self.value.print()).is_ok();
+                    check_trap_set(env, flow, special, &ty, literal, env.range(&self.value))?;
+                }
+                _ => {}
             }
         }
+        Ok(())
     }
 }
 
@@ -2566,10 +2683,7 @@ fn check_target<'a>(
                     flow.handle_get(local.clone())?;
                     Ok(Some(Left(local)))
                 }
-                Right(_) => {
-                    let _ = variable.to_maybe_ty(env, flow)?;
-                    Ok(None)
-                }
+                Right(_) => Ok(None),
             };
         }
         SetTarget::Fun(fun) => builtins::check_settarget_fun(fun, env, flow)?,
@@ -3084,8 +3198,6 @@ impl<T> CheckExprInner for ExprOps<T> {
 
 // The base of a member operation, keeping a collection property a collection (rather than its
 // `%Collection.Abstract*` class) so `..List.GetAt(i)` is typed by the element.
-// The base of a member access as a property, so that a collection property keeps its element
-// type for the collection method called on it.
 fn base_property<'a, T>(
     base: &Range<ExprOps<T>>,
     env: &CodeEnv<'a>,
@@ -3123,10 +3235,15 @@ fn check_member_of<'a>(
 ) -> Result<Option<Ty>, QuasiTypeError> {
     if let PropertyTy::Collection { kind, element } = &base
         && let Some(args) = args
-        && let Some(proc) = collection_method(*kind, element, &mem.id())
     {
-        let proc = TyProcedureOrAny::Procedure(proc);
-        return check_call(env, flow, proc, args.items(env), env.range(mem));
+        let datatype = match element {
+            Ty::OREF(ClsOrIns::Ins(cty)) => env.is_datatype(&env.qualify_class_name(&cty.name)),
+            _ => None,
+        };
+        if let Some(proc) = collection_method(*kind, element, &mem.id(), datatype) {
+            let proc = TyProcedureOrAny::Procedure(proc);
+            return check_call(env, flow, proc, args.items(env), env.range(mem));
+        }
     }
     check_member(base.to_ty(), mem, args, env, flow)
 }
@@ -3137,6 +3254,7 @@ fn collection_method(
     kind: CollectionClass,
     element: &Ty,
     name: &str,
+    datatype: Option<bool>,
 ) -> Option<std::sync::Arc<TyProcedure>> {
     let key = kind.key_ty();
     let element = element.clone();
@@ -3149,7 +3267,28 @@ fn collection_method(
         variadic: false,
     };
     let (normal_args, out) = match name {
-        "GetAt" | "RemoveAt" => (vec![arg("key", key, None)], element),
+        // The `*OfDT` classes default the key and take `RemoveAt(key)`; the `*OfObj` classes
+        // require it and take `RemoveAt(key, Output success)`. An unknown element gets both.
+        "GetAt" => {
+            let mut key = arg("key", key, None);
+            if datatype != Some(false) {
+                key.default = Some(
+                    match kind {
+                        CollectionClass::List => "0",
+                        CollectionClass::Array => "\"\"",
+                    }
+                    .into(),
+                );
+            }
+            (vec![key], element)
+        }
+        "RemoveAt" => {
+            let mut args = vec![arg("key", key, None)];
+            if datatype != Some(true) {
+                args.push(arg("success", Ty::from("%Boolean"), Some(RefMode::Output)));
+            }
+            (args, element)
+        }
         "GetNext" | "GetPrevious" => (vec![arg("key", key, Some(RefMode::ByRef))], element),
         "SetAt" => (
             vec![arg("element", element, None), arg("key", key, None)],
@@ -3448,6 +3587,7 @@ fn check_param_arg<'a>(
                 .or_else(|err| err.raise(env, env.range(arg), Some(par.name)))?;
         }
         Some(cos::MthArg::ByRef { target, .. }) => {
+            check_dottable(env, target, env.range(arg));
             if par.mode.is_none() {
                 mode_mismatch(flow, Some(RefMode::ByRef));
             }
@@ -3456,7 +3596,11 @@ fn check_param_arg<'a>(
             // fresh, obligated write — models it: satisfies whatever was pending instead of
             // demanding another read.
             if let Some(Left(local)) = check_target(target, env, flow)? {
-                flow.invalidate(local, source)?;
+                if par.mode == Some(RefMode::Output) {
+                    flow.invalidate_output(local, source)?;
+                } else {
+                    flow.invalidate(local, source)?;
+                }
             }
         }
         None => {
@@ -3466,6 +3610,28 @@ fn check_param_arg<'a>(
         }
     }
     Ok(())
+}
+
+// IRIS takes a dot before a plain local or `%` variable or an indirection alone; a subscript, a
+// global, `i%P`, a property or a function there does not compile (ERROR #1010/#1011).
+fn check_dottable(env: &CodeEnv<'_>, target: &SetTarget, range: bindings::Range) {
+    let dottable = matches!(target, SetTarget::Indirection(_))
+        || target.as_variable().is_some_and(|var| {
+            var.subs.is_none()
+                && matches!(
+                    &var.base,
+                    AllowMacro::Plain(VariableBase::Local(_) | VariableBase::Public(_))
+                        | AllowMacro::Macro(_)
+                )
+        });
+    if !dottable {
+        env.soft_diagnostic(TypeError::not_allowed_in(
+            "Anything but a variable name or an indirection",
+            "a by-reference argument",
+            "ERROR #1010/#1011",
+            range,
+        ));
+    }
 }
 
 fn check_call<'a, 'b>(
@@ -3489,7 +3655,6 @@ fn check_call<'a, 'b>(
             {
                 args.clear();
             }
-            // todo: add inlay hints
             let mut count = 0;
             for (i, &arg) in args.iter().enumerate() {
                 count += 1;
@@ -4523,7 +4688,7 @@ fn check_property_or_parameter_declaration(
                 env.base
                     .check_pattern(&value, ty, initial.range, Some(&member.name.it));
             }
-            if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = ty {
+            if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = element_ty.as_ref().or(ty.as_ref()) {
                 let name = env.base.qualify_class_name(&cty.name, Some(class_name));
                 env.base.check_declared_class_exists(&name, member.range);
             }

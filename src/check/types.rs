@@ -263,7 +263,7 @@ impl std::fmt::Display for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Term::Target => write!(f, "%?"),
-            Term::Const(v) => write!(f, "\"{}\"", v),
+            Term::Const(v) => v.fmt(f),
             Term::Neg(inner) => write!(f, "'({})", inner),
             Term::Infix { l, o, r } => write!(f, "{} {} {}", l, o, r),
         }
@@ -330,7 +330,7 @@ pub enum PowerTy {
         cases: Vec<(&'static str, Option<Ty>)>,
         // The outer Option determines if there is a default branch.
         //   There can be no default branches when all possible values are listed by cases.
-        // The inner Option determines if the default is defined, same as in AllBindings.assign
+        // The inner Option determines if the default is defined, same as `Binding::assigned` in `flow.rs`
         default: Option<Option<Ty>>,
     },
 }
@@ -905,10 +905,10 @@ pub struct TyProcedure {
     // False for a routine label with no `(...)` at all: `Do` and `Goto` reach it, `$$` can't (IRIS
     // raises <PARAMETER>). Labels read from IRIS don't say, so they count as true.
     pub formal_list: bool,
-    // Shared by every parameter's `declared_at`. Only populated for legacy routine labels so far.
+    // Shared by every parameter's `declared_at`.
     pub uri: Option<String>,
     // Where the procedure itself (not a parameter) is declared — e.g. a routine label's own
-    // line. Only populated for legacy routine labels so far.
+    // line.
     pub declared_at: Option<bindings::Range>,
 }
 
