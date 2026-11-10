@@ -22,11 +22,13 @@ required-features = ["analyze"]
 # workspace, declaration files, releases already in `~/.ascot`, and the `Atelier` trait for a
 # connection of its own. Each flag adds one subcommand of the CLI, or the network.
 [features]
-default = ["analyze", "declare", "lsp", "mcp", "network"]
+default = ["analyze", "declare", "format", "lsp", "mcp", "network"]
 # `ascot analyze`: the CLI, with SARIF output and the JSON report.
 analyze = ["dep:clap"]
 # `ascot declare`: writing a declaration file from a live instance, which needs the network.
 declare = ["dep:clap", "network"]
+# `ascot format`: the formatter on the CLI (`ascot::format` itself is always built).
+format = ["dep:clap"]
 # `ascot lsp`, the stdio Language Server (`ascot::lsp`).
 lsp = ["dep:clap", "dep:lsp-server", "dep:lsp-types"]
 # `ascot mcp`, the stdio MCP server (`ascot::mcp`).

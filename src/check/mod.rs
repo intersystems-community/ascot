@@ -33,7 +33,7 @@ use flow::*;
 use std::{iter::once, ops::Deref};
 use tygr::{IntoInner, OLC, Parse, Print, Ranged};
 use tygr_objectscript::cos::VecSep;
-use tygr_objectscript::cos::{CommandLike, KeywordKind, KeywordUse, Spelled};
+use tygr_objectscript::cos::{KeywordKind, KeywordUse, Spelled};
 use types::*;
 
 pub(crate) use env::{DocumentEnv, Labels, WorkspaceEnv, labels_of};
@@ -558,11 +558,6 @@ impl MethodDetails {
 trait CheckCommandInner {
     fn inner_check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>)
     -> Result<(), QuasiTypeError>;
-
-    // The keywords this spells out, given where it starts -- checked against the style.
-    fn keywords_at(&self, _start: usize) -> Vec<KeywordUse> {
-        vec![]
-    }
 }
 
 pub(crate) trait CheckCommand {
@@ -571,7 +566,6 @@ pub(crate) trait CheckCommand {
 
 impl<T: CheckCommandInner> CheckCommand for Ranged<T> {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        report_style(env, self.deref().keywords_at(self.start), &[]);
         flow.with_range(env.range(self), |flow| {
             self.inner_check(env, flow).with_range(|| env.range(self))
         })
@@ -740,7 +734,6 @@ fn check_block_body<'a>(
         primed.references_since(references);
         primed.restore_soft_diagnostics(suppressed);
     }
-    report_new_per_block(env, procedure_commands(&body.main));
     let checked = body.main.check(env, flow);
     if is_body {
         env.deposit_traps(flow.take_traps());
@@ -895,11 +888,6 @@ impl<Start> CheckCommand for cos::CommandLine<Start> {
         if !self.periods.is_empty() {
             return Ok(());
         }
-        if let Some(max) = env.style().and_then(|s| s.rules.max_commands_per_line) {
-            for command in commands_of(self).skip(max as usize) {
-                env.soft_diagnostic(TypeErrorKind::CommandsPerLine { max }.at(env.range(command)));
-            }
-        }
         for command in commands_of(self) {
             command.check(env, flow)?;
             flow.step_traps().with_range(|| env.range(command))?;
@@ -914,77 +902,8 @@ fn commands_of<S>(line: &CommandLine<S>) -> impl Iterator<Item = &Ranged<Command
 
 impl<Gap> CheckCommand for CurryBlock<Gap> {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        report_brace_style(env, self);
         self.block.check(env, flow)
     }
-}
-
-// A block's braces against the style: whether a line break sits between each pair of neighbours
-// that the style has an opinion on.
-fn report_brace_style<Gap>(env: &CodeEnv<'_>, block: &CurryBlock<Gap>) {
-    let Some(style) = env.style() else {
-        return;
-    };
-    let (open, close) = (block.block.start, block.block.end - 1);
-    let mut commands = procedure_commands(&block.block.wrapped.main).peekable();
-    let first = commands.peek().copied();
-    let last = commands.last().map(|c| c.end);
-    if let Some(breaks) = style.rules.open_brace {
-        if let Some(wanted) = breaks.newline_before {
-            let range = env.span(open, open + 1);
-            report_break(env, wanted, block.gap.start, open, range, |wanted| {
-                TypeErrorKind::OpenBraceBreak { wanted }
-            });
-        }
-        if let (Some(wanted), Some(first)) = (breaks.newline_after, first) {
-            let range = env.range(first);
-            report_break(env, wanted, open, first.start, range, |wanted| {
-                TypeErrorKind::BodyBreak { wanted }
-            });
-        }
-    }
-    if let (Some(Some(wanted)), Some(last)) =
-        (style.rules.close_brace.map(|b| b.newline_before), last)
-    {
-        let range = env.span(close, close + 1);
-        report_break(env, wanted, last, close, range, |wanted| {
-            TypeErrorKind::CloseBraceBreak { wanted }
-        });
-    }
-}
-
-// `Else`, `ElseIf` or `Catch` (`keyword`, at `kw`) after the block whose `}` is at `close`.
-fn report_chained_keyword<T>(
-    env: &CodeEnv<'_>,
-    close: usize,
-    kw: &Ranged<T>,
-    keyword: &'static str,
-) {
-    let Some(wanted) = env.style().and_then(|s| s.rules.close_brace?.newline_after) else {
-        return;
-    };
-    report_break(env, wanted, close, kw.start, env.range(kw), |wanted| {
-        TypeErrorKind::ChainBreak { keyword, wanted }
-    });
-}
-
-// Whether a line break between `from` and `to` is as `wanted`; if not, reports at `range`.
-fn report_break(
-    env: &CodeEnv<'_>,
-    wanted: bool,
-    from: usize,
-    to: usize,
-    range: bindings::Range,
-    make: impl FnOnce(Break) -> TypeErrorKind,
-) {
-    if (env.position(from).line != env.position(to).line) != wanted {
-        env.soft_diagnostic(make(Break(wanted)).at(range));
-    }
-}
-
-// The offset of the `}` closing `block`, if it has braces.
-fn close_brace_of(block: &Ranged<cos::Block>) -> Option<usize> {
-    matches!(block.deref(), cos::Block::Curry(_)).then_some(block.end - 1)
 }
 
 // A comma-separated list: walking its items also holds its commas to the style.
@@ -1004,66 +923,8 @@ impl<T, B, A> CommaList<T> for VecSep<T, CommaSep<B, A>> {
     }
 }
 
-// The `New`s past the style's allowance for one block.
-fn report_new_per_block<'c>(
-    env: &CodeEnv<'_>,
-    commands: impl Iterator<Item = &'c Ranged<Command>>,
-) {
-    let Some(max) = env.style().and_then(|s| s.rules.max_new_per_block) else {
-        return;
-    };
-    for command in commands
-        .filter(|c| matches!(***c, Command::New(_)))
-        .skip(max as usize)
-    {
-        env.soft_diagnostic(TypeErrorKind::NewPerBlock { max }.at(env.range(command)));
-    }
-}
-
-// `command` is the full name, lowercased, as the style keys it.
-fn report_argument_postconditional(
-    env: &CodeEnv<'_>,
-    command: &str,
-    pc: &Option<cos::PostCondition>,
-) {
-    if let Some(pc) = pc
-        && env
-            .style()
-            .is_some_and(|s| !s.keywords.allows_postcondition_on_argument(command))
-    {
-        env.soft_diagnostic(TypeErrorKind::ArgumentPostconditional.at(env.range(pc)));
-    }
-}
-
 // The conditions after the first of an `If` or `While`, each behind its comma.
 type Conjuncts = [Conjunct];
-
-// The commas, or the `&&`s, the style doesn't want between conditions.
-fn report_and_style<T: Grammar>(env: &CodeEnv<'_>, first: &GenericExpr<T>, remaining: &Conjuncts) {
-    use crate::bindings::AndOperator;
-    let Some(and) = env.style().and_then(|s| s.rules.condition_and) else {
-        return;
-    };
-    match and {
-        AndOperator::DoubleAmpersand => {
-            for cnd in remaining {
-                env.soft_diagnostic(TypeErrorKind::AndOperator { wanted: and }.at(env.range(cnd)));
-            }
-        }
-        AndOperator::Comma => {
-            let ops = (first.ops.iter()).chain(remaining.iter().flat_map(|cnd| cnd.ops.iter()));
-            for op in ops {
-                if let InfixOperation::Other { op: operator, .. } = op.deref()
-                    && matches!(operator.deref(), Operator::LA(_))
-                {
-                    env.soft_diagnostic(
-                        TypeErrorKind::AndOperator { wanted: and }.at(env.range(op)),
-                    );
-                }
-            }
-        }
-    }
-}
 
 impl CheckCommandInner for cos::EntryRefAndArgs {
     fn inner_check<'a>(
@@ -1453,10 +1314,6 @@ fn report_comma_style(env: &CodeEnv, space_after: bool, commas: &[CommaAt]) {
 }
 
 impl CheckCommandInner for cos::Command {
-    fn keywords_at(&self, start: usize) -> Vec<KeywordUse> {
-        self.keywords(start)
-    }
-
     fn inner_check<'a>(
         &self,
         env: &CodeEnv<'a>,
@@ -1477,7 +1334,6 @@ impl CheckCommandInner for cos::Command {
                 };
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.items(env) {
-                        report_argument_postconditional(env, "do", &arg.pc);
                         check_pc(&arg.pc, env, flow, |flow| match &arg.entry_ref {
                             cos::DoTarget::Plain(entry_ref) => Ok(entry_ref.check(env, flow)?),
                             cos::DoTarget::Case(case) => check_do_case(env, flow, case),
@@ -1559,7 +1415,6 @@ impl CheckCommandInner for cos::Command {
                         .into());
                     }
                     let GoToArg { location, pc } = args[0];
-                    report_argument_postconditional(env, "goto", pc);
                     check_pc(pc, env, flow, |flow| match location {
                         AllowCase::Plain(cos::Location(location)) => {
                             // A block's Goto must name a line the compiler can place: a label of
@@ -1632,11 +1487,6 @@ impl CheckCommandInner for cos::Command {
             }
             cos::Command::Quit(cos::QuitCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    if env.style().and_then(|s| s.rules.allow_quit_for_return) == Some(false)
-                        && !flow.in_block()
-                    {
-                        flow.add_soft_diagnostic(TypeErrorKind::QuitExits.into());
-                    }
                     let (ty, failed) =
                         exit_value_or_any(exp.deref().as_ref().map(|e| exit_value(e, env, flow)));
                     let ended = flow.handle_quit(env.with_range(exp.as_ref().map(|_| ty)));
@@ -1789,16 +1639,10 @@ impl CheckCommandInner for cos::Command {
             cos::Command::Try(cos::TryCommand {
                 b1,
                 dims,
-                kw_catch,
                 catch_target,
                 b2,
                 ..
-            }) => {
-                if let Some(close) = close_brace_of(b1) {
-                    report_chained_keyword(env, close, kw_catch, "Catch");
-                }
-                check_try(env, flow, b1, dims.as_ref(), catch_target.as_ref(), b2)
-            }
+            }) => check_try(env, flow, b1, dims.as_ref(), catch_target.as_ref(), b2),
             cos::Command::Throw(cos::ThrowCommand { pc, e: exp, .. })
             | cos::Command::ZTrap(cos::ZTrapCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
@@ -2082,7 +1926,6 @@ impl CheckCommandInner for cos::Command {
             cos::Command::Xecute(cos::XecuteCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.items(env) {
-                        report_argument_postconditional(env, "xecute", &arg.pc);
                         check_pc(&arg.pc, env, flow, |flow| {
                             match &arg.arg {
                                 cos::XecuteArgEnum::Expr(code) => {
@@ -2266,24 +2109,14 @@ fn check_if<'a>(
         Some(cos::IfBranches { thn, eifs, els }) => {
             check_branch(env, flow, thn);
             let mut flow = if_false;
-            let mut close = close_brace_of(thn);
             for eif in eifs {
-                if let Some(close) = close {
-                    report_chained_keyword(env, close, &eif.kw, "ElseIf");
-                }
-                close = close_brace_of(&eif.thn);
                 if_false = check_and(&eif.cnds.first, &eif.cnds.remaining, env, &mut flow, true)?;
                 check_branch(env, &mut flow, &eif.thn);
                 others.push(flow);
                 flow = if_false;
             }
-            if let Some(els) = els.as_deref() {
-                if let Some(close) = close {
-                    report_chained_keyword(env, close, &els.kw, "Else");
-                }
-                if let Some(els) = els.body.as_ref() {
-                    check_branch(env, &mut flow, els);
-                }
+            if let Some(els) = els.as_deref().and_then(|els| els.body.as_ref()) {
+                check_branch(env, &mut flow, els);
             }
             others.push(flow);
         }
@@ -2476,7 +2309,6 @@ fn check_and<'a, T: Grammar>(
     report_always: bool,
 ) -> Result<Flow<'a>, TypeError> {
     let first = first.as_ref().map(Deref::deref);
-    report_and_style(env, first.deref(), remaining);
     let commas: Vec<CommaAt> = remaining.iter().map(|cnd| (&cnd.comma).into()).collect();
     report_style(env, std::iter::empty(), &commas);
     let mut if_false = split_on_conjunction(first, env, if_true, report_always)?;
@@ -4748,7 +4580,6 @@ fn body_end_range(env: &CodeEnv<'_>, main: &RoutineMain) -> Option<bindings::Ran
 
 impl CheckCommand for RoutineMain {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        report_new_per_block(env, self.as_command_lines().flat_map(commands_of));
         for line in self.as_command_lines() {
             line.check(env, flow)?;
         }
