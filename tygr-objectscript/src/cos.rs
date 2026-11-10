@@ -1892,10 +1892,10 @@ pub enum VariableBase {
 
 #[derive(Grammar)]
 pub enum StructureSystemVariable {
-    GLOBAL(StringEqCI!("GLOBAL")),
-    JOB(StringEqCI!("JOB")),
-    LOCK(StringEqCI!("LOCK")),
-    ROUTINE(StringEqCI!("ROUTINE")),
+    GLOBAL(Either<StringEqCI!("GLOBAL"), StringEqCI!("G")>),
+    JOB(Either<StringEqCI!("JOB"), StringEqCI!("J")>),
+    LOCK(Either<StringEqCI!("LOCK"), StringEqCI!("L")>),
+    ROUTINE(Either<StringEqCI!("ROUTINE"), StringEqCI!("R")>),
 }
 
 pub type Periods = Vec<(Vec1<StringEq!(".")>, SGap1)>;
@@ -7359,6 +7359,12 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn structured_system_variable_abbreviations() {
+        routine(" w $d(^$J($j)),^$L(\"x\"),^$R(\"x\"),^$G(\"^x\"),^$GLOBAL(\"^x\")\n").expect("Ok");
+        routine(" w ^$JO($j)\n").expect_err("JO is neither JOB nor J");
     }
 
     #[test]
