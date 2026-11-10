@@ -1477,16 +1477,24 @@ pub struct LocalJobAnnotation {
 type JobProcessParams = VecSep<Option<Expr>, StringEq!(":")>;
 
 #[derive(Grammar)]
+// A `#dim` line IRIS splits at its first `=`, so a type's parameters, `(MAXLEN=5)`, make it a
+// `Set` that fails: the type takes none.
 pub enum DimType {
-    ListOf(StringEqCI!("List"), Space1, StringEqCI!("Of"), Space1, Type),
+    ListOf(
+        StringEqCI!("List"),
+        Space1,
+        StringEqCI!("Of"),
+        Space1,
+        SignatureType,
+    ),
     ArrayOf(
         StringEqCI!("Array"),
         Space1,
         StringEqCI!("Of"),
         Space1,
-        Type,
+        SignatureType,
     ),
-    Simple(Type),
+    Simple(SignatureType),
 }
 
 #[derive(Grammar)]
@@ -3293,9 +3301,12 @@ impl Default for CallType {
 #[derive(Grammar)]
 #[grammar(inline)]
 pub struct As<Type: Grammar> {
-    as_kw: Raw<(Space1, StringEqCI!("As"), Space1)>,
+    as_kw: Raw<(Space1, StringEqCI!("As"), AfterAs)>,
     pub ann: Type,
 }
+
+// `As%String`, without the space: IRIS takes it at class level and in a bare `#dim`.
+type AfterAs = Either<Space1, NotFollowedBy<CharOf<IsLetterOrNumber>>>;
 
 impl<T: Grammar> Deref for As<T> {
     type Target = T;
@@ -3675,11 +3686,16 @@ pub struct ContinueCommand {
 
 #[derive(Grammar)]
 pub struct DimCommand {
+    pub bare: BareDim,
+    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
+}
+
+// `#dim a, b As T, c As U`: each group of names has its type; one without takes the next's.
+#[derive(Grammar)]
+pub struct BareDim {
     pub kw: StringEqCI!("#dim"),
     pub g: SGap1,
-    // `#dim a, b As T, c As U`: each group of names has its type; one without takes the next's.
     pub declarations: VecSep<DimDeclaration, CommaSep<SGap>>,
-    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
 }
 
 #[derive(Grammar)]
@@ -3720,7 +3736,9 @@ pub struct MergeCommand {
 #[derive(Grammar)]
 pub struct TryCommand {
     pub kw_try: KwTry,
-    pub b1: XMGap<Range<Block>>,
+    pub b1: Range<Block>,
+    pub dims: Option<TryDims>,
+    gap: MGap,
     pub kw_catch: Range<KwCatch>,
     pub g3: SGap,
     pub catch_target: Option<CatchTarget>,
@@ -7193,6 +7211,15 @@ pub struct Procedure {
     pub body: Range<Brace<ProcedureBody>>,
     end: Raw<EndOfLine>,
     pub trailer: Option<ProcedureTrailer>,
+}
+
+// Bare `#dim` lines between a Try block and its `Catch`, one to a line: the preprocessor drops
+// each, so IRIS takes them. A default would leave a `Set` there, and one on the block's own line
+// takes the `Catch` with it; IRIS refuses both, and neither parses.
+#[derive(Grammar)]
+pub struct TryDims {
+    pub lines: Vec1<Prefix<Raw<(Vec1<NL>, SGap)>, Range<BareDim>>>,
+    end: Raw<Vec1<NL>>,
 }
 
 // Command lines after a procedure's `}` and before the next label: IRIS compiles them, though only

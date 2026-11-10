@@ -826,6 +826,11 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
+    // Whether a path still runs here: a `Quit`, `Return` or `Throw` on every way in ends it.
+    pub(crate) fn is_live(&self) -> bool {
+        self.bindings.is_some()
+    }
+
     pub(crate) fn handle_void(&mut self) -> Result<(), TypeError> {
         self.bindings = None;
         Ok(())
