@@ -498,7 +498,7 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A1054"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "Cannot find class '{cls}' in the workspace or on the IRIS instance"]
     UnconfirmedClass { cls: String },
     /// No class along the receiver's hierarchy declares the member, nor does IRIS generate one
@@ -575,7 +575,7 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A9360"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes {unseen}"]
     UnconfirmedMember {
         cls: String,
@@ -656,7 +656,7 @@ type_error_kinds! {
     ///     Quit
     /// ```
     #[code = "A5213"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "The label is confirmed, but not where its offset lands: the call is checked as untyped and the offset is not checked"]
     LabelOffset,
     /// `Label+n` names the line `n` lines after `Label`, and `Label() { }` is a procedure block,
@@ -763,7 +763,7 @@ type_error_kinds! {
     ///     Quit
     /// ```
     #[code = "A3794"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "The labels of routine '{routine}' aren't known, so calls into it can't be checked precisely"]
     RoutineWithoutSource { routine: String },
     /// `#include Name` in a routine or method body, or `Include Name` before a class, names an
@@ -799,7 +799,7 @@ type_error_kinds! {
     ///     Quit
     /// ```
     #[code = "A5540"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken"]
     UndecidedIf {
         directive: &'static str,
@@ -812,7 +812,7 @@ type_error_kinds! {
     /// The name is taken to exist and nothing about it is checked. The code may well be fine;
     /// restore the connection, or check without one (`--iris none`), for a verdict on it.
     #[code = "A4471"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "Cannot look up {lookup} on the IRIS instance ({reason}), so it is taken on trust"]
     IrisLookupFailed { lookup: IrisLookup, reason: String },
     /// A macro's body invokes the macro itself, directly or through other macros, so expanding it
@@ -1624,7 +1624,7 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A5362"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "'{name}' is a user-defined command (^%ZLANGC00), so the call is not checked"]
     UserCommand { name: String },
     /// A `$Z` function IRIS compiles and runs but does not document (`$ZOBJEXPORT`, `$ZOBJVAL`,
@@ -1644,7 +1644,7 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A6037"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "${name} is not documented for IRIS, so the call is not checked"]
     UndocumentedFunction { name: String },
     /// `..#NAME(args)` calls the class parameter `NAME`, or `Set ..#NAME = v` assigns it, and a
@@ -2616,7 +2616,7 @@ type_error_kinds! {
     ///     Quit
     /// ```
     #[code = "A3913"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "{what} is beyond what ascot checks"]
     NotChecked { what: &'static str },
     /// `ZQUIT` in a procedure block without private variables, where IRIS lets it unwind; the same

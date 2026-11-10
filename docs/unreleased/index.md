@@ -103,24 +103,24 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 
 | Code | Message |
 | --- | --- |
+| [A1054](A1054.md) | Cannot find class '{cls}' in the workspace or on the IRIS instance |
+| [A3794](A3794.md) | The labels of routine '{routine}' aren't known, so calls into it can't be checked precisely |
+| [A3913](A3913.md) | {what} is beyond what ascot checks |
 | [A4043](A4043.md) | Type checking not implemented for '{what}' |
+| [A4471](A4471.md) | Cannot look up {lookup} on the IRIS instance ({reason}), so it is taken on trust |
+| [A5213](A5213.md) | The label is confirmed, but not where its offset lands: the call is checked as untyped and the offset is not checked |
+| [A5362](A5362.md) | '{name}' is a user-defined command (^%ZLANGC00), so the call is not checked |
+| [A5540](A5540.md) | Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken |
+| [A6037](A6037.md) | ${name} is not documented for IRIS, so the call is not checked |
+| [A9360](A9360.md) | Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes {unseen} |
 
 ## Hints
 
 | Code | Message |
 | --- | --- |
-| [A1054](A1054.md) | Cannot find class '{cls}' in the workspace or on the IRIS instance |
 | [A1765](A1765.md) | A $ETRAP that only jumps to a label is what `Set $ZTrap = "{label}"` does; $ZTRAP is scoped to this frame, where $ETRAP is inherited by callees |
-| [A3794](A3794.md) | The labels of routine '{routine}' aren't known, so calls into it can't be checked precisely |
-| [A3913](A3913.md) | {what} is beyond what ascot checks |
-| [A4471](A4471.md) | Cannot look up {lookup} on the IRIS instance ({reason}), so it is taken on trust |
-| [A5213](A5213.md) | The label is confirmed, but not where its offset lands: the call is checked as untyped and the offset is not checked |
-| [A5362](A5362.md) | '{name}' is a user-defined command (^%ZLANGC00), so the call is not checked |
-| [A5540](A5540.md) | Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken |
 | [A5780](A5780.md) | ZQUIT unwinds here only because this procedure block has no private variables; one with any fails with <COMMAND>, so its error handling may not be what you expect |
 | [A5847](A5847.md) | {call} is not documented for IRIS; $ZUTIL was superseded by class methods and special variables |
-| [A6037](A6037.md) | ${name} is not documented for IRIS, so the call is not checked |
 | [A7762](A7762.md) | '{name}' is never read before it is assigned; `Output` fits better than `ByRef` |
 | [A7781](A7781.md) | '{name}' is read before it is assigned; `ByRef` fits better than `Output` |
-| [A9360](A9360.md) | Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes {unseen} |
 

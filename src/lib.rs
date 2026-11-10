@@ -1579,7 +1579,10 @@ mod tests {
         assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Error);
         assert!(diagnostics[0].message.contains("%Library.RegisteredObject"));
         assert_eq!(diagnostics[0].range.start.line, 0);
-        assert_eq!(diagnostics[1].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(
+            diagnostics[1].severity,
+            bindings::DiagnosticSeverity::Information
+        );
         assert!(diagnostics[1].message.contains("SomeInheritedMethod"));
         assert_eq!(diagnostics[1].range.start.line, 2);
     }
@@ -1614,7 +1617,7 @@ mod tests {
     }
 
     #[test]
-    fn with_an_environment_a_superclass_it_lacks_is_a_hint_at_the_extends() {
+    fn with_an_environment_a_superclass_it_lacks_is_information_at_the_extends() {
         let empty = format!(
             r#"{{"version":"{}","namespace":"%SYS","classes":{{}},"includes":{{}},"routines":{{}}}}"#,
             declared::DECLARATIONS_VERSION
@@ -1631,7 +1634,7 @@ mod tests {
         assert!(
             diagnostics
                 .iter()
-                .all(|d| d.severity == bindings::DiagnosticSeverity::Hint)
+                .all(|d| d.severity == bindings::DiagnosticSeverity::Information)
         );
         assert!(diagnostics[0].message.contains("Nope.Missing"));
         let range = diagnostics[0].range;
@@ -2256,7 +2259,7 @@ mod tests {
                     "Cannot find routine 'Typo' in the workspace or on the IRIS instance".to_string()
                 ),
                 (
-                    Hint,
+                    Information,
                     "The labels of routine 'Compiled' aren't known, so calls into it can't be checked precisely"
                         .to_string()
                 ),
@@ -2341,13 +2344,16 @@ mod tests {
     }
 
     #[test]
-    fn an_undecidable_if_is_a_hint_and_takes_its_first_branch() {
+    fn an_undecidable_if_is_information_and_takes_its_first_branch() {
         let diagnostics = diagnostics_for(&[(
             "If.mac",
             "ROUTINE If\n#define MODE \"OUTPUT\"\nMain()\n\t#if $$$MODE=\"OUTPUT\" ; which\n\tSet x = 1\n\t#else\n\tQuit\n\t#endif\n\tWrite x\n\tQuit\n",
         )]);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(
+            diagnostics[0].severity,
+            bindings::DiagnosticSeverity::Information
+        );
         assert_eq!(
             diagnostics[0].message,
             "Cannot decide `#if $$$MODE=\"OUTPUT\"` (`\"OUTPUT\"=\"OUTPUT\"`) at compile time, so its branch is assumed taken"
@@ -2356,7 +2362,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_iris_lookup_is_a_hint_about_why() {
+    fn a_failed_iris_lookup_is_information_about_why() {
         struct DeadIris;
         impl crate::IrisContext for DeadIris {
             fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
@@ -2384,7 +2390,7 @@ mod tests {
         diagnostics.sort_by(|a, b| a.2.cmp(&b.2));
         let expected = |what: &str| {
             (
-                bindings::DiagnosticSeverity::Hint,
+                bindings::DiagnosticSeverity::Information,
                 "A4471".to_string(),
                 format!(
                     "Cannot look up {what} on the IRIS instance (connection refused), so it is taken on trust"
