@@ -5809,7 +5809,8 @@ pub enum FunctionCall {
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-4"), SGap>,
         n: More<ArgOf<Expr>>,
-        third: More<ArgOf<Expr>>,
+        // `$ZF(-4,2)` unloads every DLL: no third argument.
+        third: Option<More<ArgOf<Expr>>>,
         fourth: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
@@ -7432,6 +7433,12 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn zf_minus_4_takes_two_arguments() {
+        routine(" s x=$ZF(-4,2),y=$ZF(-4,1,\"dll\"),z=$ZF(-4,2,id,1)\n").expect("Ok");
+        routine(" s x=$ZF(-4)\n").expect_err("the utility number is required");
     }
 
     #[test]
