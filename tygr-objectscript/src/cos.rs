@@ -2295,28 +2295,29 @@ pub struct HashEmbededOS(StringEq!("#("), StringEndsWith<StringEq!(")#")>);
 #[derive(Grammar)]
 pub struct AngularEmbededOS(StringEq!("<%"), StringEndsWith<StringEq!("%>")>);
 
+// `&html<...>` ends at the `>` that balances its `<`: IRIS counts every `<` and `>` of the text,
+// in a quoted attribute, a comment or a `#()#` expression as much as in a tag, and nothing else,
+// except that from any `<script` on the text is raw up to the next `</script>`, and the block
+// fails without one.
 #[derive(Grammar)]
 pub struct HTML(Raw<Vec<HTMLUnit>>);
 
 #[derive(Grammar)]
 pub enum HTMLUnit {
-    EmbededOS1(HashEmbededOS),
-    EmbededOS2(AngularEmbededOS),
-    Text(CharOf<IsHTMLContentSafe>),
-    // Quotes are safe outside of tags
-    DQ(DQ),
-    SQ(SQ),
-    JS(
-        Raw<(StringEqCI!("<script"), HTMLTagContent, StringEq!(">"))>,
+    Script(
+        Raw<(StringEqCI!("<script"), Vec<HTMLUnit>, StringEq!(">"))>,
         StringEndsWith<StringEqCI!("</script>")>,
     ),
-    CSS(
-        Raw<(StringEqCI!("<style"), HTMLTagContent, StringEq!(">"))>,
-        StringEndsWith<StringEqCI!("</style>")>,
+    Nested(
+        StringEq!("<"),
+        NotFollowedBy<StringEqCI!("script")>,
+        Vec<HTMLUnit>,
+        StringEq!(">"),
     ),
-    CMT(XMLComment),
-    Tag(StringEq!("<"), HTMLTagContent, StringEq!(">")),
+    Other(CharOf<IsNotAngleBracket>),
 }
+
+char_class!(pub IsNotAngleBracket, "not an angle bracket", |ch| !matches!(ch, '<' | '>'));
 
 #[derive(Grammar)]
 pub enum HTMLTagContentUnit {
