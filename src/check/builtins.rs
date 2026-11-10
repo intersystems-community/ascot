@@ -671,12 +671,12 @@ impl CheckExprInner for cos::FunctionCall {
                     [
                         Some(string.deref()),
                         Some(regexp.deref().deref()),
-                        arg(start),
+                        opt_arg(start),
                     ],
                     "%Integer",
                 )?;
-                check_out_var(env, flow, arg(end), "%Integer")?;
-                check_out_var(env, flow, arg(val), "%String")?;
+                check_out_var(env, flow, opt_arg(end), "%Integer")?;
+                check_out_var(env, flow, opt_arg(val), "%String")?;
                 Ok(Ty::from("%Integer").into())
             }
             FunctionCall::MV(c) => check_mv_call(env, flow, c),
@@ -732,7 +732,7 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => {
                 for g in first.as_deref().into_iter().chain(arg(second)) {
-                    check_global_ref(env, flow, g)?;
+                    check_global_arg(env, flow, g)?;
                 }
                 Ok(Ty::from("%String").into())
             }
@@ -791,7 +791,7 @@ impl CheckExprInner for cos::FunctionCall {
                 args: SortBeginArgs { set_global, .. },
                 ..
             } => {
-                check_global_ref(env, flow, set_global.deref())?;
+                check_global_arg(env, flow, set_global)?;
                 Ok(Ty::from("%Integer").into())
             }
             FunctionCall::SortEnd {
@@ -799,7 +799,7 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => {
                 if let Some(Some(g)) = first.as_deref().map(|f| f.deref()) {
-                    check_global_ref(env, flow, g)?;
+                    check_global_arg(env, flow, g)?;
                 }
                 check_read_args(env, flow, [arg(dosort)], "%Integer")
             }
@@ -849,12 +849,25 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::Xecute {
                 args: XecuteArgs { code, params, .. },
                 ..
-            } => check_read_args(
-                env,
-                flow,
-                std::iter::once(Some(code.deref())).chain(each_arg(params).map(Some)),
-                "%String",
-            ),
+            } => {
+                let _ = code.to_ty(env, flow)?;
+                for param in each_arg(params) {
+                    match param.deref() {
+                        cos::MthArg::Expr { expr, .. } => {
+                            let _ = expr.to_ty(env, flow)?;
+                        }
+                        // The code may assign it: whatever was known of it is gone.
+                        cos::MthArg::ByRef { target, .. } => {
+                            if let Some(variable) = target.as_variable()
+                                && let Left(local) = variable.as_local(env, flow)?
+                            {
+                                flow.invalidate(local, Ty::Any.into())?;
+                            }
+                        }
+                    }
+                }
+                Ok(Ty::from("%String").into())
+            }
             FunctionCall::Compile {
                 args:
                     CompileArgs {
@@ -1264,6 +1277,20 @@ fn check_global_ref<'a>(
     Ok(())
 }
 
+fn check_global_arg<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    g: &AllowIndirection<cos::GlobalReference>,
+) -> Result<(), QuasiTypeError> {
+    match g {
+        AllowIndirection::Plain(g) => check_global_ref(env, flow, g),
+        AllowIndirection::Indirection(indirection) => {
+            let _ = indirection.to_ty(env, flow)?;
+            Ok(())
+        }
+    }
+}
+
 fn check_out_var<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1479,7 +1506,7 @@ fn check_compile<'a>(
     source: &Range<cos::AllowIndirection<Variable>>,
     qspec: &Range<Expr>,
     errors: &Range<Option<Variable>>,
-    object: Option<&Range<Option<Variable>>>,
+    object: Option<&Range<Option<cos::AllowIndirection<Variable>>>>,
     arg5: Option<&Range<Option<Expr>>>,
     arg6: Option<&Range<Option<Expr>>>,
     rname: Option<&Range<Option<Expr>>>,
@@ -1490,11 +1517,15 @@ fn check_compile<'a>(
         Right(_) => flow.invalidate_all()?,
     }
     let _ = qspec.to_ty(env, flow)?;
-    for output in std::iter::once(errors).chain(object) {
-        if let Some(ranged) = output.as_ref().map(Option::as_ref).transpose()
-            && let Left(local) = ranged.as_local(env, flow)?
-        {
-            flow.invalidate(local, Ty::from("%String").into())?;
+    if let Some(ranged) = errors.as_ref().map(Option::as_ref).transpose()
+        && let Left(local) = ranged.as_local(env, flow)?
+    {
+        flow.invalidate(local, Ty::from("%String").into())?;
+    }
+    if let Some(ranged) = object.and_then(|o| o.as_ref().map(Option::as_ref).transpose()) {
+        match ranged.as_local(env, flow)? {
+            Left(local) => flow.invalidate(local, Ty::from("%String").into())?,
+            Right(_) => flow.invalidate_all()?,
         }
     }
     for arg in [arg5, arg6, rname].into_iter().flatten() {
