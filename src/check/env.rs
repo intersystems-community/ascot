@@ -1604,7 +1604,7 @@ impl<'a> WorkspaceEnv<'a> {
 
     fn is_persistent(&self, cls: &str) -> bool {
         self.ancestry(cls)
-            .any(|(cls, _)| matches!(cls.as_str(), "%Library.Persistent" | "%Persistent"))
+            .any(|(cls, _)| cls == "%Library.Persistent")
     }
 
     pub fn new(workspace: &'a WorkspaceStruct) -> Self {
