@@ -5071,17 +5071,17 @@ pub enum AlterAction {
         check: CheckSpec,
         kw: (Space, StringEqCI!("CONSTRAINT"), Space, StringEqCI!("ALL")),
     },
-    DropAction {
-        drop_kw: DropKeywd,
-        action: (Space, DropAction),
-    },
-    DropPartition {
-        drop_kw: DropKeywd,
-        partition: (Space, PartitionSpecification),
-    },
     DropAllPartitions {
         drop_kw: DropKeywd,
         kw: (Space, StringEqCI!("ALL"), Space, StringEqCI!("PARTITIONS")),
+    },
+    DropPartition {
+        drop_kw: DropKeywd,
+        partition: (Space, PartitionRangeSpec),
+    },
+    DropAction {
+        drop_kw: DropKeywd,
+        action: (Space, DropAction),
     },
     Add {
         kw: (StringEqCI!("ADD"), Space),
@@ -5124,7 +5124,7 @@ pub enum AlterAction {
     },
     Truncate {
         kw: (StringEqCI!("TRUNCATE"), Space),
-        partition: PartitionSpecification,
+        partition: PartitionRangeSpec,
     },
 }
 
@@ -5218,7 +5218,7 @@ pub enum AlterCol {
 #[grammar(name = "storagedefault convert clause")]
 pub enum StorageDefaultConvertClause {
     Column(ColumnStorageDefaultConversion),
-    Type(StorageDefaultConversionType),
+    Type(StorageDefaultConversionTypeSpec),
 }
 
 #[derive(Grammar)]
@@ -5462,12 +5462,10 @@ pub enum PkeySpec {
 #[derive(Grammar)]
 #[grammar(name = "alt fkey spec")]
 pub struct AltFkeySpec {
-    foreign: StringEq!("FOREIGN"),
-    sp: Space,
-    key: StringEq!("KEY"),
-    ident: Ident,
+    kw: (StringEqCI!("FOREIGN"), Space, StringEqCI!("KEY"), Space),
+    ident: Option<(Ident, Space)>,
     flist2: FList2,
-    references: StringEq!("REFERENCES"),
+    references_kw: (Space, StringEqCI!("REFERENCES"), Space),
     ref_: Ref,
     informix: Informix,
 }
@@ -5813,6 +5811,10 @@ pub enum PartitionRangeSpec {
         from: PartitionFieldValue,
         and_kw: (Space, StringEqCI!("AND"), Space),
         to: PartitionFieldValue,
+    },
+    PartitionValues {
+        kw: (StringEqCI!("PARTITION"), Space),
+        prefix: PartitionPrefix,
     },
 }
 
@@ -7009,5 +7011,26 @@ mod tests {
             "CREATE FUNCTION f() RETURNS INT LANGUAGE SQL BEGIN RETURN 1; END",
             "CREATE FUNCTION f() RETURNS INT LANGUAGE SQL BEGIN INSERT INTO log VALUES (1); RETURN 1; END",
         ]);
+    }
+
+    #[test]
+    fn alter_table_alternatives() {
+        all_ok(&[
+            "ALTER TABLE t DROP ALL PARTITIONS",
+            "ALTER TABLE t DROP PARTITION ID '1'",
+            "ALTER TABLE t TRUNCATE PARTITION ID '1'",
+            "ALTER TABLE t DROP PARTITION ('x')",
+            "ALTER TABLE t TRUNCATE PARTITION ('x')",
+            "ALTER TABLE t DROP PARTITION BETWEEN 1 AND 2",
+            "ALTER TABLE t MOVE PARTITION ('x') TO db",
+            "ALTER TABLE t DROP COLUMN b",
+            "ALTER TABLE t DROP b, c",
+            "ALTER TABLE t ADD FOREIGN KEY fk (a) REFERENCES u (a)",
+            "ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES u (a)",
+            "ALTER TABLE t CONVERT STORAGETYPE = COLUMNAR",
+            "ALTER TABLE t CONVERT TO STORAGETYPE = COLUMNAR",
+        ]);
+        assert!(SQL::parse("ALTER TABLE t CONVERT COLUMNAR").is_err());
+        assert!(SQL::parse("ALTER TABLE t DROP PARTITION HASH (a) IN 4 PARTITIONS").is_err());
     }
 }
