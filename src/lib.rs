@@ -117,8 +117,9 @@ pub(crate) type Name = (DocKind, String);
 impl DocKind {
     // Purely a function of `uri`'s extension -- known even for a uri that failed tier A (or
     // was never opened at all), unlike anything actually stored in `doc_cache`.
-    fn from_uri(uri: &str) -> Option<Self> {
-        match uri.rsplit('.').next() {
+    pub fn from_uri(uri: &str) -> Option<Self> {
+        let ext = uri.rsplit('.').next().map(str::to_ascii_lowercase);
+        match ext.as_deref() {
             Some("cls") => Some(DocKind::Cls),
             Some("inc") => Some(DocKind::Inc),
             Some("mac" | "int") => Some(DocKind::Rtn),
@@ -828,9 +829,7 @@ impl Workspace {
             for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
                 self.open_under(&entry.path(), opened, affected);
             }
-        } else if path
-            .extension()
-            .is_some_and(|ext| matches!(ext.to_str(), Some("cls" | "mac" | "int" | "inc")))
+        } else if path.to_str().and_then(DocKind::from_uri).is_some()
             && let Ok(text) = std::fs::read_to_string(path)
             && let Ok(uri) = url::Url::from_file_path(path)
         {
