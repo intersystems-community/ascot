@@ -2385,6 +2385,19 @@ impl CheckCommandInner for cos::SetArgument {
         flow: &mut Flow<'a>,
     ) -> Result<(), QuasiTypeError> {
         let ty = self.value.to_ranged_power_ty(env, flow)?.into_inner();
+        // A maybe-undefined value is reported here, where IRIS raises <UNDEFINED>, and the
+        // target holds the type it has when defined: a later read of the target is not the place.
+        let ty = match ty.to_maybe_ty(env) {
+            MaybeTy::Maybe(defined) => {
+                env.soft_diagnostic(
+                    QuasiTypeError::maybe_undefined(defined.clone())
+                        .with_expr_text(|| self.value.print())
+                        .into_error(|| env.range(&self.value)),
+                );
+                PowerTy::plain(defined)
+            }
+            _ => ty,
+        };
         if self.value.deref().type_unclear() {
             env.hint(bindings::InlayHint {
                 position: env.position(self.target.end),
