@@ -55,10 +55,10 @@ impl Settings {
         let (style, diagnostics) = (over.has_style(), over.has_diagnostics());
         Settings {
             iris: over.iris().map(str::to_string).or(self.iris),
-            iris_namespace: over
-                .iris_namespace()
-                .map(str::to_string)
-                .or(self.iris_namespace),
+            iris_namespace: over.iris_namespace().map(str::to_string).or_else(|| {
+                self.iris_namespace
+                    .filter(|_| over.iris().is_none_or(|iris| iris.contains("://")))
+            }),
             style: if style { over.style } else { self.style },
             diagnostics: if diagnostics {
                 over.diagnostics
@@ -165,6 +165,17 @@ mod tests {
         assert_eq!(settings.iris(), Some("none"));
         assert!(!settings.has_style());
         assert_eq!(settings.filter().unwrap().0.len(), 1);
+    }
+
+    #[test]
+    fn a_namespace_stays_only_while_iris_stays_a_live_instance() {
+        let flags = parse(r#"{"iris": "http://u:p@h:1", "iris_namespace": "USER"}"#);
+        let to_url = flags
+            .clone()
+            .overlay(parse(r#"{"iris": "http://u:p@h:2"}"#));
+        assert_eq!(to_url.iris_namespace(), Some("USER"));
+        let to_release = flags.overlay(parse(r#"{"iris": "latest"}"#));
+        assert_eq!(to_release.iris_namespace(), None);
     }
 
     #[test]
