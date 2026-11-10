@@ -727,26 +727,26 @@ pub enum ColTrun {
 #[derive(Grammar)]
 #[grammar(name = "special system variable")]
 pub enum SpecialSystemVariable {
-    H(StringEqCI!("$H")),
     Horolog(StringEqCI!("$HOROLOG")),
-    J(StringEqCI!("$J")),
+    H(StringEqCI!("$H")),
     Job(StringEqCI!("$JOB")),
+    J(StringEqCI!("$J")),
     Namespace(StringEqCI!("$NAMESPACE")),
-    TL(StringEqCI!("$TL")),
     TLevel(StringEqCI!("$TLEVEL")),
+    TL(StringEqCI!("$TL")),
     Username(StringEqCI!("$USERNAME")),
-    ZH(StringEqCI!("$ZH")),
     ZHorolog(StringEqCI!("$ZHOROLOG")),
-    ZJ(StringEqCI!("$ZJ")),
+    ZH(StringEqCI!("$ZH")),
     ZJob(StringEqCI!("$ZJOB")),
+    ZJ(StringEqCI!("$ZJ")),
     ZNspace(StringEqCI!("$ZNSPACE")),
     ZPi(StringEqCI!("$ZPI")),
     ZTimestamp(StringEqCI!("$ZTIMESTAMP")),
     ZTimezone(StringEqCI!("$ZTIMEZONE")),
     ZTS(StringEqCI!("$ZTS")),
     ZTZ(StringEqCI!("$ZTZ")),
-    ZV(StringEqCI!("$ZV")),
     ZVersion(StringEqCI!("$ZVERSION")),
+    ZV(StringEqCI!("$ZV")),
 }
 
 #[derive(Grammar)]
@@ -6797,6 +6797,17 @@ mod tests {
             "CREATE TRIGGER TrigAD AFTER UPDATE,DELETE ORDER 4 ON Sample.Person FOR EACH STATEMENT BEGIN INSERT INTO log VALUES (1); END",
             "DROP TRIGGER trg",
             "DROP TRIGGER IF EXISTS trg FROM t",
+        ]);
+    }
+
+    #[test]
+    fn special_system_variable_full_names() {
+        all_ok(&[
+            "SELECT $HOROLOG + 1 INTO :x",
+            "SELECT $H + 1 INTO :x",
+            "SELECT Name INTO :x FROM t WHERE a < $HOROLOG",
+            "SELECT $JOB, $TLEVEL, $ZHOROLOG, $ZJOB, $ZVERSION INTO :a, :b, :c, :d, :e",
+            "SELECT $J, $TL, $ZH, $ZJ, $ZV INTO :a, :b, :c, :d, :e",
         ]);
     }
 }
