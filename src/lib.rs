@@ -1571,7 +1571,7 @@ mod tests {
             ),
             (
                 "ClassMethod M() {\n ZKill\n}\n",
-                "'ZKill' is not a recognized command",
+                "'ZKill' is a command, but its argument is missing",
             ),
         ] {
             let diagnostics = class_diagnostics(body);

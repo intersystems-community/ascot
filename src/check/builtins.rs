@@ -455,11 +455,7 @@ impl CheckExprInner for cos::FunctionCall {
             } => check_read_args(
                 env,
                 flow,
-                [
-                    Some(n.deref().deref()),
-                    Some(third.deref().deref()),
-                    arg(fourth),
-                ],
+                [Some(n.deref().deref()), arg(third), arg(fourth)],
                 "%Integer",
             ),
             FunctionCall::ZFm5 {

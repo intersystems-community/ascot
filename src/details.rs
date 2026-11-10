@@ -704,14 +704,8 @@ impl TryFrom<&str> for ClassDetails {
         let olc = OLC::new(src);
         let mut doc = String::new();
         doc.push_str(cls.gap_start.0.as_str());
-        if let Some(import) = &cls.import {
-            doc.push_str(import.gap.0.as_str());
-        }
-        if let Some(import) = &cls.include {
-            doc.push_str(import.gap.0.as_str());
-        }
-        if let Some(import) = &cls.include_gen {
-            doc.push_str(import.gap.0.as_str());
+        for directive in &cls.directives {
+            doc.push_str(directive.gap().0.as_str());
         }
         let doc = extract_document_comments(&doc);
         let name = with_range_name(&cls.name, &olc);
@@ -723,7 +717,7 @@ impl TryFrom<&str> for ClassDetails {
                 .map(|class| WithRange::new(class.print(), olc.range(class)))
                 .collect()
         });
-        let imports = cls.import.as_ref().map_or(Vec::default(), |import| {
+        let imports = cls.import().map_or(Vec::default(), |import| {
             import
                 .packages
                 .classes()
@@ -735,7 +729,7 @@ impl TryFrom<&str> for ClassDetails {
         // code that *writes* code at compile time -- ascot doesn't check those as ObjectScript
         // at all (see `MethodBody::check`), so resolving its macros would only produce spurious
         // "cannot find include" diagnostics for something nothing here actually uses.
-        let include_names = cls.include.as_ref().map_or(Vec::default(), |include| {
+        let include_names = cls.include().map_or(Vec::default(), |include| {
             include
                 .files
                 .classes()
@@ -743,10 +737,7 @@ impl TryFrom<&str> for ClassDetails {
                 .map(|c| WithRange::new(c.print(), olc.range(c)))
                 .collect()
         });
-        let include_range = cls
-            .include
-            .as_ref()
-            .map(|include| olc.range(&include.files));
+        let include_range = cls.include().map(|include| olc.range(&include.files));
         let mut keywords = ClassKeywords::default();
         for keyword in typed(cls.keyword_list.as_ref()) {
             use cos::ClassKeyword::*;
@@ -768,8 +759,8 @@ impl TryFrom<&str> for ClassDetails {
         let keyword_issues = keyword_issues_in(cls.keyword_list.as_ref(), &olc);
         let lists = [
             ("Extends", cls.extends.as_ref().map(|e| &e.class_list)),
-            ("Import", cls.import.as_ref().map(|i| &i.packages)),
-            ("Include", cls.include.as_ref().map(|i| &*i.files)),
+            ("Import", cls.import().map(|i| &i.packages)),
+            ("Include", cls.include().map(|i| &*i.files)),
         ];
         let mut undocumented = Vec::new();
         for (clause, list) in lists {

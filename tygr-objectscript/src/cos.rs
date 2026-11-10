@@ -1537,7 +1537,7 @@ pub enum WriteFChar {
 pub enum ReadFChar {
     NewLine(StringEq!("!")),
     FormFeed(StringEq!("#")),
-    Tab(StringEq!("?"), Digits),
+    Tab(StringEq!("?"), Range<Expr>),
 }
 
 #[derive(Grammar)]
@@ -1741,7 +1741,10 @@ pub enum SpecialVariable {
     ZNAME(StringEqCI!("ZNAME")),
     ZNSPACE(Either<StringEqCI!("ZNSPACE"), StringEqCI!("ZN")>),
     ZORDER(Either<StringEqCI!("ZORDER"), StringEqCI!("ZO")>),
-    ZPARENT(Either<StringEqCI!("ZPARENT"), StringEqCI!("ZPA")>),
+    // `ZP` followed by a letter is `$ZPI` or `$ZPOS`, below.
+    ZPARENT(
+        Either<StringEqCI!("ZPARENT"), (StringEqCI!("ZP"), NotFollowedBy<CharOf<IsAlphabetic>>)>,
+    ),
     ZPI(StringEqCI!("ZPI")),
     ZPOS(Either<StringEqCI!("ZPOSITION"), StringEqCI!("ZPOS")>),
     ZREFERENCE(Either<StringEqCI!("ZREFERENCE"), StringEqCI!("ZR")>),
@@ -1832,7 +1835,7 @@ pub struct LocalVariableNameStruct {
     rest: StringOf<IsLocalVariableNameRemaining>,
 }
 char_class!(pub IsLocalVariableNameFirst, "letter or percent sign", |c| {
-    c.is_ascii_alphabetic() || c == '%'
+    c.is_alphabetic() || c == '%'
 });
 type IsLocalVariableNameRemaining = IsLetterOrNumberIncludingUnicode;
 
@@ -1844,12 +1847,12 @@ pub struct GlobalVariableName(Raw<GlobalVariableNameStruct>);
 pub struct GlobalVariableNameStruct {
     first: CharOf<IsGlobalVariableNameFirst>,
     remaining: Option<(
-        Vec<(StringOf<IsLetterOrNumber>, StringEq!("."))>,
-        StringOf1<IsLetterOrNumber>,
+        Vec<(StringOf<IsLetterOrNumberIncludingUnicode>, StringEq!("."))>,
+        StringOf1<IsLetterOrNumberIncludingUnicode>,
     )>,
 }
 char_class!(pub IsGlobalVariableNameFirst, "letter or percent sign", |c| c
-    .is_ascii_alphabetic()
+    .is_alphabetic()
     || c == '%');
 char_class!(pub IsLetterOrNumber, "letter or number", |c| c
     .is_ascii_alphanumeric());
@@ -1889,10 +1892,10 @@ pub enum VariableBase {
 
 #[derive(Grammar)]
 pub enum StructureSystemVariable {
-    GLOBAL(StringEqCI!("GLOBAL")),
-    JOB(StringEqCI!("JOB")),
-    LOCK(StringEqCI!("LOCK")),
-    ROUTINE(StringEqCI!("ROUTINE")),
+    GLOBAL(Either<StringEqCI!("GLOBAL"), StringEqCI!("G")>),
+    JOB(Either<StringEqCI!("JOB"), StringEqCI!("J")>),
+    LOCK(Either<StringEqCI!("LOCK"), StringEqCI!("L")>),
+    ROUTINE(Either<StringEqCI!("ROUTINE"), StringEqCI!("R")>),
 }
 
 pub type Periods = Vec<(Vec1<StringEq!(".")>, SGap1)>;
@@ -2410,8 +2413,12 @@ type WithSpace<X> = (X, Space);
 
 #[derive(Grammar)]
 pub enum KeywordValueEnum {
-    // `Data = (Tags(ELEMENTS))` names a collection's subvalues as an index key does.
-    Atom(StringOf1<IsKeywordValue>, Option<IndexPropertyKind>),
+    // `Data = (Tags(ELEMENTS))` names a collection's subvalues as an index key does, but IRIS
+    // reads this form case-sensitively, unlike the `On` clause's.
+    Atom(
+        StringOf1<IsKeywordValue>,
+        Option<Either<StringEq!("(KEYS)"), StringEq!("(ELEMENTS)")>>,
+    ),
     String(OSString),
     OS(StringEq!("{"), OSText, StringEq!("}")),
     Paren(
@@ -3016,8 +3023,8 @@ impl IndexProperty {
 #[derive(Grammar)]
 #[grammar(inline)]
 pub enum IndexPropertyKind {
-    Keys(StringEq!("(KEYS)")),
-    Elements(StringEq!("(ELEMENTS)")),
+    Keys(StringEqCI!("(KEYS)")),
+    Elements(StringEqCI!("(ELEMENTS)")),
 }
 
 #[derive(Grammar)]
@@ -3035,6 +3042,12 @@ pub enum CollationType {
     Truncate(Truncating<StringEqCI!("TRUNCATE")>),
     Plus(StringEqCI!("PLUS")),
     Minus(StringEqCI!("MINUS")),
+    // The legacy collations: of these only `STRING` takes a length (`UPPER(50)` is IRIS #5177).
+    Upper(StringEqCI!("UPPER")),
+    Space(StringEqCI!("SPACE")),
+    AlphaUp(StringEqCI!("ALPHAUP")),
+    Mvr(StringEqCI!("MVR")),
+    String(Truncating<StringEqCI!("STRING")>),
 }
 
 // A collation that may truncate to a length: `SQLUPPER(250)`.
@@ -3076,6 +3089,8 @@ pub enum MethodLanguage {
     Python(StringEqCI!("Python")),
     JavaScript(StringEqCI!("JavaScript")),
     ObjectScript(StringEqCI!("ObjectScript")),
+    // The legacy name IRIS still compiles as ObjectScript.
+    Cache(StringEqCI!("Cache")),
     TSQL(StringEqCI!("TSQL")),
     ISPL(StringEqCI!("ISPL")),
     // Not among the document's values; IRIS's own `%MV` classes compile with it.
@@ -3166,7 +3181,10 @@ impl MethodHeader {
                 Either::Left(MethodKeyword::Language(language)) => Some(&language.value),
                 _ => None,
             });
-        matches!(language, None | Some(MethodLanguage::ObjectScript(..)))
+        matches!(
+            language,
+            None | Some(MethodLanguage::ObjectScript(..) | MethodLanguage::Cache(..))
+        )
     }
 }
 
@@ -3537,14 +3555,65 @@ pub struct MemberList {
     close: StringEq!("}"),
 }
 
+// IRIS compiles the three in any order, one of each (a repeat fails the load).
 #[derive(Grammar)]
+pub enum ClassDirective {
+    Import(Import),
+    Include(IncludeCode),
+    IncludeGenerator(IncludeGeneratorCode),
+}
+
+impl ClassDirective {
+    pub fn gap(&self) -> &ImportIncludeGap {
+        match self {
+            ClassDirective::Import(d) => &d.gap,
+            ClassDirective::Include(d) => &d.gap,
+            ClassDirective::IncludeGenerator(d) => &d.gap,
+        }
+    }
+}
+
+#[derive(Grammar)]
+#[grammar(validated)]
 pub struct ClassDefinitionHeader {
     pub gap_start: ImportIncludeGap,
-    pub import: Option<Import>,
-    pub include: Option<IncludeCode>,
-    pub include_gen: Option<IncludeGeneratorCode>,
+    pub directives: Vec<ClassDirective>,
     pub class_keyword: (StringEqCI!("Class"), Space1),
     pub name: Range<ClassName>,
+}
+
+impl Validate for ClassDefinitionHeader {
+    const REQUIREMENT: &'static str = "name Import, Include and IncludeGenerator at most once each";
+    fn validate(&self) -> bool {
+        let count =
+            |is: fn(&ClassDirective) -> bool| self.directives.iter().filter(|d| is(d)).count();
+        count(|d| matches!(d, ClassDirective::Import(_))) <= 1
+            && count(|d| matches!(d, ClassDirective::Include(_))) <= 1
+            && count(|d| matches!(d, ClassDirective::IncludeGenerator(_))) <= 1
+    }
+}
+
+impl ClassDefinitionHeader {
+    pub fn import(&self) -> Option<&Import> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::Import(import) => Some(import),
+            _ => None,
+        })
+    }
+
+    pub fn include(&self) -> Option<&IncludeCode> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::Include(include) => Some(include),
+            _ => None,
+        })
+    }
+
+    pub fn include_gen(&self) -> Option<&IncludeGeneratorCode> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::IncludeGenerator(include) => Some(include),
+            _ => None,
+        })
+    }
 }
 
 #[derive(Grammar)]
@@ -4009,9 +4078,9 @@ impl Validate for UserCommandName {
         let s = self.0.print();
         s.len() > 1
             && s.starts_with(['Z', 'z'])
-            && !COMMAND_NAMES
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(&s))
+            && !COMMAND_NAMES.iter().any(|(name, abbr)| {
+                name.eq_ignore_ascii_case(&s) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(&s))
+            })
     }
 }
 
@@ -4235,6 +4304,14 @@ impl FromStr for UnknownCommand {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, String> {
+        // A known command lands here when its own grammar failed right after the word.
+        if COMMAND_NAMES.iter().any(|(name, abbr)| {
+            name.eq_ignore_ascii_case(s) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(s))
+        }) {
+            return Err(format!(
+                "'{s}' is a command, but its argument is missing or doesn't parse"
+            ));
+        }
         Err(format!(
             "'{s}' is not a recognized command; available: {}",
             COMMAND_NAMES
@@ -5632,9 +5709,6 @@ pub enum FunctionCall {
         args: CompileArgs,
         rp: StringEq!(")"),
     },
-    // Unlike every other special variable, `$ZVERSION` also has a one-argument function form
-    // (its abbreviation `$ZV` doesn't) -- easiest modeled as its own `FunctionCall` variant
-    // rather than teaching `SpecialVariable` about arguments generally.
     // Legacy `$ZPREVIOUS(glvn)`/`$ZP`: the last subscript at that level, a one-argument reverse
     // `$ORDER`. Modeled on its own rather than folded into `Order`.
     ZP {
@@ -5643,10 +5717,6 @@ pub enum FunctionCall {
         args: ZPArgs,
         rp: StringEq!(")"),
     },
-    // `$ZBITAND(b1,b2)`/`$ZBITOR`/`$ZBITXOR`: bitwise combination of two bitstrings.
-    // `$ZBITFIND(bits, value[, position])`: the position of the next bit with `value`.
-    // `$ZBITSTR(length[, value])`: a bitstring of `length` bits, all `value` (default 0).
-    // `$LOCK(lockname[, info_type])`: information about a held lock.
     // Legacy `$ZORDER(glvn)`/`$ZO` and `$NEXT(glvn)`/`$N`: the next node/subscript, like `$ORDER`.
     ZOrder {
         kw: Range<FnZOrder>,
@@ -5732,7 +5802,8 @@ pub enum FunctionCall {
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-4"), SGap>,
         n: More<ArgOf<Expr>>,
-        third: More<ArgOf<Expr>>,
+        // `$ZF(-4,2)` unloads every DLL: no third argument.
+        third: Option<More<ArgOf<Expr>>>,
         fourth: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
@@ -6647,8 +6718,9 @@ impl Validate for UnknownFunctionName {
     const REQUIREMENT: &'static str = "not be a known function";
     fn validate(&self) -> bool {
         let name = self.0.print();
-        !FUNCTION_NAMES.iter().any(|n| n.eq_ignore_ascii_case(&name))
-            && simple_function(&name).is_none()
+        !FUNCTION_KEYWORDS.iter().any(|(full, abbr)| {
+            full.eq_ignore_ascii_case(&name) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(&name))
+        }) && simple_function(&name).is_none()
             && hand_written_arity(&name).is_none()
     }
 }
@@ -6669,8 +6741,8 @@ impl UnknownFunctionCall {
     }
 }
 
-// Every full function name (including nested Bit/Extract/DText/Z*Kw calls) -- kept in sync by
-// hand, for `UnknownSpecialVariable::from_str`'s error message.
+// Every full function name, hand-written or in `SIMPLE_FUNCTIONS`, for the checker's did-you-mean
+// list; the style test keeps it in sync with `FUNCTION_KEYWORDS` and `SIMPLE_FUNCTIONS`.
 pub const FUNCTION_NAMES: &[&str] = &[
     "TEXT",
     "LENGTH",
@@ -6699,7 +6771,6 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "ISVECTOR",
     "INCREMENT",
     "ZINCREMENT",
-    "ZINCR",
     "JUSTIFY",
     "LIST",
     "LISTBUILD",
@@ -6792,7 +6863,6 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "ZVERSION",
     "ZPOWER",
     "ZPOSITION",
-    "ZP",
     "ZCRC",
     "ZBITGET",
     "ZBITAND",
@@ -7060,9 +7130,6 @@ pub struct RoutineNameAndLabel {
     )>,
 }
 
-#[derive(Grammar, Clone, PartialEq, Eq)]
-pub struct ZLangRoutineName(Raw<(StringEq!("^%ZLANG"), StringOf<IsRoutineNamePart>)>);
-
 #[derive(Grammar)]
 pub enum Label {
     Standard(RoutineNameAndLabel),
@@ -7089,18 +7156,7 @@ pub enum ScopeKeyword {
     Public(StringEqCI!("Public")),
 }
 
-#[derive(Grammar, Clone, PartialEq, Eq)]
-pub enum RoutineName {
-    ZWelcome(StringEq!("^ZWELCOME")),
-    ZAuthenticate(StringEq!("^ZAUTHENTICATE")),
-    ZAuthorize(StringEq!("^ZAUTHORIZE")),
-    ZMirror(StringEq!("^ZMIRROR")),
-    ZStart(StringEq!("^%ZSTART")),
-    ZStop(StringEq!("^%ZSTOP")),
-    ZJRead(StringEq!("^%ZJREAD")),
-    ZLang(ZLangRoutineName),
-    Other(RoutineNameAndLabel),
-}
+pub type RoutineName = RoutineNameAndLabel;
 
 #[derive(Grammar)]
 pub enum RoutineType {
@@ -7356,6 +7412,154 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn routine_names_carry_no_caret() {
+        routine(" d ^%ZSTART,^ZWELCOME,^%ZLANGC00,Tag^%ZSTOP\n").expect("Ok");
+        routine("#include ^ZWELCOME\n q\n").expect_err("an include is named without a caret");
+        Routine::scan("ROUTINE ^%ZSTART [Type=MAC]\n q\n").expect_err("a header names no caret");
+    }
+
+    #[test]
+    fn zseek_without_arguments() {
+        routine(" s p=$ZSEEK(),q=$ZSEEK(0,1),r=$ZSEEK(10)\n").expect("Ok");
+        routine(" s p=$ZSEEK(1,2,3)\n").expect_err("at most two");
+    }
+
+    #[test]
+    fn zf_minus_4_takes_two_arguments() {
+        routine(" s x=$ZF(-4,2),y=$ZF(-4,1,\"dll\"),z=$ZF(-4,2,id,1)\n").expect("Ok");
+        routine(" s x=$ZF(-4)\n").expect_err("the utility number is required");
+    }
+
+    #[test]
+    fn known_command_without_its_argument_is_not_reported_as_unknown() {
+        for line in [" set\n", " s\n", " merge\n", " zkill\n", " zk\n"] {
+            let err = routine(line).expect_err(line).to_string();
+            assert!(
+                err.contains("is a command, but its argument"),
+                "{line}: {err}"
+            );
+        }
+        let err = routine(" foo 1\n").expect_err("foo").to_string();
+        assert!(err.contains("is not a recognized command"), "{err}");
+    }
+
+    #[test]
+    fn z_command_abbreviation_without_its_argument_is_not_a_user_command() {
+        routine(" zk x\n zn \"USER\"\n ZDN x\n").expect("Ok");
+        routine(" zk\n").expect_err("ZKILL needs an argument");
+        routine(" zn\n").expect_err("ZNSPACE needs an argument");
+    }
+
+    #[test]
+    fn abbreviated_function_with_bad_arguments_is_not_unknown() {
+        for call in [
+            "$P(a)",
+            "$E()",
+            "$LG(a,1,2,3)",
+            "$ZDT()",
+            "$ZINCR()",
+            "$ZP()",
+        ] {
+            let err = routine(&format!(" s x={call}\n"))
+                .expect_err(call)
+                .to_string();
+            assert!(err.contains("argument"), "{call}: {err}");
+        }
+    }
+
+    #[test]
+    fn read_column_is_an_expression() {
+        routine(" r ?n,x:0 r ?(n+1),y:0 r ?$l(\"abc\"),z:0 r !?5,w\n").expect("Ok");
+    }
+
+    #[test]
+    fn variable_names_may_start_with_or_contain_any_letter() {
+        routine(" s Ω=1,aé=3,%é=2 s ^é=2,^a.é.b=1,^|\"USER\"|é=3,^%é=4\n").expect("Ok");
+    }
+
+    #[test]
+    fn language_cache_is_objectscript() {
+        let cls = ClassDefinition::parse(
+            "Class A.L\n{\n\nClassMethod M() [ Language = cache ]\n{\n quit 1\n}\n\n}\n",
+        )
+        .expect("Ok");
+        assert!(methods(&cls)[0].header.is_objectscript());
+    }
+
+    #[test]
+    fn legacy_index_collations() {
+        let index = |index: &str| {
+            let cls = ClassDefinition::parse(&format!(
+                "Class A.C Extends %Persistent\n{{\n\nProperty Name As %String;\n\n{index}\n\n}}\n"
+            ))?;
+            let collations: Vec<_> = cls
+                .member_list
+                .members
+                .seps
+                .iter()
+                .filter_map(|member| match member.deref() {
+                    Member::Index(index) => Some(index),
+                    _ => None,
+                })
+                .flat_map(|index| index.on_properties().unwrap_or_default())
+                .map(|key| key.collation())
+                .collect();
+            Ok::<_, Error>(collations)
+        };
+        assert_eq!(
+            index("Index A On Name As Upper;\n\nIndex B On Name As String(50);").expect("Ok"),
+            [Some("Upper".to_string()), Some("String(50)".to_string())]
+        );
+        index(
+            "Index A On Name As Space;\n\nIndex B On Name As AlphaUp;\n\nIndex C On Name As Mvr;",
+        )
+        .expect("Ok");
+        index("Index A On Name As Upper(50);").expect_err("only STRING takes a length");
+    }
+
+    #[test]
+    fn class_header_directives_in_any_order() {
+        let class =
+            |header: &str| ClassDefinition::parse(&format!("{header}\nClass A.H\n{{\n\n}}\n"));
+        class("Include %occInclude\nImport %SYS\n").expect("Ok");
+        class("Import %SYS\nIncludeGenerator %occInclude\nInclude %occInclude\n").expect("Ok");
+        assert!(
+            class("Include %occInclude\nInclude %occStatus\n").is_err(),
+            "IRIS refuses a repeat"
+        );
+    }
+
+    #[test]
+    fn index_key_kind_case() {
+        let class = |index: &str| {
+            ClassDefinition::parse(&format!(
+                "Class A.I Extends %Persistent\n{{\n\nProperty Tags As list Of %String;\n\n{index}\n\n}}\n"
+            ))
+        };
+        class("Index TagsIdx On Tags(elements);").expect("Ok");
+        class("Index TagsIdx On Tags(ELEMENTS) [ Data = (Tags(ELEMENTS)) ];").expect("Ok");
+        assert!(
+            class("Index TagsIdx On Tags(ELEMENTS) [ Data = (Tags(elements)) ];").is_err(),
+            "IRIS reads the Data form case-sensitively"
+        );
+    }
+
+    #[test]
+    fn structured_system_variable_abbreviations() {
+        routine(" w $d(^$J($j)),^$L(\"x\"),^$R(\"x\"),^$G(\"^x\"),^$GLOBAL(\"^x\")\n").expect("Ok");
+        routine(" w ^$JO($j)\n").expect_err("JO is neither JOB nor J");
+    }
+
+    #[test]
+    fn zparent_special_variable() {
+        routine(" w $ZPARENT,$ZP,$ZPI,$ZPOS,$ZPOSITION\n").expect("Ok");
+        assert!(matches!(
+            SpecialVariable::parse("ZPA"),
+            Ok(SpecialVariable::Unknown(_))
+        ));
     }
 
     #[test]

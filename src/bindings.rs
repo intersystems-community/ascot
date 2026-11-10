@@ -377,7 +377,9 @@ same_variants! {
 impl From<&cos::MethodLanguage> for Language {
     fn from(language: &cos::MethodLanguage) -> Self {
         match language {
-            cos::MethodLanguage::ObjectScript(_) => Self::Objectscript,
+            cos::MethodLanguage::ObjectScript(_) | cos::MethodLanguage::Cache(_) => {
+                Self::Objectscript
+            }
             cos::MethodLanguage::Python(_) => Self::Python,
             cos::MethodLanguage::TSQL(_) => Self::Tsql,
             cos::MethodLanguage::ISPL(_) => Self::Ispl,

@@ -1737,6 +1737,13 @@ impl CheckCommandInner for cos::Command {
                             let string = PowerTy::from(Ty::from("%String"));
                             check_set_target(target, string, env.range(target), env, flow)?;
                         }
+                        if let cos::ReadArg::FChars(fchars) = arg {
+                            for fchar in fchars.iter() {
+                                if let cos::ReadFChar::Tab(_, expr) = fchar {
+                                    expr.to_ty(env, flow)?;
+                                }
+                            }
+                        }
                     }
                     Ok(())
                 })
