@@ -207,3 +207,15 @@ fn every_kind_has_an_example_or_a_reason_not_to() {
         "kinds without an example must be exactly those `NO_EXAMPLE` excuses"
     );
 }
+
+#[test]
+fn the_reference_has_a_page_per_kind() {
+    let pages: BTreeSet<String> = ascot::reference::pages()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    let wanted: BTreeSet<String> = (TypeErrorKind::CODES.iter().map(|code| format!("{code}.md")))
+        .chain(["index.md".to_string()])
+        .collect();
+    assert_eq!(pages, wanted);
+}

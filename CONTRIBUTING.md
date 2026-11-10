@@ -61,6 +61,17 @@ one marker per diagnostic the line gets. Two checks hold the example to its word
   ```` ```objectscript compiles ````, must compile; ```` ```objectscript rejected ```` says IRIS
   refuses the example although ascot only warns or hints. CI runs it in the `iris` job.
 
+The doc comment is also what a user reads: `ascot diagnostics DIR` renders every kind's code,
+severity, message and doc comment as Markdown pages, an index and one per code, and `docs/` is
+served by GitHub Pages as the reference the code at the end of a message links to. The convention:
+
+- `docs/unreleased/` is the reference of `main`. After a change to `type_error_kinds!`, run
+  `cargo run -- diagnostics docs/unreleased` and commit the result; CI fails when it is stale.
+- A release PR copies it, `cp -r docs/unreleased docs/<version>`, and adds the version to
+  `docs/index.md`. A release's binary links to `/<version>/<CODE>`, so CI fails a PR that bumps
+  the version without the directory, and the Release workflow refuses a tag without it.
+- The generated pages are never edited by hand; the doc comment is the place to write.
+
 A private corpus of annotated ObjectScript pins what ascot reports on every file, hints and
 all. It is not run in CI, so a PR that changes what is reported should say so in its
 description, and the maintainer runs the corpus against it and before every release.

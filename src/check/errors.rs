@@ -378,8 +378,8 @@ impl<T> IntoTypeError<T> for Result<T, QuasiTypeError> {
     }
 }
 
-// Declares `TypeErrorKind` with each variant's diagnostic code next to it, so the code, the
-// variant's docs.rs anchor and the code shown in its docs all come from one place.
+// Declares `TypeErrorKind` with each variant's diagnostic code next to it, so the code, its
+// entry in the reference and the code shown in its docs all come from one place.
 // Each variant's `#[message]` is its message, with its fields in `{braces}`; its doc comment, if
 // any, explains it. `#[severity]` names a `DiagnosticSeverity` variant.
 macro_rules! type_error_kinds {
@@ -428,6 +428,10 @@ macro_rules! type_error_kinds {
             /// examples `tests/examples.rs` and `scripts/verify-examples.py` check.
             pub const DOCS: &[(&str, &str)] = &[$(($code, concat!($($doc, "\n",)*)),)*];
 
+            /// Every kind's code, severity and message template, for `reference::pages`.
+            pub const REFERENCE: &[(&str, DiagnosticSeverity, &str)] =
+                &[$(($code, DiagnosticSeverity::$severity, $message),)*];
+
             /// This kind's diagnostic code.
             pub fn code(&self) -> &'static str {
                 match self {
@@ -441,14 +445,13 @@ macro_rules! type_error_kinds {
                 }
             }
 
-            /// This kind's documentation on docs.rs, for the running version.
+            /// This kind's page in the reference of the running version, `docs/<version>` on
+            /// GitHub Pages, which `reference::pages` renders.
             pub fn code_description(&self) -> String {
-                let variant = match self {
-                    $(Self::$variant { .. } => stringify!($variant),)*
-                };
                 format!(
-                    "https://docs.rs/ascot/{}/ascot/check/enum.TypeErrorKind.html#variant.{variant}",
-                    env!("CARGO_PKG_VERSION")
+                    "https://intersystems-community.github.io/ascot/{}/{}",
+                    env!("CARGO_PKG_VERSION"),
+                    self.code()
                 )
             }
         }

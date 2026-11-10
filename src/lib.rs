@@ -62,6 +62,7 @@ mod macro_expand;
 mod mask;
 #[cfg(all(not(target_arch = "wasm32"), feature = "mcp"))]
 pub mod mcp;
+pub mod reference;
 #[cfg(not(target_arch = "wasm32"))]
 mod release;
 mod render;
@@ -2791,13 +2792,14 @@ mod tests {
                 "CannotFindClass",
             ),
         ];
-        for (diagnostic, kind, variant) in cases {
+        for (diagnostic, kind, _) in cases {
             assert_eq!(diagnostic.code, kind.code());
             assert_eq!(
                 diagnostic.code_description,
                 format!(
-                    "https://docs.rs/ascot/{}/ascot/check/enum.TypeErrorKind.html#variant.{variant}",
-                    env!("CARGO_PKG_VERSION")
+                    "https://intersystems-community.github.io/ascot/{}/{}",
+                    env!("CARGO_PKG_VERSION"),
+                    kind.code()
                 )
             );
         }
