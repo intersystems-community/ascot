@@ -1593,13 +1593,27 @@ impl CheckCommandInner for cos::Command {
                                         ));
                                     }
                                 }
+                                cos::NewArgument::Single(cos::AllowMacro::Plain(
+                                    cos::AllowIndirection::Indirection(indir),
+                                )) => {
+                                    indir.to_ty(env, flow)?;
+                                }
                                 cos::NewArgument::Single(name) => {
                                     flow.handle_new(name.print(), env.range(target))?;
                                 }
                                 cos::NewArgument::Except(keep) => {
-                                    let keep: Vec<String> =
-                                        keep.items(env).map(|name| name.print()).collect();
-                                    flow.handle_new_except(&keep, env.range(target))?;
+                                    let mut names = Vec::new();
+                                    for name in keep.items(env) {
+                                        match name {
+                                            cos::AllowMacro::Plain(
+                                                cos::AllowIndirection::Indirection(indir),
+                                            ) => {
+                                                indir.to_ty(env, flow)?;
+                                            }
+                                            _ => names.push(name.print()),
+                                        }
+                                    }
+                                    flow.handle_new_except(&names, env.range(target))?;
                                 }
                             }
                         }
