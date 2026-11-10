@@ -3182,8 +3182,6 @@ impl<T> CheckExprInner for ExprOps<T> {
 
 // The base of a member operation, keeping a collection property a collection (rather than its
 // `%Collection.Abstract*` class) so `..List.GetAt(i)` is typed by the element.
-// The base of a member access as a property, so that a collection property keeps its element
-// type for the collection method called on it.
 fn base_property<'a, T>(
     base: &Range<ExprOps<T>>,
     env: &CodeEnv<'a>,
