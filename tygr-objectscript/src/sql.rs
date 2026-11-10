@@ -68,7 +68,9 @@ impl Validate for SQLIdentNonKeyword {
     }
 }
 
-// SQL reserved words, per https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_reservedwords
+// The words an alias cannot be: IRIS's reserved words, per
+// https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_reservedwords,
+// plus the clause starters LIMIT, OFFSET and ORDER, which IRIS does not reserve.
 fn is_sql_reserved_keyword(word: &str) -> bool {
     matches!(
         word,
@@ -303,6 +305,7 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "%INORDER"
             | "%INTERNAL"
             | "%INTEXT"
+            | "%INTOLIST"
             | "%INTRANS"
             | "%INTRANSACTION"
             | "%KEY"
@@ -311,8 +314,10 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "%MERGE"
             | "%MINUS"
             | "%MVR"
+            | "%NOBSL"
             | "%NOCHECK"
             | "%NODELDATA"
+            | "%NOFIXEDSTATS"
             | "%NOFLATTEN"
             | "%NOFPLAN"
             | "%NOINDEX"
@@ -352,6 +357,7 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "CONSTRAINTS"
             | "ENDEXEC"
             | "LEADING"
+            | "PARTITION"
             | "SHARD"
     )
 }
@@ -6884,5 +6890,13 @@ mod tests {
             "SELECT Name FROM %IGNOREINDEX SQLUser.t.* SQLUser.t",
             "SELECT Name FROM t WHERE %ID %FIND SEARCH_INDEX(t.NameIdx, 'foo')",
         ]);
+    }
+
+    #[test]
+    fn reserved_words_are_not_aliases() {
+        all_ok(&["SELECT Name %INTOLIST :x FROM t", "SELECT a FROM %NOBSL t"]);
+        assert!(SQL::parse("SELECT 1 AS Partition INTO :x").is_err());
+        assert!(SQL::parse("SELECT a FROM t %NOBSL").is_err());
+        assert!(SQL::parse("SELECT a FROM t Partition").is_err());
     }
 }
