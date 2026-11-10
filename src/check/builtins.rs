@@ -1311,9 +1311,10 @@ fn check_out_var<'a>(
     Ok(())
 }
 
-/// `$LISTNEXT(list, ptr, value)` iterates a list. `ptr` becomes a defined
-/// integer unconditionally, but `value` receives an element only when the call
-/// returns true — mirroring `$ORDER`'s flow-sensitive target.
+/// `$LISTNEXT(list, ptr, value)` iterates a list. `ptr` is read (IRIS raises `<FUNCTION>` on an
+/// undefined or empty pointer), then becomes a defined integer unconditionally, but `value`
+/// receives an element only when the call returns true — mirroring `$ORDER`'s flow-sensitive
+/// target.
 fn check_listnext<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1322,6 +1323,7 @@ fn check_listnext<'a>(
     value: &Range<Variable>,
 ) -> Result<PowerTy, QuasiTypeError> {
     let _ = list.to_ty(env, flow)?;
+    let _ = ptr.to_ty(env, flow)?;
     check_out_var(env, flow, Some(ptr), "%Integer")?;
     if let Left(local) = value.as_local(env, flow)? {
         let range = env.range(value);
