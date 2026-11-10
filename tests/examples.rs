@@ -218,4 +218,11 @@ fn the_reference_has_a_page_per_kind() {
         .chain(["index.md".to_string()])
         .collect();
     assert_eq!(pages, wanted);
+    // GitHub Pages runs the pages through Liquid, which reads these as template syntax.
+    for (name, text) in ascot::reference::pages() {
+        assert!(
+            !text.contains("{{") && !text.contains("{%"),
+            "{name} has Liquid syntax"
+        );
+    }
 }

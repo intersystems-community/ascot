@@ -87,17 +87,17 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A8997](A8997.md) | Unexpected return value of type '{actual}' |
 | [A9421](A9421.md) | {value} is a number here, implicitly converted to the string "{value}" |
 | [S2839](S2839.md) | {kind} `{found}` should be written `{expected}` |
-| [S3627](S3627.md) | Put {wanted} before `}}` |
+| [S3627](S3627.md) | Put {wanted} before `}` |
 | [S3918](S3918.md) | The style allows {max} `New` per block; this is one more |
 | [S4151](S4151.md) | Use `Return` to leave a method or procedure; `Quit` is for loops and `Try` blocks |
-| [S4933](S4933.md) | Put {wanted} after `{{` |
+| [S4933](S4933.md) | Put {wanted} after `{` |
 | [S5260](S5260.md) | The style allows {max} command(s) per line; this is one more |
 | [S5583](S5583.md) | Put {wanted} |
 | [S6307](S6307.md) | Put the postconditional on the command keyword, not on its argument |
 | [S7126](S7126.md) | Describe this {kind}: its body is {lines} lines |
 | [S7442](S7442.md) | Join these conditions with `{wanted}` |
-| [S8215](S8215.md) | Put {wanted} before `{{` |
-| [S9048](S9048.md) | Put {wanted} between `}}` and `{keyword}` |
+| [S8215](S8215.md) | Put {wanted} before `{` |
+| [S9048](S9048.md) | Put {wanted} between `}` and `{keyword}` |
 
 ## Information
 
