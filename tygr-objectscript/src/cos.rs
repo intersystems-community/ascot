@@ -3544,14 +3544,65 @@ pub struct MemberList {
     close: StringEq!("}"),
 }
 
+// IRIS compiles the three in any order, one of each (a repeat fails the load).
 #[derive(Grammar)]
+pub enum ClassDirective {
+    Import(Import),
+    Include(IncludeCode),
+    IncludeGenerator(IncludeGeneratorCode),
+}
+
+impl ClassDirective {
+    pub fn gap(&self) -> &ImportIncludeGap {
+        match self {
+            ClassDirective::Import(d) => &d.gap,
+            ClassDirective::Include(d) => &d.gap,
+            ClassDirective::IncludeGenerator(d) => &d.gap,
+        }
+    }
+}
+
+#[derive(Grammar)]
+#[grammar(validated)]
 pub struct ClassDefinitionHeader {
     pub gap_start: ImportIncludeGap,
-    pub import: Option<Import>,
-    pub include: Option<IncludeCode>,
-    pub include_gen: Option<IncludeGeneratorCode>,
+    pub directives: Vec<ClassDirective>,
     pub class_keyword: (StringEqCI!("Class"), Space1),
     pub name: Range<ClassName>,
+}
+
+impl Validate for ClassDefinitionHeader {
+    const REQUIREMENT: &'static str = "name Import, Include and IncludeGenerator at most once each";
+    fn validate(&self) -> bool {
+        let count =
+            |is: fn(&ClassDirective) -> bool| self.directives.iter().filter(|d| is(d)).count();
+        count(|d| matches!(d, ClassDirective::Import(_))) <= 1
+            && count(|d| matches!(d, ClassDirective::Include(_))) <= 1
+            && count(|d| matches!(d, ClassDirective::IncludeGenerator(_))) <= 1
+    }
+}
+
+impl ClassDefinitionHeader {
+    pub fn import(&self) -> Option<&Import> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::Import(import) => Some(import),
+            _ => None,
+        })
+    }
+
+    pub fn include(&self) -> Option<&IncludeCode> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::Include(include) => Some(include),
+            _ => None,
+        })
+    }
+
+    pub fn include_gen(&self) -> Option<&IncludeGeneratorCode> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::IncludeGenerator(include) => Some(include),
+            _ => None,
+        })
+    }
 }
 
 #[derive(Grammar)]
@@ -7363,6 +7414,18 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn class_header_directives_in_any_order() {
+        let class =
+            |header: &str| ClassDefinition::parse(&format!("{header}\nClass A.H\n{{\n\n}}\n"));
+        class("Include %occInclude\nImport %SYS\n").expect("Ok");
+        class("Import %SYS\nIncludeGenerator %occInclude\nInclude %occInclude\n").expect("Ok");
+        assert!(
+            class("Include %occInclude\nInclude %occStatus\n").is_err(),
+            "IRIS refuses a repeat"
+        );
     }
 
     #[test]
