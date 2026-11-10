@@ -779,7 +779,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7831"]
     #[severity = Error]
-    #[message = "Include file '{name}' is not defined in the current workspace"]
+    #[message = "Cannot find include file '{name}' in the workspace or on the IRIS instance"]
     CannotFindInclude { name: String },
     /// The condition of an `#if` or `#elseif` is not the literal `1` or `0` once its macros are
     /// expanded. IRIS evaluates any expression at compile time and compiles the branch it picks;

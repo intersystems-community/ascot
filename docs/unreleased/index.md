@@ -41,7 +41,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A7342](A7342.md) | Argument {position} of {function} can't be left empty |
 | [A7461](A7461.md) | Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call |
 | [A7604](A7604.md) | Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>); `{label}()` would make it a function |
-| [A7831](A7831.md) | Include file '{name}' is not defined in the current workspace |
+| [A7831](A7831.md) | Cannot find include file '{name}' in the workspace or on the IRIS instance |
 | [A7895](A7895.md) | '{format}' is not a valid $FNUMBER format: {reason} |
 | [A8061](A8061.md) | Cannot find class '{cls}' in the workspace or on the IRIS instance |
 | [A8073](A8073.md) | {err} |
