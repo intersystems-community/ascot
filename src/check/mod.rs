@@ -436,10 +436,6 @@ impl MethodDetails {
             .collect();
         let local_out = self.out.clone().map(|out| Some(qualified(out)));
         let local_out = WithRange::new(local_out.it, shifter.unrange(local_out.range));
-        let is_generator = matches!(
-            mode,
-            Some(cos::CodeMode::Generator(..) | cos::CodeMode::ObjectGenerator(..))
-        );
         let in_doc_coordinates = std::cell::RefCell::new((Vec::new(), Vec::new()));
         // `?` is deferred until after relocation below, so an early return doesn't skip
         // relocating diagnostics/references/hints already recorded before the error.
@@ -463,9 +459,6 @@ impl MethodDetails {
                     mode,
                     body: WithRange::new(&body_text, self.body.range),
                 };
-                if is_generator {
-                    flow.mark_incomplete();
-                }
                 // Checked against the class document itself, in argument order, before the body;
                 // their diagnostics need no relocation, so they're set aside until that's done.
                 let marks = (env.base.soft_diagnostics_mark(), env.base.references_mark());
@@ -618,7 +611,10 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 flow.handle_return(body.as_ref().map(|_| Some(body_type)))
             }
             // todo: check other kinds of ObjectScript methods
-            _ => flow.handle_void(),
+            _ => {
+                flow.mark_incomplete();
+                flow.handle_void()
+            }
         }
     }
 }
