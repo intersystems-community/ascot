@@ -2664,10 +2664,7 @@ fn check_target<'a>(
                     flow.handle_get(local.clone())?;
                     Ok(Some(Left(local)))
                 }
-                Right(_) => {
-                    let _ = variable.to_maybe_ty(env, flow)?;
-                    Ok(None)
-                }
+                Right(_) => Ok(None),
             };
         }
         SetTarget::Fun(fun) => builtins::check_settarget_fun(fun, env, flow)?,
