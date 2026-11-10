@@ -4662,8 +4662,8 @@ pub type ViewColumnList = Suffix<FList1, Option<(Space, StringEqCI!("AS"))>>;
 pub enum ViewWith {
     ReadOnly(StringEqCI!("READ"), Space, StringEqCI!("ONLY")),
     Check {
+        levels: Option<(LevelsClause, Space)>,
         check_kw: StringEqCI!("CHECK"),
-        levels: Option<(Space, LevelsClause)>,
         option_kw: (Space, StringEqCI!("OPTION")),
         constraint: Option<(Space, StringEqCI!("CONSTRAINT"), Space, Ident)>,
     },
@@ -6911,5 +6911,17 @@ mod tests {
             "ALTER TABLE t CONVERT SHARDED",
             "ALTER TABLE t CONVERT SHARD",
         ]);
+    }
+
+    #[test]
+    fn view_check_option_level() {
+        all_ok(&[
+            "CREATE VIEW v AS SELECT a FROM t WITH CASCADED CHECK OPTION",
+            "CREATE VIEW v AS SELECT a FROM t WITH CASCADE CHECK OPTION",
+            "CREATE VIEW v AS SELECT a FROM t WITH LOCAL CHECK OPTION",
+            "CREATE VIEW v AS SELECT a FROM t WITH CHECK OPTION",
+        ]);
+        assert!(SQL::parse("CREATE VIEW v AS SELECT a FROM t WITH CHECK CASCADED OPTION").is_err());
+        assert!(SQL::parse("CREATE VIEW v AS SELECT a FROM t WITH CHECK LOCAL OPTION").is_err());
     }
 }
