@@ -382,6 +382,7 @@ impl From<&cos::MethodLanguage> for Language {
             cos::MethodLanguage::TSQL(_) => Self::Tsql,
             cos::MethodLanguage::ISPL(_) => Self::Ispl,
             cos::MethodLanguage::JavaScript(_) => Self::Javascript,
+            cos::MethodLanguage::MVBasic(_) => Self::Mvbasic,
         }
     }
 }
