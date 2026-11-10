@@ -3114,7 +3114,7 @@ pub enum GrantCmd {
         select_kw: StringEqCI!("SELECT"),
         on_kw: (Space, StringEqCI!("ON"), Space),
         cube_kw: StringEqCI!("CUBE"),
-        cubes_suffix: Option<StringEq!("S")>,
+        cubes_suffix: Option<StringEqCI!("S")>,
         cubes: (Space, CubeList),
         to_kw: (Space, StringEqCI!("TO"), Space),
         grantees: Grntee,
@@ -3155,7 +3155,7 @@ pub enum RevokeCmd {
         )>,
         privileges: SimplePrivs,
         on_kw: (Space, StringEqCI!("ON"), Space),
-        objects: VecSep<Object, (Space, StringEq!(","), Space)>,
+        objects: Objcts,
         from_kw: (Space, StringEqCI!("FROM"), Space),
         grantees: Grntee,
         behavior: Option<(Space, RevokeBehavior)>,
@@ -3190,8 +3190,8 @@ pub enum RevokeCmd {
         select_kw: StringEqCI!("SELECT"),
         on_kw: (Space, StringEqCI!("ON"), Space),
         cube_kw: StringEqCI!("CUBE"),
-        cubes_suffix: Option<StringEq!("S")>,
-        cubes: CubeList,
+        cubes_suffix: Option<StringEqCI!("S")>,
+        cubes: (Space, CubeList),
         from_kw: (Space, StringEqCI!("FROM"), Space),
         grantees: Grntee,
         behavior: Option<(Space, RevokeBehavior)>,
@@ -3325,10 +3325,8 @@ pub enum Objcts {
         space: Space,
         schemas: VecSep<Schema, (Space, StringEq!(","), Space)>,
     },
-    Tables(VecSep<Object, (Space, StringEq!(","), Space)>),
-    Cubes(CubeList),
-    MLConfigs(MLConfigurationList),
     ForeignServers(ForeignServerPrivilegeClause),
+    Tables(VecSep<Object, (Space, StringEq!(","), Space)>),
 }
 
 #[derive(Grammar)]
@@ -3354,14 +3352,19 @@ pub struct ForeignServerPrivilegeList(VecSep<TName, (Space, StringEq!(","), Spac
 pub struct ForeignServerPrivilegeClause {
     pub foreign_kw: Option<(StringEqCI!("FOREIGN"), Space)>,
     pub server_kw: ServersServer,
-    pub servers: (Space, ForeignServerPrivilegeList),
+    // A table named Servers: GRANT SELECT ON Servers TO u1 is a table grant on IRIS.
+    pub servers: (
+        Space1,
+        NotFollowedBy<(Either<StringEqCI!("TO"), StringEqCI!("FROM")>, Space1)>,
+        ForeignServerPrivilegeList,
+    ),
 }
 
 #[derive(Grammar)]
 #[grammar(name = "SERVERS/SERVER")]
 pub enum ServersServer {
-    Server(StringEqCI!("SERVER")),
     Servers(StringEqCI!("SERVERS")),
+    Server(StringEqCI!("SERVER")),
 }
 
 #[derive(Grammar)]
@@ -6848,6 +6851,27 @@ mod tests {
             "SELECT {fn NOW()} + 1 FROM t",
             "SELECT p.Name FROM {oj t p LEFT OUTER JOIN u c ON p.a = c.a}",
             "SELECT p.Name FROM {oj t p LEFT OUTER JOIN u c ON p.a = c.a }",
+        ]);
+    }
+
+    #[test]
+    fn grant_revoke_objects() {
+        all_ok(&[
+            "GRANT USE ON FOREIGN SERVER s1 TO u1",
+            "GRANT USE ON FOREIGN SERVERS s1, s2 TO u1",
+            "GRANT USE ON SERVER s1 TO u1",
+            "GRANT SELECT ON Servers TO u1",
+            "GRANT SELECT ON Server TO u1",
+            "GRANT SELECT ON ServerLog TO u1",
+            "GRANT SELECT ON Servers1 TO u1",
+            "GRANT SELECT ON Servers, Other TO u1",
+            "grant select on cubes c1, c2 to u1",
+            "REVOKE SELECT ON CUBE c1 FROM u1",
+            "REVOKE SELECT ON CUBES c1, c2 FROM u1",
+            "REVOKE USE ON FOREIGN SERVER s1 FROM u1",
+            "REVOKE SELECT ON Servers FROM u1",
+            "REVOKE SELECT ON SCHEMA SQLUser FROM u1",
+            "REVOKE SELECT ON * FROM u1",
         ]);
     }
 }
