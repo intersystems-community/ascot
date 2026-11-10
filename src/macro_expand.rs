@@ -5,8 +5,9 @@
 //! `MacroDefinitions` from a routine and the `.inc` files it includes (found in the `Workspace`,
 //! or via IRIS), (2) produces the expanded text, and (3) builds a `SourceMap` that translates
 //! positions in the expanded text back to the original file. The map is how diagnostics from
-//! `check/` land on the right line and how hover shows "Expands to". Classes are not
-//! macro-expanded yet.
+//! `check/` land on the right line and how hover shows "Expands to". A class's method bodies
+//! are expanded one by one by `expand_method_body`, with its `Include`s' definitions and the
+//! macros earlier bodies `#define`d; hover expansion is routine-only.
 
 use std::{
     borrow::Cow,

@@ -1199,8 +1199,8 @@ impl Workspace {
             .map(|(_, ty)| ty)
     }
 
-    // What the macro invocation at `position` expanded to, if any. `.mac`/`.int` only -- macros
-    // in a `.cls` method body aren't expanded at all today, and a `.inc` file's own macros can't
+    // What the macro invocation at `position` expanded to, if any. `.mac`/`.int` only -- a
+    // `.cls` method body's expansion isn't kept for hover, and a `.inc` file's own macros can't
     // be expanded independently of whoever `#include`s it (see `DocDetails::Inc`).
     fn macro_expansion(&self, uri: String, position: bindings::Position) -> Option<String> {
         let this = self.borrow();
