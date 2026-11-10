@@ -1194,8 +1194,10 @@ impl<'a> WorkspaceEnv<'a> {
         }
     }
 
-    // IRIS resolves an unqualified class name (`Extends AbstractModel`, `##class(Date)`) against
-    // the referencing class's own package, then its `Import`s, then `User`.
+    // IRIS resolves an unqualified class name (`Extends AbstractModel`, `##class(Date)`) in the
+    // referencing class's own package and its `Import`s, searched together: a name in more than
+    // one is a compile error (MPP5070 for a body reference, #5373 for a property type or
+    // superclass). A routine's resolves against `User`, which is tried last here for a class too.
     pub(crate) fn qualify_class_name(&self, name: &str, context: Option<&str>) -> String {
         let mut name = name.to_string();
         normalize_class_name(&mut name);
