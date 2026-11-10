@@ -132,8 +132,9 @@ struct OutputArgs {
     ///
     /// - `text`: one line per diagnostic, for reading.
     ///
-    /// - `lsp`: JSON, the diagnostics of each file as LSP `Diagnostic` objects, as the language
-    ///   server publishes them.
+    /// - `lsp`: JSON, the diagnostics of each file as the MCP `check` tool returns them: LSP-like
+    ///   records (range, severity, code, message, related information) in the WIT `diagnostic`
+    ///   record's spelling.
     ///
     /// - `sarif`: SARIF 2.1.0, for code scanning.
     ///
