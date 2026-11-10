@@ -854,9 +854,17 @@ impl<'a> Flow<'a> {
     // it may also read what this body assigns, so the deferred reports can't be trusted.
     pub(crate) fn arm_trap(&mut self, var: TrapVar, label: String) -> Result<(), QuasiTypeError> {
         let bindings = self.bindings()?.clone();
+        let undeclared = self.undeclared();
         self.mark_incomplete();
         self.traps.active = Some((var, Some(label.clone())));
-        self.traps.joins.insert(label, Join { var, bindings });
+        match self.traps.joins.get_mut(&label) {
+            Some(join) => join
+                .bindings
+                .merge(Some(bindings), self.shared.env, &undeclared)?,
+            None => {
+                self.traps.joins.insert(label, Join { var, bindings });
+            }
+        }
         Ok(())
     }
 
