@@ -3216,10 +3216,15 @@ fn check_member_of<'a>(
 ) -> Result<Option<Ty>, QuasiTypeError> {
     if let PropertyTy::Collection { kind, element } = &base
         && let Some(args) = args
-        && let Some(proc) = collection_method(*kind, element, &mem.id())
     {
-        let proc = TyProcedureOrAny::Procedure(proc);
-        return check_call(env, flow, proc, args.items(env), env.range(mem));
+        let datatype = match element {
+            Ty::OREF(ClsOrIns::Ins(cty)) => env.is_datatype(&env.qualify_class_name(&cty.name)),
+            _ => None,
+        };
+        if let Some(proc) = collection_method(*kind, element, &mem.id(), datatype) {
+            let proc = TyProcedureOrAny::Procedure(proc);
+            return check_call(env, flow, proc, args.items(env), env.range(mem));
+        }
     }
     check_member(base.to_ty(), mem, args, env, flow)
 }
@@ -3230,6 +3235,7 @@ fn collection_method(
     kind: CollectionClass,
     element: &Ty,
     name: &str,
+    datatype: Option<bool>,
 ) -> Option<std::sync::Arc<TyProcedure>> {
     let key = kind.key_ty();
     let element = element.clone();
@@ -3242,7 +3248,28 @@ fn collection_method(
         variadic: false,
     };
     let (normal_args, out) = match name {
-        "GetAt" | "RemoveAt" => (vec![arg("key", key, None)], element),
+        // The `*OfDT` classes default the key and take `RemoveAt(key)`; the `*OfObj` classes
+        // require it and take `RemoveAt(key, Output success)`. An unknown element gets both.
+        "GetAt" => {
+            let mut key = arg("key", key, None);
+            if datatype != Some(false) {
+                key.default = Some(
+                    match kind {
+                        CollectionClass::List => "0",
+                        CollectionClass::Array => "\"\"",
+                    }
+                    .into(),
+                );
+            }
+            (vec![key], element)
+        }
+        "RemoveAt" => {
+            let mut args = vec![arg("key", key, None)];
+            if datatype != Some(true) {
+                args.push(arg("success", Ty::from("%Boolean"), Some(RefMode::Output)));
+            }
+            (args, element)
+        }
         "GetNext" | "GetPrevious" => (vec![arg("key", key, Some(RefMode::ByRef))], element),
         "SetAt" => (
             vec![arg("element", element, None), arg("key", key, None)],
