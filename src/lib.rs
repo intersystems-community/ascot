@@ -1372,7 +1372,7 @@ mod tests {
             assert!(
                 diagnostics
                     .iter()
-                    .any(|d| d.message.contains("Include file 'Shared' is not defined")),
+                    .any(|d| d.message.contains("Cannot find include file 'Shared'")),
                 "{diagnostics:?}"
             );
         }
