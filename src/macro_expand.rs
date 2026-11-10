@@ -1278,12 +1278,31 @@ impl DoneList {
             include_directives: self.include_directives,
             include_names: self.include_names,
         };
+        // Reported against the document checked: one from an included file sits at the top-level
+        // `#include` that pulled it in, the hops down as related information.
         map.unresolved = self
             .unresolved
             .into_iter()
             .filter_map(|(make, name, origin)| {
-                let range = map.range_in(&origin.uri, &origin.range)?;
-                Some(make(name, range).into())
+                let mut chain = vec![&origin];
+                while let Some(parent) = chain.last()?.parent.as_deref() {
+                    chain.push(parent);
+                }
+                let top = chain.pop()?;
+                let mut diagnostic: Diagnostic =
+                    make(name, map.range_in(&top.uri, &top.range)?).into();
+                for hop in chain.into_iter().rev() {
+                    diagnostic
+                        .related_information
+                        .push(bindings::DiagnosticRelatedInformation {
+                            location: Location::new(
+                                hop.uri.clone()?,
+                                map.range_in(&hop.uri, &hop.range)?,
+                            ),
+                            message: "↳ In the included file.".into(),
+                        });
+                }
+                Some(diagnostic)
             })
             .collect();
         map
