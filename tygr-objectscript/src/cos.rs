@@ -7130,9 +7130,6 @@ pub struct RoutineNameAndLabel {
     )>,
 }
 
-#[derive(Grammar, Clone, PartialEq, Eq)]
-pub struct ZLangRoutineName(Raw<(StringEq!("^%ZLANG"), StringOf<IsRoutineNamePart>)>);
-
 #[derive(Grammar)]
 pub enum Label {
     Standard(RoutineNameAndLabel),
@@ -7159,18 +7156,7 @@ pub enum ScopeKeyword {
     Public(StringEqCI!("Public")),
 }
 
-#[derive(Grammar, Clone, PartialEq, Eq)]
-pub enum RoutineName {
-    ZWelcome(StringEq!("^ZWELCOME")),
-    ZAuthenticate(StringEq!("^ZAUTHENTICATE")),
-    ZAuthorize(StringEq!("^ZAUTHORIZE")),
-    ZMirror(StringEq!("^ZMIRROR")),
-    ZStart(StringEq!("^%ZSTART")),
-    ZStop(StringEq!("^%ZSTOP")),
-    ZJRead(StringEq!("^%ZJREAD")),
-    ZLang(ZLangRoutineName),
-    Other(RoutineNameAndLabel),
-}
+pub type RoutineName = RoutineNameAndLabel;
 
 #[derive(Grammar)]
 pub enum RoutineType {
@@ -7426,6 +7412,13 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn routine_names_carry_no_caret() {
+        routine(" d ^%ZSTART,^ZWELCOME,^%ZLANGC00,Tag^%ZSTOP\n").expect("Ok");
+        routine("#include ^ZWELCOME\n q\n").expect_err("an include is named without a caret");
+        Routine::scan("ROUTINE ^%ZSTART [Type=MAC]\n q\n").expect_err("a header names no caret");
     }
 
     #[test]
