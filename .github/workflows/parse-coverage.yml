@@ -1,0 +1,47 @@
+name: Parse coverage
+
+# Every class, routine and include file IRIS ships must parse. The two namespaces that hold them,
+# IRIS Community's %SYS and IRIS for Health Community's HSLIB (which has all of HSSYS and more), are
+# exported from the release's image and run through `ascot analyze` for the two syntax codes,
+# A1727 and A8073; one line of either fails the job.
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: The image tag, e.g. 2026.2
+        required: true
+        default: '2026.2'
+  pull_request:
+    paths:
+      - tygr-objectscript/**
+      - src/macro_expand.rs
+      - scripts/parse-coverage.sh
+      - .github/workflows/parse-coverage.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: parse-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: iris-community
+            namespace: '%SYS'
+          - image: irishealth-community
+            namespace: HSLIB
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: Export ${{ matrix.namespace }} of ${{ matrix.image }} and parse it
+        run: scripts/parse-coverage.sh '${{ inputs.release || '2026.2' }}' ${{ matrix.image }} '${{ matrix.namespace }}'
