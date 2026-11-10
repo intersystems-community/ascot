@@ -451,11 +451,11 @@ fn analyze<'a>(
     workspace.set_diagnostic_filter(filter);
     insert_files(&workspace, &loaded);
 
-    let count = report_diagnostics(&workspace, &files, format);
-    eprintln!("{} diagnostic(s) across {} file(s)", count, files.len());
+    let (total, failing) = report_diagnostics(&workspace, &files, format);
+    eprintln!("{total} diagnostic(s) across {} file(s)", files.len());
     // `exit` runs no destructors; dropping the workspace ends its IRIS session.
     drop(workspace);
-    if count > 0 {
+    if failing > 0 {
         exit(1);
     }
 }
@@ -503,9 +503,10 @@ fn insert_files(workspace: &Workspace, files: &[PathBuf]) {
     }
 }
 
-// Prints every diagnostic, but only `Error`/`Warning` count toward the returned total (which
-// decides the exit code) -- a hint is worth seeing, not worth failing a build over.
-fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) -> usize {
+// Prints every diagnostic and returns how many there are and how many are an `Error` or
+// `Warning`, which alone decide the exit code -- a hint is worth seeing, not worth failing a
+// build over.
+fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) -> (usize, usize) {
     use ascot::bindings::DiagnosticSeverity::*;
     let files: Vec<FileDiagnostics> = files
         .iter()
@@ -515,7 +516,8 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
             FileDiagnostics { uri, diagnostics }
         })
         .collect();
-    let count = files
+    let total: usize = files.iter().map(|file| file.diagnostics.len()).sum();
+    let failing = files
         .iter()
         .flat_map(|file| &file.diagnostics)
         .filter(|diagnostic| matches!(diagnostic.severity, Error | Warning))
@@ -546,7 +548,7 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
         Format::Sarif => println!("{}", files.into_iter().collect::<ascot::sarif::Log>()),
     }
     let _ = std::io::stdout().flush();
-    count
+    (total, failing)
 }
 
 fn collect_doc(path: &Path, out: &mut Vec<PathBuf>) {
