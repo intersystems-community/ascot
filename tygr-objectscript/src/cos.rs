@@ -1741,7 +1741,10 @@ pub enum SpecialVariable {
     ZNAME(StringEqCI!("ZNAME")),
     ZNSPACE(Either<StringEqCI!("ZNSPACE"), StringEqCI!("ZN")>),
     ZORDER(Either<StringEqCI!("ZORDER"), StringEqCI!("ZO")>),
-    ZPARENT(Either<StringEqCI!("ZPARENT"), StringEqCI!("ZPA")>),
+    // `ZP` followed by a letter is `$ZPI` or `$ZPOS`, below.
+    ZPARENT(
+        Either<StringEqCI!("ZPARENT"), (StringEqCI!("ZP"), NotFollowedBy<CharOf<IsAlphabetic>>)>,
+    ),
     ZPI(StringEqCI!("ZPI")),
     ZPOS(Either<StringEqCI!("ZPOSITION"), StringEqCI!("ZPOS")>),
     ZREFERENCE(Either<StringEqCI!("ZREFERENCE"), StringEqCI!("ZR")>),
@@ -7356,6 +7359,15 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn zparent_special_variable() {
+        routine(" w $ZPARENT,$ZP,$ZPI,$ZPOS,$ZPOSITION\n").expect("Ok");
+        assert!(matches!(
+            SpecialVariable::parse("ZPA"),
+            Ok(SpecialVariable::Unknown(_))
+        ));
     }
 
     #[test]
