@@ -1193,7 +1193,7 @@ pub enum TrimSpec {
 #[grammar(inline)]
 pub struct SQLSearchIndexArgs {
     pub open: (Space, StringEq!("("), Space),
-    pub table: Option<(Table, StringEq!("."))>,
+    pub table: Vec<(Ident, StringEq!("."))>,
     pub index_name: IndexName,
     pub scalx_list: Vec<(ArgSep, Scalx)>,
     pub close: (Space, StringEq!(")")),
@@ -2135,7 +2135,7 @@ pub struct IndexRefs {
 
 #[derive(Grammar)]
 pub struct IndexRef {
-    pub table: Option<(Table, Space, StringEq!("."), Space)>,
+    pub table: Vec<(Ident, Space, StringEq!("."), Space)>,
     pub index: IndexSpec,
 }
 
@@ -6872,6 +6872,17 @@ mod tests {
             "REVOKE SELECT ON Servers FROM u1",
             "REVOKE SELECT ON SCHEMA SQLUser FROM u1",
             "REVOKE SELECT ON * FROM u1",
+        ]);
+    }
+
+    #[test]
+    fn qualified_index_names() {
+        all_ok(&[
+            "SELECT Name FROM %IGNOREINDEX t.NameIdx t",
+            "SELECT Name FROM %IGNOREINDEX SQLUser.t.NameIdx SQLUser.t",
+            "SELECT Name FROM %IGNOREINDEX NameIdx t",
+            "SELECT Name FROM %IGNOREINDEX SQLUser.t.* SQLUser.t",
+            "SELECT Name FROM t WHERE %ID %FIND SEARCH_INDEX(t.NameIdx, 'foo')",
         ]);
     }
 }
