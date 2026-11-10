@@ -489,8 +489,8 @@ impl WorkspaceStruct {
         range: bindings::Range,
     ) -> Option<Diagnostic> {
         let other_uri = self.others_named(DocKind::Cls, uri, name).min()?;
-        let other_range = self.cls_details(&other_uri).ok()?.name.range;
-        let other = Location::new(other_uri, other_range);
+        let doc = self.doc_cache.get(&other_uri)?.as_ref().ok()?.borrow();
+        let other = Location::new(other_uri, doc.name.range);
         Some(check::TypeError::duplicate_class_name(range, name.to_string(), other).into())
     }
 
