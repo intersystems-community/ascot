@@ -126,6 +126,14 @@ impl DocKind {
             _ => None,
         }
     }
+
+    fn syntax_scope(self) -> check::SyntaxScope {
+        match self {
+            DocKind::Cls => check::SyntaxScope::ClassDefinition,
+            DocKind::Rtn => check::SyntaxScope::Routine,
+            DocKind::Inc => check::SyntaxScope::IncludeFile,
+        }
+    }
 }
 
 // A routine's macro-expanded form — the expensive part of analyzing it. Unlike `ClassDetails`,
@@ -267,7 +275,7 @@ impl WorkspaceStruct {
                 .map(|(header, _)| with_range_name(&header.name, &OLC::new(&text))),
         };
         let entry = name
-            .map_err(|err| tygr_error_to_diagnostics(err, &text))
+            .map_err(|err| tygr_error_to_diagnostics(err, &text, kind.syntax_scope()))
             .map(|name| DocCache {
                 name,
                 text,
@@ -534,7 +542,13 @@ impl WorkspaceStruct {
             .get_or_insert_with(|| match DocKind::from_uri(uri) {
                 Some(DocKind::Cls) => ClassDetails::try_from(text)
                     .map(|details| DocDetails::Cls(Arc::new(details), None))
-                    .map_err(|err| vec![tygr_error_to_diagnostics(err, text)]),
+                    .map_err(|err| {
+                        vec![tygr_error_to_diagnostics(
+                            err,
+                            text,
+                            check::SyntaxScope::ClassDefinition,
+                        )]
+                    }),
                 Some(DocKind::Rtn) => {
                     self.expand_rtn(uri, text)
                         .map(|(routine, map, definitions)| {
@@ -550,7 +564,13 @@ impl WorkspaceStruct {
                 }
                 Some(DocKind::Inc) => cos::RoutineWithMacro::parse(text)
                     .map(|parsed| DocDetails::Inc(Arc::new(parsed)))
-                    .map_err(|err| vec![tygr_error_to_diagnostics(err, text)]),
+                    .map_err(|err| {
+                        vec![tygr_error_to_diagnostics(
+                            err,
+                            text,
+                            check::SyntaxScope::IncludeFile,
+                        )]
+                    }),
                 None => unreachable!("a uri in doc_cache always has a recognized extension"),
             })
             .clone();
@@ -1245,13 +1265,17 @@ fn position_in_range(position: Position, range: bindings::Range) -> bool {
     le(range.start, position) && le(position, range.end)
 }
 
-pub(crate) fn tygr_error_to_diagnostics(e: cos::Error, src: &str) -> Diagnostic {
+pub(crate) fn tygr_error_to_diagnostics(
+    e: cos::Error,
+    src: &str,
+    scope: check::SyntaxScope,
+) -> Diagnostic {
     let start = Position::from(OLC::new(src).offset_to_line_character(e.pos()));
     let end = Position {
         character: start.character + 1,
         ..start
     };
-    check::TypeError::document_syntax_error(bindings::Range { start, end }, e).into()
+    check::TypeError::syntax_error(bindings::Range { start, end }, e, scope).into()
 }
 
 impl bindings::Guest for bindings::Component {

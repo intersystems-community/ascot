@@ -2473,8 +2473,11 @@ type_error_kinds! {
     /// ```
     #[code = "A8073"]
     #[severity = Error]
-    #[message = "Syntax error: {detail}"]
-    InvalidSyntax { detail: SyntaxErrorText },
+    #[message = "Syntax error {scope}: {detail}"]
+    InvalidSyntax {
+        scope: SyntaxScope,
+        detail: SyntaxErrorText,
+    },
     /// A class header or member declaration, or a line of a routine or include file, that doesn't
     /// parse; a method body that doesn't is A8073 instead, and the message reads the same way.
     /// Nothing else in the document is checked, and IRIS refuses to compile it. Correct the marked
@@ -2490,8 +2493,11 @@ type_error_kinds! {
     /// ```
     #[code = "A1727"]
     #[severity = Error]
-    #[message = "Syntax error: {detail}"]
-    DocumentSyntaxError { detail: SyntaxErrorText },
+    #[message = "Syntax error {scope}: {detail}"]
+    DocumentSyntaxError {
+        scope: SyntaxScope,
+        detail: SyntaxErrorText,
+    },
     /// The body of a label, or a routine's main body, runs off its end without a `Quit` or
     /// `Return`, and no label follows for it to fall into: it is the last, or a procedure block
     /// comes next. IRIS compiles it and quits there implicitly, so the code runs; an explicit `Quit`
@@ -2885,6 +2891,29 @@ impl std::fmt::Display for Expansion {
     }
 }
 
+/// Where a syntax error sits, after "Syntax error": the document's own parse (A1727) or a method
+/// body's (A8073).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxScope {
+    ClassDefinition,
+    Routine,
+    IncludeFile,
+    MethodBody,
+    ArgumentDefault,
+}
+
+impl std::fmt::Display for SyntaxScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SyntaxScope::ClassDefinition => "in the class definition",
+            SyntaxScope::Routine => "in the routine",
+            SyntaxScope::IncludeFile => "in the include file",
+            SyntaxScope::MethodBody => "in the method body",
+            SyntaxScope::ArgumentDefault => "in an argument default",
+        })
+    }
+}
+
 /// A syntax error in one line: the grammar's own words where it has some (an unknown command, a
 /// function given the wrong arguments, a value that fails a check), else what could come next.
 #[derive(Debug)]
@@ -2967,15 +2996,18 @@ fn rule_in_words(name: &str) -> String {
         "MemberRef" => "member".to_string(),
         n if n.ends_with("Expr") => "expression".to_string(),
         n if n.ends_with("Command") => "command".to_string(),
-        n => n
-            .chars()
-            .flat_map(|c| {
-                let space = c.is_uppercase().then_some(' ');
-                space.into_iter().chain(c.to_lowercase())
-            })
-            .collect::<String>()
-            .trim_start()
-            .to_string(),
+        n => {
+            let mut words = String::new();
+            let mut prev = ' ';
+            for c in n.chars() {
+                if c.is_uppercase() && prev.is_lowercase() {
+                    words.push(' ');
+                }
+                words.extend(c.to_lowercase());
+                prev = c;
+            }
+            words
+        }
     };
     let article = if words.starts_with(['a', 'e', 'i', 'o']) || words.starts_with("un") {
         "an"
@@ -3080,13 +3112,15 @@ impl TypeError {
         )
     }
 
-    pub(crate) fn document_syntax_error(range: Range, err: tygr::Error) -> Self {
-        Self::at(
-            TypeErrorKind::DocumentSyntaxError {
-                detail: SyntaxErrorText(err),
-            },
-            range,
-        )
+    pub fn syntax_error(range: Range, err: tygr::Error, scope: SyntaxScope) -> Self {
+        let detail = SyntaxErrorText(err);
+        let kind = match scope {
+            SyntaxScope::MethodBody | SyntaxScope::ArgumentDefault => {
+                TypeErrorKind::InvalidSyntax { scope, detail }
+            }
+            _ => TypeErrorKind::DocumentSyntaxError { scope, detail },
+        };
+        Self::at(kind, range)
     }
 
     pub fn cannot_find_include(name: String, range: Range) -> Self {
@@ -3214,15 +3248,6 @@ impl TypeError {
             declared_at
                 .map(|location| related(location, &message))
                 .unwrap_or_default(),
-        )
-    }
-
-    pub fn invalid_syntax(range: Range, err: tygr::Error) -> Self {
-        Self::at(
-            TypeErrorKind::InvalidSyntax {
-                detail: SyntaxErrorText(err),
-            },
-            range,
         )
     }
 

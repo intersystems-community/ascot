@@ -7,7 +7,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | Code | Message |
 | --- | --- |
 | [A1073](A1073.md) | Cannot GOTO label '{label}' from inside a procedure block: it is outside the block |
-| [A1727](A1727.md) | Syntax error: {detail} |
+| [A1727](A1727.md) | Syntax error {scope}: {detail} |
 | [A2357](A2357.md) | '{name}' is not a parameter of {class}{hint} |
 | [A2716](A2716.md) | Too many arguments to the macro '{name}', which takes {expected} |
 | [A2797](A2797.md) | The macro '{name}' is undefined{suggestions} |
@@ -44,7 +44,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A7831](A7831.md) | Cannot find include file '{name}' in the workspace or on the IRIS instance |
 | [A7895](A7895.md) | '{format}' is not a valid $FNUMBER format: {reason} |
 | [A8061](A8061.md) | Cannot find class '{cls}' in the workspace or on the IRIS instance |
-| [A8073](A8073.md) | Syntax error: {detail} |
+| [A8073](A8073.md) | Syntax error {scope}: {detail} |
 | [A8496](A8496.md) | Property '{name}' is not MultiDimensional, so it takes no subscripts |
 | [A8820](A8820.md) | SET $VECTOR needs its third argument, the type |
 | [A8892](A8892.md) | Variable '{name}' is {ty1} in one branch but {ty2} in another |
