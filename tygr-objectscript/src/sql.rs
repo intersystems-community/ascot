@@ -4189,25 +4189,30 @@ pub struct CreateIndexWithClause {
         (Space, StringEq!(")")),
     )>,
     pad_index: Option<(
-        Option<(Space, StringEq!(","), Space)>,
+        Space,
+        Option<(StringEq!(","), Space)>,
         StringEqCI!("PAD_INDEX"),
     )>,
     fillfactor: Option<(
-        Option<(Space, StringEq!(","), Space)>,
+        Space,
+        Option<(StringEq!(","), Space)>,
         StringEqCI!("FILLFACTOR"),
         (Space, StringEq!("="), Space),
         Literal,
     )>,
     ignore_dup: Option<(
-        Option<(Space, StringEq!(","), Space)>,
+        Space,
+        Option<(StringEq!(","), Space)>,
         StringEqCI!("IGNORE_DUP_KEY"),
     )>,
     drop_existing: Option<(
-        Option<(Space, StringEq!(","), Space)>,
+        Space,
+        Option<(StringEq!(","), Space)>,
         StringEqCI!("DROP_EXISTING"),
     )>,
     stats_norecompute: Option<(
-        Option<(Space, StringEq!(","), Space)>,
+        Space,
+        Option<(StringEq!(","), Space)>,
         StringEqCI!("STATISTICS_NORECOMPUTE"),
     )>,
 }
@@ -4229,7 +4234,7 @@ pub struct AlterFTAction(Ident);
 #[grammar(name = "model-name")]
 pub struct ModelName(Ident);
 
-pub type PasswordClause = Prefix<PWPrefix, Password>;
+pub type PasswordClause = Prefix<(PWPrefix, Space), Password>;
 
 #[derive(Grammar)]
 pub enum Password {
@@ -4695,6 +4700,7 @@ pub struct Thr {
     server: StringEqCI!("SERVER"),
     sp3: Space,
     tname: TName,
+    sp4: Space,
     remote_statement: RemoteStatement,
 }
 
@@ -6188,11 +6194,11 @@ pub struct Ref {
 pub enum TriggeredAction {
     DeleteFirst {
         delete_rule: DeleteRule,
-        update_rule: Option<UpdateRule>,
+        update_rule: Option<(Space, UpdateRule)>,
     },
     UpdateFirst {
         update_rule: UpdateRule,
-        delete_rule: Option<DeleteRule>,
+        delete_rule: Option<(Space, DeleteRule)>,
     },
 }
 
@@ -6923,5 +6929,21 @@ mod tests {
         ]);
         assert!(SQL::parse("CREATE VIEW v AS SELECT a FROM t WITH CHECK CASCADED OPTION").is_err());
         assert!(SQL::parse("CREATE VIEW v AS SELECT a FROM t WITH CHECK LOCAL OPTION").is_err());
+    }
+
+    #[test]
+    fn blanks_between_adjacent_clauses() {
+        all_ok(&[
+            "CREATE TABLE t (a INT, b INT, FOREIGN KEY (a) REFERENCES u (a) ON DELETE CASCADE ON UPDATE NO ACTION)",
+            "CREATE TABLE t (a INT, FOREIGN KEY (a) REFERENCES u (a) ON UPDATE NO ACTION ON DELETE CASCADE)",
+            "CREATE USER u IDENTIFIED BY 'pw'",
+            "CREATE USER u IDENTIFY BY pw",
+            "ALTER USER u PASSWORD 'pw'",
+            "ALTER USER u WITH PASSWORD 'pw'",
+            "THROUGH FOREIGN SERVER fs SELECT a FROM t",
+            "CREATE INDEX i ON t (a) WITH DATA (b) PAD_INDEX",
+            "CREATE INDEX i ON t (a) WITH PAD_INDEX, FILLFACTOR = 80",
+            "CREATE INDEX i ON t (a) WITH DATA (b), PAD_INDEX",
+        ]);
     }
 }
