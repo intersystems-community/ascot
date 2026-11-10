@@ -1753,28 +1753,106 @@ impl CheckCommandInner for cos::Command {
                     Ok(())
                 })
             }
-            cos::Command::Lock(cos::LockCommand { .. })
-            | cos::Command::Hang(cos::HangCommand { .. }) => Ok(()),
-            cos::Command::Job(cos::JobCommand { args, .. }) => {
-                for arg in args.items.iter() {
-                    let annotation = match arg {
-                        cos::JobArgument::ClassMethod(.., annotation)
-                        | cos::JobArgument::InstanceMethod(.., annotation)
-                        | cos::JobArgument::DollarClassMethod(.., annotation)
-                        | cos::JobArgument::RoutineWithLocation(.., annotation)
-                        | cos::JobArgument::RoutineLocal(.., annotation) => annotation,
-                    };
-                    if let Some(a) = annotation
-                        && let Some(cos::AllowMacro::Plain(Right(namespace))) =
-                            a.process_params.deref()
-                    {
-                        env.soft_diagnostic(TypeError::undocumented_syntax(
-                            "A Job namespace without parentheses".to_string(),
-                            env.range(namespace),
-                        ));
+            cos::Command::Lock(cos::LockCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.iter().flat_map(|args| args.items(env)) {
+                        let cos::AllowMacro::Plain((cos::AllowMacro::Plain(arg), timeout)) = arg
+                        else {
+                            continue;
+                        };
+                        let entries: Vec<_> = match &arg.lock_entry {
+                            cos::AllowMacro::Plain(cos::LockEntry::One(entry)) => vec![entry],
+                            cos::AllowMacro::Plain(cos::LockEntry::Many { entries, .. }) => {
+                                entries.items(env).collect()
+                            }
+                            cos::AllowMacro::Macro(..) => vec![],
+                        };
+                        for entry in entries {
+                            let cos::AllowIndirection::Plain(cos::LockNameType { n, t }) = entry
+                            else {
+                                continue;
+                            };
+                            // The lock name's subscripts are read; its value is not.
+                            match n {
+                                cos::AllowIndirection::Plain(cos::AllowMacro::Plain(var)) => {
+                                    var.as_local(env, flow)?;
+                                }
+                                cos::AllowIndirection::Indirection(indir) => {
+                                    indir.to_ty(env, flow)?;
+                                }
+                                cos::AllowIndirection::Plain(cos::AllowMacro::Macro(..)) => {}
+                            }
+                            if let Some(t) = t {
+                                t.to_ty(env, flow)?;
+                            }
+                        }
+                        if let Some(timeout) = timeout {
+                            timeout.timeout.to_ty(env, flow)?;
+                        }
                     }
-                }
+                    Ok(())
+                })
+            }
+            cos::Command::Hang(cos::HangCommand { pc, e, .. }) => check_pc(pc, env, flow, |flow| {
+                e.to_ty(env, flow)?;
                 Ok(())
+            }),
+            cos::Command::Job(cos::JobCommand { pc, args, .. }) => {
+                check_pc(pc, env, flow, |flow| {
+                    for arg in args.items(env) {
+                        let (params, location, annotation) = match arg {
+                            cos::JobArgument::ClassMethod(_, _, _, params, annotation)
+                            | cos::JobArgument::DollarClassMethod(_, params, annotation)
+                            | cos::JobArgument::InstanceMethod(_, _, params, annotation) => {
+                                (Some(params), None, annotation)
+                            }
+                            cos::JobArgument::RoutineWithLocation(
+                                _,
+                                params,
+                                location,
+                                annotation,
+                            ) => (params.as_ref(), Some(location), annotation),
+                            cos::JobArgument::RoutineLocal(_, params, annotation) => {
+                                (params.as_ref(), None, annotation)
+                            }
+                        };
+                        if let Some(params) = params {
+                            builtins::check_args_any(env, flow, params.items(env))?;
+                        }
+                        match location {
+                            Some(cos::JobLocation::Brackets(_, exprs, _)) => {
+                                for part in exprs.items.iter().flatten().flat_map(|e| &e.items) {
+                                    part.to_ty(env, flow)?;
+                                }
+                            }
+                            Some(cos::JobLocation::Bars(_, e, _)) => {
+                                e.to_ty(env, flow)?;
+                            }
+                            None => {}
+                        }
+                        if let Some(annotation) = annotation {
+                            match annotation.process_params.deref() {
+                                Some(cos::AllowMacro::Plain(Left(params))) => {
+                                    for param in params.items.iter().flatten() {
+                                        param.to_ty(env, flow)?;
+                                    }
+                                }
+                                Some(cos::AllowMacro::Plain(Right(namespace))) => {
+                                    env.soft_diagnostic(TypeError::undocumented_syntax(
+                                        "A Job namespace without parentheses".to_string(),
+                                        env.range(namespace),
+                                    ));
+                                    namespace.to_ty(env, flow)?;
+                                }
+                                _ => {}
+                            }
+                            if let Some(timeout) = &annotation.timeout {
+                                timeout.to_ty(env, flow)?;
+                            }
+                        }
+                    }
+                    Ok(())
+                })
             }
             // The transaction level isn't tracked: it depends on the run-time conditions around
             // each `TSTART`/`TCOMMIT`, and a flow-insensitive count only produced false alarms.

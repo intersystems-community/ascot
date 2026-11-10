@@ -1463,7 +1463,7 @@ pub struct LocalJobAnnotation {
     // and IRIS takes it, so that parses too and is reported as undocumented syntax.
     pub process_params:
         Prefix<StringEq!(":"), Option<AllowMacro<Either<Paren<JobProcessParams>, Range<Expr>>>>>,
-    timeout: Option<Prefix<StringEq!(":"), Expr>>,
+    pub timeout: Option<Prefix<StringEq!(":"), Expr>>,
 }
 
 type JobProcessParams = VecSep<Option<Expr>, StringEq!(":")>;
@@ -1613,7 +1613,7 @@ pub enum PlusMinus {
 #[derive(Grammar)]
 pub struct LockArg {
     plus_minus: Option<PlusMinus>,
-    lock_entry: AllowMacro<LockEntry>,
+    pub lock_entry: AllowMacro<LockEntry>,
 }
 
 #[derive(Grammar)]
@@ -1630,8 +1630,8 @@ type LockName = AllowMacro<Variable>;
 
 #[derive(Grammar)]
 pub struct LockNameType {
-    n: AllowIndirection<LockName>,
-    t: Option<Prefix<StringEq!("#"), Expr>>,
+    pub n: AllowIndirection<LockName>,
+    pub t: Option<Prefix<StringEq!("#"), Expr>>,
 }
 
 // A braced block after a command, `Gap` the whitespace the command allows before the `{`.
