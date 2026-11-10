@@ -37,7 +37,7 @@ use types::*;
 pub(crate) use env::{DocumentEnv, WorkspaceEnv, labels_of};
 pub use errors::{
     ArgCount, Available, Declared, Detail, DynamicGet, InRoutine, Suggestions, SuperclassOf,
-    SyntaxErrorText, TypeErrorKind, TypeParamHint,
+    SyntaxErrorText, SyntaxScope, TypeErrorKind, TypeParamHint,
 };
 pub(crate) use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
@@ -493,8 +493,11 @@ impl MethodDetails {
                             }
                             Right(text) => {
                                 if let Err(err) = Expr::parse(&text.it) {
-                                    default_env
-                                        .soft_diagnostic(TypeError::invalid_syntax(range, err));
+                                    default_env.soft_diagnostic(TypeError::syntax_error(
+                                        range,
+                                        err,
+                                        SyntaxScope::ArgumentDefault,
+                                    ));
                                 }
                                 Ty::Any.into()
                             }
@@ -633,7 +636,11 @@ impl<'b> CheckCommand for MethodBody<'b> {
 }
 
 fn syntax_error(env: &CodeEnv<'_>, err: tygr::Error) -> TypeError {
-    TypeError::invalid_syntax(env.span(err.pos(), err.pos() + 1), err)
+    TypeError::syntax_error(
+        env.span(err.pos(), err.pos() + 1),
+        err,
+        SyntaxScope::MethodBody,
+    )
 }
 
 // A method body or routine procedure block, with its own labels (`Set $ZT="Trap"` handlers,

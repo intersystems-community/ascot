@@ -401,7 +401,7 @@ impl TryFrom<Range<ExprOps<()>>> for GetTarget {
     type Error = &'static str;
 
     fn try_from(value: Range<ExprOps<()>>) -> Result<Self, Self::Error> {
-        let err = "be a valid SET target";
+        let err = "this must name a variable, a property or an indirection";
         match value.into_inner() {
             ExprOps::Then { base, op } => Ok(GetTarget::Sub { base: *base, op }),
             ExprOps::Base(base) => match *base {
@@ -504,7 +504,7 @@ impl TryFrom<SetTargetSource> for SetTarget {
     type Error = &'static str;
 
     fn try_from(value: SetTargetSource) -> Result<Self, Self::Error> {
-        let err = "be a valid SET target";
+        let err = "the left of `=` must be a variable, a property, an indirection or a settable function such as $PIECE";
         let value = match value {
             SetTargetSource::ListGet(call) => {
                 return Ok(SetTarget::Fun(SetTargetFun::ListGet(call.prefixed)));
@@ -1303,7 +1303,7 @@ impl TryFrom<ExprOps<()>> for MethodOrFuncCallExpr {
     type Error = &'static str;
 
     fn try_from(value: ExprOps<()>) -> Result<Self, Self::Error> {
-        let err = "be a method or function call";
+        let err = "Do takes a method or function call, not a value";
         match value {
             ExprOps::Then {
                 base,

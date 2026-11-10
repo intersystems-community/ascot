@@ -22,6 +22,7 @@ use tygr_objectscript::cos::{HMacro, MacroArg, MacroCallStruct, MacroedUnit};
 use crate::{
     DocDetails, DocKind, WorkspaceStruct,
     bindings::{self, Diagnostic, Location, Position},
+    check::SyntaxScope,
     cos::{self, HMacroCommand, MacroRedex, Routine, RoutineWithMacro},
     details::Positions,
     tygr_error_to_diagnostics,
@@ -466,8 +467,8 @@ impl SourceMap {
             .collect()
     }
 
-    fn relocate_error(&self, error: tygr::Error, uri: &str) -> Diagnostic {
-        let error = tygr_error_to_diagnostics(error, &self.expanded_text);
+    fn relocate_error(&self, error: tygr::Error, uri: &str, scope: SyntaxScope) -> Diagnostic {
+        let error = tygr_error_to_diagnostics(error, &self.expanded_text, scope);
         self.relocate_diagnostics(vec![error], uri).pop().unwrap()
     }
 }
@@ -992,7 +993,8 @@ impl WorkspaceStruct {
             // generic parse error. Anything else noted (an undecided `#if`, a call's arity) leaves
             // the text as written, so the parse error is the routine's own.
             Err(error) => {
-                let error = (!failed_include).then(|| map.relocate_error(error, uri));
+                let error =
+                    (!failed_include).then(|| map.relocate_error(error, uri, SyntaxScope::Routine));
                 Err(map.unresolved.into_iter().chain(error).collect())
             }
         }
@@ -1073,7 +1075,7 @@ impl WorkspaceStruct {
                 let expanded_text = map.expanded_text.clone();
                 Ok((expanded_text, map, definitions))
             }
-            Err(error) => Err(map.relocate_error(error, uri)),
+            Err(error) => Err(map.relocate_error(error, uri, SyntaxScope::MethodBody)),
         }
     }
 }

@@ -126,6 +126,14 @@ impl DocKind {
             _ => None,
         }
     }
+
+    fn syntax_scope(self) -> check::SyntaxScope {
+        match self {
+            DocKind::Cls => check::SyntaxScope::ClassDefinition,
+            DocKind::Rtn => check::SyntaxScope::Routine,
+            DocKind::Inc => check::SyntaxScope::IncludeFile,
+        }
+    }
 }
 
 // A routine's macro-expanded form — the expensive part of analyzing it. Unlike `ClassDetails`,
@@ -267,7 +275,7 @@ impl WorkspaceStruct {
                 .map(|(header, _)| with_range_name(&header.name, &OLC::new(&text))),
         };
         let entry = name
-            .map_err(|err| tygr_error_to_diagnostics(err, &text))
+            .map_err(|err| tygr_error_to_diagnostics(err, &text, kind.syntax_scope()))
             .map(|name| DocCache {
                 name,
                 text,
@@ -534,7 +542,13 @@ impl WorkspaceStruct {
             .get_or_insert_with(|| match DocKind::from_uri(uri) {
                 Some(DocKind::Cls) => ClassDetails::try_from(text)
                     .map(|details| DocDetails::Cls(Arc::new(details), None))
-                    .map_err(|err| vec![tygr_error_to_diagnostics(err, text)]),
+                    .map_err(|err| {
+                        vec![tygr_error_to_diagnostics(
+                            err,
+                            text,
+                            check::SyntaxScope::ClassDefinition,
+                        )]
+                    }),
                 Some(DocKind::Rtn) => {
                     self.expand_rtn(uri, text)
                         .map(|(routine, map, definitions)| {
@@ -550,7 +564,13 @@ impl WorkspaceStruct {
                 }
                 Some(DocKind::Inc) => cos::RoutineWithMacro::parse(text)
                     .map(|parsed| DocDetails::Inc(Arc::new(parsed)))
-                    .map_err(|err| vec![tygr_error_to_diagnostics(err, text)]),
+                    .map_err(|err| {
+                        vec![tygr_error_to_diagnostics(
+                            err,
+                            text,
+                            check::SyntaxScope::IncludeFile,
+                        )]
+                    }),
                 None => unreachable!("a uri in doc_cache always has a recognized extension"),
             })
             .clone();
@@ -1245,13 +1265,17 @@ fn position_in_range(position: Position, range: bindings::Range) -> bool {
     le(range.start, position) && le(position, range.end)
 }
 
-pub(crate) fn tygr_error_to_diagnostics(e: cos::Error, src: &str) -> Diagnostic {
+pub(crate) fn tygr_error_to_diagnostics(
+    e: cos::Error,
+    src: &str,
+    scope: check::SyntaxScope,
+) -> Diagnostic {
     let start = Position::from(OLC::new(src).offset_to_line_character(e.pos()));
     let end = Position {
         character: start.character + 1,
         ..start
     };
-    check::TypeError::document_syntax_error(bindings::Range { start, end }, e).into()
+    check::TypeError::syntax_error(bindings::Range { start, end }, e, scope).into()
 }
 
 impl bindings::Guest for bindings::Component {
@@ -1555,7 +1579,10 @@ mod tests {
         assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Error);
         assert!(diagnostics[0].message.contains("%Library.RegisteredObject"));
         assert_eq!(diagnostics[0].range.start.line, 0);
-        assert_eq!(diagnostics[1].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(
+            diagnostics[1].severity,
+            bindings::DiagnosticSeverity::Information
+        );
         assert!(diagnostics[1].message.contains("SomeInheritedMethod"));
         assert_eq!(diagnostics[1].range.start.line, 2);
     }
@@ -1579,7 +1606,7 @@ mod tests {
                 .iter()
                 .find(|d| d.code == "A8073")
                 .expect("A8073");
-            assert!(error.message.starts_with(start), "{}", error.message);
+            assert!(error.message.contains(start), "{}", error.message);
             assert!(!error.message.contains('\n'), "{}", error.message);
         }
         let diagnostics = class_diagnostics("ClassMethod M(x) {\n ZFoo x\n Quit\n}\n");
@@ -1590,7 +1617,7 @@ mod tests {
     }
 
     #[test]
-    fn with_an_environment_a_superclass_it_lacks_is_a_hint_at_the_extends() {
+    fn with_an_environment_a_superclass_it_lacks_is_information_at_the_extends() {
         let empty = format!(
             r#"{{"version":"{}","namespace":"%SYS","classes":{{}},"includes":{{}},"routines":{{}}}}"#,
             declared::DECLARATIONS_VERSION
@@ -1607,7 +1634,7 @@ mod tests {
         assert!(
             diagnostics
                 .iter()
-                .all(|d| d.severity == bindings::DiagnosticSeverity::Hint)
+                .all(|d| d.severity == bindings::DiagnosticSeverity::Information)
         );
         assert!(diagnostics[0].message.contains("Nope.Missing"));
         let range = diagnostics[0].range;
@@ -2232,7 +2259,7 @@ mod tests {
                     "Cannot find routine 'Typo' in the workspace or on the IRIS instance".to_string()
                 ),
                 (
-                    Hint,
+                    Information,
                     "The labels of routine 'Compiled' aren't known, so calls into it can't be checked precisely"
                         .to_string()
                 ),
@@ -2317,13 +2344,16 @@ mod tests {
     }
 
     #[test]
-    fn an_undecidable_if_is_a_hint_and_takes_its_first_branch() {
+    fn an_undecidable_if_is_information_and_takes_its_first_branch() {
         let diagnostics = diagnostics_for(&[(
             "If.mac",
             "ROUTINE If\n#define MODE \"OUTPUT\"\nMain()\n\t#if $$$MODE=\"OUTPUT\" ; which\n\tSet x = 1\n\t#else\n\tQuit\n\t#endif\n\tWrite x\n\tQuit\n",
         )]);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].severity, bindings::DiagnosticSeverity::Hint);
+        assert_eq!(
+            diagnostics[0].severity,
+            bindings::DiagnosticSeverity::Information
+        );
         assert_eq!(
             diagnostics[0].message,
             "Cannot decide `#if $$$MODE=\"OUTPUT\"` (`\"OUTPUT\"=\"OUTPUT\"`) at compile time, so its branch is assumed taken"
@@ -2332,7 +2362,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_iris_lookup_is_a_hint_about_why() {
+    fn a_failed_iris_lookup_is_information_about_why() {
         struct DeadIris;
         impl crate::IrisContext for DeadIris {
             fn get_cls(&self, _cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
@@ -2360,7 +2390,7 @@ mod tests {
         diagnostics.sort_by(|a, b| a.2.cmp(&b.2));
         let expected = |what: &str| {
             (
-                bindings::DiagnosticSeverity::Hint,
+                bindings::DiagnosticSeverity::Information,
                 "A4471".to_string(),
                 format!(
                     "Cannot look up {what} on the IRIS instance (connection refused), so it is taken on trust"
