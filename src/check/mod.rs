@@ -3998,7 +3998,7 @@ impl CheckCommandInner for cos::WriteFChar {
         flow: &mut Flow<'a>,
     ) -> Result<(), QuasiTypeError> {
         match self {
-            cos::WriteFChar::Tab(_, expr) => {
+            cos::WriteFChar::Tab(_, _, expr) => {
                 let _ = expr.to_ty(env, flow)?;
             }
             cos::WriteFChar::Mnemonic {

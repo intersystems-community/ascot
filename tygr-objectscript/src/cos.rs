@@ -1516,7 +1516,8 @@ pub enum WriteArg {
 pub enum WriteFChar {
     NewLine(StringEq!("!")),
     FormFeed(StringEq!("#")),
-    Tab(StringEq!("?"), Range<Expr>),
+    // `write ? 5`: IRIS takes a space before the column.
+    Tab(StringEq!("?"), SGap, Range<Expr>),
     Mnemonic {
         slash: StringEq!("/"),
         name: LocalVariableName,
@@ -2316,12 +2317,15 @@ pub enum HTMLTagContentUnit {
 
 type HTMLTagContent = Vec<HTMLTagContentUnit>;
 
+// A `\` or `~` is as plain as the rest: a Windows path in an XData's attribute.
 char_class!(pub IsHTMLContentSafe, "html safe characters", |ch| ch
 .is_alphanumeric()
 || ch.is_whitespace()
 || matches!(
     ch,
     '=' | ':'
+        | '\\'
+        | '~'
         | '&'
         | ';'
         | '['
@@ -3434,6 +3438,8 @@ impl Validate for KeywordListWithMimeTypeIsXML {
 pub enum XMLUnit {
     S(Space1),
     C(XMLComment),
+    // `<?xml version="1.0"?>`, which an XData may open with.
+    PI(StringEq!("<?"), StringEndsWith<StringEq!("?>")>),
     JS(
         Raw<(StringEqCI!("<script"), HTMLTagContent, StringEq!(">"))>,
         StringEndsWith<StringEqCI!("</script>")>,
@@ -3476,8 +3482,21 @@ pub struct XMLCloseTag(StringEqCI!("</"), XMLTagContent, StringEqCI!(">"));
 #[derive(Grammar)]
 pub enum XMLTagContentUnit {
     Txt(StringOf1<IsXMLTagSafe>),
-    Str(JSString<HashEmbededOS>),
+    Str(XMLString),
+    // A quote with no closing one is text: IRIS doesn't hold an XData to well-formedness.
+    Quote(Either<DQ, SQ>),
 }
+
+// An attribute value runs to its closing quote, a `#()#` expression inside allowed: no `\`
+// escapes, as a `C:\dir\` path ends in one.
+#[derive(Grammar)]
+pub enum XMLString {
+    DQ(DQ, Vec<Either<HashEmbededOS, CharOf<IsNotDQ>>>, DQ),
+    SQ(SQ, Vec<Either<HashEmbededOS, CharOf<IsNotSQ>>>, SQ),
+}
+
+char_class!(pub IsNotDQ, "not a double quote", |ch| ch != '"');
+char_class!(pub IsNotSQ, "not a single quote", |ch| ch != '\'');
 type XMLTagContent = Vec<XMLTagContentUnit>;
 
 #[derive(Grammar)]
