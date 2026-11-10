@@ -955,7 +955,7 @@ impl WorkspaceStruct {
     ) -> Result<(Routine, SourceMap, MacroDefinitions), Vec<Diagnostic>> {
         let mut dones = DoneList::new();
         let result = self.expand_rtn_helper(src, &mut dones);
-        let failed_include = dones.failed_include;
+        let failed_include = !dones.failed_includes.is_empty();
         let map = dones.into_source_map(src);
         match result {
             Ok((routine, definitions)) => Ok((routine, map, definitions)),
@@ -991,6 +991,7 @@ impl WorkspaceStruct {
                     let _ = self.expand_units(&mut definitions, &mut todos, &mut dones);
                     // Whatever the include itself included: an edit there changes this class too.
                     include_names.extend(dones.include_names);
+                    failed.extend(dones.failed_includes);
                 }
                 Ok(None) => failed.push((name.clone(), None)),
                 Err(reason) => failed.push((name.clone(), Some(reason))),
@@ -1184,7 +1185,8 @@ struct DoneList {
     // literally, since the raw `#include Name` text rarely re-parses and would otherwise mask
     // this diagnostic behind a generic syntax error.
     unresolved: Vec<(UnresolvedError, String, Origin)>,
-    failed_include: bool,
+    // The `#include`s among them, for a class, whose `Include` line reports them itself.
+    failed_includes: Vec<FailedInclude>,
     include_directives: Vec<(std::ops::Range<usize>, String)>,
     include_names: HashSet<String>,
     // Macros `#define`d in an earlier method's body, by the method's name: usable, but warned.
@@ -1199,7 +1201,7 @@ impl DoneList {
             included: HashMap::new(),
             invocations: Vec::new(),
             unresolved: Vec::new(),
-            failed_include: false,
+            failed_includes: Vec::new(),
             include_directives: Vec::new(),
             include_names: HashSet::new(),
             body_macros: HashMap::new(),
@@ -1207,15 +1209,16 @@ impl DoneList {
     }
 
     fn note_unresolved_include(&mut self, name: String, origin: &Origin) {
-        self.failed_include = true;
+        self.failed_includes.push((name.clone(), None));
         self.note_unresolved(crate::check::TypeError::cannot_find_include, name, origin);
     }
 
     fn note_lookup_failed(&mut self, name: String, reason: String, origin: &Origin) {
+        self.failed_includes
+            .push((name.clone(), Some(reason.clone())));
         let make = move |name, range| {
             crate::check::TypeError::iris_lookup_failed(DocKind::Inc, name, reason.clone(), range)
         };
-        self.failed_include = true;
         self.note_unresolved(make, name, origin);
     }
 
