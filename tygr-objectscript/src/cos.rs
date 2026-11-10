@@ -2413,8 +2413,12 @@ type WithSpace<X> = (X, Space);
 
 #[derive(Grammar)]
 pub enum KeywordValueEnum {
-    // `Data = (Tags(ELEMENTS))` names a collection's subvalues as an index key does.
-    Atom(StringOf1<IsKeywordValue>, Option<IndexPropertyKind>),
+    // `Data = (Tags(ELEMENTS))` names a collection's subvalues as an index key does, but IRIS
+    // reads this form case-sensitively, unlike the `On` clause's.
+    Atom(
+        StringOf1<IsKeywordValue>,
+        Option<Either<StringEq!("(KEYS)"), StringEq!("(ELEMENTS)")>>,
+    ),
     String(OSString),
     OS(StringEq!("{"), OSText, StringEq!("}")),
     Paren(
@@ -3019,8 +3023,8 @@ impl IndexProperty {
 #[derive(Grammar)]
 #[grammar(inline)]
 pub enum IndexPropertyKind {
-    Keys(StringEq!("(KEYS)")),
-    Elements(StringEq!("(ELEMENTS)")),
+    Keys(StringEqCI!("(KEYS)")),
+    Elements(StringEqCI!("(ELEMENTS)")),
 }
 
 #[derive(Grammar)]
@@ -7359,6 +7363,21 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn index_key_kind_case() {
+        let class = |index: &str| {
+            ClassDefinition::parse(&format!(
+                "Class A.I Extends %Persistent\n{{\n\nProperty Tags As list Of %String;\n\n{index}\n\n}}\n"
+            ))
+        };
+        class("Index TagsIdx On Tags(elements);").expect("Ok");
+        class("Index TagsIdx On Tags(ELEMENTS) [ Data = (Tags(ELEMENTS)) ];").expect("Ok");
+        assert!(
+            class("Index TagsIdx On Tags(ELEMENTS) [ Data = (Tags(elements)) ];").is_err(),
+            "IRIS reads the Data form case-sensitively"
+        );
     }
 
     #[test]
