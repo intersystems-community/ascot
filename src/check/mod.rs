@@ -2500,21 +2500,32 @@ impl CheckCommandInner for cos::SetArgument {
             });
         }
         let target_range = env.range(&self.target);
-        if let cos::AssignTarget::Single(SetTarget::Special(special)) = self.target.deref() {
-            let literal = cos::OSString::parse(&self.value.print()).is_ok();
-            check_trap_set(env, flow, special, &ty, literal, env.range(&self.value))?;
+        let (targets, multi): (Vec<&SetTarget>, bool) = match self.target.deref() {
+            cos::AssignTarget::Multi(multi) => (multi.targets.items(env).collect(), true),
+            cos::AssignTarget::Single(target) => (vec![target], false),
+        };
+        for target in &targets {
+            check_set_target(target, ty.clone(), target_range, env, flow)?;
         }
-        match self.target.deref() {
-            cos::AssignTarget::Multi(multi_set_target) => {
-                for target in multi_set_target.targets.items(env) {
-                    check_set_target(target, ty.clone(), target_range, env, flow)?;
+        for target in targets {
+            match target {
+                // IRIS compiles `Set ($ZTRAP, x) = ...` and fails it when run, label or none.
+                SetTarget::Special(SpecialVariable::ZTRAP(_)) if multi => {
+                    env.soft_diagnostic(TypeError::not_allowed_in(
+                        "$ZTRAP",
+                        "a multiple Set target",
+                        "<UNIMPLEMENTED>",
+                        target_range,
+                    ));
                 }
-                Ok(())
-            }
-            cos::AssignTarget::Single(set_target) => {
-                check_set_target(set_target, ty, target_range, env, flow)
+                SetTarget::Special(special) => {
+                    let literal = cos::OSString::parse(&self.value.print()).is_ok();
+                    check_trap_set(env, flow, special, &ty, literal, env.range(&self.value))?;
+                }
+                _ => {}
             }
         }
+        Ok(())
     }
 }
 
