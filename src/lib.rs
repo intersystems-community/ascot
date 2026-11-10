@@ -145,7 +145,7 @@ pub(crate) struct RtnDetails {
 struct DocCache {
     name: WithRange<String>,
     text: String,
-    details: Option<Result<DocDetails, Diagnostic>>,
+    details: Option<Result<DocDetails, Vec<Diagnostic>>>,
 }
 
 // Tier B (the full, kind-specific parse) plus tier C (the check built on top of it, for the two
@@ -411,7 +411,7 @@ impl WorkspaceStruct {
         Some(cell.borrow().text.clone())
     }
 
-    pub(crate) fn cls_details(&self, uri: &str) -> Result<Arc<ClassDetails>, Diagnostic> {
+    pub(crate) fn cls_details(&self, uri: &str) -> Result<Arc<ClassDetails>, Vec<Diagnostic>> {
         match self.ensure_details(uri)? {
             DocDetails::Cls(details, _) => Ok(details),
             _ => panic!("cls_details called on a uri that isn't an open class"),
@@ -498,7 +498,7 @@ impl WorkspaceStruct {
         WorkspaceEnv::new(self)
     }
 
-    pub(crate) fn rtn_details(&self, uri: &str) -> Result<Arc<RtnDetails>, Diagnostic> {
+    pub(crate) fn rtn_details(&self, uri: &str) -> Result<Arc<RtnDetails>, Vec<Diagnostic>> {
         match self.ensure_details(uri)? {
             DocDetails::Rtn(details, _) => Ok(details),
             _ => panic!("rtn_details called on a uri that isn't an open routine"),
@@ -509,13 +509,13 @@ impl WorkspaceStruct {
     // their own (see `DocDetails::Inc`); `expand_rtn` resolves `#include`s by recursing back into
     // `doc_cache` (via `inc_parse`), but always for some *other* (`.inc`) uri's own cell -- never
     // this one -- so holding this cell borrowed for the whole call is safe.
-    fn ensure_details(&self, uri: &str) -> Result<DocDetails, Diagnostic> {
+    fn ensure_details(&self, uri: &str) -> Result<DocDetails, Vec<Diagnostic>> {
         let cell = self
             .doc_cache
             .get(uri)
             .expect("ensure_details called on a uri that isn't in the workspace")
             .as_ref()
-            .map_err(Clone::clone)?;
+            .map_err(|diagnostic| vec![diagnostic.clone()])?;
         let mut entry = cell.borrow_mut();
         let doc = &mut *entry;
         let text = doc.text.as_str();
@@ -525,7 +525,7 @@ impl WorkspaceStruct {
             .get_or_insert_with(|| match DocKind::from_uri(uri) {
                 Some(DocKind::Cls) => ClassDetails::try_from(text)
                     .map(|details| DocDetails::Cls(Arc::new(details), None))
-                    .map_err(|err| tygr_error_to_diagnostics(err, text)),
+                    .map_err(|err| vec![tygr_error_to_diagnostics(err, text)]),
                 Some(DocKind::Rtn) => {
                     self.expand_rtn(uri, text)
                         .map(|(routine, map, definitions)| {
@@ -541,7 +541,7 @@ impl WorkspaceStruct {
                 }
                 Some(DocKind::Inc) => cos::RoutineWithMacro::parse(text)
                     .map(|parsed| DocDetails::Inc(Arc::new(parsed)))
-                    .map_err(|err| tygr_error_to_diagnostics(err, text)),
+                    .map_err(|err| vec![tygr_error_to_diagnostics(err, text)]),
                 None => unreachable!("a uri in doc_cache always has a recognized extension"),
             })
             .clone();
@@ -603,9 +603,9 @@ impl WorkspaceStruct {
         })
     }
 
-    // A failed tier-B parse (see `ensure_details`) has no check slot to write into -- its one
-    // diagnostic is cheap to recompute from `cls_details`/`rtn_details`'s own cached `Err` on
-    // every call, so there's no need to also cache it as a `CachedCheck` here.
+    // A failed tier-B parse (see `ensure_details`) has no check slot to write into -- its
+    // diagnostics are cheap to recompute from `cls_details`/`rtn_details`'s own cached `Err` on
+    // every call, so there's no need to also cache them as a `CachedCheck` here.
     fn store_check(&self, uri: &str, check: CachedCheck) {
         let Some(Ok(cell)) = self.doc_cache.get(uri) else {
             return;
@@ -636,9 +636,9 @@ impl WorkspaceStruct {
         }
         let details = match self.ensure_details(uri) {
             Ok(details) => details,
-            Err(diagnostic) => {
+            Err(diagnostics) => {
                 return CachedCheck {
-                    diagnostics: vec![diagnostic],
+                    diagnostics,
                     ..empty
                 };
             }

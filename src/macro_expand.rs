@@ -935,29 +935,22 @@ impl WorkspaceStruct {
         &self,
         uri: &str,
         src: &str,
-    ) -> Result<(Routine, SourceMap, MacroDefinitions), Diagnostic> {
+    ) -> Result<(Routine, SourceMap, MacroDefinitions), Vec<Diagnostic>> {
         let mut dones = DoneList::new();
         let result = self.expand_rtn_helper(src, &mut dones);
+        let failed_include = dones.failed_include;
         let map = dones.into_source_map(src);
         match result {
             Ok((routine, definitions)) => Ok((routine, map, definitions)),
             // A macro left unexpanded by an unresolved `#include` often doesn't re-parse (same
             // failure mode `note_unresolved_include` already calls out for `#include` itself) --
             // report the missing include(s), the actionable root cause, instead of the resulting
-            // generic parse error.
-            Err(error) => match map.unresolved.split_first() {
-                Some((first, rest)) => {
-                    let mut diagnostic = first.clone();
-                    diagnostic.related_information.extend(rest.iter().map(|d| {
-                        bindings::DiagnosticRelatedInformation {
-                            location: Location::new(uri.to_string(), d.range),
-                            message: d.message.clone(),
-                        }
-                    }));
-                    Err(diagnostic)
-                }
-                None => Err(map.relocate_error(error, uri)),
-            },
+            // generic parse error. Anything else noted (an undecided `#if`, a call's arity) leaves
+            // the text as written, so the parse error is the routine's own.
+            Err(error) => {
+                let error = (!failed_include).then(|| map.relocate_error(error, uri));
+                Err(map.unresolved.into_iter().chain(error).collect())
+            }
         }
     }
 
@@ -1165,6 +1158,7 @@ struct DoneList {
     // literally, since the raw `#include Name` text rarely re-parses and would otherwise mask
     // this diagnostic behind a generic syntax error.
     unresolved: Vec<(UnresolvedError, String, Origin)>,
+    failed_include: bool,
     include_directives: Vec<(std::ops::Range<usize>, String)>,
     include_names: HashSet<String>,
     // Macros `#define`d in an earlier method's body, by the method's name: usable, but warned.
@@ -1179,6 +1173,7 @@ impl DoneList {
             included: HashMap::new(),
             invocations: Vec::new(),
             unresolved: Vec::new(),
+            failed_include: false,
             include_directives: Vec::new(),
             include_names: HashSet::new(),
             body_macros: HashMap::new(),
@@ -1186,6 +1181,7 @@ impl DoneList {
     }
 
     fn note_unresolved_include(&mut self, name: String, origin: &Origin) {
+        self.failed_include = true;
         self.note_unresolved(crate::check::TypeError::cannot_find_include, name, origin);
     }
 
@@ -1193,6 +1189,7 @@ impl DoneList {
         let make = move |name, range| {
             crate::check::TypeError::iris_lookup_failed(DocKind::Inc, name, reason.clone(), range)
         };
+        self.failed_include = true;
         self.note_unresolved(make, name, origin);
     }
 
