@@ -12,7 +12,16 @@ use crate::check::TypeErrorKind;
 
 /// Every page by file name: `index.md`, then `<CODE>.md` per kind.
 pub fn pages() -> Vec<(String, String)> {
-    let mut kinds: Vec<_> = TypeErrorKind::REFERENCE.iter().collect();
+    // The message is a format string, which doubles a literal brace.
+    let mut kinds: Vec<_> = (TypeErrorKind::REFERENCE.iter())
+        .map(|(code, severity, message)| {
+            (
+                *code,
+                severity,
+                message.replace("{{", "{").replace("}}", "}"),
+            )
+        })
+        .collect();
     kinds.sort_by_key(|(code, ..)| *code);
     let mut index = String::from("# ascot diagnostics\n\n");
     index += "Every diagnostic ascot reports, from the checker's own definitions (`ascot diagnostics`). \
@@ -44,7 +53,7 @@ pub fn pages() -> Vec<(String, String)> {
     let mut pages = vec![("index.md".to_string(), index)];
     for (code, severity, message) in kinds {
         let doc = (TypeErrorKind::DOCS.iter())
-            .find(|(c, _)| c == code)
+            .find(|(c, _)| *c == code)
             .map_or("", |(_, doc)| doc);
         let mut page = format!("# {code}\n\n{}: {message}\n\n", name(severity));
         page += &rendered(doc, name(severity) == "Error");
