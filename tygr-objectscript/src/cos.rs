@@ -6716,8 +6716,9 @@ impl Validate for UnknownFunctionName {
     const REQUIREMENT: &'static str = "not be a known function";
     fn validate(&self) -> bool {
         let name = self.0.print();
-        !FUNCTION_NAMES.iter().any(|n| n.eq_ignore_ascii_case(&name))
-            && simple_function(&name).is_none()
+        !FUNCTION_KEYWORDS.iter().any(|(full, abbr)| {
+            full.eq_ignore_ascii_case(&name) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(&name))
+        }) && simple_function(&name).is_none()
             && hand_written_arity(&name).is_none()
     }
 }
@@ -6738,8 +6739,8 @@ impl UnknownFunctionCall {
     }
 }
 
-// Every full function name (including nested Bit/Extract/DText/Z*Kw calls) -- kept in sync by
-// hand, for `UnknownSpecialVariable::from_str`'s error message.
+// Every full function name, hand-written or in `SIMPLE_FUNCTIONS`, for the checker's did-you-mean
+// list; the style test keeps it in sync with `FUNCTION_KEYWORDS` and `SIMPLE_FUNCTIONS`.
 pub const FUNCTION_NAMES: &[&str] = &[
     "TEXT",
     "LENGTH",
@@ -6768,7 +6769,6 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "ISVECTOR",
     "INCREMENT",
     "ZINCREMENT",
-    "ZINCR",
     "JUSTIFY",
     "LIST",
     "LISTBUILD",
@@ -6861,7 +6861,6 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "ZVERSION",
     "ZPOWER",
     "ZPOSITION",
-    "ZP",
     "ZCRC",
     "ZBITGET",
     "ZBITAND",
@@ -7425,6 +7424,23 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn abbreviated_function_with_bad_arguments_is_not_unknown() {
+        for call in [
+            "$P(a)",
+            "$E()",
+            "$LG(a,1,2,3)",
+            "$ZDT()",
+            "$ZINCR()",
+            "$ZP()",
+        ] {
+            let err = routine(&format!(" s x={call}\n"))
+                .expect_err(call)
+                .to_string();
+            assert!(err.contains("argument"), "{call}: {err}");
+        }
     }
 
     #[test]
