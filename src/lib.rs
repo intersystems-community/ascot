@@ -1579,7 +1579,7 @@ mod tests {
                 .iter()
                 .find(|d| d.code == "A8073")
                 .expect("A8073");
-            assert!(error.message.starts_with(start), "{}", error.message);
+            assert!(error.message.contains(start), "{}", error.message);
             assert!(!error.message.contains('\n'), "{}", error.message);
         }
         let diagnostics = class_diagnostics("ClassMethod M(x) {\n ZFoo x\n Quit\n}\n");

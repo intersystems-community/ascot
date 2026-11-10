@@ -1584,7 +1584,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4418"]
     #[severity = Warning]
-    #[message = "{call} {replacement}"]
+    #[message = "{call} is a legacy $ZUTIL call{replacement}"]
     LegacyZUtil { call: String, replacement: Replacement },
     /// The leading literal arguments of this `$ZUTIL` (`$ZU`) call match nothing in the
     /// "Replacements for ObjectScript $ZUTIL Functions" list, and IRIS documents no `$ZUTIL`
@@ -1691,7 +1691,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6705"]
     #[severity = Warning]
-    #[message = "Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional."]
+    #[message = "Too few arguments: '{next_arg}' is required (only a parameter with a default or an `Output` one may be left out)"]
     TooFewArguments { next_arg: String },
     /// The call passes more arguments than the callee declares, and the callee has no `args...`
     /// to take the rest. IRIS compiles the call and raises `<PARAMETER>` when it runs. The first
@@ -2138,7 +2138,7 @@ type_error_kinds! {
     /// ```
     #[code = "S5583"]
     #[severity = Warning]
-    #[message = "Put {wanted}"]
+    #[message = "This comma wants {wanted}"]
     CommaSpacing { wanted: CommaSpace },
     /// `$FNUMBER`'s format is a string of the codes `+ - , . D E G L N O P T`, in any combination
     /// but the pairs IRIS forbids (such as `,` with `.`); this constant format has a character
@@ -2225,7 +2225,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4963"]
     #[severity = Error]
-    #[message = "Quit with {actual} inside control structure"]
+    #[message = "Quit inside a loop or Try block takes no value; this one carries {actual}"]
     QuitXInControl { actual: Ty },
     /// The argument and the parameter disagree on by-reference passing: a plain argument where
     /// the parameter is `ByRef` or `Output`, so the callee's assignments never reach the caller,
@@ -2254,7 +2254,7 @@ type_error_kinds! {
     /// ```
     #[code = "A5579"]
     #[severity = Warning]
-    #[message = "Passing {actual} argument to '{name}', {wanted} parameter"]
+    #[message = "Passing {actual} argument to '{name}', which is {wanted} parameter"]
     MismatchArgumentAndArgumentMode {
         name: String,
         wanted: Mode,
@@ -2473,8 +2473,8 @@ type_error_kinds! {
     /// ```
     #[code = "A8073"]
     #[severity = Error]
-    #[message = "{err}"]
-    InvalidSyntax { err: SyntaxErrorText },
+    #[message = "Syntax error: {detail}"]
+    InvalidSyntax { detail: SyntaxErrorText },
     /// A class header or member declaration, or a line of a routine or include file, that doesn't
     /// parse; a method body that doesn't is A8073 instead, and the message reads the same way.
     /// Nothing else in the document is checked, and IRIS refuses to compile it. Correct the marked
@@ -2490,8 +2490,8 @@ type_error_kinds! {
     /// ```
     #[code = "A1727"]
     #[severity = Error]
-    #[message = "{err}"]
-    DocumentSyntaxError { err: SyntaxErrorText },
+    #[message = "Syntax error: {detail}"]
+    DocumentSyntaxError { detail: SyntaxErrorText },
     /// The body of a label, or a routine's main body, runs off its end without a `Quit` or
     /// `Return`, and no label follows for it to fall into: it is the last, or a procedure block
     /// comes next. IRIS compiles it and quits there implicitly, so the code runs; an explicit `Quit`
@@ -2611,7 +2611,7 @@ type_error_kinds! {
     /// ```
     #[code = "A3913"]
     #[severity = Hint]
-    #[message = "{what} is not checked"]
+    #[message = "{what} is beyond what ascot checks"]
     NotChecked { what: &'static str },
     /// `ZQUIT` in a procedure block without private variables, where IRIS lets it unwind; the same
     /// block with any, an argument or a local, fails with `<COMMAND>` when it runs. The code works
@@ -2690,8 +2690,8 @@ pub struct Replacement(pub Option<String>);
 impl std::fmt::Display for Replacement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            Some(replacement) => write!(f, "is superseded: use {replacement}"),
-            None => f.write_str("is deprecated, with no replacement"),
+            Some(replacement) => write!(f, "; use {replacement} instead"),
+            None => f.write_str(", deprecated with no replacement"),
         }
     }
 }
@@ -2724,9 +2724,9 @@ pub struct Mode(pub Option<RefMode>);
 impl std::fmt::Display for Mode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self.0 {
-            None => "a normal",
-            Some(RefMode::Output) => "an output",
-            Some(RefMode::ByRef) => "a by-ref",
+            None => "a by-value",
+            Some(RefMode::Output) => "an Output",
+            Some(RefMode::ByRef) => "a ByRef",
         })
     }
 }
@@ -2865,9 +2865,9 @@ pub struct CommaSpace(pub bool);
 impl std::fmt::Display for CommaSpace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(if self.0 {
-            "one space after this comma, and none before"
+            "one space after it and none before"
         } else {
-            "no space around this comma"
+            "no space on either side"
         })
     }
 }
@@ -2885,17 +2885,16 @@ impl std::fmt::Display for Expansion {
     }
 }
 
-/// A syntax error, in the grammar's own words where it has some.
+/// A syntax error in one line: the grammar's own words where it has some (an unknown command, a
+/// function given the wrong arguments, a value that fails a check), else what could come next.
 #[derive(Debug)]
 pub struct SyntaxErrorText(pub tygr::Error);
 
 impl std::fmt::Display for SyntaxErrorText {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let error = &self.0;
-        // Prefer a catch-all-first `Unknown*` variant's own friendly failure (see
-        // `cos::Command`/`SpecialVariable`) over the generic "expected one of: ..." dump.
-        // A function's arguments (`cos::fun_args!`) are named after it; when several of
-        // its forms fail at the same spot, the first form's message stands for all.
+        // A function's arguments (`cos::fun_args!`) are named after it; when several of its forms
+        // fail at the same spot, the first form's message stands for all.
         let mut named = std::collections::HashSet::new();
         let mut friendly: Vec<String> = error
             .traces()
@@ -2905,16 +2904,108 @@ impl std::fmt::Display for SyntaxErrorText {
                     named.insert(into).then(|| format!("{into} {fail}"))
                 }
                 tygr::Expectation::GrammarFrom { fail, .. } => Some(fail.clone()),
+                tygr::Expectation::Valid {
+                    text, requirement, ..
+                } => Some(format!("`{text}` must {requirement}")),
                 _ => None,
             })
             .collect();
         friendly.dedup();
-        if friendly.is_empty() {
-            // The parser's own words: `parse error at ..., expected: ...`.
-            write!(f, "{error}")
-        } else {
-            write!(f, "{}", friendly.join("\n"))
+        if !friendly.is_empty() {
+            return f.write_str(&friendly.join("; "));
         }
+        let pos = error.pos();
+        let mut expected: Vec<String> = error
+            .traces()
+            .iter()
+            .map(|trace| match trace.context.last() {
+                Some(frame) if frame.pos == pos => rule_in_words(frame.node),
+                _ => match &trace.expectation {
+                    tygr::Expectation::StringEq(_, full)
+                    | tygr::Expectation::StringEqCI(_, full) => token_in_words(full),
+                    tygr::Expectation::CharClass(class) => class_in_words(class),
+                    tygr::Expectation::Valid { node, .. } => rule_in_words(node),
+                    tygr::Expectation::GrammarFrom { into, .. } => rule_in_words(into),
+                },
+            })
+            .collect();
+        // The broad before the narrow: "a variable" says more than the ten tokens that may
+        // start one, and an expression or a command more than a particular variable.
+        let rank = |what: &str| match what {
+            "an expression" => 0,
+            "a command" => 1,
+            "a variable" => 2,
+            "a number" | "a global" | "a comment" => 3,
+            w if w.starts_with('`') => 5,
+            _ => 4,
+        };
+        expected.sort_by_key(|what| (rank(what), what.clone()));
+        expected.dedup();
+        match expected.len() {
+            0 => f.write_str("unexpected text"),
+            1 => write!(f, "expected {}", expected[0]),
+            n if n <= 10 => write!(
+                f,
+                "expected {} or {}",
+                expected[..n - 1].join(", "),
+                expected[n - 1]
+            ),
+            n => write!(f, "expected {} or {} more", expected[..9].join(", "), n - 9),
+        }
+    }
+}
+
+// A grammar rule's name as the message says it: `GenericExpr` is "an expression", every
+// `*Command` "a command", `CacheDirectCallback` "a cache direct callback".
+fn rule_in_words(name: &str) -> String {
+    let words = match name {
+        "Variable" | "LocalVariable" => "variable".to_string(),
+        "GlobalRef" => "global".to_string(),
+        "Number" | "Digits" => "number".to_string(),
+        "LineComment" | "RangeComment" => "comment".to_string(),
+        "FunctionCall" => "function".to_string(),
+        "MemberRef" => "member".to_string(),
+        n if n.ends_with("Expr") => "expression".to_string(),
+        n if n.ends_with("Command") => "command".to_string(),
+        n => n
+            .chars()
+            .flat_map(|c| {
+                let space = c.is_uppercase().then_some(' ');
+                space.into_iter().chain(c.to_lowercase())
+            })
+            .collect::<String>()
+            .trim_start()
+            .to_string(),
+    };
+    let article = if words.starts_with(['a', 'e', 'i', 'o']) || words.starts_with("un") {
+        "an"
+    } else {
+        "a"
+    };
+    format!("{article} {words}")
+}
+
+// How a character class reads in a message.
+fn class_in_words(class: &str) -> String {
+    match class {
+        "whitespace" | "space" | "not line breaking whitespace" => "a space".into(),
+        "digit" | "numeric" => "a digit".into(),
+        "alphabetic" => "a letter".into(),
+        "letter or number" => "a letter or digit".into(),
+        "letter or percent sign" => "a letter or %".into(),
+        "any" => "any character".into(),
+        _ => format!("a {class} character"),
+    }
+}
+
+// A literal the parser wanted, in backticks, whitespace by name.
+fn token_in_words(token: &str) -> String {
+    match token {
+        "\n" => "a line break".into(),
+        "\r\n" => "a line break".into(),
+        " " => "a space".into(),
+        "\t" => "a tab".into(),
+        _ => format!("`{token}`"),
     }
 }
 
@@ -2992,7 +3083,7 @@ impl TypeError {
     pub(crate) fn document_syntax_error(range: Range, err: tygr::Error) -> Self {
         Self::at(
             TypeErrorKind::DocumentSyntaxError {
-                err: SyntaxErrorText(err),
+                detail: SyntaxErrorText(err),
             },
             range,
         )
@@ -3129,7 +3220,7 @@ impl TypeError {
     pub fn invalid_syntax(range: Range, err: tygr::Error) -> Self {
         Self::at(
             TypeErrorKind::InvalidSyntax {
-                err: SyntaxErrorText(err),
+                detail: SyntaxErrorText(err),
             },
             range,
         )
