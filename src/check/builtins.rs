@@ -1406,6 +1406,7 @@ pub(super) fn check_args_any<'a, 'b>(
             // An unknown callee may set anything through a by-reference argument, subscripts
             // included.
             Some(cos::MthArg::ByRef { target, .. }) => {
+                check_dottable(env, target, env.range(arg));
                 let local = match target.as_variable() {
                     Some(variable) => variable
                         .as_local(env, flow)
@@ -1480,6 +1481,7 @@ fn check_zu_args<'a>(
                 }
             }
             cos::FunArg::ByRef { target, .. } => {
+                check_dottable(env, target, env.range(arg));
                 check_set_target(target, PowerTy::from(Ty::Any), env.range(arg), env, flow)?;
             }
         }

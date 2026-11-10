@@ -3568,6 +3568,7 @@ fn check_param_arg<'a>(
                 .or_else(|err| err.raise(env, env.range(arg), Some(par.name)))?;
         }
         Some(cos::MthArg::ByRef { target, .. }) => {
+            check_dottable(env, target, env.range(arg));
             if par.mode.is_none() {
                 mode_mismatch(flow, Some(RefMode::ByRef));
             }
@@ -3590,6 +3591,28 @@ fn check_param_arg<'a>(
         }
     }
     Ok(())
+}
+
+// IRIS takes a dot before a plain local or `%` variable or an indirection alone; a subscript, a
+// global, `i%P`, a property or a function there does not compile (ERROR #1010/#1011).
+fn check_dottable(env: &CodeEnv<'_>, target: &SetTarget, range: bindings::Range) {
+    let dottable = matches!(target, SetTarget::Indirection(_))
+        || target.as_variable().is_some_and(|var| {
+            var.subs.is_none()
+                && matches!(
+                    &var.base,
+                    AllowMacro::Plain(VariableBase::Local(_) | VariableBase::Public(_))
+                        | AllowMacro::Macro(_)
+                )
+        });
+    if !dottable {
+        env.soft_diagnostic(TypeError::not_allowed_in(
+            "Anything but a variable name or an indirection",
+            "a by-reference argument",
+            "ERROR #1010/#1011",
+            range,
+        ));
+    }
 }
 
 fn check_call<'a, 'b>(
