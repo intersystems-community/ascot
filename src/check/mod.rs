@@ -3448,7 +3448,11 @@ fn check_param_arg<'a>(
             // fresh, obligated write — models it: satisfies whatever was pending instead of
             // demanding another read.
             if let Some(Left(local)) = check_target(target, env, flow)? {
-                flow.invalidate(local, source)?;
+                if par.mode == Some(RefMode::Output) {
+                    flow.invalidate_output(local, source)?;
+                } else {
+                    flow.invalidate(local, source)?;
+                }
             }
         }
         None => {

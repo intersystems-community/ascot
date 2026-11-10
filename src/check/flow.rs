@@ -1130,7 +1130,26 @@ impl<'a> Flow<'a> {
     // site wants both. Ignores `local.subs`: a callee-mutated variable is invalidated wholesale
     // either way.
     pub(crate) fn invalidate(&mut self, local: Local, ty: PowerTy) -> Result<(), QuasiTypeError> {
-        self.note_ref_param(&local.name, RefUse::Ref)?;
+        self.invalidate_used(local, ty, RefUse::Ref)
+    }
+
+    // The same for a callee's `Output` parameter, which disclaims the prior value: no read of
+    // what came in, so handing on one of our own `Output` params is not A7781.
+    pub(crate) fn invalidate_output(
+        &mut self,
+        local: Local,
+        ty: PowerTy,
+    ) -> Result<(), QuasiTypeError> {
+        self.invalidate_used(local, ty, RefUse::Get)
+    }
+
+    fn invalidate_used(
+        &mut self,
+        local: Local,
+        ty: PowerTy,
+        used: RefUse,
+    ) -> Result<(), QuasiTypeError> {
+        self.note_ref_param(&local.name, used)?;
         self.note_ref_param(&local.name, RefUse::Set)?;
         self.read(&local.name)?;
         let binding = self.lookup(local.name.clone())?;
