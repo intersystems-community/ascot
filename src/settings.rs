@@ -17,8 +17,8 @@ pub struct Settings {
     /// `ascot declare`; or `none`, for no environment at all. Defaults to the newest release ascot
     /// was built for.
     pub iris: Option<String>,
-    /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
-    /// for a URL; for a declaration file it must match the namespace it declares.
+    /// The namespace of a live instance, `%SYS` by default. A release names its own after its tag
+    /// and a declaration file carries its own, so giving one with either is an error.
     pub iris_namespace: Option<String>,
     /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
     /// have every command keyword but `Do`'s written in full; `function` and `function_<name>` do
