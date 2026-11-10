@@ -911,8 +911,6 @@ impl CheckExprInner for cos::FunctionCall {
     }
 }
 
-/// Check a [`SetTargetFun`] -- the settable functions on the left of `SET`.
-/// Reuses the same per-function checks as the read positions.
 // `Set $PIECE(x, ..) = v` (likewise `$EXTRACT`, `$LIST`, `$BIT`, ...) on an undefined `x` is fine:
 // it starts from the empty string, so the target is defined from here on rather than read.
 fn define_set_target_base<'a>(
@@ -933,6 +931,8 @@ fn define_set_target_base<'a>(
     Ok(())
 }
 
+/// Check a [`SetTargetFun`] -- the settable functions on the left of `SET`.
+/// Reuses the same per-function checks as the read positions.
 pub(super) fn check_settarget_fun<'a>(
     fun: &cos::SetTargetFun,
     env: &CodeEnv<'a>,
