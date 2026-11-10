@@ -5709,9 +5709,6 @@ pub enum FunctionCall {
         args: CompileArgs,
         rp: StringEq!(")"),
     },
-    // Unlike every other special variable, `$ZVERSION` also has a one-argument function form
-    // (its abbreviation `$ZV` doesn't) -- easiest modeled as its own `FunctionCall` variant
-    // rather than teaching `SpecialVariable` about arguments generally.
     // Legacy `$ZPREVIOUS(glvn)`/`$ZP`: the last subscript at that level, a one-argument reverse
     // `$ORDER`. Modeled on its own rather than folded into `Order`.
     ZP {
@@ -5720,10 +5717,6 @@ pub enum FunctionCall {
         args: ZPArgs,
         rp: StringEq!(")"),
     },
-    // `$ZBITAND(b1,b2)`/`$ZBITOR`/`$ZBITXOR`: bitwise combination of two bitstrings.
-    // `$ZBITFIND(bits, value[, position])`: the position of the next bit with `value`.
-    // `$ZBITSTR(length[, value])`: a bitstring of `length` bits, all `value` (default 0).
-    // `$LOCK(lockname[, info_type])`: information about a held lock.
     // Legacy `$ZORDER(glvn)`/`$ZO` and `$NEXT(glvn)`/`$N`: the next node/subscript, like `$ORDER`.
     ZOrder {
         kw: Range<FnZOrder>,
