@@ -116,7 +116,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A4471](A4471.md) | Cannot look up {lookup} on the IRIS instance ({reason}), so it is taken on trust |
 | [A5213](A5213.md) | The label is confirmed, but not where its offset lands: the call is checked as untyped and the offset is not checked |
 | [A5362](A5362.md) | '{name}' is a user-defined command (^%ZLANGC00), so the call is not checked |
-| [A5540](A5540.md) | Cannot decide `#if {condition}`{expansion} at compile time, so its first branch is assumed |
+| [A5540](A5540.md) | Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken |
 | [A5780](A5780.md) | ZQUIT unwinds here only because this procedure block has no private variables; one with any fails with <COMMAND>, so its error handling may not be what you expect |
 | [A5847](A5847.md) | {call} is not documented for IRIS; $ZUTIL was superseded by class methods and special variables |
 | [A6037](A6037.md) | ${name} is not documented for IRIS, so the call is not checked |

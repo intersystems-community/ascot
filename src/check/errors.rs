@@ -783,8 +783,8 @@ type_error_kinds! {
     CannotFindInclude { name: String },
     /// The condition of an `#if` or `#elseif` is not the literal `1` or `0` once its macros are
     /// expanded. IRIS evaluates any expression at compile time and compiles the branch it picks;
-    /// ascot does not evaluate, so it checks the first branch and skips the rest, which may not be
-    /// what IRIS compiles. The code is fine as far as IRIS is concerned; a macro that expands to
+    /// ascot does not evaluate, so it checks that directive's branch and skips the rest, which may
+    /// not be what IRIS compiles. The code is fine as far as IRIS is concerned; a macro that expands to
     /// `1` or `0` (`#define DEBUG 1`, `#if $$$DEBUG`) would make the choice visible to ascot.
     ///
     /// ```objectscript compiles
@@ -800,8 +800,12 @@ type_error_kinds! {
     /// ```
     #[code = "A5540"]
     #[severity = Hint]
-    #[message = "Cannot decide `#if {condition}`{expansion} at compile time, so its first branch is assumed"]
-    UndecidedIf { condition: String, expansion: Expansion },
+    #[message = "Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken"]
+    UndecidedIf {
+        directive: &'static str,
+        condition: String,
+        expansion: Expansion,
+    },
     /// The IRIS connection failed to answer a lookup: a class, routine or include file the
     /// workspace doesn't hold was asked of the instance, and the request itself failed (the
     /// instance is down, the credentials are refused), as opposed to the instance not having it.
@@ -3078,9 +3082,15 @@ impl TypeError {
         Self::at(TypeErrorKind::CommaSpacing { wanted }, range)
     }
 
-    pub fn undecided_if(condition: String, expansion: Option<String>, range: Range) -> Self {
+    pub fn undecided_if(
+        directive: &'static str,
+        condition: String,
+        expansion: Option<String>,
+        range: Range,
+    ) -> Self {
         Self::at(
             TypeErrorKind::UndecidedIf {
+                directive,
                 condition,
                 expansion: Expansion(expansion),
             },
