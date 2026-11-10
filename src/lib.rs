@@ -52,6 +52,7 @@ mod details;
 pub mod diagnostic_filter;
 #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
 mod download;
+pub mod format;
 #[cfg(not(target_arch = "wasm32"))]
 mod iris;
 #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
@@ -684,6 +685,10 @@ impl WorkspaceStruct {
                     diagnostics.push(diagnostic);
                 }
                 diagnostics.extend(env.soft_diagnostics());
+                if let Some(style) = &self.style {
+                    let findings = format::findings_cls(&cls, &text, &olc, style, None);
+                    diagnostics.extend(findings.into_iter().map(|f| f.diagnostic(&olc)));
+                }
                 let hints = doc_env.inlay_hints.into_inner();
                 let hover_types = doc_env.hover_types.into_inner();
                 let references = env.references();
@@ -703,6 +708,25 @@ impl WorkspaceStruct {
                 diagnostics.extend(env.soft_diagnostics());
                 let mut diagnostics = rtn.map.relocate_diagnostics(diagnostics, uri);
                 diagnostics.extend(rtn.map.unresolved.iter().cloned());
+                // The style reads the routine as written, its macros unexpanded; when those hide
+                // the syntax, the expanded routine, reported in the source's terms.
+                if let Some(style) = &self.style {
+                    let text = self.doc_text(uri).unwrap_or_default();
+                    let map = &rtn.map;
+                    diagnostics.extend(match cos::Routine::parse(&text) {
+                        Ok(raw) => {
+                            let olc = OLC::new(&text);
+                            let found = format::findings_rtn(&raw, &text, style, None);
+                            found.into_iter().map(|f| f.diagnostic(&olc)).collect()
+                        }
+                        Err(_) => {
+                            let expanded = map.expanded_text();
+                            let found = format::findings_rtn(&rtn.routine, expanded, style, None);
+                            let found = found.into_iter().map(|f| f.diagnostic(&map.expanded_olc));
+                            map.relocate_diagnostics(found.collect(), uri)
+                        }
+                    });
+                }
                 let hints = doc_env
                     .inlay_hints
                     .into_inner()
@@ -938,6 +962,32 @@ impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn inlay_hint(&self, uri: String, _range: bindings::Range) -> Vec<InlayHint> {
         self.borrow().ensure_checked(&uri).hints
+    }
+
+    #[allow(async_fn_in_trait)]
+    fn format(
+        &self,
+        uri: String,
+        options: bindings::FormattingOptions,
+    ) -> Option<Vec<bindings::TextEdit>> {
+        let this = self.borrow();
+        let text = this.doc_text(&uri)?;
+        let Some(style) = &this.style else {
+            return Some(vec![]);
+        };
+        let spaces = " ".repeat(options.tab_size as usize);
+        let indent = if options.insert_spaces {
+            spaces.as_str()
+        } else {
+            "\t"
+        };
+        let edits = format::edits(&text, &uri, style, indent)?;
+        let olc = OLC::new(&text);
+        let to_text_edit = |edit: format::Edit| bindings::TextEdit {
+            range: olc.span(edit.start, edit.end),
+            new_text: edit.text,
+        };
+        Some(edits.into_iter().map(to_text_edit).collect())
     }
 
     // Where the reference at `position` is declared, if any — one of the go-to-definition

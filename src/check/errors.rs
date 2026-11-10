@@ -30,10 +30,6 @@ impl QuasiTypeError {
         TypeErrorKind::Unimplemented { what: msg }.into()
     }
 
-    pub fn quit_exits() -> Self {
-        TypeErrorKind::QuitExits.into()
-    }
-
     pub fn undefined_macro(name: String, suggestions: Vec<String>) -> Self {
         TypeErrorKind::UndefinedMacro {
             name,
@@ -3127,18 +3123,6 @@ impl TypeError {
         Self::at(TypeErrorKind::CannotFindInclude { name }, range)
     }
 
-    pub fn argument_postconditional(range: Range) -> Self {
-        Self::at(TypeErrorKind::ArgumentPostconditional, range)
-    }
-
-    pub fn and_operator(wanted: crate::bindings::AndOperator, range: Range) -> Self {
-        Self::at(TypeErrorKind::AndOperator { wanted }, range)
-    }
-
-    pub fn new_per_block(max: u32, range: Range) -> Self {
-        Self::at(TypeErrorKind::NewPerBlock { max }, range)
-    }
-
     pub fn undescribed(kind: &str, lines: usize, range: Range) -> Self {
         Self::at(
             TypeErrorKind::Undescribed {
@@ -3147,30 +3131,6 @@ impl TypeError {
             },
             range,
         )
-    }
-
-    pub fn commands_per_line(max: u32, range: Range) -> Self {
-        Self::at(TypeErrorKind::CommandsPerLine { max }, range)
-    }
-
-    pub fn open_brace_break(newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::OpenBraceBreak { wanted }, range)
-    }
-
-    pub fn body_break(newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::BodyBreak { wanted }, range)
-    }
-
-    pub fn close_brace_break(newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::CloseBraceBreak { wanted }, range)
-    }
-
-    pub fn chain_break(keyword: &'static str, newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::ChainBreak { keyword, wanted }, range)
     }
 
     pub fn comma_spacing(space_after: bool, range: Range) -> Self {

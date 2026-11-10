@@ -17,7 +17,7 @@ cargo clippy --all-targets -- -D warnings
 
 `ascot lsp` runs the stdio LSP server natively.
 
-Each subcommand is a Cargo feature (`analyze`, `declare`, `lsp`, `mcp`), and `network` is
+Each subcommand is a Cargo feature (`analyze`, `declare`, `format`, `lsp`, `mcp`), and `network` is
 ascot's own access to a live instance and to the pre-built declarations; all are on by default,
 and the binary needs only `analyze`. Code that one of them alone uses lives in a module gated
 whole (`sarif`, `declare`, `lsp`, `mcp`, `iris_connection`, `download`); CI builds and lints the

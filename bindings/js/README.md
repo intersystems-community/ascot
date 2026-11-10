@@ -110,6 +110,7 @@ as in the Language Server Protocol.
 | `hover(uri, position)`                          | markdown `string \| undefined`                        |
 | `documentSymbol(uri)`                           | the class or routine and its members or labels        |
 | `workspaceSymbol(query)`                        | classes and members across the workspace by prefix    |
+| `format(uri, options)`                          | `TextEdit[] \| undefined` bringing blocks to style    |
 | `queryCls(query)`                               | `[uri, ClassInfo][]` for classes by prefix            |
 | `queryMem(cls, query)`                          | `[uri, MemberInfo][]` for a class's members by prefix |
 

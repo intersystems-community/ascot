@@ -17,6 +17,17 @@ interface common {
         range: range,
     }
 
+    // LSP's TextEdit and FormattingOptions.
+    record text-edit {
+        range: range,
+        new-text: string,
+    }
+
+    record formatting-options {
+        tab-size: u32,
+        insert-spaces: bool,
+    }
+
     record diagnostic-related-information {
         location: location,
         message: string,
@@ -555,6 +566,7 @@ interface exported {
         member-info, class-info, position,
         diagnostic, inlay-hint, range, location,
         document-symbol, workspace-symbol, style,
+        text-edit, formatting-options,
     };
     use imported.{env};
 
@@ -582,6 +594,9 @@ interface exported {
         query-mem: func(cls: string, query: string) -> list<tuple<string, member-info>>;
         document-symbol: func(uri: string) -> option<document-symbol>;
         workspace-symbol: func(query: string) -> list<workspace-symbol>;
+        // The edits that bring `uri`'s procedure blocks and method bodies to the style, as `ascot
+        // format` writes them. None when `uri` is not open or doesn't parse; empty with no style.
+        format: func(uri: string, options: formatting-options) -> option<list<text-edit>>;
     }
 }
 
