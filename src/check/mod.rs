@@ -1504,7 +1504,7 @@ impl CheckCommandInner for cos::Command {
                     let default_range = env.range(&default.prefixed);
                     let default = default.to_power_ty(env, flow)?;
                     for declaration in declarations.items.iter() {
-                        for name in declaration.name.items(env) {
+                        for name in declaration.name.items.iter() {
                             flow.handle_set(
                                 Local::bare(name.print()),
                                 default.clone(),
