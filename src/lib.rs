@@ -246,6 +246,14 @@ impl WorkspaceStruct {
         let Some(kind) = DocKind::from_uri(&uri) else {
             return vec![];
         };
+        // The same text again stales nothing; the caller may still want this uri's diagnostics.
+        if self
+            .doc_cache
+            .get(&uri)
+            .is_some_and(|entry| entry.as_ref().is_ok_and(|cell| cell.borrow().text == text))
+        {
+            return vec![uri];
+        }
         if kind == DocKind::Inc {
             self.forget_include_definitions();
         }
@@ -1315,7 +1323,7 @@ mod tests {
         let affected: HashSet<String> = workspace
             .open(
                 base_uri.clone(),
-                "Class Test.Base {\nClassMethod Foo() {\n}\n}\n".to_string(),
+                "Class Test.Base {\nClassMethod Foo() {\n Quit\n}\n}\n".to_string(),
             )
             .into_iter()
             .collect();
