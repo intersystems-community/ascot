@@ -1328,22 +1328,20 @@ impl CheckCommandInner for cos::Command {
                 })?;
                 check_do_while(env, flow, env.range(iter.deref()), iter, cnds)
             }
-            cos::Command::If(cos::IfCommand {
-                cnds: Some(cnds),
-                branches,
-                ..
-            }) => check_if(env, flow, cnds, branches),
-            // Legacy argumentless `If` tests `$TEST`, which isn't tracked: an optional branch.
-            cos::Command::If(cos::IfCommand {
-                cnds: None,
-                branches,
-                ..
-            }) => {
-                let mut branch = flow.split();
-                if let Some(cos::IfBranches { thn, .. }) = branches {
-                    check_branch(env, &mut branch, thn);
+            cos::Command::If(cos::IfCommand { cnds, branches, .. }) => {
+                // An argumentless `If` takes commands on its line, not a block (ERROR #1026).
+                if cnds.is_none()
+                    && let Some(cos::IfBranches { thn, .. }) = branches
+                    && let cos::Block::Curry(_) = thn.deref()
+                {
+                    env.soft_diagnostic(TypeError::not_allowed_in(
+                        "A block in braces",
+                        "an argumentless If",
+                        "ERROR #1026",
+                        env.range(thn),
+                    ));
                 }
-                flow.merge(branch)
+                check_if(env, flow, cnds.as_ref(), branches)
             }
             cos::Command::While(cos::WhileCommand { cnds, bdy, .. }) => {
                 let cnds = cnds.as_ref().ok_or_else(|| {
@@ -2052,11 +2050,15 @@ fn check_branch<'a>(env: &CodeEnv<'a>, flow: &mut Flow<'a>, block: &Range<cos::B
 fn check_if<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    cnds: &IfConditions,
+    cnds: Option<&IfConditions>,
     branches: &Option<cos::IfBranches>,
 ) -> Result<(), QuasiTypeError> {
-    // todo: I am not sure the range here is accurate
-    let mut if_false = check_and(&cnds.first, &cnds.remaining, env, flow, true)?;
+    let mut if_false = match cnds {
+        // todo: I am not sure the range here is accurate
+        Some(cnds) => check_and(&cnds.first, &cnds.remaining, env, flow, true)?,
+        // Legacy argumentless `If` tests `$TEST`, which isn't tracked: every branch is possible.
+        None => flow.split(),
+    };
     let mut others = vec![];
     match branches {
         None => {
