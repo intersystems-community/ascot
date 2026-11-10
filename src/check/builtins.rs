@@ -1723,7 +1723,9 @@ fn check_zstrip_action(action: &str) -> Result<(), &'static str> {
         }
         rest
     };
-    let mut has_plain = false;
+    if !rest.is_empty() && rest.len() == action.len() {
+        return Err("mask codes must follow an action code (*, <, > or =)");
+    }
     let mut has_negated = false;
     let mut chars = rest.chars();
     while let Some(c) = chars.next() {
@@ -1739,19 +1741,9 @@ fn check_zstrip_action(action: &str) -> Result<(), &'static str> {
             return Err("mask codes must be one of E, A, P, C, N, L, U, W");
         }
         if negated {
-            if !has_plain {
-                return Err(
-                    "a Unary Not (') mask code must follow at least one mask code without one",
-                );
-            }
             has_negated = true;
-        } else {
-            if has_negated {
-                return Err(
-                    "mask codes without a Unary Not (') must all precede the ones with one",
-                );
-            }
-            has_plain = true;
+        } else if has_negated {
+            return Err("mask codes without a Unary Not (') must all precede the ones with one");
         }
     }
     Ok(())
