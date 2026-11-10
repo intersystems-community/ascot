@@ -330,7 +330,7 @@ pub enum PowerTy {
         cases: Vec<(&'static str, Option<Ty>)>,
         // The outer Option determines if there is a default branch.
         //   There can be no default branches when all possible values are listed by cases.
-        // The inner Option determines if the default is defined, same as in AllBindings.assign
+        // The inner Option determines if the default is defined, same as `Binding::assigned` in `flow.rs`
         default: Option<Option<Ty>>,
     },
 }
