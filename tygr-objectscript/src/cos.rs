@@ -4304,6 +4304,14 @@ impl FromStr for UnknownCommand {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, String> {
+        // A known command lands here when its own grammar failed right after the word.
+        if COMMAND_NAMES.iter().any(|(name, abbr)| {
+            name.eq_ignore_ascii_case(s) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(s))
+        }) {
+            return Err(format!(
+                "'{s}' is a command, but its argument is missing or doesn't parse"
+            ));
+        }
         Err(format!(
             "'{s}' is not a recognized command; available: {}",
             COMMAND_NAMES
@@ -7424,6 +7432,19 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn known_command_without_its_argument_is_not_reported_as_unknown() {
+        for line in [" set\n", " s\n", " merge\n", " zkill\n", " zk\n"] {
+            let err = routine(line).expect_err(line).to_string();
+            assert!(
+                err.contains("is a command, but its argument"),
+                "{line}: {err}"
+            );
+        }
+        let err = routine(" foo 1\n").expect_err("foo").to_string();
+        assert!(err.contains("is not a recognized command"), "{err}");
     }
 
     #[test]
