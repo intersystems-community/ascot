@@ -1835,7 +1835,7 @@ pub struct LocalVariableNameStruct {
     rest: StringOf<IsLocalVariableNameRemaining>,
 }
 char_class!(pub IsLocalVariableNameFirst, "letter or percent sign", |c| {
-    c.is_ascii_alphabetic() || c == '%'
+    c.is_alphabetic() || c == '%'
 });
 type IsLocalVariableNameRemaining = IsLetterOrNumberIncludingUnicode;
 
@@ -1847,12 +1847,12 @@ pub struct GlobalVariableName(Raw<GlobalVariableNameStruct>);
 pub struct GlobalVariableNameStruct {
     first: CharOf<IsGlobalVariableNameFirst>,
     remaining: Option<(
-        Vec<(StringOf<IsLetterOrNumber>, StringEq!("."))>,
-        StringOf1<IsLetterOrNumber>,
+        Vec<(StringOf<IsLetterOrNumberIncludingUnicode>, StringEq!("."))>,
+        StringOf1<IsLetterOrNumberIncludingUnicode>,
     )>,
 }
 char_class!(pub IsGlobalVariableNameFirst, "letter or percent sign", |c| c
-    .is_ascii_alphabetic()
+    .is_alphabetic()
     || c == '%');
 char_class!(pub IsLetterOrNumber, "letter or number", |c| c
     .is_ascii_alphanumeric());
@@ -7425,6 +7425,11 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn variable_names_may_start_with_or_contain_any_letter() {
+        routine(" s Ω=1,aé=3,%é=2 s ^é=2,^a.é.b=1,^|\"USER\"|é=3,^%é=4\n").expect("Ok");
     }
 
     #[test]
