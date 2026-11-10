@@ -905,10 +905,10 @@ pub struct TyProcedure {
     // False for a routine label with no `(...)` at all: `Do` and `Goto` reach it, `$$` can't (IRIS
     // raises <PARAMETER>). Labels read from IRIS don't say, so they count as true.
     pub formal_list: bool,
-    // Shared by every parameter's `declared_at`. Only populated for legacy routine labels so far.
+    // Shared by every parameter's `declared_at`.
     pub uri: Option<String>,
     // Where the procedure itself (not a parameter) is declared — e.g. a routine label's own
-    // line. Only populated for legacy routine labels so far.
+    // line.
     pub declared_at: Option<bindings::Range>,
 }
 
