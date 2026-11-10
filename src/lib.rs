@@ -1166,6 +1166,11 @@ impl Workspace {
                     .into_iter()
                     .find(|(range, _)| position_in_range(position, *range))
                     .map(|(_, location)| location)?;
+                if DocKind::from_uri(&location.uri) != Some(DocKind::Cls)
+                    || !this.doc_cache.contains_key(&location.uri)
+                {
+                    return None;
+                }
                 let target = this.cls_details(&location.uri).ok()?;
                 return target
                     .members
