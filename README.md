@@ -239,7 +239,7 @@ IRIS; `iris` says which:
   into `~/.ascot`.
 - `--iris <release>`: the snapshot of that IRIS release, the tag of its
   `iris-community` image; `--iris irishealth-community:<release>:HSLIB` that of
-  IRIS for Health's `HS` and `Ens` classes (7 MB), the namespace after the tag
+  IRIS for Health's `HS` and `Ens` classes (6 MB), the namespace after the tag
   and `%SYS` when left out; `latest` serves as the tag there too.
 - `--iris http://user:password@host:port[/prefix]` with `--iris-namespace`
   (default `%SYS`): a live connection to IRIS through the Atelier REST API.
