@@ -4046,9 +4046,8 @@ pub enum DDL {
         cascade: Option<(Space, CascadeOpt)>,
     },
     DropAggregate {
-        kw: (StringEqCI!("DROP"), Space),
+        kw: (StringEqCI!("DROP"), Space, StringEqCI!("AGGREGATE"), Space),
         if_exists: Option<(StringEqCI!("IF"), Space, StringEqCI!("EXISTS"), Space)>,
-        agg_kw: (StringEqCI!("AGGREGATE"), Space),
         name: QualifiedSPName,
     },
     FreezePlans {
@@ -4319,13 +4318,11 @@ pub struct ModelColumn {
     datyp: (Space, Datyp),
 }
 
-pub type ModelSource = Prefix<(StringEqCI!("FROM"), Space), ModelSourceQuery>;
-
 #[derive(Grammar)]
-#[grammar(name = "model-source-query")]
-pub enum ModelSourceQuery {
+#[grammar(name = "model-source")]
+pub enum ModelSource {
     Subquery {
-        open: (StringEq!("("), Space),
+        open: (StringEqCI!("FROM"), Space, StringEq!("("), Space),
         selex: Selex,
         close: (Space, StringEq!(")")),
     },
@@ -4342,7 +4339,7 @@ pub type UsingClause = Prefix<(StringEqCI!("USING"), Space), AlgDescription>;
 
 #[derive(Grammar)]
 #[grammar(name = "alg description")]
-pub struct AlgDescription(JSONString);
+pub struct AlgDescription(JSONObject);
 
 pub type WithClauseTrain = Prefix<(StringEqCI!("WITH"), Space), TrainWith>;
 
@@ -4407,7 +4404,7 @@ pub enum ProviderName {
     AutoML(StringEqCI!("AutoML")),
     DataRobot(StringEqCI!("DataRobot")),
     H2O(StringEqCI!("H2O")),
-    PMMML(StringEqCI!("PMMML")),
+    PMML(StringEqCI!("PMML")),
 }
 
 #[derive(Grammar)]
@@ -4422,7 +4419,7 @@ pub type MlconfigUsingClause = Prefix<(StringEqCI!("USING"), Space), MlconfigUsi
 #[derive(Grammar)]
 #[grammar(name = "mlconfig-using")]
 pub enum MlconfigUsing {
-    JSONString(JSONString),
+    JSONString(JSONObject),
     Null(StringEqCI!("NULL")),
 }
 
@@ -4463,14 +4460,6 @@ pub enum TuneOption {
     RecompileCQ(StringEqCI!("%RECOMPILE_CQ")),
     SamplePercent(StringEqCI!("%SAMPLE_PERCENT"), (Space, PercentValue)),
 }
-
-char_class!(pub IsDbIdentifierStart, "db_identifier_start", |ch| {
-    ch.is_ascii_alphabetic() || ch == '_'
-});
-
-char_class!(pub IsDbIdentifierPart, "db_identifier_part", |ch| {
-    ch == '-' || ch.is_ascii_digit() || ch.is_ascii_alphabetic() || ch == '_'
-});
 
 #[derive(Grammar)]
 #[grammar(name = "DR option")]
@@ -4516,11 +4505,30 @@ pub struct DBOption(Ident);
 
 #[derive(Grammar)]
 #[grammar(name = "ft-options")]
-pub struct FTOptions(Ident);
+pub enum FTOptions {
+    Table((StringEqCI!("TABLE"), Space), Literal),
+    Query((StringEqCI!("QUERY"), Space), Literal),
+    File {
+        kw: (StringEqCI!("FILE"), Space),
+        path: Literal,
+        columns: Option<(
+            Space,
+            StringEqCI!("COLUMNS"),
+            Space,
+            StringEq!("("),
+            Space,
+            ColumnDefList,
+            Space,
+            StringEq!(")"),
+        )>,
+    },
+}
+
+pub type JSONObject = crate::cos::Brace<crate::cos::OSText>;
 
 #[derive(Grammar)]
 #[grammar(name = "json-string")]
-pub struct JSONString(StringLiteral);
+pub struct JSONString(Either<JSONObject, StringLiteral>);
 
 #[derive(Grammar)]
 #[grammar(name = "server-type")]
@@ -4749,10 +4757,17 @@ pub enum Stat {
 }
 
 #[derive(Grammar)]
-#[grammar(name = "percent_value")]
-pub enum PercentValue {
-    Dot(StringEq!("."), CharOf<IsDigit>, CharOf<IsDigit>),
-    Percent(CharOf<IsDigit>, CharOf<IsDigit>, StringEq!("%")),
+#[grammar(name = "percent_value", validated)]
+pub struct PercentValue(Number);
+
+impl Validate for PercentValue {
+    const REQUIREMENT: &'static str = "be in the range (0, 1]";
+    fn validate(&self) -> bool {
+        self.0
+            .print()
+            .parse::<f64>()
+            .is_ok_and(|v| v > 0.0 && v <= 1.0)
+    }
 }
 
 #[derive(Grammar)]
@@ -4988,14 +5003,6 @@ pub enum QueryMethod {
 pub type COSMethodBody = crate::cos::Brace<crate::cos::OSText>;
 
 pub type PythonMethodBody = Prefix<StringEq!("{"), StringEndsWith<StringEq!("}")>>;
-
-#[derive(Grammar)]
-pub enum Language {
-    Cos(StringEqCI!("COS")),
-    ObjectScript(StringEqCI!("OBJECTSCRIPT")),
-    Python(StringEqCI!("PYTHON")),
-    Sql(StringEqCI!("SQL")),
-}
 
 #[derive(Grammar)]
 #[grammar(name = "indexname")]
@@ -5281,6 +5288,11 @@ pub enum DefSpec {
     CurrentUser(StringEqCI!("CURRENT_USER")),
     GetDate {
         kw: (StringEqCI!("GETDATE"), StringEq!("("), Space),
+        value: Option<Literal>,
+        close: (Space, StringEq!(")")),
+    },
+    GetUtcDate {
+        kw: (StringEqCI!("GETUTCDATE"), StringEq!("("), Space),
         value: Option<Literal>,
         close: (Space, StringEq!(")")),
     },
@@ -6441,7 +6453,7 @@ pub enum LoadOptions {
 
 #[derive(Grammar)]
 #[grammar(name = "load-options-json")]
-pub struct LoadOptionsJson(Literal);
+pub struct LoadOptionsJson(Either<JSONObject, Literal>);
 
 #[derive(Grammar)]
 #[grammar(name = "load-options-name")]
@@ -7032,5 +7044,40 @@ mod tests {
         ]);
         assert!(SQL::parse("ALTER TABLE t CONVERT COLUMNAR").is_err());
         assert!(SQL::parse("ALTER TABLE t DROP PARTITION HASH (a) IN 4 PARTITIONS").is_err());
+    }
+
+    #[test]
+    fn single_tokens_as_iris_takes_them() {
+        all_ok(&[
+            "DROP AGGREGATE IF EXISTS Foo.Bar",
+            "DROP AGGREGATE Foo.Bar",
+            "CREATE ML CONFIGURATION c PROVIDER PMML",
+            "CREATE ML CONFIGURATION c PROVIDER AutoML USING {\"x\":1}",
+            "CREATE MODEL m PREDICTING (a) FROM t",
+            "CREATE MODEL m PREDICTING (a) FROM t USING {\"seed\":3}",
+            "CREATE MODEL m PREDICTING (a) FROM (SELECT a FROM t)",
+            "TRAIN MODEL m FROM t",
+            "VALIDATE MODEL m FROM t",
+            "CREATE TABLE t (a TIMESTAMP DEFAULT GETUTCDATE())",
+            "TUNE TABLE t %SAMPLE_PERCENT .5",
+            "TUNE TABLE t %SAMPLE_PERCENT 1",
+            "TUNE TABLE t %SAMPLE_PERCENT 0.25",
+            "LOAD DATA FROM FILE '/x.csv' INTO t USING {\"from\":{\"file\":{\"header\":true}}}",
+            "LOAD DATA FROM FILE '/x.csv' INTO t USING '{\"from\":{\"file\":{\"header\":true}}}'",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs TABLE 'x'",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs FILE 'x.csv' COLUMNS (a INT) USING {\"x\":1}",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs QUERY 'SELECT 1'",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs TABLE 'x' USING '{\"x\":1}'",
+        ]);
+        for rejected in [
+            "DROP IF EXISTS AGGREGATE Foo.Bar",
+            "CREATE ML CONFIGURATION c PROVIDER PMMML",
+            "CREATE ML CONFIGURATION c PROVIDER AutoML USING '{\"x\":1}'",
+            "TUNE TABLE t %SAMPLE_PERCENT 2",
+            "TUNE TABLE t %SAMPLE_PERCENT 0",
+            "TUNE TABLE t %SAMPLE_PERCENT 25%",
+        ] {
+            assert!(SQL::parse(rejected).is_err(), "{rejected}");
+        }
     }
 }
