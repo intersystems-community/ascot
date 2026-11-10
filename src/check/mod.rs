@@ -1224,7 +1224,6 @@ impl CheckCommandInner for cos::Block {
     }
 }
 
-// How each keyword in `keywords` is written, if a style was given.
 // What a node spells out, against the style: how its keywords are written, how its commas are
 // spaced.
 pub(crate) fn report_style(
