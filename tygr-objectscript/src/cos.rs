@@ -3089,6 +3089,8 @@ pub enum MethodLanguage {
     Python(StringEqCI!("Python")),
     JavaScript(StringEqCI!("JavaScript")),
     ObjectScript(StringEqCI!("ObjectScript")),
+    // The legacy name IRIS still compiles as ObjectScript.
+    Cache(StringEqCI!("Cache")),
     TSQL(StringEqCI!("TSQL")),
     ISPL(StringEqCI!("ISPL")),
     // Not among the document's values; IRIS's own `%MV` classes compile with it.
@@ -3179,7 +3181,10 @@ impl MethodHeader {
                 Either::Left(MethodKeyword::Language(language)) => Some(&language.value),
                 _ => None,
             });
-        matches!(language, None | Some(MethodLanguage::ObjectScript(..)))
+        matches!(
+            language,
+            None | Some(MethodLanguage::ObjectScript(..) | MethodLanguage::Cache(..))
+        )
     }
 }
 
@@ -7420,6 +7425,15 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn language_cache_is_objectscript() {
+        let cls = ClassDefinition::parse(
+            "Class A.L\n{\n\nClassMethod M() [ Language = cache ]\n{\n quit 1\n}\n\n}\n",
+        )
+        .expect("Ok");
+        assert!(methods(&cls)[0].header.is_objectscript());
     }
 
     #[test]
