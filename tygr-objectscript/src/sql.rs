@@ -1418,7 +1418,7 @@ char_class!(pub IsExtFuncChar, "non left paren character", |ch| {
     !matches!(ch, '(' | '$')
 });
 
-pub type ODBCEscape = Wrap<(StringEq!("{"), Space), DTS, (StringEq!("}"), Space)>;
+pub type ODBCEscape = Wrap<(StringEq!("{"), Space), DTS, (Space, StringEq!("}"))>;
 
 #[derive(Grammar)]
 pub enum DTS {
@@ -2165,9 +2165,9 @@ pub enum Tref {
     Join(JTab),
     OJSyntax {
         open: StringEq!("{"),
-        oj: Ident,
+        oj: (Ident, Space),
         table: Box<JTab>,
-        close: StringEq!("}"),
+        close: (Space, StringEq!("}")),
     },
 }
 
@@ -6837,6 +6837,17 @@ mod tests {
         all_ok(&[
             "SELECT a FROM t WHERE FOR SOME (u AS e) (e.a = t.a)",
             "SELECT a FROM t WHERE FOR SOME (u)(u.a = t.a)",
+        ]);
+    }
+
+    #[test]
+    fn odbc_escape_blank_before_close() {
+        all_ok(&[
+            "SELECT {d '2020-01-01' } FROM t",
+            "SELECT {fn NOW() } FROM t",
+            "SELECT {fn NOW()} + 1 FROM t",
+            "SELECT p.Name FROM {oj t p LEFT OUTER JOIN u c ON p.a = c.a}",
+            "SELECT p.Name FROM {oj t p LEFT OUTER JOIN u c ON p.a = c.a }",
         ]);
     }
 }
