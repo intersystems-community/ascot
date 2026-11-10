@@ -1647,7 +1647,7 @@ pub enum Dist {
         keyword: (StringEqCI!("DISTINCT"), Space),
         by: Option<SQLDistinctBy>,
     },
-    All(StringEqCI!("ALL")),
+    All((StringEqCI!("ALL"), Space)),
 }
 
 pub type SQLDistinctBy = Wrap<(StringEqCI!("BY"), Space), List, Space>;
@@ -6819,6 +6819,16 @@ mod tests {
             "SELECT LAG(Name, 1) OVER (ORDER BY Name) FROM t",
             "SELECT LEAD(a, 1, 0) OVER (PARTITION BY Age ORDER BY Name ASC, a DESC) FROM t",
             "SELECT COUNT(*) OVER (PARTITION BY Age) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn all_before_expression() {
+        all_ok(&[
+            "SELECT ALL Name FROM t",
+            "SELECT COUNT(ALL Name) FROM t",
+            "SELECT ALLOWED FROM t",
+            "SELECT COUNT(ALLOWED) FROM t",
         ]);
     }
 }
