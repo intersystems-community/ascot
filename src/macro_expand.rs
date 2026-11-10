@@ -1142,9 +1142,18 @@ fn substitute_macro_body<'a>(
         match unit.deref() {
             MacroedUnit::Plain(_) => {
                 for (start, end, span) in overlapping {
-                    let piece = &text[unit.start.max(*start)..unit.end.min(*end)];
-                    for part in <Vec<MacroedUnit>>::parse(piece)? {
-                        items.push((Cow::Owned(part), span.origin.clone(), span.precise));
+                    let piece_start = unit.start.max(*start);
+                    let piece = &text[piece_start..unit.end.min(*end)];
+                    for part in <Vec<Range<MacroedUnit>>>::parse(piece)? {
+                        // A precise span's text sits at its origin, so a part of it is at the
+                        // same offset into the origin.
+                        let origin = if span.precise {
+                            let at = span.origin.range.start + (piece_start - start);
+                            span.origin.with_range(at + part.start..at + part.end)
+                        } else {
+                            span.origin.clone()
+                        };
+                        items.push((Cow::Owned(part.into_inner()), origin, span.precise));
                     }
                 }
             }
