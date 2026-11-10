@@ -4672,8 +4672,8 @@ pub enum ViewWith {
 #[derive(Grammar)]
 #[grammar(name = "levels clause")]
 pub enum LevelsClause {
-    Cascade(StringEqCI!("CASCADE")),
     Cascaded(StringEqCI!("CASCADED")),
+    Cascade(StringEqCI!("CASCADE")),
     Local(StringEqCI!("LOCAL")),
 }
 
@@ -5158,8 +5158,8 @@ pub enum ConvertTiming {
 #[derive(Grammar)]
 #[grammar(name = "shard convert clause")]
 pub enum ShardConvertClause {
-    Shard(Shard),
     Sharded(Sharded),
+    Shard(Shard),
     NonSharded(StringEqCI!("NONSHARDED")),
 }
 
@@ -5268,12 +5268,12 @@ pub enum DefSpec {
     },
     Literal(Literal),
     CurrentDate(StringEqCI!("CURRENT_DATE")),
-    CurrentTime {
-        kw: StringEqCI!("CURRENT_TIME"),
-        precision: Option<Parenthesized<Literal>>,
-    },
     CurrentTimestamp {
         kw: StringEqCI!("CURRENT_TIMESTAMP"),
+        precision: Option<Parenthesized<Literal>>,
+    },
+    CurrentTime {
+        kw: StringEqCI!("CURRENT_TIME"),
         precision: Option<Parenthesized<Literal>>,
     },
     CurrentUser(StringEqCI!("CURRENT_USER")),
@@ -6121,8 +6121,8 @@ pub enum UpdateSpec {
     },
     Literal(Literal),
     CurrentDate(StringEqCI!("CURRENT_DATE")),
-    CurrentTime {
-        kw: StringEqCI!("CURRENT_TIME"),
+    CurrentTimestamp {
+        kw: StringEqCI!("CURRENT_TIMESTAMP"),
         precision: Option<(
             Space,
             StringEq!("("),
@@ -6132,8 +6132,8 @@ pub enum UpdateSpec {
             StringEq!(")"),
         )>,
     },
-    CurrentTimestamp {
-        kw: StringEqCI!("CURRENT_TIMESTAMP"),
+    CurrentTime {
+        kw: StringEqCI!("CURRENT_TIME"),
         precision: Option<(
             Space,
             StringEq!("("),
@@ -6898,5 +6898,18 @@ mod tests {
         assert!(SQL::parse("SELECT 1 AS Partition INTO :x").is_err());
         assert!(SQL::parse("SELECT a FROM t %NOBSL").is_err());
         assert!(SQL::parse("SELECT a FROM t Partition").is_err());
+    }
+
+    #[test]
+    fn longer_keyword_before_its_prefix() {
+        all_ok(&[
+            "CREATE TABLE t (a TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE t (a TIMESTAMP DEFAULT CURRENT_TIMESTAMP(3))",
+            "CREATE TABLE t (a TIME DEFAULT CURRENT_TIME)",
+            "CREATE TABLE t (a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+            "CREATE TABLE t (a TIME ON UPDATE CURRENT_TIME)",
+            "ALTER TABLE t CONVERT SHARDED",
+            "ALTER TABLE t CONVERT SHARD",
+        ]);
     }
 }
