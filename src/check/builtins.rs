@@ -456,6 +456,9 @@ impl CheckExprInner for cos::FunctionCall {
                 args,
                 ..
             } => {
+                if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
+                    return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
+                }
                 let _ = dll_id.to_ty(env, flow)?;
                 let _ = func_id.to_ty(env, flow)?;
                 Ok(check_args_any(env, flow, each_arg(args))?.into())
@@ -463,6 +466,9 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::ZFm6 {
                 dll_index, args, ..
             } => {
+                if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
+                    return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
+                }
                 let _ = dll_index.to_ty(env, flow)?;
                 Ok(check_args_any(env, flow, each_arg(args))?.into())
             }

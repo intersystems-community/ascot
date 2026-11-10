@@ -879,8 +879,9 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "{function} can't take '{name}', which is private to this procedure block"]
     PrivateVariableNotAllowed { function: String, name: String },
-    /// `$ZF(-3)` has no by-reference arguments: a `.x` in the call is a syntax error IRIS refuses
-    /// to compile. Pass the value itself and take what the function returns.
+    /// `$ZF(-3)`, `$ZF(-5)` and `$ZF(-6)` have no by-reference arguments: a `.x` in the call is a
+    /// syntax error IRIS refuses to compile. Pass the value itself and take what the function
+    /// returns.
     ///
     /// ```objectscript
     /// Class Demo.ByRefArgumentNotAllowed
