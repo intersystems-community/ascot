@@ -560,10 +560,7 @@ fn collect_doc(path: &Path, out: &mut Vec<PathBuf>) {
         for entry in entries.flatten() {
             collect_doc(&entry.path(), out);
         }
-    } else if path
-        .extension()
-        .is_some_and(|ext| matches!(ext.to_str(), Some("cls" | "mac" | "int" | "inc")))
-    {
+    } else if path.to_str().and_then(ascot::DocKind::from_uri).is_some() {
         out.push(path.to_path_buf());
     }
 }

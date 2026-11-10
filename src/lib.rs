@@ -117,8 +117,9 @@ pub(crate) type Name = (DocKind, String);
 impl DocKind {
     // Purely a function of `uri`'s extension -- known even for a uri that failed tier A (or
     // was never opened at all), unlike anything actually stored in `doc_cache`.
-    fn from_uri(uri: &str) -> Option<Self> {
-        match uri.rsplit('.').next() {
+    pub fn from_uri(uri: &str) -> Option<Self> {
+        let ext = uri.rsplit('.').next().map(str::to_ascii_lowercase);
+        match ext.as_deref() {
             Some("cls") => Some(DocKind::Cls),
             Some("inc") => Some(DocKind::Inc),
             Some("mac" | "int") => Some(DocKind::Rtn),
@@ -145,7 +146,7 @@ pub(crate) struct RtnDetails {
 struct DocCache {
     name: WithRange<String>,
     text: String,
-    details: Option<Result<DocDetails, Diagnostic>>,
+    details: Option<Result<DocDetails, Vec<Diagnostic>>>,
 }
 
 // Tier B (the full, kind-specific parse) plus tier C (the check built on top of it, for the two
@@ -245,6 +246,14 @@ impl WorkspaceStruct {
         let Some(kind) = DocKind::from_uri(&uri) else {
             return vec![];
         };
+        // The same text again stales nothing; the caller may still want this uri's diagnostics.
+        if self
+            .doc_cache
+            .get(&uri)
+            .is_some_and(|entry| entry.as_ref().is_ok_and(|cell| cell.borrow().text == text))
+        {
+            return vec![uri];
+        }
         if kind == DocKind::Inc {
             self.forget_include_definitions();
         }
@@ -411,7 +420,7 @@ impl WorkspaceStruct {
         Some(cell.borrow().text.clone())
     }
 
-    pub(crate) fn cls_details(&self, uri: &str) -> Result<Arc<ClassDetails>, Diagnostic> {
+    pub(crate) fn cls_details(&self, uri: &str) -> Result<Arc<ClassDetails>, Vec<Diagnostic>> {
         match self.ensure_details(uri)? {
             DocDetails::Cls(details, _) => Ok(details),
             _ => panic!("cls_details called on a uri that isn't an open class"),
@@ -489,8 +498,8 @@ impl WorkspaceStruct {
         range: bindings::Range,
     ) -> Option<Diagnostic> {
         let other_uri = self.others_named(DocKind::Cls, uri, name).min()?;
-        let other_range = self.cls_details(&other_uri).ok()?.name.range;
-        let other = Location::new(other_uri, other_range);
+        let doc = self.doc_cache.get(&other_uri)?.as_ref().ok()?.borrow();
+        let other = Location::new(other_uri, doc.name.range);
         Some(check::TypeError::duplicate_class_name(range, name.to_string(), other).into())
     }
 
@@ -498,7 +507,7 @@ impl WorkspaceStruct {
         WorkspaceEnv::new(self)
     }
 
-    pub(crate) fn rtn_details(&self, uri: &str) -> Result<Arc<RtnDetails>, Diagnostic> {
+    pub(crate) fn rtn_details(&self, uri: &str) -> Result<Arc<RtnDetails>, Vec<Diagnostic>> {
         match self.ensure_details(uri)? {
             DocDetails::Rtn(details, _) => Ok(details),
             _ => panic!("rtn_details called on a uri that isn't an open routine"),
@@ -509,13 +518,13 @@ impl WorkspaceStruct {
     // their own (see `DocDetails::Inc`); `expand_rtn` resolves `#include`s by recursing back into
     // `doc_cache` (via `inc_parse`), but always for some *other* (`.inc`) uri's own cell -- never
     // this one -- so holding this cell borrowed for the whole call is safe.
-    fn ensure_details(&self, uri: &str) -> Result<DocDetails, Diagnostic> {
+    fn ensure_details(&self, uri: &str) -> Result<DocDetails, Vec<Diagnostic>> {
         let cell = self
             .doc_cache
             .get(uri)
             .expect("ensure_details called on a uri that isn't in the workspace")
             .as_ref()
-            .map_err(Clone::clone)?;
+            .map_err(|diagnostic| vec![diagnostic.clone()])?;
         let mut entry = cell.borrow_mut();
         let doc = &mut *entry;
         let text = doc.text.as_str();
@@ -525,7 +534,7 @@ impl WorkspaceStruct {
             .get_or_insert_with(|| match DocKind::from_uri(uri) {
                 Some(DocKind::Cls) => ClassDetails::try_from(text)
                     .map(|details| DocDetails::Cls(Arc::new(details), None))
-                    .map_err(|err| tygr_error_to_diagnostics(err, text)),
+                    .map_err(|err| vec![tygr_error_to_diagnostics(err, text)]),
                 Some(DocKind::Rtn) => {
                     self.expand_rtn(uri, text)
                         .map(|(routine, map, definitions)| {
@@ -541,7 +550,7 @@ impl WorkspaceStruct {
                 }
                 Some(DocKind::Inc) => cos::RoutineWithMacro::parse(text)
                     .map(|parsed| DocDetails::Inc(Arc::new(parsed)))
-                    .map_err(|err| tygr_error_to_diagnostics(err, text)),
+                    .map_err(|err| vec![tygr_error_to_diagnostics(err, text)]),
                 None => unreachable!("a uri in doc_cache always has a recognized extension"),
             })
             .clone();
@@ -603,9 +612,9 @@ impl WorkspaceStruct {
         })
     }
 
-    // A failed tier-B parse (see `ensure_details`) has no check slot to write into -- its one
-    // diagnostic is cheap to recompute from `cls_details`/`rtn_details`'s own cached `Err` on
-    // every call, so there's no need to also cache it as a `CachedCheck` here.
+    // A failed tier-B parse (see `ensure_details`) has no check slot to write into -- its
+    // diagnostics are cheap to recompute from `cls_details`/`rtn_details`'s own cached `Err` on
+    // every call, so there's no need to also cache them as a `CachedCheck` here.
     fn store_check(&self, uri: &str, check: CachedCheck) {
         let Some(Ok(cell)) = self.doc_cache.get(uri) else {
             return;
@@ -630,15 +639,11 @@ impl WorkspaceStruct {
         if !self.doc_cache.contains_key(uri) {
             return empty;
         }
-        // A `.inc` file can't be macro-expanded (or checked) on its own -- see `DocDetails::Inc`.
-        if DocKind::from_uri(uri) == Some(DocKind::Inc) {
-            return empty;
-        }
         let details = match self.ensure_details(uri) {
             Ok(details) => details,
-            Err(diagnostic) => {
+            Err(diagnostics) => {
                 return CachedCheck {
-                    diagnostics: vec![diagnostic],
+                    diagnostics,
                     ..empty
                 };
             }
@@ -724,7 +729,8 @@ impl WorkspaceStruct {
                     hover_types,
                 }
             }
-            DocDetails::Inc(_) => unreachable!("DocKind::Inc already returned above"),
+            // An include that parses has nothing to check on its own -- see `DocDetails::Inc`.
+            DocDetails::Inc(_) => return empty,
         };
         self.store_check(uri, result.clone());
         result
@@ -831,9 +837,7 @@ impl Workspace {
             for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
                 self.open_under(&entry.path(), opened, affected);
             }
-        } else if path
-            .extension()
-            .is_some_and(|ext| matches!(ext.to_str(), Some("cls" | "mac" | "int" | "inc")))
+        } else if path.to_str().and_then(DocKind::from_uri).is_some()
             && let Ok(text) = std::fs::read_to_string(path)
             && let Ok(uri) = url::Url::from_file_path(path)
         {
@@ -919,9 +923,10 @@ impl bindings::GuestWorkspace for Workspace {
     // Where the reference at `position` is declared, if any — one of the go-to-definition
     // edges discovered as a byproduct of the last check. Covers class references
     // (`##class(Name)`, `x.Foo`, `x.Foo()`), instance members (`i%Foo`), self-references
-    // (`..Method`), and same-routine label calls/gotos. Doesn't cover anything the checker
-    // resolves to no location (e.g. `%New`, unmapped IRIS system classes), computed/indirect
-    // `Goto`, or anything in SQL (which isn't type-checked yet).
+    // (`..Method`), label calls/gotos, in the same or another open routine, and
+    // `Include`/`#include` names. Doesn't cover anything the checker resolves to no location
+    // (e.g. `%New`, unmapped IRIS system classes), computed/indirect `Goto`, or anything in SQL
+    // (which isn't type-checked yet).
     #[allow(async_fn_in_trait)]
     fn definition(&self, uri: String, position: bindings::Position) -> Option<bindings::Location> {
         self.borrow()
@@ -1169,6 +1174,11 @@ impl Workspace {
                     .into_iter()
                     .find(|(range, _)| position_in_range(position, *range))
                     .map(|(_, location)| location)?;
+                if DocKind::from_uri(&location.uri) != Some(DocKind::Cls)
+                    || !this.doc_cache.contains_key(&location.uri)
+                {
+                    return None;
+                }
                 let target = this.cls_details(&location.uri).ok()?;
                 return target
                     .members
@@ -1199,8 +1209,8 @@ impl Workspace {
             .map(|(_, ty)| ty)
     }
 
-    // What the macro invocation at `position` expanded to, if any. `.mac`/`.int` only -- macros
-    // in a `.cls` method body aren't expanded at all today, and a `.inc` file's own macros can't
+    // What the macro invocation at `position` expanded to, if any. `.mac`/`.int` only -- a
+    // `.cls` method body's expansion isn't kept for hover, and a `.inc` file's own macros can't
     // be expanded independently of whoever `#include`s it (see `DocDetails::Inc`).
     fn macro_expansion(&self, uri: String, position: bindings::Position) -> Option<String> {
         let this = self.borrow();
@@ -1313,7 +1323,7 @@ mod tests {
         let affected: HashSet<String> = workspace
             .open(
                 base_uri.clone(),
-                "Class Test.Base {\nClassMethod Foo() {\n}\n}\n".to_string(),
+                "Class Test.Base {\nClassMethod Foo() {\n Quit\n}\n}\n".to_string(),
             )
             .into_iter()
             .collect();
