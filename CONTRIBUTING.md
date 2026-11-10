@@ -67,6 +67,8 @@ served by GitHub Pages as the reference the code at the end of a message links t
 
 - `docs/unreleased/` is the reference of `main`. After a change to `type_error_kinds!`, run
   `cargo run -- diagnostics docs/unreleased` and commit the result; CI fails when it is stale.
+  A PR that touches `docs/unreleased` goes stale in the merge queue when a kind-changing PR
+  merges ahead of it, so merge `main` and regenerate before re-queueing.
 - A release PR copies it, `cp -r docs/unreleased docs/<version>`, and adds the version to
   `docs/index.md`. A release's binary links to `/<version>/<CODE>`, so CI fails a PR that bumps
   the version without the directory, and the Release workflow refuses a tag without it.
