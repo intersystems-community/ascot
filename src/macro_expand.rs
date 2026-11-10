@@ -804,7 +804,16 @@ impl WorkspaceStruct {
                             }
                         }
                     }
-                    MacroRedex::Lit(_, text, _) => dones.push(&text.print(), &origin, precise),
+                    // Only `text` is pushed, so a precise origin is narrowed past the `##lit(`.
+                    MacroRedex::Lit(open, text, _) => {
+                        let piece = if precise {
+                            let start = origin.range.start + open.print().len();
+                            origin.with_range(start..start + text.print().len())
+                        } else {
+                            origin.clone()
+                        };
+                        dones.push(&text.print(), &piece, precise)
+                    }
                     // A comment included: matched whole, nothing in it expands, and a check may
                     // read it.
                     unit => dones.push(&unit.print(), &origin, precise),
