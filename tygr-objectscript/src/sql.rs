@@ -6030,7 +6030,24 @@ pub enum DatypSpec {
     Varchar2(StringEqCI!("VARCHAR2")),
     Varchar(StringEqCI!("VARCHAR")),
     Vector(StringEqCI!("VECTOR")),
-    AnyToken(DottedIdent),
+    AnyToken {
+        head: DatypName,
+        rest: Vec<(StringEq!("."), Ident)>,
+    },
+}
+
+#[derive(Grammar)]
+#[grammar(validated, inline)]
+pub struct DatypName(Ident);
+
+impl Validate for DatypName {
+    const REQUIREMENT: &'static str = "not be a column clause keyword";
+    fn validate(&self) -> bool {
+        !matches!(
+            self.0.print().to_uppercase().as_str(),
+            "COLLATE" | "CONSTRAINT" | "DEFAULT" | "DROP" | "NOT" | "NULL" | "RENAME" | "SET"
+        )
+    }
 }
 
 #[derive(Grammar)]
@@ -6944,6 +6961,21 @@ mod tests {
             "CREATE INDEX i ON t (a) WITH DATA (b) PAD_INDEX",
             "CREATE INDEX i ON t (a) WITH PAD_INDEX, FILLFACTOR = 80",
             "CREATE INDEX i ON t (a) WITH DATA (b), PAD_INDEX",
+        ]);
+    }
+
+    #[test]
+    fn alter_column_clauses_are_not_types() {
+        all_ok(&[
+            "ALTER TABLE t ALTER COLUMN b NOT NULL",
+            "ALTER TABLE t ALTER COLUMN b SET DEFAULT 1",
+            "ALTER TABLE t ALTER COLUMN b DROP DEFAULT",
+            "ALTER TABLE t ALTER COLUMN b RENAME c",
+            "ALTER TABLE t ALTER COLUMN b COLLATE %EXACT",
+            "ALTER TABLE t MODIFY b DEFAULT 'x' NOT NULL",
+            "ALTER TABLE t ALTER COLUMN b %String(MAXLEN=20)",
+            "ALTER TABLE t ALTER COLUMN b %Library.String(MAXLEN=20)",
+            "CREATE TABLE t (a %String(MAXLEN=20), n NUMERIC(10,2))",
         ]);
     }
 }
