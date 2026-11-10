@@ -2459,7 +2459,8 @@ fn check_embedded_sql(flow: &mut Flow<'_>, sql: &str) -> Result<(), QuasiTypeErr
             continue;
         } else if c.is_ascii_alphabetic() {
             let end = word_end(i);
-            into = sql[i..end].eq_ignore_ascii_case("INTO");
+            let word = &sql[i..end];
+            into = word.eq_ignore_ascii_case("INTO") || word.eq_ignore_ascii_case("INTOLIST");
             i = end;
             continue;
         }
