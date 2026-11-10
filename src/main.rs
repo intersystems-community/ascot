@@ -185,8 +185,9 @@ struct StyleArgs {
     /// A JSON file of style rules, such as how command keywords are spelled
     ///
     /// Its shape is the `style` record in src/wit/ascot.wit. Without it, no style is checked.
+    // A `String`: clap's `PathBuf` parser rejects the `""` a plugin's unset setting interpolates to.
     #[arg(long, value_name = "FILE")]
-    style: Option<PathBuf>,
+    style: Option<String>,
 }
 
 #[derive(Args)]
@@ -286,9 +287,9 @@ impl StyleArgs {
     /// Reads and parses `--style`, if given. Like `--iris`, a file that can't be read or parsed is
     /// an error up front, not a silent fallback to no style.
     fn load(self) -> Option<Style> {
-        let path = self.style.filter(|path| !path.as_os_str().is_empty())?;
+        let path = self.style.filter(|path| !path.is_empty())?;
         let fail = |err: String| -> ! {
-            eprintln!("--style: {}: {err}", path.display());
+            eprintln!("--style: {path}: {err}");
             exit(1)
         };
         let text = fs::read_to_string(&path).unwrap_or_else(|err| fail(err.to_string()));
