@@ -38,9 +38,10 @@ pub struct Exponential {
 
 #[derive(Grammar)]
 pub enum Number {
+    // `0.` is `0`: the point may end the number.
     FromDigit(
         Digits,
-        Option<(StringEq!("."), Digits)>,
+        Option<(StringEq!("."), Option<Digits>)>,
         Option<Exponential>,
     ),
     FromDot(StringEq!("."), Digits, Option<Exponential>),
@@ -136,13 +137,14 @@ pub struct HMacro {
 
 #[derive(Grammar, Clone)]
 pub enum HMacroCommand {
+    // `#define F()` declares no parameter, which the call may then write as `$$$F` or `$$$F()`.
     Define {
         kw: (StringEqCI!("define"), SGap1),
         name: MacroName,
         args: Option<
             Wrap<
                 (StringEq!("("), SGap),
-                VecSep<Prefix<StringEq!("%"), MacroName>, Wrap<SGap, StringEq!(","), SGap>>,
+                Option<VecSep<Prefix<StringEq!("%"), MacroName>, Wrap<SGap, StringEq!(","), SGap>>>,
                 (SGap, StringEq!(")")),
             >,
         >,
@@ -259,13 +261,15 @@ pub enum MthArg {
 }
 
 #[derive(Grammar)]
+// The `:` may start a line of its own: `$select(cond ##continue\n : value, ...)`, and the same in
+// a method body.
 pub struct ExpColExp {
     pub e1: Range<Expr>,
-    kw: SGapXMGap<StringEq!(":")>,
+    kw: MGapXMGap<StringEq!(":")>,
     pub e2: Range<Expr>,
 }
 
-pub type ColExp = Prefix<SGapXMGap<StringEq!(":")>, Range<Expr>>;
+pub type ColExp = Prefix<MGapXMGap<StringEq!(":")>, Range<Expr>>;
 
 // The expression is parsed once and the `:expr` / `...` suffix decides the `FunArg` variant;
 // trying `ExpColExp` and then `Expr` as separate alternatives re-parsed every argument, doubling
@@ -279,7 +283,7 @@ pub enum FunArgSource {
     },
     Expr {
         expr: Range<Expr>,
-        tail: Option<Either<(SGapXMGap<StringEq!(":")>, Range<Expr>), StringEq!("...")>>,
+        tail: Option<Either<(MGapXMGap<StringEq!(":")>, Range<Expr>), StringEq!("...")>>,
     },
     ByRef {
         dot: StringEq!("."),
@@ -397,7 +401,7 @@ impl TryFrom<Range<ExprOps<()>>> for GetTarget {
     type Error = &'static str;
 
     fn try_from(value: Range<ExprOps<()>>) -> Result<Self, Self::Error> {
-        let err = "be a valid SET target";
+        let err = "this must name a variable, a property or an indirection";
         match value.into_inner() {
             ExprOps::Then { base, op } => Ok(GetTarget::Sub { base: *base, op }),
             ExprOps::Base(base) => match *base {
@@ -457,6 +461,10 @@ pub enum SetTargetFun {
     Property(PropertyCall),
     Sequence(SequenceCall),
     MV(MVCall),
+    // `$zobjval(...)`, `$zobjmod(...)`: the undocumented object internals IRIS's own classes set.
+    Undocumented(UnknownFunctionCall),
+    // `$mvv(n)`, a MultiValue system value: IRIS's own classes assign it, undocumented as a target.
+    Simple(SimpleFunctionCall),
 }
 
 // A SET target is an expression of a settable shape -- except `$LISTGET(var1,var2,...)`, which
@@ -496,7 +504,7 @@ impl TryFrom<SetTargetSource> for SetTarget {
     type Error = &'static str;
 
     fn try_from(value: SetTargetSource) -> Result<Self, Self::Error> {
-        let err = "be a valid SET target";
+        let err = "the left of `=` must be a variable, a property, an indirection or a settable function such as $PIECE";
         let value = match value {
             SetTargetSource::ListGet(call) => {
                 return Ok(SetTarget::Fun(SetTargetFun::ListGet(call.prefixed)));
@@ -544,6 +552,8 @@ impl TryFrom<FunctionCall> for SetTargetFun {
             FunctionCall::Sequence(c) => Ok(SetTargetFun::Sequence(c)),
             FunctionCall::ListBuild(c) => Ok(SetTargetFun::ListBuild(c.try_into()?)),
             FunctionCall::MV(c) => Ok(SetTargetFun::MV(c)),
+            FunctionCall::Unknown(c) if c.is_settable() => Ok(SetTargetFun::Undocumented(c)),
+            FunctionCall::Simple(c) if c.is_settable() => Ok(SetTargetFun::Simple(c)),
             _ => Err(()),
         }
     }
@@ -609,6 +619,8 @@ impl SetTargetFun {
             SetTargetFun::Sequence(c) => c.print_to(buf),
             SetTargetFun::MV(c) => c.print_to(buf),
             SetTargetFun::ListBuild(c) => c.print_to(buf),
+            SetTargetFun::Undocumented(c) => c.print_to(buf),
+            SetTargetFun::Simple(c) => Grammar::print_to(c, buf),
         }
     }
 }
@@ -656,9 +668,10 @@ pub struct GlobalReference {
 
 #[derive(Grammar)]
 #[grammar(inline)]
+// The name may be a property or a method's value: `@obj.Name@(sub)`.
 pub struct Indirection {
     pub at: StringEq!("@"),
-    pub expr: Box<Range<ParenedExpr<()>>>,
+    pub expr: Box<Range<ExprOps<()>>>,
     pub subscript_indirection: Option<Prefix<StringEq!("@"), SubscriptList>>,
 }
 
@@ -770,6 +783,8 @@ pub enum SignatureType {
 pub enum CastReceiver {
     This(StringEq!("$"), StringEqCI!("this")),
     Local(LocalVariableName),
+    // `##class(C)($this).M()`: IRIS compiles the parenthesized receiver too.
+    Parenthesized(Range<Paren<Box<CastReceiver>>>),
 }
 
 #[derive(Grammar)]
@@ -1288,7 +1303,7 @@ impl TryFrom<ExprOps<()>> for MethodOrFuncCallExpr {
     type Error = &'static str;
 
     fn try_from(value: ExprOps<()>) -> Result<Self, Self::Error> {
-        let err = "be a method or function call";
+        let err = "Do takes a method or function call, not a value";
         match value {
             ExprOps::Then {
                 base,
@@ -1452,25 +1467,34 @@ pub enum JobLocation {
 #[derive(Grammar)]
 #[grammar(inline)]
 pub struct LocalJobAnnotation {
-    // todo the official document requires paren (https://docs.intersystems.com/iris20261/csp/docbook/Doc.View.cls?KEY=RCOS_cjob)
-    // but %SYS.Audit doesn't have paren ("j ##Class(%SYS.Audit).ConvertData()::5")
-    process_params: Prefix<StringEq!(":"), Option<AllowMacro<Paren<JobProcessParams>>>>,
-    timeout: Option<Prefix<StringEq!(":"), Expr>>,
+    // The document (RCOS_cjob) requires the parentheses, but %SYS.Audit passes a bare namespace
+    // and IRIS takes it, so that parses too and is reported as undocumented syntax.
+    pub process_params:
+        Prefix<StringEq!(":"), Option<AllowMacro<Either<Paren<JobProcessParams>, Range<Expr>>>>>,
+    pub timeout: Option<Prefix<StringEq!(":"), Expr>>,
 }
 
 type JobProcessParams = VecSep<Option<Expr>, StringEq!(":")>;
 
 #[derive(Grammar)]
+// A `#dim` line IRIS splits at its first `=`, so a type's parameters, `(MAXLEN=5)`, make it a
+// `Set` that fails: the type takes none.
 pub enum DimType {
-    ListOf(StringEqCI!("List"), Space1, StringEqCI!("Of"), Space1, Type),
+    ListOf(
+        StringEqCI!("List"),
+        Space1,
+        StringEqCI!("Of"),
+        Space1,
+        SignatureType,
+    ),
     ArrayOf(
         StringEqCI!("Array"),
         Space1,
         StringEqCI!("Of"),
         Space1,
-        Type,
+        SignatureType,
     ),
-    Simple(Type),
+    Simple(SignatureType),
 }
 
 #[derive(Grammar)]
@@ -1508,7 +1532,8 @@ pub enum WriteArg {
 pub enum WriteFChar {
     NewLine(StringEq!("!")),
     FormFeed(StringEq!("#")),
-    Tab(StringEq!("?"), Range<Expr>),
+    // `write ? 5`: IRIS takes a space before the column.
+    Tab(StringEq!("?"), SGap, Range<Expr>),
     Mnemonic {
         slash: StringEq!("/"),
         name: LocalVariableName,
@@ -1520,7 +1545,7 @@ pub enum WriteFChar {
 pub enum ReadFChar {
     NewLine(StringEq!("!")),
     FormFeed(StringEq!("#")),
-    Tab(StringEq!("?"), Digits),
+    Tab(StringEq!("?"), Range<Expr>),
 }
 
 #[derive(Grammar)]
@@ -1549,7 +1574,8 @@ pub type IOParameters = VecSep<IOParameter, StringEq!(":")>;
 pub struct IOParameter {
     pub key: Option<(StringEq!("/"), Identifier)>,
     pub eq: Option<StringEq!("=")>,
-    pub val: Option<Expr>,
+    // `/args="-c","%U:%G",File`: a list for a parameter that takes one.
+    pub val: Option<VecSep<Expr, StringEq!(",")>>,
     pub ddd: Option<StringEq!("...")>,
 }
 
@@ -1604,7 +1630,7 @@ pub enum PlusMinus {
 #[derive(Grammar)]
 pub struct LockArg {
     plus_minus: Option<PlusMinus>,
-    lock_entry: AllowMacro<LockEntry>,
+    pub lock_entry: AllowMacro<LockEntry>,
 }
 
 #[derive(Grammar)]
@@ -1621,8 +1647,8 @@ type LockName = AllowMacro<Variable>;
 
 #[derive(Grammar)]
 pub struct LockNameType {
-    n: AllowIndirection<LockName>,
-    t: Option<Prefix<StringEq!("#"), Expr>>,
+    pub n: AllowIndirection<LockName>,
+    pub t: Option<Prefix<StringEq!("#"), Expr>>,
 }
 
 // A braced block after a command, `Gap` the whitespace the command allows before the `{`.
@@ -1723,7 +1749,10 @@ pub enum SpecialVariable {
     ZNAME(StringEqCI!("ZNAME")),
     ZNSPACE(Either<StringEqCI!("ZNSPACE"), StringEqCI!("ZN")>),
     ZORDER(Either<StringEqCI!("ZORDER"), StringEqCI!("ZO")>),
-    ZPARENT(Either<StringEqCI!("ZPARENT"), StringEqCI!("ZPA")>),
+    // `ZP` followed by a letter is `$ZPI` or `$ZPOS`, below.
+    ZPARENT(
+        Either<StringEqCI!("ZPARENT"), (StringEqCI!("ZP"), NotFollowedBy<CharOf<IsAlphabetic>>)>,
+    ),
     ZPI(StringEqCI!("ZPI")),
     ZPOS(Either<StringEqCI!("ZPOSITION"), StringEqCI!("ZPOS")>),
     ZREFERENCE(Either<StringEqCI!("ZREFERENCE"), StringEqCI!("ZR")>),
@@ -1814,7 +1843,7 @@ pub struct LocalVariableNameStruct {
     rest: StringOf<IsLocalVariableNameRemaining>,
 }
 char_class!(pub IsLocalVariableNameFirst, "letter or percent sign", |c| {
-    c.is_ascii_alphabetic() || c == '%'
+    c.is_alphabetic() || c == '%'
 });
 type IsLocalVariableNameRemaining = IsLetterOrNumberIncludingUnicode;
 
@@ -1826,12 +1855,12 @@ pub struct GlobalVariableName(Raw<GlobalVariableNameStruct>);
 pub struct GlobalVariableNameStruct {
     first: CharOf<IsGlobalVariableNameFirst>,
     remaining: Option<(
-        Vec<(StringOf<IsLetterOrNumber>, StringEq!("."))>,
-        StringOf1<IsLetterOrNumber>,
+        Vec<(StringOf<IsLetterOrNumberIncludingUnicode>, StringEq!("."))>,
+        StringOf1<IsLetterOrNumberIncludingUnicode>,
     )>,
 }
 char_class!(pub IsGlobalVariableNameFirst, "letter or percent sign", |c| c
-    .is_ascii_alphabetic()
+    .is_alphabetic()
     || c == '%');
 char_class!(pub IsLetterOrNumber, "letter or number", |c| c
     .is_ascii_alphanumeric());
@@ -1855,6 +1884,10 @@ char_class!(pub IsClassMemberNameRemaining, "letter or number", |c| c
 pub enum VariableBase {
     Instance(Prefix<StringEq!("i%"), Range<QuotableClassMemberName>>),
     RowInstance(Prefix<StringEq!("r%"), Range<ClassMemberName>>),
+    // `m%Prop`, a property's modified flag, and `s%Prop`: two more prefixes of IRIS's own classes,
+    // undocumented; the quotes of `i%"%%OID"` go here too.
+    ModifiedInstance(Range<Prefix<StringEq!("m%"), Range<QuotableClassMemberName>>>),
+    SInstance(Range<Prefix<StringEq!("s%"), Range<QuotableClassMemberName>>>),
     Public(Prefix<StringEq!("%"), LocalVariableName>),
     Local(LocalVariableName),
     StructureSystemVariable {
@@ -1867,15 +1900,17 @@ pub enum VariableBase {
 
 #[derive(Grammar)]
 pub enum StructureSystemVariable {
-    GLOBAL(StringEqCI!("GLOBAL")),
-    JOB(StringEqCI!("JOB")),
-    LOCK(StringEqCI!("LOCK")),
-    ROUTINE(StringEqCI!("ROUTINE")),
+    GLOBAL(Either<StringEqCI!("GLOBAL"), StringEqCI!("G")>),
+    JOB(Either<StringEqCI!("JOB"), StringEqCI!("J")>),
+    LOCK(Either<StringEqCI!("LOCK"), StringEqCI!("L")>),
+    ROUTINE(Either<StringEqCI!("ROUTINE"), StringEqCI!("R")>),
 }
 
 pub type Periods = Vec<(Vec1<StringEq!(".")>, SGap1)>;
 
 pub type ExprEntry = MGapXMGap<Range<Expr>>;
+// A `CodeMode = expression` body: IRIS compiles an empty one, comments alone included.
+pub type ExprBody = MGapXMGap<Option<Range<Expr>>>;
 
 #[derive(Grammar)]
 pub enum BitLogicOp {
@@ -2273,28 +2308,29 @@ pub struct HashEmbededOS(StringEq!("#("), StringEndsWith<StringEq!(")#")>);
 #[derive(Grammar)]
 pub struct AngularEmbededOS(StringEq!("<%"), StringEndsWith<StringEq!("%>")>);
 
+// `&html<...>` ends at the `>` that balances its `<`: IRIS counts every `<` and `>` of the text,
+// in a quoted attribute, a comment or a `#()#` expression as much as in a tag, and nothing else,
+// except that from any `<script` on the text is raw up to the next `</script>`, and the block
+// fails without one.
 #[derive(Grammar)]
 pub struct HTML(Raw<Vec<HTMLUnit>>);
 
 #[derive(Grammar)]
 pub enum HTMLUnit {
-    EmbededOS1(HashEmbededOS),
-    EmbededOS2(AngularEmbededOS),
-    Text(CharOf<IsHTMLContentSafe>),
-    // Quotes are safe outside of tags
-    DQ(DQ),
-    SQ(SQ),
-    JS(
-        Raw<(StringEqCI!("<script"), HTMLTagContent, StringEq!(">"))>,
+    Script(
+        Raw<(StringEqCI!("<script"), Vec<HTMLUnit>, StringEq!(">"))>,
         StringEndsWith<StringEqCI!("</script>")>,
     ),
-    CSS(
-        Raw<(StringEqCI!("<style"), HTMLTagContent, StringEq!(">"))>,
-        StringEndsWith<StringEqCI!("</style>")>,
+    Nested(
+        StringEq!("<"),
+        NotFollowedBy<StringEqCI!("script")>,
+        Vec<HTMLUnit>,
+        StringEq!(">"),
     ),
-    CMT(XMLComment),
-    Tag(StringEq!("<"), HTMLTagContent, StringEq!(">")),
+    Other(CharOf<IsNotAngleBracket>),
 }
+
+char_class!(pub IsNotAngleBracket, "not an angle bracket", |ch| !matches!(ch, '<' | '>'));
 
 #[derive(Grammar)]
 pub enum HTMLTagContentUnit {
@@ -2307,12 +2343,15 @@ pub enum HTMLTagContentUnit {
 
 type HTMLTagContent = Vec<HTMLTagContentUnit>;
 
+// A `\` or `~` is as plain as the rest: a Windows path in an XData's attribute.
 char_class!(pub IsHTMLContentSafe, "html safe characters", |ch| ch
 .is_alphanumeric()
 || ch.is_whitespace()
 || matches!(
     ch,
     '=' | ':'
+        | '\\'
+        | '~'
         | '&'
         | ';'
         | '['
@@ -2385,8 +2424,12 @@ type WithSpace<X> = (X, Space);
 
 #[derive(Grammar)]
 pub enum KeywordValueEnum {
-    // `Data = (Tags(ELEMENTS))` names a collection's subvalues as an index key does.
-    Atom(StringOf1<IsKeywordValue>, Option<IndexPropertyKind>),
+    // `Data = (Tags(ELEMENTS))` names a collection's subvalues as an index key does, but IRIS
+    // reads this form case-sensitively, unlike the `On` clause's.
+    Atom(
+        StringOf1<IsKeywordValue>,
+        Option<Either<StringEq!("(KEYS)"), StringEq!("(ELEMENTS)")>>,
+    ),
     String(OSString),
     OS(StringEq!("{"), OSText, StringEq!("}")),
     Paren(
@@ -2991,8 +3034,8 @@ impl IndexProperty {
 #[derive(Grammar)]
 #[grammar(inline)]
 pub enum IndexPropertyKind {
-    Keys(StringEq!("(KEYS)")),
-    Elements(StringEq!("(ELEMENTS)")),
+    Keys(StringEqCI!("(KEYS)")),
+    Elements(StringEqCI!("(ELEMENTS)")),
 }
 
 #[derive(Grammar)]
@@ -3010,6 +3053,12 @@ pub enum CollationType {
     Truncate(Truncating<StringEqCI!("TRUNCATE")>),
     Plus(StringEqCI!("PLUS")),
     Minus(StringEqCI!("MINUS")),
+    // The legacy collations: of these only `STRING` takes a length (`UPPER(50)` is IRIS #5177).
+    Upper(StringEqCI!("UPPER")),
+    Space(StringEqCI!("SPACE")),
+    AlphaUp(StringEqCI!("ALPHAUP")),
+    Mvr(StringEqCI!("MVR")),
+    String(Truncating<StringEqCI!("STRING")>),
 }
 
 // A collation that may truncate to a length: `SQLUPPER(250)`.
@@ -3051,8 +3100,12 @@ pub enum MethodLanguage {
     Python(StringEqCI!("Python")),
     JavaScript(StringEqCI!("JavaScript")),
     ObjectScript(StringEqCI!("ObjectScript")),
+    // The legacy name IRIS still compiles as ObjectScript.
+    Cache(StringEqCI!("Cache")),
     TSQL(StringEqCI!("TSQL")),
     ISPL(StringEqCI!("ISPL")),
+    // Not among the document's values; IRIS's own `%MV` classes compile with it.
+    MVBasic(StringEqCI!("MVBasic")),
 }
 
 impl Default for MethodLanguage {
@@ -3139,7 +3192,10 @@ impl MethodHeader {
                 Either::Left(MethodKeyword::Language(language)) => Some(&language.value),
                 _ => None,
             });
-        matches!(language, None | Some(MethodLanguage::ObjectScript(..)))
+        matches!(
+            language,
+            None | Some(MethodLanguage::ObjectScript(..) | MethodLanguage::Cache(..))
+        )
     }
 }
 
@@ -3266,9 +3322,12 @@ impl Default for CallType {
 #[derive(Grammar)]
 #[grammar(inline)]
 pub struct As<Type: Grammar> {
-    as_kw: Raw<(Space1, StringEqCI!("As"), Space1)>,
+    as_kw: Raw<(Space1, StringEqCI!("As"), AfterAs)>,
     pub ann: Type,
 }
+
+// `As%String`, without the space: IRIS takes it at class level and in a bare `#dim`.
+type AfterAs = Either<Space1, NotFollowedBy<CharOf<IsLetterOrNumber>>>;
 
 impl<T: Grammar> Deref for As<T> {
     type Target = T;
@@ -3425,6 +3484,8 @@ impl Validate for KeywordListWithMimeTypeIsXML {
 pub enum XMLUnit {
     S(Space1),
     C(XMLComment),
+    // `<?xml version="1.0"?>`, which an XData may open with.
+    PI(StringEq!("<?"), StringEndsWith<StringEq!("?>")>),
     JS(
         Raw<(StringEqCI!("<script"), HTMLTagContent, StringEq!(">"))>,
         StringEndsWith<StringEqCI!("</script>")>,
@@ -3467,8 +3528,21 @@ pub struct XMLCloseTag(StringEqCI!("</"), XMLTagContent, StringEqCI!(">"));
 #[derive(Grammar)]
 pub enum XMLTagContentUnit {
     Txt(StringOf1<IsXMLTagSafe>),
-    Str(JSString<HashEmbededOS>),
+    Str(XMLString),
+    // A quote with no closing one is text: IRIS doesn't hold an XData to well-formedness.
+    Quote(Either<DQ, SQ>),
 }
+
+// An attribute value runs to its closing quote, a `#()#` expression inside allowed: no `\`
+// escapes, as a `C:\dir\` path ends in one.
+#[derive(Grammar)]
+pub enum XMLString {
+    DQ(DQ, Vec<Either<HashEmbededOS, CharOf<IsNotDQ>>>, DQ),
+    SQ(SQ, Vec<Either<HashEmbededOS, CharOf<IsNotSQ>>>, SQ),
+}
+
+char_class!(pub IsNotDQ, "not a double quote", |ch| ch != '"');
+char_class!(pub IsNotSQ, "not a single quote", |ch| ch != '\'');
 type XMLTagContent = Vec<XMLTagContentUnit>;
 
 #[derive(Grammar)]
@@ -3495,14 +3569,65 @@ pub struct MemberList {
     close: StringEq!("}"),
 }
 
+// IRIS compiles the three in any order, one of each (a repeat fails the load).
 #[derive(Grammar)]
+pub enum ClassDirective {
+    Import(Import),
+    Include(IncludeCode),
+    IncludeGenerator(IncludeGeneratorCode),
+}
+
+impl ClassDirective {
+    pub fn gap(&self) -> &ImportIncludeGap {
+        match self {
+            ClassDirective::Import(d) => &d.gap,
+            ClassDirective::Include(d) => &d.gap,
+            ClassDirective::IncludeGenerator(d) => &d.gap,
+        }
+    }
+}
+
+#[derive(Grammar)]
+#[grammar(validated)]
 pub struct ClassDefinitionHeader {
     pub gap_start: ImportIncludeGap,
-    pub import: Option<Import>,
-    pub include: Option<IncludeCode>,
-    pub include_gen: Option<IncludeGeneratorCode>,
+    pub directives: Vec<ClassDirective>,
     pub class_keyword: (StringEqCI!("Class"), Space1),
     pub name: Range<ClassName>,
+}
+
+impl Validate for ClassDefinitionHeader {
+    const REQUIREMENT: &'static str = "name Import, Include and IncludeGenerator at most once each";
+    fn validate(&self) -> bool {
+        let count =
+            |is: fn(&ClassDirective) -> bool| self.directives.iter().filter(|d| is(d)).count();
+        count(|d| matches!(d, ClassDirective::Import(_))) <= 1
+            && count(|d| matches!(d, ClassDirective::Include(_))) <= 1
+            && count(|d| matches!(d, ClassDirective::IncludeGenerator(_))) <= 1
+    }
+}
+
+impl ClassDefinitionHeader {
+    pub fn import(&self) -> Option<&Import> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::Import(import) => Some(import),
+            _ => None,
+        })
+    }
+
+    pub fn include(&self) -> Option<&IncludeCode> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::Include(include) => Some(include),
+            _ => None,
+        })
+    }
+
+    pub fn include_gen(&self) -> Option<&IncludeGeneratorCode> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::IncludeGenerator(include) => Some(include),
+            _ => None,
+        })
+    }
 }
 
 #[derive(Grammar)]
@@ -3633,12 +3758,23 @@ pub struct ContinueCommand {
 
 #[derive(Grammar)]
 pub struct DimCommand {
+    pub bare: BareDim,
+    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
+}
+
+// `#dim a, b As T, c As U`: each group of names has its type; one without takes the next's.
+#[derive(Grammar)]
+pub struct BareDim {
     pub kw: StringEqCI!("#dim"),
     pub g: SGap1,
+    pub declarations: VecSep<DimDeclaration, CommaSep<SGap>>,
+}
+
+#[derive(Grammar)]
+pub struct DimDeclaration {
     pub name: VecSep<LocalVariableName, CommaSep<SGap>>,
     // The reference makes `As <Type>` mandatory; it is accepted as optional here.
     pub as_type: Range<Option<As<DimType>>>,
-    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
 }
 
 #[derive(Grammar)]
@@ -3672,7 +3808,9 @@ pub struct MergeCommand {
 #[derive(Grammar)]
 pub struct TryCommand {
     pub kw_try: KwTry,
-    pub b1: XMGap<Range<Block>>,
+    pub b1: Range<Block>,
+    pub dims: Option<TryDims>,
+    gap: MGap,
     pub kw_catch: Range<KwCatch>,
     pub g3: SGap,
     pub catch_target: Option<CatchTarget>,
@@ -3796,7 +3934,7 @@ pub struct TRollbackCommand {
 pub struct ZWriteCommand {
     pub kw: KwZWrite,
     pub pc: Option<PostCondition>,
-    pub exp: Option<CommandArgument<Expr>>,
+    pub exp: Option<CommandArgument<VecSep<Expr, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
@@ -3961,9 +4099,9 @@ impl Validate for UserCommandName {
         let s = self.0.print();
         s.len() > 1
             && s.starts_with(['Z', 'z'])
-            && !COMMAND_NAMES
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(&s))
+            && !COMMAND_NAMES.iter().any(|(name, abbr)| {
+                name.eq_ignore_ascii_case(&s) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(&s))
+            })
     }
 }
 
@@ -4187,6 +4325,14 @@ impl FromStr for UnknownCommand {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, String> {
+        // A known command lands here when its own grammar failed right after the word.
+        if COMMAND_NAMES.iter().any(|(name, abbr)| {
+            name.eq_ignore_ascii_case(s) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(s))
+        }) {
+            return Err(format!(
+                "'{s}' is a command, but its argument is missing or doesn't parse"
+            ));
+        }
         Err(format!(
             "'{s}' is not a recognized command; available: {}",
             COMMAND_NAMES
@@ -4840,7 +4986,7 @@ pub struct CondValue {
     pub value: Range<Expr>,
 }
 
-type CondPrefix = Suffix<Range<Expr>, SGapXMGap<StringEq!(":")>>;
+type CondPrefix = Suffix<Range<Expr>, MGapXMGap<StringEq!(":")>>;
 
 fun_args!("$LIST" ListRangeCallArgs {
     list: ArgOf<Expr>,
@@ -5225,12 +5371,13 @@ fun_args!("$LISTUPDATE" ListUpdateArgs {
     rest: Vec<More<ArgOf<CondValue>>>,
 });
 
+// An optional argument may be left out of the middle: `$LOCATE(s, re,, start)`.
 fun_args!("$LOCATE" LocateArgs {
     string: ArgOf<Expr>,
     regexp: More<ArgOf<Expr>>,
-    start: Option<More<ArgOf<Expr>>>,
-    end: Option<More<ArgOf<Variable>>>,
-    val: Option<More<ArgOf<Variable>>>,
+    start: Option<More<OptArgOf<Expr>>>,
+    end: Option<More<OptArgOf<Variable>>>,
+    val: Option<More<OptArgOf<Variable>>>,
 });
 
 fun_args!("$METHOD" MethodArgs {
@@ -5250,8 +5397,8 @@ fun_args!("$PARAMETER" ParameterArgs {
 });
 
 fun_args!("$PREFETCHOFF" PrefetchOffArgs {
-    first: Option<ArgOf<GlobalReference>>,
-    second: Option<More<ArgOf<GlobalReference>>>,
+    first: Option<ArgOf<AllowIndirection<GlobalReference>>>,
+    second: Option<More<ArgOf<AllowIndirection<GlobalReference>>>>,
 });
 
 fun_args!("$PREFETCHON" PrefetchOnArgs {
@@ -5271,11 +5418,11 @@ fun_args!("$SELECT" SelectArgs {
 });
 
 fun_args!("$SORTBEGIN" SortBeginArgs {
-    set_global: ArgOf<GlobalReference>,
+    set_global: ArgOf<AllowIndirection<GlobalReference>>,
 });
 
 fun_args!("$SORTEND" SortEndArgs {
-    first: Option<ArgOf<Option<GlobalReference>>>,
+    first: Option<ArgOf<Option<AllowIndirection<GlobalReference>>>>,
     dosort: Option<More<ArgOf<Expr>>>,
 });
 
@@ -5296,9 +5443,10 @@ fun_args!("$WCHAR" WCharArgs {
     rest: Vec<More<ArgOf<Expr>>>,
 });
 
+// A parameter may be passed by reference, `.var`, as to a method.
 fun_args!("$XECUTE" XecuteArgs {
     code: ArgOf<Expr>,
-    params: Vec<More<ArgOf<Expr>>>,
+    params: Vec<More<ArgOf<MthArg>>>,
 });
 
 fun_args!("$CLASSMETHOD" ClassMethodArgs {
@@ -5311,7 +5459,7 @@ fun_args!("$COMPILE" CompileArgs {
     source: ArgOf<AllowIndirection<Variable>>,
     qspec: More<ArgOf<Expr>>,
     errors: More<ArgOf<Option<Variable>>>,
-    object: Option<More<ArgOf<Option<Variable>>>>,
+    object: Option<More<ArgOf<Option<AllowIndirection<Variable>>>>>,
     arg5: Option<More<ArgOf<Option<Expr>>>>,
     arg6: Option<More<ArgOf<Option<Expr>>>>,
     rname: Option<More<ArgOf<Option<Expr>>>>,
@@ -5582,9 +5730,6 @@ pub enum FunctionCall {
         args: CompileArgs,
         rp: StringEq!(")"),
     },
-    // Unlike every other special variable, `$ZVERSION` also has a one-argument function form
-    // (its abbreviation `$ZV` doesn't) -- easiest modeled as its own `FunctionCall` variant
-    // rather than teaching `SpecialVariable` about arguments generally.
     // Legacy `$ZPREVIOUS(glvn)`/`$ZP`: the last subscript at that level, a one-argument reverse
     // `$ORDER`. Modeled on its own rather than folded into `Order`.
     ZP {
@@ -5593,10 +5738,6 @@ pub enum FunctionCall {
         args: ZPArgs,
         rp: StringEq!(")"),
     },
-    // `$ZBITAND(b1,b2)`/`$ZBITOR`/`$ZBITXOR`: bitwise combination of two bitstrings.
-    // `$ZBITFIND(bits, value[, position])`: the position of the next bit with `value`.
-    // `$ZBITSTR(length[, value])`: a bitstring of `length` bits, all `value` (default 0).
-    // `$LOCK(lockname[, info_type])`: information about a held lock.
     // Legacy `$ZORDER(glvn)`/`$ZO` and `$NEXT(glvn)`/`$N`: the next node/subscript, like `$ORDER`.
     ZOrder {
         kw: Range<FnZOrder>,
@@ -5682,7 +5823,8 @@ pub enum FunctionCall {
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-4"), SGap>,
         n: More<ArgOf<Expr>>,
-        third: More<ArgOf<Expr>>,
+        // `$ZF(-4,2)` unloads every DLL: no third argument.
+        third: Option<More<ArgOf<Expr>>>,
         fourth: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
@@ -5867,8 +6009,9 @@ impl FunctionCall {
 }
 
 impl SetTargetFun {
-    pub fn name(&self) -> KeywordUse {
-        match self {
+    // An undocumented function has no spelling to hold it to.
+    pub fn name(&self) -> Option<KeywordUse> {
+        Some(match self {
             SetTargetFun::Piece(call) => call.kw.spelled(),
             SetTargetFun::Extract(call) => call.kw.spelled(),
             SetTargetFun::List(call) => call.kw.spelled(),
@@ -5880,7 +6023,9 @@ impl SetTargetFun {
             SetTargetFun::Property(call) => call.kw.spelled(),
             SetTargetFun::Sequence(call) => call.kw.spelled(),
             SetTargetFun::MV(call) => call.kw.spelled(),
-        }
+            SetTargetFun::Simple(call) => call.spelled(),
+            SetTargetFun::Undocumented(_) => return None,
+        })
     }
 }
 
@@ -6382,9 +6527,10 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
         max: 1,
         ret: "%String",
     },
+    // `$ZSEEK()` reads the position without moving.
     SimpleFunction {
         names: &["ZSeek"],
-        min: 1,
+        min: 0,
         max: 2,
         ret: "%Integer",
     },
@@ -6449,6 +6595,12 @@ pub struct SimpleFunctionCallSource {
 pub struct SimpleFunctionCall {
     pub name: Range<SimpleFunctionName>,
     pub args: ExprArgList,
+}
+
+impl SimpleFunctionCall {
+    pub fn is_settable(&self) -> bool {
+        self.name.print().eq_ignore_ascii_case("MVV")
+    }
 }
 
 impl Spelled for SimpleFunctionCall {
@@ -6587,8 +6739,9 @@ impl Validate for UnknownFunctionName {
     const REQUIREMENT: &'static str = "not be a known function";
     fn validate(&self) -> bool {
         let name = self.0.print();
-        !FUNCTION_NAMES.iter().any(|n| n.eq_ignore_ascii_case(&name))
-            && simple_function(&name).is_none()
+        !FUNCTION_KEYWORDS.iter().any(|(full, abbr)| {
+            full.eq_ignore_ascii_case(&name) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(&name))
+        }) && simple_function(&name).is_none()
             && hand_written_arity(&name).is_none()
     }
 }
@@ -6599,8 +6752,18 @@ pub struct UnknownFunctionCall {
     pub args: FunArgList,
 }
 
-// Every full function name (including nested Bit/Extract/DText/Z*Kw calls) -- kept in sync by
-// hand, for `UnknownSpecialVariable::from_str`'s error message.
+impl UnknownFunctionCall {
+    // The object internals IRIS's own classes assign to, undocumented like the rest of `$ZOBJ*`.
+    pub fn is_settable(&self) -> bool {
+        let name = self.name.print();
+        ["ZOBJVAL", "ZOBJOID", "ZOBJMOD", "ZOBJMODS"]
+            .iter()
+            .any(|settable| settable.eq_ignore_ascii_case(&name))
+    }
+}
+
+// Every full function name, hand-written or in `SIMPLE_FUNCTIONS`, for the checker's did-you-mean
+// list; the style test keeps it in sync with `FUNCTION_KEYWORDS` and `SIMPLE_FUNCTIONS`.
 pub const FUNCTION_NAMES: &[&str] = &[
     "TEXT",
     "LENGTH",
@@ -6629,7 +6792,6 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "ISVECTOR",
     "INCREMENT",
     "ZINCREMENT",
-    "ZINCR",
     "JUSTIFY",
     "LIST",
     "LISTBUILD",
@@ -6722,7 +6884,6 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "ZVERSION",
     "ZPOWER",
     "ZPOSITION",
-    "ZP",
     "ZCRC",
     "ZBITGET",
     "ZBITAND",
@@ -6990,9 +7151,6 @@ pub struct RoutineNameAndLabel {
     )>,
 }
 
-#[derive(Grammar, Clone, PartialEq, Eq)]
-pub struct ZLangRoutineName(Raw<(StringEq!("^%ZLANG"), StringOf<IsRoutineNamePart>)>);
-
 #[derive(Grammar)]
 pub enum Label {
     Standard(RoutineNameAndLabel),
@@ -7019,18 +7177,7 @@ pub enum ScopeKeyword {
     Public(StringEqCI!("Public")),
 }
 
-#[derive(Grammar, Clone, PartialEq, Eq)]
-pub enum RoutineName {
-    ZWelcome(StringEq!("^ZWELCOME")),
-    ZAuthenticate(StringEq!("^ZAUTHENTICATE")),
-    ZAuthorize(StringEq!("^ZAUTHORIZE")),
-    ZMirror(StringEq!("^ZMIRROR")),
-    ZStart(StringEq!("^%ZSTART")),
-    ZStop(StringEq!("^%ZSTOP")),
-    ZJRead(StringEq!("^%ZJREAD")),
-    ZLang(ZLangRoutineName),
-    Other(RoutineNameAndLabel),
-}
+pub type RoutineName = RoutineNameAndLabel;
 
 #[derive(Grammar)]
 pub enum RoutineType {
@@ -7111,7 +7258,8 @@ pub struct Subroutine {
 #[derive(Grammar)]
 pub struct ProcedureHeader {
     pub label: Range<Label>,
-    pub params: Option<SpaceThen<ParameterList>>,
+    // `lab {` without one IRIS refuses (ERROR #1026).
+    pub params: SpaceThen<ParameterList>,
     pub publics: Option<Prefix<StringOf<IsWhitespace>, AllowMacro<PublicVarList>>>,
     pub scope: Option<SpaceThen<ScopeKeyword>>,
 }
@@ -7123,6 +7271,15 @@ pub struct Procedure {
     pub body: Range<Brace<ProcedureBody>>,
     end: Raw<EndOfLine>,
     pub trailer: Option<ProcedureTrailer>,
+}
+
+// Bare `#dim` lines between a Try block and its `Catch`, one to a line: the preprocessor drops
+// each, so IRIS takes them. A default would leave a `Set` there, and one on the block's own line
+// takes the `Catch` with it; IRIS refuses both, and neither parses.
+#[derive(Grammar)]
+pub struct TryDims {
+    pub lines: Vec1<Prefix<Raw<(Vec1<NL>, SGap)>, Range<BareDim>>>,
+    end: Raw<Vec1<NL>>,
 }
 
 // Command lines after a procedure's `}` and before the next label: IRIS compiles them, though only
@@ -7139,7 +7296,7 @@ pub struct ProcedureTrailer {
 pub struct ProcedureBody {
     // The first line needs no space and does not permit dots
     pub main: ProcedureMain,
-    pub subroutines: Option<Prefix<Raw<Vec1<NL>>, VecSep<Subroutine, Raw<Vec1<NL>>>>>,
+    pub subroutines: Option<Prefix<Raw<Vec1<NL>>, VecSep<RoutineElement, Raw<Vec1<NL>>>>>,
     end: Raw<VecSep<SGap, NL>>,
 }
 
@@ -7197,6 +7354,12 @@ pub enum MacroRedex {
         StringEqCI!("##lit("),
         StringOf<IsNotCloseParen>,
         StringEq!(")"),
+    ),
+    // `##beginlit text ##endlit`: the same, undocumented, in IRIS's own includes.
+    BeginLit(
+        StringEqCI!("##beginlit"),
+        Raw<Vec<(NotFollowedBy<StringEqCI!("##endlit")>, CharOf<AnyChar>)>>,
+        StringEqCI!("##endlit"),
     ),
     H(HMacro),
     // Passed through whole, so a `;` inside (`&nbsp;`, a JavaScript statement) isn't a comment.
@@ -7286,6 +7449,154 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn routine_names_carry_no_caret() {
+        routine(" d ^%ZSTART,^ZWELCOME,^%ZLANGC00,Tag^%ZSTOP\n").expect("Ok");
+        routine("#include ^ZWELCOME\n q\n").expect_err("an include is named without a caret");
+        Routine::scan("ROUTINE ^%ZSTART [Type=MAC]\n q\n").expect_err("a header names no caret");
+    }
+
+    #[test]
+    fn zseek_without_arguments() {
+        routine(" s p=$ZSEEK(),q=$ZSEEK(0,1),r=$ZSEEK(10)\n").expect("Ok");
+        routine(" s p=$ZSEEK(1,2,3)\n").expect_err("at most two");
+    }
+
+    #[test]
+    fn zf_minus_4_takes_two_arguments() {
+        routine(" s x=$ZF(-4,2),y=$ZF(-4,1,\"dll\"),z=$ZF(-4,2,id,1)\n").expect("Ok");
+        routine(" s x=$ZF(-4)\n").expect_err("the utility number is required");
+    }
+
+    #[test]
+    fn known_command_without_its_argument_is_not_reported_as_unknown() {
+        for line in [" set\n", " s\n", " merge\n", " zkill\n", " zk\n"] {
+            let err = routine(line).expect_err(line).to_string();
+            assert!(
+                err.contains("is a command, but its argument"),
+                "{line}: {err}"
+            );
+        }
+        let err = routine(" foo 1\n").expect_err("foo").to_string();
+        assert!(err.contains("is not a recognized command"), "{err}");
+    }
+
+    #[test]
+    fn z_command_abbreviation_without_its_argument_is_not_a_user_command() {
+        routine(" zk x\n zn \"USER\"\n ZDN x\n").expect("Ok");
+        routine(" zk\n").expect_err("ZKILL needs an argument");
+        routine(" zn\n").expect_err("ZNSPACE needs an argument");
+    }
+
+    #[test]
+    fn abbreviated_function_with_bad_arguments_is_not_unknown() {
+        for call in [
+            "$P(a)",
+            "$E()",
+            "$LG(a,1,2,3)",
+            "$ZDT()",
+            "$ZINCR()",
+            "$ZP()",
+        ] {
+            let err = routine(&format!(" s x={call}\n"))
+                .expect_err(call)
+                .to_string();
+            assert!(err.contains("argument"), "{call}: {err}");
+        }
+    }
+
+    #[test]
+    fn read_column_is_an_expression() {
+        routine(" r ?n,x:0 r ?(n+1),y:0 r ?$l(\"abc\"),z:0 r !?5,w\n").expect("Ok");
+    }
+
+    #[test]
+    fn variable_names_may_start_with_or_contain_any_letter() {
+        routine(" s Ω=1,aé=3,%é=2 s ^é=2,^a.é.b=1,^|\"USER\"|é=3,^%é=4\n").expect("Ok");
+    }
+
+    #[test]
+    fn language_cache_is_objectscript() {
+        let cls = ClassDefinition::parse(
+            "Class A.L\n{\n\nClassMethod M() [ Language = cache ]\n{\n quit 1\n}\n\n}\n",
+        )
+        .expect("Ok");
+        assert!(methods(&cls)[0].header.is_objectscript());
+    }
+
+    #[test]
+    fn legacy_index_collations() {
+        let index = |index: &str| {
+            let cls = ClassDefinition::parse(&format!(
+                "Class A.C Extends %Persistent\n{{\n\nProperty Name As %String;\n\n{index}\n\n}}\n"
+            ))?;
+            let collations: Vec<_> = cls
+                .member_list
+                .members
+                .seps
+                .iter()
+                .filter_map(|member| match member.deref() {
+                    Member::Index(index) => Some(index),
+                    _ => None,
+                })
+                .flat_map(|index| index.on_properties().unwrap_or_default())
+                .map(|key| key.collation())
+                .collect();
+            Ok::<_, Error>(collations)
+        };
+        assert_eq!(
+            index("Index A On Name As Upper;\n\nIndex B On Name As String(50);").expect("Ok"),
+            [Some("Upper".to_string()), Some("String(50)".to_string())]
+        );
+        index(
+            "Index A On Name As Space;\n\nIndex B On Name As AlphaUp;\n\nIndex C On Name As Mvr;",
+        )
+        .expect("Ok");
+        index("Index A On Name As Upper(50);").expect_err("only STRING takes a length");
+    }
+
+    #[test]
+    fn class_header_directives_in_any_order() {
+        let class =
+            |header: &str| ClassDefinition::parse(&format!("{header}\nClass A.H\n{{\n\n}}\n"));
+        class("Include %occInclude\nImport %SYS\n").expect("Ok");
+        class("Import %SYS\nIncludeGenerator %occInclude\nInclude %occInclude\n").expect("Ok");
+        assert!(
+            class("Include %occInclude\nInclude %occStatus\n").is_err(),
+            "IRIS refuses a repeat"
+        );
+    }
+
+    #[test]
+    fn index_key_kind_case() {
+        let class = |index: &str| {
+            ClassDefinition::parse(&format!(
+                "Class A.I Extends %Persistent\n{{\n\nProperty Tags As list Of %String;\n\n{index}\n\n}}\n"
+            ))
+        };
+        class("Index TagsIdx On Tags(elements);").expect("Ok");
+        class("Index TagsIdx On Tags(ELEMENTS) [ Data = (Tags(ELEMENTS)) ];").expect("Ok");
+        assert!(
+            class("Index TagsIdx On Tags(ELEMENTS) [ Data = (Tags(elements)) ];").is_err(),
+            "IRIS reads the Data form case-sensitively"
+        );
+    }
+
+    #[test]
+    fn structured_system_variable_abbreviations() {
+        routine(" w $d(^$J($j)),^$L(\"x\"),^$R(\"x\"),^$G(\"^x\"),^$GLOBAL(\"^x\")\n").expect("Ok");
+        routine(" w ^$JO($j)\n").expect_err("JO is neither JOB nor J");
+    }
+
+    #[test]
+    fn zparent_special_variable() {
+        routine(" w $ZPARENT,$ZP,$ZPI,$ZPOS,$ZPOSITION\n").expect("Ok");
+        assert!(matches!(
+            SpecialVariable::parse("ZPA"),
+            Ok(SpecialVariable::Unknown(_))
+        ));
     }
 
     #[test]

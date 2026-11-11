@@ -30,9 +30,9 @@ cargo clippy --lib --no-default-features --features lsp -- -D warnings
 
 ### Against IRIS
 
-`tests/iris.rs` and the JavaScript binding's `npm test` run against the instance in
-`ASCOT_TEST_IRIS`, and do nothing without it. To run one in Docker (its default passwords
-come expired):
+`tests/iris.rs` runs against the instance in `ASCOT_TEST_IRIS` and does nothing without it;
+the JavaScript binding's `npm test` skips only its live test. To run one in Docker (its default
+passwords come expired):
 
 ```sh
 docker run -d --name iris -p 52773:52773 containers.intersystems.com/intersystems/iris-community:2026.1
@@ -67,6 +67,8 @@ served by GitHub Pages as the reference the code at the end of a message links t
 
 - `docs/unreleased/` is the reference of `main`. After a change to `type_error_kinds!`, run
   `cargo run -- diagnostics docs/unreleased` and commit the result; CI fails when it is stale.
+  A PR that touches `docs/unreleased` goes stale in the merge queue when a kind-changing PR
+  merges ahead of it, so merge `main` and regenerate before re-queueing.
 - A release PR copies it, `cp -r docs/unreleased docs/<version>`, and adds the version to
   `docs/index.md`. A release's binary links to `/<version>/<CODE>`, so CI fails a PR that bumps
   the version without the directory, and the Release workflow refuses a tag without it.
@@ -110,8 +112,8 @@ shasum -a 256 iris-community-2026.2.d.json.gz > iris-community-2026.2.d.json.gz.
 gh release upload declarations iris-community-2026.2.d.json.gz{,.sha256} --clobber
 ```
 
-Bump `DEFAULT_RELEASE` in `src/prebuilt.rs` when a new Community release's file is up. The
-format's version, `DECLARATIONS_VERSION` in `src/iris.rs`, is semver: a file is readable while
+Bump `DEFAULT_RELEASE` in `src/release.rs` when a new Community release's file is up. The
+format's version, `DECLARATIONS_VERSION` in `src/declared.rs`, is semver: a file is readable while
 its major part matches, so bump the major for a change old ascots can't read, the minor for an
 addition, and re-upload every release's file after a major bump.
 

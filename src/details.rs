@@ -392,9 +392,9 @@ impl RoutineElementDetails {
 
 type Args = (Vec<WithRange<NormalArg>>, Option<WithRange<VariadicArg>>);
 
-fn import_args(pos: &impl Positions, params: &Option<cos::SpaceThen<cos::ParameterList>>) -> Args {
+fn import_args(pos: &impl Positions, params: Option<&cos::SpaceThen<cos::ParameterList>>) -> Args {
     let args = params
-        .iter()
+        .into_iter()
         .flat_map(|x| &***x)
         .flat_map(|x| x.items.iter())
         .map(|entry| {
@@ -476,7 +476,7 @@ fn public_list(
 fn element(
     pos: &impl Positions,
     label: &Range<cos::Label>,
-    params: &Option<cos::SpaceThen<cos::ParameterList>>,
+    params: Option<&cos::SpaceThen<cos::ParameterList>>,
     kind: RoutineElementKind,
 ) -> RoutineElementDetails {
     let (normal_args, variadic_arg) = import_args(pos, params);
@@ -500,7 +500,7 @@ pub(crate) fn subroutine_kind(
     Some(element(
         pos,
         &header.label,
-        &header.params,
+        header.params.as_ref(),
         RoutineElementKind::Subroutine,
     ))
 }
@@ -515,7 +515,7 @@ fn procedure_kind(
     let kind = RoutineElementKind::Procedure {
         public_list: public_list(pos, &header.publics),
     };
-    Some(element(pos, &header.label, &header.params, kind))
+    Some(element(pos, &header.label, Some(&header.params), kind))
 }
 
 pub fn routine_element_kind(
@@ -704,14 +704,8 @@ impl TryFrom<&str> for ClassDetails {
         let olc = OLC::new(src);
         let mut doc = String::new();
         doc.push_str(cls.gap_start.0.as_str());
-        if let Some(import) = &cls.import {
-            doc.push_str(import.gap.0.as_str());
-        }
-        if let Some(import) = &cls.include {
-            doc.push_str(import.gap.0.as_str());
-        }
-        if let Some(import) = &cls.include_gen {
-            doc.push_str(import.gap.0.as_str());
+        for directive in &cls.directives {
+            doc.push_str(directive.gap().0.as_str());
         }
         let doc = extract_document_comments(&doc);
         let name = with_range_name(&cls.name, &olc);
@@ -723,7 +717,7 @@ impl TryFrom<&str> for ClassDetails {
                 .map(|class| WithRange::new(class.print(), olc.range(class)))
                 .collect()
         });
-        let imports = cls.import.as_ref().map_or(Vec::default(), |import| {
+        let imports = cls.import().map_or(Vec::default(), |import| {
             import
                 .packages
                 .classes()
@@ -735,7 +729,7 @@ impl TryFrom<&str> for ClassDetails {
         // code that *writes* code at compile time -- ascot doesn't check those as ObjectScript
         // at all (see `MethodBody::check`), so resolving its macros would only produce spurious
         // "cannot find include" diagnostics for something nothing here actually uses.
-        let include_names = cls.include.as_ref().map_or(Vec::default(), |include| {
+        let include_names = cls.include().map_or(Vec::default(), |include| {
             include
                 .files
                 .classes()
@@ -743,10 +737,7 @@ impl TryFrom<&str> for ClassDetails {
                 .map(|c| WithRange::new(c.print(), olc.range(c)))
                 .collect()
         });
-        let include_range = cls
-            .include
-            .as_ref()
-            .map(|include| olc.range(&include.files));
+        let include_range = cls.include().map(|include| olc.range(&include.files));
         let mut keywords = ClassKeywords::default();
         for keyword in typed(cls.keyword_list.as_ref()) {
             use cos::ClassKeyword::*;
@@ -768,8 +759,8 @@ impl TryFrom<&str> for ClassDetails {
         let keyword_issues = keyword_issues_in(cls.keyword_list.as_ref(), &olc);
         let lists = [
             ("Extends", cls.extends.as_ref().map(|e| &e.class_list)),
-            ("Import", cls.import.as_ref().map(|i| &i.packages)),
-            ("Include", cls.include.as_ref().map(|i| &*i.files)),
+            ("Import", cls.import().map(|i| &i.packages)),
+            ("Include", cls.include().map(|i| &*i.files)),
         ];
         let mut undocumented = Vec::new();
         for (clause, list) in lists {

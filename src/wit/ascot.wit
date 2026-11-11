@@ -142,7 +142,7 @@ interface common {
     // `extends` entry rather than the leftmost.
     enum inheritance { left, right }
 
-    enum language { objectscript, python, tsql, ispl, javascript }
+    enum language { objectscript, python, tsql, ispl, javascript, mvbasic }
 
     // A class as declared: its header, its own members, and the class keywords ascot reads
     // (https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class),

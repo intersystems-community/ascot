@@ -826,6 +826,11 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
+    // Whether a path still runs here: a `Quit`, `Return` or `Throw` on every way in ends it.
+    pub(crate) fn is_live(&self) -> bool {
+        self.bindings.is_some()
+    }
+
     pub(crate) fn handle_void(&mut self) -> Result<(), TypeError> {
         self.bindings = None;
         Ok(())
@@ -854,9 +859,17 @@ impl<'a> Flow<'a> {
     // it may also read what this body assigns, so the deferred reports can't be trusted.
     pub(crate) fn arm_trap(&mut self, var: TrapVar, label: String) -> Result<(), QuasiTypeError> {
         let bindings = self.bindings()?.clone();
+        let undeclared = self.undeclared();
         self.mark_incomplete();
         self.traps.active = Some((var, Some(label.clone())));
-        self.traps.joins.insert(label, Join { var, bindings });
+        match self.traps.joins.get_mut(&label) {
+            Some(join) => join
+                .bindings
+                .merge(Some(bindings), self.shared.env, &undeclared)?,
+            None => {
+                self.traps.joins.insert(label, Join { var, bindings });
+            }
+        }
         Ok(())
     }
 
@@ -929,19 +942,20 @@ impl<'a> Flow<'a> {
         }
         let uri = self.shared.env.uri().to_string();
         let binding = self.lookup(name.clone())?;
-        if let Some(previous) = binding.new_at {
-            return Err(QuasiTypeError::WithRange(TypeError::redundant_new(
-                name,
-                range,
-                Location::new(uri, previous),
-            )));
-        }
+        let previous = binding.new_at;
         binding.new = Some(true);
         binding.new_at = Some(range);
         // Like `Kill`: undefined until set again.
         binding.assigned = PowerTy::undefined();
         binding.assigned_at = HashSet::new();
         binding.subscript_assigned = None;
+        if let Some(previous) = previous {
+            self.add_soft_diagnostic(QuasiTypeError::WithRange(TypeError::redundant_new(
+                name,
+                range,
+                Location::new(uri, previous),
+            )));
+        }
         Ok(())
     }
 
@@ -1121,7 +1135,26 @@ impl<'a> Flow<'a> {
     // site wants both. Ignores `local.subs`: a callee-mutated variable is invalidated wholesale
     // either way.
     pub(crate) fn invalidate(&mut self, local: Local, ty: PowerTy) -> Result<(), QuasiTypeError> {
-        self.note_ref_param(&local.name, RefUse::Ref)?;
+        self.invalidate_used(local, ty, RefUse::Ref)
+    }
+
+    // The same for a callee's `Output` parameter, which disclaims the prior value: no read of
+    // what came in, so handing on one of our own `Output` params is not A7781.
+    pub(crate) fn invalidate_output(
+        &mut self,
+        local: Local,
+        ty: PowerTy,
+    ) -> Result<(), QuasiTypeError> {
+        self.invalidate_used(local, ty, RefUse::Get)
+    }
+
+    fn invalidate_used(
+        &mut self,
+        local: Local,
+        ty: PowerTy,
+        used: RefUse,
+    ) -> Result<(), QuasiTypeError> {
+        self.note_ref_param(&local.name, used)?;
         self.note_ref_param(&local.name, RefUse::Set)?;
         self.read(&local.name)?;
         let binding = self.lookup(local.name.clone())?;
@@ -1153,9 +1186,11 @@ impl<'a> Flow<'a> {
     // touches `subscript_assigned`, regardless of whether the target itself was subscripted.
     pub(crate) fn handle_zkill(&mut self, local: Local) -> Result<(), QuasiTypeError> {
         self.note_ref_param(&local.name, RefUse::Set)?;
-        let binding = self.lookup(local.name)?;
-        binding.assigned = PowerTy::undefined();
-        binding.assigned_at = HashSet::new();
+        if local.subs.is_empty() {
+            let binding = self.lookup(local.name)?;
+            binding.assigned = PowerTy::undefined();
+            binding.assigned_at = HashSet::new();
+        }
         Ok(())
     }
 

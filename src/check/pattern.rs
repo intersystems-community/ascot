@@ -39,13 +39,17 @@ type Then<'a> = &'a dyn Fn(usize) -> bool;
 
 /// Whether `value` matches `pattern`; `None` when that can't be told here: the pattern doesn't
 /// parse, uses a macro, indirection or a locale-specific code, classifies a character outside
-/// ASCII (IRIS does so by locale), or backtracks past a budget.
+/// ASCII (IRIS does so by locale), the value is over 500 units, or backtracks past a budget.
 pub(crate) fn matches(pattern: &str, value: &str) -> Option<bool> {
     let atoms = atoms(&Pattern::parse(pattern).ok()?)?;
     if !value.is_ascii() && classifies(&atoms) {
         return None;
     }
     let value: Vec<u16> = value.encode_utf16().collect();
+    // The match recurses about three frames per unit, so the length bounds the stack.
+    if value.len() > 500 {
+        return None;
+    }
     let steps = Cell::new(10_000);
     let matched = matches_at(&atoms, &value, 0, &|end| end == value.len(), &steps);
     (steps.get() > 0).then_some(matched)
@@ -224,5 +228,7 @@ mod tests {
         assert_eq!(matches("1Q", "x"), None);
         assert_eq!(matches("1A", "é"), None);
         assert_eq!(matches(r#".(.E)1"x""#, &"a".repeat(40)), None);
+        assert_eq!(matches("1.E", &"a".repeat(500)), Some(true));
+        assert_eq!(matches("1.E", &"a".repeat(501)), None);
     }
 }

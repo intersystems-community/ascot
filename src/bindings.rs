@@ -163,7 +163,12 @@ impl From<&MethodDetails> for wit_bind::Signature {
                 .as_deref()
                 .map(bindings::VariadicArg::from),
             t: details.out.it.as_ref().map(|t| t.to_string()),
-            procedure_block: Some(vec![]),
+            procedure_block: Some(
+                details
+                    .procedure_block
+                    .as_ref()
+                    .map_or(vec![], |x| x.iter().map(|x| x.to_string()).collect()),
+            ),
         }
     }
 }
@@ -377,11 +382,14 @@ same_variants! {
 impl From<&cos::MethodLanguage> for Language {
     fn from(language: &cos::MethodLanguage) -> Self {
         match language {
-            cos::MethodLanguage::ObjectScript(_) => Self::Objectscript,
+            cos::MethodLanguage::ObjectScript(_) | cos::MethodLanguage::Cache(_) => {
+                Self::Objectscript
+            }
             cos::MethodLanguage::Python(_) => Self::Python,
             cos::MethodLanguage::TSQL(_) => Self::Tsql,
             cos::MethodLanguage::ISPL(_) => Self::Ispl,
             cos::MethodLanguage::JavaScript(_) => Self::Javascript,
+            cos::MethodLanguage::MVBasic(_) => Self::Mvbasic,
         }
     }
 }

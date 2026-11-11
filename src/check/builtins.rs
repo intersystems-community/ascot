@@ -38,6 +38,7 @@ const NO_EMPTY_FIRST: &[&str] = &[
     "ListSame",
     "ListToString",
     "Locate",
+    "Lock",
     "MV",
     "Match",
     "NConvert",
@@ -46,6 +47,7 @@ const NO_EMPTY_FIRST: &[&str] = &[
     "Number",
     "Piece",
     "QSubscript",
+    "Replace",
     "SConvert",
     "Stack",
     "Translate",
@@ -62,8 +64,10 @@ const NO_EMPTY_FIRST: &[&str] = &[
     "ZBitFind",
     "ZBitGet",
     "ZBitOr",
+    "ZBitSet",
     "ZBitStr",
     "ZBitXor",
+    "ZBoolean",
     "ZConvert",
     "ZCrc",
     "ZDAscii",
@@ -120,6 +124,7 @@ const NO_EMPTY_SECOND: &[&str] = &[
     "ListSame",
     "ListUpdate",
     "Locate",
+    "Lock",
     "Match",
     "Method",
     "NConvert",
@@ -177,17 +182,31 @@ const NO_EMPTY_SECOND: &[&str] = &[
 const NO_EMPTY_LATER: &[&str] = &[
     "BitFind",
     "Char",
+    "Find",
+    "INumber",
+    "Justify",
+    "ListFind",
+    "ListFromString",
+    "ListToString",
     "Piece",
+    "Translate",
     "View",
     "WChar",
+    "WFind",
+    "ZBitFind",
+    "ZBitSet",
+    "ZBoolean",
     "ZConvert",
+    "ZCrc",
     "ZDChar",
     "ZF",
     "ZLChar",
+    "ZName",
     "ZPosition",
     "ZQChar",
     "ZUtil",
     "ZWChar",
+    "ZZenkaku",
 ];
 
 // Any `$`-function call, to see which of its arguments are empty.
@@ -200,7 +219,15 @@ struct AnyCall(
 
 // `$Z` functions IRIS compiles but doesn't document: the object-system internals the kernel's
 // own classes call. Noted with a hint and typed as Any, per GOVERNANCE.md.
-const UNDOCUMENTED_FUNCTIONS: &[&str] = &["ZOBJEXPORT", "ZOBJVAL", "ZOBJNEW", "ZOBJNEXT"];
+const UNDOCUMENTED_FUNCTIONS: &[&str] = &[
+    "ZOBJEXPORT",
+    "ZOBJVAL",
+    "ZOBJNEW",
+    "ZOBJNEXT",
+    "ZOBJOID",
+    "ZOBJMOD",
+    "ZOBJMODS",
+];
 
 fn check_empty_args(call: &cos::FunctionCall) -> Result<(), QuasiTypeError> {
     let Some(name) = call.name() else {
@@ -209,6 +236,13 @@ fn check_empty_args(call: &cos::FunctionCall) -> Result<(), QuasiTypeError> {
     let Ok(AnyCall(_, _, args)) = AnyCall::parse(&call.print()) else {
         return Ok(());
     };
+    // `$ZSEEK()`: no argument at all, not an empty one, for a function that takes none.
+    if args.items.len() == 1
+        && args.items[0].is_none()
+        && cos::simple_function(name.full).is_some_and(|f| f.min == 0)
+    {
+        return Ok(());
+    }
     for (i, arg) in args.items.iter().enumerate() {
         let table = match i {
             0 => NO_EMPTY_FIRST,
@@ -292,29 +326,7 @@ impl CheckExprInner for cos::FunctionCall {
             ),
             FunctionCall::Simple(call) => check_simple_function(env, flow, call),
             FunctionCall::Generic(_) => unreachable!("never converts"),
-            FunctionCall::Unknown(call) => {
-                for arg in call.args.items(env) {
-                    if let Some(cos::FunArg::Normal { expr, .. }) = arg.deref() {
-                        let _ = expr.to_ty(env, flow)?;
-                    }
-                }
-                let name = call.name.print();
-                if UNDOCUMENTED_FUNCTIONS
-                    .iter()
-                    .any(|f| f.eq_ignore_ascii_case(&name))
-                {
-                    flow.add_soft_diagnostic(QuasiTypeError::undocumented_function(name));
-                    return Ok(PowerTy::plain(Ty::Any));
-                }
-                let names = cos::FUNCTION_NAMES.iter().copied().chain(
-                    cos::SIMPLE_FUNCTIONS
-                        .iter()
-                        .flat_map(|f| f.names.iter().copied()),
-                );
-                let suggestions = crate::check::top_similar(&name, names, 5);
-                flow.add_soft_diagnostic(QuasiTypeError::unknown_function(name, suggestions));
-                Ok(PowerTy::plain(Ty::Any))
-            }
+            FunctionCall::Unknown(call) => check_unknown_call(env, flow, call),
             FunctionCall::Data {
                 args: DataArgs {
                     variable, target, ..
@@ -443,11 +455,7 @@ impl CheckExprInner for cos::FunctionCall {
             } => check_read_args(
                 env,
                 flow,
-                [
-                    Some(n.deref().deref()),
-                    Some(third.deref().deref()),
-                    arg(fourth),
-                ],
+                [Some(n.deref().deref()), arg(third), arg(fourth)],
                 "%Integer",
             ),
             FunctionCall::ZFm5 {
@@ -456,6 +464,9 @@ impl CheckExprInner for cos::FunctionCall {
                 args,
                 ..
             } => {
+                if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
+                    return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
+                }
                 let _ = dll_id.to_ty(env, flow)?;
                 let _ = func_id.to_ty(env, flow)?;
                 Ok(check_args_any(env, flow, each_arg(args))?.into())
@@ -463,6 +474,9 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::ZFm6 {
                 dll_index, args, ..
             } => {
+                if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
+                    return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
+                }
                 let _ = dll_index.to_ty(env, flow)?;
                 Ok(check_args_any(env, flow, each_arg(args))?.into())
             }
@@ -671,12 +685,12 @@ impl CheckExprInner for cos::FunctionCall {
                     [
                         Some(string.deref()),
                         Some(regexp.deref().deref()),
-                        arg(start),
+                        opt_arg(start),
                     ],
                     "%Integer",
                 )?;
-                check_out_var(env, flow, arg(end), "%Integer")?;
-                check_out_var(env, flow, arg(val), "%String")?;
+                check_out_var(env, flow, opt_arg(end), "%Integer")?;
+                check_out_var(env, flow, opt_arg(val), "%String")?;
                 Ok(Ty::from("%Integer").into())
             }
             FunctionCall::MV(c) => check_mv_call(env, flow, c),
@@ -732,7 +746,7 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => {
                 for g in first.as_deref().into_iter().chain(arg(second)) {
-                    check_global_ref(env, flow, g)?;
+                    check_global_arg(env, flow, g)?;
                 }
                 Ok(Ty::from("%String").into())
             }
@@ -777,7 +791,7 @@ impl CheckExprInner for cos::FunctionCall {
                     }
                     let _ = (&b.e2).to_ty(env, flow)?;
                 }
-                // $SELECT throws <ILLEGAL VALUE> at runtime if no condition matches;
+                // $SELECT throws <SELECT> at runtime if no condition matches;
                 // without a literal catch-all branch (`1:...`), that can't be ruled out.
                 Ok(if exhaustive {
                     MaybeTy::Plain(Ty::from("%DataType"))
@@ -791,7 +805,7 @@ impl CheckExprInner for cos::FunctionCall {
                 args: SortBeginArgs { set_global, .. },
                 ..
             } => {
-                check_global_ref(env, flow, set_global.deref())?;
+                check_global_arg(env, flow, set_global)?;
                 Ok(Ty::from("%Integer").into())
             }
             FunctionCall::SortEnd {
@@ -799,7 +813,7 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => {
                 if let Some(Some(g)) = first.as_deref().map(|f| f.deref()) {
-                    check_global_ref(env, flow, g)?;
+                    check_global_arg(env, flow, g)?;
                 }
                 check_read_args(env, flow, [arg(dosort)], "%Integer")
             }
@@ -849,12 +863,25 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::Xecute {
                 args: XecuteArgs { code, params, .. },
                 ..
-            } => check_read_args(
-                env,
-                flow,
-                std::iter::once(Some(code.deref())).chain(each_arg(params).map(Some)),
-                "%String",
-            ),
+            } => {
+                let _ = code.to_ty(env, flow)?;
+                for param in each_arg(params) {
+                    match param.deref() {
+                        cos::MthArg::Expr { expr, .. } => {
+                            let _ = expr.to_ty(env, flow)?;
+                        }
+                        // The code may assign it: whatever was known of it is gone.
+                        cos::MthArg::ByRef { target, .. } => {
+                            if let Some(variable) = target.as_variable()
+                                && let Left(local) = variable.as_local(env, flow)?
+                            {
+                                flow.invalidate(local, Ty::Any.into())?;
+                            }
+                        }
+                    }
+                }
+                Ok(Ty::from("%String").into())
+            }
             FunctionCall::Compile {
                 args:
                     CompileArgs {
@@ -898,8 +925,6 @@ impl CheckExprInner for cos::FunctionCall {
     }
 }
 
-/// Check a [`SetTargetFun`] -- the settable functions on the left of `SET`.
-/// Reuses the same per-function checks as the read positions.
 // `Set $PIECE(x, ..) = v` (likewise `$EXTRACT`, `$LIST`, `$BIT`, ...) on an undefined `x` is fine:
 // it starts from the empty string, so the target is defined from here on rather than read.
 fn define_set_target_base<'a>(
@@ -920,12 +945,14 @@ fn define_set_target_base<'a>(
     Ok(())
 }
 
+/// Check a [`SetTargetFun`] -- the settable functions on the left of `SET`.
+/// Reuses the same per-function checks as the read positions.
 pub(super) fn check_settarget_fun<'a>(
     fun: &cos::SetTargetFun,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
-    super::report_style(env, [fun.name()], &[]);
+    super::report_style(env, fun.name(), &[]);
     use cos::SetTargetFun::*;
     match fun {
         Piece(c) => {
@@ -966,8 +993,46 @@ pub(super) fn check_settarget_fun<'a>(
         MV(c) => {
             let _ = check_mv_call(env, flow, c)?;
         }
+        Undocumented(c) => {
+            let _ = check_unknown_call(env, flow, c)?;
+        }
+        Simple(c) => {
+            env.soft_diagnostic(TypeError::undocumented_syntax(
+                format!("`${}` as a Set target", c.name.print()),
+                env.range(&c.name),
+            ));
+            let _ = check_simple_function(env, flow, c)?;
+        }
     };
     Ok(())
+}
+
+fn check_unknown_call<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    call: &cos::UnknownFunctionCall,
+) -> Result<PowerTy, QuasiTypeError> {
+    for arg in call.args.items(env) {
+        if let Some(cos::FunArg::Normal { expr, .. }) = arg.deref() {
+            let _ = expr.to_ty(env, flow)?;
+        }
+    }
+    let name = call.name.print();
+    if UNDOCUMENTED_FUNCTIONS
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(&name))
+    {
+        flow.add_soft_diagnostic(QuasiTypeError::undocumented_function(name));
+        return Ok(PowerTy::plain(Ty::Any));
+    }
+    let names = cos::FUNCTION_NAMES.iter().copied().chain(
+        cos::SIMPLE_FUNCTIONS
+            .iter()
+            .flat_map(|f| f.names.iter().copied()),
+    );
+    let suggestions = crate::check::top_similar(&name, names, 5);
+    flow.add_soft_diagnostic(QuasiTypeError::unknown_function(name, suggestions));
+    Ok(PowerTy::plain(Ty::Any))
 }
 
 // One variable slot of `SET $LISTBUILD(a,,b)=` / `SET $LISTGET(a,,b)=`, empty for a placeholder.
@@ -1264,6 +1329,20 @@ fn check_global_ref<'a>(
     Ok(())
 }
 
+fn check_global_arg<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    g: &AllowIndirection<cos::GlobalReference>,
+) -> Result<(), QuasiTypeError> {
+    match g {
+        AllowIndirection::Plain(g) => check_global_ref(env, flow, g),
+        AllowIndirection::Indirection(indirection) => {
+            let _ = indirection.to_ty(env, flow)?;
+            Ok(())
+        }
+    }
+}
+
 fn check_out_var<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1278,9 +1357,10 @@ fn check_out_var<'a>(
     Ok(())
 }
 
-/// `$LISTNEXT(list, ptr, value)` iterates a list. `ptr` becomes a defined
-/// integer unconditionally, but `value` receives an element only when the call
-/// returns true — mirroring `$ORDER`'s flow-sensitive target.
+/// `$LISTNEXT(list, ptr, value)` iterates a list. `ptr` is read (IRIS raises `<FUNCTION>` on an
+/// undefined or empty pointer), then becomes a defined integer unconditionally, but `value`
+/// receives an element only when the call returns true — mirroring `$ORDER`'s flow-sensitive
+/// target.
 fn check_listnext<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1289,6 +1369,7 @@ fn check_listnext<'a>(
     value: &Range<Variable>,
 ) -> Result<PowerTy, QuasiTypeError> {
     let _ = list.to_ty(env, flow)?;
+    let _ = ptr.to_ty(env, flow)?;
     check_out_var(env, flow, Some(ptr), "%Integer")?;
     if let Left(local) = value.as_local(env, flow)? {
         let range = env.range(value);
@@ -1379,6 +1460,7 @@ pub(super) fn check_args_any<'a, 'b>(
             // An unknown callee may set anything through a by-reference argument, subscripts
             // included.
             Some(cos::MthArg::ByRef { target, .. }) => {
+                check_dottable(env, target, env.range(arg));
                 let local = match target.as_variable() {
                     Some(variable) => variable
                         .as_local(env, flow)
@@ -1453,6 +1535,7 @@ fn check_zu_args<'a>(
                 }
             }
             cos::FunArg::ByRef { target, .. } => {
+                check_dottable(env, target, env.range(arg));
                 check_set_target(target, PowerTy::from(Ty::Any), env.range(arg), env, flow)?;
             }
         }
@@ -1479,7 +1562,7 @@ fn check_compile<'a>(
     source: &Range<cos::AllowIndirection<Variable>>,
     qspec: &Range<Expr>,
     errors: &Range<Option<Variable>>,
-    object: Option<&Range<Option<Variable>>>,
+    object: Option<&Range<Option<cos::AllowIndirection<Variable>>>>,
     arg5: Option<&Range<Option<Expr>>>,
     arg6: Option<&Range<Option<Expr>>>,
     rname: Option<&Range<Option<Expr>>>,
@@ -1490,11 +1573,15 @@ fn check_compile<'a>(
         Right(_) => flow.invalidate_all()?,
     }
     let _ = qspec.to_ty(env, flow)?;
-    for output in std::iter::once(errors).chain(object) {
-        if let Some(ranged) = output.as_ref().map(Option::as_ref).transpose()
-            && let Left(local) = ranged.as_local(env, flow)?
-        {
-            flow.invalidate(local, Ty::from("%String").into())?;
+    if let Some(ranged) = errors.as_ref().map(Option::as_ref).transpose()
+        && let Left(local) = ranged.as_local(env, flow)?
+    {
+        flow.invalidate(local, Ty::from("%String").into())?;
+    }
+    if let Some(ranged) = object.and_then(|o| o.as_ref().map(Option::as_ref).transpose()) {
+        match ranged.as_local(env, flow)? {
+            Left(local) => flow.invalidate(local, Ty::from("%String").into())?,
+            Right(_) => flow.invalidate_all()?,
         }
     }
     for arg in [arg5, arg6, rname].into_iter().flatten() {
@@ -1686,7 +1773,9 @@ fn check_zstrip_action(action: &str) -> Result<(), &'static str> {
         }
         rest
     };
-    let mut has_plain = false;
+    if !rest.is_empty() && rest.len() == action.len() {
+        return Err("mask codes must follow an action code (*, <, > or =)");
+    }
     let mut has_negated = false;
     let mut chars = rest.chars();
     while let Some(c) = chars.next() {
@@ -1702,19 +1791,9 @@ fn check_zstrip_action(action: &str) -> Result<(), &'static str> {
             return Err("mask codes must be one of E, A, P, C, N, L, U, W");
         }
         if negated {
-            if !has_plain {
-                return Err(
-                    "a Unary Not (') mask code must follow at least one mask code without one",
-                );
-            }
             has_negated = true;
-        } else {
-            if has_negated {
-                return Err(
-                    "mask codes without a Unary Not (') must all precede the ones with one",
-                );
-            }
-            has_plain = true;
+        } else if has_negated {
+            return Err("mask codes without a Unary Not (') must all precede the ones with one");
         }
     }
     Ok(())

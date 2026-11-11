@@ -68,7 +68,9 @@ impl Validate for SQLIdentNonKeyword {
     }
 }
 
-// SQL reserved words, per https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_reservedwords
+// The words an alias cannot be: IRIS's reserved words, per
+// https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_reservedwords,
+// plus the clause starters LIMIT, OFFSET and ORDER, which IRIS does not reserve.
 fn is_sql_reserved_keyword(word: &str) -> bool {
     matches!(
         word,
@@ -303,6 +305,7 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "%INORDER"
             | "%INTERNAL"
             | "%INTEXT"
+            | "%INTOLIST"
             | "%INTRANS"
             | "%INTRANSACTION"
             | "%KEY"
@@ -311,8 +314,10 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "%MERGE"
             | "%MINUS"
             | "%MVR"
+            | "%NOBSL"
             | "%NOCHECK"
             | "%NODELDATA"
+            | "%NOFIXEDSTATS"
             | "%NOFLATTEN"
             | "%NOFPLAN"
             | "%NOINDEX"
@@ -352,6 +357,7 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
             | "CONSTRAINTS"
             | "ENDEXEC"
             | "LEADING"
+            | "PARTITION"
             | "SHARD"
     )
 }
@@ -727,26 +733,26 @@ pub enum ColTrun {
 #[derive(Grammar)]
 #[grammar(name = "special system variable")]
 pub enum SpecialSystemVariable {
-    H(StringEqCI!("$H")),
     Horolog(StringEqCI!("$HOROLOG")),
-    J(StringEqCI!("$J")),
+    H(StringEqCI!("$H")),
     Job(StringEqCI!("$JOB")),
+    J(StringEqCI!("$J")),
     Namespace(StringEqCI!("$NAMESPACE")),
-    TL(StringEqCI!("$TL")),
     TLevel(StringEqCI!("$TLEVEL")),
+    TL(StringEqCI!("$TL")),
     Username(StringEqCI!("$USERNAME")),
-    ZH(StringEqCI!("$ZH")),
     ZHorolog(StringEqCI!("$ZHOROLOG")),
-    ZJ(StringEqCI!("$ZJ")),
+    ZH(StringEqCI!("$ZH")),
     ZJob(StringEqCI!("$ZJOB")),
+    ZJ(StringEqCI!("$ZJ")),
     ZNspace(StringEqCI!("$ZNSPACE")),
     ZPi(StringEqCI!("$ZPI")),
     ZTimestamp(StringEqCI!("$ZTIMESTAMP")),
     ZTimezone(StringEqCI!("$ZTIMEZONE")),
     ZTS(StringEqCI!("$ZTS")),
     ZTZ(StringEqCI!("$ZTZ")),
-    ZV(StringEqCI!("$ZV")),
     ZVersion(StringEqCI!("$ZVERSION")),
+    ZV(StringEqCI!("$ZV")),
 }
 
 #[derive(Grammar)]
@@ -1193,7 +1199,7 @@ pub enum TrimSpec {
 #[grammar(inline)]
 pub struct SQLSearchIndexArgs {
     pub open: (Space, StringEq!("("), Space),
-    pub table: Option<(Table, StringEq!("."))>,
+    pub table: Vec<(Ident, StringEq!("."))>,
     pub index_name: IndexName,
     pub scalx_list: Vec<(ArgSep, Scalx)>,
     pub close: (Space, StringEq!(")")),
@@ -1418,7 +1424,7 @@ char_class!(pub IsExtFuncChar, "non left paren character", |ch| {
     !matches!(ch, '(' | '$')
 });
 
-pub type ODBCEscape = Wrap<(StringEq!("{"), Space), DTS, (StringEq!("}"), Space)>;
+pub type ODBCEscape = Wrap<(StringEq!("{"), Space), DTS, (Space, StringEq!("}"))>;
 
 #[derive(Grammar)]
 pub enum DTS {
@@ -1647,7 +1653,7 @@ pub enum Dist {
         keyword: (StringEqCI!("DISTINCT"), Space),
         by: Option<SQLDistinctBy>,
     },
-    All(StringEqCI!("ALL")),
+    All((StringEqCI!("ALL"), Space)),
 }
 
 pub type SQLDistinctBy = Wrap<(StringEqCI!("BY"), Space), List, Space>;
@@ -1664,7 +1670,7 @@ pub type SQLForEachClause = Prefix<(Space, StringEqCI!("%FOREACH"), Space), List
 #[grammar(name = "window")]
 pub struct Window {
     pub fun: WindowFunc,
-    pub arg: Parenthesized<Option<Either<StringEq!("*"), Scalx>>>,
+    pub arg: Parenthesized<Option<Either<StringEq!("*"), VecSep<Scalx, ArgSep>>>>,
     pub over_kw: (Space, StringEqCI!("OVER"), Space),
     pub open: (StringEq!("("), Space),
     pub partition: Option<WindowPartition>,
@@ -1707,7 +1713,7 @@ pub type WindowPartition = Prefix<
 
 pub type WindowOrder = Prefix<
     (Space, StringEqCI!("ORDER"), Space, StringEqCI!("BY"), Space),
-    VecSep<Scalx, (Space, StringEq!(","), Space)>,
+    VecSep<Ordir, (Space, StringEq!(","), Space)>,
 >;
 
 #[derive(Grammar)]
@@ -1804,7 +1810,7 @@ pub enum Cond {
         open: (StringEq!("("), Space),
         tables: Tables,
         close: (Space, StringEq!(")")),
-        condition: Option<Box<ForCnd>>,
+        condition: Option<(Space, Box<ForCnd>)>,
     },
     Comparison {
         noindex: Option<(StringEqCI!("%NOINDEX"), Space)>,
@@ -2135,7 +2141,7 @@ pub struct IndexRefs {
 
 #[derive(Grammar)]
 pub struct IndexRef {
-    pub table: Option<(Table, Space, StringEq!("."), Space)>,
+    pub table: Vec<(Ident, Space, StringEq!("."), Space)>,
     pub index: IndexSpec,
 }
 
@@ -2165,9 +2171,9 @@ pub enum Tref {
     Join(JTab),
     OJSyntax {
         open: StringEq!("{"),
-        oj: Ident,
+        oj: (Ident, Space),
         table: Box<JTab>,
-        close: StringEq!("}"),
+        close: (Space, StringEq!("}")),
     },
 }
 
@@ -3114,7 +3120,7 @@ pub enum GrantCmd {
         select_kw: StringEqCI!("SELECT"),
         on_kw: (Space, StringEqCI!("ON"), Space),
         cube_kw: StringEqCI!("CUBE"),
-        cubes_suffix: Option<StringEq!("S")>,
+        cubes_suffix: Option<StringEqCI!("S")>,
         cubes: (Space, CubeList),
         to_kw: (Space, StringEqCI!("TO"), Space),
         grantees: Grntee,
@@ -3155,7 +3161,7 @@ pub enum RevokeCmd {
         )>,
         privileges: SimplePrivs,
         on_kw: (Space, StringEqCI!("ON"), Space),
-        objects: VecSep<Object, (Space, StringEq!(","), Space)>,
+        objects: Objcts,
         from_kw: (Space, StringEqCI!("FROM"), Space),
         grantees: Grntee,
         behavior: Option<(Space, RevokeBehavior)>,
@@ -3190,8 +3196,8 @@ pub enum RevokeCmd {
         select_kw: StringEqCI!("SELECT"),
         on_kw: (Space, StringEqCI!("ON"), Space),
         cube_kw: StringEqCI!("CUBE"),
-        cubes_suffix: Option<StringEq!("S")>,
-        cubes: CubeList,
+        cubes_suffix: Option<StringEqCI!("S")>,
+        cubes: (Space, CubeList),
         from_kw: (Space, StringEqCI!("FROM"), Space),
         grantees: Grntee,
         behavior: Option<(Space, RevokeBehavior)>,
@@ -3325,10 +3331,8 @@ pub enum Objcts {
         space: Space,
         schemas: VecSep<Schema, (Space, StringEq!(","), Space)>,
     },
-    Tables(VecSep<Object, (Space, StringEq!(","), Space)>),
-    Cubes(CubeList),
-    MLConfigs(MLConfigurationList),
     ForeignServers(ForeignServerPrivilegeClause),
+    Tables(VecSep<Object, (Space, StringEq!(","), Space)>),
 }
 
 #[derive(Grammar)]
@@ -3354,14 +3358,19 @@ pub struct ForeignServerPrivilegeList(VecSep<TName, (Space, StringEq!(","), Spac
 pub struct ForeignServerPrivilegeClause {
     pub foreign_kw: Option<(StringEqCI!("FOREIGN"), Space)>,
     pub server_kw: ServersServer,
-    pub servers: (Space, ForeignServerPrivilegeList),
+    // A table named Servers: GRANT SELECT ON Servers TO u1 is a table grant on IRIS.
+    pub servers: (
+        Space1,
+        NotFollowedBy<(Either<StringEqCI!("TO"), StringEqCI!("FROM")>, Space1)>,
+        ForeignServerPrivilegeList,
+    ),
 }
 
 #[derive(Grammar)]
 #[grammar(name = "SERVERS/SERVER")]
 pub enum ServersServer {
-    Server(StringEqCI!("SERVER")),
     Servers(StringEqCI!("SERVERS")),
+    Server(StringEqCI!("SERVER")),
 }
 
 #[derive(Grammar)]
@@ -3932,7 +3941,7 @@ pub enum DDL {
         ),
         if_exists: Option<(StringEqCI!("IF"), Space, StringEqCI!("EXISTS"), Space)>,
         tname: TName,
-        cascade: (Space, CascadeOpt),
+        cascade: Option<(Space, CascadeOpt)>,
     },
     DropFunction {
         kw: (StringEqCI!("DROP"), Space, StringEqCI!("FUNCTION"), Space),
@@ -4034,12 +4043,11 @@ pub enum DDL {
         foreign: Option<(StringEqCI!("FOREIGN"), Space)>,
         server_kw: (StringEqCI!("SERVER"), Space),
         tname: TName,
-        cascade: (Space, CascadeOpt),
+        cascade: Option<(Space, CascadeOpt)>,
     },
     DropAggregate {
-        kw: (StringEqCI!("DROP"), Space),
+        kw: (StringEqCI!("DROP"), Space, StringEqCI!("AGGREGATE"), Space),
         if_exists: Option<(StringEqCI!("IF"), Space, StringEqCI!("EXISTS"), Space)>,
-        agg_kw: (StringEqCI!("AGGREGATE"), Space),
         name: QualifiedSPName,
     },
     FreezePlans {
@@ -4134,9 +4142,11 @@ pub enum CreateServerConnection {
     Host {
         kw: (StringEqCI!("HOST"), Space),
         host: Literal,
-        open: (Space, StringEq!("("), Space),
-        options: DBServerOptions,
-        close: (Space, StringEq!(")")),
+        options: Option<(
+            (Space, StringEq!("("), Space),
+            DBServerOptions,
+            (Space, StringEq!(")")),
+        )>,
     },
 }
 
@@ -4180,25 +4190,30 @@ pub struct CreateIndexWithClause {
         (Space, StringEq!(")")),
     )>,
     pad_index: Option<(
-        Option<(Space, StringEq!(","), Space)>,
+        Space,
+        Option<(StringEq!(","), Space)>,
         StringEqCI!("PAD_INDEX"),
     )>,
     fillfactor: Option<(
-        Option<(Space, StringEq!(","), Space)>,
+        Space,
+        Option<(StringEq!(","), Space)>,
         StringEqCI!("FILLFACTOR"),
         (Space, StringEq!("="), Space),
         Literal,
     )>,
     ignore_dup: Option<(
-        Option<(Space, StringEq!(","), Space)>,
+        Space,
+        Option<(StringEq!(","), Space)>,
         StringEqCI!("IGNORE_DUP_KEY"),
     )>,
     drop_existing: Option<(
-        Option<(Space, StringEq!(","), Space)>,
+        Space,
+        Option<(StringEq!(","), Space)>,
         StringEqCI!("DROP_EXISTING"),
     )>,
     stats_norecompute: Option<(
-        Option<(Space, StringEq!(","), Space)>,
+        Space,
+        Option<(StringEq!(","), Space)>,
         StringEqCI!("STATISTICS_NORECOMPUTE"),
     )>,
 }
@@ -4220,7 +4235,7 @@ pub struct AlterFTAction(Ident);
 #[grammar(name = "model-name")]
 pub struct ModelName(Ident);
 
-pub type PasswordClause = Prefix<PWPrefix, Password>;
+pub type PasswordClause = Prefix<(PWPrefix, Space), Password>;
 
 #[derive(Grammar)]
 pub enum Password {
@@ -4303,13 +4318,11 @@ pub struct ModelColumn {
     datyp: (Space, Datyp),
 }
 
-pub type ModelSource = Prefix<(StringEqCI!("FROM"), Space), ModelSourceQuery>;
-
 #[derive(Grammar)]
-#[grammar(name = "model-source-query")]
-pub enum ModelSourceQuery {
+#[grammar(name = "model-source")]
+pub enum ModelSource {
     Subquery {
-        open: (StringEq!("("), Space),
+        open: (StringEqCI!("FROM"), Space, StringEq!("("), Space),
         selex: Selex,
         close: (Space, StringEq!(")")),
     },
@@ -4326,7 +4339,7 @@ pub type UsingClause = Prefix<(StringEqCI!("USING"), Space), AlgDescription>;
 
 #[derive(Grammar)]
 #[grammar(name = "alg description")]
-pub struct AlgDescription(JSONString);
+pub struct AlgDescription(JSONObject);
 
 pub type WithClauseTrain = Prefix<(StringEqCI!("WITH"), Space), TrainWith>;
 
@@ -4391,7 +4404,7 @@ pub enum ProviderName {
     AutoML(StringEqCI!("AutoML")),
     DataRobot(StringEqCI!("DataRobot")),
     H2O(StringEqCI!("H2O")),
-    PMMML(StringEqCI!("PMMML")),
+    PMML(StringEqCI!("PMML")),
 }
 
 #[derive(Grammar)]
@@ -4406,7 +4419,7 @@ pub type MlconfigUsingClause = Prefix<(StringEqCI!("USING"), Space), MlconfigUsi
 #[derive(Grammar)]
 #[grammar(name = "mlconfig-using")]
 pub enum MlconfigUsing {
-    JSONString(JSONString),
+    JSONString(JSONObject),
     Null(StringEqCI!("NULL")),
 }
 
@@ -4447,14 +4460,6 @@ pub enum TuneOption {
     RecompileCQ(StringEqCI!("%RECOMPILE_CQ")),
     SamplePercent(StringEqCI!("%SAMPLE_PERCENT"), (Space, PercentValue)),
 }
-
-char_class!(pub IsDbIdentifierStart, "db_identifier_start", |ch| {
-    ch.is_ascii_alphabetic() || ch == '_'
-});
-
-char_class!(pub IsDbIdentifierPart, "db_identifier_part", |ch| {
-    ch == '-' || ch.is_ascii_digit() || ch.is_ascii_alphabetic() || ch == '_'
-});
 
 #[derive(Grammar)]
 #[grammar(name = "DR option")]
@@ -4500,11 +4505,30 @@ pub struct DBOption(Ident);
 
 #[derive(Grammar)]
 #[grammar(name = "ft-options")]
-pub struct FTOptions(Ident);
+pub enum FTOptions {
+    Table((StringEqCI!("TABLE"), Space), Literal),
+    Query((StringEqCI!("QUERY"), Space), Literal),
+    File {
+        kw: (StringEqCI!("FILE"), Space),
+        path: Literal,
+        columns: Option<(
+            Space,
+            StringEqCI!("COLUMNS"),
+            Space,
+            StringEq!("("),
+            Space,
+            ColumnDefList,
+            Space,
+            StringEq!(")"),
+        )>,
+    },
+}
+
+pub type JSONObject = crate::cos::Brace<crate::cos::OSText>;
 
 #[derive(Grammar)]
 #[grammar(name = "json-string")]
-pub struct JSONString(StringLiteral);
+pub struct JSONString(Either<JSONObject, StringLiteral>);
 
 #[derive(Grammar)]
 #[grammar(name = "server-type")]
@@ -4534,7 +4558,7 @@ pub enum FTPushdownType {
 
 #[derive(Grammar)]
 #[grammar(name = "index classname")]
-pub struct IndexClassName(Ident);
+pub struct IndexClassName(DottedIdent);
 
 #[derive(Grammar)]
 #[grammar(name = "qualified SPname")]
@@ -4542,7 +4566,7 @@ pub struct QualifiedSPName(DottedIdent);
 
 #[derive(Grammar)]
 #[grammar(name = "classname")]
-pub struct ClassName(Ident);
+pub struct ClassName(DottedIdent);
 
 #[derive(Grammar)]
 #[grammar(name = "trigger time")]
@@ -4653,8 +4677,8 @@ pub type ViewColumnList = Suffix<FList1, Option<(Space, StringEqCI!("AS"))>>;
 pub enum ViewWith {
     ReadOnly(StringEqCI!("READ"), Space, StringEqCI!("ONLY")),
     Check {
+        levels: Option<(LevelsClause, Space)>,
         check_kw: StringEqCI!("CHECK"),
-        levels: Option<(Space, LevelsClause)>,
         option_kw: (Space, StringEqCI!("OPTION")),
         constraint: Option<(Space, StringEqCI!("CONSTRAINT"), Space, Ident)>,
     },
@@ -4663,8 +4687,8 @@ pub enum ViewWith {
 #[derive(Grammar)]
 #[grammar(name = "levels clause")]
 pub enum LevelsClause {
-    Cascade(StringEqCI!("CASCADE")),
     Cascaded(StringEqCI!("CASCADED")),
+    Cascade(StringEqCI!("CASCADE")),
     Local(StringEqCI!("LOCAL")),
 }
 
@@ -4686,6 +4710,7 @@ pub struct Thr {
     server: StringEqCI!("SERVER"),
     sp3: Space,
     tname: TName,
+    sp4: Space,
     remote_statement: RemoteStatement,
 }
 
@@ -4732,10 +4757,17 @@ pub enum Stat {
 }
 
 #[derive(Grammar)]
-#[grammar(name = "percent_value")]
-pub enum PercentValue {
-    Dot(StringEq!("."), CharOf<IsDigit>, CharOf<IsDigit>),
-    Percent(CharOf<IsDigit>, CharOf<IsDigit>, StringEq!("%")),
+#[grammar(name = "percent_value", validated)]
+pub struct PercentValue(Number);
+
+impl Validate for PercentValue {
+    const REQUIREMENT: &'static str = "be in the range (0, 1]";
+    fn validate(&self) -> bool {
+        self.0
+            .print()
+            .parse::<f64>()
+            .is_ok_and(|v| v > 0.0 && v <= 1.0)
+    }
 }
 
 #[derive(Grammar)]
@@ -4907,13 +4939,7 @@ pub enum CodeBody {
 
 pub type SqlMethodBody = Wrap<
     StringEqCI!("BEGIN"),
-    Vec<(
-        Space,
-        Stat,
-        Space,
-        StringEq!(";"),
-        Option<(Space, ReturnStatement, Space, StringEq!(";"))>,
-    )>,
+    Vec<(Space, Either<ReturnStatement, Stat>, Space, StringEq!(";"))>,
     (Space, StringEqCI!("END")),
 >;
 
@@ -4979,14 +5005,6 @@ pub type COSMethodBody = crate::cos::Brace<crate::cos::OSText>;
 pub type PythonMethodBody = Prefix<StringEq!("{"), StringEndsWith<StringEq!("}")>>;
 
 #[derive(Grammar)]
-pub enum Language {
-    Cos(StringEqCI!("COS")),
-    ObjectScript(StringEqCI!("OBJECTSCRIPT")),
-    Python(StringEqCI!("PYTHON")),
-    Sql(StringEqCI!("SQL")),
-}
-
-#[derive(Grammar)]
 #[grammar(name = "indexname")]
 pub struct IndexName(Ident);
 
@@ -5041,7 +5059,7 @@ pub enum CollectionSpec {
 #[derive(Grammar)]
 #[grammar(name = "classname")]
 pub struct Classname {
-    first: Ident,
+    first: DottedIdent,
     rest: Vec<(Space, StringEq!(","), Space, Ident)>,
 }
 
@@ -5060,17 +5078,17 @@ pub enum AlterAction {
         check: CheckSpec,
         kw: (Space, StringEqCI!("CONSTRAINT"), Space, StringEqCI!("ALL")),
     },
-    DropAction {
-        drop_kw: DropKeywd,
-        action: (Space, DropAction),
-    },
-    DropPartition {
-        drop_kw: DropKeywd,
-        partition: (Space, PartitionSpecification),
-    },
     DropAllPartitions {
         drop_kw: DropKeywd,
         kw: (Space, StringEqCI!("ALL"), Space, StringEqCI!("PARTITIONS")),
+    },
+    DropPartition {
+        drop_kw: DropKeywd,
+        partition: (Space, PartitionRangeSpec),
+    },
+    DropAction {
+        drop_kw: DropKeywd,
+        action: (Space, DropAction),
     },
     Add {
         kw: (StringEqCI!("ADD"), Space),
@@ -5113,7 +5131,7 @@ pub enum AlterAction {
     },
     Truncate {
         kw: (StringEqCI!("TRUNCATE"), Space),
-        partition: PartitionSpecification,
+        partition: PartitionRangeSpec,
     },
 }
 
@@ -5149,8 +5167,8 @@ pub enum ConvertTiming {
 #[derive(Grammar)]
 #[grammar(name = "shard convert clause")]
 pub enum ShardConvertClause {
-    Shard(Shard),
     Sharded(Sharded),
+    Shard(Shard),
     NonSharded(StringEqCI!("NONSHARDED")),
 }
 
@@ -5207,7 +5225,7 @@ pub enum AlterCol {
 #[grammar(name = "storagedefault convert clause")]
 pub enum StorageDefaultConvertClause {
     Column(ColumnStorageDefaultConversion),
-    Type(StorageDefaultConversionType),
+    Type(StorageDefaultConversionTypeSpec),
 }
 
 #[derive(Grammar)]
@@ -5259,17 +5277,22 @@ pub enum DefSpec {
     },
     Literal(Literal),
     CurrentDate(StringEqCI!("CURRENT_DATE")),
-    CurrentTime {
-        kw: StringEqCI!("CURRENT_TIME"),
-        precision: Option<Parenthesized<Literal>>,
-    },
     CurrentTimestamp {
         kw: StringEqCI!("CURRENT_TIMESTAMP"),
+        precision: Option<Parenthesized<Literal>>,
+    },
+    CurrentTime {
+        kw: StringEqCI!("CURRENT_TIME"),
         precision: Option<Parenthesized<Literal>>,
     },
     CurrentUser(StringEqCI!("CURRENT_USER")),
     GetDate {
         kw: (StringEqCI!("GETDATE"), StringEq!("("), Space),
+        value: Option<Literal>,
+        close: (Space, StringEq!(")")),
+    },
+    GetUtcDate {
+        kw: (StringEqCI!("GETUTCDATE"), StringEq!("("), Space),
         value: Option<Literal>,
         close: (Space, StringEq!(")")),
     },
@@ -5451,12 +5474,10 @@ pub enum PkeySpec {
 #[derive(Grammar)]
 #[grammar(name = "alt fkey spec")]
 pub struct AltFkeySpec {
-    foreign: StringEq!("FOREIGN"),
-    sp: Space,
-    key: StringEq!("KEY"),
-    ident: Ident,
+    kw: (StringEqCI!("FOREIGN"), Space, StringEqCI!("KEY"), Space),
+    ident: Option<(Ident, Space)>,
     flist2: FList2,
-    references: StringEq!("REFERENCES"),
+    references_kw: (Space, StringEqCI!("REFERENCES"), Space),
     ref_: Ref,
     informix: Informix,
 }
@@ -5664,6 +5685,11 @@ pub enum TableOptionList {
         first: TableOption,
         rest: Vec<(Space, StringEq!(","), Space, TableOption)>,
     },
+    Shard {
+        shard: Shard,
+        partition: Option<(Space, PartitionOption)>,
+    },
+    Partition(PartitionOption),
     InformixCompat(InformixCompatability),
 }
 
@@ -5798,6 +5824,10 @@ pub enum PartitionRangeSpec {
         and_kw: (Space, StringEqCI!("AND"), Space),
         to: PartitionFieldValue,
     },
+    PartitionValues {
+        kw: (StringEqCI!("PARTITION"), Space),
+        prefix: PartitionPrefix,
+    },
 }
 
 #[derive(Grammar)]
@@ -5896,7 +5926,7 @@ pub enum SqlCollation {
     PctTruncate {
         kw: StringEqCI!("%TRUNCATE"),
         arg: Option<(Space, StringEq!("("), Space, Literal, Space, StringEq!(")"))>,
-        alphaup: (Space, StringEqCI!("ALPHAUP")),
+        alphaup: Option<(Space, StringEqCI!("ALPHAUP"))>,
     },
     PctUpper(StringEqCI!("%UPPER")),
     Exact(StringEqCI!("EXACT")),
@@ -6015,7 +6045,24 @@ pub enum DatypSpec {
     Varchar2(StringEqCI!("VARCHAR2")),
     Varchar(StringEqCI!("VARCHAR")),
     Vector(StringEqCI!("VECTOR")),
-    AnyToken(DottedIdent),
+    AnyToken {
+        head: DatypName,
+        rest: Vec<(StringEq!("."), Ident)>,
+    },
+}
+
+#[derive(Grammar)]
+#[grammar(validated, inline)]
+pub struct DatypName(Ident);
+
+impl Validate for DatypName {
+    const REQUIREMENT: &'static str = "not be a column clause keyword";
+    fn validate(&self) -> bool {
+        !matches!(
+            self.0.print().to_uppercase().as_str(),
+            "COLLATE" | "CONSTRAINT" | "DEFAULT" | "DROP" | "NOT" | "NULL" | "RENAME" | "SET"
+        )
+    }
 }
 
 #[derive(Grammar)]
@@ -6112,8 +6159,8 @@ pub enum UpdateSpec {
     },
     Literal(Literal),
     CurrentDate(StringEqCI!("CURRENT_DATE")),
-    CurrentTime {
-        kw: StringEqCI!("CURRENT_TIME"),
+    CurrentTimestamp {
+        kw: StringEqCI!("CURRENT_TIMESTAMP"),
         precision: Option<(
             Space,
             StringEq!("("),
@@ -6123,8 +6170,8 @@ pub enum UpdateSpec {
             StringEq!(")"),
         )>,
     },
-    CurrentTimestamp {
-        kw: StringEqCI!("CURRENT_TIMESTAMP"),
+    CurrentTime {
+        kw: StringEqCI!("CURRENT_TIME"),
         precision: Option<(
             Space,
             StringEq!("("),
@@ -6179,11 +6226,11 @@ pub struct Ref {
 pub enum TriggeredAction {
     DeleteFirst {
         delete_rule: DeleteRule,
-        update_rule: Option<UpdateRule>,
+        update_rule: Option<(Space, UpdateRule)>,
     },
     UpdateFirst {
         update_rule: UpdateRule,
-        delete_rule: Option<DeleteRule>,
+        delete_rule: Option<(Space, DeleteRule)>,
     },
 }
 
@@ -6406,7 +6453,7 @@ pub enum LoadOptions {
 
 #[derive(Grammar)]
 #[grammar(name = "load-options-json")]
-pub struct LoadOptionsJson(Literal);
+pub struct LoadOptionsJson(Either<JSONObject, Literal>);
 
 #[derive(Grammar)]
 #[grammar(name = "load-options-name")]
@@ -6798,5 +6845,239 @@ mod tests {
             "DROP TRIGGER trg",
             "DROP TRIGGER IF EXISTS trg FROM t",
         ]);
+    }
+
+    #[test]
+    fn special_system_variable_full_names() {
+        all_ok(&[
+            "SELECT $HOROLOG + 1 INTO :x",
+            "SELECT $H + 1 INTO :x",
+            "SELECT Name INTO :x FROM t WHERE a < $HOROLOG",
+            "SELECT $JOB, $TLEVEL, $ZHOROLOG, $ZJOB, $ZVERSION INTO :a, :b, :c, :d, :e",
+            "SELECT $J, $TL, $ZH, $ZJ, $ZV INTO :a, :b, :c, :d, :e",
+        ]);
+    }
+
+    #[test]
+    fn window_order_direction_and_offsets() {
+        all_ok(&[
+            "SELECT ROW_NUMBER() OVER (ORDER BY Name DESC) FROM t",
+            "SELECT NTH_VALUE(Name, 2) OVER (ORDER BY Name) FROM t",
+            "SELECT LAG(Name, 1) OVER (ORDER BY Name) FROM t",
+            "SELECT LEAD(a, 1, 0) OVER (PARTITION BY Age ORDER BY Name ASC, a DESC) FROM t",
+            "SELECT COUNT(*) OVER (PARTITION BY Age) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn all_before_expression() {
+        all_ok(&[
+            "SELECT ALL Name FROM t",
+            "SELECT COUNT(ALL Name) FROM t",
+            "SELECT ALLOWED FROM t",
+            "SELECT COUNT(ALLOWED) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn for_some_with_blank_before_condition() {
+        all_ok(&[
+            "SELECT a FROM t WHERE FOR SOME (u AS e) (e.a = t.a)",
+            "SELECT a FROM t WHERE FOR SOME (u)(u.a = t.a)",
+        ]);
+    }
+
+    #[test]
+    fn odbc_escape_blank_before_close() {
+        all_ok(&[
+            "SELECT {d '2020-01-01' } FROM t",
+            "SELECT {fn NOW() } FROM t",
+            "SELECT {fn NOW()} + 1 FROM t",
+            "SELECT p.Name FROM {oj t p LEFT OUTER JOIN u c ON p.a = c.a}",
+            "SELECT p.Name FROM {oj t p LEFT OUTER JOIN u c ON p.a = c.a }",
+        ]);
+    }
+
+    #[test]
+    fn grant_revoke_objects() {
+        all_ok(&[
+            "GRANT USE ON FOREIGN SERVER s1 TO u1",
+            "GRANT USE ON FOREIGN SERVERS s1, s2 TO u1",
+            "GRANT USE ON SERVER s1 TO u1",
+            "GRANT SELECT ON Servers TO u1",
+            "GRANT SELECT ON Server TO u1",
+            "GRANT SELECT ON ServerLog TO u1",
+            "GRANT SELECT ON Servers1 TO u1",
+            "GRANT SELECT ON Servers, Other TO u1",
+            "grant select on cubes c1, c2 to u1",
+            "REVOKE SELECT ON CUBE c1 FROM u1",
+            "REVOKE SELECT ON CUBES c1, c2 FROM u1",
+            "REVOKE USE ON FOREIGN SERVER s1 FROM u1",
+            "REVOKE SELECT ON Servers FROM u1",
+            "REVOKE SELECT ON SCHEMA SQLUser FROM u1",
+            "REVOKE SELECT ON * FROM u1",
+        ]);
+    }
+
+    #[test]
+    fn qualified_index_names() {
+        all_ok(&[
+            "SELECT Name FROM %IGNOREINDEX t.NameIdx t",
+            "SELECT Name FROM %IGNOREINDEX SQLUser.t.NameIdx SQLUser.t",
+            "SELECT Name FROM %IGNOREINDEX NameIdx t",
+            "SELECT Name FROM %IGNOREINDEX SQLUser.t.* SQLUser.t",
+            "SELECT Name FROM t WHERE %ID %FIND SEARCH_INDEX(t.NameIdx, 'foo')",
+        ]);
+    }
+
+    #[test]
+    fn reserved_words_are_not_aliases() {
+        all_ok(&["SELECT Name %INTOLIST :x FROM t", "SELECT a FROM %NOBSL t"]);
+        assert!(SQL::parse("SELECT 1 AS Partition INTO :x").is_err());
+        assert!(SQL::parse("SELECT a FROM t %NOBSL").is_err());
+        assert!(SQL::parse("SELECT a FROM t Partition").is_err());
+    }
+
+    #[test]
+    fn longer_keyword_before_its_prefix() {
+        all_ok(&[
+            "CREATE TABLE t (a TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE t (a TIMESTAMP DEFAULT CURRENT_TIMESTAMP(3))",
+            "CREATE TABLE t (a TIME DEFAULT CURRENT_TIME)",
+            "CREATE TABLE t (a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+            "CREATE TABLE t (a TIME ON UPDATE CURRENT_TIME)",
+            "ALTER TABLE t CONVERT SHARDED",
+            "ALTER TABLE t CONVERT SHARD",
+        ]);
+    }
+
+    #[test]
+    fn view_check_option_level() {
+        all_ok(&[
+            "CREATE VIEW v AS SELECT a FROM t WITH CASCADED CHECK OPTION",
+            "CREATE VIEW v AS SELECT a FROM t WITH CASCADE CHECK OPTION",
+            "CREATE VIEW v AS SELECT a FROM t WITH LOCAL CHECK OPTION",
+            "CREATE VIEW v AS SELECT a FROM t WITH CHECK OPTION",
+        ]);
+        assert!(SQL::parse("CREATE VIEW v AS SELECT a FROM t WITH CHECK CASCADED OPTION").is_err());
+        assert!(SQL::parse("CREATE VIEW v AS SELECT a FROM t WITH CHECK LOCAL OPTION").is_err());
+    }
+
+    #[test]
+    fn blanks_between_adjacent_clauses() {
+        all_ok(&[
+            "CREATE TABLE t (a INT, b INT, FOREIGN KEY (a) REFERENCES u (a) ON DELETE CASCADE ON UPDATE NO ACTION)",
+            "CREATE TABLE t (a INT, FOREIGN KEY (a) REFERENCES u (a) ON UPDATE NO ACTION ON DELETE CASCADE)",
+            "CREATE USER u IDENTIFIED BY 'pw'",
+            "CREATE USER u IDENTIFY BY pw",
+            "ALTER USER u PASSWORD 'pw'",
+            "ALTER USER u WITH PASSWORD 'pw'",
+            "THROUGH FOREIGN SERVER fs SELECT a FROM t",
+            "CREATE INDEX i ON t (a) WITH DATA (b) PAD_INDEX",
+            "CREATE INDEX i ON t (a) WITH PAD_INDEX, FILLFACTOR = 80",
+            "CREATE INDEX i ON t (a) WITH DATA (b), PAD_INDEX",
+        ]);
+    }
+
+    #[test]
+    fn alter_column_clauses_are_not_types() {
+        all_ok(&[
+            "ALTER TABLE t ALTER COLUMN b NOT NULL",
+            "ALTER TABLE t ALTER COLUMN b SET DEFAULT 1",
+            "ALTER TABLE t ALTER COLUMN b DROP DEFAULT",
+            "ALTER TABLE t ALTER COLUMN b RENAME c",
+            "ALTER TABLE t ALTER COLUMN b COLLATE %EXACT",
+            "ALTER TABLE t MODIFY b DEFAULT 'x' NOT NULL",
+            "ALTER TABLE t ALTER COLUMN b %String(MAXLEN=20)",
+            "ALTER TABLE t ALTER COLUMN b %Library.String(MAXLEN=20)",
+            "CREATE TABLE t (a %String(MAXLEN=20), n NUMERIC(10,2))",
+        ]);
+    }
+
+    #[test]
+    fn package_qualified_class_names() {
+        all_ok(&[
+            "CREATE INDEX i ON t (a) AS %iFind.Index.Basic",
+            "DROP PROCEDURE IF EXISTS P FROM Pkg.Cls",
+            "DROP FUNCTION f FROM Pkg.Cls",
+            "CREATE PROCEDURE P() FOR Pkg.Cls LANGUAGE OBJECTSCRIPT { QUIT }",
+        ]);
+    }
+
+    #[test]
+    fn optional_clauses() {
+        all_ok(&[
+            "CREATE TABLE t (a INT) SHARD KEY (a)",
+            "CREATE TABLE t (a INT) PARTITION BY RANGE (a) INTERVAL 10",
+            "CREATE TABLE t (a INT) SHARD KEY (a) PARTITION BY RANGE (a) INTERVAL 10",
+            "CREATE TABLE t (a INT) SHARD KEY (a) WITH %CLASSPARAMETER DEFAULTGLOBAL = '^x'",
+            "CREATE TABLE t (a INT) IN dbspace",
+            "CREATE TABLE t (a INT) EXTENT SIZE 16",
+            "DROP FOREIGN SERVER fs",
+            "DROP FOREIGN SERVER fs CASCADE",
+            "DROP FOREIGN TABLE ft",
+            "CREATE TABLE t (a VARCHAR(10) %TRUNCATE(5))",
+            "CREATE TABLE t (a VARCHAR(10) %TRUNCATE(5) ALPHAUP)",
+            "CREATE TABLE t (a VARCHAR(10) COLLATE %TRUNCATE(5))",
+            "CREATE FOREIGN SERVER fs FOREIGN DATA WRAPPER CSV HOST '/tmp'",
+            "CREATE FUNCTION f() RETURNS INT LANGUAGE SQL BEGIN RETURN 1; END",
+            "CREATE FUNCTION f() RETURNS INT LANGUAGE SQL BEGIN INSERT INTO log VALUES (1); RETURN 1; END",
+        ]);
+    }
+
+    #[test]
+    fn alter_table_alternatives() {
+        all_ok(&[
+            "ALTER TABLE t DROP ALL PARTITIONS",
+            "ALTER TABLE t DROP PARTITION ID '1'",
+            "ALTER TABLE t TRUNCATE PARTITION ID '1'",
+            "ALTER TABLE t DROP PARTITION ('x')",
+            "ALTER TABLE t TRUNCATE PARTITION ('x')",
+            "ALTER TABLE t DROP PARTITION BETWEEN 1 AND 2",
+            "ALTER TABLE t MOVE PARTITION ('x') TO db",
+            "ALTER TABLE t DROP COLUMN b",
+            "ALTER TABLE t DROP b, c",
+            "ALTER TABLE t ADD FOREIGN KEY fk (a) REFERENCES u (a)",
+            "ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES u (a)",
+            "ALTER TABLE t CONVERT STORAGETYPE = COLUMNAR",
+            "ALTER TABLE t CONVERT TO STORAGETYPE = COLUMNAR",
+        ]);
+        assert!(SQL::parse("ALTER TABLE t CONVERT COLUMNAR").is_err());
+        assert!(SQL::parse("ALTER TABLE t DROP PARTITION HASH (a) IN 4 PARTITIONS").is_err());
+    }
+
+    #[test]
+    fn single_tokens_as_iris_takes_them() {
+        all_ok(&[
+            "DROP AGGREGATE IF EXISTS Foo.Bar",
+            "DROP AGGREGATE Foo.Bar",
+            "CREATE ML CONFIGURATION c PROVIDER PMML",
+            "CREATE ML CONFIGURATION c PROVIDER AutoML USING {\"x\":1}",
+            "CREATE MODEL m PREDICTING (a) FROM t",
+            "CREATE MODEL m PREDICTING (a) FROM t USING {\"seed\":3}",
+            "CREATE MODEL m PREDICTING (a) FROM (SELECT a FROM t)",
+            "TRAIN MODEL m FROM t",
+            "VALIDATE MODEL m FROM t",
+            "CREATE TABLE t (a TIMESTAMP DEFAULT GETUTCDATE())",
+            "TUNE TABLE t %SAMPLE_PERCENT .5",
+            "TUNE TABLE t %SAMPLE_PERCENT 1",
+            "TUNE TABLE t %SAMPLE_PERCENT 0.25",
+            "LOAD DATA FROM FILE '/x.csv' INTO t USING {\"from\":{\"file\":{\"header\":true}}}",
+            "LOAD DATA FROM FILE '/x.csv' INTO t USING '{\"from\":{\"file\":{\"header\":true}}}'",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs TABLE 'x'",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs FILE 'x.csv' COLUMNS (a INT) USING {\"x\":1}",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs QUERY 'SELECT 1'",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs TABLE 'x' USING '{\"x\":1}'",
+        ]);
+        for rejected in [
+            "DROP IF EXISTS AGGREGATE Foo.Bar",
+            "CREATE ML CONFIGURATION c PROVIDER PMMML",
+            "CREATE ML CONFIGURATION c PROVIDER AutoML USING '{\"x\":1}'",
+            "TUNE TABLE t %SAMPLE_PERCENT 2",
+            "TUNE TABLE t %SAMPLE_PERCENT 0",
+            "TUNE TABLE t %SAMPLE_PERCENT 25%",
+        ] {
+            assert!(SQL::parse(rejected).is_err(), "{rejected}");
+        }
     }
 }
