@@ -77,7 +77,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A6613](A6613.md) | ZQUIT takes an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack |
 | [A6705](A6705.md) | Too few arguments: '{next_arg}' is required |
 | [A6826](A6826.md) | This '{ty}' value may be undefined{expr} |
-| [A7155](A7155.md) | ObjectScript evaluates operators strictly left to right, without precedence |
+| [A7155](A7155.md) | ObjectScript evaluates operators strictly left to right, without precedence; this may not compute what you expect |
 | [A7408](A7408.md) | Label '{label}' is inside braces, where ascot does not follow labels, so the checks after it may be incomplete |
 | [A7548](A7548.md) | No QUIT or RETURN; execution falls through to what follows |
 | [A7731](A7731.md) | {value} doesn't match the pattern of {what} |

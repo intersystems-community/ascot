@@ -1183,7 +1183,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7155"]
     #[severity = Warning]
-    #[message = "ObjectScript evaluates operators strictly left to right, without precedence"]
+    #[message = "ObjectScript evaluates operators strictly left to right, without precedence; this may not compute what you expect"]
     MixedPrecedence,
     /// A `Set` whose value no path reads before the variable is assigned again, killed or out of
     /// scope; a parameter the body never reads is reported the same way, its value being the
