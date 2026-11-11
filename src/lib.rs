@@ -1801,6 +1801,32 @@ mod tests {
     }
 
     #[test]
+    fn quoted_argument_pasted_into_dollar_g_is_the_string_alone() {
+        let workspace = Workspace::new(None, None);
+        let uri = "QuotedArg.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE Test\n\n#define VALUE(%v) $g(%v)\n\n\tWrite $$$VALUE(\"x\")\n\tQuit\n"
+                .to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri.clone());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let expansion = workspace
+            .macro_expansion(
+                uri,
+                bindings::Position {
+                    line: 4,
+                    character: 10,
+                },
+            )
+            .expect("expected a macro expansion at that position");
+        assert!(
+            expansion.contains("\"x\"") && !expansion.contains("$g("),
+            "{expansion:?}"
+        );
+    }
+
+    #[test]
     fn macro_expansion_shows_expanded_text() {
         let workspace = Workspace::new(None, None);
         let uri = "MacroHover.mac".to_string();

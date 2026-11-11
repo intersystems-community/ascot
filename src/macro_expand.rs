@@ -1131,9 +1131,24 @@ fn substitute_macro_body<'a>(
                         break;
                     }
                     Some(idx) => {
-                        if idx > 0 {
+                        let (mut before, mut after) = (&rest[..idx], &rest[idx + name.len()..]);
+                        // IRIS's preprocessor pastes a quoted argument into `$g(%m)` as the string
+                        // alone: it drops the `$g(` and the one character after the parameter,
+                        // taken for the `)`. Its own classes rely on it. `$$g(` is a call.
+                        if replacement.starts_with('"')
+                            && before.len() >= 3
+                            && before.is_char_boundary(before.len() - 3)
+                            && before[before.len() - 3..].eq_ignore_ascii_case("$g(")
+                            && !before[..before.len() - 3].ends_with('$')
+                        {
+                            before = &before[..before.len() - 3];
+                            after = after
+                                .get(after.chars().next().map_or(0, char::len_utf8)..)
+                                .unwrap_or("");
+                        }
+                        if !before.is_empty() {
                             next.push(Span {
-                                text: rest[..idx].to_string(),
+                                text: before.to_string(),
                                 origin: span.origin.clone(),
                                 precise: span.precise,
                                 argument: false,
@@ -1145,7 +1160,7 @@ fn substitute_macro_body<'a>(
                             precise: *arg_precise,
                             argument: true,
                         });
-                        rest = &rest[idx + name.len()..];
+                        rest = after;
                     }
                 }
             }
