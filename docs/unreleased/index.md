@@ -108,7 +108,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A3913](A3913.md) | {what} is beyond what ascot checks |
 | [A4043](A4043.md) | Type checking not implemented for '{what}' |
 | [A4471](A4471.md) | Cannot look up {lookup} on the IRIS instance ({reason}), so it is taken on trust |
-| [A5213](A5213.md) | The label exists, but where its offset lands is unknown, so the call is not checked |
+| [A5213](A5213.md) | The label exists, but ascot does not follow the offset, so the call is not checked |
 | [A5362](A5362.md) | '{name}' is a user-defined command (^%ZLANGC00), so the call is not checked |
 | [A5540](A5540.md) | Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken |
 | [A6037](A6037.md) | ${name} is not documented for IRIS, so the call is not checked |

@@ -657,7 +657,7 @@ type_error_kinds! {
     /// ```
     #[code = "A5213"]
     #[severity = Information]
-    #[message = "The label exists, but where its offset lands is unknown, so the call is not checked"]
+    #[message = "The label exists, but ascot does not follow the offset, so the call is not checked"]
     LabelOffset,
     /// `Label+n` names the line `n` lines after `Label`, and `Label() { }` is a procedure block,
     /// whose lines only the label itself enters. IRIS compiles the call and raises `<NOLINE>` when
