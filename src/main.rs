@@ -1,5 +1,5 @@
-//! The `ascot` command-line binary: argument parsing (with `clap`) and the `analyze`, `parse`,
-//! `declare`, `mcp` and `lsp` subcommands documented in README.md.
+//! The `ascot` command-line binary: argument parsing (with `clap`) and the `analyze`, `declare`,
+//! `diagnostics`, `mcp` and `lsp` subcommands documented in README.md.
 //!
 //! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
 //! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
@@ -92,7 +92,7 @@ enum Command {
         #[arg(long, value_name = "NS")]
         iris_namespace: Option<String>,
         /// The declaration file to write, for example user.d.json
-        /// [default: ~/.ascot/<host>-<port>-<namespace>.d.json]
+        /// [default: ~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json]
         file: Option<PathBuf>,
     },
     #[cfg(feature = "mcp")]
@@ -132,8 +132,9 @@ struct OutputArgs {
     ///
     /// - `text`: one line per diagnostic, for reading.
     ///
-    /// - `lsp`: JSON, the diagnostics of each file as LSP `Diagnostic` objects, as the language
-    ///   server publishes them.
+    /// - `lsp`: JSON, the diagnostics of each file as the MCP `check` tool returns them: LSP-like
+    ///   records (range, severity, code, message, related information) in the WIT `diagnostic`
+    ///   record's spelling.
     ///
     /// - `sarif`: SARIF 2.1.0, for code scanning.
     ///
@@ -184,8 +185,9 @@ struct StyleArgs {
     /// A JSON file of style rules, such as how command keywords are spelled
     ///
     /// Its shape is the `style` record in src/wit/ascot.wit. Without it, no style is checked.
+    // A `String`: clap's `PathBuf` parser rejects the `""` a plugin's unset setting interpolates to.
     #[arg(long, value_name = "FILE")]
-    style: Option<PathBuf>,
+    style: Option<String>,
 }
 
 #[derive(Args)]
@@ -285,9 +287,9 @@ impl StyleArgs {
     /// Reads and parses `--style`, if given. Like `--iris`, a file that can't be read or parsed is
     /// an error up front, not a silent fallback to no style.
     fn load(self) -> Option<Style> {
-        let path = self.style.filter(|path| !path.as_os_str().is_empty())?;
+        let path = self.style.filter(|path| !path.is_empty())?;
         let fail = |err: String| -> ! {
-            eprintln!("--style: {}: {err}", path.display());
+            eprintln!("--style: {path}: {err}");
             exit(1)
         };
         let text = fs::read_to_string(&path).unwrap_or_else(|err| fail(err.to_string()));
@@ -450,11 +452,11 @@ fn analyze<'a>(
     workspace.set_diagnostic_filter(filter);
     insert_files(&workspace, &loaded);
 
-    let count = report_diagnostics(&workspace, &files, format);
-    eprintln!("{} diagnostic(s) across {} file(s)", count, files.len());
+    let (total, failing) = report_diagnostics(&workspace, &files, format);
+    eprintln!("{total} diagnostic(s) across {} file(s)", files.len());
     // `exit` runs no destructors; dropping the workspace ends its IRIS session.
     drop(workspace);
-    if count > 0 {
+    if failing > 0 {
         exit(1);
     }
 }
@@ -502,9 +504,9 @@ fn insert_files(workspace: &Workspace, files: &[PathBuf]) {
     }
 }
 
-// Prints every diagnostic, but only `Error`/`Warning` count toward the returned total (which
-// decides the exit code) -- a hint is worth seeing, not worth failing a build over.
-fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) -> usize {
+// Prints every diagnostic; returns the total and the errors and warnings, which alone decide the
+// exit code -- a hint is worth seeing, not worth failing a build over.
+fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) -> (usize, usize) {
     use ascot::bindings::DiagnosticSeverity::*;
     let files: Vec<FileDiagnostics> = files
         .iter()
@@ -514,7 +516,8 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
             FileDiagnostics { uri, diagnostics }
         })
         .collect();
-    let count = files
+    let total: usize = files.iter().map(|file| file.diagnostics.len()).sum();
+    let failing = files
         .iter()
         .flat_map(|file| &file.diagnostics)
         .filter(|diagnostic| matches!(diagnostic.severity, Error | Warning))
@@ -531,7 +534,8 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
                         (Information | Hint, true) => ("\x1b[2m", "\x1b[0m"),
                         (Error, false) => ("error: ", ""),
                         (Warning, false) => ("warning: ", ""),
-                        (Information | Hint, false) => ("hint: ", ""),
+                        (Information, false) => ("information: ", ""),
+                        (Hint, false) => ("hint: ", ""),
                     };
                     print!("{}{}{}{}", on, file.uri, diagnostic.describe(), off);
                 }
@@ -545,7 +549,7 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
         Format::Sarif => println!("{}", files.into_iter().collect::<ascot::sarif::Log>()),
     }
     let _ = std::io::stdout().flush();
-    count
+    (total, failing)
 }
 
 fn collect_doc(path: &Path, out: &mut Vec<PathBuf>) {

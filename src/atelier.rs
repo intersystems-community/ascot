@@ -376,13 +376,21 @@ struct MemberRow {
     index_unique: Value,
 }
 
-// The dictionary holds a parameter's compiled value, bare; the header spells it as source, so a
-// non-number is quoted the way `Parameter P = "..."` writes it. A value with a line break has no
-// literal spelling (it came from an `{expression}`), so it is left out.
+// The dictionary holds a parameter's compiled value, bare; the header spells it as source, so
+// anything but a number IRIS compiles bare (`inf`, `NaN` and `1.` are not) is quoted. A value with
+// a line break came from an `{expression}` and has no literal spelling, so it is left out.
 fn parameter_source(value: &str) -> Option<String> {
     if value.contains(['\n', '\r']) {
         None
-    } else if value.parse::<f64>().is_ok() {
+    } else if value.parse::<f64>().is_ok()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b"+-.eE".contains(&b))
+        && value
+            .split('.')
+            .skip(1)
+            .all(|s| s.starts_with(|c: char| c.is_ascii_digit()))
+    {
         Some(value.to_string())
     } else {
         Some(format!("\"{}\"", value.replace('"', "\"\"")))
@@ -401,9 +409,6 @@ fn is_truthy(v: &Value) -> bool {
     matches!(v, Value::Bool(true)) || v.as_str() == Some("1") || v.as_i64() == Some(1)
 }
 
-// Every member declared directly on the classes matching `Parent {filter}`, across all three
-// tables -- one query per batch instead of one per member, since `get_cls` always wants the
-// whole list at once.
 // A class's own members (`Origin = Parent`): methods, properties and parameters, then its indices
 // and queries, whose generated methods ascot synthesizes. Two requests: one `UNION` of all five
 // tables overflows IRIS's query stack for a batch of classes.
@@ -664,11 +669,6 @@ fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
     (normal, variadic)
 }
 
-// Each of `names` that has source, read from the first of `exts` it exists as.
-
-// Every request without a session cookie opens a CSP session, which holds a license slot until
-// the web application's timeout. The agent keeps the cookie, so there's one session; this ends it.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -836,9 +836,4 @@ mod tests {
             [Some("$$$OK"), Some(r#"$lb(1,"a,b",$g(x))"#), Some("{{}}")]
         );
     }
-
-    // An HTTP server answering each request with the first of `routes` whose path suffix
-    // matches the request's path (`("", ...)` matches anything).
-    // `stub_server` that also sets a session cookie, and records each request as its first line
-    // plus the cookie it carried, if any.
 }

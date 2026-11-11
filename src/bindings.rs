@@ -163,7 +163,12 @@ impl From<&MethodDetails> for wit_bind::Signature {
                 .as_deref()
                 .map(bindings::VariadicArg::from),
             t: details.out.it.as_ref().map(|t| t.to_string()),
-            procedure_block: Some(vec![]),
+            procedure_block: Some(
+                details
+                    .procedure_block
+                    .as_ref()
+                    .map_or(vec![], |x| x.iter().map(|x| x.to_string()).collect()),
+            ),
         }
     }
 }

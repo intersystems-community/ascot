@@ -449,11 +449,16 @@ impl DeclaredClass {
         info.storage = self.storage.clone();
         for member in &mut info.members {
             member.origin = Some(name.to_string());
-            if let Some(declared) = self
-                .members
-                .iter()
-                .find(|m| m.header.contains(&member_name(&member.name)))
-            {
+            let own = format!(
+                "{} {}",
+                crate::bindings::member_keyword(&member.kind),
+                member_name(&member.name)
+            );
+            if let Some(declared) = self.members.iter().find(|m| {
+                m.header
+                    .strip_prefix(&own)
+                    .is_some_and(|rest| matches!(rest.chars().next(), None | Some(' ' | '(')))
+            }) {
                 member.aliases = declared.aliases.clone();
             }
         }

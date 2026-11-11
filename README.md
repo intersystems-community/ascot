@@ -129,10 +129,10 @@ is every file under `DIR` instead, so cross-file references resolve, and the
 a warning. Exits non-zero if any error or warning was found, or if a `PATH`
 doesn't exist.
 
-`--format lsp` prints the LSP diagnostic records per file instead of text, as
-the language server publishes and the MCP `check` tool returns them, and
-`--format sarif` one SARIF 2.1.0 document for code scanning. The summary stays
-on stderr and the exit code is the same.
+`--format lsp` prints the diagnostics of each file as JSON instead of text, in
+the shape the MCP `check` tool returns them, and `--format sarif` one SARIF
+2.1.0 document for code scanning. The summary stays on stderr and the exit code
+is the same.
 
 ### `ascot` as an MCP server
 
@@ -239,7 +239,7 @@ IRIS; `iris` says which:
   into `~/.ascot`.
 - `--iris <release>`: the snapshot of that IRIS release, the tag of its
   `iris-community` image; `--iris irishealth-community:<release>:HSLIB` that of
-  IRIS for Health's `HS` and `Ens` classes (7 MB), the namespace after the tag
+  IRIS for Health's `HS` and `Ens` classes (6 MB), the namespace after the tag
   and `%SYS` when left out; `latest` serves as the tag there too.
 - `--iris http://user:password@host:port[/prefix]` with `--iris-namespace`
   (default `%SYS`): a live connection to IRIS through the Atelier REST API.
@@ -258,7 +258,7 @@ machines without the instance can check against it:
 ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER path/to/declaration.d.json
 ```
 
-Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
+Without the file argument it writes `~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json`.
 
 ### Style
 

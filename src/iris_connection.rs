@@ -162,6 +162,8 @@ impl RawAtelier {
     }
 }
 
+// Every request without a session cookie opens a CSP session, which holds a license slot until
+// the web application's timeout. The agent keeps the cookie, so there's one session; this ends it.
 impl Drop for RawAtelier {
     fn drop(&mut self) {
         if let Ok(agent) = self.agent() {
@@ -280,6 +282,8 @@ mod tests {
         url.replace("user:pass@", "")
     }
 
+    // An HTTP server answering each request with the first of `routes` whose path suffix
+    // matches the request's path (`("", ...)` matches anything).
     fn stub_server(routes: &'static [(&str, &str, &str)]) -> String {
         recording_stub_server(routes).0
     }

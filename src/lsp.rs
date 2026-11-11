@@ -51,7 +51,8 @@ pub fn run(settings: Settings, shared_fs: bool) -> Fallible {
 
 struct Server {
     workspace: Workspace,
-    // In force; a change to `iris` alone, or to `iris_namespace` alone, is completed from them.
+    // In force, completing a partial change; the namespace outlives a change of `iris` only while
+    // that stays a live instance.
     settings: RefCell<Settings>,
     shared_fs: bool,
 }
