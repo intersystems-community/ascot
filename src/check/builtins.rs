@@ -1282,7 +1282,6 @@ fn check_simple_function<'a>(
             let Some(Left(local)) = local.filter(|l| matches!(l, Left(l) if l.subs.is_empty()))
             else {
                 return Err(QuasiTypeError::WithRange(TypeError::handle_not_a_local(
-                    "$ZCONVERT".into(),
                     env.range(&expr),
                 )));
             };

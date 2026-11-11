@@ -2116,7 +2116,7 @@ mod tests {
         let diagnostics = workspace.diagnostics(uri.clone());
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
-            diagnostics[0].message.contains("instance-only"),
+            diagnostics[0].message.contains("instance member"),
             "{diagnostics:?}"
         );
         assert_eq!(diagnostics[0].range.start.line, 6);
@@ -2265,8 +2265,7 @@ mod tests {
                 ),
                 (
                     Error,
-                    "Too many arguments: the callee takes no arguments, and this one is extra"
-                        .to_string()
+                    "Too many arguments: the callee takes no arguments".to_string()
                 ),
             ]
         );

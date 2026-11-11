@@ -216,7 +216,7 @@ mod tests {
         );
         assert_eq!(
             check(" Do Proc^Lib(1,2,3)"),
-            vec!["Too many arguments: the callee takes 2 arguments, and this one is extra"]
+            vec!["Too many arguments: the callee takes 2 arguments"]
         );
         assert_eq!(
             check(" Do Plain^NoSuchRoutine"),

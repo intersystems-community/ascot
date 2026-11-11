@@ -550,7 +550,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4718"]
     #[severity = Warning]
-    #[message = "Cannot find member '{mem}' in {cls}, an abstract class: the value is a subclass's, which may have it{suggestions}"]
+    #[message = "Cannot find member '{mem}' in {cls}, an abstract class whose subclass here may have it{suggestions}"]
     CannotFindMemberOnAbstract {
         cls: String,
         mem: String,
@@ -576,7 +576,7 @@ type_error_kinds! {
     /// ```
     #[code = "A9360"]
     #[severity = Information]
-    #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes {unseen}"]
+    #[message = "Cannot confirm '{mem}' exists on {on}{cls}: its hierarchy includes {unseen}"]
     UnconfirmedMember {
         cls: String,
         mem: String,
@@ -601,7 +601,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7461"]
     #[severity = Error]
-    #[message = "Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call"]
+    #[message = "No superclass of {cls} has a method '{method}' for ##super to call"]
     SuperWithoutMethod { method: String, cls: String },
     /// `$$Label` calls a label as a function, which a label is only when it declares a formal
     /// parameter list, even an empty `()`. `Do Label` reaches any label, but `$$` of a bare one
@@ -619,7 +619,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7604"]
     #[severity = Error]
-    #[message = "Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>); `{label}()` would make it a function"]
+    #[message = "Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>)"]
     LabelNotAFunction { label: String },
     /// `Do Label`, `$$Label()`, `Goto Label` or `Set $ZTRAP = "Label"` names a label the routine
     /// or body doesn't declare, or `Label^Routine` names one that routine lacks. IRIS refuses to
@@ -657,7 +657,7 @@ type_error_kinds! {
     /// ```
     #[code = "A5213"]
     #[severity = Information]
-    #[message = "The label is confirmed, but not where its offset lands: the call is checked as untyped and the offset is not checked"]
+    #[message = "The label exists, but where its offset lands is unknown, so the call is not checked"]
     LabelOffset,
     /// `Label+n` names the line `n` lines after `Label`, and `Label() { }` is a procedure block,
     /// whose lines only the label itself enters. IRIS compiles the call and raises `<NOLINE>` when
@@ -677,7 +677,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7217"]
     #[severity = Error]
-    #[message = "Label '{label}' is a procedure block, which an offset cannot enter (IRIS: <NOLINE> when the call runs)"]
+    #[message = "An offset cannot enter the procedure block at label '{label}' (IRIS: <NOLINE>)"]
     OffsetIntoProcedureBlock { label: String },
     /// A `Goto` inside a procedure block, `Label() { }`, or a `$ZTRAP` set there, names one of
     /// the routine's labels outside the block, where a block's `Goto` cannot jump. IRIS refuses to
@@ -697,7 +697,7 @@ type_error_kinds! {
     /// ```
     #[code = "A1073"]
     #[severity = Error]
-    #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
+    #[message = "Label '{label}' is outside this procedure block, which GOTO cannot leave"]
     GotoOutOfBlock { label: String },
     /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide;
     /// ascot reads it where it stands, so its checks of the lines after the label may not match
@@ -718,7 +718,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7408"]
     #[severity = Warning]
-    #[message = "Label '{label}' is inside nested braces; ascot only understands labels at the top level of a method or routine body, so the checks after it may be inaccurate or incomplete"]
+    #[message = "Label '{label}' is inside braces, where ascot does not follow labels, so the checks after it may be incomplete"]
     LabelInBlock { label: String },
     /// `Label^Routine` or `^Routine` names a routine that isn't open in the workspace, and there is
     /// no environment (`--iris none`) to look it up in, so the call is checked as untyped. IRIS
@@ -734,7 +734,7 @@ type_error_kinds! {
     /// ```
     #[code = "A3303"]
     #[severity = Warning]
-    #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
+    #[message = "Cannot find routine '{routine}' in the workspace; there is no IRIS environment to check against"]
     CannotFindRoutine { routine: String },
     /// `Label^Routine` or `^Routine` names a routine that is neither open in the workspace nor on
     /// the IRIS instance (or in its declarations), so the call can only fail: IRIS compiles it and
@@ -881,7 +881,7 @@ type_error_kinds! {
     /// ```
     #[code = "A3485"]
     #[severity = Error]
-    #[message = "{function} can't take '{name}', which is private to this procedure block"]
+    #[message = "{function} can't take the private variable '{name}'"]
     PrivateVariableNotAllowed { function: String, name: String },
     /// `$ZF(-3)`, `$ZF(-5)` and `$ZF(-6)` have no by-reference arguments: a `.x` in the call is a
     /// syntax error IRIS refuses to compile. Pass the value itself and take what the function
@@ -939,8 +939,8 @@ type_error_kinds! {
     /// ```
     #[code = "A4652"]
     #[severity = Error]
-    #[message = "{function} takes only a plain local variable as its handle"]
-    HandleNotALocal { function: String },
+    #[message = "$ZCONVERT's fourth argument must be an unsubscripted local variable"]
+    HandleNotALocal,
     /// `Set $VECTOR(v, position) = value` leaves out the element type, which the settable form
     /// always takes as its third argument: IRIS refuses to compile it, a vector that already
     /// exists included. Write `$VECTOR(v, position, "integer")`, or whichever type the vector
@@ -982,7 +982,7 @@ type_error_kinds! {
     /// ```
     #[code = "A8914"]
     #[severity = Error]
-    #[message = "Cannot reference instance-only member '{name}' in a class method"]
+    #[message = "Cannot reference instance member '{name}' from a class method"]
     AccessInstanceOnlyMemberFromClassContext { name: String },
     /// A method's or label's formal parameter list declares the same name twice, so one parameter
     /// would shadow the other. IRIS refuses to compile it: `#1050 Duplicate variable names in
@@ -1020,7 +1020,7 @@ type_error_kinds! {
     /// ```
     #[code = "A1817"]
     #[severity = Warning]
-    #[message = "Variable '{name}' is already NEW'd; this NEW resets it to undefined, discarding its current value — `Kill {name}` says that explicitly"]
+    #[message = "Variable '{name}' is already NEW'd; this NEW discards its current value"]
     RedundantNew { name: String },
     /// `New` names a variable private to the procedure block: a parameter, or a local the body
     /// creates, which the block already scopes to itself on entry. IRIS refuses to compile it:
@@ -1042,7 +1042,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6866"]
     #[severity = Error]
-    #[message = "Cannot NEW the private variable '{name}' in a procedure block, where every local variable is already NEW'd on entry"]
+    #[message = "Cannot NEW the private variable '{name}' in a procedure block"]
     NewInProcedureBlock { name: String },
     /// An entry in the class's `[ ... ]` keyword list is no class keyword as written: misspelled,
     /// or a member's keyword in the wrong list. IRIS compiles the class without the entry, so what
@@ -1080,7 +1080,7 @@ type_error_kinds! {
     /// ```
     #[code = "A5431"]
     #[severity = Error]
-    #[message = "A Caché Direct callback, `_name` or `_form!control`, raises <_CALLBACK SYNTAX> in IRIS, which has no client to call"]
+    #[message = "A Caché Direct callback raises <_CALLBACK SYNTAX>: IRIS has no client to call"]
     CacheDirectCallback,
     /// A form the documentation doesn't give, which IRIS compiles all the same: `list Of` before a
     /// relationship's class, which it ignores, or an empty entry in `Extends`, `Import` or
@@ -1183,7 +1183,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7155"]
     #[severity = Warning]
-    #[message = "ObjectScript has no operator precedence and evaluates strictly left-to-right; this may not compute what you expect"]
+    #[message = "ObjectScript evaluates operators strictly left to right, without precedence"]
     MixedPrecedence,
     /// A `Set` whose value no path reads before the variable is assigned again, killed or out of
     /// scope; a parameter the body never reads is reported the same way, its value being the
@@ -1224,7 +1224,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4476"]
     #[severity = Warning]
-    #[message = "Output parameter '{name}' is never assigned; its caller will get an undefined value"]
+    #[message = "Output parameter '{name}' is never assigned"]
     OutputNeverAssigned { name: String },
     /// A `ByRef` parameter whose incoming value no path reads before writing it: the body only
     /// produces the value, so the caller need not pass one, which is what `Output` declares and
@@ -1424,7 +1424,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6274"]
     #[severity = Warning]
-    #[message = "Assigning {source}, an abstract class, to '{name}' declared as {target}: the value is a subclass's, which may be one"]
+    #[message = "Assigning {source}, an abstract class, to '{name}' declared as {target}"]
     DowncastFromAbstract {
         name: String,
         source: Ty,
@@ -1460,7 +1460,7 @@ type_error_kinds! {
     /// ```
     #[code = "A8139"]
     #[severity = Warning]
-    #[message = "{source} is abstract, so this value is a subclass's, which may be the {target} it is taken for"]
+    #[message = "{source} is abstract, so this value may not be the {target} it is taken for"]
     TypeDowncast { source: Ty, target: Ty },
     /// Every path to this statement has already quit, returned or thrown, so it never runs. IRIS
     /// compiles it all the same. Delete the statement, or move it before the exit that precedes
@@ -1545,7 +1545,7 @@ type_error_kinds! {
     /// ```
     #[code = "A3942"]
     #[severity = Error]
-    #[message = "Property '{name}' is MultiDimensional, so `{name}()` names no node: give it a subscript"]
+    #[message = "MultiDimensional property '{name}' takes a subscript, not empty parentheses"]
     NodeWithoutSubscripts { name: String },
     /// A function is called with more arguments than its documentation names: `$ZF(-1, command)`
     /// with a third, `$ZBITSET` or `$VIEW` in mode -7 with a fourth. IRIS compiles and runs the call
@@ -1691,7 +1691,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6705"]
     #[severity = Warning]
-    #[message = "Too few arguments: '{next_arg}' is required (only a parameter with a default or an `Output` one may be left out)"]
+    #[message = "Too few arguments: '{next_arg}' is required"]
     TooFewArguments { next_arg: String },
     /// The call passes more arguments than the callee declares, and the callee has no `args...`
     /// to take the rest. IRIS compiles the call and raises `<PARAMETER>` when it runs. The first
@@ -1716,7 +1716,7 @@ type_error_kinds! {
     /// ```
     #[code = "A5523"]
     #[severity = Error]
-    #[message = "Too many arguments: the callee takes {takes}, and this one is extra"]
+    #[message = "Too many arguments: the callee takes {takes}"]
     TooManyArguments { takes: ArgCount },
     /// `$CASE` takes its `:default` as the last argument only; an arm after it is a syntax error
     /// IRIS refuses to compile. Move the `:default` to the end.
@@ -1734,7 +1734,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7139"]
     #[severity = Error]
-    #[message = "$CASE's `:default` must be its last argument"]
+    #[message = "Only $CASE's last argument may omit the value before its colon"]
     CaseDefaultNotLast,
     /// A `$` function with a name ObjectScript has no function for, usually a misspelling; the
     /// nearest names follow as suggestions. IRIS refuses to compile the call.
@@ -1868,7 +1868,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4556"]
     #[severity = Warning]
-    #[message = "This call returns {class}, which Do discards -- consider Set to capture it, or checking it directly"]
+    #[message = "Do discards the {class} this call returns"]
     DiscardedReturnValue { class: String },
     /// A command or intrinsic function keyword spelled in a form or case the style's `command` or
     /// `function` rule, or a per-keyword `command_<name>` or `function_<name>`, doesn't allow: `s`
@@ -2179,7 +2179,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6781"]
     #[severity = Error]
-    #[message = "Expected return value of type '{wanted}' but got nothing"]
+    #[message = "Returns nothing where '{wanted}' is declared"]
     ReturnNothingForX { wanted: Ty },
     /// The method declares no return type, and this `Quit` or `Return` carries a value: a caller
     /// that asks for one gets it, but nothing in the signature says so. IRIS compiles and runs
@@ -2199,7 +2199,7 @@ type_error_kinds! {
     /// ```
     #[code = "A8997"]
     #[severity = Warning]
-    #[message = "Unexpected return value of type '{actual}'"]
+    #[message = "Returns a '{actual}' where no return type is declared"]
     ReturnXForNothing { actual: Ty },
     /// This `Quit` carries a value inside a `For`, `While`, `Do ... While`, `Try` or `Catch`
     /// block, which it leaves instead of the method, so it has no caller to hand the value to.
@@ -2338,7 +2338,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4025"]
     #[severity = Error]
-    #[message = "The procedure call requires the private variable '{name}' to be public"]
+    #[message = "The callee's public list names '{name}', which is private here"]
     RequirePrivateVariable { name: String },
     /// A construct ascot doesn't model: an argumentless `Do` and its dotted block, a stand-alone
     /// `Else` or `ElseIf`, a `Goto` without an argument or with several, a `Break` with an
@@ -2384,7 +2384,7 @@ type_error_kinds! {
     /// ```
     #[code = "A3904"]
     #[severity = Warning]
-    #[message = "The macro '{name}' is defined in the body of method '{method}'; IRIS keeps it for the methods compiled after it (alphabetically), but it belongs in an include file or at class level"]
+    #[message = "The macro '{name}' is defined in the body of method '{method}', which only the methods compiled after it see"]
     MacroFromMethodBody { name: String, method: String },
     /// `$$$Name` names a macro no `#define` in reach declares: not in the file, its `#include`s,
     /// nor, for a class, the system include files every class gets; the nearest known names
@@ -2445,7 +2445,7 @@ type_error_kinds! {
     /// ```
     #[code = "A3119"]
     #[severity = Error]
-    #[message = "The member name {name} is defined twice"]
+    #[message = "Member '{name}' is defined twice"]
     DuplicatedMemberName { name: String },
     /// Another open document declares a class of this name, so the workspace holds two definitions
     /// and whichever claimed the name last answers for it wherever the class is looked up. IRIS
@@ -2514,7 +2514,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7548"]
     #[severity = Warning]
-    #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
+    #[message = "No QUIT or RETURN; execution falls through to what follows"]
     MissingQuit,
     /// A form IRIS refuses where it stands, named with IRIS's own error: an error trap set inside a
     /// `Try` block, a `*` or routine-qualified `$ZTRAP` value in a procedure block, an offset in a
@@ -2574,7 +2574,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6613"]
     #[severity = Warning]
-    #[message = "ZQUIT wants an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack"]
+    #[message = "ZQUIT takes an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack"]
     ZQuitArgument { value: String },
     /// An error raised on purpose (`ZTrap`, `Throw` outside a `Try`, a non-empty `$ECODE`) inside
     /// the handler the trap still names, or a `$ETRAP` command that raises one. IRIS compiles it,
@@ -2594,7 +2594,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4344"]
     #[severity = Warning]
-    #[message = "An error here re-enters the handler {var} still names; set {var} to \"\" first"]
+    #[message = "An error here re-enters the handler {var} still names"]
     TrapReenters { var: &'static str },
     /// This marks a limit of ascot, not a fault in the code. ascot follows error handling only in
     /// the forms it can read: a `Try`/`Catch`, a literal `$ZTRAP` label, a `$ETRAP` that is a plain
@@ -2638,7 +2638,7 @@ type_error_kinds! {
     /// ```
     #[code = "A5780"]
     #[severity = Hint]
-    #[message = "ZQUIT unwinds here only because this procedure block has no private variables; one with any fails with <COMMAND>, so its error handling may not be what you expect"]
+    #[message = "ZQUIT unwinds here only because this procedure block has no private variables; with any, it fails with <COMMAND>"]
     ZQuitWithoutPrivates,
     /// A `$ETRAP` whose code is a single `Goto Label` does what `Set $ZTRAP = "Label"` does, and
     /// ascot checks it as that handler, which is how it can check it at all. The two differ in
@@ -3315,8 +3315,8 @@ impl TypeError {
         Self::at(TypeErrorKind::MacroFromMethodBody { name, method }, range)
     }
 
-    pub fn handle_not_a_local(function: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::HandleNotALocal { function }, range)
+    pub fn handle_not_a_local(range: Range) -> Self {
+        Self::at(TypeErrorKind::HandleNotALocal, range)
     }
 
     pub fn label_not_a_function(label: String, range: Range) -> Self {
