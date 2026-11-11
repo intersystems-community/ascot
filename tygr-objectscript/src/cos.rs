@@ -1681,9 +1681,6 @@ char_class!(pub IsNotSpaceChar, "not_space", |ch| ch != ' ');
 #[derive(Grammar)]
 pub struct ElseIfBranch {
     pub kw: Range<KwElseIf>,
-    // Unlike `If`, `ElseIf` is never argumentless, and IRIS takes any same-line gap after it,
-    // spaces, tabs and comments, where `If` wants the one space.
-    gap: SGap1,
     pub cnds: ElseIfConditions,
     pub thn: Range<Block>,
 }
@@ -7080,11 +7077,14 @@ impl Deref for ExpressionAfterIf {
     }
 }
 
+// Unlike `If`, `ElseIf` is never argumentless, and IRIS takes any same-line gap before its
+// condition, spaces, tabs and comments, or none before a parenthesis, `ElseIf(x)`, where `If` wants
+// the one space.
 #[derive(Grammar)]
-pub struct ExpressionAfterElseIf(GenericExpr<()>);
+pub struct ExpressionAfterElseIf(GenericExpr<SGap1>);
 
 impl Deref for ExpressionAfterElseIf {
-    type Target = GenericExpr<()>;
+    type Target = GenericExpr<SGap1>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
