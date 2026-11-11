@@ -25,9 +25,8 @@ impl RawAtelier {
         let namespace = self.namespace().to_string();
         let iris_version = self.server_version()?;
         let ctx = AtelierContext::from(self);
-        // `%sqlcq.*` are SQL cached queries and `%SYS.sqlcq.*` embedded SQL cached statements;
-        // `declare`'s own queries create some, so without this each run would add classes to the
-        // next run's file.
+        // `%sqlcq.*` and `%SYS.sqlcq.*` are cached SQL, which `declare`'s own queries add to, so
+        // without this each run would add classes to the next run's file.
         let mut class_names: Vec<String> = ctx
             .rows("SELECT Name FROM %Dictionary.CompiledClass", &[])?
             .into_iter()

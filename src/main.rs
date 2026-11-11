@@ -504,9 +504,8 @@ fn insert_files(workspace: &Workspace, files: &[PathBuf]) {
     }
 }
 
-// Prints every diagnostic and returns how many there are and how many are an `Error` or
-// `Warning`, which alone decide the exit code -- a hint is worth seeing, not worth failing a
-// build over.
+// Prints every diagnostic; returns the total and the errors and warnings, which alone decide the
+// exit code -- a hint is worth seeing, not worth failing a build over.
 fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) -> (usize, usize) {
     use ascot::bindings::DiagnosticSeverity::*;
     let files: Vec<FileDiagnostics> = files
