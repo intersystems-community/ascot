@@ -1382,6 +1382,9 @@ pub enum MacroArgUnit {
 #[derive(Grammar)]
 pub struct ZKillTarget {
     pub var: AllowIndirection<Variable>,
+    // `zkill x:2`, or `x: 2` but not `x :2`: IRIS compiles the suffix, which the document doesn't
+    // have.
+    pub level: Option<(StringEq!(":"), SGap, Range<Expr>)>,
 }
 
 #[derive(Grammar)]
@@ -1678,10 +1681,10 @@ char_class!(pub IsNotSpaceChar, "not_space", |ch| ch != ' ');
 #[derive(Grammar)]
 pub struct ElseIfBranch {
     pub kw: Range<KwElseIf>,
-    // `ElseIf  (x)` with extra spaces: every space but the last is the keyword's, the last
-    // belongs to the condition (as after `If`). Unlike `If`, `ElseIf` is never argumentless.
-    kw_spaces: Raw<Vec<(StringEq!(" "), NotFollowedBy<CharOf<IsNotSpaceChar>>)>>,
-    pub cnds: IfConditions,
+    // Unlike `If`, `ElseIf` is never argumentless, and IRIS takes any same-line gap after it,
+    // spaces, tabs and comments, where `If` wants the one space.
+    gap: SGap1,
+    pub cnds: ElseIfConditions,
     pub thn: Range<Block>,
 }
 
@@ -3655,6 +3658,12 @@ pub struct IfConditions {
     pub remaining: Vec<Conjunct>,
 }
 
+#[derive(Grammar)]
+pub struct ElseIfConditions {
+    pub first: Range<ExpressionAfterElseIf>,
+    pub remaining: Vec<Conjunct>,
+}
+
 // A condition after the first, behind its comma.
 #[derive(Grammar)]
 pub struct Conjunct {
@@ -5060,10 +5069,19 @@ impl Deref for PieceCall {
 // but used throughout the corpus for MultiValue-BASIC field/value/subvalue addressing, both as
 // a read and, like `$PIECE`, as a `SET` target. Modeled with an open-ended `rest` since real
 // usage runs from 1 up to 5 trailing positional args and its exact upper bound is unconfirmed.
-fun_args!("$MV" MVCallArgs {
-    record: ArgOf<Expr>,
-    rest: Vec<More<ArgOf<Expr>>>,
-});
+// Hand-written rather than through `fun_args!`, since `-1::1` separates positions with `:`, any
+// of them left empty.
+#[derive(Grammar)]
+pub struct MVCallArgs {
+    pub record: ArgOf<Expr>,
+    pub rest: Vec<More<ArgOf<MVPosition>>>,
+}
+
+#[derive(Grammar)]
+pub struct MVPosition {
+    pub first: Option<Range<Expr>>,
+    pub more: Vec<Range<Prefix<SGapXSGap<StringEq!(":")>, Option<Range<Expr>>>>>,
+}
 
 #[derive(Grammar)]
 pub struct MVCall {
@@ -5889,7 +5907,8 @@ impl FunctionCall {
             FunctionCall::ListNext { args, .. } => args.commas.clone(),
             FunctionCall::ListUpdate { args, .. } => args.commas.clone(),
             FunctionCall::Locate { args, .. } => args.commas.clone(),
-            FunctionCall::MV(call) => call.args.commas.clone(),
+            // Hand-written arguments, their commas unplaced; `$MV` is undocumented.
+            FunctionCall::MV(_) => vec![],
             FunctionCall::Method { args, .. } => args.commas.clone(),
             FunctionCall::Name { args, .. } => args.commas.clone(),
             FunctionCall::Parameter { args, .. } => args.commas.clone(),
@@ -7055,6 +7074,17 @@ impl std::ops::DerefMut for ExpressionAfterIf {
 
 impl Deref for ExpressionAfterIf {
     type Target = GenericExpr<StringEq!(" ")>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Grammar)]
+pub struct ExpressionAfterElseIf(GenericExpr<()>);
+
+impl Deref for ExpressionAfterElseIf {
+    type Target = GenericExpr<()>;
 
     fn deref(&self) -> &Self::Target {
         &self.0

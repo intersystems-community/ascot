@@ -1950,6 +1950,13 @@ impl CheckCommandInner for cos::Command {
                 check_pc(pc, env, flow, |flow| {
                     for target in targets.items(env) {
                         target.check(env, flow)?;
+                        if let Some((_, _, level)) = &target.level {
+                            env.soft_diagnostic(TypeError::undocumented_syntax(
+                                "A `:` suffix on a ZKILL argument".to_string(),
+                                env.range(level),
+                            ));
+                            let _ = level.to_ty(env, flow)?;
+                        }
                     }
                     Ok(())
                 })
