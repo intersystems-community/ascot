@@ -16,6 +16,18 @@ mod wit_bind {
         path: "src/wit/ascot.wit",
         additional_derives: [serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq, Hash],
         additional_derives_ignore: ["env"],
+        // The style record's JSON spelling is the JS binding's, camelCase keys and kebab-case values,
+        // so one style file serves every binding; serde would spell the Rust names otherwise.
+        additional_type_attributes: {
+            "iris:ascot/common/style": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/command-style": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/function-style": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/brace-breaks": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/require-description": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/keyword-form": [#[serde(rename_all = "kebab-case")]],
+            "iris:ascot/common/keyword-case": [#[serde(rename_all = "kebab-case")]],
+            "iris:ascot/common/and-operator": [#[serde(rename_all = "kebab-case")]],
+        },
     });
 
     pub use exports::iris::ascot::exported::{Guest, GuestWorkspace, Workspace};
