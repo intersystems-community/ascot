@@ -8,7 +8,7 @@ repository = "https://github.com/intersystems-community/ascot"
 
 [dependencies]
 either = "1.15.0"
-tygr = "0.6.0"
+tygr = "=0.7.0"
 
 [lints.clippy]
 # Grammars are written as nested generic types by design; complexity here

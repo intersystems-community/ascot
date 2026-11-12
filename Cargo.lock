@@ -1594,9 +1594,9 @@ dependencies = [
 
 [[package]]
 name = "tygr"
-version = "0.6.2"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7e1b0d0e8e9d559c19ab6bf14df937ad31a8894204874bc3285ba5a2976b559"
+checksum = "c8390a400a5091782172d5e60fe3c74f0f4b7e3e1588d16c6f01e28eedd1dac1"
 dependencies = [
  "either",
  "tygr-derive",
@@ -1604,11 +1604,10 @@ dependencies = [
 
 [[package]]
 name = "tygr-derive"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72e5a818c55011ff0dc32d3c8d86c39b82c4a6b93ca1c6a6af4d01995c9fa58d"
+checksum = "2debc867152b34830a793176e206bfcf20681e94d96efef15bde408ede15f7c5"
 dependencies = [
- "either",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

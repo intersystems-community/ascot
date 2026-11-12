@@ -2917,44 +2917,49 @@ impl std::fmt::Display for SyntaxScope {
 /// A syntax error in one line: the grammar's own words where it has some (an unknown command, a
 /// function given the wrong arguments, a value that fails a check), else what could come next.
 #[derive(Debug)]
-pub struct SyntaxErrorText(pub tygr::Error);
+pub struct SyntaxErrorText(pub String);
 
 impl std::fmt::Display for SyntaxErrorText {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let error = &self.0;
-        // A function's arguments (`cos::fun_args!`) are named after it; when several of its forms
-        // fail at the same spot, the first form's message stands for all.
+        f.write_str(&self.0)
+    }
+}
+
+impl SyntaxErrorText {
+    pub fn new(error: &tygr::Error, src: &str) -> Self {
+        // A function's arguments (`cos::fun_args!`) are named after it and word the whole message;
+        // when several of its forms fail at the same spot, the first form's message stands for all.
         let mut named = std::collections::HashSet::new();
         let mut friendly: Vec<String> = error
             .traces()
             .iter()
             .filter_map(|trace| match &trace.expectation {
-                tygr::Expectation::GrammarFrom { into, fail, .. } if into.starts_with('$') => {
-                    named.insert(into).then(|| format!("{into} {fail}"))
+                tygr::Expectation::Rejected {
+                    node, requirement, ..
+                } if requirement.starts_with('$') => {
+                    named.insert(node).then(|| requirement.to_string())
                 }
-                tygr::Expectation::GrammarFrom { fail, .. } => Some(fail.clone()),
-                tygr::Expectation::Valid {
-                    text, requirement, ..
-                } => Some(format!("`{text}` must {requirement}")),
+                tygr::Expectation::Rejected {
+                    range, requirement, ..
+                } => Some(format!("`{}` must {requirement}", &src[range.clone()])),
                 _ => None,
             })
             .collect();
         friendly.dedup();
         if !friendly.is_empty() {
-            return f.write_str(&friendly.join("; "));
+            return Self(friendly.join("; "));
         }
         let pos = error.pos();
         let mut expected: Vec<String> = error
             .traces()
             .iter()
-            .map(|trace| match trace.context.last() {
-                Some(frame) if frame.pos == pos => rule_in_words(frame.node),
+            .filter_map(|trace| match trace.context.last() {
+                Some(frame) if frame.pos == pos => Some(rule_in_words(frame.node)),
                 _ => match &trace.expectation {
-                    tygr::Expectation::StringEq(_, full)
-                    | tygr::Expectation::StringEqCI(_, full) => token_in_words(full),
-                    tygr::Expectation::CharClass(class) => class_in_words(class),
-                    tygr::Expectation::Valid { node, .. } => rule_in_words(node),
-                    tygr::Expectation::GrammarFrom { into, .. } => rule_in_words(into),
+                    tygr::Expectation::Token { text, .. } => Some(token_in_words(text)),
+                    tygr::Expectation::CharClass(class) => Some(class_in_words(class)),
+                    tygr::Expectation::Rejected { node, .. } => node.map(rule_in_words),
+                    _ => None,
                 },
             })
             .collect();
@@ -2970,17 +2975,16 @@ impl std::fmt::Display for SyntaxErrorText {
         };
         expected.sort_by_key(|what| (rank(what), what.clone()));
         expected.dedup();
-        match expected.len() {
-            0 => f.write_str("unexpected text"),
-            1 => write!(f, "expected {}", expected[0]),
-            n if n <= 10 => write!(
-                f,
+        Self(match expected.len() {
+            0 => "unexpected text".into(),
+            1 => format!("expected {}", expected[0]),
+            n if n <= 10 => format!(
                 "expected {} or {}",
                 expected[..n - 1].join(", "),
                 expected[n - 1]
             ),
-            n => write!(f, "expected {} or {} more", expected[..9].join(", "), n - 9),
-        }
+            n => format!("expected {} or {} more", expected[..9].join(", "), n - 9),
+        })
     }
 }
 
@@ -3112,8 +3116,8 @@ impl TypeError {
         )
     }
 
-    pub fn syntax_error(range: Range, err: tygr::Error, scope: SyntaxScope) -> Self {
-        let detail = SyntaxErrorText(err);
+    pub fn syntax_error(range: Range, err: &tygr::Error, src: &str, scope: SyntaxScope) -> Self {
+        let detail = SyntaxErrorText::new(err, src);
         let kind = match scope {
             SyntaxScope::MethodBody | SyntaxScope::ArgumentDefault => {
                 TypeErrorKind::InvalidSyntax { scope, detail }

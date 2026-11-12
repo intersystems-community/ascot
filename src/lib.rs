@@ -92,7 +92,7 @@ use std::{
 };
 
 use details::Positions;
-use tygr::{Grammar, OLC};
+use tygr::{OLC, Parse, Print};
 
 use crate::{
     bindings::{Diagnostic, InlayHint, Location, MemberInfo, Position, Style},
@@ -1275,7 +1275,7 @@ pub(crate) fn tygr_error_to_diagnostics(
         character: start.character + 1,
         ..start
     };
-    check::TypeError::syntax_error(bindings::Range { start, end }, e, scope).into()
+    check::TypeError::syntax_error(bindings::Range { start, end }, &e, src, scope).into()
 }
 
 impl bindings::Guest for bindings::Component {
@@ -1594,11 +1594,11 @@ mod tests {
         for (body, start) in [
             (
                 "ClassMethod M(x) {\n Ydummyword x\n}\n",
-                "'Ydummyword' is not a recognized command",
+                "`Ydummyword` must be a command; the commands are",
             ),
             (
                 "ClassMethod M() {\n ZKill\n}\n",
-                "'ZKill' is a command, but its argument is missing",
+                "`ZKill` must be followed by a well-formed argument",
             ),
         ] {
             let diagnostics = class_diagnostics(body);

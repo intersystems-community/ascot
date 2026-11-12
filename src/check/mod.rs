@@ -30,7 +30,8 @@ use either::Either::{self, Left, Right};
 use env::*;
 use flow::*;
 use std::{iter::once, ops::Deref};
-use tygr::{Grammar, IntoInner, OLC, Range, VecSep};
+use tygr::{IntoInner, OLC, Parse, Print, Ranged};
+use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::cos::{CommandLike, KeywordKind, KeywordUse, Spelled};
 use types::*;
 
@@ -61,9 +62,9 @@ trait CheckExprInner {
     }
 }
 
-// So `Range<Box<T>>` (boxed for size, ranged for precise error locations) resolves through
-// `&Range<U>`'s blanket below with `U = Box<T>`, rather than method-call deref skipping straight
-// past the `Range` to the unranged leaf.
+// So `Ranged<Box<T>>` (boxed for size, ranged for precise error locations) resolves through
+// `&Ranged<U>`'s blanket below with `U = Box<T>`, rather than method-call deref skipping straight
+// past the `Ranged` to the unranged leaf.
 impl<T: CheckExprInner> CheckExprInner for Box<T> {
     fn to_power_ty<'a>(
         &self,
@@ -74,12 +75,12 @@ impl<T: CheckExprInner> CheckExprInner for Box<T> {
     }
 }
 
-impl<T: CheckExprInner + Grammar> CheckExpr for &Range<T> {
+impl<T: CheckExprInner + Grammar> CheckExpr for &Ranged<T> {
     fn to_ranged_power_ty<'a>(
         self,
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
-    ) -> Result<Range<PowerTy>, TypeError> {
+    ) -> Result<Ranged<PowerTy>, TypeError> {
         self.as_ref().to_ranged_power_ty(env, flow)
     }
 
@@ -96,12 +97,12 @@ impl<T: CheckExprInner + Grammar> CheckExpr for &Range<T> {
     }
 }
 
-impl<T: CheckExprInner + Grammar> CheckExpr for Range<&T> {
+impl<T: CheckExprInner + Grammar> CheckExpr for Ranged<&T> {
     fn to_ranged_power_ty<'a>(
         self,
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
-    ) -> Result<Range<PowerTy>, TypeError> {
+    ) -> Result<Ranged<PowerTy>, TypeError> {
         let ty = check_ranged(&self, env, flow, T::to_power_ty)?;
         Ok(self.map(|_| ty))
     }
@@ -133,7 +134,7 @@ impl<T: CheckExprInner + Grammar> CheckExpr for Range<&T> {
 }
 
 fn check_ranged<'a, T: Grammar, R>(
-    expr: &Range<&T>,
+    expr: &Ranged<&T>,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     check: impl FnOnce(&T, &CodeEnv<'a>, &mut Flow<'a>) -> Result<R, QuasiTypeError>,
@@ -352,7 +353,7 @@ impl CheckMember for MemberDetails {
     }
 }
 
-impl CheckMember for Range<&cos::Parameter> {
+impl CheckMember for Ranged<&cos::Parameter> {
     fn check(&self, _env: &DocumentEnv, _cls: &ClassDocument) -> Result<(), TypeError> {
         Ok(())
     }
@@ -495,7 +496,8 @@ impl MethodDetails {
                                 if let Err(err) = Expr::parse(&text.it) {
                                     default_env.soft_diagnostic(TypeError::syntax_error(
                                         range,
-                                        err,
+                                        &err,
+                                        &text.it,
                                         SyntaxScope::ArgumentDefault,
                                     ));
                                 }
@@ -579,7 +581,7 @@ trait CheckCommand {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError>;
 }
 
-impl<T: CheckCommandInner> CheckCommand for Range<T> {
+impl<T: CheckCommandInner> CheckCommand for Ranged<T> {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
         report_style(env, self.deref().keywords_at(self.start), &[]);
         flow.with_range(env.range(self), |flow| {
@@ -602,8 +604,8 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 Option::None | Option::Some(cos::CodeMode::Code(..)),
                 body,
             ) => {
-                let body =
-                    <cos::ProcedureBody>::parse(body).map_err(|err| syntax_error(env, err))?;
+                let body = <cos::ProcedureBody>::parse(body)
+                    .map_err(|err| syntax_error(env, err, body))?;
                 check_block_body(&body, env, flow, true)
             }
             (
@@ -612,7 +614,7 @@ impl<'b> CheckCommand for MethodBody<'b> {
                 body,
             ) => {
                 let body_expr = <cos::ExprBody>::parse(body)
-                    .map_err(|err| syntax_error(env, err))?
+                    .map_err(|err| syntax_error(env, err, body))?
                     .into_inner();
                 // An empty body compiles; a caller that takes its value raises <COMMAND>, as
                 // after a `Quit` without one.
@@ -664,10 +666,11 @@ fn declare_dims<'a>(
     Ok(())
 }
 
-fn syntax_error(env: &CodeEnv<'_>, err: tygr::Error) -> TypeError {
+fn syntax_error(env: &CodeEnv<'_>, err: tygr::Error, src: &str) -> TypeError {
     TypeError::syntax_error(
         env.span(err.pos(), err.pos() + 1),
-        err,
+        &err,
+        src,
         SyntaxScope::MethodBody,
     )
 }
@@ -916,7 +919,7 @@ impl<Start> CheckCommand for cos::CommandLine<Start> {
     }
 }
 
-fn commands_of<S>(line: &CommandLine<S>) -> impl Iterator<Item = &Range<Command>> {
+fn commands_of<S>(line: &CommandLine<S>) -> impl Iterator<Item = &Ranged<Command>> {
     line.commands.iter().flat_map(|cmds| cmds.items.iter())
 }
 
@@ -973,7 +976,7 @@ fn report_brace_style<Gap>(env: &CodeEnv<'_>, block: &CurryBlock<Gap>) {
 fn report_chained_keyword<T>(
     env: &CodeEnv<'_>,
     close: usize,
-    kw: &Range<T>,
+    kw: &Ranged<T>,
     keyword: &'static str,
 ) {
     let Some(wanted) = env.style().and_then(|s| s.rules.close_brace?.newline_after) else {
@@ -1004,7 +1007,7 @@ fn report_break(
 }
 
 // The offset of the `}` closing `block`, if it has braces.
-fn close_brace_of(block: &Range<cos::Block>) -> Option<usize> {
+fn close_brace_of(block: &Ranged<cos::Block>) -> Option<usize> {
     matches!(block.deref(), cos::Block::Curry(_)).then_some(block.end - 1)
 }
 
@@ -1026,7 +1029,10 @@ impl<T, B, A> CommaList<T> for VecSep<T, CommaSep<B, A>> {
 }
 
 // The `New`s past the style's allowance for one block.
-fn report_new_per_block<'c>(env: &CodeEnv<'_>, commands: impl Iterator<Item = &'c Range<Command>>) {
+fn report_new_per_block<'c>(
+    env: &CodeEnv<'_>,
+    commands: impl Iterator<Item = &'c Ranged<Command>>,
+) {
     let Some(max) = env.style().and_then(|s| s.rules.max_new_per_block) else {
         return;
     };
@@ -1163,7 +1169,7 @@ fn warn_if_discarding_status_or_boolean(flow: &Flow, ty: Option<&Ty>) {
 fn check_legacy_label_call<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    proc: &Range<LegacyEntryRef>,
+    proc: &Ranged<LegacyEntryRef>,
     args: &Option<MthArgList>,
     extrinsic: bool,
 ) -> Result<Option<Ty>, QuasiTypeError> {
@@ -1219,7 +1225,7 @@ fn check_goto_case<'a>(
     flow: &mut Flow<'a>,
     cases: &FunArgList,
 ) -> Result<(), QuasiTypeError> {
-    let goto = |flow: &mut Flow<'a>, target: &Range<Expr>| -> Result<(), QuasiTypeError> {
+    let goto = |flow: &mut Flow<'a>, target: &Ranged<Expr>| -> Result<(), QuasiTypeError> {
         match target.as_variable() {
             Some(label) => {
                 let range = env.range(target);
@@ -2087,7 +2093,7 @@ impl CheckCommandInner for cos::Command {
 // The path ends here even when the value fails to check -- otherwise a failed `else { return bad }`
 // branch (kept alive by `check_branch`) reads as falling through to the end of the method.
 fn exit_value<'a>(
-    exp: &Range<cos::Expr>,
+    exp: &Ranged<cos::Expr>,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<PowerTy, QuasiTypeError> {
@@ -2108,7 +2114,7 @@ fn exit_value<'a>(
 // paths. Downgraded to a soft diagnostic; the branch carries on with its bindings as of the
 // failure -- treating it as dead made everything after an `if` whose every branch failed
 // "unreachable".
-fn check_branch<'a>(env: &CodeEnv<'a>, flow: &mut Flow<'a>, block: &Range<cos::Block>) {
+fn check_branch<'a>(env: &CodeEnv<'a>, flow: &mut Flow<'a>, block: &Ranged<cos::Block>) {
     if let Err(err) = block.check(env, flow) {
         env.add_soft_diagnostic(err.into());
         flow.mark_incomplete();
@@ -2166,10 +2172,10 @@ fn check_if<'a>(
 fn check_try<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    try_block: &Range<cos::Block>,
+    try_block: &Ranged<cos::Block>,
     dims: Option<&cos::TryDims>,
     catch_target: Option<&cos::CatchTarget>,
-    catch_block: &Range<cos::Block>,
+    catch_block: &Ranged<cos::Block>,
 ) -> Result<(), QuasiTypeError> {
     let before = flow.split();
     let try_env = env.with_try();
@@ -2246,7 +2252,7 @@ fn check_for<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     iterator: Option<&cos::ForIterator>,
-    block: Option<&Range<cos::Block>>,
+    block: Option<&Ranged<cos::Block>>,
 ) -> Result<(), QuasiTypeError> {
     if let Some(block) = block
         && let cos::Block::Curry(block) = block.deref()
@@ -2336,7 +2342,7 @@ fn check_for_specs<'a, T>(
 
 #[allow(clippy::type_complexity)]
 fn check_and<'a, T: Grammar>(
-    first: &Range<impl Deref<Target = GenericExpr<T>>>,
+    first: &Ranged<impl Deref<Target = GenericExpr<T>>>,
     remaining: &Conjuncts,
     env: &CodeEnv<'a>,
     if_true: &mut Flow<'a>,
@@ -2357,13 +2363,13 @@ fn check_and<'a, T: Grammar>(
 
 // `a && b` (or `a & b`) as a condition refines on each operand in turn, exactly like `If a,b`.
 fn split_on_conjunction<'a, X: Grammar, Y: Grammar>(
-    expr: Range<&GenericExpr<X, Y>>,
+    expr: Ranged<&GenericExpr<X, Y>>,
     env: &CodeEnv<'a>,
     if_true: &mut Flow<'a>,
     report_always: bool,
 ) -> Result<Flow<'a>, TypeError> {
     fn split<'a>(
-        ty: Range<PowerTy>,
+        ty: Ranged<PowerTy>,
         env: &CodeEnv<'a>,
         if_true: &mut Flow<'a>,
         report_always: bool,
@@ -2997,7 +3003,7 @@ trait CheckExpr: Sized {
         self,
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
-    ) -> Result<Range<PowerTy>, TypeError>;
+    ) -> Result<Ranged<PowerTy>, TypeError>;
 
     fn to_power_ty<'a>(self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<PowerTy, TypeError>;
 
@@ -3012,7 +3018,7 @@ trait CheckExpr: Sized {
 fn ranged_quasi_ty_to_ty<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    ty: Range<PowerTy>,
+    ty: Ranged<PowerTy>,
     text: Option<&dyn Fn() -> String>,
 ) -> Result<Ty, TypeError> {
     let text = || text.map_or_else(String::new, |text| text());
@@ -3056,7 +3062,7 @@ impl<X: Grammar, Y> CheckExprInner for GenericExpr<X, Y> {
                 flow.add_soft_diagnostic(QuasiTypeError::mixed_precedence());
             }
             prev_class = class;
-            ty = Range::new(
+            ty = Ranged::new(
                 start,
                 check_infix(ty, lhs_text.take(), op.deref(), env, flow)?,
                 end,
@@ -3139,7 +3145,7 @@ impl TryFrom<&cos::Operator> for TermOp {
 }
 
 fn check_infix<'a, X>(
-    lhs: Range<PowerTy>,
+    lhs: Ranged<PowerTy>,
     lhs_text: Option<&dyn Fn() -> String>,
     op: &InfixOperation<X>,
     env: &CodeEnv<'a>,
@@ -3281,7 +3287,7 @@ impl<T> CheckExprInner for ExprOps<T> {
 // The base of a member operation, keeping a collection property a collection (rather than its
 // `%Collection.Abstract*` class) so `..List.GetAt(i)` is typed by the element.
 fn base_property<'a, T>(
-    base: &Range<ExprOps<T>>,
+    base: &Ranged<ExprOps<T>>,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<PropertyTy, QuasiTypeError> {
@@ -3310,8 +3316,8 @@ fn base_property<'a, T>(
 
 fn check_member_of<'a>(
     base: PropertyTy,
-    mem: &Range<MemberRef>,
-    args: Option<&Range<MthArgList>>,
+    mem: &Ranged<MemberRef>,
+    args: Option<&Ranged<MthArgList>>,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<Option<Ty>, QuasiTypeError> {
@@ -3442,8 +3448,8 @@ fn is_system_var<T>(base: &ExprOps<T>) -> bool {
 
 fn check_member<'a>(
     ty: Ty,
-    mem: &Range<MemberRef>,
-    args: Option<&Range<MthArgList>>,
+    mem: &Ranged<MemberRef>,
+    args: Option<&Ranged<MthArgList>>,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<Option<Ty>, QuasiTypeError> {
@@ -3532,7 +3538,7 @@ impl CheckExprInner for cos::GetTarget {
 fn check_super_call<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    args: &Range<MthArgList>,
+    args: &Ranged<MthArgList>,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     let range = env.range(args);
     let ty = env.resolve_super_mstr(range)?;
@@ -3542,7 +3548,7 @@ fn check_super_call<'a>(
 // A member of `obj`, recorded as a reference to where it's declared.
 fn referenced<T>(
     env: &CodeEnv<'_>,
-    mem: &Range<MemberRef>,
+    mem: &Ranged<MemberRef>,
     member: Result<types::Member<T>, TypeError>,
 ) -> Result<T, QuasiTypeError> {
     let member = member?;
@@ -3557,8 +3563,8 @@ fn check_set_member<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     obj: Ty,
-    mem: &Range<MemberRef>,
-    subs: Option<&Range<MthArgList>>,
+    mem: &Ranged<MemberRef>,
+    subs: Option<&Ranged<MthArgList>>,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     let range = env.range(mem);
     let name = mem.id();
@@ -3598,7 +3604,7 @@ fn check_param_arg<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     par: NormalArg,
-    arg: &Range<Option<cos::MthArg>>,
+    arg: &Ranged<Option<cos::MthArg>>,
     declared_at: Option<bindings::Location>,
 ) -> Result<(), QuasiTypeError> {
     {
@@ -3717,7 +3723,7 @@ fn check_call<'a, 'b>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     base: TyProcedureOrAny,
-    args: impl Iterator<Item = &'b Range<Option<cos::MthArg>>>,
+    args: impl Iterator<Item = &'b Ranged<Option<cos::MthArg>>>,
     range: bindings::Range,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     match base {
@@ -3856,7 +3862,7 @@ impl MacroCallStructExt for MacroCallStruct {
 // A macro argument is raw text (it is also substituted verbatim into a `#define` body), so it
 // is re-parsed as an expression here.
 fn check_macro_arg_as_expr<'a>(
-    arg: &Range<cos::MacroArg>,
+    arg: &Ranged<cos::MacroArg>,
     expected_ty: &Ty,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -4050,8 +4056,8 @@ impl CheckExprInner for AtomicExpr {
 fn check_label_call<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    label: Option<&Range<AllowIndirection<Label>>>,
-    offset: Option<&Range<Expr>>,
+    label: Option<&Ranged<AllowIndirection<Label>>>,
+    offset: Option<&Ranged<Expr>>,
     routine: Option<&ExtendedRoutineReference>,
     args: &Option<MthArgList>,
     range: bindings::Range,
@@ -4358,7 +4364,7 @@ fn undocumented_instance<'a, P>(
     env: &CodeEnv<'a>,
     flow: &Flow<'a>,
     prefix: &str,
-    var: &Range<Prefix<P, Range<QuotableClassMemberName>>>,
+    var: &Ranged<Prefix<P, Ranged<QuotableClassMemberName>>>,
 ) -> Result<Either<Local, PowerTy>, QuasiTypeError> {
     env.soft_diagnostic(TypeError::undocumented_syntax(
         format!("The `{prefix}` property prefix"),
@@ -4400,7 +4406,7 @@ trait AsCommandLines<Start: 'static> {
 }
 
 // Its first line is typed apart from the rest, so this yields commands rather than lines.
-fn procedure_commands(main: &ProcedureMain) -> impl Iterator<Item = &Range<Command>> {
+fn procedure_commands(main: &ProcedureMain) -> impl Iterator<Item = &Ranged<Command>> {
     (main.line_1.iter().flat_map(commands_of)).chain(
         (main.line_n.iter())
             .flat_map(|line_n| line_n.items.iter())

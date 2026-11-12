@@ -4,7 +4,7 @@
 
 use std::ops::Deref;
 use std::{env, fs, process::exit};
-use tygr::{Grammar, OLC};
+use tygr::{OLC, Parse, Print};
 use tygr_objectscript::cos;
 
 fn main() {
@@ -22,7 +22,7 @@ fn main() {
     let had_error = if path.ends_with(".cls") {
         check_class(&path, &content)
     } else {
-        match cos::Routine::scan(&content) {
+        match cos::Routine::check(&content) {
             Ok(()) => false,
             Err(err) => {
                 eprintln!("{err}");
@@ -81,11 +81,11 @@ fn check_method_body(method: &cos::Method) -> Result<(), (usize, tygr::Error)> {
         (
             None | Some(cos::MethodLanguage::ObjectScript(..) | cos::MethodLanguage::Cache(..)),
             None | Some(cos::CodeMode::Code(..)),
-        ) => cos::ProcedureBody::scan(&text),
+        ) => cos::ProcedureBody::check(&text),
         (
             None | Some(cos::MethodLanguage::ObjectScript(..) | cos::MethodLanguage::Cache(..)),
             Some(cos::CodeMode::Expression(..)),
-        ) => <cos::ExprBody>::scan(&text),
+        ) => <cos::ExprBody>::check(&text),
         // Other languages (Python, ...) and modes (Call, Generator, ...) aren't ObjectScript,
         // so there's nothing here to parse.
         _ => Ok(()),

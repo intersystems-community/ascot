@@ -21,7 +21,7 @@ use std::process::exit;
 #[cfg(feature = "declare")]
 use std::time::Instant;
 #[cfg(feature = "lsp")]
-use tygr::Grammar;
+use tygr::Print;
 
 use ascot::IrisContext;
 #[cfg(feature = "declare")]
@@ -257,7 +257,7 @@ fn main() {
                 iris_namespace: iris.iris_namespace,
                 style: style.load().map(StyleSetting::from),
                 diagnostics: Some(Diagnostics::List(
-                    filter.filter().0.iter().map(Grammar::print).collect(),
+                    filter.filter().0.iter().map(Print::print).collect(),
                 )),
             };
             if let Err(err) = ascot::lsp::run(settings, shared_fs) {

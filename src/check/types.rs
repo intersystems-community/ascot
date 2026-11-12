@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use tygr::Grammar;
+use tygr::{Parse, Print};
 
 use crate::bindings::{self, RefMode};
 use crate::check::{WorkspaceEnv, errors::*};
