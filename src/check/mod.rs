@@ -3642,7 +3642,8 @@ fn check_param_arg<'a>(
             // A value where `Output` is declared: the callee's result never reaches the caller.
             // Where `ByRef` is declared, only a variable the caller could have dotted (a plain
             // local or `%` variable; IRIS takes no dot on a subscript, a global or `i%P`) is
-            // reported: a constant or an expression takes the value's path by nature.
+            // noted, as an Information: a constant or an expression takes the value's path by
+            // nature, and a variable passed by value is as often meant as not.
             let dottable = expr.as_variable().is_some_and(|var| {
                 var.subs.is_none()
                     && matches!(
@@ -3650,8 +3651,14 @@ fn check_param_arg<'a>(
                         AllowMacro::Plain(VariableBase::Local(_) | VariableBase::Public(_))
                     )
             });
-            if par.mode == Some(RefMode::Output) || (par.mode.is_some() && dottable) {
+            if par.mode == Some(RefMode::Output) {
                 mode_mismatch(flow, None);
+            } else if par.mode.is_some() && dottable {
+                flow.add_soft_diagnostic(QuasiTypeError::WithRange(TypeError::by_value_to_by_ref(
+                    par.name.clone(),
+                    env.range(arg),
+                    declared_at.clone(),
+                )));
             }
             let target = par.ty.clone().unwrap_or_default();
             let source = expr.to_power_ty(env, flow)?;
