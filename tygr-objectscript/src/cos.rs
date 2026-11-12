@@ -17,9 +17,17 @@ use crate::sql;
 // tygr 0.2.0 dropped these (previously public) helpers; reimplemented locally
 // against tygr's still-public building blocks.
 char_class!(pub AnyChar, "any", |_ch| true);
+
+/// A letter as IRIS reads a name: an ASCII or Latin-1 letter, or any code unit from U+0100 up,
+/// `→` and `٣` included (`$ZNAME` on IRIS 2026.3).
+pub const fn is_letter(ch: char) -> bool {
+    ch.is_ascii_alphabetic()
+        || matches!(ch, 'ª' | 'µ' | 'º' | 'À'..='Ö' | 'Ø'..='ö' | 'ø'..='ÿ')
+        || ch as u32 >= 0x100
+}
 type StringEndsWith<T> = Raw<(Vec<(NotFollowedBy<T>, AnyChar)>, T)>;
 
-unicode_class!(pub IsNumeric, "numeric", |ch| ch.is_numeric(), |ch| ch.is_ascii_digit());
+char_class!(pub IsNumeric, "numeric", |ch| ch.is_ascii_digit());
 
 char_class!(
     pub IsNotLineBreakingWhitespace,
@@ -1846,7 +1854,7 @@ pub const SPECIAL_VARIABLE_NAMES: &[&str] = &[
     "ZB",
 ];
 
-unicode_class!(pub IsAlphabetic, "alphabetic", |ch| ch.is_alphabetic(), |ch| ch.is_ascii_alphabetic());
+char_class!(pub IsAlphabetic, "alphabetic", |ch| is_letter(ch));
 
 #[derive(Grammar)]
 pub struct Variable {
@@ -1865,10 +1873,8 @@ pub struct LocalVariableNameStruct {
     first: IsLocalVariableNameFirst,
     rest: StringOf<IsLocalVariableNameRemaining>,
 }
-unicode_class!(pub IsLocalVariableNameFirst, "letter or percent sign", |c| {
-    c.is_alphabetic() || c == '%'
-}, |c| {
-    c.is_ascii_alphabetic() || c == '%'
+char_class!(pub IsLocalVariableNameFirst, "letter or percent sign", |c| {
+    is_letter(c) || c == '%'
 });
 type IsLocalVariableNameRemaining = IsLetterOrNumberIncludingUnicode;
 
@@ -1884,10 +1890,7 @@ pub struct GlobalVariableNameStruct {
         StringOf1<IsLetterOrNumberIncludingUnicode>,
     )>,
 }
-unicode_class!(pub IsGlobalVariableNameFirst, "letter or percent sign", |c| c
-    .is_alphabetic()
-    || c == '%', |c| c
-    .is_ascii_alphabetic()
+char_class!(pub IsGlobalVariableNameFirst, "letter or percent sign", |c| is_letter(c)
     || c == '%');
 char_class!(pub IsLetterOrNumber, "letter or number", |c| c
     .is_ascii_alphanumeric());
@@ -1903,9 +1906,7 @@ pub struct ClassMemberNameStruct {
 char_class!(pub IsClassMemberNameFirst, "letter or percent sign", |c| c
     .is_ascii_alphabetic()
     || c == '%');
-unicode_class!(pub IsClassMemberNameRemaining, "letter or number", |c| c
-    .is_alphanumeric(), |c| c
-    .is_ascii_alphanumeric());
+char_class!(pub IsClassMemberNameRemaining, "letter or number", |c| is_letter(c) || c.is_ascii_digit());
 
 #[derive(Grammar)]
 #[tygr(inline)]
@@ -1964,13 +1965,11 @@ pub type BitLogicExpr = VecSep<Ranged<BitLogicAtom>, MGapXMGap<BitLogicOp>>;
 
 char_class!(pub IsAny, "any", |_c| true);
 
-unicode_class!(pub IsSymbolFirst, "ObjectScript symbols (i.e., letters or %)", |ch| ch.is_alphabetic() || ch == '%', |ch| ch.is_ascii_alphabetic() || ch == '%');
-unicode_class!(pub IsSymbolRest, "letter/digit/%", |ch| {
-    ch.is_alphabetic() || ch.is_ascii_digit() || ch == '%'
-}, |ch| {
-    ch.is_ascii_alphabetic() || ch.is_ascii_digit() || ch == '%'
+char_class!(pub IsSymbolFirst, "ObjectScript symbols (i.e., letters or %)", |ch| is_letter(ch) || ch == '%');
+char_class!(pub IsSymbolRest, "letter/digit/%", |ch| {
+    is_letter(ch) || ch.is_ascii_digit() || ch == '%'
 });
-unicode_class!(pub IsKeywordValue, "keyword name (i.e., letters, digits, or one of \"_%./-\")", |ch| ch.is_alphabetic() || ch.is_ascii_digit() || matches!(ch, '_' | '/' | '-' | '%' | '.'), |ch| ch.is_ascii_alphabetic() || ch.is_ascii_digit() || matches!(ch, '_' | '/' | '-' | '%' | '.'));
+char_class!(pub IsKeywordValue, "keyword name (i.e., letters, digits, or one of \"_%./-\")", |ch| is_letter(ch) || ch.is_ascii_digit() || matches!(ch, '_' | '/' | '-' | '%' | '.'));
 char_class!(pub IsWhitespace, "whitespace", |ch| ch.is_whitespace());
 char_class!(pub IsNotNL, "not_newline", |ch| ch != '\n');
 char_class!(pub IsNotStar, "not_star", |ch| ch != '*');
@@ -2150,7 +2149,7 @@ char_class!(pub IsLetterOrPercent, "letter or percent sign", |c| c
     || c == '%');
 
 type IsPackageAndClassNameRemaining = IsLetterOrNumberIncludingUnicode;
-unicode_class!(pub IsLetterOrNumberIncludingUnicode, "letter or number", |c| c.is_alphanumeric(), |c| c.is_ascii_alphanumeric());
+char_class!(pub IsLetterOrNumberIncludingUnicode, "letter or number", |c| is_letter(c) || c.is_ascii_digit());
 
 /*
 There are two entry points for ObjectScript:
@@ -2265,30 +2264,7 @@ impl Validate for AndWhatever {
     }
 }
 
-unicode_class!(pub IsOSExprSafe, "expr_char", |ch| ch.is_alphanumeric()
-|| matches!(
-    ch,
-    '$' | '.'
-        | '='
-        | '%'
-        | '\''
-        | ':'
-        | '['
-        | ']'
-        | '_'
-        | '+'
-        | '-'
-        | '*'
-        | '|'
-        | '>'
-        | '<'
-        | '!'
-        | '^'
-        | '?'
-        | '@'
-        | '\\'
-        | '~'
-), |ch| ch.is_ascii_alphanumeric()
+char_class!(pub IsOSExprSafe, "expr_char", |ch| is_letter(ch) || ch.is_ascii_digit()
 || matches!(
     ch,
     '$' | '.'
@@ -2314,34 +2290,7 @@ unicode_class!(pub IsOSExprSafe, "expr_char", |ch| ch.is_alphanumeric()
 ));
 
 // Like expr safe but add parentheses and whitespace
-unicode_class!(pub IsOSTextSafe, "objectscript_text", |ch| ch.is_alphanumeric()
-|| (ch.is_whitespace() && ch != '\n')
-|| matches!(
-    ch,
-    '$' | '.'
-        | '='
-        | '%'
-        | '\''
-        | ':'
-        | '['
-        | ']'
-        | '_'
-        | '+'
-        | '-'
-        | '*'
-        | '|'
-        | '>'
-        | '<'
-        | '!'
-        | '^'
-        | '?'
-        | '@'
-        | '\\'
-        | '~'
-        | '('
-        | ')'
-        | ','
-), |ch| ch.is_ascii_alphanumeric()
+char_class!(pub IsOSTextSafe, "objectscript_text", |ch| is_letter(ch) || ch.is_ascii_digit()
 || (ch.is_whitespace() && ch != '\n')
 || matches!(
     ch,
@@ -2412,38 +2361,7 @@ pub enum HTMLTagContentUnit {
 type HTMLTagContent = Vec<HTMLTagContentUnit>;
 
 // A `\` or `~` is as plain as the rest: a Windows path in an XData's attribute.
-unicode_class!(pub IsHTMLContentSafe, "html safe characters", |ch| ch
-.is_alphanumeric()
-|| ch.is_whitespace()
-|| matches!(
-    ch,
-    '=' | ':'
-        | '\\'
-        | '~'
-        | '&'
-        | ';'
-        | '['
-        | ']'
-        | '.'
-        | '/'
-        | '('
-        | ')'
-        | '-'
-        | '#'
-        | '|'
-        | '{'
-        | '}'
-        | ','
-        | '^'
-        | '%'
-        | '_'
-        | '?'
-        | '*'
-        | '+'
-        | '!'
-        | '$'
-), |ch| ch
-.is_ascii_alphanumeric()
+char_class!(pub IsHTMLContentSafe, "html safe characters", |ch| is_letter(ch) || ch.is_ascii_digit()
 || ch.is_whitespace()
 || matches!(
     ch,
@@ -7287,10 +7205,8 @@ pub struct SpaceOrTab(StringOf<IsSpaceOrTab>);
 #[tygr(hidden)]
 pub struct SpaceOrTab1(StringOf1<IsSpaceOrTab>);
 
-unicode_class!(pub IsRoutineNamePart, "routine_name_part", |ch| {
-    ch.is_alphanumeric() || ch == '.'
-}, |ch| {
-    ch.is_ascii_alphanumeric() || ch == '.'
+char_class!(pub IsRoutineNamePart, "routine_name_part", |ch| {
+    is_letter(ch) || ch.is_ascii_digit() || ch == '.'
 });
 
 // https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=RCOS_appx_identifiers#RCOS_appx_identifiers_cos_routines
@@ -7310,10 +7226,8 @@ pub enum Label {
     Lecacy(StringOf1<IsLetterOrNumber>),
 }
 
-unicode_class!(pub IsMacroNameChar, "macro_name_char", |ch| {
-    ch.is_alphanumeric() || ch == '%'
-}, |ch| {
-    ch.is_ascii_alphanumeric() || ch == '%'
+char_class!(pub IsMacroNameChar, "macro_name_char", |ch| {
+    is_letter(ch) || ch.is_ascii_digit() || ch == '%'
 });
 
 #[derive(Grammar, Clone)]

@@ -5,6 +5,7 @@ use either::Either;
 use tygr::*;
 
 use crate::convert::VecSep;
+use crate::cos;
 
 char_class!(pub IsSpace, "simple_space", |ch| matches!(
     ch,
@@ -16,10 +17,8 @@ char_class!(pub IsSimpleLatinLetter, "simple latin letter", |ch| {
     ch.is_ascii_alphabetic()
 });
 
-unicode_class!(pub IsNonAsciiLetter, "non-ASCII letter", |ch| {
-    !ch.is_ascii() && ch.is_alphabetic()
-}, |ch| {
-    !ch.is_ascii() && ch.is_ascii_alphabetic()
+char_class!(pub IsNonAsciiLetter, "non-ASCII letter", |ch| {
+    !ch.is_ascii() && cos::is_letter(ch)
 });
 
 char_class!(pub IsNotDQ, "non double-quote character", |ch| ch != '"');
