@@ -1268,6 +1268,7 @@
   "%Collection.AbstractArray": {
    "header": "Class %Collection.AbstractArray",
    "members": [
+    { "header": "Property ElementType As %RawString" },
     { "header": "Method Find(element As ..#ELEMENTTYPE, key As %String) As %String" },
     { "header": "Method GetPrevious(ByRef key As %String) As ..#ELEMENTTYPE" },
     { "header": "Method RemoveAt(key As %String) As ..#ELEMENTTYPE" },
@@ -1293,6 +1294,9 @@
   "%Collection.AbstractIterator": {
    "header": "Class %Collection.AbstractIterator",
    "members": [
+    { "header": "ClassMethod %ClassName(fullname As %Boolean = 0) As %String" },
+    { "header": "ClassMethod %Extends(isclass As %String) As %Integer" },
+    { "header": "ClassMethod %IsA(isclass As %String) As %Integer" },
     { "header": "Method GetAt(key As %RawString = \"\") As ..#ELEMENTTYPE" },
     { "header": "Method GetNext(ByRef key As %RawString) As ..#ELEMENTTYPE" },
     { "header": "Method Next(key As %RawString = \"\") As ..#ELEMENTTYPE" }
@@ -1304,6 +1308,7 @@
   "%Collection.AbstractList": {
    "header": "Class %Collection.AbstractList",
    "members": [
+    { "header": "Property ElementType As %RawString" },
     { "header": "Method Find(element As ..#ELEMENTTYPE, key As %Integer) As %String" },
     { "header": "Method GetAt(key As %Integer = 0) As ..#ELEMENTTYPE" },
     { "header": "Method GetNext(ByRef key As %Integer) As ..#ELEMENTTYPE" },
@@ -1312,7 +1317,8 @@
     { "header": "Method InsertAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" },
     { "header": "Method InsertOrdered(element As ..#ELEMENTTYPE) As %Status" },
     { "header": "Method RemoveAt(key As %Integer) As ..#ELEMENTTYPE" },
-    { "header": "Method SetAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" }
+    { "header": "Method SetAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" },
+    { "header": "Property Size As %Integer" }
    ],
    "generics": {
     "ELEMENTTYPE": "%RawString"
