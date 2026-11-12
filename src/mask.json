@@ -2792,6 +2792,12 @@
     { "header": "Method %Clone() As This" },
     { "header": "Method %DispatchGetProperty(propertyName As %String)" },
     { "header": "Method %DispatchSetProperty(propertyName As %String, value As %String)" },
+    { "header": "Method %Get(key As %DataType, default As %Any = \"\", type As %String = \"\") As %Any" },
+    { "header": "Method %GetTypeCodeOf(key As %DataType) As %Integer" },
+    { "header": "Method %IsDefined(key As %DataType) As %Boolean" },
+    { "header": "Method %IsModified() As %Boolean" },
+    { "header": "Method %Remove(key As %DataType) As %Any" },
+    { "header": "Method %Set(key As %DataType, value As %Any, type As %String = \"\") As This" },
     { "header": "ClassMethod %FromJSON(str As %RawString) As This" },
     { "header": "ClassMethod %FromJSONFile(filename As %RawString, TranslateTable As %String = \"UTF8\") As This" },
     { "header": "ClassMethod %FromJSONStats(str As %RawString, stats As %RawString) As This" },
@@ -2815,8 +2821,8 @@
     { "header": "Method %DispatchMethod(methodName As %String(PATTERN=\"1.E1(1\"\"Get\"\",1\"\"Set\"\")\"), args As %Any = \"\") As %Any" },
     { "header": "Method %Get(key As %Integer, default As %Any = \"\", type As %String = \"\") As %Any" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
-    { "header": "Method %Push(value As %Any, type As %String = \"\") As %DynamicAbstractObject" },
-    { "header": "Method %Set(key As %Integer, value As %Any, type As %String = \"\") As %DynamicAbstractObject" },
+    { "header": "Method %Push(value As %Any, type As %String = \"\") As This" },
+    { "header": "Method %Set(key As %Integer, value As %Any, type As %String = \"\") As This" },
     { "header": "Method add(value As %Any) As This" },
     { "header": "Method addAll(value As %AbstractSet) As This" },
     { "header": "ClassMethod fromObject(source = \"\", returnValue = \"\", laxMode As %Integer = 1) As This" }
@@ -2842,7 +2848,7 @@
     { "header": "Method %DispatchMethod(methodName As %String(PATTERN=\"1.E1(1\"\"Get\"\",1\"\"Set\"\")\"), args As %Any = \"\") As %Any" },
     { "header": "Method %Get(key As %String, default As %Any = \"\", type As %String = \"\") As %Any" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
-    { "header": "Method %Set(key As %String, value As %Any, type As %String = \"\") As %DynamicAbstractObject" }
+    { "header": "Method %Set(key As %String, value As %Any, type As %String = \"\") As This" }
    ]
   },
   "%Library.EnsembleMgr": {
