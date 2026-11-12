@@ -12,6 +12,9 @@ npm install @intersystems-community/ascot
 
 ## Usage
 
+An ES module whose wasm and declarations are files beside the code, which a bundler such as
+webpack carries into its output and finds again at run time, with no configuration.
+
 ````ts
 import { createWorkspace } from "@intersystems-community/ascot";
 

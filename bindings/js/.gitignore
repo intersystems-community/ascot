@@ -4,4 +4,5 @@ lib/*.wasm
 dist/
 *.tgz
 lib/*.d.json.gz
-lib/declarations.json
+lib/*.js
+lib/*.d.ts
