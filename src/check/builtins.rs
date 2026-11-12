@@ -785,18 +785,24 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => {
                 let mut exhaustive = false;
+                let mut ty = None;
                 for b in std::iter::once(first.deref()).chain(each_arg(rest)) {
                     if let PowerTy::Const(c) = (&b.e1).to_power_ty(env, flow)? {
                         exhaustive |= c.truthy();
                     }
-                    let _ = (&b.e2).to_ty(env, flow)?;
+                    let value = (&b.e2).to_ty(env, flow)?;
+                    ty = Some(match ty {
+                        Some(x) => env.merge_ty(x, value),
+                        None => value,
+                    });
                 }
+                let ty = ty.unwrap_or(Ty::Any);
                 // $SELECT throws <SELECT> at runtime if no condition matches;
                 // without a literal catch-all branch (`1:...`), that can't be ruled out.
                 Ok(if exhaustive {
-                    MaybeTy::Plain(Ty::from("%DataType"))
+                    MaybeTy::Plain(ty)
                 } else {
-                    MaybeTy::Maybe(Ty::from("%DataType"))
+                    MaybeTy::Maybe(ty)
                 }
                 .into())
             }
