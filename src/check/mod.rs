@@ -3318,16 +3318,13 @@ fn check_member_of<'a>(
     if let PropertyTy::Collection { kind, element } = &base
         && let Some(args) = args
     {
-        let datatype = match element {
-            Ty::OREF(ClsOrIns::Ins(cty)) => env.is_datatype(&env.qualify_class_name(&cty.name)),
-            _ => None,
-        };
+        let datatype = env.collection_datatype(element);
         if let Some(proc) = collection_method(*kind, element, &mem.id(), datatype) {
             let proc = TyProcedureOrAny::Procedure(proc);
             return check_call(env, flow, proc, args.items(env), env.range(mem));
         }
     }
-    check_member(base.to_ty(), mem, args, env, flow)
+    check_member(env.value_ty(&base), mem, args, env, flow)
 }
 
 // The `%Collection.AbstractList`/`AbstractArray` methods whose signatures involve the element
@@ -3464,7 +3461,7 @@ fn check_member<'a>(
         }
         (false, None) => {
             let property = env.resolve_mem::<Properties<Read>>(&ty, name, range, true);
-            Ok(Some(referenced(env, mem, property)?.to_ty()))
+            Ok(Some(env.value_ty(&referenced(env, mem, property)?)))
         }
         // A method anywhere in the chain before a property anywhere, as IRIS resolves it, and the
         // `%DispatchMethod` hook once neither has the name.
@@ -4393,7 +4390,7 @@ fn check_instance_member(
             if let Some(location) = &member.location {
                 env.reference(mem_range, location.clone());
             }
-            Ok(Right(member.ty.to_ty().into()))
+            Ok(Right(env.value_ty(&member.ty).into()))
         }
     }
 }

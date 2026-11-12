@@ -523,10 +523,17 @@ pub enum CollectionClass {
 }
 
 impl CollectionClass {
-    pub fn class(self) -> Ty {
-        Ty::from(match self {
-            CollectionClass::List => "%Collection.AbstractList",
-            CollectionClass::Array => "%Collection.AbstractArray",
+    /// The class a collection runs as: IRIS gives a `list Of` or `array Of` property a
+    /// `%Collection.ListOfDT`, `ListOfObj`, `ArrayOfDT` or `ArrayOfObj` by its element's kind.
+    /// With the element unresolved, the abstract class, which declares what every one has.
+    pub fn class(self, datatype: Option<bool>) -> Ty {
+        Ty::from(match (self, datatype) {
+            (CollectionClass::List, Some(true)) => "%Collection.ListOfDT",
+            (CollectionClass::List, Some(false)) => "%Collection.ListOfObj",
+            (CollectionClass::List, None) => "%Collection.AbstractList",
+            (CollectionClass::Array, Some(true)) => "%Collection.ArrayOfDT",
+            (CollectionClass::Array, Some(false)) => "%Collection.ArrayOfObj",
+            (CollectionClass::Array, None) => "%Collection.AbstractArray",
         })
     }
 
@@ -667,17 +674,6 @@ pub enum PropertyTy {
 impl Default for PropertyTy {
     fn default() -> Self {
         PropertyTy::Value(Ty::Any)
-    }
-}
-
-impl PropertyTy {
-    pub fn to_ty(&self) -> Ty {
-        match self {
-            PropertyTy::Value(ty)
-            | PropertyTy::Multidimensional(ty)
-            | PropertyTy::Dispatched(ty) => ty.clone(),
-            PropertyTy::Collection { kind, .. } => kind.class(),
-        }
     }
 }
 

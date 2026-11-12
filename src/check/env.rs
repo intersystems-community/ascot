@@ -2068,6 +2068,26 @@ impl<'a> CodeEnv<'a> {
         self.base.base.add_soft_diagnostic(err.into())
     }
 
+    /// Whether a collection's element class is a datatype; `None` while it is unresolved.
+    pub(crate) fn collection_datatype(&self, element: &Ty) -> Option<bool> {
+        match element {
+            Ty::OREF(ClsOrIns::Ins(cty)) => self.is_datatype(&self.qualify_class_name(&cty.name)),
+            _ => None,
+        }
+    }
+
+    /// A property's value as an expression has it: a collection's is the class it runs as.
+    pub(crate) fn value_ty(&self, property: &PropertyTy) -> Ty {
+        match property {
+            PropertyTy::Value(ty)
+            | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Dispatched(ty) => ty.clone(),
+            PropertyTy::Collection { kind, element } => {
+                kind.class(self.collection_datatype(element))
+            }
+        }
+    }
+
     pub(crate) fn qualify_class_name(&self, name: &str) -> String {
         self.base
             .base
