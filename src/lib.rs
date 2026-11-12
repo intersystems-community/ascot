@@ -2695,7 +2695,7 @@ mod tests {
 
     #[test]
     fn set_style_rechecks_every_document_against_the_new_style() {
-        let style = style::parse(r#"{"command": {"form": "Long", "case": "Pascal"}}"#).unwrap();
+        let style = style::parse(r#"{"command": {"form": "long", "case": "pascal"}}"#).unwrap();
         let workspace = Workspace::new(None, None);
         let uri = "Style.mac".to_string();
         workspace.open(
@@ -2714,7 +2714,7 @@ mod tests {
 
     #[test]
     fn command_keywords_follow_the_configured_style() {
-        let style = style::parse(r#"{"command": {"form": "Long", "case": "Pascal"}}"#).unwrap();
+        let style = style::parse(r#"{"command": {"form": "long", "case": "pascal"}}"#).unwrap();
         let workspace = Workspace::new(None, Some(style));
         let uri = "Style.mac".to_string();
         workspace.open(
@@ -2746,7 +2746,7 @@ mod tests {
     #[test]
     fn functions_follow_the_configured_style() {
         let style = style::parse(
-            r#"{"function": {"form": "Long", "case": "Pascal"}, "function_listbuild": {"form": "Short"}}"#,
+            r#"{"function": {"form": "long", "case": "pascal"}, "functionListbuild": {"form": "short"}}"#,
         )
         .unwrap();
         let workspace = Workspace::new(None, Some(style));
@@ -2766,7 +2766,7 @@ mod tests {
 
     #[test]
     fn set_targets_follow_the_configured_function_style() {
-        let style = style::parse(r#"{"function": {"form": "Long", "case": "Pascal"}}"#).unwrap();
+        let style = style::parse(r#"{"function": {"form": "long", "case": "pascal"}}"#).unwrap();
         let workspace = Workspace::new(None, Some(style));
         let uri = "S.mac".to_string();
         workspace.open(
@@ -2794,7 +2794,7 @@ mod tests {
 
     #[test]
     fn expression_methods_follow_the_configured_function_style() {
-        let style = style::parse(r#"{"function": {"case": "Upper"}}"#).unwrap();
+        let style = style::parse(r#"{"function": {"case": "upper"}}"#).unwrap();
         let workspace = Workspace::new(None, Some(style));
         let uri = "T.cls".to_string();
         workspace.open(
@@ -2810,7 +2810,7 @@ mod tests {
     #[test]
     fn method_body_commands_follow_the_configured_style() {
         let style = style::parse(
-            r#"{"command": {"form": "Short"}, "command_quit": {"form": "Long", "case": "Upper"}}"#,
+            r#"{"command": {"form": "short"}, "commandQuit": {"form": "long", "case": "upper"}}"#,
         )
         .unwrap();
         let workspace = Workspace::new(None, Some(style));

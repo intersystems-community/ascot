@@ -266,7 +266,7 @@ Without the file argument it writes `~/.ascot/<host>-<port>[-<prefix>]-<namespac
 should be written; only what's set is checked, as a warning. For example, with
 
 ```json
-{ "command": { "form": "Long", "case": "Pascal" }, "allow_quit_for_return": false }
+{ "command": { "form": "long", "case": "pascal" }, "allowQuitForReturn": false }
 ```
 
 ```

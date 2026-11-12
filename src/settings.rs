@@ -20,8 +20,8 @@ pub struct Settings {
     /// The namespace of a live instance, `%SYS` by default. A release names its own after its tag
     /// and a declaration file carries its own, so giving one with either is an error.
     pub iris_namespace: Option<String>,
-    /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
-    /// have every command keyword but `Do`'s written in full; `function` and `function_<name>` do
+    /// Workspace-wide style rules, e.g. `{"command": {"form": "long"}, "commandDo": {"form": "short"}}` to
+    /// have every command keyword but `Do`'s written in full; `function` and `function<Name>` do
     /// the same for intrinsic functions. Applies to every document. The keys are documented at
     /// https://github.com/intersystems-community/ascot/blob/main/STYLE.md. When the server shares
     /// the client's file system, the path of a JSON file holding the object is accepted too.
@@ -192,7 +192,7 @@ mod tests {
         let settings = parse(r#"{"style": "/no/such/style.json"}"#);
         assert!(settings.style(false).unwrap_err().contains("--shared-fs"));
         assert!(settings.style(true).is_err());
-        let object = parse(r#"{"style": {"command": {"form": "Long"}}}"#);
+        let object = parse(r#"{"style": {"command": {"form": "long"}}}"#);
         assert!(object.style(false).unwrap().is_some());
         assert!(parse(r#"{"style": {"commnad": {}}}"#).style(false).is_err());
     }

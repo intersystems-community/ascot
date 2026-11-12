@@ -23,8 +23,8 @@ impl Styles {
     }
 }
 
-// A `Style`'s keyword rules: each `<kind>-<name>` field merged with its `<kind>` default, keyed
-// by the name as serde spells it (`do`, `listbuild`).
+// A `Style`'s keyword rules: each `<kind><Name>` field merged with its `<kind>` default, keyed by
+// the name lowercased (`do`, `listbuild`).
 pub struct KeywordStyles {
     commands: Kind<CommandStyle>,
     functions: Kind<FunctionStyle>,
@@ -36,13 +36,14 @@ struct Kind<T> {
 }
 
 impl<T: DeserializeOwned> Kind<T> {
-    // The `<prefix>` and `<prefix>_<name>` fields of `fields`, the latter completed by the former.
+    // The `<prefix>` and `<prefix><Name>` fields of `fields`, the latter completed by the former.
     fn new(fields: &Map<String, Value>, prefix: &str) -> Self {
         let default = fields.get(prefix).cloned().unwrap_or(Value::Null);
         let by_name = fields
             .iter()
             .filter_map(|(key, value)| {
-                let name = key.strip_prefix(prefix)?.strip_prefix('_')?;
+                let name = key.strip_prefix(prefix)?;
+                name.chars().next().filter(char::is_ascii_uppercase)?;
                 let mut merged = default.as_object().cloned().unwrap_or_default();
                 for (field, value) in value.as_object()? {
                     if !value.is_null() {
@@ -50,7 +51,7 @@ impl<T: DeserializeOwned> Kind<T> {
                     }
                 }
                 Some((
-                    name.to_string(),
+                    name.to_ascii_lowercase(),
                     serde_json::from_value(Value::Object(merged)).ok()?,
                 ))
             })
@@ -129,8 +130,8 @@ fn expected(
     (kw.text != expected).then_some(expected)
 }
 
-// `{"command": {"form": "Long"}, "function_piece": {"form": "Short"}}` -- variant names as the
-// WIT-generated types spell them.
+// `{"command": {"form": "long"}, "functionPiece": {"form": "short"}}`: camelCase keys and
+// lowercase values, the JS binding's spelling of the record, so one style file serves every binding.
 pub fn parse(json: &str) -> Result<Style, String> {
     from_value(serde_json::from_str(json).map_err(|err| err.to_string())?)
 }
@@ -249,6 +250,18 @@ mod tests {
         assert_eq!(expected("ZIncr", "ZIncrement", "ZINCR"), None);
     }
 
+    // `commandDo` for `do`, and back: `None` for a key that names no keyword, `command` itself included.
+    fn field(prefix: &str, name: &str) -> String {
+        let (head, tail) = name.split_at(1);
+        format!("{prefix}{}{tail}", head.to_ascii_uppercase())
+    }
+
+    fn named(key: &str, prefix: &str) -> Option<String> {
+        let name = key.strip_prefix(prefix)?;
+        name.chars().next().filter(char::is_ascii_uppercase)?;
+        Some(name.to_ascii_lowercase())
+    }
+
     #[test]
     fn unset_style_accepts_everything() {
         assert_eq!(
@@ -260,7 +273,7 @@ mod tests {
     #[test]
     fn a_command_overrides_the_default_field_by_field() {
         let styles = KeywordStyles::new(
-            &parse(r#"{"command": {"form": "Long", "case": "Pascal"}, "command_do": {"form": "Short"}}"#)
+            &parse(r#"{"command": {"form": "long", "case": "pascal"}, "commandDo": {"form": "short"}}"#)
                 .unwrap(),
         );
         assert_eq!(
@@ -273,7 +286,7 @@ mod tests {
         );
         assert!(styles.allows_postcondition_on_argument("do"));
         let styles = KeywordStyles::new(
-            &parse(r#"{"command": {"allow_postcondition_on_argument": false}, "command_do": {"allow_postcondition_on_argument": true}}"#)
+            &parse(r#"{"command": {"allowPostconditionOnArgument": false}, "commandDo": {"allowPostconditionOnArgument": true}}"#)
                 .unwrap(),
         );
         assert!(styles.allows_postcondition_on_argument("do"));
@@ -294,15 +307,14 @@ mod tests {
             .collect();
         let json: serde_json::Map<String, Value> = names
             .iter()
-            .map(|name| (format!("command_{name}"), serde_json::json!({})))
+            .map(|name| (field("command", name), serde_json::json!({})))
             .collect();
         parse(&Value::Object(json).to_string()).expect("every command has a field");
         let Value::Object(fields) = serde_json::to_value(parse("{}").unwrap()).unwrap() else {
             unreachable!()
         };
-        for key in fields.keys().filter(|key| key.starts_with("command_")) {
-            let name = &key["command_".len()..];
-            assert!(names.iter().any(|n| n == name), "{key} names no command");
+        for name in fields.keys().filter_map(|key| named(key, "command")) {
+            assert!(names.contains(&name), "{name} names no command");
         }
     }
 
@@ -343,15 +355,14 @@ mod tests {
         let names: Vec<String> = spelled.iter().map(|f| f.to_ascii_lowercase()).collect();
         let json: serde_json::Map<String, Value> = names
             .iter()
-            .map(|name| (format!("function_{name}"), serde_json::json!({})))
+            .map(|name| (field("function", name), serde_json::json!({})))
             .collect();
         parse(&Value::Object(json).to_string()).expect("every function has a field");
         let Value::Object(fields) = serde_json::to_value(parse("{}").unwrap()).unwrap() else {
             unreachable!()
         };
-        for key in fields.keys().filter(|key| key.starts_with("function_")) {
-            let name = &key["function_".len()..];
-            assert!(names.iter().any(|n| n == name), "{key} names no function");
+        for name in fields.keys().filter_map(|key| named(key, "function")) {
+            assert!(names.contains(&name), "{name} names no function");
         }
     }
 
@@ -359,7 +370,7 @@ mod tests {
     fn commands_and_functions_have_their_own_defaults() {
         let styles = KeywordStyles::new(
             &parse(
-                r#"{"command": {"form": "Short"}, "function": {"form": "Long"}, "function_piece": {"form": "Short"}}"#,
+                r#"{"command": {"form": "short"}, "function": {"form": "long"}, "functionPiece": {"form": "short"}}"#,
             )
             .unwrap(),
         );
@@ -373,13 +384,13 @@ mod tests {
 
     #[test]
     fn parse_rejects_unknown_keys_and_values() {
-        let err = parse(r#"{"command": {"from": "Long"}}"#).unwrap_err();
+        let err = parse(r#"{"command": {"from": "long"}}"#).unwrap_err();
         assert!(err.contains("unknown field `command.from`"), "{err}");
-        let err = parse(r#"{"command_sett": {}}"#).unwrap_err();
-        assert!(err.contains("unknown field `command_sett`"), "{err}");
-        let err = parse(r#"{"command": {"form": "long"}}"#).unwrap_err();
+        let err = parse(r#"{"commandSett": {}}"#).unwrap_err();
+        assert!(err.contains("unknown field `commandSett`"), "{err}");
+        let err = parse(r#"{"command": {"form": "Long"}}"#).unwrap_err();
         assert!(
-            err.contains("unknown variant `long`, expected `Long` or `Short`"),
+            err.contains("unknown variant `Long`, expected `long` or `short`"),
             "{err}"
         );
         assert!(parse("{}").is_ok());

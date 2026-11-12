@@ -1871,11 +1871,11 @@ type_error_kinds! {
     #[message = "Do discards the {class} this call returns"]
     DiscardedReturnValue { class: String },
     /// A command or intrinsic function keyword spelled in a form or case the style's `command` or
-    /// `function` rule, or a per-keyword `command_<name>` or `function_<name>`, doesn't allow: `s`
-    /// under `{"form":"Long"}`, `SET` under `{"case":"Pascal"}`. IRIS compiles every spelling alike;
+    /// `function` rule, or a per-keyword `command<Name>` or `function<Name>`, doesn't allow: `s`
+    /// under `{"form":"long"}`, `SET` under `{"case":"pascal"}`. IRIS compiles every spelling alike;
     /// write the one the message gives.
     ///
-    /// ```objectscript style={"command":{"form":"Long","case":"Pascal"},"function":{"form":"Long","case":"Pascal"}}
+    /// ```objectscript style={"command":{"form":"long","case":"pascal"},"function":{"form":"long","case":"pascal"}}
     /// Class Demo.KeywordStyle
     /// {
     ///
@@ -1895,11 +1895,11 @@ type_error_kinds! {
         found: String,
         expected: String,
     },
-    /// Under `{"allow_quit_for_return":false}`, a `Quit` that leaves the method or procedure, with no
+    /// Under `{"allowQuitForReturn":false}`, a `Quit` that leaves the method or procedure, with no
     /// loop or `Try` block around it to leave instead. There it does what `Return` does, and IRIS runs
     /// either; write `Return`, keeping `Quit` for loops and `Try` blocks.
     ///
-    /// ```objectscript style={"allow_quit_for_return":false}
+    /// ```objectscript style={"allowQuitForReturn":false}
     /// Class Demo.QuitExits
     /// {
     ///
@@ -1919,12 +1919,12 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Use `Return` to leave a method or procedure; `Quit` is for loops and `Try` blocks"]
     QuitExits,
-    /// Under `{"command":{"allow_postcondition_on_argument":false}}` (or `command_do`, `command_goto`,
-    /// `command_xecute` for one command), a postconditional on an argument of `Do`, `Goto` or
+    /// Under `{"command":{"allowPostconditionOnArgument":false}}` (or `commandDo`, `commandGoto`,
+    /// `commandXecute` for one command), a postconditional on an argument of `Do`, `Goto` or
     /// `Xecute`, `Do ^R:x`, rather than on the keyword, `Do:x ^R`. IRIS accepts both, and with a
     /// single argument they mean the same; move the condition onto the keyword.
     ///
-    /// ```objectscript style={"command":{"allow_postcondition_on_argument":false}}
+    /// ```objectscript style={"command":{"allowPostconditionOnArgument":false}}
     /// Class Demo.ArgumentPostconditional
     /// {
     ///
@@ -1945,11 +1945,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Put the postconditional on the command keyword, not on its argument"]
     ArgumentPostconditional,
-    /// Under `{"condition_and":"DoubleAmpersand"}`, the conditions of an `If`, `ElseIf` or `While`
-    /// joined by a comma, `If a, b`; under `"Comma"`, ones joined by `&&`. To IRIS the two mean the
+    /// Under `{"conditionAnd":"double-ampersand"}`, the conditions of an `If`, `ElseIf` or `While`
+    /// joined by a comma, `If a, b`; under `"comma"`, ones joined by `&&`. To IRIS the two mean the
     /// same; join them as the message says.
     ///
-    /// ```objectscript style={"condition_and":"DoubleAmpersand"}
+    /// ```objectscript style={"conditionAnd":"double-ampersand"}
     /// Class Demo.AndOperator
     /// {
     ///
@@ -1965,11 +1965,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Join these conditions with `{wanted}`"]
     AndOperator { wanted: crate::bindings::AndOperator },
-    /// Under `{"max_new_per_block":N}`, each `New` past the Nth in one method body, label body or
+    /// Under `{"maxNewPerBlock":N}`, each `New` past the Nth in one method body, label body or
     /// `{ }` block; a nested block counts its own. IRIS runs any number of them; gather the names into
     /// one `New a, b`.
     ///
-    /// ```objectscript style={"max_new_per_block":1}
+    /// ```objectscript style={"maxNewPerBlock":1}
     /// ROUTINE Demo.NewPerBlock
     /// Report
     ///     New count
@@ -1982,11 +1982,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "The style allows {max} `New` per block; this is one more"]
     NewPerBlock { max: u32 },
-    /// Under `{"max_commands_per_line":N}`, each command past the Nth on one line; a brace-less `If`,
+    /// Under `{"maxCommandsPerLine":N}`, each command past the Nth on one line; a brace-less `If`,
     /// `Else` or `For` and the commands it governs count as one. IRIS reads the line as it would the
     /// commands on separate lines; give each its own.
     ///
-    /// ```objectscript style={"max_commands_per_line":1}
+    /// ```objectscript style={"maxCommandsPerLine":1}
     /// Class Demo.CommandsPerLine
     /// {
     ///
@@ -2001,12 +2001,12 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "The style allows {max} command(s) per line; this is one more"]
     CommandsPerLine { max: u32 },
-    /// Under `{"require_description":{"min_body_lines":N}}`, a method, or a routine label with a
+    /// Under `{"requireDescription":{"minBodyLines":N}}`, a method, or a routine label with a
     /// parameter list, whose body spans at least N lines and has no description: `///` lines right
     /// above a method, comment lines right above a label. Private methods are exempt. IRIS compiles
     /// it with or without; say what it does above it.
     ///
-    /// ```objectscript style={"require_description":{"min_body_lines":2}}
+    /// ```objectscript style={"requireDescription":{"minBodyLines":2}}
     /// Class Demo.Undescribed
     /// {
     ///
@@ -2029,11 +2029,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Describe this {kind}: its body is {lines} line(s)"]
     Undescribed { kind: String, lines: usize },
-    /// Under `{"open_brace":{"newline_before":false}}`, a block's `{` on a line of its own below its
+    /// Under `{"openBrace":{"newlineBefore":false}}`, a block's `{` on a line of its own below its
     /// command; under `true`, one on the command's line, `If x {`. IRIS accepts either layout; move
     /// the brace.
     ///
-    /// ```objectscript style={"open_brace":{"newline_before":false}}
+    /// ```objectscript style={"openBrace":{"newlineBefore":false}}
     /// Class Demo.OpenBraceBreak
     /// {
     ///
@@ -2052,11 +2052,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Put {wanted} before `{{`"]
     OpenBraceBreak { wanted: Break },
-    /// Under `{"open_brace":{"newline_after":true}}`, a block's first command on the line of its `{`,
+    /// Under `{"openBrace":{"newlineAfter":true}}`, a block's first command on the line of its `{`,
     /// `If x { Set y = 1`; under `false`, one on the next line. IRIS accepts either layout; break the
     /// line after the brace, or join it.
     ///
-    /// ```objectscript style={"open_brace":{"newline_after":true}}
+    /// ```objectscript style={"openBrace":{"newlineAfter":true}}
     /// Class Demo.BodyBreak
     /// {
     ///
@@ -2072,11 +2072,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Put {wanted} after `{{`"]
     BodyBreak { wanted: Break },
-    /// Under `{"close_brace":{"newline_before":true}}`, a block's `}` on the line of its last command,
+    /// Under `{"closeBrace":{"newlineBefore":true}}`, a block's `}` on the line of its last command,
     /// `Set y = 1 }`; under `false`, one on a line of its own. IRIS accepts either layout; move the
     /// brace.
     ///
-    /// ```objectscript style={"close_brace":{"newline_before":true}}
+    /// ```objectscript style={"closeBrace":{"newlineBefore":true}}
     /// Class Demo.CloseBraceBreak
     /// {
     ///
@@ -2093,11 +2093,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Put {wanted} before `}}`"]
     CloseBraceBreak { wanted: Break },
-    /// Under `{"close_brace":{"newline_after":false}}`, an `Else`, `ElseIf` or `Catch` on the line
+    /// Under `{"closeBrace":{"newlineAfter":false}}`, an `Else`, `ElseIf` or `Catch` on the line
     /// below the `}` it follows; under `true`, one on the brace's line, `} Else {`. IRIS accepts either
     /// layout; move the keyword.
     ///
-    /// ```objectscript style={"close_brace":{"newline_after":false}}
+    /// ```objectscript style={"closeBrace":{"newlineAfter":false}}
     /// Class Demo.ChainBreak
     /// {
     ///
@@ -2120,12 +2120,12 @@ type_error_kinds! {
         keyword: &'static str,
         wanted: Break,
     },
-    /// Under `{"space_after_comma":true}`, a list's comma with no space after it or one before,
+    /// Under `{"spaceAfterComma":true}`, a list's comma with no space after it or one before,
     /// `$ListBuild(a,b)`; under `false`, one with a space on either side. A comma whose whitespace holds
     /// a line break, and the two around an omitted argument, are left alone. IRIS ignores the
     /// spacing; respace the comma.
     ///
-    /// ```objectscript style={"space_after_comma":true}
+    /// ```objectscript style={"spaceAfterComma":true}
     /// Class Demo.CommaSpacing
     /// {
     ///
