@@ -248,6 +248,12 @@ IRIS; `iris` says which:
   requests, and no instance needed.
 - `--iris none`: no environment, so every class, routine or include outside the
   workspace is an error.
+- `--iris` more than once: the sources are asked in order, and the first that
+  holds a class, routine or include answers for it. `--iris latest --iris
+  http://...` reads the system classes from the snapshot, mask corrections
+  included, and your own from the instance; `--iris-namespace` applies to the
+  instances in the list, and `none` among others is a no-op. The `iris` setting
+  of the servers takes a list the same way.
 
 #### Build Your Own Declaration Files
 

@@ -12,7 +12,7 @@ use ascot::bindings::Style;
 use ascot::diagnostic_filter::Filter;
 use ascot::report::{DiagnosticsResult, FileDiagnostics};
 #[cfg(feature = "lsp")]
-use ascot::settings::{Diagnostics, Settings, StyleSetting};
+use ascot::settings::{Diagnostics, IrisSetting, Settings, StyleSetting};
 use ascot::style;
 use std::fs;
 use std::io::{IsTerminal, Write};
@@ -201,9 +201,12 @@ struct IrisArgs {
     /// another image's, `<image>:<tag>:<namespace>` for a namespace other than %SYS, as
     /// irishealth-community:<tag>:HSLIB for IRIS for Health's HS and Ens classes. An instance is
     /// given as http://user:password@host:port[/prefix]. With `none`, nothing outside the workspace
-    /// exists: every reference to such a class, routine or include is an error. [default: latest]
+    /// exists: every reference to such a class, routine or include is an error. Given more than
+    /// once, the sources are asked in order and the first that holds a document answers for it:
+    /// `--iris latest --iris http://...` reads the system classes from the snapshot and your own
+    /// from the instance. [default: latest]
     #[arg(long, value_name = "RELEASE|URL|FILE|none")]
-    iris: Option<String>,
+    iris: Vec<String>,
     /// The namespace of the live instance to use [default: %SYS]
     ///
     /// A release names its own after its tag, and a declaration file carries its own.
@@ -253,7 +256,7 @@ fn main() {
             shared_fs,
         } => {
             let settings = Settings {
-                iris: iris.iris,
+                iris: IrisSetting::given(iris.iris),
                 iris_namespace: iris.iris_namespace,
                 style: style.load().map(StyleSetting::from),
                 diagnostics: Some(Diagnostics::List(
@@ -272,11 +275,11 @@ impl IrisArgs {
     /// Opens the release's declarations, the connection or the declaration file; `none` is no
     /// environment. Whatever can't be opened or fetched ends the run.
     fn open(self) -> Option<Box<dyn IrisContext>> {
-        let iris = (self.iris).unwrap_or_else(|| ascot::LATEST_IRIS.to_string());
-        match ascot::open_iris(&iris, self.iris_namespace.as_deref()) {
+        let irises: Vec<&str> = self.iris.iter().map(String::as_str).collect();
+        match ascot::open_iris_all(&irises, self.iris_namespace.as_deref()) {
             Ok(iris) => iris,
             Err(err) => {
-                eprintln!("--iris {iris}: {err}");
+                eprintln!("--iris {err}");
                 exit(1);
             }
         }

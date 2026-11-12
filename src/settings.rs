@@ -15,8 +15,10 @@ pub struct Settings {
     /// declarations ascot downloads once; an IRIS instance, `scheme://user:pass@host:port`,
     /// queried via the Atelier REST API; the path of a declaration file written by
     /// `ascot declare`; or `none`, for no environment at all. Defaults to the newest release ascot
-    /// was built for.
-    pub iris: Option<String>,
+    /// was built for. A list of these is asked in order, and the first that holds a document
+    /// answers for it: `["latest", "http://..."]` reads the system classes from the snapshot and
+    /// your own from the instance.
+    pub iris: Option<IrisSetting>,
     /// The namespace of a live instance, `%SYS` by default. A release names its own after its tag
     /// and a declaration file carries its own, so giving one with either is an error.
     pub iris_namespace: Option<String>,
@@ -33,6 +35,29 @@ pub struct Settings {
     /// of them separated by spaces. For example `["off:A5579,A4043"]`, `"off:hint,information"`,
     /// or `["off:all", "on:A7095,A6851"]`.
     pub diagnostics: Option<Diagnostics>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum IrisSetting {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl IrisSetting {
+    /// The sources named, empty strings left out.
+    pub fn names(&self) -> Vec<&str> {
+        let names: Vec<&str> = match self {
+            IrisSetting::One(name) => vec![name.as_str()],
+            IrisSetting::Many(names) => names.iter().map(String::as_str).collect(),
+        };
+        names.into_iter().filter(|name| !name.is_empty()).collect()
+    }
+
+    /// `names` as a setting, none when there are none.
+    pub fn given(names: Vec<String>) -> Option<Self> {
+        (!names.is_empty()).then_some(IrisSetting::Many(names))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -54,10 +79,12 @@ impl Settings {
     pub fn overlay(self, over: Settings) -> Settings {
         let (style, diagnostics) = (over.has_style(), over.has_diagnostics());
         Settings {
-            iris: over.iris().map(str::to_string).or(self.iris),
+            iris: over.iris().cloned().or(self.iris),
             iris_namespace: over.iris_namespace().map(str::to_string).or_else(|| {
-                self.iris_namespace
-                    .filter(|_| over.iris().is_none_or(|iris| iris.contains("://")))
+                self.iris_namespace.filter(|_| {
+                    over.iris()
+                        .is_none_or(|iris| iris.names().iter().any(|name| name.contains("://")))
+                })
             }),
             style: if style { over.style } else { self.style },
             diagnostics: if diagnostics {
@@ -68,8 +95,8 @@ impl Settings {
         }
     }
 
-    pub fn iris(&self) -> Option<&str> {
-        given(&self.iris)
+    pub fn iris(&self) -> Option<&IrisSetting> {
+        self.iris.as_ref().filter(|iris| !iris.names().is_empty())
     }
 
     pub fn iris_namespace(&self) -> Option<&str> {
@@ -93,10 +120,10 @@ impl Settings {
     }
 
     /// The environment `iris` names, the newest release's declarations when none is given; `none`
-    /// is no environment.
+    /// is no environment, and a list is asked in order.
     pub fn open_iris(&self) -> Result<Option<Box<dyn IrisContext>>, String> {
-        let name = self.iris().unwrap_or(iris::LATEST);
-        iris::open(name, self.iris_namespace()).map_err(|err| format!("iris {name}: {err}"))
+        let names = self.iris().map(IrisSetting::names).unwrap_or_default();
+        iris::open_all(&names, self.iris_namespace()).map_err(|err| format!("iris {err}"))
     }
 
     /// The style given, if any. A path is read only when the server shares the client's file
@@ -162,7 +189,7 @@ mod tests {
         let flags = parse(r#"{"iris": "none", "diagnostics": "off:A7095"}"#);
         let options = parse(r#"{"iris": "", "style": "", "diagnostics": ""}"#);
         let settings = flags.overlay(options);
-        assert_eq!(settings.iris(), Some("none"));
+        assert_eq!(settings.iris().unwrap().names(), ["none"]);
         assert!(!settings.has_style());
         assert_eq!(settings.filter().unwrap().0.len(), 1);
     }
@@ -174,8 +201,14 @@ mod tests {
             .clone()
             .overlay(parse(r#"{"iris": "http://u:p@h:2"}"#));
         assert_eq!(to_url.iris_namespace(), Some("USER"));
-        let to_release = flags.overlay(parse(r#"{"iris": "latest"}"#));
+        let to_release = flags.clone().overlay(parse(r#"{"iris": "latest"}"#));
         assert_eq!(to_release.iris_namespace(), None);
+        let to_list = flags.overlay(parse(r#"{"iris": ["latest", "http://u:p@h:3"]}"#));
+        assert_eq!(to_list.iris_namespace(), Some("USER"));
+        assert_eq!(
+            to_list.iris().unwrap().names(),
+            ["latest", "http://u:p@h:3"]
+        );
     }
 
     #[test]
