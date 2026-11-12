@@ -17,14 +17,21 @@
     "url": "https://github.com/intersystems-community/ascot.git",
     "directory": "bindings/js"
   },
+  "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "types": "dist/index.d.ts",
   "files": [
     "dist",
     "generated",
-    "lib/*.wasm",
     "lib/*.d.json.gz",
-    "lib/declarations.json"
+    "lib/*.js",
+    "lib/*.d.ts"
   ],
   "engines": {
     "node": ">=24"

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
-import ascot from "../dist/index.js";
+import * as ascot from "../dist/index.js";
 
 const { Atelier, createWorkspace } = ascot;
 

@@ -140,7 +140,7 @@ jobs:
         working-directory: bindings/js
         run: |
           npm pack --dry-run --json > /tmp/pack.json
-          python3 -c "import json, sys; files = {f['path'] for f in json.load(open('/tmp/pack.json'))[0]['files']}; sys.exit(0 if 'lib/declarations.json' in files and any(f.endswith('.d.json.gz') for f in files) else 'the package lacks its declarations: ' + ', '.join(sorted(files)))"
+          python3 -c "import json, sys; files = {f['path'] for f in json.load(open('/tmp/pack.json'))[0]['files']}; sys.exit(0 if 'lib/declarations.js' in files and any(f.endswith('.d.json.gz') for f in files) else 'the package lacks its declarations: ' + ', '.join(sorted(files)))"
 
       # What `release.yml` publishes to npm, so the package shipped is the one tested here.
       - uses: actions/upload-artifact@v7
@@ -149,9 +149,9 @@ jobs:
           path: |
             bindings/js/dist
             bindings/js/generated
-            bindings/js/lib/*.wasm
             bindings/js/lib/*.d.json.gz
-            bindings/js/lib/declarations.json
+            bindings/js/lib/*.js
+            bindings/js/lib/*.d.ts
           if-no-files-found: error
 
   # Only humans are accountable for this work, so an AI credit in a commit or the PR is noise.

@@ -1,23 +1,19 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
-// `generated/ascot.js` is jco's own ESM output (real `export function instantiate`), so
-// this CJS wrapper can't statically `import` it -- load it lazily instead. Doing so also
-// keeps this file's own module-relative asset lookup (below) on native CJS `__dirname`,
-// which survives being bundled into a consumer's build; ESM's `import.meta.url` doesn't --
-// bundlers commonly substitute it with a literal path resolved at *build* time, which
-// breaks the moment the built package runs on a different machine.
-import type { Root } from "../generated/ascot.js" with { "resolution-mode": "import" };
 import type {
 	ClassInfo,
 	RoutineInfo,
 	Source,
 	Style,
-} from "../generated/interfaces/iris-ascot-common.js" with {
-	"resolution-mode": "import",
-};
+} from "../generated/interfaces/iris-ascot-common.js";
+// Written by scripts/build.sh: the bundled declarations, as a `new URL("./file", import.meta.url)`,
+// the one form of asset reference a bundler resolves at build time and carries into its output.
+import { file as declarations, release } from "../lib/declarations.js";
+import { Atelier, IrisContext } from "./imports.js";
 
 export type * from "../generated/interfaces/iris-ascot-common.js";
+export { Atelier, IrisContext };
 
+type Root = typeof import("../generated/ascot.js");
 type RawWorkspace = InstanceType<Root["exported"]["Workspace"]>;
 
 /** Every method of the wasm `Workspace`, as `createWorkspace` hands it out: all async, since
@@ -39,64 +35,20 @@ export type Workspace = {
  * `"none"`, no environment at all, so that everything outside the workspace is an error. */
 export type Env = "latest" | IrisContext | Atelier | Uint8Array | "none";
 
-type Manifest = { release: string; file: string };
-let cachedManifest: Manifest | undefined;
-function manifest(): Manifest {
-	cachedManifest ??= JSON.parse(
-		fs.readFileSync(path.resolve(__dirname, "../lib/declarations.json"), "utf-8"),
-	) as Manifest;
-	return cachedManifest;
-}
 let bundled: Uint8Array | undefined;
 function bundledDeclarations(): Uint8Array {
-	bundled ??= fs.readFileSync(path.resolve(__dirname, "../lib", manifest().file));
+	bundled ??= fs.readFileSync(declarations);
 	return bundled;
 }
 
 /** The IRIS release whose declarations `"latest"` stands for, e.g. `"2026.2"`. */
-export const LATEST_RELEASE: string = manifest().release;
+export const LATEST_RELEASE: string = release;
 
-/** What ascot asks about code outside the workspace. A failed lookup throws; ascot then takes
- * what it looked for on trust and says why. */
-export class IrisContext {
-	/** A class's own members and metadata. */
-	async getCls(_cls: string): Promise<ClassInfo | undefined> {
-		return undefined;
-	}
-	/** The text of `name.inc`. */
-	async getInc(_name: string): Promise<Source | undefined> {
-		return undefined;
-	}
-	/** The labels of routine `name`, `undefined` if there is no such routine. */
-	async getRtn(_name: string): Promise<RoutineInfo | undefined> {
-		return { labels: undefined, uri: undefined };
-	}
-}
-
-/** The two Atelier REST API requests, for ascot to make `IrisContext`'s lookups with. A failed
- * request throws, like a failed lookup. */
-export class Atelier {
-	/** The rows of `/action/query` as a JSON array, each an object keyed by column name. */
-	async query(_sql: string, _params: string[]): Promise<string> {
-		throw new Error("no IRIS connection");
-	}
-	/** The text of `/doc/{name}`, `undefined` if there is no such document. */
-	async getDoc(_name: string): Promise<string | undefined> {
-		throw new Error("no IRIS connection");
-	}
-}
-
-const wasm: Promise<Root> = import("../generated/ascot.js").then(({ instantiate }) =>
-	instantiate(
-		(name: string) =>
-			new WebAssembly.Module(fs.readFileSync(path.resolve(__dirname, "../lib", name))),
-		{
-			"iris:ascot/common": {},
-			"iris:ascot/imported": { IrisContext, Atelier },
-		} as never,
-	),
-);
-wasm.catch(() => {}); // reported by createWorkspace instead
+// jco's glue instantiates the wasm as it loads, from its own `new URL("./ascot.core.wasm",
+// import.meta.url)`, with the classes above as the host; loaded lazily so that a failure is
+// `createWorkspace`'s to report, not this module's.
+const wasm: Promise<Root> = import("../generated/ascot.js");
+wasm.catch(() => {});
 
 // jco's jspi glue allows only one in-flight suspended call per component instance --
 // overlapping calls (e.g. diagnostics() and hover() both awaiting a REST round trip)
