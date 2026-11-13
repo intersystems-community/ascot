@@ -1370,6 +1370,7 @@ impl CheckCommandInner for cos::Command {
                         check_pc(&arg.pc, env, flow, |flow| match &arg.entry_ref {
                             cos::DoTarget::Plain(entry_ref) => Ok(entry_ref.check(env, flow)?),
                             cos::DoTarget::Case(case) => check_do_case(env, flow, case),
+                            cos::DoTarget::Macro(call) => call.deref().check_as_command(env, flow),
                         })?;
                     }
                     Ok(())
