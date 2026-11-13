@@ -540,7 +540,21 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
                         (Information, false) => ("information: ", ""),
                         (Hint, false) => ("hint: ", ""),
                     };
-                    print!("{}{}{}{}", on, file.uri, diagnostic.describe(), off);
+                    let mut text = diagnostic.describe();
+                    // On a terminal the code is a link to its page (OSC 8); a terminal that
+                    // doesn't know the sequence shows the plain code.
+                    if color && !diagnostic.code_description.is_empty() {
+                        let code = format!("[{}]", diagnostic.code);
+                        if let Some((first, rest)) = text.split_once('\n')
+                            && let Some(first) = first.strip_suffix(&code)
+                        {
+                            text = format!(
+                                "{first}\x1b]8;;{}\x1b\\{code}\x1b]8;;\x1b\\\n{rest}",
+                                diagnostic.code_description
+                            );
+                        }
+                    }
+                    print!("{}{}{}{}", on, file.uri, text, off);
                 }
             }
         }
