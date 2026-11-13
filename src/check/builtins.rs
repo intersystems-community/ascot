@@ -784,19 +784,10 @@ impl CheckExprInner for cos::FunctionCall {
                 args: SelectArgs { first, rest, .. },
                 ..
             } => {
-                let mut exhaustive = false;
-                let mut ty = None;
-                for b in std::iter::once(first.deref()).chain(each_arg(rest)) {
-                    if let PowerTy::Const(c) = (&b.e1).to_power_ty(env, flow)? {
-                        exhaustive |= c.truthy();
-                    }
-                    let value = (&b.e2).to_ty(env, flow)?;
-                    ty = Some(match ty {
-                        Some(x) => env.merge_ty(x, value),
-                        None => value,
-                    });
-                }
-                let ty = ty.unwrap_or(Ty::Any);
+                let branches = std::iter::once(first.deref())
+                    .chain(each_arg(rest))
+                    .map(|b| (Taken::If(&b.e1), &b.e2));
+                let (ty, exhaustive) = check_branches(env, flow, branches)?;
                 // $SELECT throws <SELECT> at runtime if no condition matches;
                 // without a literal catch-all branch (`1:...`), that can't be ruled out.
                 Ok(if exhaustive {
@@ -1607,31 +1598,70 @@ fn check_case<'a>(
     branches: Vec<(&Range<Expr>, &Range<Expr>)>,
     default: Option<&Range<Expr>>,
 ) -> Result<MaybeTy, QuasiTypeError> {
-    // todo: make $CASE flow-sensitive by understanding quasity.
-    let _ = target.to_ty(env, flow)?;
-    let mut tys = vec![];
-    for (cnd, thn) in branches {
-        let _ = cnd.to_ty(env, flow)?;
-        tys.push(thn.to_ty(env, flow)?);
+    let target = target.to_power_ty(env, flow)?;
+    if branches.is_empty() && default.is_none() {
+        return Ok(MaybeTy::Undefined);
     }
-    let definitely = if let Some(thn) = default {
-        tys.push(thn.to_ty(env, flow)?);
-        true
+    let branches = branches
+        .iter()
+        .map(|(value, then)| (Taken::Equal(&target, value), *then))
+        .chain(default.map(|then| (Taken::Always, then)));
+    let (ty, exhaustive) = check_branches(env, flow, branches)?;
+    // $CASE raises <CASE> at runtime when nothing matches and there is no default.
+    Ok(if exhaustive {
+        MaybeTy::Plain(ty)
     } else {
-        false
-    };
-    if let Some(mut x) = tys.pop() {
-        for y in tys.drain(..) {
-            x = env.merge_ty(x, y);
+        MaybeTy::Maybe(ty)
+    })
+}
+
+// What takes a branch of `$SELECT` or `$CASE`.
+enum Taken<'e> {
+    If(&'e Range<Expr>),
+    Equal(&'e PowerTy, &'e Range<Expr>),
+    Always,
+}
+
+// The type of the branches' values, each typed where its branch is taken, its condition true
+// and the earlier ones false, as `If` does, so a `$DATA(x)` guards the `x` of its branch; `flow`
+// goes on from the branches taken, as the path where none is ends in <SELECT> or <CASE>. Also
+// whether a condition always holds.
+fn check_branches<'a, 'e>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    branches: impl IntoIterator<Item = (Taken<'e>, &'e Range<Expr>)>,
+) -> Result<(Ty, bool), QuasiTypeError> {
+    let mut exhaustive = false;
+    let mut ty = None;
+    let mut taken = vec![];
+    for (condition, value) in branches {
+        let condition = match condition {
+            Taken::If(condition) => condition.to_power_ty(env, flow)?,
+            Taken::Equal(target, this) => {
+                let this = this.to_power_ty(env, flow)?;
+                related(target, TermOp::Eq, &this).unwrap_or_else(|| PowerTy::from("%Boolean"))
+            }
+            Taken::Always => PowerTy::Const(Const::from(true)),
+        };
+        if let PowerTy::Const(c) = &condition {
+            exhaustive |= c.truthy();
         }
-        if definitely {
-            Ok(MaybeTy::Plain(x))
-        } else {
-            Ok(MaybeTy::Maybe(x))
+        let if_false = flow.split_on(condition, false);
+        let mut if_true = std::mem::replace(flow, if_false);
+        if if_true.is_live() {
+            let value = value.to_ty(env, &mut if_true)?;
+            ty = Some(match ty {
+                Some(x) => env.merge_ty(x, value),
+                None => value,
+            });
         }
-    } else {
-        Ok(MaybeTy::Undefined)
+        taken.push(if_true);
     }
+    flow.handle_throw()?;
+    for branch in taken {
+        flow.merge(branch)?;
+    }
+    Ok((ty.unwrap_or(Ty::Any), exhaustive))
 }
 
 // A true `$ISOBJECT(x)` / `$ISOBJECT($GET(x))` proves `x` holds an object, hence is defined.

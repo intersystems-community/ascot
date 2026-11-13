@@ -3138,6 +3138,23 @@ impl TryFrom<&cos::Operator> for TermOp {
     }
 }
 
+// `lhs op rhs` as a term over one variable's quasity, when one side is a constant and the other
+// such a term: the shape a condition refines a flow on.
+fn related(lhs: &PowerTy, op: TermOp, rhs: &PowerTy) -> Option<PowerTy> {
+    let (target, term) = match (lhs, rhs) {
+        (PowerTy::Const(c), PowerTy::Term { target, term }) => (
+            *target,
+            Term::infix(Term::Const(c.clone()), op, term.clone()),
+        ),
+        (PowerTy::Term { target, term }, PowerTy::Const(c)) => (
+            *target,
+            Term::infix(term.clone(), op, Term::Const(c.clone())),
+        ),
+        _ => return None,
+    };
+    Some(PowerTy::Term { target, term })
+}
+
 fn check_infix<'a, X>(
     lhs: Range<PowerTy>,
     lhs_text: Option<&dyn Fn() -> String>,
@@ -3150,19 +3167,12 @@ fn check_infix<'a, X>(
         cos::InfixOperation::Other { op, rhs: rhs_node } => {
             let op = op.deref();
             let rhs = rhs_node.to_ranged_power_ty(env, flow)?;
+            if let Ok(o) = TermOp::try_from(op)
+                && let Some(related) = related(&lhs, o, &rhs)
+            {
+                return Ok(related);
+            }
             match (lhs.deref(), TermOp::try_from(op), rhs.deref()) {
-                (PowerTy::Const(c), Ok(o), PowerTy::Term { target, term }) => {
-                    return Ok(PowerTy::Term {
-                        target: *target,
-                        term: Term::infix(Term::Const(c.clone()), o, term.clone()),
-                    });
-                }
-                (PowerTy::Term { target, term }, Ok(o), PowerTy::Const(c)) => {
-                    return Ok(PowerTy::Term {
-                        target: *target,
-                        term: Term::infix(term.clone(), o, Term::Const(c.clone())),
-                    });
-                }
                 // A fold that overflows or divides by zero falls through to the plain typing.
                 (PowerTy::Const(x), Ok(o), PowerTy::Const(y)) => {
                     if let Some(c) = eval(x, o, y) {
