@@ -36,8 +36,8 @@ use types::*;
 
 pub(crate) use env::{DocumentEnv, WorkspaceEnv, labels_of};
 pub use errors::{
-    ArgCount, Available, Declared, Detail, DynamicGet, InRoutine, Suggestions, SuperclassOf,
-    SyntaxErrorText, SyntaxScope, TypeErrorKind, TypeParamHint,
+    ArgCount, Available, Declared, Detail, DynamicGet, InRoutine, OverrideDifference, Suggestions,
+    SuperclassOf, SyntaxErrorText, SyntaxScope, TypeErrorKind, TypeParamHint,
 };
 pub(crate) use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
@@ -436,13 +436,21 @@ impl MethodDetails {
             }
             ty
         };
-        let local_args = (self.args().into_iter())
+        let local_args: Vec<WithRange<NormalArg>> = (self.args().into_iter())
             .map(|mut arg| {
                 arg.it.ty = qualified(arg.it.ty.take());
                 WithRange::new(arg.it, shifter.unrange(arg.range))
             })
             .collect();
         let local_out = self.out.clone().map(|out| Some(qualified(out)));
+        // `%OnNew` is `%New`'s alone and takes `%New`'s own arguments, so it is no override.
+        let overridden = (name != "%OnNew")
+            .then(|| env.base.overridden_method(&cls.class.name, name))
+            .flatten();
+        if let Some((origin, TyProcedureOrAny::Procedure(sup))) = &overridden {
+            let out = local_out.it.clone().flatten();
+            check_override(env, cls, name, origin, sup, self, &local_args, out);
+        }
         let local_out = WithRange::new(local_out.it, shifter.unrange(local_out.range));
         let in_doc_coordinates = std::cell::RefCell::new((Vec::new(), Vec::new()));
         // `?` is deferred until after relocation below, so an early return doesn't skip
@@ -1151,6 +1159,103 @@ fn never_returns(ty: &Ty, member: &str) -> bool {
 // `Do` never looks at what its call returns -- fine for a procedure with nothing meaningful to
 // report, but a %Status/%Boolean return almost always means the caller is expected to check it
 // (e.g. `$$$ISERR`/`If`), so silently dropping it here is usually a real mistake.
+// An override is reached through the superclass's signature, so it keeps it: the same formal
+// arguments in count and mode (A1841, a warning, IRIS compiling it), each of the class declared,
+// judged as an assignment is so the datatypes are interchangeable, and a return class the caller
+// can use as the declared one (A3604, an error: IRIS refuses all but the narrowed argument, which
+// fails when run). `args` and `out` carry the types qualified, `method` the ranges.
+#[allow(clippy::too_many_arguments)]
+fn check_override(
+    env: &DocumentEnv,
+    cls: &ClassDocument,
+    name: &str,
+    origin: &str,
+    sup: &TyProcedure,
+    method: &MethodDetails,
+    args: &[WithRange<NormalArg>],
+    out: Option<Ty>,
+) {
+    let warn = |difference, range| {
+        let err = TypeError::override_signature(name.into(), origin.into(), difference, range);
+        env.base.add_soft_diagnostic(err.into());
+    };
+    let refuse = |difference, range| {
+        let err = TypeError::override_refused(name.into(), origin.into(), difference, range);
+        env.base.add_soft_diagnostic(err.into());
+    };
+    let concrete = |ty: &Ty| match ty {
+        Ty::This => Ty::ins(ClassTy::from(cls.class.name.clone())),
+        ty => ty.clone(),
+    };
+    // A value of `from` serves as one of `to`.
+    let serves = |from: &Ty, to: &Ty| {
+        env.base
+            .assert_value_compatible(&PowerTy::plain(from.clone()), to)
+            .is_ok()
+    };
+    let has = args.len() + usize::from(method.variadic_arg.is_some());
+    let declares = sup.normal_args.len() + usize::from(sup.variadic_arg.is_some());
+    if has != declares {
+        let olc = env.olc();
+        let header = method
+            .header_text
+            .trim_end_matches(['{', ' ', '\t', '\r', '\n']);
+        let range = bindings::Range {
+            start: olc.position(method.header_start),
+            end: olc.position(method.header_start + header.len()),
+        };
+        warn(OverrideDifference::Count { has, declares }, range);
+    } else {
+        for ((arg, ranged), declared) in args.iter().zip(&method.normal_args).zip(&sup.normal_args)
+        {
+            let arg_name = arg.it.name.clone();
+            if arg.it.mode != declared.mode {
+                let difference = OverrideDifference::Mode {
+                    arg: arg_name,
+                    has: arg.it.mode,
+                    declares: declared.mode,
+                };
+                warn(difference, ranged.range);
+            } else if let (Some(has), Some(declares)) = (&arg.it.ty, &declared.ty) {
+                let (has, declares) = (concrete(has), concrete(declares));
+                match env.base.is_class_or_subclass(&has, &declares) {
+                    Some(false) => {
+                        let difference = OverrideDifference::Wider {
+                            arg: arg_name,
+                            has,
+                            declares,
+                        };
+                        refuse(difference, ranged.range);
+                    }
+                    Some(true) if !(serves(&declares, &has) && serves(&has, &declares)) => {
+                        let difference = OverrideDifference::Narrower {
+                            arg: arg_name,
+                            has,
+                            declares,
+                        };
+                        refuse(difference, ranged.range);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    if let Some(declares) = &sup.out {
+        let declares = concrete(declares);
+        let has = out.as_ref().map(concrete);
+        let kept = match &has {
+            Some(has) => env.base.is_class_or_subclass(has, &declares) != Some(false),
+            None => false,
+        };
+        if !kept {
+            refuse(
+                OverrideDifference::Return { has, declares },
+                method.out.range,
+            );
+        }
+    }
+}
+
 fn warn_if_discarding_status_or_boolean(flow: &Flow, ty: Option<&Ty>) {
     if let Some(Ty::OREF(ClsOrIns::Ins(cty))) = ty
         && (cty.name.eq_ignore_ascii_case("%Library.Status")
