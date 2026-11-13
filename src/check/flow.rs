@@ -132,6 +132,9 @@ impl TrapVar {
 struct Traps {
     active: Option<(TrapVar, Option<String>)>,
     joins: HashMap<String, Join>,
+    // The `Try` blocks this path is in, innermost last: each the merge of every state its `Catch`
+    // can be entered from.
+    catches: Vec<Bindings>,
 }
 
 impl Traps {
@@ -151,6 +154,9 @@ impl Traps {
                     self.joins.insert(label, join);
                 }
             }
+        }
+        for (mine, theirs) in self.catches.iter_mut().zip(them.catches) {
+            mine.merge(Some(theirs), env, undeclared)?;
         }
         Ok(())
     }
@@ -447,7 +453,7 @@ impl<'a> Flow<'a> {
                 bindings,
                 Traps {
                     active: Some((var, None)),
-                    joins: HashMap::new(),
+                    ..Traps::default()
                 },
             ),
             None => (Bindings { bindings }, Traps::default()),
@@ -881,8 +887,27 @@ impl<'a> Flow<'a> {
         }
     }
 
+    // A `Try` block starts: an error anywhere in it enters its `Catch`, so this state and each one
+    // after it (`step_traps`) join into what the catch block is checked from.
+    pub(crate) fn enter_try(&mut self) -> Result<(), QuasiTypeError> {
+        let bindings = self.bindings()?.clone();
+        self.traps.catches.push(bindings);
+        Ok(())
+    }
+
+    // The `Try` block ended: the flow its `Catch` block is checked from.
+    pub(crate) fn leave_try(&mut self) -> Flow<'a> {
+        let caught = self.traps.catches.pop();
+        let mut catch = self.split();
+        catch.bindings = caught;
+        catch
+    }
+
     pub(crate) fn step_traps(&mut self) -> Result<(), QuasiTypeError> {
         let undeclared = self.undeclared();
+        for join in &mut self.traps.catches {
+            join.merge(self.bindings.clone(), self.shared.env, &undeclared)?;
+        }
         let Some((_, Some(label))) = &self.traps.active else {
             return Ok(());
         };
