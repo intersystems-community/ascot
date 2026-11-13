@@ -2972,6 +2972,7 @@
   "%Library.GlobalEdit": {
    "header": "Class %Library.GlobalEdit",
    "members": [
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
     { "header": "ClassMethod GetGlobalSizeBySubscriptPrecise(Directory As %String, BlockSize As %String, MaxSize As %String, Block As %Integer, StartingNode As %String, EndingNode As %String, StartKey As %String, EndKey As %String = \"\", CalculateAverages As %Boolean = 0, Output Level As %String = 0, ByRef TotalNodes As %Integer = 0, ByRef TotalNodesPages As %Integer = 0)" },
     { "header": "ClassMethod Open(Name As %String, Directory As %String = {$zu(12,\"\")}, System As %String = \"\", concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" }
    ]
@@ -3043,6 +3044,12 @@
    "generics": {
     "ELEMENTTYPE": "%Library.Any"
    }
+  },
+  "%Library.MessageDictionary": {
+   "header": "Class %Library.MessageDictionary",
+   "members": [
+    { "header": "Method %OnNew(initvalue = \"\") As %Status" }
+   ]
   },
   "%Library.MethodDefinition": {
    "header": "Class %Library.MethodDefinition",
@@ -3277,6 +3284,7 @@
   "%Library.Transaction": {
    "header": "Class %Library.Transaction",
    "members": [
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
     { "header": "Property object As %Library.Any [ MultiDimensional ]" }
    ]
   },
