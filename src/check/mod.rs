@@ -1568,6 +1568,10 @@ impl CheckCommandInner for cos::Command {
             }),
             cos::Command::Kill(cos::KillCommand { pc, targets, .. }) => {
                 check_pc(pc, env, flow, |flow| {
+                    // Without arguments, every local goes.
+                    if targets.is_none() {
+                        return flow.handle_kill_except(&[]);
+                    }
                     for target in targets.iter().flat_map(|targets| targets.items(env)) {
                         match target.deref() {
                             cos::AllowMacro::Plain(arg) => match &arg {
@@ -2355,7 +2359,8 @@ fn check_and<'a, T: Grammar>(
     Ok(if_false)
 }
 
-// `a && b` (or `a & b`) as a condition refines on each operand in turn, exactly like `If a,b`.
+// `a && b` as a condition refines on each operand in turn, exactly like `If a,b`; `a & b` evaluates
+// both sides whatever `a` is, so it is one value.
 fn split_on_conjunction<'a, X: Grammar, Y: Grammar>(
     expr: Range<&GenericExpr<X, Y>>,
     env: &CodeEnv<'a>,
@@ -2376,9 +2381,7 @@ fn split_on_conjunction<'a, X: Grammar, Y: Grammar>(
         .ops
         .iter()
         .map(|op| match op.deref() {
-            InfixOperation::Other { op, rhs }
-                if matches!(op.deref(), cos::Operator::LA(_) | cos::Operator::And(..)) =>
-            {
+            InfixOperation::Other { op, rhs } if matches!(op.deref(), cos::Operator::LA(_)) => {
                 Some(rhs)
             }
             _ => None,
@@ -3729,8 +3732,9 @@ fn check_call<'a, 'b>(
 ) -> Result<Option<Ty>, QuasiTypeError> {
     match base {
         // Unknown callee shape: conservatively assume it might read any public variable.
+        // An unknown callee may read or write any public variable.
         TyProcedureOrAny::Any => {
-            flow.read_publics()?;
+            flow.read_write_publics()?;
             Ok(Some(builtins::check_args_any(env, flow, args)?))
         }
         TyProcedureOrAny::Procedure(base) => {
