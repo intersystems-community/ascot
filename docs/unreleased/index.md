@@ -112,6 +112,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A5362](A5362.md) | '{name}' is a user-defined command (^%ZLANGC00), so the call is not checked |
 | [A5540](A5540.md) | Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken |
 | [A6037](A6037.md) | ${name} is not documented for IRIS, so the call is not checked |
+| [A6204](A6204.md) | '{name}' is a ByRef parameter and gets a copy of the argument: an assignment the callee makes to it stays there, which may be intended |
 | [A9360](A9360.md) | Cannot confirm '{mem}' exists on {on}{cls}: its hierarchy includes {unseen} |
 
 ## Hints

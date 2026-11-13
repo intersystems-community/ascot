@@ -114,7 +114,8 @@ ones are the [settings](#settings) described under Advanced Usage.
 The code at the end of a message links to its page in the
 [diagnostics reference](https://intersystems-community.github.io/ascot/), one
 per release: severity, message, when it fires, what IRIS does with such code,
-and an example. `ascot diagnostics DIR` writes the pages.
+and an example; on a terminal, `analyze` prints the code as that link. `ascot diagnostics DIR`
+writes the pages.
 
 ### `ascot` as a CLI tool
 
@@ -248,6 +249,12 @@ IRIS; `iris` says which:
   requests, and no instance needed.
 - `--iris none`: no environment, so every class, routine or include outside the
   workspace is an error.
+- `--iris` more than once: the sources are asked in order, and the first that
+  holds a class, routine or include answers for it. `--iris latest --iris
+  http://...` reads the system classes from the snapshot, mask corrections
+  included, and your own from the instance; `--iris-namespace` applies to the
+  instances in the list, and `none` among others is a no-op. The `iris` setting
+  of the servers takes a list the same way.
 
 #### Build Your Own Declaration Files
 

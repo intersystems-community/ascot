@@ -2228,26 +2228,27 @@ type_error_kinds! {
     #[message = "Quit inside a loop or Try block takes no value; this one carries {actual}"]
     QuitXInControl { actual: Ty },
     /// The argument and the parameter disagree on by-reference passing: a plain argument where
-    /// the parameter is `ByRef` or `Output`, so the callee's assignments never reach the caller,
-    /// or a dotted one where the parameter is neither, so they do without the signature saying
-    /// so. Only the caller's `.` passes by reference; `ByRef` and `Output` just declare the
-    /// intent, so IRIS compiles and runs either way. Add or drop the `.`, or correct the
-    /// declaration.
+    /// the parameter is `Output`, so the callee's result never reaches the caller, or a dotted one
+    /// where the parameter is neither `ByRef` nor `Output`, so the callee's assignments do without
+    /// the signature saying so. Only the caller's `.` passes by reference; `ByRef` and `Output`
+    /// just declare the intent, so IRIS compiles and runs either way. Add or drop the `.`, or
+    /// correct the declaration. A plain variable where `ByRef` is declared is A6204, an
+    /// Information, since it is as often meant as not.
     ///
     /// ```objectscript compiles
     /// Class Demo.MismatchArgumentAndArgumentMode
     /// {
     ///
-    /// ClassMethod Increment(ByRef counter As %Integer)
+    /// ClassMethod Next(Output value As %Integer)
     /// {
-    ///     Set counter = counter + 1
+    ///     Set value = 1
     /// }
     ///
     /// ClassMethod Call() As %Integer
     /// {
-    ///     Set counter = 0
-    ///     Do ..Increment(counter) //! A5579
-    ///     Quit counter
+    ///     Set value = 0
+    ///     Do ..Next(value) //! A5579
+    ///     Quit value
     /// }
     ///
     /// }
@@ -2260,6 +2261,35 @@ type_error_kinds! {
         wanted: Mode,
         actual: Mode,
     },
+    /// A plain variable where the parameter is `ByRef`: the callee gets a copy, and whatever it
+    /// assigns to the parameter stays with it. IRIS compiles and runs the call. As often as not
+    /// this is meant: `ByRef` also marks a parameter that may take an array, `%Prepare`'s
+    /// statement text or `Read`'s length, and an input passed by value loses nothing. It is a
+    /// mistake only when the caller reads the variable afterwards for the callee's result; a `.`
+    /// before the argument passes it by reference.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.ByValueToByRef
+    /// {
+    ///
+    /// ClassMethod Increment(ByRef counter As %Integer)
+    /// {
+    ///     Set counter = counter + 1
+    /// }
+    ///
+    /// ClassMethod Call() As %Integer
+    /// {
+    ///     Set counter = 0
+    ///     Do ..Increment(counter) //! A6204
+    ///     Quit counter
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A6204"]
+    #[severity = Information]
+    #[message = "'{name}' is a ByRef parameter and gets a copy of the argument: an assignment the callee makes to it stays there, which may be intended"]
+    ByValueToByRef { name: String },
     /// The variable has a value on some of the paths that reach this use and none on the others:
     /// an assignment under a condition, or a `Kill` on one branch. IRIS compiles the code and raises
     /// `<UNDEFINED>` when it runs along a path without the value. Assign it on every path, or read
@@ -3251,6 +3281,16 @@ impl TypeError {
             range,
             declared_at
                 .map(|location| related(location, &message))
+                .unwrap_or_default(),
+        )
+    }
+
+    pub fn by_value_to_by_ref(name: String, range: Range, declared_at: Option<Location>) -> Self {
+        Self::new(
+            TypeErrorKind::ByValueToByRef { name },
+            range,
+            declared_at
+                .map(|location| related(location, "Parameter declared here."))
                 .unwrap_or_default(),
         )
     }

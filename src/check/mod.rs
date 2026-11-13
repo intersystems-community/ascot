@@ -396,7 +396,7 @@ impl MethodDetails {
         };
         {
             let mut body_macros = cls.body_macros.borrow_mut();
-            for (macro_name, definition) in &definitions {
+            for (macro_name, definition) in definitions.own() {
                 if !cls.macro_definitions.contains_key(macro_name)
                     && !body_macros.definitions.contains_key(macro_name)
                 {
@@ -1376,6 +1376,7 @@ impl CheckCommandInner for cos::Command {
                         check_pc(&arg.pc, env, flow, |flow| match &arg.entry_ref {
                             cos::DoTarget::Plain(entry_ref) => Ok(entry_ref.check(env, flow)?),
                             cos::DoTarget::Case(case) => check_do_case(env, flow, case),
+                            cos::DoTarget::Macro(call) => call.deref().check_as_command(env, flow),
                         })?;
                     }
                     Ok(())
@@ -1574,6 +1575,10 @@ impl CheckCommandInner for cos::Command {
             }),
             cos::Command::Kill(cos::KillCommand { pc, targets, .. }) => {
                 check_pc(pc, env, flow, |flow| {
+                    // Without arguments, every local goes.
+                    if targets.is_none() {
+                        return flow.handle_kill_except(&[]);
+                    }
                     for target in targets.iter().flat_map(|targets| targets.items(env)) {
                         match target.deref() {
                             cos::AllowMacro::Plain(arg) => match &arg {
@@ -2177,9 +2182,13 @@ fn check_try<'a>(
     catch_target: Option<&cos::CatchTarget>,
     catch_block: &Ranged<cos::Block>,
 ) -> Result<(), QuasiTypeError> {
-    let before = flow.split();
     let try_env = env.with_try();
-    flow.with_block(env.range(try_block), |flow| try_block.check(&try_env, flow))?;
+    flow.enter_try()?;
+    let checked = flow.with_block(env.range(try_block), |flow| try_block.check(&try_env, flow));
+    // The exception may be thrown anywhere in the try block, so the catch block starts from
+    // anything between its start and its end.
+    let mut catch_flow = flow.leave_try();
+    checked?;
     // The `#dim` lines between the block and its `Catch` declare for what follows them: the path
     // out of the block, when there is one, and the catch block.
     let declare = |flow: &mut Flow<'a>| -> Result<(), QuasiTypeError> {
@@ -2194,10 +2203,6 @@ fn check_try<'a>(
     if flow.is_live() {
         declare(flow)?;
     }
-    // The exception may be thrown anywhere in the try block, so the catch block starts from
-    // anything between its start and its end.
-    let mut catch_flow = flow.split();
-    catch_flow.merge(before)?;
     declare(&mut catch_flow)?;
     if let Some(target) = catch_target
         && let Left(local) = target.deref().as_local(env, flow)?
@@ -2361,7 +2366,8 @@ fn check_and<'a, T: Grammar>(
     Ok(if_false)
 }
 
-// `a && b` (or `a & b`) as a condition refines on each operand in turn, exactly like `If a,b`.
+// `a && b` as a condition refines on each operand in turn, exactly like `If a,b`; `a & b` evaluates
+// both sides whatever `a` is, so it is one value.
 fn split_on_conjunction<'a, X: Grammar, Y: Grammar>(
     expr: Ranged<&GenericExpr<X, Y>>,
     env: &CodeEnv<'a>,
@@ -2370,35 +2376,37 @@ fn split_on_conjunction<'a, X: Grammar, Y: Grammar>(
 ) -> Result<Flow<'a>, TypeError> {
     fn split<'a>(
         ty: Ranged<PowerTy>,
+        text: &dyn Fn() -> String,
         env: &CodeEnv<'a>,
         if_true: &mut Flow<'a>,
         report_always: bool,
-    ) -> Flow<'a> {
-        if_true.with_range(env.range(&ty), |if_true| {
+    ) -> Result<Flow<'a>, TypeError> {
+        // A condition is a read like any other, then what the flow splits on.
+        ranged_quasi_ty_to_ty(env, if_true, &ty, Some(text))?;
+        Ok(if_true.with_range(env.range(&ty), |if_true| {
             if_true.split_on(ty.into_inner(), report_always)
-        })
+        }))
     }
     let conjuncts: Option<Vec<_>> = expr
         .ops
         .iter()
         .map(|op| match op.deref() {
-            InfixOperation::Other { op, rhs }
-                if matches!(op.deref(), cos::Operator::LA(_) | cos::Operator::And(..)) =>
-            {
+            InfixOperation::Other { op, rhs } if matches!(op.deref(), cos::Operator::LA(_)) => {
                 Some(rhs)
             }
             _ => None,
         })
         .collect();
     let Some(conjuncts) = conjuncts.filter(|conjuncts| !conjuncts.is_empty()) else {
+        let whole = *expr.deref();
         let ty = expr.to_ranged_power_ty(env, if_true)?;
-        return Ok(split(ty, env, if_true, report_always));
+        return split(ty, &|| whole.print(), env, if_true, report_always);
     };
     let ty = expr.base.to_ranged_power_ty(env, if_true)?;
-    let mut if_false = split(ty, env, if_true, report_always);
+    let mut if_false = split(ty, &|| expr.base.print(), env, if_true, report_always)?;
     for rhs in conjuncts {
         let ty = rhs.to_ranged_power_ty(env, if_true)?;
-        let flow = split(ty, env, if_true, report_always);
+        let flow = split(ty, &|| rhs.print(), env, if_true, report_always)?;
         if_false.merge(flow).with_range(|| env.range(rhs))?;
     }
     Ok(if_false)
@@ -2412,7 +2420,10 @@ fn check_pc<'a>(
 ) -> Result<(), QuasiTypeError> {
     if let Some(pc) = pc {
         let pc_ty = pc.as_ref().map(Deref::deref).to_power_ty(env, flow)?;
-        let old_flow = flow.split_on(pc_ty, true);
+        let pc_ty = Ranged::new(pc.start, pc_ty, pc.end);
+        let text = || pc.as_ref().map(Deref::deref).print();
+        ranged_quasi_ty_to_ty(env, flow, &pc_ty, Some(&text)).map_err(QuasiTypeError::WithRange)?;
+        let old_flow = flow.split_on(pc_ty.into_inner(), true);
         and_then(flow)?;
         flow.merge(old_flow)
     } else {
@@ -2518,6 +2529,8 @@ fn check_embedded_sql(flow: &mut Flow<'_>, sql: &str) -> Result<(), QuasiTypeErr
             && bytes
                 .get(i + 1)
                 .is_some_and(|n| n.is_ascii_alphabetic() || *n == b'%')
+            // After a closing quote it is a JSON key's colon (`USING {"header":true}`).
+            && sql[..i].trim_end().as_bytes().last() != Some(&b'"')
         {
             let end = word_end(i + 1);
             let name = sql[i + 1..end].to_string();
@@ -2526,7 +2539,8 @@ fn check_embedded_sql(flow: &mut Flow<'_>, sql: &str) -> Result<(), QuasiTypeErr
             } else if into && !is_object {
                 flow.handle_set(Local::bare(name), Ty::Any.into(), flow.range())?;
             } else {
-                flow.handle_ref(Local::bare(name))?;
+                let ty = flow.handle_ref(Local::bare(name.clone()))?;
+                flow.value(&ty, || name)?;
             }
             i = end;
             continue;
@@ -2584,6 +2598,14 @@ impl CheckCommandInner for cos::SetArgument {
                         .into_error(|| env.range(&self.value)),
                 );
                 PowerTy::plain(defined)
+            }
+            MaybeTy::Undefined => {
+                env.soft_diagnostic(
+                    QuasiTypeError::undefined()
+                        .with_expr_text(|| self.value.print())
+                        .into_error(|| env.range(&self.value)),
+                );
+                PowerTy::plain(Ty::Any)
             }
             _ => ty,
         };
@@ -3018,13 +3040,13 @@ trait CheckExpr: Sized {
 fn ranged_quasi_ty_to_ty<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    ty: Ranged<PowerTy>,
+    ty: &Ranged<PowerTy>,
     text: Option<&dyn Fn() -> String>,
 ) -> Result<Ty, TypeError> {
-    let text = || text.map_or_else(String::new, |text| text());
-    flow.with_range(env.range(&ty), |flow| flow.value(&ty, text))
+    let text = || text.map_or_else(String::new, |text| text().trim().to_string());
+    flow.with_range(env.range(ty), |flow| flow.value(ty, text))
         .map_err(|err| err.with_expr_text(text))
-        .with_range(|| env.range(&ty))
+        .with_range(|| env.range(ty))
 }
 
 impl CheckExprInner for Expr {
@@ -3144,6 +3166,23 @@ impl TryFrom<&cos::Operator> for TermOp {
     }
 }
 
+// `lhs op rhs` as a term over one variable's quasity, when one side is a constant and the other
+// such a term: the shape a condition refines a flow on.
+fn related(lhs: &PowerTy, op: TermOp, rhs: &PowerTy) -> Option<PowerTy> {
+    let (target, term) = match (lhs, rhs) {
+        (PowerTy::Const(c), PowerTy::Term { target, term }) => (
+            *target,
+            Term::infix(Term::Const(c.clone()), op, term.clone()),
+        ),
+        (PowerTy::Term { target, term }, PowerTy::Const(c)) => (
+            *target,
+            Term::infix(term.clone(), op, Term::Const(c.clone())),
+        ),
+        _ => return None,
+    };
+    Some(PowerTy::Term { target, term })
+}
+
 fn check_infix<'a, X>(
     lhs: Ranged<PowerTy>,
     lhs_text: Option<&dyn Fn() -> String>,
@@ -3152,23 +3191,19 @@ fn check_infix<'a, X>(
     flow: &mut Flow<'a>,
 ) -> Result<PowerTy, TypeError> {
     match op {
-        cos::InfixOperation::Match { .. } => Ok(PowerTy::from("%Boolean")),
+        cos::InfixOperation::Match { .. } => {
+            ranged_quasi_ty_to_ty(env, flow, &lhs, lhs_text)?;
+            Ok(PowerTy::from("%Boolean"))
+        }
         cos::InfixOperation::Other { op, rhs: rhs_node } => {
             let op = op.deref();
             let rhs = rhs_node.to_ranged_power_ty(env, flow)?;
+            if let Ok(o) = TermOp::try_from(op)
+                && let Some(related) = related(&lhs, o, &rhs)
+            {
+                return Ok(related);
+            }
             match (lhs.deref(), TermOp::try_from(op), rhs.deref()) {
-                (PowerTy::Const(c), Ok(o), PowerTy::Term { target, term }) => {
-                    return Ok(PowerTy::Term {
-                        target: *target,
-                        term: Term::infix(Term::Const(c.clone()), o, term.clone()),
-                    });
-                }
-                (PowerTy::Term { target, term }, Ok(o), PowerTy::Const(c)) => {
-                    return Ok(PowerTy::Term {
-                        target: *target,
-                        term: Term::infix(term.clone(), o, Term::Const(c.clone())),
-                    });
-                }
                 // A fold that overflows or divides by zero falls through to the plain typing.
                 (PowerTy::Const(x), Ok(o), PowerTy::Const(y)) => {
                     if let Some(c) = eval(x, o, y) {
@@ -3196,8 +3231,8 @@ fn check_infix<'a, X>(
                 }
                 _ => (),
             }
-            let lhs = ranged_quasi_ty_to_ty(env, flow, lhs, lhs_text)?;
-            let rhs = ranged_quasi_ty_to_ty(env, flow, rhs, Some(&|| rhs_node.print()))?;
+            let lhs = ranged_quasi_ty_to_ty(env, flow, &lhs, lhs_text)?;
+            let rhs = ranged_quasi_ty_to_ty(env, flow, &rhs, Some(&|| rhs_node.print()))?;
             Ok(match op {
                 cos::Operator::Add(_) | cos::Operator::Sub(_) => env.merge_ty(lhs, rhs).into(),
                 cos::Operator::Pow(_) | cos::Operator::Mul(_) | cos::Operator::Div(..) => {
@@ -3255,13 +3290,15 @@ fn check_prefix(op: &PrefixOperator, ty: PowerTy, env: &CodeEnv) -> Result<Power
                 term: Term::Target.negate(),
             })
         }
-        ty => {
-            let _ = ty.to_ty(env);
-            match op {
-                cos::PrefixOperator::Not(_) => Ok(PowerTy::from("%Boolean")),
-                cos::PrefixOperator::Minus(_) | cos::PrefixOperator::Plus(_) => Ok(ty),
-            }
-        }
+        ty => match op {
+            // The operand is read, so an undefined one stays undefined for whoever values it.
+            cos::PrefixOperator::Not(_) => Ok(match ty.to_maybe_ty(env) {
+                MaybeTy::Undefined => PowerTy::undefined(),
+                MaybeTy::Maybe(_) => MaybeTy::Maybe(Ty::from("%Boolean")).into(),
+                MaybeTy::Plain(_) => PowerTy::from("%Boolean"),
+            }),
+            cos::PrefixOperator::Minus(_) | cos::PrefixOperator::Plus(_) => Ok(ty),
+        },
     }
 }
 
@@ -3648,7 +3685,8 @@ fn check_param_arg<'a>(
             // A value where `Output` is declared: the callee's result never reaches the caller.
             // Where `ByRef` is declared, only a variable the caller could have dotted (a plain
             // local or `%` variable; IRIS takes no dot on a subscript, a global or `i%P`) is
-            // reported: a constant or an expression takes the value's path by nature.
+            // noted, as an Information: a constant or an expression takes the value's path by
+            // nature, and a variable passed by value is as often meant as not.
             let dottable = expr.as_variable().is_some_and(|var| {
                 var.subs.is_none()
                     && matches!(
@@ -3656,8 +3694,14 @@ fn check_param_arg<'a>(
                         AllowMacro::Plain(VariableBase::Local(_) | VariableBase::Public(_))
                     )
             });
-            if par.mode == Some(RefMode::Output) || (par.mode.is_some() && dottable) {
+            if par.mode == Some(RefMode::Output) {
                 mode_mismatch(flow, None);
+            } else if par.mode.is_some() && dottable {
+                flow.add_soft_diagnostic(QuasiTypeError::WithRange(TypeError::by_value_to_by_ref(
+                    par.name.clone(),
+                    env.range(arg),
+                    declared_at.clone(),
+                )));
             }
             let target = par.ty.clone().unwrap_or_default();
             let source = expr.to_power_ty(env, flow)?;
@@ -3728,8 +3772,9 @@ fn check_call<'a, 'b>(
 ) -> Result<Option<Ty>, QuasiTypeError> {
     match base {
         // Unknown callee shape: conservatively assume it might read any public variable.
+        // An unknown callee may read or write any public variable.
         TyProcedureOrAny::Any => {
-            flow.read_publics()?;
+            flow.read_write_publics()?;
             Ok(Some(builtins::check_args_any(env, flow, args)?))
         }
         TyProcedureOrAny::Procedure(base) => {
@@ -4538,7 +4583,8 @@ pub(crate) fn check_rtn(
         })
         .collect();
     let min_description_lines = min_description_lines(env);
-    let env = env.for_routine(env::scoped_labels(env.uri(), &labels), definitions);
+    let definitions = crate::Definitions::over(definitions);
+    let env = env.for_routine(env::scoped_labels(env.uri(), &labels), &definitions);
     let mut diagnostics = Vec::new();
     // The label loose lines fall through to: the element at `i`, when it is a label of the old kind.
     let label_at = |i: usize| match elements.get(i)? {

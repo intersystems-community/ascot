@@ -76,12 +76,12 @@ pub use atelier::{Atelier, AtelierContext};
 #[cfg(not(target_arch = "wasm32"))]
 pub use iris::{
     DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, LATEST as LATEST_IRIS, NONE as NO_IRIS,
-    open as open_iris,
+    open as open_iris, open_all as open_iris_all,
 };
 #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
 pub use iris_connection::RawAtelier;
-pub(crate) use macro_expand::MacroDefinitions;
 pub(crate) use macro_expand::SourceMap;
+pub(crate) use macro_expand::{Definitions, MacroDefinitions};
 use tygr_objectscript::cos::ClassDefinitionHeader;
 pub use tygr_objectscript::{cos, sql};
 

@@ -1248,11 +1248,13 @@ pub struct DoArgument {
 }
 
 // What `Do` runs: an entry reference, or `$Case(x, value:entry, ..., :entry)` choosing one, each
-// value a `Do` argument (documented for `$CASE`).
+// value a `Do` argument (documented for `$CASE`); or a macro call left unexpanded, undefined or
+// compile-time, which stands for one.
 #[derive(Grammar)]
 pub enum DoTarget {
     Plain(Ranged<EntryRefAndArgs>),
     Case(DoCase),
+    Macro(Ranged<MacroCall>),
 }
 
 #[derive(Grammar)]

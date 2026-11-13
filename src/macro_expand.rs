@@ -75,6 +75,84 @@ pub(crate) struct BodyMacros {
     pub(crate) methods: HashMap<String, String>,
 }
 
+// The definitions in force while expanding: a layer of its own, where `#define`s land, over the
+// base a class shares with every method body, read and never copied.
+pub(crate) struct Definitions<'b> {
+    base: Option<&'b MacroDefinitions>,
+    // `None` is an `#undef` of a base definition.
+    own: HashMap<String, Option<MacroDefinition>>,
+}
+
+impl<'b> Definitions<'b> {
+    fn new() -> Self {
+        Self::from(MacroDefinitions::new())
+    }
+
+    pub(crate) fn over(base: &'b MacroDefinitions) -> Self {
+        Definitions {
+            base: Some(base),
+            own: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&MacroDefinition> {
+        match self.own.get(name) {
+            Some(own) => own.as_ref(),
+            None => self.base.and_then(|base| base.get(name)),
+        }
+    }
+
+    fn contains_key(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
+    fn insert(&mut self, name: String, definition: MacroDefinition) {
+        self.own.insert(name, Some(definition));
+    }
+
+    fn remove(&mut self, name: &str) {
+        if self.base.is_some_and(|base| base.contains_key(name)) {
+            self.own.insert(name.to_string(), None);
+        } else {
+            self.own.remove(name);
+        }
+    }
+
+    // Its own layer, the base left out.
+    pub(crate) fn own(&self) -> impl Iterator<Item = (&String, &MacroDefinition)> {
+        self.own
+            .iter()
+            .filter_map(|(name, definition)| Some((name, definition.as_ref()?)))
+    }
+
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        let base = self.base.into_iter().flat_map(|base| base.keys());
+        let own = self
+            .own
+            .keys()
+            .filter(|name| !self.base.is_some_and(|base| base.contains_key(*name)));
+        base.chain(own)
+            .filter(move |name| self.contains_key(name))
+            .map(String::as_str)
+    }
+
+    fn into_own(self) -> MacroDefinitions {
+        self.own
+            .into_iter()
+            .filter_map(|(name, definition)| Some((name, definition?)))
+            .collect()
+    }
+}
+
+impl From<MacroDefinitions> for Definitions<'_> {
+    fn from(own: MacroDefinitions) -> Self {
+        Definitions {
+            base: None,
+            own: own.into_iter().map(|(k, v)| (k, Some(v))).collect(),
+        }
+    }
+}
+
 // Where a span of expanded text came from. `uri: None` means the top-level file passed to
 // `expand_rtn`. `parent`, if set, is the `#include` directive that pulled `uri`'s text in, so
 // walking it up always reaches a `uri: None` origin.
@@ -524,8 +602,9 @@ impl WorkspaceStruct {
         src: &str,
         dones: &mut DoneList,
     ) -> Result<(Routine, MacroDefinitions), tygr::Error> {
-        let (mut definitions, _, _) =
+        let (definitions, _, _) =
             self.resolve_class_includes(&implicit_includes(ROUTINE_IMPLICIT_INCLUDES));
+        let mut definitions = Definitions::from(definitions);
         let RoutineWithMacro {
             header,
             macroed_units,
@@ -545,11 +624,11 @@ impl WorkspaceStruct {
                     true,
                 );
             }
-            return Ok((Routine::parse(&dones.text)?, definitions));
+            return Ok((Routine::parse(&dones.text)?, definitions.into_own()));
         }
         let mut todos = TodoList::new(precise_items(&macroed_units, Origin::top_level));
         self.expand_units(&mut definitions, &mut todos, dones)?;
-        Ok((Routine::parse(&dones.text)?, definitions))
+        Ok((Routine::parse(&dones.text)?, definitions.into_own()))
     }
 
     // The substitution loop: `#define`/`#include`/macro-calls update `definitions` or requeue
@@ -557,7 +636,7 @@ impl WorkspaceStruct {
     // as-is via `dones`.
     fn expand_units(
         &self,
-        definitions: &mut MacroDefinitions,
+        definitions: &mut Definitions<'_>,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
     ) -> Result<(), tygr::Error> {
@@ -860,7 +939,7 @@ impl WorkspaceStruct {
     // against %occErrors whether or not the file includes it, so those count as defined here.
     fn expand_arg(
         &self,
-        definitions: &mut MacroDefinitions,
+        definitions: &mut Definitions<'_>,
         text: &str,
         compile_time: bool,
     ) -> Result<String, tygr::Error> {
@@ -895,7 +974,7 @@ impl WorkspaceStruct {
 
     fn expand_text(
         &self,
-        definitions: &mut MacroDefinitions,
+        definitions: &mut Definitions<'_>,
         text: &str,
     ) -> Result<String, tygr::Error> {
         let mut dones = DoneList::new();
@@ -909,7 +988,7 @@ impl WorkspaceStruct {
     // and anything else is unresolved (see `resolve_branch`).
     fn resolve_if(
         &self,
-        definitions: &mut MacroDefinitions,
+        definitions: &mut Definitions<'_>,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
         item: TodoItem<'_>,
@@ -961,7 +1040,7 @@ impl WorkspaceStruct {
     // a dropped one and tries the closing `#elseif` in turn.
     fn resolve_branch(
         &self,
-        definitions: &mut MacroDefinitions,
+        definitions: &mut Definitions<'_>,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
         taken: bool,
@@ -1008,7 +1087,7 @@ impl WorkspaceStruct {
         &self,
         names: &[String],
     ) -> (MacroDefinitions, Vec<FailedInclude>, HashSet<String>) {
-        let mut definitions = HashMap::new();
+        let mut definitions = Definitions::new();
         let mut failed = Vec::new();
         let mut include_names = HashSet::new();
         for name in names {
@@ -1030,7 +1109,7 @@ impl WorkspaceStruct {
                 Err(reason) => failed.push((name.clone(), Some(reason))),
             }
         }
-        (definitions, failed, include_names)
+        (definitions.into_own(), failed, include_names)
     }
 
     pub(crate) fn implicit_class_definitions(&self) -> (MacroDefinitions, HashSet<String>) {
@@ -1046,19 +1125,21 @@ impl WorkspaceStruct {
 
     // `header` is pushed verbatim, unexpanded, ahead of the expanded `body` -- like
     // `expand_rtn_helper` pushes a routine's own header -- so both share one coordinate space.
-    pub(crate) fn expand_method_body(
+    pub(crate) fn expand_method_body<'b>(
         &self,
         uri: &str,
         header: &str,
         body: &str,
-        base_definitions: &MacroDefinitions,
+        base_definitions: &'b MacroDefinitions,
         body_macros: &BodyMacros,
-    ) -> Result<(String, SourceMap, MacroDefinitions), Diagnostic> {
+    ) -> Result<(String, SourceMap, Definitions<'b>), Diagnostic> {
         let mut dones = DoneList::new();
         dones.body_macros = body_macros.methods.clone();
-        // The body's own `#define`s land here too, for `check::mod` to recognize.
-        let mut definitions = base_definitions.clone();
-        definitions.extend(body_macros.definitions.clone());
+        // The body's own `#define`s land in the layer too, for `check::mod` to recognize.
+        let mut definitions = Definitions::over(base_definitions);
+        for (name, definition) in &body_macros.definitions {
+            definitions.insert(name.clone(), definition.clone());
+        }
         // Tokenized together so every offset, including a macro argument's, is relative to the
         // same text; the header itself is copied verbatim (a `{$$$X}` parameter default must not
         // change its length, or the body would be cut at the wrong offset).
@@ -1464,7 +1545,7 @@ fn take_branch<'a>(todos: &mut TodoList<'a>) -> (Vec<TodoItem<'a>>, BranchEnd<'a
 }
 
 fn define(
-    definitions: &mut MacroDefinitions,
+    definitions: &mut Definitions<'_>,
     name: &cos::MacroName,
     params: Option<Vec<String>>,
     literal_args: bool,

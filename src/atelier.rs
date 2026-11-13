@@ -284,7 +284,12 @@ fn drop_query_methods(members: &mut Vec<MemberInfo>) {
         else {
             continue;
         };
-        let (normal, variadic) = (sig.normal[1..].to_vec(), sig.variadic.clone());
+        // Its first parameter is the query handle; without one (a hand-written `Execute`, or a
+        // spec the grammar couldn't read) the query keeps its own view.
+        let Some(rest) = sig.normal.get(1..) else {
+            continue;
+        };
+        let (normal, variadic) = (rest.to_vec(), sig.variadic.clone());
         let Some(MemberKind::Query(sig)) = members
             .iter_mut()
             .find(|m| &m.name == query)
@@ -643,7 +648,16 @@ tygr::char_class!(IsCompiledDefaultText, "default_char", |ch| {
 });
 
 fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
-    let Ok(CompiledFormalSpec(Some(formals))) = CompiledFormalSpec::parse(spec) else {
+    // A spec this grammar can't read is a method of unknown arity, not one without parameters.
+    let Ok(CompiledFormalSpec(formals)) = CompiledFormalSpec::parse(spec) else {
+        let any = VariadicArg {
+            mode: None,
+            name: "args".into(),
+            t: None,
+        };
+        return (vec![], Some(any));
+    };
+    let Some(formals) = formals else {
         return (vec![], None);
     };
     let mut normal = vec![];
@@ -819,6 +833,50 @@ mod tests {
         assert_eq!(normal.len(), 1);
         assert_eq!(normal[0].name, "x");
         assert_eq!(normal[0].t, Some("%String(MAXLEN=50,MINLEN=1)".to_string()));
+    }
+
+    #[test]
+    fn a_query_whose_execute_method_has_no_parameters_keeps_its_own() {
+        let member = |name: &str, kind| MemberInfo {
+            doc: String::new(),
+            name: name.into(),
+            aliases: vec![],
+            deprecated: false,
+            kind,
+            uri: None,
+            origin: None,
+        };
+        let signature = |normal| Signature {
+            normal,
+            variadic: None,
+            t: None,
+            procedure_block: None,
+        };
+        let x = NormalArg {
+            mode: None,
+            name: "x".into(),
+            t: Some("%String".into()),
+            default: None,
+        };
+        let mut members = vec![
+            member("Q", MemberKind::Query(signature(vec![x]))),
+            member("QExecute", MemberKind::ClassMethod(signature(vec![]))),
+        ];
+        drop_query_methods(&mut members);
+        let [query] = &members[..] else {
+            panic!("{members:?}")
+        };
+        let MemberKind::Query(sig) = &query.kind else {
+            panic!("{query:?}")
+        };
+        assert_eq!(sig.normal.len(), 1);
+    }
+
+    #[test]
+    fn an_unreadable_formal_spec_takes_any_arguments() {
+        let (normal, variadic) = parse_formal_spec("x:%String=((");
+        assert!(normal.is_empty());
+        assert!(variadic.is_some());
     }
 
     #[test]

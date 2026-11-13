@@ -64,6 +64,69 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisCo
     open_file(Path::new(iris), namespace).map(Some)
 }
 
+/// The `--iris` values as given, asked in order: the first source that holds a document answers
+/// for it, so `latest` before an instance reads the system classes from the snapshot and the
+/// instance's own classes from it. `none` among others is a no-op. `namespace` goes to the live
+/// instances in the list; with none in it, `open`'s refusal stands.
+pub fn open_all(
+    irises: &[&str],
+    namespace: Option<&str>,
+) -> Result<Option<Box<dyn IrisContext>>, String> {
+    if irises.is_empty() {
+        return open(LATEST, namespace).map_err(|err| format!("{LATEST}: {err}"));
+    }
+    let live = irises.iter().any(|iris| iris.contains("://"));
+    let mut sources = Vec::new();
+    for iris in irises {
+        let namespace = namespace.filter(|_| !live || iris.contains("://"));
+        if let Some(source) = open(iris, namespace).map_err(|err| format!("{iris}: {err}"))? {
+            sources.push(source);
+        }
+    }
+    Ok(match sources.len() {
+        0 => None,
+        1 => sources.pop(),
+        _ => Some(Box::new(Chain(sources))),
+    })
+}
+
+/// Sources asked in order. A document is the first source's that has it; a source that fails is
+/// passed over, and its failure is the answer only when no later source has the document.
+pub struct Chain(pub Vec<Box<dyn IrisContext>>);
+
+impl Chain {
+    fn first<T>(
+        &self,
+        get: impl Fn(&dyn IrisContext) -> Result<Option<T>, String>,
+    ) -> Result<Option<T>, String> {
+        let mut failed = None;
+        for source in &self.0 {
+            match get(source.as_ref()) {
+                Ok(Some(found)) => return Ok(Some(found)),
+                Ok(None) => {}
+                Err(err) => {
+                    failed.get_or_insert(err);
+                }
+            }
+        }
+        failed.map_or(Ok(None), Err)
+    }
+}
+
+impl IrisContext for Chain {
+    fn get_cls(&self, cls: &str) -> Result<Option<crate::bindings::ClassInfo>, String> {
+        self.first(|source| source.get_cls(cls))
+    }
+
+    fn get_inc(&self, name: &str) -> Result<Option<crate::bindings::Source>, String> {
+        self.first(|source| source.get_inc(name))
+    }
+
+    fn get_rtn(&self, name: &str) -> Result<Option<crate::bindings::RoutineInfo>, String> {
+        self.first(|source| source.get_rtn(name))
+    }
+}
+
 /// The `--iris` value for no environment: nothing outside the workspace exists.
 pub const NONE: &str = "none";
 /// The `--iris` value for the newest release's pre-built declarations, the default.
@@ -130,6 +193,38 @@ mod tests {
             text: text.to_string(),
             uri: None,
         }
+    }
+
+    // A source holding one class; `down` fails every routine lookup.
+    struct Fake(&'static str, bool);
+
+    impl IrisContext for Fake {
+        fn get_cls(&self, cls: &str) -> Result<Option<ClassInfo>, String> {
+            Ok((cls == self.0).then(|| class_info(cls)))
+        }
+
+        fn get_inc(&self, _: &str) -> Result<Option<Source>, String> {
+            Ok(None)
+        }
+
+        fn get_rtn(&self, _: &str) -> Result<Option<RoutineInfo>, String> {
+            if self.1 {
+                Err("down".to_string())
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    #[test]
+    fn a_chain_answers_from_the_first_source_that_has_the_document() {
+        let chain = Chain(vec![Box::new(Fake("A", false)), Box::new(Fake("B", true))]);
+        assert_eq!(chain.get_cls("A").unwrap().unwrap().name, "A");
+        assert_eq!(chain.get_cls("B").unwrap().unwrap().name, "B");
+        assert!(chain.get_cls("C").unwrap().is_none());
+        // A failure counts only once every source has been asked.
+        assert_eq!(chain.get_rtn("R").unwrap_err(), "down");
+        assert!(open_all(&[NONE, NONE], None).unwrap().is_none());
     }
 
     #[test]

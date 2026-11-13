@@ -29,7 +29,9 @@ pub use crate::details::Positions;
 use crate::details::{
     MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
 };
-use crate::{DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos};
+use crate::{
+    Definitions, DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos,
+};
 use std::marker::PhantomData;
 
 // A member a lookup found, with the class declaring it, which its type parameters resolve against.
@@ -1536,14 +1538,14 @@ impl<'a> WorkspaceEnv<'a> {
             .extend(include_names.into_iter().map(|name| (DocKind::Inc, name)));
     }
 
-    pub(crate) fn expand_method_body(
+    pub(crate) fn expand_method_body<'b>(
         &self,
         uri: &str,
         header: &str,
         body: &str,
-        base_definitions: &MacroDefinitions,
+        base_definitions: &'b MacroDefinitions,
         body_macros: &crate::macro_expand::BodyMacros,
-    ) -> Result<(String, SourceMap, MacroDefinitions), bindings::Diagnostic> {
+    ) -> Result<(String, SourceMap, Definitions<'b>), bindings::Diagnostic> {
         self.workspace
             .expand_method_body(uri, header, body, base_definitions, body_macros)
     }
@@ -1925,7 +1927,7 @@ impl<'a> DocumentEnv<'a> {
     pub fn for_routine<'b>(
         &'b self,
         labels: ScopedLabels,
-        macro_definitions: &'b MacroDefinitions,
+        macro_definitions: &'b Definitions<'b>,
     ) -> CodeEnv<'b> {
         CodeEnv {
             base: self,
@@ -1948,7 +1950,7 @@ impl<'a> DocumentEnv<'a> {
         this: Option<&'a ClassTy>,
         is_instance: bool,
         method_name: &'a str,
-        macro_definitions: &'a MacroDefinitions,
+        macro_definitions: &'a Definitions<'a>,
         procedure_block: bool,
     ) -> CodeEnv<'_> {
         CodeEnv {
@@ -2045,7 +2047,7 @@ pub struct CodeEnv<'a> {
     method_name: Option<&'a str>,
     // The enclosing class's own resolved `Include`s, for suggesting a similarly named macro on
     // an undefined-macro error -- `None` outside a class method (e.g. a routine).
-    macro_definitions: Option<&'a MacroDefinitions>,
+    macro_definitions: Option<&'a Definitions<'a>>,
     // A procedure block (a method body, `label() {...}`), where IRIS refuses the legacy forms
     // `TypeErrorKind::NotAllowedIn` reports.
     procedure_block: bool,
@@ -2195,8 +2197,7 @@ impl<'a> CodeEnv<'a> {
     pub(crate) fn known_macro_names(&self) -> impl Iterator<Item = &str> {
         self.macro_definitions
             .into_iter()
-            .flatten()
-            .map(|(k, _)| k.as_str())
+            .flat_map(Definitions::names)
     }
 }
 

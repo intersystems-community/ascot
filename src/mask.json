@@ -2651,6 +2651,7 @@
   "%Library.AbstractResultSet": {
    "header": "Class %Library.AbstractResultSet",
    "members": [
+    { "header": "Method %Next(Output sc As %Status) As %Integer" },
     { "header": "Method GetObject() As %Library.Any" }
    ]
   },
@@ -3133,11 +3134,12 @@
   "%Library.ResultSet": {
    "header": "Class %Library.ResultSet",
    "members": [
+    { "header": "Method %Next(Output sc As %Status) As %Integer" },
     { "header": "Method %OnNew(initvalue As %String = \"\") As %Status" },
     { "header": "ClassMethod %PrepareMetaData(pQueryId As %String(MAXLEN=\"\"), Output returnError As %SYSTEM.Error = \"\", importPackages As %RawString = \"\") As %ResultSet.MetaData" },
     { "header": "Method GetInfo(extoption = \"\") As %Status" },
     { "header": "Method GetObject() As %Library.Any" },
-    { "header": "Method Next(ByRef sc As %Status = \"\") As %Integer" }
+    { "header": "Method Next(Output sc As %Status) As %Integer" }
    ]
   },
   "%Library.Routine": {
