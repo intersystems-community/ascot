@@ -1638,11 +1638,9 @@ fn check_branches<'a, 'e>(
         let condition = match condition {
             Taken::If(condition) => {
                 let ty = condition.to_ranged_power_ty(env, flow)?;
-                // A condition is a read: an undefined one is reported, as any value is.
-                if let PowerTy::Plain(_) = ty.deref() {
-                    ranged_quasi_ty_to_ty(env, flow, ty.clone(), Some(&|| condition.print()))
-                        .map_err(QuasiTypeError::WithRange)?;
-                }
+                // A condition is a read like any other, then what the flow splits on.
+                ranged_quasi_ty_to_ty(env, flow, ty.clone(), Some(&|| condition.print()))
+                    .map_err(QuasiTypeError::WithRange)?;
                 ty.into_inner()
             }
             Taken::Equal(target, this) => {
