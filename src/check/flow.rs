@@ -9,6 +9,7 @@
 use crate::bindings;
 use crate::bindings::Location;
 use crate::bindings::RefMode;
+use crate::check::CheckCommand;
 use crate::check::env::*;
 use crate::check::errors::*;
 use crate::check::types::*;
@@ -148,17 +149,29 @@ impl Traps {
             self.active = them.active;
         }
         for (label, join) in them.joins {
-            match self.joins.get_mut(&label) {
-                Some(mine) => mine.bindings.merge(Some(join.bindings), env, undeclared)?,
-                None => {
-                    self.joins.insert(label, join);
-                }
-            }
+            self.join(label, join, env, undeclared)?;
         }
         for (mine, theirs) in self.catches.iter_mut().zip(them.catches) {
             mine.merge(Some(theirs), env, undeclared)?;
         }
         Ok(())
+    }
+
+    // `join` is one more state `label`'s handler can be entered from.
+    fn join(
+        &mut self,
+        label: String,
+        join: Join,
+        env: &WorkspaceEnv<'_>,
+        undeclared: &Binding,
+    ) -> Result<(), QuasiTypeError> {
+        match self.joins.get_mut(&label) {
+            Some(mine) => mine.bindings.merge(Some(join.bindings), env, undeclared),
+            None => {
+                self.joins.insert(label, join);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -259,15 +272,23 @@ impl<'a> Flow<'a> {
     }
 
     // A label, held to `output` (see `LabelEntry::output`); an error handler starts from `join`,
-    // the states it can be entered from (see `Traps`). Returns what it creates.
+    // the states it can be entered from (see `Traps`). Its `body` falls through to `next`.
+    // Returns what it creates.
     pub(crate) fn with_label(
         env: &'a CodeEnv<'a>,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
         output: OutputCell,
         join: Option<Join>,
-        handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
+        body: &impl CheckCommand,
+        next: Option<&OnceCell<OutputCell>>,
     ) -> Result<Effects, TypeError> {
+        let handler = |flow: &mut Self| {
+            let checked = body.check(env, flow);
+            env.deposit_traps(flow.take_traps());
+            checked?;
+            flow.tail_call(next, range)
+        };
         Self::run(env, range, args, None, output, join, handler, false, false)
     }
 
@@ -566,13 +587,7 @@ impl<'a> Flow<'a> {
         // (`check_branch`) and carry on, and a leaked context would then trip its `merge`.
         let quits = std::mem::replace(&mut self.loop_context, outer).map(|context| context.quits);
         result?;
-        for WithRange {
-            it: bindings,
-            range,
-        } in quits.unwrap_or_default()
-        {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        self.merge_states(quits.unwrap_or_default())?;
         if optional {
             self.merge(before)?;
         }
@@ -589,17 +604,15 @@ impl<'a> Flow<'a> {
     ) -> Result<(), QuasiTypeError> {
         self.primed(env, &handler)?;
         // Run the body a second time, starting with union of all continue and the before
-        for bindings in self.loop_context.take().unwrap().continues {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        let continues = self.loop_context.take().unwrap().continues;
+        self.merge_states(continues.into_iter().map(|b| WithRange::new(b, range)))?;
         self.merge_bindings(before.bindings.clone())
             .with_range(|| range)?;
         self.loop_context = Some(LoopContext::new(range));
         handler(self)?;
         // A `Continue` heads back to the loop head just like falling off the end of the body.
-        for bindings in std::mem::take(&mut self.loop_context.as_mut().unwrap().continues) {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        let continues = std::mem::take(&mut self.loop_context.as_mut().unwrap().continues);
+        self.merge_states(continues.into_iter().map(|b| WithRange::new(b, range)))?;
         if infinite {
             self.bindings = None;
         }
@@ -626,13 +639,7 @@ impl<'a> Flow<'a> {
         let Some(context) = context else {
             return Ok(());
         };
-        for WithRange {
-            it: bindings,
-            range,
-        } in context.quits
-        {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        self.merge_states(context.quits)?;
         if !context.continues.is_empty() {
             match &mut self.loop_context {
                 Some(outer) => outer.continues.extend(context.continues),
@@ -718,6 +725,17 @@ impl<'a> Flow<'a> {
             }
             _ => self.split(),
         }
+    }
+
+    // Each of `states` (a loop's `Quit`s or `Continue`s) joins this path, at its own range.
+    fn merge_states(
+        &mut self,
+        states: impl IntoIterator<Item = WithRange<Bindings>>,
+    ) -> Result<(), TypeError> {
+        for WithRange { it, range } in states {
+            self.merge_bindings(Some(it)).with_range(|| range)?;
+        }
+        Ok(())
     }
 
     fn merge_bindings(&mut self, that: Option<Bindings>) -> Result<(), QuasiTypeError> {
@@ -868,15 +886,8 @@ impl<'a> Flow<'a> {
         let undeclared = self.undeclared();
         self.mark_incomplete();
         self.traps.active = Some((var, Some(label.clone())));
-        match self.traps.joins.get_mut(&label) {
-            Some(join) => join
-                .bindings
-                .merge(Some(bindings), self.shared.env, &undeclared)?,
-            None => {
-                self.traps.joins.insert(label, Join { var, bindings });
-            }
-        }
-        Ok(())
+        let join = Join { var, bindings };
+        self.traps.join(label, join, self.shared.env, &undeclared)
     }
 
     // `var` is cleared or unknown. `$ZTRAP` takes precedence, so clearing `$ETRAP` under it
