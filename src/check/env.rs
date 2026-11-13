@@ -304,9 +304,9 @@ enum FindError {
 impl From<FindError> for QuasiTypeError {
     fn from(err: FindError) -> Self {
         match err {
-            FindError::NoSuchClass(cls) => QuasiTypeError::cannot_find_class(cls),
+            FindError::NoSuchClass(cls) => TypeErrorKind::CannotFindClass { cls }.into(),
             FindError::InstanceOnly(mem) => {
-                QuasiTypeError::access_instance_only_member_from_class_context(mem)
+                TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name: mem }.into()
             }
         }
     }
@@ -1010,12 +1010,17 @@ impl<'a> WorkspaceEnv<'a> {
             }
             // `##class(X)` names X itself, not some subclass's instance: what it lacks is missing.
             if obj.is_ins() && self.is_abstract(obj.name()) {
-                QuasiTypeError::cannot_find_member_on_abstract(obj.to_string(), mem, suggestions)
+                TypeErrorKind::CannotFindMemberOnAbstract {
+                    cls: obj.to_string(),
+                    mem,
+                    suggestions: Suggestions(suggestions),
+                }
+                .into()
             } else {
                 QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get)
             }
         };
-        self.add_soft_diagnostic(err.into_error(|| range).into());
+        self.add_soft_error(err, range);
         Ok(Member::undeclared(N::Ty::default()))
     }
 
@@ -1163,23 +1168,25 @@ impl<'a> WorkspaceEnv<'a> {
                             },
                             None => {
                                 let err = match reason {
-                                    Some(reason) => TypeError::iris_lookup_failed(
-                                        DocKind::Cls,
-                                        cls.clone(),
-                                        reason.clone(),
-                                        range,
-                                    ),
-                                    None => TypeError::unconfirmed_member(
-                                        receiver.name.clone(),
-                                        mem.to_string(),
-                                        cls != receiver.name,
-                                        if matches!(resolved, Some(Class::Unknown(None))) {
+                                    Some(reason) => TypeErrorKind::IrisLookupFailed {
+                                        lookup: IrisLookup {
+                                            kind: DocKind::Cls,
+                                            name: cls.clone(),
+                                        },
+                                        reason: reason.clone(),
+                                    }
+                                    .at(range),
+                                    None => TypeErrorKind::UnconfirmedMember {
+                                        cls: receiver.name.clone(),
+                                        mem: mem.to_string(),
+                                        on: SuperclassOf(cls != receiver.name),
+                                        unseen: if matches!(resolved, Some(Class::Unknown(None))) {
                                             UnseenClass::Unparsed(cls.clone())
                                         } else {
                                             UnseenClass::Missing(cls.clone())
                                         },
-                                        range,
-                                    ),
+                                    }
+                                    .at(range),
                                 };
                                 self.add_soft_diagnostic(err.into());
                                 return Some(Ok(Some(Member::undeclared(N::Ty::default()))));
@@ -1489,13 +1496,24 @@ impl<'a> WorkspaceEnv<'a> {
         }
         let diagnostic = match self.resolve(cls) {
             Some(Class::Workspace(..) | Class::Iris(_)) => return,
-            Some(Class::Unknown(Some(reason))) => {
-                TypeError::iris_lookup_failed(DocKind::Cls, cls.to_string(), reason, range)
+            Some(Class::Unknown(Some(reason))) => TypeErrorKind::IrisLookupFailed {
+                lookup: IrisLookup {
+                    kind: DocKind::Cls,
+                    name: cls.to_string(),
+                },
+                reason,
             }
+            .at(range),
             // Its file is in the workspace; the parse error is reported there.
             Some(Class::Unknown(None)) => return,
-            None if !has_iris => TypeError::cannot_find_class(cls.to_string(), range),
-            None => TypeError::unconfirmed_class(cls.to_string(), range),
+            None if !has_iris => TypeErrorKind::CannotFindClass {
+                cls: cls.to_string(),
+            }
+            .at(range),
+            None => TypeErrorKind::UnconfirmedClass {
+                cls: cls.to_string(),
+            }
+            .at(range),
         };
         self.add_soft_diagnostic(diagnostic.into());
     }
@@ -1549,17 +1567,32 @@ impl<'a> WorkspaceEnv<'a> {
             return Ok(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
         }
         let Some(iris) = self.workspace.iris.as_ref() else {
-            return Err(QuasiTypeError::cannot_find_routine(name.into()));
+            return Err(TypeErrorKind::CannotFindRoutine {
+                routine: name.into(),
+            }
+            .into());
         };
         let info = iris
             .get_rtn(name)
             .map_err(|reason| {
-                QuasiTypeError::iris_lookup_failed(DocKind::Rtn, name.into(), reason)
+                QuasiTypeError::from(TypeErrorKind::IrisLookupFailed {
+                    lookup: IrisLookup {
+                        kind: DocKind::Rtn,
+                        name: name.into(),
+                    },
+                    reason,
+                })
             })?
-            .ok_or_else(|| QuasiTypeError::routine_not_on_iris(name.into()))?;
-        let labels = info
-            .labels
-            .ok_or_else(|| QuasiTypeError::routine_without_source(name.into()))?;
+            .ok_or_else(|| {
+                QuasiTypeError::from(TypeErrorKind::RoutineNotOnIris {
+                    routine: name.into(),
+                })
+            })?;
+        let labels = info.labels.ok_or_else(|| {
+            QuasiTypeError::from(TypeErrorKind::RoutineWithoutSource {
+                routine: name.into(),
+            })
+        })?;
         let labels = labels.into_iter().map(|label| {
             let proc = label
                 .signature
@@ -1608,8 +1641,12 @@ impl<'a> WorkspaceEnv<'a> {
                 Some(name) => format!("'{name}', declared as {target}"),
                 None => target.to_string(),
             };
-            let err = QuasiTypeError::pattern_mismatch(value.to_string(), what);
-            self.add_soft_diagnostic(err.into_error(|| range).into());
+            let err = TypeErrorKind::PatternMismatch {
+                value: value.to_string(),
+                what,
+            }
+            .into();
+            self.add_soft_error(err, range);
         }
     }
 
@@ -1746,6 +1783,10 @@ impl<'a> WorkspaceEnv<'a> {
         self.soft_diagnostics.borrow_mut().push(diagnostics);
     }
 
+    pub(crate) fn add_soft_error(&self, err: QuasiTypeError, range: bindings::Range) {
+        self.add_soft_diagnostic(err.into_error(|| range).into());
+    }
+
     // Brackets a loop's throwaway priming pass (see `Flow::with_loop`): returns the previous
     // state, to be handed back to `restore_soft_diagnostics` afterward.
     pub(crate) fn suppress_soft_diagnostics(&self) -> bool {
@@ -1824,7 +1865,7 @@ impl Incompatible {
             None => self.general(),
         };
         if downcast {
-            env.add_soft_diagnostic(err.into_error(|| range).into());
+            env.add_soft_error(err, range);
             return Ok(());
         }
         Err(err)
@@ -1832,17 +1873,35 @@ impl Incompatible {
 
     fn assign(self, name: String) -> QuasiTypeError {
         if self.downcast {
-            QuasiTypeError::downcast_from_abstract(name, self.source, self.target)
+            TypeErrorKind::DowncastFromAbstract {
+                name,
+                source: self.source,
+                target: self.target,
+            }
+            .into()
         } else {
-            QuasiTypeError::assign_incompatible(name, self.source, self.target)
+            TypeErrorKind::AssignIncompatible {
+                name,
+                source: self.source,
+                target: self.target,
+            }
+            .into()
         }
     }
 
     pub(crate) fn general(self) -> QuasiTypeError {
         if self.downcast {
-            QuasiTypeError::type_downcast(self.source, self.target)
+            TypeErrorKind::TypeDowncast {
+                source: self.source,
+                target: self.target,
+            }
+            .into()
         } else {
-            QuasiTypeError::type_incompatible(self.source, self.target)
+            TypeErrorKind::TypeIncompatible {
+                source: self.source,
+                target: self.target,
+            }
+            .into()
         }
     }
 }
@@ -2223,7 +2282,10 @@ impl<'a> Deref for CodeEnv<'a> {
 
 impl<'a> CodeEnv<'a> {
     pub(crate) fn this(&self) -> Result<ClsOrIns, QuasiTypeError> {
-        let this = self.this.ok_or_else(QuasiTypeError::not_in_class)?.clone();
+        let this = self
+            .this
+            .ok_or(QuasiTypeError::from(TypeErrorKind::NotInClass))?
+            .clone();
         Ok(if self.is_instance {
             ClsOrIns::Ins(this)
         } else {
@@ -2252,15 +2314,15 @@ impl<'a> CodeEnv<'a> {
         let this = self.this().map_err(|err| err.into_error(|| range))?;
         let mem = self
             .method_name
-            .ok_or_else(QuasiTypeError::not_in_class)
-            .map_err(|err| err.into_error(|| range))?
+            .ok_or_else(|| TypeErrorKind::NotInClass.at(range))?
             .to_string();
         match self.find::<Methods>(&this, &mem, false, range) {
             Ok(Some(method)) => Ok(method.ty),
-            Ok(None) => {
-                let err = QuasiTypeError::super_without_method(mem, this.name().to_string());
-                Err(err.into_error(|| range))
+            Ok(None) => Err(TypeErrorKind::SuperWithoutMethod {
+                method: mem,
+                cls: this.name().to_string(),
             }
+            .at(range)),
             Err(err) => Err(QuasiTypeError::from(err).into_error(|| range)),
         }
     }
@@ -2293,7 +2355,11 @@ impl<'a> CodeEnv<'a> {
                     labels => match labels? {
                         Some(labels) => match labels.get(&label) {
                             Some(proc) => Ok(proc.clone()),
-                            None => Err(QuasiTypeError::cannot_find_label(label, Some(routine))),
+                            None => Err(TypeErrorKind::CannotFindLabel {
+                                label,
+                                routine: InRoutine(Some(routine)),
+                            }
+                            .into()),
                         },
                         None => Ok(TyProcedureOrAny::Any),
                     },
@@ -2306,7 +2372,11 @@ impl<'a> CodeEnv<'a> {
             None => match label {
                 Some(label) => match self.labels.as_ref().and_then(|labels| labels.get(&label)) {
                     Some(label) => Ok(TyProcedureOrAny::Procedure(label.proc.clone())),
-                    None => Err(QuasiTypeError::cannot_find_label(label, None)),
+                    None => Err(TypeErrorKind::CannotFindLabel {
+                        label,
+                        routine: InRoutine(None),
+                    }
+                    .into()),
                 },
                 None => Ok(TyProcedureOrAny::Any),
             },

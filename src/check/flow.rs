@@ -234,9 +234,7 @@ impl<'a> Flow<'a> {
     // one (e.g. it isn't tied to the expression currently being checked). A no-op during a
     // loop's throwaway priming pass (see `WorkspaceEnv::suppress_soft_diagnostics`).
     pub(crate) fn add_soft_diagnostic(&self, err: QuasiTypeError) {
-        self.shared
-            .env
-            .add_soft_diagnostic(err.into_error(|| self.current_range).into());
+        self.shared.env.add_soft_error(err, self.current_range);
     }
 
     // `ty` read as a value (`text` is its source): an undefined one is reported softly and read
@@ -336,7 +334,7 @@ impl<'a> Flow<'a> {
                 self.share_output(next);
                 self.mark_incomplete();
             }
-            None => self.add_soft_diagnostic(TypeError::missing_quit(range).into()),
+            None => self.add_soft_diagnostic(TypeErrorKind::MissingQuit.at(range).into()),
         }
         self.handle_void()
     }
@@ -535,10 +533,12 @@ impl<'a> Flow<'a> {
                 let (name, range) = (param.name.clone(), param.range);
                 let err = match (param.mode, param.needed, param.written, param.read) {
                     (RefMode::ByRef, false, true, _) if output_keyword => {
-                        TypeError::by_ref_never_read(name, range)
+                        TypeErrorKind::ByRefNeverRead { name }.at(range)
                     }
                     (RefMode::ByRef, false, false, false) => flow.unread(name, range),
-                    (RefMode::Output, true, true, _) => TypeError::output_read_first(name, range),
+                    (RefMode::Output, true, true, _) => {
+                        TypeErrorKind::OutputReadFirst { name }.at(range)
+                    }
                     _ => continue,
                 };
                 flow.add_soft_diagnostic(err.into());
@@ -552,10 +552,10 @@ impl<'a> Flow<'a> {
                 .iter()
                 .find(|param| param.mode == RefMode::Output && !param.written)
         {
-            return Err(TypeError::output_never_assigned(
-                param.name.clone(),
-                param.range,
-            ));
+            return Err(TypeErrorKind::OutputNeverAssigned {
+                name: param.name.clone(),
+            }
+            .at(param.range));
         }
         drop(ref_params);
         let mut creates: Vec<String> = flow
@@ -644,7 +644,7 @@ impl<'a> Flow<'a> {
         if !context.continues.is_empty() {
             match &mut self.loop_context {
                 Some(outer) => outer.continues.extend(context.continues),
-                None => return Err(QuasiTypeError::continue_not_in_loop()),
+                None => return Err(TypeErrorKind::ContinueNotInLoop.into()),
             }
         }
         Ok(())
@@ -680,7 +680,7 @@ impl<'a> Flow<'a> {
     fn settle(&mut self, value: bool, report: bool) -> Flow<'a> {
         let mut false_branch = self.split();
         if report {
-            self.add_soft_diagnostic(QuasiTypeError::condition_always(value));
+            self.add_soft_diagnostic(TypeErrorKind::ConditionAlways { value }.into());
         }
         if value {
             false_branch.bindings = None;
@@ -763,9 +763,10 @@ impl<'a> Flow<'a> {
             }
             (None, None) => {}
             (Some(_), None) | (None, Some(_)) => {
-                return Err(QuasiTypeError::unimplemented(
-                    "Internal error: inconsistent loop context".to_string(),
-                ));
+                return Err(TypeErrorKind::Unimplemented {
+                    what: "Internal error: inconsistent loop context".to_string(),
+                }
+                .into());
             }
         }
         Ok(())
@@ -777,7 +778,7 @@ impl<'a> Flow<'a> {
             Some(context) => {
                 context.continues.push(bindings);
             }
-            None => return Err(QuasiTypeError::continue_not_in_loop()),
+            None => return Err(TypeErrorKind::ContinueNotInLoop.into()),
         }
         self.bindings = None;
         Ok(())
@@ -938,7 +939,7 @@ impl<'a> Flow<'a> {
     fn bindings(&mut self) -> Result<&mut Bindings, QuasiTypeError> {
         self.bindings
             .as_mut()
-            .ok_or_else(QuasiTypeError::unreachable)
+            .ok_or_else(|| TypeErrorKind::Unreachable.into())
     }
 
     fn lookup(&mut self, name: String) -> Result<&mut Binding, QuasiTypeError> {
@@ -972,9 +973,7 @@ impl<'a> Flow<'a> {
         // IRIS refuses to `New` a private variable of a procedure block (#1038), parameters
         // included, in every frame of the block; only a public one may be.
         if self.lookup(name.clone())?.private {
-            self.add_soft_diagnostic(QuasiTypeError::WithRange(
-                TypeError::new_in_procedure_block(name, range),
-            ));
+            self.add_soft_diagnostic(TypeErrorKind::NewInProcedureBlock { name }.at(range).into());
             return Ok(());
         }
         let uri = self.shared.env.uri().to_string();
@@ -987,11 +986,9 @@ impl<'a> Flow<'a> {
         binding.assigned_at = HashSet::new();
         binding.subscript_assigned = None;
         if let Some(previous) = previous {
-            self.add_soft_diagnostic(QuasiTypeError::WithRange(TypeError::redundant_new(
-                name,
-                range,
-                Location::new(uri, previous),
-            )));
+            self.add_soft_diagnostic(
+                TypeError::redundant_new(name, range, Location::new(uri, previous)).into(),
+            );
         }
         Ok(())
     }
@@ -1006,9 +1003,11 @@ impl<'a> Flow<'a> {
     ) -> Result<(), QuasiTypeError> {
         for name in keep {
             if !is_percent_variable(name) && self.lookup(name.clone())?.private {
-                self.add_soft_diagnostic(QuasiTypeError::WithRange(
-                    TypeError::new_in_procedure_block(name.clone(), range),
-                ));
+                self.add_soft_diagnostic(
+                    TypeErrorKind::NewInProcedureBlock { name: name.clone() }
+                        .at(range)
+                        .into(),
+                );
             }
         }
         for name in self.other_names(keep)? {
@@ -1081,8 +1080,8 @@ impl<'a> Flow<'a> {
     fn unread(&self, name: String, range: bindings::Range) -> TypeError {
         let role = self.shared.unread_roles.borrow();
         match role.get(&Written::new(name.clone(), range)) {
-            Some(role) => TypeError::unread_required(*role, name, range),
-            None => TypeError::unread_assignment(name, range),
+            Some(role) => TypeErrorKind::UnreadRequired { role: *role, name }.at(range),
+            None => TypeErrorKind::UnreadAssignment { name }.at(range),
         }
     }
 
@@ -1405,11 +1404,12 @@ impl Binding {
             (Some(this_d), Some(that_d)) if this_d.it == that_d.it => Some(this_d),
             (Some(_), None) | (None, Some(_)) | (None, None) => None,
             (this_d, that_d) => {
-                return Err(QuasiTypeError::inconsistent_declaration(
-                    name.to_string(),
-                    this_d.map(|d| d.it),
-                    that_d.map(|d| d.it),
-                ));
+                return Err(TypeErrorKind::InconsistentDeclaration {
+                    name: name.to_string(),
+                    ty1: Declared(this_d.map(|d| d.it)),
+                    ty2: Declared(that_d.map(|d| d.it)),
+                }
+                .into());
             }
         };
         let new = match (self.new, that.new) {
