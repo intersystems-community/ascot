@@ -95,6 +95,28 @@ enum Command {
         /// [default: ~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json]
         file: Option<PathBuf>,
     },
+    #[cfg(feature = "format")]
+    /// Rewrite .cls/.mac/.int files to a style, inside procedure blocks and method bodies
+    ///
+    /// Spells command keywords as the style's `command` rules say and puts a block's braces, its
+    /// first command and an `Else`, `ElseIf` or `Catch` after it on a line of their own or not,
+    /// as `open_brace` and `close_brace` say. Only procedure blocks and method bodies change,
+    /// where no `Label+offset` reaches a line; a routine with such an offset keeps every line
+    /// count. Files are rewritten in place.
+    Format {
+        /// The JSON file of style rules to bring the files to
+        #[arg(long, value_name = "FILE")]
+        style: PathBuf,
+        /// Indent a line the formatter adds by this many spaces instead of a tab
+        #[arg(long, value_name = "N", value_parser = clap::value_parser!(u8).range(1..))]
+        indent: Option<u8>,
+        /// Write nothing; list the files that would change, and exit 1 if there are any
+        #[arg(long)]
+        check: bool,
+        /// Files or directories to format
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
     #[cfg(feature = "mcp")]
     /// Run the MCP server on stdio, for AI agents
     ///
@@ -243,6 +265,22 @@ fn main() {
             iris_namespace,
             file,
         } => declare(&iris, iris_namespace.as_deref(), file.as_deref()),
+        #[cfg(feature = "format")]
+        Command::Format {
+            style,
+            indent,
+            check,
+            paths,
+        } => {
+            let style = StyleArgs {
+                style: Some(style.display().to_string()),
+            };
+            let Some(style) = style.load() else {
+                eprintln!("--style: a file is required");
+                exit(2)
+            };
+            format_files(&style, indent, check, &paths)
+        }
         #[cfg(feature = "mcp")]
         Command::Mcp { shared_fs } => {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
@@ -490,6 +528,56 @@ impl ProgressBars {
             );
         }
         self.drawn = true;
+    }
+}
+
+/// Rewrites, or with `check` lists, every file under `paths` whose procedure blocks and method
+/// bodies `style` would change. A file that doesn't parse is skipped with a warning.
+#[cfg(feature = "format")]
+fn format_files(style: &Style, indent: Option<u8>, check: bool, paths: &[PathBuf]) {
+    let styles = ascot::style::Styles::new(style);
+    let indent = indent.map_or("\t".to_string(), |n| " ".repeat(n as usize));
+    let mut files = Vec::new();
+    for path in paths {
+        if !path.exists() {
+            eprintln!("Error: {} does not exist", path.display());
+            exit(1);
+        }
+        collect_doc(path, &mut files);
+    }
+    files.retain(|file| file.extension().is_some_and(|ext| ext != "inc"));
+    files.sort();
+    files.dedup();
+    let mut changed = 0;
+    for file in &files {
+        let fail = |what: &str, err: std::io::Error| -> ! {
+            eprintln!("Error {what} {}: {err}", file.display());
+            exit(1)
+        };
+        let text = fs::read_to_string(file).unwrap_or_else(|err| fail("reading", err));
+        let uri = file.display().to_string();
+        let Some(edits) = ascot::format::edits(&text, &uri, &styles, &indent) else {
+            eprintln!(
+                "Warning: {} does not parse as written; skipped",
+                file.display()
+            );
+            continue;
+        };
+        if edits.is_empty() {
+            continue;
+        }
+        changed += 1;
+        if check {
+            println!("{}", file.display());
+        } else {
+            let formatted = ascot::format::apply(&text, &edits);
+            fs::write(file, formatted).unwrap_or_else(|err| fail("writing", err));
+        }
+    }
+    let verb = if check { "would change" } else { "formatted" };
+    eprintln!("{changed} of {} file(s) {verb}", files.len());
+    if check && changed > 0 {
+        exit(1);
     }
 }
 

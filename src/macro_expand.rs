@@ -526,6 +526,10 @@ impl SourceMap {
     // Relocates every diagnostic's range and related-information back to source, expanding each
     // into its own chain: the main range's chain first, then each original related-information
     // entry followed immediately by its own chain.
+    pub(crate) fn expanded_text(&self) -> &str {
+        &self.expanded_text
+    }
+
     pub(crate) fn relocate_diagnostics(
         &self,
         diagnostics: Vec<bindings::Diagnostic>,

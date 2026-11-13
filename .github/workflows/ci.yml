@@ -61,7 +61,7 @@ jobs:
       # A library host takes the checker alone, or with any one flag; the CLI can be `analyze` alone.
       - name: Feature gates
         run: |
-          for features in "" analyze declare lsp mcp network; do
+          for features in "" analyze declare format lsp mcp network; do
             cargo clippy --lib --no-default-features ${features:+--features "$features"} -- -D warnings
           done
           cargo clippy --bin ascot --no-default-features --features analyze -- -D warnings

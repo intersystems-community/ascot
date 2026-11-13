@@ -26,6 +26,9 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
   hover.
 - **Inlay Hints**: inferred types, argument names, and parameter default
   values shown inline.
+- **Formatting**: `ascot format`, and the LSP formatting request, bring
+  procedure blocks and method bodies to the configured style: keyword spelling
+  and brace placement.
 
 ## Installation
 
@@ -78,8 +81,8 @@ needs only the checker turns them off and adds what it uses:
 cargo add ascot --no-default-features --features network
 ```
 
-- `analyze`, `declare`, `lsp`, `mcp`: one subcommand of the CLI each, as a module where there
-  is one (`ascot::sarif`, `ascot::lsp`, `ascot::mcp`); `declare` implies `network`.
+- `analyze`, `declare`, `format`, `lsp`, `mcp`: one subcommand of the CLI each, as a module
+  where there is one (`ascot::sarif`, `ascot::lsp`, `ascot::mcp`); `declare` implies `network`.
 - `network`: ascot reaching the network itself, for a live IRIS instance over its REST API
   (`RawAtelier`, `--iris http://...`) and for a release's pre-built declarations
   (`--iris latest`).
@@ -134,6 +137,20 @@ doesn't exist.
 the shape the MCP `check` tool returns them, and `--format sarif` one SARIF
 2.1.0 document for code scanning. The summary stays on stderr and the exit code
 is the same.
+
+```sh
+ascot format --style <FILE> [--indent N] [--check] <PATH>...
+```
+
+Rewrites every `.cls`/`.mac`/`.int` file under each `PATH` to the [style](#style):
+command keywords take the form and case the `command` rules give them, and a
+block's braces, its first command and an `Else`, `ElseIf` or `Catch` after it go
+on a line of their own or not as `open_brace` and `close_brace` say. Only
+procedure blocks and method bodies change, since no `Label+offset` reaches a
+line inside them; a routine with such an offset keeps every line count, and the
+rest stays as written. A line the formatter adds is indented like its block, one
+tab (or `--indent N` spaces) deeper for a body's first command. `--check` writes
+nothing and exits non-zero listing the files that would change.
 
 ### `ascot` as an MCP server
 
