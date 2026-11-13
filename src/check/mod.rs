@@ -2171,9 +2171,13 @@ fn check_try<'a>(
     catch_target: Option<&cos::CatchTarget>,
     catch_block: &Range<cos::Block>,
 ) -> Result<(), QuasiTypeError> {
-    let before = flow.split();
     let try_env = env.with_try();
-    flow.with_block(env.range(try_block), |flow| try_block.check(&try_env, flow))?;
+    flow.enter_try()?;
+    let checked = flow.with_block(env.range(try_block), |flow| try_block.check(&try_env, flow));
+    // The exception may be thrown anywhere in the try block, so the catch block starts from
+    // anything between its start and its end.
+    let mut catch_flow = flow.leave_try();
+    checked?;
     // The `#dim` lines between the block and its `Catch` declare for what follows them: the path
     // out of the block, when there is one, and the catch block.
     let declare = |flow: &mut Flow<'a>| -> Result<(), QuasiTypeError> {
@@ -2188,10 +2192,6 @@ fn check_try<'a>(
     if flow.is_live() {
         declare(flow)?;
     }
-    // The exception may be thrown anywhere in the try block, so the catch block starts from
-    // anything between its start and its end.
-    let mut catch_flow = flow.split();
-    catch_flow.merge(before)?;
     declare(&mut catch_flow)?;
     if let Some(target) = catch_target
         && let Left(local) = target.deref().as_local(env, flow)?
