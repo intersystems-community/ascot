@@ -15,6 +15,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A3139](A3139.md) | Cannot find member '{mem}' in {cls}{suggestions}{dynamic} |
 | [A3286](A3286.md) | '{action}' is not a valid $ZSTRIP action: {reason} |
 | [A3485](A3485.md) | {function} can't take the private variable '{name}' |
+| [A3604](A3604.md) | Method '{name}' overrides {cls}'s but {difference} |
 | [A3850](A3850.md) | ${name} is not a recognized function{suggestions} |
 | [A3942](A3942.md) | MultiDimensional property '{name}' takes a subscript, not empty parentheses |
 | [A4025](A4025.md) | The callee's public list names '{name}', which is private here |
@@ -40,7 +41,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A7217](A7217.md) | An offset cannot enter the procedure block at label '{label}' (IRIS: <NOLINE>) |
 | [A7342](A7342.md) | Argument {position} of {function} can't be left empty |
 | [A7461](A7461.md) | No superclass of {cls} has a method '{method}' for ##super to call |
-| [A7604](A7604.md) | Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>) |
+| [A7604](A7604.md) | Label '{label}' has no formal argument list, so $$ cannot call it (IRIS: <PARAMETER>) |
 | [A7831](A7831.md) | Cannot find include file '{name}' in the workspace or on the IRIS instance |
 | [A7895](A7895.md) | '{format}' is not a valid $FNUMBER format: {reason} |
 | [A8061](A8061.md) | Cannot find class '{cls}' in the workspace or on the IRIS instance |
@@ -60,15 +61,16 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A1203](A1203.md) | Unreachable: every path before this statement has quit, returned or thrown |
 | [A1368](A1368.md) | Not in a class context; this relies on `$this` being set when it runs |
 | [A1817](A1817.md) | Variable '{name}' is already NEW'd; this NEW discards its current value |
+| [A1841](A1841.md) | Method '{name}' overrides {cls}'s {difference} |
 | [A3303](A3303.md) | Cannot find routine '{routine}' in the workspace; there is no IRIS environment to check against |
 | [A3717](A3717.md) | Class '{name}' is also declared in {other_uri} |
 | [A3904](A3904.md) | The macro '{name}' is defined in the body of method '{method}', which only the methods compiled after it see |
 | [A4344](A4344.md) | An error here re-enters the handler {var} still names |
 | [A4418](A4418.md) | {call} is a legacy $ZUTIL call{replacement} |
-| [A4476](A4476.md) | Output parameter '{name}' is never assigned |
+| [A4476](A4476.md) | Output formal argument '{name}' is never assigned |
 | [A4718](A4718.md) | Cannot find member '{mem}' in {cls}, an abstract class whose subclass here may have it{suggestions} |
 | [A5156](A5156.md) | ${function} is documented to take at most {documented} argument(s), but was given {given}; IRIS tolerates the extra |
-| [A5579](A5579.md) | Passing {actual} argument to '{name}', which is {wanted} parameter |
+| [A5579](A5579.md) | Passing {actual} argument to '{name}', which is {wanted} formal argument |
 | [A5718](A5718.md) | Variable '{name}' is assigned but never read |
 | [A6194](A6194.md) | {what} is not documented, though IRIS compiles it |
 | [A6203](A6203.md) | '{entry}' is not a class keyword as written, though IRIS compiles it |
@@ -112,7 +114,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A5362](A5362.md) | '{name}' is a user-defined command (^%ZLANGC00), so the call is not checked |
 | [A5540](A5540.md) | Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken |
 | [A6037](A6037.md) | ${name} is not documented for IRIS, so the call is not checked |
-| [A6204](A6204.md) | '{name}' is a ByRef parameter and gets a copy of the argument: an assignment the callee makes to it stays there, which may be intended |
+| [A6204](A6204.md) | '{name}' is a ByRef formal argument and gets a copy of the argument: an assignment the callee makes to it stays there, which may be intended |
 | [A9360](A9360.md) | Cannot confirm '{mem}' exists on {on}{cls}: its hierarchy includes {unseen} |
 
 ## Hints

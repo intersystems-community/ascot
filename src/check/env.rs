@@ -654,6 +654,23 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
 ];
 
 impl<'a> WorkspaceEnv<'a> {
+    // The method `mem` of `cls` overrides: the first a superclass declares, as `cls` sees it, with
+    // the class that declares it. Nothing is reported for a class in the chain nobody can see.
+    pub(crate) fn overridden_method(
+        &self,
+        cls: &str,
+        mem: &str,
+    ) -> Option<(String, TyProcedureOrAny)> {
+        let receiver = ClassTy::from(cls.to_string());
+        let given = |param: &str| self.parameter_value(cls, param);
+        self.ancestry(cls).skip(1).find_map(|(sup, resolved)| {
+            let found = self.declared_in::<Methods>(&sup, &resolved, mem)?;
+            let mut ty = found.member.ty;
+            ty.instantiate(&receiver, &found.origin, &given);
+            Some((found.origin, ty))
+        })
+    }
+
     // The names in `N`'s namespace along `cls`'s chain -- all ObjectScript can refer to there.
     pub(crate) fn names<N: Namespace>(&self, cls: &str) -> Vec<String> {
         let mut names = Vec::new();
@@ -1645,6 +1662,19 @@ impl<'a> WorkspaceEnv<'a> {
 
     fn is_subclass(&self, source: &ClassTy, target: &ClassTy) -> bool {
         self.merge_class(Cow::Borrowed(source), Cow::Borrowed(target)) == *target
+    }
+
+    // Whether `has` names `declares`'s class or a subclass of it, type parameters aside: the test
+    // IRIS applies to an override's formal argument and return class (ERROR #5478). `None` when
+    // either is no class.
+    pub(crate) fn is_class_or_subclass(&self, has: &Ty, declares: &Ty) -> Option<bool> {
+        match (has, declares) {
+            (Ty::OREF(ClsOrIns::Ins(has)), Ty::OREF(ClsOrIns::Ins(declares))) => Some(
+                self.ancestry(&has.name)
+                    .any(|(cls, _)| cls == declares.name),
+            ),
+            _ => None,
+        }
     }
 
     pub fn merge_ty(&self, x: Ty, y: Ty) -> Ty {
