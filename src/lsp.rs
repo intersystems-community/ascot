@@ -275,17 +275,33 @@ fn respond<P: serde::de::DeserializeOwned, R: serde::Serialize>(
     }
 }
 
+// A notification's params, or `None` once a note of what didn't deserialize went to stderr: unlike
+// a request, a notification has no response to carry the error, and the server goes on.
+fn params<P: serde::de::DeserializeOwned>(method: &str, params: serde_json::Value) -> Option<P> {
+    serde_json::from_value(params)
+        .map_err(|err| eprintln!("ascot lsp: {method} ignored: {err}"))
+        .ok()
+}
+
 fn handle_notification(connection: &Connection, server: &Server, not: Notification) -> Fallible {
     let workspace = &server.workspace;
-    match not.method.as_str() {
+    let Notification {
+        method,
+        params: raw,
+    } = not;
+    match method.as_str() {
         "textDocument/didOpen" => {
-            let params: DidOpenTextDocumentParams = serde_json::from_value(not.params)?;
+            let Some(params) = params::<DidOpenTextDocumentParams>(&method, raw) else {
+                return Ok(());
+            };
             let uri = workspace_key(&params.text_document.uri);
             let affected = workspace.open(uri, params.text_document.text);
             publish_all(connection, workspace, affected)?;
         }
         "textDocument/didChange" => {
-            let params: DidChangeTextDocumentParams = serde_json::from_value(not.params)?;
+            let Some(params) = params::<DidChangeTextDocumentParams>(&method, raw) else {
+                return Ok(());
+            };
             let uri = workspace_key(&params.text_document.uri);
             // Whole-document sync: the (only) content change is the full new text.
             if let Some(change) = params.content_changes.into_iter().last() {
@@ -297,7 +313,14 @@ fn handle_notification(connection: &Connection, server: &Server, not: Notificati
         // it, and a close isn't a delete (there's no watched-files support to tell those apart).
         "textDocument/didClose" => {}
         "workspace/didChangeConfiguration" => {
-            let params: DidChangeConfigurationParams = serde_json::from_value(not.params)?;
+            let Some(params) = params::<DidChangeConfigurationParams>(&method, raw) else {
+                return Ok(());
+            };
+            // `null` settings announce a change for the server to pull; ascot takes them pushed,
+            // so nothing has changed for it.
+            if params.settings.is_null() {
+                return Ok(());
+            }
             match serde_json::from_value::<Settings>(params.settings) {
                 Ok(changes) => reconfigure(connection, server, changes)?,
                 Err(err) => show_error(connection, format!("settings: {err}"))?,
@@ -556,6 +579,27 @@ mod tests {
             })
             .collect();
         assert_eq!(codes, [vec![], vec![json!("A7095")]]);
+    }
+
+    #[test]
+    fn a_notification_with_unexpected_params_is_ignored_and_the_server_goes_on() {
+        let uri = "file:///t/T.mac";
+        let text = "ROUTINE T\nTest() {\n Write x\n}\n";
+        let document =
+            json!({"uri": uri, "languageId": "objectscript", "version": 1, "text": text});
+        let sent = session(
+            json!({"iris": "none"}),
+            vec![
+                notification("workspace/didChangeConfiguration", json!({})),
+                notification(
+                    "workspace/didChangeConfiguration",
+                    json!({"settings": null}),
+                ),
+                notification("textDocument/didOpen", json!({"textDocument": document})),
+            ],
+        );
+        assert!(sent_as(&sent, "window/showMessage").is_empty(), "{sent:?}");
+        assert_eq!(sent_as(&sent, "textDocument/publishDiagnostics").len(), 1);
     }
 
     #[test]
