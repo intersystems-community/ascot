@@ -1219,13 +1219,6 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
-    pub(crate) fn read_publics(&mut self) -> Result<(), QuasiTypeError> {
-        for name in self.bindings()?.publics() {
-            self.read(&name)?
-        }
-        Ok(())
-    }
-
     pub(crate) fn read_write_publics(&mut self) -> Result<(), QuasiTypeError> {
         for name in self.bindings()?.publics() {
             self.invalidate(Local::bare(name), Ty::Any.into())?;
