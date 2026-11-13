@@ -2369,7 +2369,8 @@ fn split_on_conjunction<'a, X: Grammar, Y: Grammar>(
         if_true: &mut Flow<'a>,
         report_always: bool,
     ) -> Result<Flow<'a>, TypeError> {
-        read_condition(env, if_true, &ty, text)?;
+        // A condition is a read like any other, then what the flow splits on.
+        ranged_quasi_ty_to_ty(env, if_true, &ty, Some(text))?;
         Ok(if_true.with_range(env.range(&ty), |if_true| {
             if_true.split_on(ty.into_inner(), report_always)
         }))
@@ -2401,20 +2402,6 @@ fn split_on_conjunction<'a, X: Grammar, Y: Grammar>(
     Ok(if_false)
 }
 
-// A condition is a read: an undefined or maybe-undefined one is reported, as any value is. A
-// term or a constant has nothing to value.
-fn read_condition<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    ty: &Range<PowerTy>,
-    text: &dyn Fn() -> String,
-) -> Result<(), TypeError> {
-    if let PowerTy::Plain(_) = ty.deref() {
-        ranged_quasi_ty_to_ty(env, flow, ty.clone(), Some(text))?;
-    }
-    Ok(())
-}
-
 fn check_pc<'a>(
     pc: &Option<cos::PostCondition>,
     env: &CodeEnv<'a>,
@@ -2425,7 +2412,7 @@ fn check_pc<'a>(
         let pc_ty = pc.as_ref().map(Deref::deref).to_power_ty(env, flow)?;
         let pc_ty = Range::new(pc.start, pc_ty, pc.end);
         let text = || pc.as_ref().map(Deref::deref).print();
-        read_condition(env, flow, &pc_ty, &text).map_err(QuasiTypeError::WithRange)?;
+        ranged_quasi_ty_to_ty(env, flow, &pc_ty, Some(&text)).map_err(QuasiTypeError::WithRange)?;
         let old_flow = flow.split_on(pc_ty.into_inner(), true);
         and_then(flow)?;
         flow.merge(old_flow)
@@ -3043,13 +3030,13 @@ trait CheckExpr: Sized {
 fn ranged_quasi_ty_to_ty<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    ty: Range<PowerTy>,
+    ty: &Range<PowerTy>,
     text: Option<&dyn Fn() -> String>,
 ) -> Result<Ty, TypeError> {
     let text = || text.map_or_else(String::new, |text| text().trim().to_string());
-    flow.with_range(env.range(&ty), |flow| flow.value(&ty, text))
+    flow.with_range(env.range(ty), |flow| flow.value(ty, text))
         .map_err(|err| err.with_expr_text(text))
-        .with_range(|| env.range(&ty))
+        .with_range(|| env.range(ty))
 }
 
 impl CheckExprInner for Expr {
@@ -3178,7 +3165,7 @@ fn check_infix<'a, X>(
 ) -> Result<PowerTy, TypeError> {
     match op {
         cos::InfixOperation::Match { .. } => {
-            ranged_quasi_ty_to_ty(env, flow, lhs, lhs_text)?;
+            ranged_quasi_ty_to_ty(env, flow, &lhs, lhs_text)?;
             Ok(PowerTy::from("%Boolean"))
         }
         cos::InfixOperation::Other { op, rhs: rhs_node } => {
@@ -3224,8 +3211,8 @@ fn check_infix<'a, X>(
                 }
                 _ => (),
             }
-            let lhs = ranged_quasi_ty_to_ty(env, flow, lhs, lhs_text)?;
-            let rhs = ranged_quasi_ty_to_ty(env, flow, rhs, Some(&|| rhs_node.print()))?;
+            let lhs = ranged_quasi_ty_to_ty(env, flow, &lhs, lhs_text)?;
+            let rhs = ranged_quasi_ty_to_ty(env, flow, &rhs, Some(&|| rhs_node.print()))?;
             Ok(match op {
                 cos::Operator::Add(_) | cos::Operator::Sub(_) => env.merge_ty(lhs, rhs).into(),
                 cos::Operator::Pow(_) | cos::Operator::Mul(_) | cos::Operator::Div(..) => {
