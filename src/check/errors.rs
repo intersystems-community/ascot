@@ -2957,25 +2957,34 @@ impl std::fmt::Display for SyntaxErrorText {
 
 impl SyntaxErrorText {
     pub fn new(error: &tygr::Error, src: &str) -> Self {
-        // A function's arguments (`cos::fun_args!`) are named after it and word the whole message;
-        // when several of its forms fail at the same spot, the first form's message stands for all.
+        // A function's arguments (`cos::fun_args!`) are a rule named after it, which words the whole
+        // message; when several of its forms fail at the same spot, the first form's stands for all.
         let mut named = std::collections::HashSet::new();
         let mut friendly: Vec<String> = error
             .traces()
             .iter()
-            .filter_map(|trace| match &trace.expectation {
-                tygr::Expectation::Rejected {
-                    node, requirement, ..
-                } if requirement.starts_with('$') => {
-                    named.insert(node).then(|| requirement.to_string())
+            .filter_map(|trace| {
+                // The rule a conversion failed in: a function's arguments are a rule named after it.
+                let rule = trace.context.last().map_or("", |frame| frame.node);
+                match &trace.expectation {
+                    tygr::Expectation::Convertible { error, .. } if rule.starts_with('$') => {
+                        named.insert(rule).then(|| format!("{rule} {error}"))
+                    }
+                    tygr::Expectation::Convertible { error, .. } if error.starts_with('$') => {
+                        Some(error.to_string())
+                    }
+                    tygr::Expectation::Convertible { range, error, .. } => {
+                        Some(format!("`{}` must {error}", &src[range.clone()]))
+                    }
+                    tygr::Expectation::Rejected {
+                        range, requirement, ..
+                    } => Some(format!("`{}` must {requirement}", &src[range.clone()])),
+                    _ => None,
                 }
-                tygr::Expectation::Rejected {
-                    range, requirement, ..
-                } => Some(format!("`{}` must {requirement}", &src[range.clone()])),
-                _ => None,
             })
             .collect();
-        friendly.dedup();
+        let mut seen = std::collections::HashSet::new();
+        friendly.retain(|message| seen.insert(message.clone()));
         if !friendly.is_empty() {
             return Self(friendly.join("; "));
         }
@@ -2988,7 +2997,8 @@ impl SyntaxErrorText {
                 _ => match &trace.expectation {
                     tygr::Expectation::Token { text, .. } => Some(token_in_words(text)),
                     tygr::Expectation::CharClass(class) => Some(class_in_words(class)),
-                    tygr::Expectation::Rejected { node, .. } => node.map(rule_in_words),
+                    tygr::Expectation::Rejected { node, .. } => Some(rule_in_words(node)),
+                    tygr::Expectation::Convertible { into, .. } => Some(rule_in_words(into)),
                     _ => None,
                 },
             })

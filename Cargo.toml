@@ -60,3 +60,6 @@ ureq = { version = "3", features = ["json", "platform-verifier", "cookies"], opt
 sha2 = { version = "0.10", optional = true }
 base64 = { version = "0.23", optional = true }
 clap = { version = "4.6.7", features = ["derive", "wrap_help"], optional = true }
+
+[patch.crates-io]
+tygr = { git = "https://github.com/intersystems-community/tygr", rev = "94a49f5" }

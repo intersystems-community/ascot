@@ -425,8 +425,8 @@ impl MethodDetails {
         }
         let body_text = expanded[header_len..].to_string();
         let body_range = bindings::Range {
-            start: bindings::Position::from(expanded_olc.offset_to_line_character(header_len)),
-            end: bindings::Position::from(expanded_olc.offset_to_line_character(expanded.len())),
+            start: expanded_olc.position(header_len),
+            end: expanded_olc.position(expanded.len()),
         };
         let diagnostics_mark = env.base.soft_diagnostics_mark();
         let references_mark = env.base.references_mark();

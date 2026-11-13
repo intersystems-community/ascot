@@ -62,13 +62,14 @@ pub trait Positions {
     }
 }
 
+// A position past the text, a line or inside a character is clamped to the nearest valid one.
 impl Positions for OLC {
     fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
-        OLC::offset_to_line_character(self, offset)
+        OLC::offset_to_line_character(self, offset).unwrap_or_else(|e| e.bound)
     }
 
     fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize {
-        OLC::line_character_to_offset(self, line_character)
+        OLC::line_character_to_offset(self, line_character).unwrap_or_else(|e| e.bound)
     }
 }
 

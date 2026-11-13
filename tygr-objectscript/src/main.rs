@@ -96,7 +96,9 @@ fn check_method_body(method: &cos::Method) -> Result<(), (usize, tygr::Error)> {
 // `err.pos()` is relative to the method body's own text, so it's offset by `body_start` (the
 // body's position within the whole file) to land on the right line/column.
 fn report(path: &str, olc: &OLC, method_name: &str, body_start: usize, err: &tygr::Error) {
-    let (line, character) = olc.offset_to_line_character(body_start + err.pos());
+    let (line, character) = olc
+        .offset_to_line_character(body_start + err.pos())
+        .unwrap_or_else(|e| e.bound);
     eprintln!(
         "{path}:{}:{}: in method {method_name}: {err}",
         line + 1,

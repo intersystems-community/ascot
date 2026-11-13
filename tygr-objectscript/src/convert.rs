@@ -1,10 +1,5 @@
-//! Grammars that tygr 0.7 no longer derives: a list with its separators kept apart, and a type
-//! parsed as another grammar and converted from it, with the conversion's own message when it
-//! fails. [`Converted`] is implemented beside the `TryFrom`/`From`, and `converted!` writes its
-//! `Parse`.
+//! A grammar tygr no longer provides: a list with its separators kept apart.
 
-use std::collections::HashSet;
-use std::sync::{LazyLock, Mutex};
 use tygr::bnf::{Expr, Rules};
 use tygr::first::First;
 use tygr::*;
@@ -31,9 +26,9 @@ impl<T: Parse, S: Parse> Parse for VecSep<T, S> {
     fn parse_at<M: Mode>(
         input: &str,
         pos: usize,
-        mut state: State,
+        mut state: State<M>,
     ) -> Option<(M::Output<Self>, usize)> {
-        let (first, mut pos) = T::parse_at::<M>(input, pos, state.reborrow())?;
+        let (first, mut pos) = T::parse_at(input, pos, state.reborrow())?;
         let mut vec_sep = M::build(|_| VecSep {
             items: Vec::new(),
             seps: Vec::new(),
@@ -42,10 +37,10 @@ impl<T: Parse, S: Parse> Parse for VecSep<T, S> {
             mode.get_mut(&mut vec_sep).items.push(mode.get(first));
         }
         loop {
-            let Some((sep, after_sep)) = S::parse_at::<M>(input, pos, state.reborrow()) else {
+            let Some((sep, after_sep)) = S::parse_at(input, pos, state.reborrow()) else {
                 break;
             };
-            let Some((item, end)) = T::parse_at::<M>(input, after_sep, state.reborrow()) else {
+            let Some((item, end)) = T::parse_at(input, after_sep, state.reborrow()) else {
                 break;
             };
             if end == pos {
@@ -61,7 +56,7 @@ impl<T: Parse, S: Parse> Parse for VecSep<T, S> {
         Some((vec_sep, pos))
     }
 
-    fn fail_at(pos: usize, mut state: State) -> bool {
+    fn fail_at<M: Mode>(pos: usize, mut state: State<M>) -> bool {
         T::fail_at(pos, state.reborrow()) || <Vec<(S, T)>>::fail_at(pos, state)
     }
 
@@ -86,123 +81,4 @@ impl<T: Print, S: Print> Print for VecSep<T, S> {
             item.print_to(buf);
         }
     }
-}
-
-/// A grammar read as `Source` and converted from it, so that a wrong shape is reported by what
-/// the text must be. `NAME` is its rule; `REQUIREMENT` footnotes the EBNF, and `requirement`
-/// words one failure, starting with `$` when it is a whole sentence about a function.
-pub trait Converted: TryFrom<Self::Source> + 'static {
-    type Source: Parse;
-    const NAME: &'static str;
-    const REQUIREMENT: &'static str;
-    fn requirement(_error: <Self as TryFrom<Self::Source>>::Error) -> &'static str {
-        Self::REQUIREMENT
-    }
-}
-
-/// A message built while parsing, kept for the error to point at; the set stays small as long as
-/// no message quotes the source.
-pub fn intern(message: String) -> &'static str {
-    static INTERNED: LazyLock<Mutex<HashSet<&'static str>>> = LazyLock::new(Default::default);
-    let mut interned = INTERNED.lock().unwrap();
-    if let Some(known) = interned.get(message.as_str()) {
-        return known;
-    }
-    let message: &'static str = Box::leak(message.into_boxed_str());
-    interned.insert(message);
-    message
-}
-
-pub fn parse_at<T: Converted, M: Mode>(
-    input: &str,
-    pos: usize,
-    mut state: State,
-) -> Option<(M::Output<T>, usize)> {
-    let mut state = state.node(T::NAME, pos);
-    let (source, end) = T::Source::parse_at::<Build>(input, pos, state.reborrow())?;
-    match T::try_from(source) {
-        Ok(value) => Some((M::build(|_| value), end)),
-        Err(error) => {
-            state.reject(Some(T::NAME), pos..end, T::requirement(error));
-            None
-        }
-    }
-}
-
-/// `parse_at` for a conversion that can't fail, which checking skips; no rule of its own is
-/// entered, as the error can only be the source's.
-pub fn parse_at_infallible<T: Converted + From<T::Source>, M: Mode>(
-    input: &str,
-    pos: usize,
-    state: State,
-) -> Option<(M::Output<T>, usize)> {
-    let (source, end) = T::Source::parse_at::<M>(input, pos, state)?;
-    Some((M::map(source, T::from), end))
-}
-
-pub fn fail_at<T: Converted>(pos: usize, mut state: State) -> bool {
-    T::Source::fail_at(pos, state.node(T::NAME, pos))
-}
-
-pub fn fail_at_infallible<T: Converted>(pos: usize, state: State) -> bool {
-    T::Source::fail_at(pos, state)
-}
-
-pub fn to_bnf<T: Converted>() -> Expr {
-    Expr::RuleRef(T::NAME.to_string())
-}
-
-pub fn visit_rules<T: Converted>(rules: &mut Rules) {
-    if rules.insert::<T>(T::NAME, || {
-        Expr::side_condition(T::Source::to_bnf(), T::REQUIREMENT)
-    }) {
-        T::Source::visit_rules(rules);
-    }
-}
-
-/// `converted!(Type)` implements `Parse` for a [`Converted`] type through its `TryFrom`;
-/// `converted!(Type, infallible)` for one with a `From`, which checking needn't run; and
-/// `converted!(Type<B>)` for a generic one, whose rule is spliced rather than named since every
-/// instantiation would share the name.
-macro_rules! converted {
-    ($ty:ident) => {
-        converted!(@impl $ty, parse_at, fail_at);
-    };
-    ($ty:ident, infallible) => {
-        converted!(@impl $ty, parse_at_infallible, fail_at_infallible);
-    };
-    (@impl $ty:ident, $parse:ident, $fail:ident) => {
-        impl Parse for $ty {
-            type First = <<Self as $crate::convert::Converted>::Source as Parse>::First;
-            fn parse_at<M: Mode>(input: &str, pos: usize, state: State) -> Option<(M::Output<Self>, usize)> {
-                $crate::convert::$parse::<Self, M>(input, pos, state)
-            }
-            fn fail_at(pos: usize, state: State) -> bool {
-                $crate::convert::$fail::<Self>(pos, state)
-            }
-            fn to_bnf() -> bnf::Expr {
-                $crate::convert::to_bnf::<Self>()
-            }
-            fn visit_rules(rules: &mut bnf::Rules) {
-                $crate::convert::visit_rules::<Self>(rules);
-            }
-        }
-    };
-    ($ty:ident<$p:ident>) => {
-        impl<$p: Parse> Parse for $ty<$p> {
-            type First = <<Self as $crate::convert::Converted>::Source as Parse>::First;
-            fn parse_at<M: Mode>(input: &str, pos: usize, state: State) -> Option<(M::Output<Self>, usize)> {
-                $crate::convert::parse_at_infallible::<Self, M>(input, pos, state)
-            }
-            fn fail_at(pos: usize, state: State) -> bool {
-                $crate::convert::fail_at_infallible::<Self>(pos, state)
-            }
-            fn to_bnf() -> bnf::Expr {
-                <<Self as $crate::convert::Converted>::Source as Parse>::to_bnf()
-            }
-            fn visit_rules(rules: &mut bnf::Rules) {
-                <<Self as $crate::convert::Converted>::Source as Parse>::visit_rules(rules);
-            }
-        }
-    };
 }

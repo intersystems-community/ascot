@@ -10,7 +10,8 @@ use either::Either;
 // Make key types public for use in corpus tests
 pub use tygr::*;
 
-pub use crate::convert::{Converted, VecSep};
+pub use crate::convert::VecSep;
+use std::borrow::Cow;
 
 use crate::sql;
 
@@ -300,6 +301,8 @@ pub enum FunArgSource {
     },
 }
 
+#[derive(Parse)]
+#[tygr(inline, try_from_infallible = FunArgSource)]
 pub enum FunArg {
     ColonNormal(ExpColExp),
     ColonDefault(ColExp),
@@ -317,13 +320,6 @@ pub enum FunArg {
         target: SetTarget,
     },
 }
-
-impl Converted for FunArg {
-    type Source = FunArgSource;
-    const NAME: &'static str = "FunArg";
-    const REQUIREMENT: &'static str = "be an argument";
-}
-converted!(FunArg, infallible);
 
 impl Print for FunArg {
     fn print_to(&self, buf: &mut String) {
@@ -376,6 +372,8 @@ pub enum StarModOp {
     Sub(StringEq!("-")),
 }
 
+#[derive(Parse)]
+#[tygr(try_from = Ranged<ExprOps<()>>)]
 pub enum GetTarget {
     Var(Variable),
     Member {
@@ -390,13 +388,6 @@ pub enum GetTarget {
     // A `$z...` system function standing for a reference, e.g. `$order($zobjval(...))`.
     Fun(Box<Prefix<StringEq!("$"), FunctionCall>>),
 }
-
-impl Converted for GetTarget {
-    type Source = Ranged<ExprOps<()>>;
-    const NAME: &'static str = "GetTarget";
-    const REQUIREMENT: &'static str = "name a variable, a property or an indirection";
-}
-converted!(GetTarget);
 
 impl Print for GetTarget {
     fn print_to(&self, buf: &mut String) {
@@ -420,7 +411,7 @@ impl TryFrom<Ranged<ExprOps<()>>> for GetTarget {
     type Error = &'static str;
 
     fn try_from(value: Ranged<ExprOps<()>>) -> Result<Self, Self::Error> {
-        let err = Self::REQUIREMENT;
+        let err = "name a variable, a property or an indirection";
         match value.into_inner() {
             ExprOps::Then { base, op } => Ok(GetTarget::Sub { base: *base, op }),
             ExprOps::Base(base) => match *base {
@@ -451,6 +442,8 @@ pub struct CacheDirectCallback {
     sub: Option<Prefix<StringEq!("!"), Identifier>>,
 }
 
+#[derive(Parse)]
+#[tygr(try_from = SetTargetSource)]
 pub enum SetTarget {
     Var(Variable),
     Member {
@@ -494,14 +487,6 @@ pub enum SetTargetSource {
     Expr(Ranged<ExprOps<()>>),
 }
 
-impl Converted for SetTarget {
-    type Source = SetTargetSource;
-    const NAME: &'static str = "SetTarget";
-    const REQUIREMENT: &'static str =
-        "be a variable, a property, an indirection or a settable function such as $PIECE";
-}
-converted!(SetTarget);
-
 impl Print for SetTarget {
     fn print_to(&self, buf: &mut String) {
         match self {
@@ -529,7 +514,7 @@ impl TryFrom<SetTargetSource> for SetTarget {
     type Error = &'static str;
 
     fn try_from(value: SetTargetSource) -> Result<Self, Self::Error> {
-        let err = Self::REQUIREMENT;
+        let err = "be a variable, a property, an indirection or a settable function such as $PIECE";
         let value = match value {
             SetTargetSource::ListGet(call) => {
                 return Ok(SetTarget::Fun(SetTargetFun::ListGet(call.prefixed)));
@@ -876,7 +861,7 @@ impl Parse for NotFirstNonWhitespace {
     fn parse_at<M: Mode>(
         input: &str,
         pos: usize,
-        _state: State,
+        _state: State<M>,
     ) -> Option<(M::Output<Self>, usize)> {
         let before = input.get(..pos)?;
         let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
@@ -887,7 +872,7 @@ impl Parse for NotFirstNonWhitespace {
         }
     }
 
-    fn fail_at(_pos: usize, _state: State) -> bool {
+    fn fail_at<M: Mode>(_pos: usize, _state: State<M>) -> bool {
         false
     }
 
@@ -1289,6 +1274,8 @@ pub enum AllowCase<T> {
 #[derive(Grammar)]
 pub struct Location(pub AllowIndirection<Ranged<LegacyEntryRef>>);
 
+#[derive(Parse)]
+#[tygr(try_from = ExprOps<()>)]
 pub enum MethodOrFuncCallExpr {
     /// A receiver expression whose last suffix op is a call.
     Method {
@@ -1308,13 +1295,6 @@ pub enum MethodOrFuncCallExpr {
     /// A bare `$`-prefixed function call atom.
     Function(FunctionCall),
 }
-
-impl Converted for MethodOrFuncCallExpr {
-    type Source = ExprOps<()>;
-    const NAME: &'static str = "MethodOrFuncCallExpr";
-    const REQUIREMENT: &'static str = "be a method or function call, not a value";
-}
-converted!(MethodOrFuncCallExpr);
 
 impl Print for MethodOrFuncCallExpr {
     fn print_to(&self, buf: &mut String) {
@@ -1338,7 +1318,7 @@ impl TryFrom<ExprOps<()>> for MethodOrFuncCallExpr {
     type Error = &'static str;
 
     fn try_from(value: ExprOps<()>) -> Result<Self, Self::Error> {
-        let err = Self::REQUIREMENT;
+        let err = "be a method or function call, not a value";
         match value {
             ExprOps::Then {
                 base,
@@ -3185,12 +3165,12 @@ pub enum MemberBody {
     Foreign(Raw<(Space, StringEq!("{"))>, ForeignBody, StringEq!("}")),
 }
 
-fn foreign_body(input: &str, pos: usize, mut state: State) -> Option<(OSBody, usize)> {
-    let (space, pos) = Space::parse_at::<Build>(input, pos, state.reborrow())?;
-    let (open, start) = <StringEq!("{")>::parse_at::<Build>(input, pos, state.reborrow())?;
-    let ((), end) = ForeignBody::parse_at::<Check>(input, start, state.reborrow())?;
+fn foreign_body<M: Mode>(input: &str, pos: usize, mut state: State<M>) -> Option<(OSBody, usize)> {
+    let (space, pos) = Space::build_at(input, pos, state.reborrow())?;
+    let (open, start) = <StringEq!("{")>::build_at(input, pos, state.reborrow())?;
+    let end = ForeignBody::check_at(input, start, state.reborrow())?;
     let text = Ranged::new(start, OSText(input[start..end].into()), end);
-    let (close, pos) = <StringEq!("}")>::parse_at::<Build>(input, end, state)?;
+    let (close, pos) = <StringEq!("}")>::build_at(input, end, state)?;
     Some((Prefix::new(space, Wrap::new(open, text, close)), pos))
 }
 
@@ -3220,26 +3200,26 @@ impl Parse for Method {
     fn parse_at<M: Mode>(
         input: &str,
         pos: usize,
-        mut state: State,
+        mut state: State<M>,
     ) -> Option<(M::Output<Self>, usize)> {
-        let (header, pos) = MethodHeader::parse_at::<Build>(input, pos, state.reborrow())?;
-        let os_body = |mut state: State| {
-            let (body, end) = OSBody::parse_at::<Build>(input, pos, state.reborrow())?;
-            MemberEnd::parse_at::<Check>(input, end, state)?;
+        let (header, pos) = MethodHeader::build_at(input, pos, state.reborrow())?;
+        let os_body = |mut state: State<M>| {
+            let (body, end) = OSBody::build_at(input, pos, state.reborrow())?;
+            MemberEnd::check_at(input, end, state)?;
             Some((body, end))
         };
         let (body, pos) = if header.is_objectscript() {
             os_body(state.reborrow())
                 .or_else(|| foreign_body(input, pos, state.reborrow()))
-                .or_else(|| OSBody::parse_at::<Build>(input, pos, state))?
+                .or_else(|| OSBody::build_at(input, pos, state))?
         } else {
             foreign_body(input, pos, state.reborrow())
-                .or_else(|| OSBody::parse_at::<Build>(input, pos, state))?
+                .or_else(|| OSBody::build_at(input, pos, state))?
         };
         Some((M::build(|_| Method { header, body }), pos))
     }
 
-    fn fail_at(pos: usize, state: State) -> bool {
+    fn fail_at<M: Mode>(pos: usize, state: State<M>) -> bool {
         MethodHeader::fail_at(pos, state)
     }
 
@@ -4335,17 +4315,9 @@ impl CommandLike for Command {
     }
 }
 
+#[derive(Parse)]
+#[tygr(try_from = StringOf1<IsAlphabetic>)]
 pub struct UnknownCommand(pub std::convert::Infallible);
-
-impl Converted for UnknownCommand {
-    type Source = StringOf1<IsAlphabetic>;
-    const NAME: &'static str = "UnknownCommand";
-    const REQUIREMENT: &'static str = "be a command";
-    fn requirement(error: &'static str) -> &'static str {
-        error
-    }
-}
-converted!(UnknownCommand);
 
 impl Print for UnknownCommand {
     fn print_to(&self, _buf: &mut String) {
@@ -4354,24 +4326,25 @@ impl Print for UnknownCommand {
 }
 
 impl TryFrom<StringOf1<IsAlphabetic>> for UnknownCommand {
-    type Error = &'static str;
+    type Error = Cow<'static, str>;
 
-    fn try_from(word: StringOf1<IsAlphabetic>) -> Result<Self, &'static str> {
+    fn try_from(word: StringOf1<IsAlphabetic>) -> Result<Self, Cow<'static, str>> {
         let s = word.as_str();
         // A known command lands here when its own grammar failed right after the word.
         if COMMAND_NAMES.iter().any(|(name, abbr)| {
             name.eq_ignore_ascii_case(s) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(s))
         }) {
-            return Err("be followed by a well-formed argument");
+            return Err("be followed by a well-formed argument".into());
         }
-        Err(crate::convert::intern(format!(
+        Err(format!(
             "be a command; the commands are {}",
             COMMAND_NAMES
                 .iter()
                 .map(|(name, _)| *name)
                 .collect::<Vec<_>>()
                 .join(", ")
-        )))
+        )
+        .into())
     }
 }
 
@@ -4967,21 +4940,13 @@ impl<P: FromOptFunArg> FunArgField for Vec<Prefix<Comma, Wrap<MGap, P, MGap>>> {
 // the arguments of one function, parsed generically and converted field by field.
 macro_rules! fun_args {
     ($name:literal $ty:ident { $first:ident : $firstty:ty $(, $field:ident : $fty:ty)* $(,)? }) => {
+        #[derive(Parse)]
+        #[tygr(name = $name, try_from = GenericFunArgs)]
         pub struct $ty {
             pub $first: $firstty,
             $(pub $field: $fty,)*
             pub commas: Vec<CommaAt>,
         }
-
-        impl Converted for $ty {
-            type Source = GenericFunArgs;
-            const NAME: &'static str = $name;
-            const REQUIREMENT: &'static str = concat!("be the arguments of ", $name);
-            fn requirement(error: FunArgError) -> &'static str {
-                crate::convert::intern(format!("{} {error}", $name))
-            }
-        }
-        converted!($ty);
 
         impl Print for $ty {
             fn print_to(&self, buf: &mut String) {
@@ -6632,6 +6597,8 @@ pub struct SimpleFunctionCallSource {
     args: ExprArgList,
 }
 
+#[derive(Parse)]
+#[tygr(name = "simple function call", try_from = SimpleFunctionCallSource)]
 pub struct SimpleFunctionCall {
     pub name: Ranged<SimpleFunctionName>,
     pub args: ExprArgList,
@@ -6655,16 +6622,6 @@ impl Spelled for SimpleFunctionCall {
         }
     }
 }
-
-impl Converted for SimpleFunctionCall {
-    type Source = SimpleFunctionCallSource;
-    const NAME: &'static str = "simple function call";
-    const REQUIREMENT: &'static str = "be a known function given its arguments";
-    fn requirement(error: NamedFunArgError) -> &'static str {
-        crate::convert::intern(error.to_string())
-    }
-}
-converted!(SimpleFunctionCall);
 
 impl Print for SimpleFunctionCall {
     fn print_to(&self, buf: &mut String) {
@@ -6743,20 +6700,12 @@ pub struct GenericFunctionCallSource {
     args: Paren<GenericFunArgs>,
 }
 
+#[derive(Parse)]
+#[tygr(name = "function call", try_from = GenericFunctionCallSource)]
 pub struct GenericFunctionCall {
     pub name: HandWrittenFunctionName,
     pub args: Paren<GenericFunArgs>,
 }
-
-impl Converted for GenericFunctionCall {
-    type Source = GenericFunctionCallSource;
-    const NAME: &'static str = "function call";
-    const REQUIREMENT: &'static str = "be a known function given its arguments";
-    fn requirement(error: NamedFunArgError) -> &'static str {
-        crate::convert::intern(error.to_string())
-    }
-}
-converted!(GenericFunctionCall);
 
 impl Print for GenericFunctionCall {
     fn print_to(&self, buf: &mut String) {
@@ -7028,6 +6977,8 @@ pub struct ExprOpsStruct<BeforeFirst> {
     pub ops: Vec<SufOp>,
 }
 
+#[derive(Parse)]
+#[tygr(inline, try_from_infallible = ExprOpsStruct<BeforeFirst>)]
 pub enum ExprOps<BeforeFirst> {
     Base(Box<ParenedExpr<BeforeFirst>>),
     Then {
@@ -7035,13 +6986,6 @@ pub enum ExprOps<BeforeFirst> {
         op: SufOp,
     },
 }
-
-impl<BeforeFirst: Parse> Converted for ExprOps<BeforeFirst> {
-    type Source = ExprOpsStruct<BeforeFirst>;
-    const NAME: &'static str = "ExprOps";
-    const REQUIREMENT: &'static str = "be an expression";
-}
-converted!(ExprOps<BeforeFirst>);
 
 impl<BeforeFirst: Print> Print for ExprOps<BeforeFirst> {
     fn print_to(&self, buf: &mut String) {
@@ -7545,12 +7489,12 @@ mod regression_tests {
         for line in [" set\n", " s\n", " merge\n", " zkill\n", " zk\n"] {
             let err = routine(line).expect_err(line).to_string();
             assert!(
-                err.contains("must be followed by a well-formed argument"),
+                err.contains("be followed by a well-formed argument"),
                 "{line}: {err}"
             );
         }
         let err = routine(" foo 1\n").expect_err("foo").to_string();
-        assert!(err.contains("must be a command; the commands are"), "{err}");
+        assert!(err.contains("be a command; the commands are"), "{err}");
     }
 
     #[test]

@@ -2206,6 +2206,7 @@ impl<'a> CodeEnv<'a> {
         self.base
             .olc
             .offset_to_line_character(offset + self.offset)
+            .unwrap_or_else(|e| e.bound)
             .0
     }
 
@@ -2354,11 +2355,15 @@ impl<'a> Locator for DocumentEnv<'a> {
 
 impl<'a> Positions for DocumentEnv<'a> {
     fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
-        self.olc.offset_to_line_character(offset)
+        self.olc
+            .offset_to_line_character(offset)
+            .unwrap_or_else(|e| e.bound)
     }
 
     fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize {
-        self.olc.line_character_to_offset(line_character)
+        self.olc
+            .line_character_to_offset(line_character)
+            .unwrap_or_else(|e| e.bound)
     }
 }
 

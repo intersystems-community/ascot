@@ -237,19 +237,12 @@ impl SourceMap {
         self.include_names.iter()
     }
 
-    fn expanded_line_count(&self) -> usize {
-        self.expanded_text.matches('\n').count() + 1
-    }
-
     // False means `position` definitely isn't part of this expansion (e.g. it's really a
     // different member's declaration, which happens to share this document's uri): past the last
-    // line, or past its line's end, where the `OLC` would clamp it onto the text.
+    // line, or past its line's end.
     pub(crate) fn is_in_expanded_bounds(&self, position: Position) -> bool {
-        (position.line as usize) < self.expanded_line_count()
-            && self
-                .expanded_olc
-                .position(self.expanded_olc.offset(position))
-                == position
+        let line_character = (position.line as usize, position.character as usize);
+        OLC::line_character_to_offset(&self.expanded_olc, line_character).is_ok()
     }
 
     // Relocates a single expanded-text position back to the top-level source, or `None` if it
@@ -260,9 +253,7 @@ impl SourceMap {
             return None;
         }
         let (source_offset, _) = self.to_source_offset(self.expanded_olc.offset(position))?;
-        Some(Position::from(
-            self.source_olc.offset_to_line_character(source_offset),
-        ))
+        Some(self.source_olc.position(source_offset))
     }
 
     // The end is exclusive, so it is relocated through the last character it covers; otherwise
@@ -287,7 +278,7 @@ impl SourceMap {
         };
         Some(bindings::Range {
             start: self.relocate_position(range.start)?,
-            end: Position::from(self.source_olc.offset_to_line_character(end)),
+            end: self.source_olc.position(end),
         })
     }
 

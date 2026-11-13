@@ -1254,7 +1254,7 @@ fn include_names(map: &SourceMap) -> HashSet<Name> {
 fn full_range(text: &str) -> bindings::Range {
     bindings::Range {
         start: Position::default(),
-        end: Position::from(OLC::new(text).offset_to_line_character(text.len())),
+        end: OLC::new(text).position(text.len()),
     }
 }
 
@@ -1270,7 +1270,7 @@ pub(crate) fn tygr_error_to_diagnostics(
     src: &str,
     scope: check::SyntaxScope,
 ) -> Diagnostic {
-    let start = Position::from(OLC::new(src).offset_to_line_character(e.pos()));
+    let start = OLC::new(src).position(e.pos());
     let end = Position {
         character: start.character + 1,
         ..start
