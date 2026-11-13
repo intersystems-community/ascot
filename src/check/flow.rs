@@ -66,6 +66,8 @@ struct Shared<'a> {
     output: OutputCell,
     ty_var: RefCell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
+    // The entries of `reading_list` that are information rather than a warning when never read.
+    unread_roles: RefCell<HashMap<Written, UnreadRole>>,
     // In declaration order, for a deterministic diagnostic when more than one qualifies.
     ref_params: RefCell<Vec<RefParam>>,
     // Visible in the signature already, so excluded from `creates` below.
@@ -465,6 +467,7 @@ impl<'a> Flow<'a> {
                 output,
                 ty_var: RefCell::new(0),
                 reading_list: RefCell::new(reading_list),
+                unread_roles: RefCell::new(HashMap::new()),
                 ref_params: RefCell::new(ref_params),
                 known_names,
                 creates: RefCell::new(HashSet::new()),
@@ -501,7 +504,7 @@ impl<'a> Flow<'a> {
                 unread.map(|(w, _)| (w.name.clone(), w.range)).collect()
             };
             for (name, range) in unread {
-                flow.add_soft_diagnostic(TypeError::unread_assignment(name, range).into());
+                flow.add_soft_diagnostic(flow.unread(name, range).into());
             }
             // The caller reads a by-reference parameter, and need not set an `Output` one, so the
             // body's own use says which mode fits: a `ByRef` written without its incoming value
@@ -513,9 +516,7 @@ impl<'a> Flow<'a> {
                     (RefMode::ByRef, false, true, _) if output_keyword => {
                         TypeError::by_ref_never_read(name, range)
                     }
-                    (RefMode::ByRef, false, false, false) => {
-                        TypeError::unread_assignment(name, range)
-                    }
+                    (RefMode::ByRef, false, false, false) => flow.unread(name, range),
                     (RefMode::Output, true, true, _) => TypeError::output_read_first(name, range),
                     _ => continue,
                 };
@@ -1056,6 +1057,22 @@ impl<'a> Flow<'a> {
     ) -> Result<(), QuasiTypeError> {
         self.lookup(name)?.declared = Some(ty);
         Ok(())
+    }
+
+    // An assignment at `range` that is information rather than a warning when never read.
+    pub(crate) fn note_unread_role(&self, name: String, range: bindings::Range, role: UnreadRole) {
+        self.shared
+            .unread_roles
+            .borrow_mut()
+            .insert(Written::new(name, range), role);
+    }
+
+    fn unread(&self, name: String, range: bindings::Range) -> TypeError {
+        let role = self.shared.unread_roles.borrow();
+        match role.get(&Written::new(name.clone(), range)) {
+            Some(role) => TypeError::unread_required(*role, name, range),
+            None => TypeError::unread_assignment(name, range),
+        }
     }
 
     pub(crate) fn handle_set(

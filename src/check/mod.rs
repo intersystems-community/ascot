@@ -37,7 +37,7 @@ use types::*;
 pub(crate) use env::{DocumentEnv, WorkspaceEnv, labels_of};
 pub use errors::{
     ArgCount, Available, Declared, Detail, DynamicGet, InRoutine, OverrideDifference, Suggestions,
-    SuperclassOf, SyntaxErrorText, SyntaxScope, TypeErrorKind, TypeParamHint,
+    SuperclassOf, SyntaxErrorText, SyntaxScope, TypeErrorKind, TypeParamHint, UnreadRole,
 };
 pub(crate) use errors::{IntoTypeError, QuasiTypeError, TypeError};
 
@@ -451,6 +451,13 @@ impl MethodDetails {
             let out = local_out.it.clone().flatten();
             check_override(env, cls, name, origin, sup, self, &local_args, out);
         }
+        // An override's formal arguments are the superclass's, read or not (A4269).
+        let inherited: Vec<(String, bindings::Range)> = match overridden {
+            Some(_) => (local_args.iter())
+                .map(|arg| (arg.it.name.clone(), arg.range))
+                .collect(),
+            None => vec![],
+        };
         let local_out = WithRange::new(local_out.it, shifter.unrange(local_out.range));
         let in_doc_coordinates = std::cell::RefCell::new((Vec::new(), Vec::new()));
         // `?` is deferred until after relocation below, so an early return doesn't skip
@@ -470,6 +477,9 @@ impl MethodDetails {
             self.procedure_block.clone(),
             local_out,
             |flow| {
+                for (name, range) in &inherited {
+                    flow.note_unread_role(name.clone(), *range, UnreadRole::Inherited);
+                }
                 let body = MethodBody {
                     language,
                     mode,
@@ -2307,7 +2317,9 @@ fn check_try<'a>(
         && let Left(local) = target.deref().as_local(env, flow)?
     {
         // `CatchTarget` carries no range of its own; anchor on the catch block instead.
-        catch_flow.handle_set(local, Ty::Any.into(), env.range(catch_block))?
+        let range = env.range(catch_block);
+        catch_flow.note_unread_role(local.name.clone(), range, UnreadRole::Catch);
+        catch_flow.handle_set(local, Ty::Any.into(), range)?
     }
     catch_flow.with_block(env.range(catch_block), |flow| catch_block.check(env, flow))?;
     flow.merge(catch_flow)
