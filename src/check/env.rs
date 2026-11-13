@@ -47,7 +47,7 @@ type Generated = (Arc<TyProcedure>, bool);
 // One of the three member namespaces IRIS tells apart by syntax -- `..#X`, `..X`, `..X(...)` --
 // and the shape of what it holds.
 pub(crate) trait Namespace {
-    type Ty: Instantiate + ClassNames + Default;
+    type Ty: ClassNames + Default;
     // Where its members are declared.
     const NS: MemberNs;
     // The type of a member a workspace class declares, and whether it's instance-only.
