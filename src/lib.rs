@@ -80,8 +80,8 @@ pub use iris::{
 };
 #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
 pub use iris_connection::RawAtelier;
-pub(crate) use macro_expand::MacroDefinitions;
 pub(crate) use macro_expand::SourceMap;
+pub(crate) use macro_expand::{Definitions, MacroDefinitions};
 use tygr_objectscript::cos::ClassDefinitionHeader;
 pub use tygr_objectscript::{cos, sql};
 
