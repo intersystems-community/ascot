@@ -4499,10 +4499,10 @@ pub enum DTextArg {
     ),
 }
 
-type ArgOf<T> = Wrap<MGap, Range<T>, MGap>;
+pub type ArgOf<T> = Wrap<MGap, Range<T>, MGap>;
 // An argument that may be left empty, as in `$FN(x,,0)`.
 type OptArgOf<T> = Wrap<MGap, Option<Range<T>>, MGap>;
-type More<T> = Prefix<StringEq!(","), T>;
+pub type More<T> = Prefix<StringEq!(","), T>;
 
 // ---- Function arguments ---------------------------------------------------------------------
 // Every known function parses its arguments generically and `fun_args!` converts them, so a
@@ -6619,6 +6619,14 @@ impl SimpleFunctionCall {
     pub fn is_settable(&self) -> bool {
         self.name.print().eq_ignore_ascii_case("MVV")
     }
+
+    // How many arguments are given: `f()` parses as one empty argument, and means none.
+    pub fn given(&self) -> usize {
+        match self.args.items.as_slice() {
+            [only] if only.is_none() => 0,
+            items => items.len(),
+        }
+    }
 }
 
 impl Spelled for SimpleFunctionCall {
@@ -6658,15 +6666,10 @@ impl TryFrom<SimpleFunctionCallSource> for SimpleFunctionCall {
         SimpleFunctionCallSource { name, args }: SimpleFunctionCallSource,
     ) -> Result<Self, NamedFunArgError> {
         let function = simple_function(&name.print()).expect("validated by the grammar");
-        let named = |err| NamedFunArgError(name.print(), err);
-        let items = &args.items;
-        let given = if let [only] = items.as_slice()
-            && only.is_none()
-        {
-            0
-        } else {
-            items.len()
-        };
+        let call = Self { name, args };
+        let named = |err| NamedFunArgError(call.name.print(), err);
+        let items = &call.args.items;
+        let given = call.given();
         let max = function.max + undocumented_extra(function, items);
         if given > max {
             let extra = items[max..]
@@ -6682,7 +6685,7 @@ impl TryFrom<SimpleFunctionCallSource> for SimpleFunctionCall {
                 given,
             }));
         }
-        Ok(Self { name, args })
+        Ok(call)
     }
 }
 
@@ -7135,22 +7138,24 @@ pub struct GenericExpr<BeforeFirst = (), BetweenInfix = MGap> {
 
 impl Expr {
     pub fn as_variable(&self) -> Option<&Variable> {
+        match self.as_atomic()? {
+            AtomicExpr::Variable(this) => Some(this),
+            _ => None,
+        }
+    }
+
+    // The one atom this is, under no operator and in no parentheses.
+    pub fn as_atomic(&self) -> Option<&AtomicExpr> {
         if !self.ops.is_empty() {
             return None;
         }
-        let OpsExpr::Base(this) = self.base.deref() else {
-            return None;
-        };
-        let ExprOps::Base(this) = this else {
+        let OpsExpr::Base(ExprOps::Base(this)) = self.base.deref() else {
             return None;
         };
         let ParenedExpr::Normal(this) = this.deref() else {
             return None;
         };
-        match this.deref().deref() {
-            AtomicExpr::Variable(this) => Some(this),
-            _ => None,
-        }
+        Some(this.deref().deref())
     }
 }
 

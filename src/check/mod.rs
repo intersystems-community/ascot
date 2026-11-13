@@ -182,10 +182,7 @@ impl Shifter<'_> {
     }
 
     fn range(&self, relative: bindings::Range) -> bindings::Range {
-        bindings::Range {
-            start: self.position(relative.start),
-            end: self.position(relative.end),
-        }
+        relative.map(|position| self.position(position))
     }
 
     // The inverse of `position`.
@@ -195,10 +192,7 @@ impl Shifter<'_> {
     }
 
     fn unrange(&self, absolute: bindings::Range) -> bindings::Range {
-        bindings::Range {
-            start: self.unposition(absolute.start),
-            end: self.unposition(absolute.end),
-        }
+        absolute.map(|position| self.unposition(position))
     }
 }
 
@@ -252,43 +246,6 @@ fn relocate_local(
         relocated.extend(hop);
     }
     *related_information = relocated;
-}
-
-fn relocate_method_diagnostics(
-    diagnostics: Vec<Diagnostic>,
-    source_map: &SourceMap,
-    uri: &str,
-    shifter: &Shifter,
-) -> Vec<Diagnostic> {
-    diagnostics
-        .into_iter()
-        .map(|mut diagnostic| {
-            relocate_local(
-                &mut diagnostic.range,
-                &mut diagnostic.related_information,
-                source_map,
-                uri,
-                shifter,
-            );
-            diagnostic
-        })
-        .collect()
-}
-
-fn relocate_method_error(
-    mut err: TypeError,
-    source_map: &SourceMap,
-    uri: &str,
-    shifter: &Shifter,
-) -> TypeError {
-    relocate_local(
-        &mut err.range,
-        &mut err.related_information,
-        source_map,
-        uri,
-        shifter,
-    );
-    err
 }
 
 // Only the range (this method's own call site or expression) is relocated -- a reference's
@@ -423,10 +380,7 @@ impl MethodDetails {
             env.base.add_soft_diagnostic(diagnostic);
         }
         let body_text = expanded[header_len..].to_string();
-        let body_range = bindings::Range {
-            start: bindings::Position::from(expanded_olc.offset_to_line_character(header_len)),
-            end: bindings::Position::from(expanded_olc.offset_to_line_character(expanded.len())),
-        };
+        let body_range = expanded_olc.span(header_len, expanded.len());
         let diagnostics_mark = env.base.soft_diagnostics_mark();
         let references_mark = env.base.references_mark();
         // The signature's types are written relative to the class: its package and `Import`s.
@@ -532,12 +486,14 @@ impl MethodDetails {
             true,
             true,
         );
-        for diagnostic in relocate_method_diagnostics(
-            env.base.soft_diagnostics_since(diagnostics_mark),
-            &source_map,
-            env.uri(),
-            &shifter,
-        ) {
+        for mut diagnostic in env.base.soft_diagnostics_since(diagnostics_mark) {
+            relocate_local(
+                &mut diagnostic.range,
+                &mut diagnostic.related_information,
+                &source_map,
+                env.uri(),
+                &shifter,
+            );
             env.base.add_soft_diagnostic(diagnostic);
         }
         for (source, target) in relocate_method_ranged(
@@ -564,8 +520,16 @@ impl MethodDetails {
         for (source, target) in references {
             env.base.reference(source, target);
         }
-        let creates =
-            result.map_err(|err| relocate_method_error(err, &source_map, env.uri(), &shifter))?;
+        let creates = result.map_err(|mut err| {
+            relocate_local(
+                &mut err.range,
+                &mut err.related_information,
+                &source_map,
+                env.uri(),
+                &shifter,
+            );
+            err
+        })?;
         if let Some(hint) = creates_hint(self.body.range.start, creates) {
             env.inlay_hints.borrow_mut().push(hint);
         }
@@ -583,7 +547,7 @@ trait CheckCommandInner {
     }
 }
 
-trait CheckCommand {
+pub(crate) trait CheckCommand {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError>;
 }
 
@@ -873,12 +837,8 @@ fn check_label_body<'a>(
         details.args(),
         output.clone(),
         env.take_trap_join(&details.name.it),
-        |flow| {
-            let checked = sub.check(env, flow);
-            env.deposit_traps(flow.take_traps());
-            checked?;
-            flow.tail_call(next.map(|next| &next.output), range)
-        },
+        sub,
+        next.map(|next| &next.output),
     )?;
     if entry.nested {
         env.record_label_writes(&details.name.it, effects.writes);
@@ -1006,7 +966,7 @@ fn report_break(
     range: bindings::Range,
     make: impl FnOnce(bool, bindings::Range) -> TypeError,
 ) {
-    if (env.line_of(from) != env.line_of(to)) != wanted {
+    if (env.position(from).line != env.position(to).line) != wanted {
         env.soft_diagnostic(make(wanted, range));
     }
 }
@@ -1122,17 +1082,12 @@ impl CheckCommandInner for cos::EntryRefAndArgs {
                     && lor.routine.is_none()
                     && lor.offset.is_some()
                     && let AllowIndirection::Plain(label) = lor.label.deref()
-                    && env.in_procedure_block()
                     && env
                         .label_entry(&label.print())
                         .is_some_and(|entry| entry.nested)
                 {
-                    env.soft_diagnostic(TypeError::not_allowed_in(
-                        "A DO with a line offset to a label of the block",
-                        "a procedure block",
-                        "<NOLINE>",
-                        env.range(proc),
-                    ));
+                    let what = "A DO with a line offset to a label of the block";
+                    refused_in_block(env, what, "<NOLINE>", env.range(proc));
                 }
                 check_legacy_label_call(env, flow, proc, args, false)?
             }
@@ -1439,7 +1394,7 @@ fn report_keyword_style(
 fn report_comma_style(env: &CodeEnv, space_after: bool, commas: &[CommaAt]) {
     for comma in commas {
         let (start, end) = (comma.start - comma.before, comma.start + 1 + comma.after);
-        if env.line_of(start) != env.line_of(end) {
+        if env.position(start).line != env.position(end).line {
             continue;
         }
         if comma.before != 0 || comma.after != usize::from(space_after) {
@@ -1546,60 +1501,54 @@ impl CheckCommandInner for cos::Command {
                     let GoToArg { location, pc } = args[0];
                     report_argument_postconditional(env, "goto", pc);
                     check_pc(pc, env, flow, |flow| match location {
-                        AllowCase::Plain(cos::Location(location)) => match location {
-                            AllowIndirection::Plain(location) => {
-                                if let LegacyEntryRef::Label(lor) = location.deref()
-                                    && lor.routine.is_none()
-                                {
-                                    // A block's Goto must name a line the compiler can place: a
-                                    // label of the block, or another routine's entry. An indirect
-                                    // name or an offset is known only when the line runs.
-                                    let refused = match (lor.label.deref(), &lor.offset) {
-                                        (AllowIndirection::Indirection(_), _) => {
-                                            Some(("An indirect GOTO", "ERROR #1049"))
+                        AllowCase::Plain(cos::Location(location)) => {
+                            // A block's Goto must name a line the compiler can place: a label of
+                            // the block, or another routine's entry. An indirect name or an
+                            // offset is known only when the line runs.
+                            let indirect = ("An indirect GOTO", "ERROR #1049");
+                            let refused = match location {
+                                AllowIndirection::Indirection(_) => Some(indirect),
+                                AllowIndirection::Plain(location) => match location.deref() {
+                                    LegacyEntryRef::Label(lor) if lor.routine.is_none() => {
+                                        match (lor.label.deref(), &lor.offset) {
+                                            (AllowIndirection::Indirection(_), _) => Some(indirect),
+                                            (_, Some(_)) => {
+                                                Some(("A GOTO with a line offset", "<NOLINE>"))
+                                            }
+                                            _ => None,
                                         }
-                                        (_, Some(_)) => {
-                                            Some(("A GOTO with a line offset", "<NOLINE>"))
+                                    }
+                                    _ => None,
+                                },
+                            };
+                            if let Some((what, iris)) = refused {
+                                refused_in_block(env, what, iris, flow.range());
+                            }
+                            match location {
+                                AllowIndirection::Plain(location) => {
+                                    if let LegacyEntryRef::Label(lor) = location.deref()
+                                        && lor.routine.is_none()
+                                    {
+                                        let label = lor.label.print();
+                                        if env.goto_leaves_block(&label) {
+                                            return Err(QuasiTypeError::goto_out_of_block(label));
                                         }
-                                        _ => None,
-                                    };
-                                    if let Some((what, iris)) = refused
-                                        && env.in_procedure_block()
-                                    {
-                                        env.soft_diagnostic(TypeError::not_allowed_in(
-                                            what,
-                                            "a procedure block",
-                                            iris,
-                                            flow.range(),
-                                        ));
+                                        // A nested label reached by Goto returns for the body.
+                                        if let Some(entry) = env.label_entry(&label)
+                                            && entry.nested
+                                        {
+                                            flow.share_output(&entry.output);
+                                        }
                                     }
-                                    let label = lor.label.print();
-                                    if env.goto_leaves_block(&label) {
-                                        return Err(QuasiTypeError::goto_out_of_block(label));
-                                    }
-                                    // A nested label reached by Goto returns for the body.
-                                    if let Some(entry) = env.label_entry(&label)
-                                        && entry.nested
-                                    {
-                                        flow.share_output(&entry.output);
-                                    }
+                                    let _ =
+                                        check_legacy_label_call(env, flow, location, &None, false)?;
                                 }
-                                let _ = check_legacy_label_call(env, flow, location, &None, false)?;
-                                Ok(flow.handle_void()?)
-                            }
-                            AllowIndirection::Indirection(indir) => {
-                                if env.in_procedure_block() {
-                                    env.soft_diagnostic(TypeError::not_allowed_in(
-                                        "An indirect GOTO",
-                                        "a procedure block",
-                                        "ERROR #1049",
-                                        flow.range(),
-                                    ));
+                                AllowIndirection::Indirection(indir) => {
+                                    let _ = indir.to_ty(env, flow)?;
                                 }
-                                let _ = indir.to_ty(env, flow)?;
-                                Ok(flow.handle_void()?)
                             }
-                        },
+                            Ok(flow.handle_void()?)
+                        }
                         AllowCase::Case(_, kw, cases) => {
                             report_style(env, [kw.spelled()], &[]);
                             check_goto_case(env, flow, cases)
@@ -1682,26 +1631,14 @@ impl CheckCommandInner for cos::Command {
                         match target.deref() {
                             cos::AllowMacro::Plain(arg) => match &arg {
                                 cos::KillArgument::Single(target) => {
-                                    if let cos::SetTarget::Indirection(indir) = target.deref() {
-                                        indir.expr.to_ty(env, flow)?;
-                                    } else if let Some(local) = target
-                                        .as_variable()
-                                        .and_then(|x| {
-                                            x.as_local(env, flow).map(|x| x.left()).transpose()
-                                        })
-                                        .transpose()?
-                                    {
+                                    if let Some(local) = kill_target_local(target, env, flow)? {
                                         flow.handle_kill(local)?;
                                     }
                                 }
                                 cos::KillArgument::Except(keep) => {
                                     let mut names = Vec::new();
                                     for target in keep.items(env) {
-                                        if let cos::SetTarget::Indirection(indir) = target.deref() {
-                                            indir.expr.to_ty(env, flow)?;
-                                        } else if let Some(variable) = target.as_variable()
-                                            && let Left(local) = variable.as_local(env, flow)?
-                                        {
+                                        if let Some(local) = kill_target_local(target, env, flow)? {
                                             names.push(local.name);
                                         }
                                     }
@@ -1864,12 +1801,7 @@ impl CheckCommandInner for cos::Command {
                 })
             }
             cos::Command::Write(cos::WriteCommand { pc, args, .. }) => {
-                check_pc(pc, env, flow, |flow| {
-                    for arg in args.iter().flat_map(|args| args.items(env)) {
-                        arg.inner_check(env, flow)?;
-                    }
-                    Ok(())
-                })
+                check_each(pc, env, flow, args.iter().flat_map(|args| args.items(env)))
             }
             cos::Command::Read(cos::ReadCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
@@ -1980,10 +1912,9 @@ impl CheckCommandInner for cos::Command {
                     Ok(())
                 })
             }
-            cos::Command::Hang(cos::HangCommand { pc, e, .. }) => check_pc(pc, env, flow, |flow| {
-                e.to_ty(env, flow)?;
-                Ok(())
-            }),
+            cos::Command::Hang(cos::HangCommand { pc, e, .. }) => {
+                check_pc(pc, env, flow, |flow| e.inner_check(env, flow))
+            }
             cos::Command::Job(cos::JobCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
                     for arg in args.items(env) {
@@ -2049,12 +1980,7 @@ impl CheckCommandInner for cos::Command {
                 check_pc(pc, env, flow, |_| Ok(()))
             }
             cos::Command::ZWrite(cos::ZWriteCommand { pc, exp, .. }) => {
-                check_pc(pc, env, flow, |flow| {
-                    for exp in exp.iter().flat_map(|exp| exp.items.iter()) {
-                        let _ = exp.to_ty(env, flow)?;
-                    }
-                    Ok(())
-                })
+                check_each(pc, env, flow, exp.iter().flat_map(|exp| exp.items.iter()))
             }
             cos::Command::ZKill(cos::ZKillCommand { pc, targets, .. }) => {
                 check_pc(pc, env, flow, |flow| {
@@ -2072,10 +1998,7 @@ impl CheckCommandInner for cos::Command {
                 })
             }
             cos::Command::ZNspace(cos::ZNspaceCommand { pc, e, .. }) => {
-                check_pc(pc, env, flow, |flow| {
-                    let _ = e.to_ty(env, flow)?;
-                    Ok(())
-                })
+                check_pc(pc, env, flow, |flow| e.inner_check(env, flow))
             }
             cos::Command::Xecute(cos::XecuteCommand { pc, args, .. }) => {
                 check_pc(pc, env, flow, |flow| {
@@ -2162,29 +2085,16 @@ impl CheckCommandInner for cos::Command {
             // `H` alone halts; with an argument it hangs.
             cos::Command::H(cos::HCommand { pc, e, .. }) => {
                 check_pc(pc, env, flow, |flow| match e {
-                    Some(e) => {
-                        e.to_ty(env, flow)?;
-                        Ok(())
-                    }
+                    Some(e) => e.inner_check(env, flow),
                     None => Ok(flow.handle_void()?),
                 })
             }
             cos::Command::ZZDump(cos::ZZDumpCommand { pc, exp, .. }) => {
-                check_pc(pc, env, flow, |flow| {
-                    for e in exp.items(env) {
-                        e.to_ty(env, flow)?;
-                    }
-                    Ok(())
-                })
+                check_each(pc, env, flow, exp.items(env))
             }
             cos::Command::MVP(cos::MVPCommand { pc, args, .. })
             | cos::Command::MVC(cos::MVCCommand { pc, args, .. }) => {
-                check_pc(pc, env, flow, |flow| {
-                    for arg in args.items(env) {
-                        arg.inner_check(env, flow)?;
-                    }
-                    Ok(())
-                })
+                check_each(pc, env, flow, args.items(env))
             }
             cos::Command::ZBreak(cos::ZBreakCommand { .. })
             | cos::Command::ZPrint(cos::ZPrintCommand { .. })
@@ -2192,6 +2102,23 @@ impl CheckCommandInner for cos::Command {
             cos::Command::Unknown(unknown) => match unknown.0 {},
         }
     }
+}
+
+// The local a `Kill` target names; an indirection is read, naming no one local.
+fn kill_target_local<'a>(
+    target: &cos::SetTarget,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+) -> Result<Option<Local>, QuasiTypeError> {
+    if let cos::SetTarget::Indirection(indir) = target {
+        indir.expr.to_ty(env, flow)?;
+        return Ok(None);
+    }
+    let local = target
+        .as_variable()
+        .map(|x| x.as_local(env, flow))
+        .transpose()?;
+    Ok(local.and_then(Either::left))
 }
 
 // The path ends here even when the value fails to check -- otherwise a failed `else { return bad }`
@@ -2515,7 +2442,7 @@ fn check_pc<'a>(
     pc: &Option<cos::PostCondition>,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    and_then: impl Fn(&mut Flow<'a>) -> Result<(), QuasiTypeError>,
+    and_then: impl FnOnce(&mut Flow<'a>) -> Result<(), QuasiTypeError>,
 ) -> Result<(), QuasiTypeError> {
     if let Some(pc) = pc {
         let pc_ty = pc.as_ref().map(Deref::deref).to_power_ty(env, flow)?;
@@ -2527,6 +2454,43 @@ fn check_pc<'a>(
         flow.merge(old_flow)
     } else {
         and_then(flow)
+    }
+}
+
+// A command whose arguments are each checked on their own.
+fn check_each<'a, 'b, T: CheckCommandInner + 'b>(
+    pc: &Option<cos::PostCondition>,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    args: impl IntoIterator<Item = &'b T>,
+) -> Result<(), QuasiTypeError> {
+    check_pc(pc, env, flow, |flow| {
+        for arg in args {
+            arg.inner_check(env, flow)?;
+        }
+        Ok(())
+    })
+}
+
+impl CheckCommandInner for Expr {
+    fn inner_check<'a>(
+        &self,
+        env: &CodeEnv<'a>,
+        flow: &mut Flow<'a>,
+    ) -> Result<(), QuasiTypeError> {
+        self.to_ty(env, flow).map(drop)
+    }
+}
+
+// `what` is refused in a procedure block (IRIS: `iris`), reported when this is one.
+fn refused_in_block(env: &CodeEnv<'_>, what: &str, iris: &'static str, range: bindings::Range) {
+    if env.in_procedure_block() {
+        env.soft_diagnostic(TypeError::not_allowed_in(
+            what,
+            "a procedure block",
+            iris,
+            range,
+        ));
     }
 }
 
@@ -2669,7 +2633,10 @@ impl CheckCommandInner for cos::MergeArgument {
                 let ty = source.to_ranged_power_ty(env, flow)?;
                 // The target carries no range of its own; anchor on the source instead.
                 let range = env.range(&ty);
-                check_merge_target(target, ty.into_inner(), range, env, flow)
+                if let Some(Left(local)) = check_target(target, env, flow)? {
+                    flow.handle_merge(local, ty.into_inner(), range)?;
+                }
+                Ok(())
             }
             // The target is whatever the text names: every binding may have changed.
             cos::MergeArgument::Indirect(indirection) => {
@@ -2689,24 +2656,17 @@ impl CheckCommandInner for cos::SetArgument {
         let ty = self.value.to_ranged_power_ty(env, flow)?.into_inner();
         // A maybe-undefined value is reported here, where IRIS raises <UNDEFINED>, and the
         // target holds the type it has when defined: a later read of the target is not the place.
-        let ty = match ty.to_maybe_ty(env) {
-            MaybeTy::Maybe(defined) => {
+        let maybe = ty.to_maybe_ty(env);
+        let defined = maybe.maybe_defined().cloned();
+        let ty = match maybe.to_ty() {
+            Ok(_) => ty,
+            Err(err) => {
                 env.soft_diagnostic(
-                    QuasiTypeError::maybe_undefined(defined.clone())
-                        .with_expr_text(|| self.value.print())
+                    err.with_expr_text(|| self.value.print())
                         .into_error(|| env.range(&self.value)),
                 );
-                PowerTy::plain(defined)
+                PowerTy::plain(defined.unwrap_or_default())
             }
-            MaybeTy::Undefined => {
-                env.soft_diagnostic(
-                    QuasiTypeError::undefined()
-                        .with_expr_text(|| self.value.print())
-                        .into_error(|| env.range(&self.value)),
-                );
-                PowerTy::plain(Ty::Any)
-            }
-            _ => ty,
         };
         if self.value.deref().type_unclear() {
             env.hint(bindings::InlayHint {
@@ -2832,19 +2792,6 @@ impl<T> TypeUnclear for ExprOps<T> {
             },
         }
     }
-}
-
-fn check_merge_target<'a>(
-    target: &cos::SetTarget,
-    source: PowerTy,
-    range: bindings::Range,
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-) -> Result<(), QuasiTypeError> {
-    if let Some(Left(local)) = check_target(target, env, flow)? {
-        flow.handle_merge(local, source, range)?;
-    }
-    Ok(())
 }
 
 fn check_set_target<'a>(
@@ -3302,33 +3249,14 @@ fn check_infix<'a, X>(
             {
                 return Ok(related);
             }
-            match (lhs.deref(), TermOp::try_from(op), rhs.deref()) {
-                // A fold that overflows or divides by zero falls through to the plain typing.
-                (PowerTy::Const(x), Ok(o), PowerTy::Const(y)) => {
-                    if let Some(c) = eval(x, o, y) {
-                        return Ok(PowerTy::Const(c));
-                    }
-                }
-                (PowerTy::Union(x1, x2, xn), Ok(o), PowerTy::Const(y)) => {
-                    let xs = once(x1).chain(once(x2)).chain(xn.iter());
-                    if let Some(cs) = xs.map(|x| eval(x, o, y)).collect() {
-                        return Ok(PowerTy::union(cs));
-                    }
-                }
-                (PowerTy::Const(x), Ok(o), PowerTy::Union(y1, y2, yn)) => {
-                    let ys = once(y1).chain(once(y2)).chain(yn.iter());
-                    if let Some(cs) = ys.map(|y| eval(x, o, y)).collect() {
-                        return Ok(PowerTy::union(cs));
-                    }
-                }
-                (PowerTy::Union(x1, x2, xn), Ok(o), PowerTy::Union(y1, y2, yn)) => {
-                    let xs = once(x1).chain(once(x2)).chain(xn.iter());
-                    let ys = once(y1).chain(once(y2)).chain(yn.iter());
-                    if let Some(cs) = xs.flat_map(|x| ys.clone().map(|y| eval(x, o, y))).collect() {
-                        return Ok(PowerTy::union(cs));
-                    }
-                }
-                _ => (),
+            // A fold that overflows or divides by zero falls through to the plain typing.
+            if let (Ok(o), Some(xs), Some(ys)) = (TermOp::try_from(op), consts(&lhs), consts(&rhs))
+                && let Some(cs) = xs
+                    .iter()
+                    .flat_map(|x| ys.iter().map(|y| eval(x, o, y)))
+                    .collect()
+            {
+                return Ok(PowerTy::union(cs));
             }
             let lhs = ranged_quasi_ty_to_ty(env, flow, &lhs, lhs_text)?;
             let rhs = ranged_quasi_ty_to_ty(env, flow, &rhs, Some(&|| rhs_node.print()))?;
@@ -3343,6 +3271,15 @@ fn check_infix<'a, X>(
                 _ => PowerTy::from("%Boolean"),
             })
         }
+    }
+}
+
+// The constants a `Const` or `Union` is one of.
+fn consts(ty: &PowerTy) -> Option<Vec<&Const>> {
+    match ty {
+        PowerTy::Const(x) => Some(vec![x]),
+        PowerTy::Union(x1, x2, xn) => Some(once(x1).chain(once(x2)).chain(xn).collect()),
+        _ => None,
     }
 }
 
@@ -3445,7 +3382,7 @@ fn base_property<'a, T>(
     let range = env.range(mem);
     referenced(
         env,
-        mem,
+        range,
         env.resolve_mem::<Properties<Read>>(&obj, mem.id(), range, true),
     )
 }
@@ -3594,16 +3531,12 @@ fn check_member<'a>(
     match (mem.is_parameter(), args) {
         (true, None) => {
             let parameter = env.resolve_mem::<Parameters>(&ty, name, range, true);
-            Ok(Some(referenced(env, mem, parameter)?))
+            Ok(Some(referenced(env, range, parameter)?))
         }
-        (true, Some(_)) => {
-            let parameter = env.resolve_mem::<Parameters>(&ty, name.clone(), range, true);
-            referenced(env, mem, parameter)?;
-            Err(QuasiTypeError::parameter_is_constant(name))
-        }
+        (true, Some(_)) => parameter_is_constant(env, &ty, name, range),
         (false, None) => {
             let property = env.resolve_mem::<Properties<Read>>(&ty, name, range, true);
-            Ok(Some(env.value_ty(&referenced(env, mem, property)?)))
+            Ok(Some(env.value_ty(&referenced(env, range, property)?)))
         }
         // A method anywhere in the chain before a property anywhere, as IRIS resolves it, and the
         // `%DispatchMethod` hook once neither has the name.
@@ -3614,7 +3547,7 @@ fn check_member<'a>(
                 // typed like the property.
                 None => match env.lookup_mem::<Properties<Called>>(&ty, &name, range, true)? {
                     Some(property) => {
-                        let property = referenced(env, mem, Ok(property))?;
+                        let property = referenced(env, range, Ok(property))?;
                         return match property {
                             PropertyTy::Multidimensional(_)
                                 if args.items(env).all(|a| a.is_none()) =>
@@ -3638,7 +3571,7 @@ fn check_member<'a>(
                 // Neither: reported as a missing method.
                 None => env.resolve_mem::<Methods>(&ty, name.clone(), range, true),
             };
-            let method = referenced(env, mem, method)?;
+            let method = referenced(env, range, method)?;
             check_call(env, flow, method, args.items(env), range)
         }
     }
@@ -3681,17 +3614,29 @@ fn check_super_call<'a>(
     check_call(env, flow, ty, args.items(env), range)
 }
 
-// A member of `obj`, recorded as a reference to where it's declared.
+// A member named at `range`, recorded as a reference to where it's declared.
 fn referenced<T>(
-    env: &CodeEnv<'_>,
-    mem: &Range<MemberRef>,
+    env: &WorkspaceEnv<'_>,
+    range: bindings::Range,
     member: Result<types::Member<T>, TypeError>,
 ) -> Result<T, QuasiTypeError> {
     let member = member?;
     if let Some(location) = &member.location {
-        env.reference(env.range(mem), location.clone());
+        env.reference(range, location.clone());
     }
     Ok(member.ty)
+}
+
+// `..#NAME = v` or `..#NAME(..)`: a parameter is a constant, recorded as a reference all the same.
+fn parameter_is_constant<T>(
+    env: &CodeEnv<'_>,
+    ty: &Ty,
+    name: String,
+    range: bindings::Range,
+) -> Result<T, QuasiTypeError> {
+    let parameter = env.resolve_mem::<Parameters>(ty, name.clone(), range, true);
+    referenced(env, range, parameter)?;
+    Err(QuasiTypeError::parameter_is_constant(name))
 }
 
 // `Set obj.X = v`, or `Set obj.X(subs) = v` for a node of a multidimensional property.
@@ -3705,9 +3650,7 @@ fn check_set_member<'a>(
     let range = env.range(mem);
     let name = mem.id();
     if mem.is_parameter() {
-        let parameter = env.resolve_mem::<Parameters>(&obj, name.clone(), range, true);
-        referenced(env, mem, parameter)?;
-        return Err(QuasiTypeError::parameter_is_constant(name));
+        return parameter_is_constant(env, &obj, name, range);
     }
     let property = match subs {
         Some(subs) => {
@@ -3716,7 +3659,7 @@ fn check_set_member<'a>(
         }
         None => env.resolve_mem::<Properties<Assign>>(&obj, name.clone(), range, true),
     };
-    let property = referenced(env, mem, property)?;
+    let property = referenced(env, range, property)?;
     let Some(subs) = subs else {
         return Ok(match property {
             PropertyTy::Value(ty) => Some(ty),
@@ -4034,16 +3977,10 @@ fn relocate_macro_arg_error(
     err: QuasiTypeError,
 ) -> QuasiTypeError {
     match err {
-        QuasiTypeError::WithRange(err) => {
-            let relocate = |pos: bindings::Position| env.position(env.offset(pos) + arg_start);
-            QuasiTypeError::WithRange(TypeError {
-                range: bindings::Range {
-                    start: relocate(err.range.start),
-                    end: relocate(err.range.end),
-                },
-                ..err
-            })
-        }
+        QuasiTypeError::WithRange(err) => QuasiTypeError::WithRange(TypeError {
+            range: (err.range).map(|pos| env.position(env.offset(pos) + arg_start)),
+            ..err
+        }),
         without_range => without_range,
     }
 }
@@ -4536,11 +4473,10 @@ fn check_instance_member(
         }
         Some(ClsOrIns::Ins(cty)) => {
             let obj = Ty::OREF(ClsOrIns::Ins(cty));
-            let member = env.resolve_mem::<Properties<Read>>(&obj, mem, mem_range, true)?;
-            if let Some(location) = &member.location {
-                env.reference(mem_range, location.clone());
-            }
-            Ok(Right(env.value_ty(&member.ty).into()))
+            let member = env.resolve_mem::<Properties<Read>>(&obj, mem, mem_range, true);
+            Ok(Right(
+                env.value_ty(&referenced(env, mem_range, member)?).into(),
+            ))
         }
     }
 }
@@ -4575,10 +4511,7 @@ fn body_end_range(env: &CodeEnv<'_>, main: &RoutineMain) -> Option<bindings::Ran
     });
     let first = commands.next()?;
     let end = commands.last().map_or(first.end, |last| last.end);
-    Some(bindings::Range {
-        start: env.position(first.start),
-        end: env.position(end),
-    })
+    Some(env.span(first.start, end))
 }
 
 impl CheckCommand for RoutineMain {
@@ -4634,12 +4567,8 @@ fn check_loose_lines(
     next: Option<&env::LabelEntry>,
 ) -> Option<bindings::Diagnostic> {
     let range = body_end_range(env, lines)?;
-    match Flow::with_label(env, range, vec![], Default::default(), None, |flow| {
-        let checked = lines.check(env, flow);
-        env.deposit_traps(flow.take_traps());
-        checked?;
-        flow.tail_call(next.map(|next| &next.output), range)
-    }) {
+    let next = next.map(|next| &next.output);
+    match Flow::with_label(env, range, vec![], Default::default(), None, lines, next) {
         Ok(effects) => {
             if let Some(hint) = creates_hint(range.start, effects.creates) {
                 env.hint(hint);
@@ -4842,16 +4771,11 @@ pub(crate) fn check_cls(
                 let key_range = key.range;
                 // Of a path into an embedded object (`Home.State`), this class's own property.
                 let property = key.it.split('.').next().unwrap_or_default().to_string();
-                match env
+                let property = env
                     .base
-                    .resolve_mem::<Properties<Indexed>>(&this, property, key_range, true)
-                {
-                    Ok(property) => {
-                        if let Some(location) = property.location {
-                            env.base.reference(key.range, location);
-                        }
-                    }
-                    Err(err) => diagnostics.push(err.into()),
+                    .resolve_mem::<Properties<Indexed>>(&this, property, key_range, true);
+                if let Err(err) = referenced(env.base, key_range, property) {
+                    diagnostics.push(err.into_error(|| key_range).into());
                 }
             }
         }
