@@ -395,7 +395,7 @@ impl MethodDetails {
         };
         {
             let mut body_macros = cls.body_macros.borrow_mut();
-            for (macro_name, definition) in &definitions {
+            for (macro_name, definition) in definitions.own() {
                 if !cls.macro_definitions.contains_key(macro_name)
                     && !body_macros.definitions.contains_key(macro_name)
                 {
@@ -4549,7 +4549,8 @@ pub(crate) fn check_rtn(
         })
         .collect();
     let min_description_lines = min_description_lines(env);
-    let env = env.for_routine(env::scoped_labels(env.uri(), &labels), definitions);
+    let definitions = crate::Definitions::over(definitions);
+    let env = env.for_routine(env::scoped_labels(env.uri(), &labels), &definitions);
     let mut diagnostics = Vec::new();
     // The label loose lines fall through to: the element at `i`, when it is a label of the old kind.
     let label_at = |i: usize| match elements.get(i)? {
