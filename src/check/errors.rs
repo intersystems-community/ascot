@@ -1847,7 +1847,8 @@ type_error_kinds! {
     /// callee's report of whether it worked: the caller goes on as if it had. IRIS compiles and
     /// runs the call. Where the outcome matters, `Set sc = ..Save(...)` followed by `$$$ISERR(sc)`,
     /// or `If ..Save(...)`, puts the result to use; where it does not, the `Do` is a choice, not a
-    /// mistake.
+    /// mistake, and the usual one: IRIS's own classes write streams and collections this way, so
+    /// this is information, not a warning.
     ///
     /// ```objectscript compiles
     /// Class Demo.DiscardedReturnValue
@@ -1867,7 +1868,7 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A4556"]
-    #[severity = Warning]
+    #[severity = Information]
     #[message = "Do discards the {class} this call returns"]
     DiscardedReturnValue { class: String },
     /// A command or intrinsic function keyword spelled in a form or case the style's `command` or
