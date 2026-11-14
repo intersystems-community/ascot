@@ -251,7 +251,11 @@ fn check_empty_args(call: &cos::FunctionCall) -> Result<(), QuasiTypeError> {
         };
         if arg.is_none() && table.iter().any(|f| f.eq_ignore_ascii_case(name.full)) {
             let function = format!("${}", name.full.to_uppercase());
-            return Err(QuasiTypeError::omitted_argument(function, i + 1));
+            return Err(TypeErrorKind::OmittedArgument {
+                function,
+                position: i + 1,
+            }
+            .into());
         }
     }
     Ok(())
@@ -268,10 +272,11 @@ fn require_public<'a>(
         && let Left(local) = variable.as_local(env, flow)?
         && !flow.is_public(&local.name)?
     {
-        return Err(QuasiTypeError::private_variable_not_allowed(
-            function.to_string(),
-            local.name,
-        ));
+        return Err(TypeErrorKind::PrivateVariableNotAllowed {
+            function: function.to_string(),
+            name: local.name,
+        }
+        .into());
     }
     Ok(())
 }
@@ -301,7 +306,10 @@ fn check_zf_callout<'a, 'b>(
     args: &[cos::More<cos::ArgOf<Option<cos::MthArg>>>],
 ) -> Result<PowerTy, QuasiTypeError> {
     if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
-        return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
+        return Err(TypeErrorKind::ByRefArgumentNotAllowed {
+            function: "$ZF".into(),
+        }
+        .into());
     }
     for selector in selectors {
         let _ = selector.to_ty(env, flow)?;
@@ -399,13 +407,9 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => {
                 string.deref().to_ty(env, flow)?;
-                check_code_arg(
-                    env,
-                    flow,
-                    action,
-                    check_zstrip_action,
-                    QuasiTypeError::invalid_zstrip_action,
-                )?;
+                check_code_arg(env, flow, action, check_zstrip_action, |action, reason| {
+                    TypeErrorKind::InvalidZStripAction { action, reason }
+                })?;
                 if let Some(remchar) = remchar {
                     remchar.check(env, flow)?
                 }
@@ -437,11 +441,14 @@ impl CheckExprInner for cos::FunctionCall {
                 if !extra.is_empty() {
                     check_read_args(env, flow, each_arg(extra).map(Some), "%Integer")?;
                     let given = 2 + extra.len();
-                    flow.add_soft_diagnostic(QuasiTypeError::undocumented_argument(
-                        "ZF(-1)".to_string(),
-                        2,
-                        given,
-                    ));
+                    flow.add_soft_diagnostic(
+                        TypeErrorKind::UndocumentedArgument {
+                            function: "ZF(-1)".to_string(),
+                            documented: 2,
+                            given,
+                        }
+                        .into(),
+                    );
                 }
                 Ok(ty)
             }
@@ -487,7 +494,7 @@ impl CheckExprInner for cos::FunctionCall {
                 let mut default = None;
                 for arm in arms {
                     if default.is_some() {
-                        return Err(QuasiTypeError::case_default_not_last());
+                        return Err(TypeErrorKind::CaseDefaultNotLast.into());
                     }
                     match arm.deref().deref().deref() {
                         CaseArm::Branch(branch) => branches.push((&branch.e1, &branch.e2)),
@@ -582,13 +589,9 @@ impl CheckExprInner for cos::FunctionCall {
             } => {
                 let _ = num.deref().to_ty(env, flow)?;
                 if let Some(format) = opt_arg(format) {
-                    check_code_arg(
-                        env,
-                        flow,
-                        format,
-                        check_fnumber_format,
-                        QuasiTypeError::invalid_fnumber_format,
-                    )?;
+                    check_code_arg(env, flow, format, check_fnumber_format, |format, reason| {
+                        TypeErrorKind::InvalidFNumberFormat { format, reason }
+                    })?;
                 }
                 if let Some(decimal) = decimal {
                     let _ = decimal.to_ty(env, flow)?;
@@ -969,7 +972,7 @@ pub(super) fn check_settarget_fun<'a>(
         Bit(c) => check_set_fun(env, flow, &c.bits, c, check_bit_call)?,
         Vector(c) => {
             if c.third.is_none() {
-                return Err(QuasiTypeError::set_vector_without_type());
+                return Err(TypeErrorKind::SetVectorWithoutType.into());
             }
             check_set_fun(env, flow, &c.vector, c, check_vector_call)?;
         }
@@ -988,10 +991,12 @@ pub(super) fn check_settarget_fun<'a>(
             let _ = check_unknown_call(env, flow, c)?;
         }
         Simple(c) => {
-            env.soft_diagnostic(TypeError::undocumented_syntax(
-                format!("`${}` as a Set target", c.name.print()),
-                env.range(&c.name),
-            ));
+            env.soft_diagnostic(
+                TypeErrorKind::UndocumentedSyntax {
+                    what: format!("`${}` as a Set target", c.name.print()),
+                }
+                .at(env.range(&c.name)),
+            );
             let _ = check_simple_function(env, flow, c)?;
         }
     };
@@ -1013,7 +1018,7 @@ fn check_unknown_call<'a>(
         .iter()
         .any(|f| f.eq_ignore_ascii_case(&name))
     {
-        flow.add_soft_diagnostic(QuasiTypeError::undocumented_function(name));
+        flow.add_soft_diagnostic(TypeErrorKind::UndocumentedFunction { name }.into());
         return Ok(PowerTy::plain(Ty::Any));
     }
     let names = cos::FUNCTION_NAMES.iter().copied().chain(
@@ -1022,7 +1027,13 @@ fn check_unknown_call<'a>(
             .flat_map(|f| f.names.iter().copied()),
     );
     let suggestions = crate::check::top_similar(&name, names, 5);
-    flow.add_soft_diagnostic(QuasiTypeError::unknown_function(name, suggestions));
+    flow.add_soft_diagnostic(
+        TypeErrorKind::UnknownFunction {
+            name,
+            suggestions: Suggestions(suggestions),
+        }
+        .into(),
+    );
     Ok(PowerTy::plain(Ty::Any))
 }
 
@@ -1105,7 +1116,12 @@ fn check_mv_call<'a>(
     for e in once(c.record.deref()).chain(in_positions) {
         let _ = e.to_ty(env, flow)?;
     }
-    flow.add_soft_diagnostic(QuasiTypeError::undocumented_function("MV".to_string()));
+    flow.add_soft_diagnostic(
+        TypeErrorKind::UndocumentedFunction {
+            name: "MV".to_string(),
+        }
+        .into(),
+    );
     Ok(PowerTy::plain(Ty::Any))
 }
 
@@ -1277,9 +1293,7 @@ fn check_simple_function<'a>(
                 .transpose()?;
             let Some(Left(local)) = local.filter(|l| matches!(l, Left(l) if l.subs.is_empty()))
             else {
-                return Err(QuasiTypeError::WithRange(TypeError::handle_not_a_local(
-                    env.range(&expr),
-                )));
+                return Err(TypeErrorKind::HandleNotALocal.at(env.range(&expr)).into());
             };
             flow.invalidate(local, Ty::from("%String").into())?;
             continue;
@@ -1289,11 +1303,14 @@ fn check_simple_function<'a>(
     let given = call.given();
     if given > function.max {
         let name = call.name.print().to_uppercase();
-        flow.add_soft_diagnostic(QuasiTypeError::undocumented_argument(
-            name,
-            function.max,
-            given,
-        ));
+        flow.add_soft_diagnostic(
+            TypeErrorKind::UndocumentedArgument {
+                function: name,
+                documented: function.max,
+                given,
+            }
+            .into(),
+        );
     }
     Ok(Ty::from(function.ret).into())
 }
@@ -1511,11 +1528,18 @@ fn check_zu_args<'a>(
         let err = match super::zutil::lookup(&literals, count) {
             Some(legacy) => {
                 let call = legacy.args.iter().map(u32::to_string).collect::<Vec<_>>();
-                QuasiTypeError::legacy_zutil(format!("$ZU({})", call.join(",")), legacy.replacement)
+                TypeErrorKind::LegacyZUtil {
+                    call: format!("$ZU({})", call.join(",")),
+                    replacement: Replacement(legacy.replacement.map(str::to_string)),
+                }
+                .into()
             }
-            None => QuasiTypeError::undocumented_zutil(format!("$ZU({first})")),
+            None => TypeErrorKind::UndocumentedZUtil {
+                call: format!("$ZU({first})"),
+            }
+            .into(),
         };
-        env.add_soft_diagnostic(err.into_error(|| env.range(kw)).into());
+        env.add_soft_error(err, env.range(kw));
     }
     for arg in args.items(env) {
         let Some(fun_arg) = arg.deref() else { continue };
@@ -1765,9 +1789,12 @@ fn const_as_string(power_ty: &PowerTy, flow: &Flow<'_>) -> Option<String> {
         return None;
     };
     if matches!(c, types::Const::Integer(_)) {
-        flow.add_soft_diagnostic(QuasiTypeError::number_implicitly_converted_to_string(
-            c.as_string(),
-        ));
+        flow.add_soft_diagnostic(
+            TypeErrorKind::NumberImplicitlyConvertedToString {
+                value: c.as_string(),
+            }
+            .into(),
+        );
     }
     Some(c.as_string())
 }
@@ -1779,14 +1806,14 @@ fn check_code_arg<'a, R>(
     flow: &mut Flow<'a>,
     code: &Range<Expr>,
     check: impl FnOnce(&str) -> Result<(), R>,
-    invalid: impl FnOnce(String, R) -> QuasiTypeError,
+    invalid: impl FnOnce(String, R) -> TypeErrorKind,
 ) -> Result<Ty, QuasiTypeError> {
     flow.with_range(env.range(code), |flow| {
         let ty = code.to_power_ty(env, flow)?;
         if let Some(text) = const_as_string(&ty, flow)
             && let Err(reason) = check(&text)
         {
-            return Err(invalid(text, reason));
+            return Err(invalid(text, reason).into());
         }
         ty.to_ty(env)
     })

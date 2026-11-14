@@ -26,30 +26,6 @@ impl QuasiTypeError {
         }
     }
 
-    pub fn unimplemented(msg: String) -> Self {
-        TypeErrorKind::Unimplemented { what: msg }.into()
-    }
-
-    pub fn quit_exits() -> Self {
-        TypeErrorKind::QuitExits.into()
-    }
-
-    pub fn undefined_macro(name: String, suggestions: Vec<String>) -> Self {
-        TypeErrorKind::UndefinedMacro {
-            name,
-            suggestions: Suggestions(suggestions),
-        }
-        .into()
-    }
-
-    pub fn unreachable() -> Self {
-        TypeErrorKind::Unreachable.into()
-    }
-
-    pub(crate) fn condition_always(value: bool) -> Self {
-        TypeErrorKind::ConditionAlways { value }.into()
-    }
-
     pub(crate) fn return_nothing_for_x(wanted: Ty, declared_at: Location) -> Self {
         Self::WithoutRange(
             TypeErrorKind::ReturnNothingForX { wanted },
@@ -99,69 +75,6 @@ impl QuasiTypeError {
         self
     }
 
-    pub fn type_incompatible(source: Ty, target: Ty) -> Self {
-        TypeErrorKind::TypeIncompatible { source, target }.into()
-    }
-
-    pub fn assign_incompatible(name: String, source: Ty, target: Ty) -> Self {
-        TypeErrorKind::AssignIncompatible {
-            name,
-            source,
-            target,
-        }
-        .into()
-    }
-
-    pub fn pattern_mismatch(value: String, what: String) -> Self {
-        TypeErrorKind::PatternMismatch { value, what }.into()
-    }
-
-    pub fn downcast_from_abstract(name: String, source: Ty, target: Ty) -> Self {
-        TypeErrorKind::DowncastFromAbstract {
-            name,
-            source,
-            target,
-        }
-        .into()
-    }
-
-    pub fn type_downcast(source: Ty, target: Ty) -> Self {
-        TypeErrorKind::TypeDowncast { source, target }.into()
-    }
-
-    pub fn access_instance_only_member_from_class_context(name: String) -> Self {
-        TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name }.into()
-    }
-
-    pub fn node_without_subscripts(name: String) -> Self {
-        TypeErrorKind::NodeWithoutSubscripts { name }.into()
-    }
-
-    pub fn undocumented_argument(function: String, documented: usize, given: usize) -> Self {
-        TypeErrorKind::UndocumentedArgument {
-            function,
-            documented,
-            given,
-        }
-        .into()
-    }
-
-    pub fn not_multidimensional(name: String) -> Self {
-        TypeErrorKind::NotMultidimensional { name }.into()
-    }
-
-    pub fn parameter_is_constant(name: String) -> Self {
-        TypeErrorKind::ParameterIsConstant { name }.into()
-    }
-
-    pub fn not_in_class() -> Self {
-        TypeErrorKind::NotInClass.into()
-    }
-
-    pub fn require_private_variable(name: String) -> Self {
-        TypeErrorKind::RequirePrivateVariable { name }.into()
-    }
-
     pub fn too_few_arguments(next_arg: String, declared_at: Option<Location>) -> Self {
         Self::WithoutRange(
             TypeErrorKind::TooFewArguments { next_arg },
@@ -174,69 +87,6 @@ impl QuasiTypeError {
                 })
                 .unwrap_or_default(),
         )
-    }
-
-    pub fn too_many_arguments(takes: usize) -> Self {
-        TypeErrorKind::TooManyArguments {
-            takes: ArgCount(takes),
-        }
-        .into()
-    }
-
-    pub fn case_default_not_last() -> Self {
-        TypeErrorKind::CaseDefaultNotLast.into()
-    }
-
-    pub fn legacy_zutil(call: String, replacement: Option<&str>) -> Self {
-        TypeErrorKind::LegacyZUtil {
-            call,
-            replacement: Replacement(replacement.map(str::to_string)),
-        }
-        .into()
-    }
-
-    pub fn undocumented_zutil(call: String) -> Self {
-        TypeErrorKind::UndocumentedZUtil { call }.into()
-    }
-
-    pub fn undocumented_function(name: String) -> Self {
-        TypeErrorKind::UndocumentedFunction { name }.into()
-    }
-
-    pub fn unknown_function(name: String, suggestions: Vec<String>) -> Self {
-        TypeErrorKind::UnknownFunction {
-            name,
-            suggestions: Suggestions(suggestions),
-        }
-        .into()
-    }
-
-    pub fn unknown_special_variable(name: String, suggestions: Vec<String>) -> Self {
-        TypeErrorKind::UnknownSpecialVariable {
-            name,
-            suggestions: Suggestions(suggestions),
-        }
-        .into()
-    }
-
-    pub fn invalid_macro_argument(msg: impl Into<String>) -> Self {
-        TypeErrorKind::InvalidMacroArgument { reason: msg.into() }.into()
-    }
-
-    pub fn invalid_zstrip_action(action: String, reason: &'static str) -> Self {
-        TypeErrorKind::InvalidZStripAction { action, reason }.into()
-    }
-
-    pub fn number_implicitly_converted_to_string(value: String) -> Self {
-        TypeErrorKind::NumberImplicitlyConvertedToString { value }.into()
-    }
-
-    pub fn discarded_return_value(class: String) -> Self {
-        TypeErrorKind::DiscardedReturnValue { class }.into()
-    }
-
-    pub fn invalid_fnumber_format(format: String, reason: String) -> Self {
-        TypeErrorKind::InvalidFNumberFormat { format, reason }.into()
     }
 
     pub fn cannot_find_member(
@@ -252,100 +102,6 @@ impl QuasiTypeError {
             suggestions: Suggestions(suggestions),
         }
         .into()
-    }
-
-    pub fn user_command(name: String) -> Self {
-        TypeErrorKind::UserCommand { name }.into()
-    }
-
-    pub fn cannot_find_member_on_abstract(
-        cls: String,
-        mem: String,
-        suggestions: Vec<String>,
-    ) -> Self {
-        TypeErrorKind::CannotFindMemberOnAbstract {
-            cls,
-            mem,
-            suggestions: Suggestions(suggestions),
-        }
-        .into()
-    }
-
-    pub fn cannot_find_class(cls: String) -> Self {
-        TypeErrorKind::CannotFindClass { cls }.into()
-    }
-
-    pub fn super_without_method(method: String, cls: String) -> Self {
-        TypeErrorKind::SuperWithoutMethod { method, cls }.into()
-    }
-
-    pub fn cannot_find_label(label: String, routine: Option<String>) -> Self {
-        TypeErrorKind::CannotFindLabel {
-            label,
-            routine: InRoutine(routine),
-        }
-        .into()
-    }
-
-    pub fn goto_out_of_block(label: String) -> Self {
-        TypeErrorKind::GotoOutOfBlock { label }.into()
-    }
-
-    pub fn cannot_find_routine(routine: String) -> Self {
-        TypeErrorKind::CannotFindRoutine { routine }.into()
-    }
-
-    pub fn routine_not_on_iris(routine: String) -> Self {
-        TypeErrorKind::RoutineNotOnIris { routine }.into()
-    }
-
-    pub fn private_variable_not_allowed(function: String, name: String) -> Self {
-        TypeErrorKind::PrivateVariableNotAllowed { function, name }.into()
-    }
-
-    pub fn by_ref_argument_not_allowed(function: String) -> Self {
-        TypeErrorKind::ByRefArgumentNotAllowed { function }.into()
-    }
-
-    pub fn omitted_argument(function: String, position: usize) -> Self {
-        TypeErrorKind::OmittedArgument { function, position }.into()
-    }
-
-    pub fn set_vector_without_type() -> Self {
-        TypeErrorKind::SetVectorWithoutType.into()
-    }
-
-    pub fn routine_without_source(routine: String) -> Self {
-        TypeErrorKind::RoutineWithoutSource { routine }.into()
-    }
-
-    pub fn iris_lookup_failed(kind: crate::DocKind, name: String, reason: String) -> Self {
-        TypeErrorKind::IrisLookupFailed {
-            lookup: IrisLookup { kind, name },
-            reason,
-        }
-        .into()
-    }
-
-    pub fn continue_not_in_loop() -> Self {
-        TypeErrorKind::ContinueNotInLoop.into()
-    }
-
-    pub(crate) fn inconsistent_declaration(
-        name: String,
-        ty1: Option<Ty>,
-        ty2: Option<Ty>,
-    ) -> QuasiTypeError {
-        TypeErrorKind::InconsistentDeclaration {
-            name,
-            ty1: Declared(ty1),
-            ty2: Declared(ty2),
-        }
-        .into()
-    }
-
-    pub(crate) fn mixed_precedence() -> QuasiTypeError {
-        TypeErrorKind::MixedPrecedence.into()
     }
 }
 
@@ -2777,6 +2533,12 @@ type_error_kinds! {
 // The conditional parts of messages, each rendering nothing or a fragment of its kind's message.
 
 /// "; did you mean: …?", or nothing without suggestions.
+impl TypeErrorKind {
+    pub(crate) fn at(self, range: Range) -> TypeError {
+        TypeError::new(self, range, vec![])
+    }
+}
+
 #[derive(Debug)]
 pub struct Suggestions(pub Vec<String>);
 
@@ -3273,46 +3035,6 @@ impl TypeError {
         }
     }
 
-    fn at(kind: TypeErrorKind, range: Range) -> Self {
-        Self::new(kind, range, vec![])
-    }
-
-    pub fn too_many_arguments(takes: usize, range: Range) -> Self {
-        QuasiTypeError::too_many_arguments(takes).into_error(|| range)
-    }
-
-    // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
-    // yet to attach one lazily this early (during macro expansion).
-    pub fn label_in_block(label: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::LabelInBlock { label }, range)
-    }
-
-    pub(crate) fn cannot_find_class(cls: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::CannotFindClass { cls }, range)
-    }
-
-    pub(crate) fn unconfirmed_class(cls: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::UnconfirmedClass { cls }, range)
-    }
-
-    pub(crate) fn unconfirmed_member(
-        cls: String,
-        mem: String,
-        superclass: bool,
-        unseen: UnseenClass,
-        range: Range,
-    ) -> Self {
-        Self::at(
-            TypeErrorKind::UnconfirmedMember {
-                cls,
-                mem,
-                on: SuperclassOf(superclass),
-                unseen,
-            },
-            range,
-        )
-    }
-
     pub(crate) fn duplicate_class_name(range: Range, name: String, other: Location) -> Self {
         Self::new(
             TypeErrorKind::DuplicateClassName {
@@ -3332,105 +3054,7 @@ impl TypeError {
             }
             _ => TypeErrorKind::DocumentSyntaxError { scope, detail },
         };
-        Self::at(kind, range)
-    }
-
-    pub fn cannot_find_include(name: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::CannotFindInclude { name }, range)
-    }
-
-    pub fn argument_postconditional(range: Range) -> Self {
-        Self::at(TypeErrorKind::ArgumentPostconditional, range)
-    }
-
-    pub fn and_operator(wanted: crate::bindings::AndOperator, range: Range) -> Self {
-        Self::at(TypeErrorKind::AndOperator { wanted }, range)
-    }
-
-    pub fn new_per_block(max: u32, range: Range) -> Self {
-        Self::at(TypeErrorKind::NewPerBlock { max }, range)
-    }
-
-    pub fn undescribed(kind: &str, lines: usize, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::Undescribed {
-                kind: kind.to_string(),
-                lines,
-            },
-            range,
-        )
-    }
-
-    pub fn commands_per_line(max: u32, range: Range) -> Self {
-        Self::at(TypeErrorKind::CommandsPerLine { max }, range)
-    }
-
-    pub fn open_brace_break(newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::OpenBraceBreak { wanted }, range)
-    }
-
-    pub fn body_break(newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::BodyBreak { wanted }, range)
-    }
-
-    pub fn close_brace_break(newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::CloseBraceBreak { wanted }, range)
-    }
-
-    pub fn chain_break(keyword: &'static str, newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::ChainBreak { keyword, wanted }, range)
-    }
-
-    pub fn comma_spacing(space_after: bool, range: Range) -> Self {
-        let wanted = CommaSpace(space_after);
-        Self::at(TypeErrorKind::CommaSpacing { wanted }, range)
-    }
-
-    pub fn undecided_if(
-        directive: &'static str,
-        condition: String,
-        expansion: Option<String>,
-        range: Range,
-    ) -> Self {
-        Self::at(
-            TypeErrorKind::UndecidedIf {
-                directive,
-                condition,
-                expansion: Expansion(expansion),
-            },
-            range,
-        )
-    }
-
-    pub fn iris_lookup_failed(
-        kind: crate::DocKind,
-        name: String,
-        reason: String,
-        range: Range,
-    ) -> Self {
-        QuasiTypeError::iris_lookup_failed(kind, name, reason).into_error(|| range)
-    }
-
-    pub fn macro_expansion_too_deep(name: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::MacroExpansionTooDeep { name }, range)
-    }
-
-    pub fn macro_too_many_arguments(name: String, expected: usize, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::MacroTooManyArguments { name, expected },
-            range,
-        )
-    }
-
-    pub fn macro_too_few_arguments(name: String, expected: usize, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::MacroTooFewArguments { name, expected },
-            range,
-        )
+        kind.at(range)
     }
 
     pub fn mismatch_argument_mode(
@@ -3473,58 +3097,6 @@ impl TypeError {
         )
     }
 
-    pub fn unread_assignment(name: String, range: Range) -> TypeError {
-        Self::at(TypeErrorKind::UnreadAssignment { name }, range)
-    }
-
-    pub fn unread_required(role: UnreadRole, name: String, range: Range) -> TypeError {
-        Self::at(TypeErrorKind::UnreadRequired { role, name }, range)
-    }
-
-    pub fn override_signature(
-        name: String,
-        cls: String,
-        difference: OverrideDifference,
-        range: Range,
-    ) -> TypeError {
-        Self::at(
-            TypeErrorKind::OverrideSignature {
-                name,
-                cls,
-                difference,
-            },
-            range,
-        )
-    }
-
-    pub fn override_refused(
-        name: String,
-        cls: String,
-        difference: OverrideDifference,
-        range: Range,
-    ) -> TypeError {
-        Self::at(
-            TypeErrorKind::OverrideRefused {
-                name,
-                cls,
-                difference,
-            },
-            range,
-        )
-    }
-
-    pub fn output_never_assigned(name: String, range: Range) -> TypeError {
-        Self::at(TypeErrorKind::OutputNeverAssigned { name }, range)
-    }
-
-    pub fn by_ref_never_read(name: String, range: Range) -> TypeError {
-        Self::at(TypeErrorKind::ByRefNeverRead { name }, range)
-    }
-
-    pub fn output_read_first(name: String, range: Range) -> TypeError {
-        Self::at(TypeErrorKind::OutputReadFirst { name }, range)
-    }
-
     pub fn duplicated_member_name(range: Range, name: String, previous: Location) -> Self {
         Self::new(
             TypeErrorKind::DuplicatedMemberName { name },
@@ -3533,31 +3105,11 @@ impl TypeError {
         )
     }
 
-    pub fn missing_quit(range: Range) -> Self {
-        Self::at(TypeErrorKind::MissingQuit, range)
-    }
-
     pub fn redeclare_variable(name: String, range: Range, previous: Location) -> Self {
         Self::new(
             TypeErrorKind::RedeclareVariable { name },
             range,
             related(previous, "Previous declaration"),
-        )
-    }
-
-    pub fn keyword_style(
-        kind: tygr_objectscript::cos::KeywordKind,
-        found: String,
-        expected: String,
-        range: Range,
-    ) -> Self {
-        Self::at(
-            TypeErrorKind::KeywordStyle {
-                kind,
-                found,
-                expected,
-            },
-            range,
         )
     }
 
@@ -3569,75 +3121,6 @@ impl TypeError {
         )
     }
 
-    pub fn macro_from_method_body(name: String, method: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::MacroFromMethodBody { name, method }, range)
-    }
-
-    pub fn handle_not_a_local(range: Range) -> Self {
-        Self::at(TypeErrorKind::HandleNotALocal, range)
-    }
-
-    pub fn label_not_a_function(label: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::LabelNotAFunction { label }, range)
-    }
-
-    pub fn new_in_procedure_block(name: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::NewInProcedureBlock { name }, range)
-    }
-
-    pub fn label_offset(range: Range) -> Self {
-        Self::at(TypeErrorKind::LabelOffset, range)
-    }
-
-    pub fn offset_into_procedure_block(label: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::OffsetIntoProcedureBlock { label }, range)
-    }
-
-    pub fn unrecognized_class_keyword(entry: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::UnrecognizedClassKeyword { entry }, range)
-    }
-
-    pub fn undocumented_syntax(what: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::UndocumentedSyntax { what }, range)
-    }
-
-    pub fn not_allowed_in(
-        what: impl Into<String>,
-        context: &'static str,
-        iris: &'static str,
-        range: Range,
-    ) -> Self {
-        let what = what.into();
-        Self::at(
-            TypeErrorKind::NotAllowedIn {
-                what,
-                context,
-                iris,
-            },
-            range,
-        )
-    }
-
-    pub fn zquit_argument(value: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::ZQuitArgument { value }, range)
-    }
-
-    pub fn trap_reenters(var: &'static str, range: Range) -> Self {
-        Self::at(TypeErrorKind::TrapReenters { var }, range)
-    }
-
-    pub fn not_checked(what: &'static str, range: Range) -> Self {
-        Self::at(TypeErrorKind::NotChecked { what }, range)
-    }
-
-    pub fn etrap_goto(label: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::ETrapGoto { label }, range)
-    }
-
-    pub fn zquit_without_privates(range: Range) -> Self {
-        Self::at(TypeErrorKind::ZQuitWithoutPrivates, range)
-    }
-
     pub fn unrecognized_type_param(
         name: String,
         class: String,
@@ -3645,32 +3128,16 @@ impl TypeError {
         suggestions: Vec<String>,
         range: Range,
     ) -> Self {
-        Self::at(
-            TypeErrorKind::UnrecognizedTypeParam {
-                hint: if is_property_keyword {
-                    TypeParamHint::PropertyKeyword(name.clone())
-                } else {
-                    TypeParamHint::Suggestions(Suggestions(suggestions))
-                },
-                name,
-                class,
+        TypeErrorKind::UnrecognizedTypeParam {
+            hint: if is_property_keyword {
+                TypeParamHint::PropertyKeyword(name.clone())
+            } else {
+                TypeParamHint::Suggestions(Suggestions(suggestions))
             },
-            range,
-        )
-    }
-
-    pub fn unrecognized_keyword(kind: &'static str, entry: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::UnrecognizedKeyword { kind, entry }, range)
-    }
-
-    pub fn unrecognized_parameter_type(meta_type: String, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::UnrecognizedParameterType {
-                meta_type,
-                available: Available(PARAMETER_TYPE_KEYWORDS),
-            },
-            range,
-        )
+            name,
+            class,
+        }
+        .at(range)
     }
 }
 

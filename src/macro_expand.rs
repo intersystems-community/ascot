@@ -22,7 +22,7 @@ use tygr_objectscript::cos::{HMacro, MacroArg, MacroCallStruct, MacroedUnit};
 use crate::{
     DocDetails, DocKind, WorkspaceStruct,
     bindings::{self, Diagnostic, Location, Position},
-    check::SyntaxScope,
+    check::{Expansion, IrisLookup, SyntaxScope, TypeErrorKind},
     cos::{self, HMacroCommand, MacroRedex, Routine, RoutineWithMacro},
     details::Positions,
     tygr_error_to_diagnostics,
@@ -716,11 +716,11 @@ impl WorkspaceStruct {
                         {
                             dones.note_unresolved(
                                 move |name, range| {
-                                    crate::check::TypeError::macro_from_method_body(
+                                    TypeErrorKind::MacroFromMethodBody {
                                         name,
-                                        method.clone(),
-                                        range,
-                                    )
+                                        method: method.clone(),
+                                    }
+                                    .at(range)
                                 },
                                 name.print(),
                                 &origin,
@@ -729,7 +729,9 @@ impl WorkspaceStruct {
                         let substituted = match definitions.get(&name.print()) {
                             Some(_) if origin.depth >= MAX_MACRO_DEPTH => {
                                 dones.note_unresolved(
-                                    crate::check::TypeError::macro_expansion_too_deep,
+                                    |name, range| {
+                                        TypeErrorKind::MacroExpansionTooDeep { name }.at(range)
+                                    },
                                     name.print(),
                                     &origin,
                                 );
@@ -794,13 +796,16 @@ impl WorkspaceStruct {
                                 .is_some_and(|args| args.items.len() != pars.len()) =>
                             {
                                 let expected = pars.len();
-                                let make = if args.as_ref().unwrap().items.len() > expected {
-                                    crate::check::TypeError::macro_too_many_arguments
-                                } else {
-                                    crate::check::TypeError::macro_too_few_arguments
-                                };
+                                let too_many = args.as_ref().unwrap().items.len() > expected;
                                 dones.note_unresolved(
-                                    move |name, range| make(name, expected, range),
+                                    move |name, range| {
+                                        if too_many {
+                                            TypeErrorKind::MacroTooManyArguments { name, expected }
+                                        } else {
+                                            TypeErrorKind::MacroTooFewArguments { name, expected }
+                                        }
+                                        .at(range)
+                                    },
                                     name.print(),
                                     &origin,
                                 );
@@ -1016,12 +1021,12 @@ impl WorkspaceStruct {
                 let expansion = (expanded != written).then(|| expanded.to_string());
                 dones.note_unresolved(
                     move |written, range| {
-                        crate::check::TypeError::undecided_if(
+                        TypeErrorKind::UndecidedIf {
                             directive,
-                            written,
-                            expansion.clone(),
-                            range,
-                        )
+                            condition: written,
+                            expansion: Expansion(expansion.clone()),
+                        }
+                        .at(range)
                     },
                     written.to_string(),
                     &item.1,
@@ -1335,14 +1340,25 @@ impl DoneList {
 
     fn note_unresolved_include(&mut self, name: String, origin: &Origin) {
         self.failed_includes.push((name.clone(), None));
-        self.note_unresolved(crate::check::TypeError::cannot_find_include, name, origin);
+        self.note_unresolved(
+            |name, range| TypeErrorKind::CannotFindInclude { name }.at(range),
+            name,
+            origin,
+        );
     }
 
     fn note_lookup_failed(&mut self, name: String, reason: String, origin: &Origin) {
         self.failed_includes
             .push((name.clone(), Some(reason.clone())));
         let make = move |name, range| {
-            crate::check::TypeError::iris_lookup_failed(DocKind::Inc, name, reason.clone(), range)
+            TypeErrorKind::IrisLookupFailed {
+                lookup: IrisLookup {
+                    kind: DocKind::Inc,
+                    name,
+                },
+                reason: reason.clone(),
+            }
+            .at(range)
         };
         self.note_unresolved(make, name, origin);
     }
