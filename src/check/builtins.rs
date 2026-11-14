@@ -1350,9 +1350,8 @@ fn check_out_var<'a>(
 }
 
 /// `$LISTNEXT(list, ptr, value)` iterates a list. `ptr` is read (IRIS raises `<FUNCTION>` on an
-/// undefined or empty pointer), then becomes a defined integer unconditionally, but `value`
-/// receives an element only when the call returns true — mirroring `$ORDER`'s flow-sensitive
-/// target.
+/// undefined or empty pointer), then becomes a defined integer unconditionally, but `value` may be
+/// undefined even when the call returns true: a null element leaves it so.
 fn check_listnext<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1364,9 +1363,9 @@ fn check_listnext<'a>(
     let _ = ptr.to_ty(env, flow)?;
     check_out_var(env, flow, Some(ptr), "%Integer")?;
     if let Left(local) = value.as_local(env, flow)? {
-        let string = Some(Some(Ty::from("%String")));
-        let cases = |old_ty| vec![("0", old_ty)];
-        return bind_out_var(env, flow, local, env.range(value), cases, string);
+        let range = env.range(value);
+        flow.handle_get(local.clone())?;
+        flow.handle_set(local, MaybeTy::Maybe(Ty::from("%String")).into(), range)?;
     }
     Ok(Ty::from("%Boolean").into())
 }
