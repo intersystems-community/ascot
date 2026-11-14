@@ -9,6 +9,7 @@
 use crate::bindings;
 use crate::bindings::Location;
 use crate::bindings::RefMode;
+use crate::check::CheckCommand;
 use crate::check::env::*;
 use crate::check::errors::*;
 use crate::check::types::*;
@@ -66,6 +67,8 @@ struct Shared<'a> {
     output: OutputCell,
     ty_var: RefCell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
+    // The entries of `reading_list` that are information rather than a warning when never read.
+    unread_roles: RefCell<HashMap<Written, UnreadRole>>,
     // In declaration order, for a deterministic diagnostic when more than one qualifies.
     ref_params: RefCell<Vec<RefParam>>,
     // Visible in the signature already, so excluded from `creates` below.
@@ -148,17 +151,29 @@ impl Traps {
             self.active = them.active;
         }
         for (label, join) in them.joins {
-            match self.joins.get_mut(&label) {
-                Some(mine) => mine.bindings.merge(Some(join.bindings), env, undeclared)?,
-                None => {
-                    self.joins.insert(label, join);
-                }
-            }
+            self.join(label, join, env, undeclared)?;
         }
         for (mine, theirs) in self.catches.iter_mut().zip(them.catches) {
             mine.merge(Some(theirs), env, undeclared)?;
         }
         Ok(())
+    }
+
+    // `join` is one more state `label`'s handler can be entered from.
+    fn join(
+        &mut self,
+        label: String,
+        join: Join,
+        env: &WorkspaceEnv<'_>,
+        undeclared: &Binding,
+    ) -> Result<(), QuasiTypeError> {
+        match self.joins.get_mut(&label) {
+            Some(mine) => mine.bindings.merge(Some(join.bindings), env, undeclared),
+            None => {
+                self.joins.insert(label, join);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -259,15 +274,23 @@ impl<'a> Flow<'a> {
     }
 
     // A label, held to `output` (see `LabelEntry::output`); an error handler starts from `join`,
-    // the states it can be entered from (see `Traps`). Returns what it creates.
+    // the states it can be entered from (see `Traps`). Its `body` falls through to `next`.
+    // Returns what it creates.
     pub(crate) fn with_label(
         env: &'a CodeEnv<'a>,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
         output: OutputCell,
         join: Option<Join>,
-        handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
+        body: &impl CheckCommand,
+        next: Option<&OnceCell<OutputCell>>,
     ) -> Result<Effects, TypeError> {
+        let handler = |flow: &mut Self| {
+            let checked = body.check(env, flow);
+            env.deposit_traps(flow.take_traps());
+            checked?;
+            flow.tail_call(next, range)
+        };
         Self::run(env, range, args, None, output, join, handler, false, false)
     }
 
@@ -465,6 +488,7 @@ impl<'a> Flow<'a> {
                 output,
                 ty_var: RefCell::new(0),
                 reading_list: RefCell::new(reading_list),
+                unread_roles: RefCell::new(HashMap::new()),
                 ref_params: RefCell::new(ref_params),
                 known_names,
                 creates: RefCell::new(HashSet::new()),
@@ -501,7 +525,7 @@ impl<'a> Flow<'a> {
                 unread.map(|(w, _)| (w.name.clone(), w.range)).collect()
             };
             for (name, range) in unread {
-                flow.add_soft_diagnostic(TypeError::unread_assignment(name, range).into());
+                flow.add_soft_diagnostic(flow.unread(name, range).into());
             }
             // The caller reads a by-reference parameter, and need not set an `Output` one, so the
             // body's own use says which mode fits: a `ByRef` written without its incoming value
@@ -513,9 +537,7 @@ impl<'a> Flow<'a> {
                     (RefMode::ByRef, false, true, _) if output_keyword => {
                         TypeError::by_ref_never_read(name, range)
                     }
-                    (RefMode::ByRef, false, false, false) => {
-                        TypeError::unread_assignment(name, range)
-                    }
+                    (RefMode::ByRef, false, false, false) => flow.unread(name, range),
                     (RefMode::Output, true, true, _) => TypeError::output_read_first(name, range),
                     _ => continue,
                 };
@@ -566,13 +588,7 @@ impl<'a> Flow<'a> {
         // (`check_branch`) and carry on, and a leaked context would then trip its `merge`.
         let quits = std::mem::replace(&mut self.loop_context, outer).map(|context| context.quits);
         result?;
-        for WithRange {
-            it: bindings,
-            range,
-        } in quits.unwrap_or_default()
-        {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        self.merge_states(quits.unwrap_or_default())?;
         if optional {
             self.merge(before)?;
         }
@@ -589,17 +605,15 @@ impl<'a> Flow<'a> {
     ) -> Result<(), QuasiTypeError> {
         self.primed(env, &handler)?;
         // Run the body a second time, starting with union of all continue and the before
-        for bindings in self.loop_context.take().unwrap().continues {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        let continues = self.loop_context.take().unwrap().continues;
+        self.merge_states(continues.into_iter().map(|b| WithRange::new(b, range)))?;
         self.merge_bindings(before.bindings.clone())
             .with_range(|| range)?;
         self.loop_context = Some(LoopContext::new(range));
         handler(self)?;
         // A `Continue` heads back to the loop head just like falling off the end of the body.
-        for bindings in std::mem::take(&mut self.loop_context.as_mut().unwrap().continues) {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        let continues = std::mem::take(&mut self.loop_context.as_mut().unwrap().continues);
+        self.merge_states(continues.into_iter().map(|b| WithRange::new(b, range)))?;
         if infinite {
             self.bindings = None;
         }
@@ -626,13 +640,7 @@ impl<'a> Flow<'a> {
         let Some(context) = context else {
             return Ok(());
         };
-        for WithRange {
-            it: bindings,
-            range,
-        } in context.quits
-        {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        self.merge_states(context.quits)?;
         if !context.continues.is_empty() {
             match &mut self.loop_context {
                 Some(outer) => outer.continues.extend(context.continues),
@@ -718,6 +726,17 @@ impl<'a> Flow<'a> {
             }
             _ => self.split(),
         }
+    }
+
+    // Each of `states` (a loop's `Quit`s or `Continue`s) joins this path, at its own range.
+    fn merge_states(
+        &mut self,
+        states: impl IntoIterator<Item = WithRange<Bindings>>,
+    ) -> Result<(), TypeError> {
+        for WithRange { it, range } in states {
+            self.merge_bindings(Some(it)).with_range(|| range)?;
+        }
+        Ok(())
     }
 
     fn merge_bindings(&mut self, that: Option<Bindings>) -> Result<(), QuasiTypeError> {
@@ -868,15 +887,8 @@ impl<'a> Flow<'a> {
         let undeclared = self.undeclared();
         self.mark_incomplete();
         self.traps.active = Some((var, Some(label.clone())));
-        match self.traps.joins.get_mut(&label) {
-            Some(join) => join
-                .bindings
-                .merge(Some(bindings), self.shared.env, &undeclared)?,
-            None => {
-                self.traps.joins.insert(label, Join { var, bindings });
-            }
-        }
-        Ok(())
+        let join = Join { var, bindings };
+        self.traps.join(label, join, self.shared.env, &undeclared)
     }
 
     // `var` is cleared or unknown. `$ZTRAP` takes precedence, so clearing `$ETRAP` under it
@@ -1056,6 +1068,22 @@ impl<'a> Flow<'a> {
     ) -> Result<(), QuasiTypeError> {
         self.lookup(name)?.declared = Some(ty);
         Ok(())
+    }
+
+    // An assignment at `range` that is information rather than a warning when never read.
+    pub(crate) fn note_unread_role(&self, name: String, range: bindings::Range, role: UnreadRole) {
+        self.shared
+            .unread_roles
+            .borrow_mut()
+            .insert(Written::new(name, range), role);
+    }
+
+    fn unread(&self, name: String, range: bindings::Range) -> TypeError {
+        let role = self.shared.unread_roles.borrow();
+        match role.get(&Written::new(name.clone(), range)) {
+            Some(role) => TypeError::unread_required(*role, name, range),
+            None => TypeError::unread_assignment(name, range),
+        }
     }
 
     pub(crate) fn handle_set(

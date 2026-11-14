@@ -138,6 +138,13 @@ impl Range {
             end: position,
         }
     }
+
+    pub fn map(self, mut f: impl FnMut(Position) -> Position) -> Self {
+        Self {
+            start: f(self.start),
+            end: f(self.end),
+        }
+    }
 }
 
 impl From<&check::types::NormalArg> for wit_bind::NormalArg {

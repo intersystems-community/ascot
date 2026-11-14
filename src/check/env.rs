@@ -47,7 +47,7 @@ type Generated = (Arc<TyProcedure>, bool);
 // One of the three member namespaces IRIS tells apart by syntax -- `..#X`, `..X`, `..X(...)` --
 // and the shape of what it holds.
 pub(crate) trait Namespace {
-    type Ty: Instantiate + ClassNames + Default;
+    type Ty: ClassNames + Default;
     // Where its members are declared.
     const NS: MemberNs;
     // The type of a member a workspace class declares, and whether it's instance-only.
@@ -321,18 +321,33 @@ impl<T> Member<T> {
 
 fn generated_procedure(
     normal_args: Vec<NormalArg>,
-    variadic: bool,
+    variadic_arg: Option<VariadicArg>,
     out: Option<Ty>,
 ) -> Arc<TyProcedure> {
     Arc::new(TyProcedure {
         normal_args,
-        variadic_arg: variadic.then(|| VariadicArg::new(None, "args".into(), None)),
+        variadic_arg,
         out,
         procedure_block: Some(vec![]),
         formal_list: true,
         uri: None,
         declared_at: None,
     })
+}
+
+// `args...`: a generated method taking anything.
+fn any_args() -> Option<VariadicArg> {
+    Some(VariadicArg::new(None, "args".into(), None))
+}
+
+// A generated method's argument.
+fn arg(mode: Option<RefMode>, name: &str, ty: impl Into<Ty>, default: Option<&str>) -> NormalArg {
+    NormalArg::new(
+        mode,
+        name.into(),
+        Some(ty.into()),
+        default.map(str::to_string),
+    )
 }
 
 // Where a host-reported member is declared: only known when the host could map it to a uri
@@ -402,27 +417,9 @@ fn query_methods(
     variadic: Option<VariadicArg>,
 ) -> Vec<(String, Generated)> {
     let (by_ref, output) = (Some(RefMode::ByRef), Some(RefMode::Output));
-    let arg = |mode, name: &str, ty: &str, default: Option<&str>| {
-        NormalArg::new(
-            mode,
-            name.into(),
-            Some(Ty::from(ty)),
-            default.map(str::to_string),
-        )
-    };
     let handle = |mode| arg(mode, "qHandle", "%Binary", None);
     let status = || Some(Ty::from("%Status"));
-    let proc = |args, variadic, out| {
-        Arc::new(TyProcedure {
-            normal_args: args,
-            variadic_arg: variadic,
-            out,
-            procedure_block: Some(vec![]),
-            formal_list: true,
-            uri: None,
-            declared_at: None,
-        })
-    };
+    let proc = generated_procedure;
     let execute = std::iter::once(handle(output))
         .chain(normal.iter().cloned())
         .collect();
@@ -489,8 +486,8 @@ fn query_methods(
                 status(),
             ),
         ),
-        ("Prepare", generated_procedure(vec![], true, status())),
-        ("SendODBC", generated_procedure(vec![], true, status())),
+        ("Prepare", proc(vec![], any_args(), status())),
+        ("SendODBC", proc(vec![], any_args(), status())),
     ]
     .into_iter()
     .map(|(suffix, proc)| (suffix.to_string(), (proc, false)))
@@ -521,16 +518,9 @@ enum Out {
 
 impl Shape {
     fn procedure(&self, prop: &Ty) -> Generated {
-        let Shape(_, arg, out, is_instance_only) = *self;
-        let one = |name: &str, ty, default: Option<&str>| {
-            vec![NormalArg::new(
-                None,
-                name.into(),
-                Some(ty),
-                default.map(str::to_string),
-            )]
-        };
-        let args = match arg {
+        let Shape(_, shape, out, is_instance_only) = *self;
+        let one = |name, ty: Ty, default| vec![arg(None, name, ty, default)];
+        let args = match shape {
             Arg::None => vec![],
             Arg::Value => one("value", prop.clone(), None),
             Arg::Id => one("id", Ty::from("%String"), None),
@@ -545,10 +535,7 @@ impl Shape {
             Out::Boolean => Ty::from("%Boolean"),
             Out::Oid => Ty::from("%ObjectIdentity"),
         };
-        (
-            generated_procedure(args, false, Some(out)),
-            is_instance_only,
-        )
+        (generated_procedure(args, None, Some(out)), is_instance_only)
     }
 }
 
@@ -576,14 +563,6 @@ const SERIAL_ACCESSORS: &[Shape] = &[Shape("IsEmpty", Arg::None, Out::Boolean, t
 
 // `%Compiler.Type.Collection`'s class methods, as the dictionary declares them.
 fn collection_methods() -> Vec<(String, Generated)> {
-    let arg = |mode, name: &str, ty: &str, default: Option<&str>| {
-        NormalArg::new(
-            mode,
-            name.into(),
-            Some(Ty::from(ty)),
-            default.map(str::to_string),
-        )
-    };
     let val = || arg(None, "val", "%String", Some("\"\""));
     let delim = || arg(None, "delim", "%String", Some("\"\""));
     let string = || Some(Ty::from("%String"));
@@ -605,7 +584,7 @@ fn collection_methods() -> Vec<(String, Generated)> {
     .map(|(suffix, args, out)| {
         (
             suffix.to_string(),
-            (generated_procedure(args, false, out), false),
+            (generated_procedure(args, None, out), false),
         )
     })
     .collect()
@@ -654,6 +633,23 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
 ];
 
 impl<'a> WorkspaceEnv<'a> {
+    // The method `mem` of `cls` overrides: the first a superclass declares, as `cls` sees it, with
+    // the class that declares it. Nothing is reported for a class in the chain nobody can see.
+    pub(crate) fn overridden_method(
+        &self,
+        cls: &str,
+        mem: &str,
+    ) -> Option<(String, TyProcedureOrAny)> {
+        let receiver = ClassTy::from(cls.to_string());
+        let given = |param: &str| self.parameter_value(cls, param);
+        self.ancestry(cls).skip(1).find_map(|(sup, resolved)| {
+            let found = self.declared_in::<Methods>(&sup, &resolved, mem)?;
+            let mut ty = found.member.ty;
+            ty.instantiate(&receiver, &found.origin, &given);
+            Some((found.origin, ty))
+        })
+    }
+
     // The names in `N`'s namespace along `cls`'s chain -- all ObjectScript can refer to there.
     pub(crate) fn names<N: Namespace>(&self, cls: &str) -> Vec<String> {
         let mut names = Vec::new();
@@ -910,9 +906,6 @@ impl<'a> WorkspaceEnv<'a> {
         {
             return vec![];
         }
-        let arg = |name: &str, mode, ty: Ty, default: Option<&str>| {
-            NormalArg::new(mode, name.into(), Some(ty), default.map(str::to_string))
-        };
         let this = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
         let mut args: Vec<NormalArg> = keys
             .iter()
@@ -933,34 +926,29 @@ impl<'a> WorkspaceEnv<'a> {
                     Some(PropertyTy::Value(ty)) => ty,
                     _ => Ty::Any,
                 };
-                arg("value", None, ty, None)
+                arg(None, "value", ty, None)
             })
             .collect();
         if keys.is_empty() {
-            args.push(arg("id", None, Ty::from("%String"), None));
+            args.push(arg(None, "id", "%String", None));
         }
         let exists = (
             "Exists",
-            vec![arg("id", Some(RefMode::Output), Ty::from("%String"), None)],
+            vec![arg(Some(RefMode::Output), "id", "%String", None)],
             Ty::from("%Boolean"),
         );
         let open_and_delete = [
             (
                 "Open",
                 vec![
-                    arg("concurrency", None, Ty::from("%Integer"), Some("-1")),
-                    arg(
-                        "sc",
-                        Some(RefMode::ByRef),
-                        Ty::from("%Status"),
-                        Some("$$$OK"),
-                    ),
+                    arg(None, "concurrency", "%Integer", Some("-1")),
+                    arg(Some(RefMode::ByRef), "sc", "%Status", Some("$$$OK")),
                 ],
                 Ty::This,
             ),
             (
                 "Delete",
-                vec![arg("concurrency", None, Ty::from("%Integer"), Some("-1"))],
+                vec![arg(None, "concurrency", "%Integer", Some("-1"))],
                 Ty::from("%Status"),
             ),
         ];
@@ -971,7 +959,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let args = args.iter().cloned().chain(extra).collect();
                 (
                     suffix.to_string(),
-                    (generated_procedure(args, false, Some(out)), false),
+                    (generated_procedure(args, None, Some(out)), false),
                 )
             })
             .collect()
@@ -1161,7 +1149,7 @@ impl<'a> WorkspaceEnv<'a> {
                         let proc = if mem == "%New" {
                             TyProcedureOrAny::Procedure(generated_procedure(
                                 vec![],
-                                true,
+                                any_args(),
                                 Some(Ty::This),
                             ))
                         } else {
@@ -1645,6 +1633,19 @@ impl<'a> WorkspaceEnv<'a> {
 
     fn is_subclass(&self, source: &ClassTy, target: &ClassTy) -> bool {
         self.merge_class(Cow::Borrowed(source), Cow::Borrowed(target)) == *target
+    }
+
+    // Whether `has` names `declares`'s class or a subclass of it, type parameters aside: the test
+    // IRIS applies to an override's formal argument and return class (ERROR #5478). `None` when
+    // either is no class.
+    pub(crate) fn is_class_or_subclass(&self, has: &Ty, declares: &Ty) -> Option<bool> {
+        match (has, declares) {
+            (Ty::OREF(ClsOrIns::Ins(has)), Ty::OREF(ClsOrIns::Ins(declares))) => Some(
+                self.ancestry(&has.name)
+                    .any(|(cls, _)| cls == declares.name),
+            ),
+            _ => None,
+        }
     }
 
     pub fn merge_ty(&self, x: Ty, y: Ty) -> Ty {
@@ -2202,14 +2203,6 @@ impl<'a> CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
-    pub(crate) fn line_of(&self, offset: usize) -> usize {
-        self.base
-            .olc
-            .offset_to_line_character(offset + self.offset)
-            .unwrap_or_else(|e| e.bound)
-            .0
-    }
-
     // Whether `node` is text a macro expanded to (or an include supplied), rather than text the
     // document spells out.
     pub(crate) fn is_expanded<T>(&self, node: &tygr::Ranged<T>) -> bool {

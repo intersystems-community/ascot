@@ -511,7 +511,7 @@ pub enum Ty {
     #[default]
     Any,
     OREF(ClsOrIns),
-    // Only from the mask, and resolved by `Instantiate`.
+    // Only from the mask, and resolved by `ClassNames::instantiate`.
     This,
     Param(String),
 }
@@ -984,6 +984,38 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
 // member type takes before it leaves its declaring class.
 pub(crate) trait ClassNames {
     fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty));
+
+    // `This` is the receiver's class; `..#NAME` the receiver's argument for the parameter `NAME`
+    // that `owner`, the member's declaring class, defines: the receiver type's own, else the value
+    // `given` finds on the receiver's class, else `owner`'s default.
+    fn instantiate(
+        &mut self,
+        receiver: &ClassTy,
+        owner: &str,
+        given: &dyn Fn(&str) -> Option<String>,
+    ) {
+        self.class_names(&mut |ty| instantiate_ty(ty, receiver, owner, given));
+    }
+}
+
+fn instantiate_ty(
+    ty: &mut Ty,
+    receiver: &ClassTy,
+    owner: &str,
+    given: &dyn Fn(&str) -> Option<String>,
+) {
+    match ty {
+        Ty::This => *ty = Ty::ins(receiver.clone()),
+        Ty::Param(param) => {
+            let arg = (receiver.generics.get(param).cloned())
+                .or_else(|| given(param))
+                .or_else(|| crate::mask::generic_default(owner, param));
+            if let Some(arg) = arg {
+                *ty = Ty::from(arg);
+            }
+        }
+        Ty::Any | Ty::OREF(_) => {}
+    }
 }
 
 impl ClassNames for Ty {
@@ -1031,104 +1063,11 @@ impl ClassNames for PropertyTy {
     }
 }
 
-// `This` is the receiver's class; `..#NAME` the receiver's argument for the parameter `NAME`
-// that `owner`, the member's declaring class, defines: the receiver type's own, else the value
-// `given` finds on the receiver's class, else `owner`'s default.
-pub(crate) trait Instantiate {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    );
-}
-
-impl Instantiate for Ty {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    ) {
-        match self {
-            Ty::This => *self = Ty::ins(receiver.clone()),
-            Ty::Param(param) => {
-                let arg = (receiver.generics.get(param).cloned())
-                    .or_else(|| given(param))
-                    .or_else(|| crate::mask::generic_default(owner, param));
-                if let Some(arg) = arg {
-                    *self = Ty::from(arg);
-                }
-            }
-            Ty::Any | Ty::OREF(_) => {}
-        }
-    }
-}
-
-impl<T: Instantiate> Instantiate for Option<T> {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    ) {
-        if let Some(t) = self {
-            t.instantiate(receiver, owner, given);
-        }
-    }
-}
-
-impl Instantiate for TyProcedure {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    ) {
-        for arg in &mut self.normal_args {
-            arg.ty.instantiate(receiver, owner, given);
-        }
-        if let Some(arg) = &mut self.variadic_arg {
-            arg.ty.instantiate(receiver, owner, given);
-        }
-        self.out.instantiate(receiver, owner, given);
-    }
-}
-
 impl TyProcedureOrAny {
     pub fn procedure(&self) -> Option<&Arc<TyProcedure>> {
         match self {
             TyProcedureOrAny::Procedure(proc) => Some(proc),
             TyProcedureOrAny::Any => None,
-        }
-    }
-}
-
-impl Instantiate for TyProcedureOrAny {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    ) {
-        if let TyProcedureOrAny::Procedure(proc) = self {
-            Arc::make_mut(proc).instantiate(receiver, owner, given);
-        }
-    }
-}
-
-impl Instantiate for PropertyTy {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    ) {
-        match self {
-            PropertyTy::Value(ty)
-            | PropertyTy::Multidimensional(ty)
-            | PropertyTy::Dispatched(ty)
-            | PropertyTy::Collection { element: ty, .. } => ty.instantiate(receiver, owner, given),
         }
     }
 }

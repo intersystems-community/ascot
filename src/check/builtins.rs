@@ -293,6 +293,22 @@ where
     arg.as_deref().map(|w| w.deref())
 }
 
+// `$ZF(-3)`, `$ZF(-5)` and `$ZF(-6)`: `selectors` name the callout, whose `args` go by value.
+fn check_zf_callout<'a, 'b>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    selectors: impl IntoIterator<Item = &'b cos::More<cos::ArgOf<Expr>>>,
+    args: &[cos::More<cos::ArgOf<Option<cos::MthArg>>>],
+) -> Result<PowerTy, QuasiTypeError> {
+    if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
+        return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
+    }
+    for selector in selectors {
+        let _ = selector.to_ty(env, flow)?;
+    }
+    Ok(check_args_any(env, flow, each_arg(args))?.into())
+}
+
 fn each_arg<'b, M, W, T: 'b>(args: &'b [M]) -> impl Iterator<Item = &'b Ranged<T>>
 where
     M: Deref<Target = W>,
@@ -443,13 +459,7 @@ impl CheckExprInner for cos::FunctionCall {
                 check_args_any(env, flow, each_arg(args))?;
                 Ok(Ty::from("%Integer").into())
             }
-            FunctionCall::ZFm3 { dll, args, .. } => {
-                if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
-                    return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
-                }
-                let _ = dll.to_ty(env, flow)?;
-                Ok(check_args_any(env, flow, each_arg(args))?.into())
-            }
+            FunctionCall::ZFm3 { dll, args, .. } => check_zf_callout(env, flow, [dll], args),
             FunctionCall::ZFm4 {
                 n, third, fourth, ..
             } => check_read_args(
@@ -463,23 +473,10 @@ impl CheckExprInner for cos::FunctionCall {
                 func_id,
                 args,
                 ..
-            } => {
-                if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
-                    return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
-                }
-                let _ = dll_id.to_ty(env, flow)?;
-                let _ = func_id.to_ty(env, flow)?;
-                Ok(check_args_any(env, flow, each_arg(args))?.into())
-            }
+            } => check_zf_callout(env, flow, [dll_id, func_id], args),
             FunctionCall::ZFm6 {
                 dll_index, args, ..
-            } => {
-                if each_arg(args).any(|arg| matches!(**arg, Some(cos::MthArg::ByRef { .. }))) {
-                    return Err(QuasiTypeError::by_ref_argument_not_allowed("$ZF".into()));
-                }
-                let _ = dll_index.to_ty(env, flow)?;
-                Ok(check_args_any(env, flow, each_arg(args))?.into())
-            }
+            } => check_zf_callout(env, flow, [dll_index], args),
             FunctionCall::ZU { kw, args } => check_zu_args(env, flow, kw, args),
             FunctionCall::Case {
                 args: CaseArgs { target, arms, .. },
@@ -942,6 +939,19 @@ fn define_set_target_base<'a>(
     Ok(())
 }
 
+// `Set $F(base, ..) = v`: the base is defined from here on, and the call checked as a read.
+fn check_set_fun<'a, C>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    base: &Ranged<Expr>,
+    c: &C,
+    check: impl FnOnce(&CodeEnv<'a>, &mut Flow<'a>, &C) -> Result<PowerTy, QuasiTypeError>,
+) -> Result<(), QuasiTypeError> {
+    define_set_target_base(env, flow, base)?;
+    let _ = check(env, flow, c)?;
+    Ok(())
+}
+
 /// Check a [`SetTargetFun`] -- the settable functions on the left of `SET`.
 /// Reuses the same per-function checks as the read positions.
 pub(super) fn check_settarget_fun<'a>(
@@ -952,34 +962,18 @@ pub(super) fn check_settarget_fun<'a>(
     super::report_style(env, fun.name(), &[]);
     use cos::SetTargetFun::*;
     match fun {
-        Piece(c) => {
-            define_set_target_base(env, flow, &c.string)?;
-            let _ = check_piece_call(env, flow, c)?;
-        }
-        Extract(c) => {
-            define_set_target_base(env, flow, &c.string)?;
-            let _ = check_extract_call(env, flow, c)?;
-        }
-        List(c) => {
-            define_set_target_base(env, flow, &c.list)?;
-            let _ = check_list_plain_call(env, flow, c)?;
-        }
+        Piece(c) => check_set_fun(env, flow, &c.string, c, check_piece_call)?,
+        Extract(c) => check_set_fun(env, flow, &c.string, c, check_extract_call)?,
+        List(c) => check_set_fun(env, flow, &c.list, c, check_list_plain_call)?,
         ListGet(c) => check_set_var_list(env, flow, &c.first, &c.rest)?,
-        Bit(c) => {
-            define_set_target_base(env, flow, &c.bits)?;
-            let _ = check_bit_call(env, flow, c)?;
-        }
+        Bit(c) => check_set_fun(env, flow, &c.bits, c, check_bit_call)?,
         Vector(c) => {
             if c.third.is_none() {
                 return Err(QuasiTypeError::set_vector_without_type());
             }
-            define_set_target_base(env, flow, &c.vector)?;
-            let _ = check_vector_call(env, flow, c)?;
+            check_set_fun(env, flow, &c.vector, c, check_vector_call)?;
         }
-        WExtract(c) => {
-            define_set_target_base(env, flow, &c.string)?;
-            let _ = check_wextract_call(env, flow, c)?;
-        }
+        WExtract(c) => check_set_fun(env, flow, &c.string, c, check_wextract_call)?,
         Property(c) => {
             let _ = check_property_call(env, flow, c)?;
         }
@@ -1292,10 +1286,7 @@ fn check_simple_function<'a>(
         }
         let _ = expr.to_ty(env, flow)?;
     }
-    let given = match call.args.items.as_slice() {
-        [only] if only.is_none() => 0,
-        items => items.len(),
-    };
+    let given = call.given();
     if given > function.max {
         let name = call.name.print().to_uppercase();
         flow.add_soft_diagnostic(QuasiTypeError::undocumented_argument(
@@ -1373,17 +1364,27 @@ fn check_listnext<'a>(
     let _ = ptr.to_ty(env, flow)?;
     check_out_var(env, flow, Some(ptr), "%Integer")?;
     if let Left(local) = value.as_local(env, flow)? {
-        let range = env.range(value);
-        let old_ty = flow.handle_get(local.clone())?.to_ty(env).ok();
-        let var = flow.fresh();
-        flow.handle_set(
-            local,
-            PowerTy::case(var, vec![("0", old_ty)], Some(Some(Ty::from("%String")))),
-            range,
-        )?;
-        return Ok(PowerTy::bind(var));
+        let string = Some(Some(Ty::from("%String")));
+        let cases = |old_ty| vec![("0", old_ty)];
+        return bind_out_var(env, flow, local, env.range(value), cases, string);
     }
     Ok(Ty::from("%Boolean").into())
+}
+
+// `local` is set by the call whose value `var` binds: in each of `cases` of that value it is of the
+// type given (`None` undefined; `old_ty` the type it had), `default` in any other case.
+fn bind_out_var<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    local: Local,
+    range: bindings::Range,
+    cases: impl FnOnce(Option<Ty>) -> Vec<(&'static str, Option<Ty>)>,
+    default: Option<Option<Ty>>,
+) -> Result<PowerTy, QuasiTypeError> {
+    let old_ty = flow.handle_get(local.clone())?.to_ty(env).ok();
+    let var = flow.fresh();
+    flow.handle_set(local, PowerTy::case(var, cases(old_ty), default), range)?;
+    Ok(PowerTy::bind(var))
 }
 
 /// `$PROPERTY(instance, propertyname, index...)` — the instance is optional
@@ -1636,7 +1637,13 @@ fn check_branches<'a, 'e>(
     let mut taken = vec![];
     for (condition, value) in branches {
         let condition = match condition {
-            Taken::If(condition) => condition.to_power_ty(env, flow)?,
+            Taken::If(condition) => {
+                let ty = condition.to_ranged_power_ty(env, flow)?;
+                // A condition is a read like any other, then what the flow splits on.
+                ranged_quasi_ty_to_ty(env, flow, &ty, Some(&|| condition.print()))
+                    .map_err(QuasiTypeError::WithRange)?;
+                ty.into_inner()
+            }
             Taken::Equal(target, this) => {
                 let this = this.to_power_ty(env, flow)?;
                 related(target, TermOp::Eq, &this).unwrap_or_else(|| PowerTy::from("%Boolean"))
@@ -1693,16 +1700,7 @@ fn check_is_object<'a>(
 }
 
 fn get_of_variable(expr: &Expr) -> Option<&Variable> {
-    if !expr.ops.is_empty() {
-        return None;
-    }
-    let OpsExpr::Base(ExprOps::Base(this)) = expr.base.deref() else {
-        return None;
-    };
-    let ParenedExpr::Normal(this) = this.deref() else {
-        return None;
-    };
-    let AtomicExpr::FunctionCall(call) = this.deref().deref() else {
+    let AtomicExpr::FunctionCall(call) = expr.as_atomic()? else {
         return None;
     };
     let FunctionCall::Get {
@@ -1947,16 +1945,15 @@ fn check_data_opaque<'a>(
     if let Some(target) = target
         && let Left(local) = target.as_local(env, flow)?
     {
-        let old_ty = flow.handle_get(local.clone())?.to_ty(env).ok();
-        let var = flow.fresh();
-        let cases = vec![
-            ("0", old_ty.clone()),
-            ("1", Some(Ty::Any)),
-            ("10", old_ty),
-            ("11", Some(Ty::Any)),
-        ];
-        flow.handle_set(local, PowerTy::case(var, cases, None), env.range(target))?;
-        return Ok(PowerTy::bind(var));
+        let cases = |old_ty: Option<Ty>| {
+            vec![
+                ("0", old_ty.clone()),
+                ("1", Some(Ty::Any)),
+                ("10", old_ty),
+                ("11", Some(Ty::Any)),
+            ]
+        };
+        return bind_out_var(env, flow, local, env.range(target), cases, None);
     }
     Ok(PowerTy::union(vec![
         0.into(),
@@ -1983,15 +1980,9 @@ fn check_order<'a>(
     }
     if let Some(target) = target {
         let target_range = env.range(target);
-        if let Left(target) = target.as_local(env, flow)? {
-            let old_ty = flow.handle_get(target.clone())?.to_ty(env).ok();
-            let var = flow.fresh();
-            flow.handle_set(
-                target,
-                PowerTy::case(var, vec![("", old_ty)], Some(Some(new_ty))),
-                target_range,
-            )?;
-            return Ok(PowerTy::bind(var));
+        if let Left(local) = target.as_local(env, flow)? {
+            let cases = |old_ty| vec![("", old_ty)];
+            return bind_out_var(env, flow, local, target_range, cases, Some(Some(new_ty)));
         }
     }
     Ok(PowerTy::from("%DataType"))

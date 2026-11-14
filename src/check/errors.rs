@@ -583,6 +583,63 @@ type_error_kinds! {
         on: SuperclassOf,
         unseen: UnseenClass,
     },
+    /// A method of the same name as one a superclass declares overrides it and is reached through
+    /// the superclass's signature: a caller holding the superclass passes the formal arguments it
+    /// declares. An override that takes another number of them, or takes one in another mode (by
+    /// value, `ByRef`, `Output`), leaves that caller passing what the override does not take. IRIS
+    /// compiles and runs it all the same, dropping an extra argument and leaving a missing one
+    /// undefined. `%OnNew` is exempt: `%New` alone calls it, with `%New`'s own arguments, so each
+    /// class declares what it is built with. A formal argument or return of another class is
+    /// A3604.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.OverrideSignature Extends %Persistent
+    /// {
+    ///
+    /// Method %OnBeforeSave() As %Status //! A1841
+    /// {
+    ///     Return $$$OK
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A1841"]
+    #[severity = Warning]
+    #[message = "Method '{name}' overrides {cls}'s {difference}"]
+    OverrideSignature {
+        name: String,
+        cls: String,
+        difference: OverrideDifference,
+    },
+    /// An override's formal argument keeps the class the superclass declares, and its return class
+    /// is the superclass's or a subclass of it. A formal argument of a subclass of the declared
+    /// class takes less than a caller holding the superclass may pass, and IRIS passes it anyway,
+    /// untyped, so the override fails on it when it runs; one of any other class, a return class
+    /// that is neither the declared one nor a subclass, and no return class where one is declared,
+    /// IRIS refuses to compile (`ERROR #5478 Keyword signature error`). Two classes are the same
+    /// here when a value of each serves as the other, so the datatypes, which IRIS converts
+    /// between, are interchangeable where they are related; an untyped formal argument on either
+    /// side is not compared. `%OnNew` is exempt, as for A1841.
+    ///
+    /// ```objectscript rejected
+    /// Class Demo.OverrideRefused Extends %Persistent
+    /// {
+    ///
+    /// Method %OnBeforeSave(insert As %Boolean) As %String //! A3604
+    /// {
+    ///     Return insert
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A3604"]
+    #[severity = Error]
+    #[message = "Method '{name}' overrides {cls}'s but {difference}"]
+    OverrideRefused {
+        name: String,
+        cls: String,
+        difference: OverrideDifference,
+    },
     /// `##super()` binds to the superclass's version of the enclosing method at compile time, and
     /// no superclass declares a method of that name; no `%DispatchMethod` and no same-named
     /// property stands in. IRIS refuses to compile the method. Remove the call, or spell the
@@ -619,7 +676,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7604"]
     #[severity = Error]
-    #[message = "Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>)"]
+    #[message = "Label '{label}' has no formal argument list, so $$ cannot call it (IRIS: <PARAMETER>)"]
     LabelNotAFunction { label: String },
     /// `Do Label`, `$$Label()`, `Goto Label` or `Set $ZTRAP = "Label"` names a label the routine
     /// or body doesn't declare, or `Label^Routine` names one that routine lacks. IRIS refuses to
@@ -1186,9 +1243,10 @@ type_error_kinds! {
     #[message = "ObjectScript evaluates operators strictly left to right, without precedence; this may not compute what you expect"]
     MixedPrecedence,
     /// A `Set` whose value no path reads before the variable is assigned again, killed or out of
-    /// scope; a parameter the body never reads is reported the same way, its value being the
-    /// caller's assignment. IRIS compiles and runs the code; the assignment is dead. Delete it, or
-    /// read the variable where it was meant to be read.
+    /// scope; a formal argument the body never reads is reported the same way, its value being
+    /// the caller's assignment. IRIS compiles and runs the code; the assignment is dead. Delete it,
+    /// or read the variable where it was meant to be read. A `Catch` variable, or a formal argument
+    /// of a method that overrides one, is A4269 instead: neither can go.
     ///
     /// ```objectscript compiles
     /// Class Demo.UnreadAssignment
@@ -1206,6 +1264,28 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Variable '{name}' is assigned but never read"]
     UnreadAssignment { name: String },
+    /// An assignment the body never reads that it cannot drop: the variable a `Catch` names,
+    /// which the documentation prefers to a bare `Catch {`, or a formal argument of a method that
+    /// overrides one, whose signature it keeps (A1841). IRIS compiles and runs the code; IRIS's own
+    /// classes leave a `Catch` variable unread in most of their handlers. Nothing needs changing;
+    /// the information says the value goes unused.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UnreadRequired Extends %Persistent
+    /// {
+    ///
+    /// Method %OnBeforeSave(insert As %Boolean) As %Status //! A4269
+    /// {
+    ///     Try { Set ^Demo("saved") = $Horolog } Catch ex { Return $$$OK } //! A4269
+    ///     Return $$$OK
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A4269"]
+    #[severity = Information]
+    #[message = "{role} '{name}' is never read"]
+    UnreadRequired { role: UnreadRole, name: String },
     /// An `Output` parameter no path of the body assigns. The caller passes a variable to receive a
     /// value and gets none, so its first read of the variable raises `<UNDEFINED>`; IRIS compiles
     /// the method all the same, since `Output` only documents intent. Assign the parameter on every
@@ -1224,7 +1304,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4476"]
     #[severity = Warning]
-    #[message = "Output parameter '{name}' is never assigned"]
+    #[message = "Output formal argument '{name}' is never assigned"]
     OutputNeverAssigned { name: String },
     /// A `ByRef` parameter whose incoming value no path reads before writing it: the body only
     /// produces the value, so the caller need not pass one, which is what `Output` declares and
@@ -1847,7 +1927,8 @@ type_error_kinds! {
     /// callee's report of whether it worked: the caller goes on as if it had. IRIS compiles and
     /// runs the call. Where the outcome matters, `Set sc = ..Save(...)` followed by `$$$ISERR(sc)`,
     /// or `If ..Save(...)`, puts the result to use; where it does not, the `Do` is a choice, not a
-    /// mistake.
+    /// mistake, and the usual one: IRIS's own classes write streams and collections this way, so
+    /// this is information, not a warning.
     ///
     /// ```objectscript compiles
     /// Class Demo.DiscardedReturnValue
@@ -1867,7 +1948,7 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A4556"]
-    #[severity = Warning]
+    #[severity = Information]
     #[message = "Do discards the {class} this call returns"]
     DiscardedReturnValue { class: String },
     /// A command or intrinsic function keyword spelled in a form or case the style's `command` or
@@ -2255,7 +2336,7 @@ type_error_kinds! {
     /// ```
     #[code = "A5579"]
     #[severity = Warning]
-    #[message = "Passing {actual} argument to '{name}', which is {wanted} parameter"]
+    #[message = "Passing {actual} argument to '{name}', which is {wanted} formal argument"]
     MismatchArgumentAndArgumentMode {
         name: String,
         wanted: Mode,
@@ -2288,7 +2369,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6204"]
     #[severity = Information]
-    #[message = "'{name}' is a ByRef parameter and gets a copy of the argument: an assignment the callee makes to it stays there, which may be intended"]
+    #[message = "'{name}' is a ByRef formal argument and gets a copy of the argument: an assignment the callee makes to it stays there, which may be intended"]
     ByValueToByRef { name: String },
     /// The variable has a value on some of the paths that reach this use and none on the others:
     /// an assignment under a condition, or a `Kill` on one branch. IRIS compiles the code and raises
@@ -2840,6 +2921,107 @@ impl std::fmt::Display for TypeParamHint {
     }
 }
 
+/// What makes an unread assignment one the body cannot drop (A4269).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnreadRole {
+    Catch,
+    Inherited,
+}
+
+impl std::fmt::Display for UnreadRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            UnreadRole::Catch => "Catch variable",
+            UnreadRole::Inherited => "Inherited formal argument",
+        })
+    }
+}
+
+/// How an override departs from the method it overrides (A1841, A3604).
+#[derive(Debug)]
+pub enum OverrideDifference {
+    Count {
+        has: usize,
+        declares: usize,
+    },
+    Mode {
+        arg: String,
+        has: Option<RefMode>,
+        declares: Option<RefMode>,
+    },
+    Narrower {
+        arg: String,
+        has: Ty,
+        declares: Ty,
+    },
+    Wider {
+        arg: String,
+        has: Ty,
+        declares: Ty,
+    },
+    Return {
+        has: Option<Ty>,
+        declares: Ty,
+    },
+}
+
+fn mode_words(mode: Option<RefMode>) -> &'static str {
+    match mode {
+        None => "by value",
+        Some(RefMode::ByRef) => "ByRef",
+        Some(RefMode::Output) => "Output",
+    }
+}
+
+fn formal_arguments(n: usize) -> String {
+    match n {
+        0 => "no formal arguments".into(),
+        1 => "1 formal argument".into(),
+        n => format!("{n} formal arguments"),
+    }
+}
+
+impl std::fmt::Display for OverrideDifference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Count { has, declares } => write!(
+                f,
+                "with {} where it declares {}",
+                formal_arguments(*has),
+                formal_arguments(*declares)
+            ),
+            Self::Mode { arg, has, declares } => write!(
+                f,
+                "with formal argument '{arg}' {} where it declares {}",
+                mode_words(*has),
+                mode_words(*declares)
+            ),
+            Self::Narrower { arg, has, declares } => write!(
+                f,
+                "takes formal argument '{arg}' As {has}, a subclass of the {declares} it declares, which a caller holding the superclass may pass"
+            ),
+            Self::Wider { arg, has, declares } => write!(
+                f,
+                "takes formal argument '{arg}' As {has}, neither the {declares} it declares nor a subclass, which IRIS refuses (ERROR #5478)"
+            ),
+            Self::Return {
+                has: Some(has),
+                declares,
+            } => write!(
+                f,
+                "returns {has}, neither the {declares} it declares nor a subclass, which IRIS refuses (ERROR #5478)"
+            ),
+            Self::Return {
+                has: None,
+                declares,
+            } => write!(
+                f,
+                "returns nothing where it declares {declares}, which IRIS refuses (ERROR #5478)"
+            ),
+        }
+    }
+}
+
 /// "declared as '…'", or "undeclared".
 #[derive(Debug)]
 pub struct Declared(pub Option<Ty>);
@@ -3307,6 +3489,42 @@ impl TypeError {
 
     pub fn unread_assignment(name: String, range: Range) -> TypeError {
         Self::at(TypeErrorKind::UnreadAssignment { name }, range)
+    }
+
+    pub fn unread_required(role: UnreadRole, name: String, range: Range) -> TypeError {
+        Self::at(TypeErrorKind::UnreadRequired { role, name }, range)
+    }
+
+    pub fn override_signature(
+        name: String,
+        cls: String,
+        difference: OverrideDifference,
+        range: Range,
+    ) -> TypeError {
+        Self::at(
+            TypeErrorKind::OverrideSignature {
+                name,
+                cls,
+                difference,
+            },
+            range,
+        )
+    }
+
+    pub fn override_refused(
+        name: String,
+        cls: String,
+        difference: OverrideDifference,
+        range: Range,
+    ) -> TypeError {
+        Self::at(
+            TypeErrorKind::OverrideRefused {
+                name,
+                cls,
+                difference,
+            },
+            range,
+        )
     }
 
     pub fn output_never_assigned(name: String, range: Range) -> TypeError {
