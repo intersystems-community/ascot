@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 
-use tygr::Grammar;
+use tygr::{Parse, Print};
 use tygr_objectscript::cos::{
     AllowIndirection, AllowMacro, Digits, OSString, PatternCode, PatternCount, PatternElement,
     PatternItem,

@@ -2264,7 +2264,7 @@ impl<'a> CodeEnv<'a> {
 impl<'a> CodeEnv<'a> {
     // Whether `node` is text a macro expanded to (or an include supplied), rather than text the
     // document spells out.
-    pub(crate) fn is_expanded<T>(&self, node: &tygr::Range<T>) -> bool {
+    pub(crate) fn is_expanded<T>(&self, node: &tygr::Ranged<T>) -> bool {
         self.base.source_map.is_some_and(|map| {
             map.to_source_offset(node.start + self.offset)
                 .is_none_or(|(_, precise)| !precise)
@@ -2418,11 +2418,15 @@ impl<'a> Locator for DocumentEnv<'a> {
 
 impl<'a> Positions for DocumentEnv<'a> {
     fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
-        self.olc.offset_to_line_character(offset)
+        self.olc
+            .offset_to_line_character(offset)
+            .unwrap_or_else(|e| e.bound)
     }
 
     fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize {
-        self.olc.line_character_to_offset(line_character)
+        self.olc
+            .line_character_to_offset(line_character)
+            .unwrap_or_else(|e| e.bound)
     }
 }
 

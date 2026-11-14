@@ -282,18 +282,18 @@ fn require_public<'a>(
 }
 
 // An argument that may be left empty (`$FN(x,,0)`): the expression inside, if any.
-fn opt_arg<'b, M, W, T>(arg: &'b Option<M>) -> Option<&'b Range<T>>
+fn opt_arg<'b, M, W, T>(arg: &'b Option<M>) -> Option<&'b Ranged<T>>
 where
     M: Deref<Target = W>,
-    W: Deref<Target = Option<Range<T>>> + 'b,
+    W: Deref<Target = Option<Ranged<T>>> + 'b,
 {
     arg.as_deref().and_then(|w| w.deref().as_ref())
 }
 
-fn arg<'b, M, W, T>(arg: &'b Option<M>) -> Option<&'b Range<T>>
+fn arg<'b, M, W, T>(arg: &'b Option<M>) -> Option<&'b Ranged<T>>
 where
     M: Deref<Target = W>,
-    W: Deref<Target = Range<T>> + 'b,
+    W: Deref<Target = Ranged<T>> + 'b,
 {
     arg.as_deref().map(|w| w.deref())
 }
@@ -317,10 +317,10 @@ fn check_zf_callout<'a, 'b>(
     Ok(check_args_any(env, flow, each_arg(args))?.into())
 }
 
-fn each_arg<'b, M, W, T: 'b>(args: &'b [M]) -> impl Iterator<Item = &'b Range<T>>
+fn each_arg<'b, M, W, T: 'b>(args: &'b [M]) -> impl Iterator<Item = &'b Ranged<T>>
 where
     M: Deref<Target = W>,
-    W: Deref<Target = Range<T>> + 'b,
+    W: Deref<Target = Ranged<T>> + 'b,
 {
     args.iter().map(|m| m.deref().deref())
 }
@@ -927,7 +927,7 @@ impl CheckExprInner for cos::FunctionCall {
 fn define_set_target_base<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    string: &Range<Expr>,
+    string: &Ranged<Expr>,
 ) -> Result<(), QuasiTypeError> {
     if let Some(variable) = string.as_variable()
         && let Left(local) = variable.as_local(env, flow)?
@@ -946,7 +946,7 @@ fn define_set_target_base<'a>(
 fn check_set_fun<'a, C>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    base: &Range<Expr>,
+    base: &Ranged<Expr>,
     c: &C,
     check: impl FnOnce(&CodeEnv<'a>, &mut Flow<'a>, &C) -> Result<PowerTy, QuasiTypeError>,
 ) -> Result<(), QuasiTypeError> {
@@ -1038,7 +1038,7 @@ fn check_unknown_call<'a>(
 }
 
 // One variable slot of `SET $LISTBUILD(a,,b)=` / `SET $LISTGET(a,,b)=`, empty for a placeholder.
-type SetVarArg = Wrap<MGap, Range<Option<Variable>>, MGap>;
+type SetVarArg = Wrap<MGap, Ranged<Option<Variable>>, MGap>;
 
 // `SET $LISTBUILD(a,,b)=list` / `SET $LISTGET(a,,b)=list`: every named variable is assigned.
 fn check_set_var_list<'a>(
@@ -1223,8 +1223,8 @@ fn check_property_call<'a>(
 fn check_bitlogic<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    expr: &Range<cos::BitLogicExpr>,
-    length: Option<&Range<Expr>>,
+    expr: &Ranged<cos::BitLogicExpr>,
+    length: Option<&Ranged<Expr>>,
 ) -> Result<PowerTy, QuasiTypeError> {
     let _ = expr.to_ty(env, flow)?;
     if let Some(length) = length {
@@ -1282,7 +1282,7 @@ fn check_simple_function<'a>(
     let function = cos::simple_function(&call.name.print()).expect("validated by the grammar");
     for (i, arg) in call.args.items(env).enumerate() {
         let Some(expr) = arg.deref() else { continue };
-        let expr = Range::new(arg.start, expr, arg.end);
+        let expr = Ranged::new(arg.start, expr, arg.end);
         // `$ZCONVERT(s, mode, table, handle)`: the handle is state the call writes, and IRIS
         // takes nothing but a plain local there (measured: a subscript, a global or a literal is
         // a compile error).
@@ -1318,7 +1318,7 @@ fn check_simple_function<'a>(
 fn check_read_args<'a, 'b, T: CheckExprInner + Grammar>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    args: impl IntoIterator<Item = Option<&'b Range<T>>>,
+    args: impl IntoIterator<Item = Option<&'b Ranged<T>>>,
     ret: &str,
 ) -> Result<PowerTy, QuasiTypeError> {
     for arg in args.into_iter().flatten() {
@@ -1355,7 +1355,7 @@ fn check_global_arg<'a>(
 fn check_out_var<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    var: Option<&Range<Variable>>,
+    var: Option<&Ranged<Variable>>,
     ty: &str,
 ) -> Result<(), QuasiTypeError> {
     if let Some(var) = var
@@ -1372,9 +1372,9 @@ fn check_out_var<'a>(
 fn check_listnext<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    list: &Range<Expr>,
-    ptr: &Range<Variable>,
-    value: &Range<Variable>,
+    list: &Ranged<Expr>,
+    ptr: &Ranged<Variable>,
+    value: &Ranged<Variable>,
 ) -> Result<PowerTy, QuasiTypeError> {
     let _ = list.to_ty(env, flow)?;
     let _ = ptr.to_ty(env, flow)?;
@@ -1409,9 +1409,9 @@ fn bind_out_var<'a>(
 fn check_property<'a, 'b>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    instance: &Range<Option<Expr>>,
-    property: &Range<Expr>,
-    indexes: impl Iterator<Item = &'b Range<Expr>>,
+    instance: &Ranged<Option<Expr>>,
+    property: &Ranged<Expr>,
+    indexes: impl Iterator<Item = &'b Ranged<Expr>>,
 ) -> Result<PowerTy, QuasiTypeError> {
     instance.check(env, flow)?;
     let _ = property.to_ty(env, flow)?;
@@ -1424,7 +1424,7 @@ fn check_property<'a, 'b>(
 fn target_as_local<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    target: &Range<GetTarget>,
+    target: &Ranged<GetTarget>,
 ) -> Result<Either<Local, PowerTy>, QuasiTypeError> {
     match target.deref() {
         GetTarget::Var(var) => var.as_local(env, flow),
@@ -1438,8 +1438,8 @@ fn target_as_local<'a>(
 fn check_increment<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    counter: &Range<GetTarget>,
-    amount: Option<&Range<Expr>>,
+    counter: &Ranged<GetTarget>,
+    amount: Option<&Ranged<Expr>>,
 ) -> Result<PowerTy, QuasiTypeError> {
     if let Some(amount) = amount {
         let _ = amount.to_ty(env, flow)?;
@@ -1468,7 +1468,7 @@ impl CheckCommandInner for Option<Expr> {
 pub(super) fn check_args_any<'a, 'b>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    args: impl Iterator<Item = &'b Range<Option<cos::MthArg>>>,
+    args: impl Iterator<Item = &'b Ranged<Option<cos::MthArg>>>,
 ) -> Result<Ty, TypeError> {
     for arg in args {
         match arg.deref() {
@@ -1509,7 +1509,7 @@ pub(super) fn check_args_any<'a, 'b>(
 fn check_zu_args<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    kw: &Range<cos::FnZUtil>,
+    kw: &Ranged<cos::FnZUtil>,
     args: &FunArgList,
 ) -> Result<PowerTy, QuasiTypeError> {
     let literals: Vec<u32> = args
@@ -1571,9 +1571,9 @@ fn check_zu_args<'a>(
 fn check_classmethod<'a, 'b>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    classname: &Range<Option<Expr>>,
-    method: &Range<Expr>,
-    args: impl Iterator<Item = &'b Range<Option<cos::MthArg>>>,
+    classname: &Ranged<Option<Expr>>,
+    method: &Ranged<Expr>,
+    args: impl Iterator<Item = &'b Ranged<Option<cos::MthArg>>>,
 ) -> Result<Ty, QuasiTypeError> {
     classname.check(env, flow)?;
     let _ = method.to_ty(env, flow)?;
@@ -1584,13 +1584,13 @@ fn check_classmethod<'a, 'b>(
 fn check_compile<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    source: &Range<cos::AllowIndirection<Variable>>,
-    qspec: &Range<Expr>,
-    errors: &Range<Option<Variable>>,
-    object: Option<&Range<Option<cos::AllowIndirection<Variable>>>>,
-    arg5: Option<&Range<Option<Expr>>>,
-    arg6: Option<&Range<Option<Expr>>>,
-    rname: Option<&Range<Option<Expr>>>,
+    source: &Ranged<cos::AllowIndirection<Variable>>,
+    qspec: &Ranged<Expr>,
+    errors: &Ranged<Option<Variable>>,
+    object: Option<&Ranged<Option<cos::AllowIndirection<Variable>>>>,
+    arg5: Option<&Ranged<Option<Expr>>>,
+    arg6: Option<&Ranged<Option<Expr>>>,
+    rname: Option<&Ranged<Option<Expr>>>,
 ) -> Result<PowerTy, QuasiTypeError> {
     // The array is handed over by reference, as `.source` would be; named by indirection, any may be.
     match source.as_local(env, flow)? {
@@ -1618,9 +1618,9 @@ fn check_compile<'a>(
 fn check_case<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    target: &Range<Expr>,
-    branches: Vec<(&Range<Expr>, &Range<Expr>)>,
-    default: Option<&Range<Expr>>,
+    target: &Ranged<Expr>,
+    branches: Vec<(&Ranged<Expr>, &Ranged<Expr>)>,
+    default: Option<&Ranged<Expr>>,
 ) -> Result<MaybeTy, QuasiTypeError> {
     let target = target.to_power_ty(env, flow)?;
     if branches.is_empty() && default.is_none() {
@@ -1641,8 +1641,8 @@ fn check_case<'a>(
 
 // What takes a branch of `$SELECT` or `$CASE`.
 enum Taken<'e> {
-    If(&'e Range<Expr>),
-    Equal(&'e PowerTy, &'e Range<Expr>),
+    If(&'e Ranged<Expr>),
+    Equal(&'e PowerTy, &'e Ranged<Expr>),
     Always,
 }
 
@@ -1653,7 +1653,7 @@ enum Taken<'e> {
 fn check_branches<'a, 'e>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    branches: impl IntoIterator<Item = (Taken<'e>, &'e Range<Expr>)>,
+    branches: impl IntoIterator<Item = (Taken<'e>, &'e Ranged<Expr>)>,
 ) -> Result<(Ty, bool), QuasiTypeError> {
     let mut exhaustive = false;
     let mut ty = None;
@@ -1698,7 +1698,7 @@ fn check_branches<'a, 'e>(
 fn check_is_object<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    expr: &Range<Expr>,
+    expr: &Ranged<Expr>,
 ) -> Result<PowerTy, QuasiTypeError> {
     let ty = check_read_args(env, flow, [Some(expr)], "%Boolean")?;
     let Some(variable) = expr.as_variable().or_else(|| get_of_variable(expr)) else {
@@ -1742,8 +1742,8 @@ fn get_of_variable(expr: &Expr) -> Option<&Variable> {
 fn check_get<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    target: &Range<GetTarget>,
-    default: Option<&Range<Expr>>,
+    target: &Ranged<GetTarget>,
+    default: Option<&Ranged<Expr>>,
 ) -> Result<PowerTy, QuasiTypeError> {
     let default = if let Some(default) = default {
         default.to_ty(env, flow)?
@@ -1804,7 +1804,7 @@ fn const_as_string(power_ty: &PowerTy, flow: &Flow<'_>) -> Option<String> {
 fn check_code_arg<'a, R>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    code: &Range<Expr>,
+    code: &Ranged<Expr>,
     check: impl FnOnce(&str) -> Result<(), R>,
     invalid: impl FnOnce(String, R) -> TypeErrorKind,
 ) -> Result<Ty, QuasiTypeError> {
@@ -1903,8 +1903,8 @@ fn check_fnumber_format(format: &str) -> Result<(), String> {
 fn check_data<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    variable: &Range<GetTarget>,
-    target: Option<&Range<Variable>>,
+    variable: &Ranged<GetTarget>,
+    target: Option<&Ranged<Variable>>,
 ) -> Result<PowerTy, QuasiTypeError> {
     let variable = match target_as_local(env, flow, variable)? {
         Left(local) if local.subs.is_empty() => local,
@@ -1966,7 +1966,7 @@ fn check_data<'a>(
 fn check_data_opaque<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    target: Option<&Range<Variable>>,
+    target: Option<&Ranged<Variable>>,
 ) -> Result<PowerTy, QuasiTypeError> {
     if let Some(target) = target
         && let Left(local) = target.as_local(env, flow)?
@@ -1992,9 +1992,9 @@ fn check_data_opaque<'a>(
 fn check_order<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    variable: &Range<GetTarget>,
-    direction: Option<&Range<Expr>>,
-    target: Option<&Range<Variable>>,
+    variable: &Ranged<GetTarget>,
+    direction: Option<&Ranged<Expr>>,
+    target: Option<&Ranged<Variable>>,
 ) -> Result<PowerTy, QuasiTypeError> {
     let new_ty = variable
         .to_maybe_ty(env, flow)?

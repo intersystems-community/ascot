@@ -16,7 +16,7 @@ use std::{
     sync::Arc,
 };
 
-use tygr::{Grammar, IntoInner, OLC, Range};
+use tygr::{IntoInner, OLC, Parse, Print, Ranged};
 use tygr_objectscript::cos::{HMacro, MacroArg, MacroCallStruct, MacroedUnit};
 
 use crate::{
@@ -237,15 +237,12 @@ impl SourceMap {
         self.include_names.iter()
     }
 
-    fn expanded_line_count(&self) -> usize {
-        self.expanded_text.matches('\n').count() + 1
-    }
-
     // False means `position` definitely isn't part of this expansion (e.g. it's really a
-    // different member's declaration, which happens to share this document's uri) -- callers
-    // must not feed it to any `expanded_olc`-based lookup, which panics out of bounds.
+    // different member's declaration, which happens to share this document's uri): past the last
+    // line, or past its line's end.
     pub(crate) fn is_in_expanded_bounds(&self, position: Position) -> bool {
-        (position.line as usize) < self.expanded_line_count()
+        let line_character = (position.line as usize, position.character as usize);
+        OLC::line_character_to_offset(&self.expanded_olc, line_character).is_ok()
     }
 
     // Relocates a single expanded-text position back to the top-level source, or `None` if it
@@ -256,9 +253,7 @@ impl SourceMap {
             return None;
         }
         let (source_offset, _) = self.to_source_offset(self.expanded_olc.offset(position))?;
-        Some(Position::from(
-            self.source_olc.offset_to_line_character(source_offset),
-        ))
+        Some(self.source_olc.position(source_offset))
     }
 
     // The end is exclusive, so it is relocated through the last character it covers; otherwise
@@ -283,7 +278,7 @@ impl SourceMap {
         };
         Some(bindings::Range {
             start: self.relocate_position(range.start)?,
-            end: Position::from(self.source_olc.offset_to_line_character(end)),
+            end: self.source_olc.position(end),
         })
     }
 
@@ -552,7 +547,7 @@ impl SourceMap {
 }
 
 // An include's uri, full text, and un-substituted macro units.
-pub(crate) type Include = Arc<(String, String, Vec<Range<MacroedUnit>>)>;
+pub(crate) type Include = Arc<(String, String, Vec<Ranged<MacroedUnit>>)>;
 
 // An `Include` that didn't resolve, with why IRIS couldn't be asked for it, when that's why.
 pub(crate) type FailedInclude = (String, Option<String>);
@@ -846,7 +841,7 @@ impl WorkspaceStruct {
                                 Some(args) => {
                                     let text = unit.print();
                                     let base = origin.range.start;
-                                    let arg_span = |arg: &Range<MacroArg>| {
+                                    let arg_span = |arg: &Ranged<MacroArg>| {
                                         Some(
                                             arg.start.checked_sub(base)?
                                                 ..arg.end.checked_sub(base)?,
@@ -1146,7 +1141,7 @@ impl WorkspaceStruct {
         // change its length, or the body would be cut at the wrong offset).
         let text = format!("{header}{body}");
         let result = (|| -> Result<(), tygr::Error> {
-            let units = <Vec<Range<MacroedUnit>>>::parse(&text)?;
+            let units = <Vec<Ranged<MacroedUnit>>>::parse(&text)?;
             let (in_header, in_body): (Vec<_>, Vec<_>) =
                 units.iter().partition(|x| x.end <= header.len());
             for x in in_header {
@@ -1266,7 +1261,7 @@ fn substitute_macro_body<'a>(
         offset += span.text.len();
     }
     let mut items = Vec::new();
-    for unit in <Vec<Range<MacroedUnit>>>::parse(&text)? {
+    for unit in <Vec<Ranged<MacroedUnit>>>::parse(&text)? {
         let overlapping = bounds
             .iter()
             .filter(|(start, end, _)| *start < unit.end && unit.start < *end);
@@ -1275,7 +1270,7 @@ fn substitute_macro_body<'a>(
                 for (start, end, span) in overlapping {
                     let piece_start = unit.start.max(*start);
                     let piece = &text[piece_start..unit.end.min(*end)];
-                    for part in <Vec<Range<MacroedUnit>>>::parse(piece)? {
+                    for part in <Vec<Ranged<MacroedUnit>>>::parse(piece)? {
                         // A precise span's text sits at its origin, so a part of it is at the
                         // same offset into the origin.
                         let origin = if span.precise {
@@ -1502,7 +1497,7 @@ impl<'a> TodoList<'a> {
 }
 
 fn precise_items<'a>(
-    units: impl IntoIterator<Item = &'a Range<MacroedUnit>>,
+    units: impl IntoIterator<Item = &'a Ranged<MacroedUnit>>,
     origin_at: impl Fn(std::ops::Range<usize>) -> Origin,
 ) -> Vec<TodoItem<'a>> {
     units

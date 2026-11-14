@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::Value;
-use tygr::{Grammar, GrammarRule, Prefix, Raw, StringEq, StringOf1, VecSep};
+use tygr::{Grammar, Parse, Prefix, Print, Raw, StringEq, StringOf1};
+use tygr_objectscript::cos::VecSep;
 
 use crate::IrisContext;
 use crate::bindings::{

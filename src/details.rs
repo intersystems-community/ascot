@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 
 use either::Either::{self, Left, Right};
-use tygr::{Grammar, IntoInner, OLC, Prefix, Range, StringOf};
+use tygr::{Grammar, IntoInner, OLC, Parse, Prefix, Print, Ranged, StringOf};
 
 use crate::bindings::{self, RefMode};
 use crate::check::types::{
@@ -50,11 +50,11 @@ pub trait Positions {
         }
     }
 
-    fn range<T>(&self, ranged: &Range<T>) -> bindings::Range {
+    fn range<T>(&self, ranged: &Ranged<T>) -> bindings::Range {
         self.span(ranged.start, ranged.end)
     }
 
-    fn with_range<T>(&self, ranged: Range<T>) -> WithRange<T> {
+    fn with_range<T>(&self, ranged: Ranged<T>) -> WithRange<T> {
         WithRange {
             range: self.range(&ranged),
             it: ranged.into_inner(),
@@ -62,13 +62,14 @@ pub trait Positions {
     }
 }
 
+// A position past the text, a line or inside a character is clamped to the nearest valid one.
 impl Positions for OLC {
     fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
-        OLC::offset_to_line_character(self, offset)
+        OLC::offset_to_line_character(self, offset).unwrap_or_else(|e| e.bound)
     }
 
     fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize {
-        OLC::line_character_to_offset(self, line_character)
+        OLC::line_character_to_offset(self, line_character).unwrap_or_else(|e| e.bound)
     }
 }
 
@@ -339,7 +340,7 @@ pub struct MethodDetails {
 pub struct BraceDefault {
     pub name: String,
     // The expression, or the braces' text when it isn't one.
-    pub value: Either<Range<cos::Expr>, WithRange<String>>,
+    pub value: Either<Ranged<cos::Expr>, WithRange<String>>,
 }
 
 pub enum RoutineElementKind {
@@ -475,7 +476,7 @@ fn public_list(
 
 fn element(
     pos: &impl Positions,
-    label: &Range<cos::Label>,
+    label: &Ranged<cos::Label>,
     params: Option<&cos::SpaceThen<cos::ParameterList>>,
     kind: RoutineElementKind,
 ) -> RoutineElementDetails {
@@ -563,7 +564,7 @@ fn label_doc(gap: &str) -> String {
 }
 
 pub(crate) fn with_range_name<T: Grammar>(
-    ranged: &Range<T>,
+    ranged: &Ranged<T>,
     pos: &impl Positions,
 ) -> WithRange<String> {
     pos.with_range(ranged.as_ref().map(|x| x.print()))
@@ -811,7 +812,7 @@ impl TryFrom<&str> for ClassDetails {
 
 // A form of the member the documentation doesn't give, which IRIS compiles: `list Of` before a
 // relationship's class, which it ignores.
-fn undocumented_in(member: &Range<cos::Member>, olc: &OLC) -> Vec<WithRange<String>> {
+fn undocumented_in(member: &Ranged<cos::Member>, olc: &OLC) -> Vec<WithRange<String>> {
     match member.deref() {
         cos::Member::Property(cos::Property::Relationship {
             as_type: Some(as_type),
@@ -831,7 +832,7 @@ fn process_member(
     olc: &OLC,
     src: &str,
     deprecated: bool,
-    member: Range<cos::Member>,
+    member: Ranged<cos::Member>,
     class_procedure_block: bool,
 ) -> (
     WithRange<String>,
@@ -930,7 +931,7 @@ fn process_member(
         }
         cos::Member::Parameter(parameter) => {
             let name = with_range_member_name(&parameter.name, olc);
-            let as_type = parameter.as_type.as_deref().map(Grammar::print);
+            let as_type = parameter.as_type.as_deref().map(Print::print);
             let ty = as_type.as_deref().map(parameter_ty);
             let default = parameter.default.as_ref().map(|v| v.deref().print());
             (
