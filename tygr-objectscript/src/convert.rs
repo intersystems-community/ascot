@@ -19,54 +19,53 @@ impl<T, S> VecSep<T, S> {
     }
 }
 
-impl<T: Parse, S: Parse> Parse for VecSep<T, S> {
-    type First = <T::First as First>::Seq<Vec<(S, T)>>;
+impl<T: Parse, Sep: Parse> Parse for VecSep<T, Sep> {
+    type First = <T::First as First>::Seq<Vec<(Sep, T)>>;
 
     #[inline]
-    fn parse_at<M: Mode>(
+    fn parse_at<S: Success, L: Level>(
         input: &str,
         pos: usize,
-        mut state: State<M>,
-    ) -> Option<(M::Output<Self>, usize)> {
-        let (first, mut pos) = T::parse_at(input, pos, state.reborrow())?;
-        let mut vec_sep = M::build(|_| VecSep {
-            items: Vec::new(),
-            seps: Vec::new(),
+        mut state: State<L>,
+    ) -> Option<(S::Output<Self>, usize)> {
+        let (first, mut pos) = T::parse_at::<S, L>(input, pos, state.reborrow())?;
+        let mut vec_sep = S::and_then(first, |first| {
+            S::output(|| VecSep {
+                items: vec![first],
+                seps: Vec::new(),
+            })
         });
-        if let Some(mode) = M::building() {
-            mode.get_mut(&mut vec_sep).items.push(mode.get(first));
-        }
         loop {
-            let Some((sep, after_sep)) = S::parse_at(input, pos, state.reborrow()) else {
+            let Some((sep, after_sep)) = Sep::parse_at::<S, L>(input, pos, state.reborrow()) else {
                 break;
             };
-            let Some((item, end)) = T::parse_at(input, after_sep, state.reborrow()) else {
+            let Some((item, end)) = T::parse_at::<S, L>(input, after_sep, state.reborrow()) else {
                 break;
             };
             if end == pos {
                 break; // a pair matching empty would loop forever
             }
-            if let Some(mode) = M::building() {
-                let VecSep { items, seps } = mode.get_mut(&mut vec_sep);
-                seps.push(mode.get(sep));
-                items.push(mode.get(item));
-            }
+            vec_sep = S::and_then(vec_sep, |mut vec_sep| {
+                S::and_then(sep, |sep| {
+                    S::and_then(item, |item| {
+                        vec_sep.seps.push(sep);
+                        vec_sep.items.push(item);
+                        S::output(|| vec_sep)
+                    })
+                })
+            });
             pos = end;
         }
         Some((vec_sep, pos))
     }
 
-    fn fail_at<M: Mode>(pos: usize, mut state: State<M>) -> bool {
-        T::fail_at(pos, state.reborrow()) || <Vec<(S, T)>>::fail_at(pos, state)
-    }
-
     fn to_bnf() -> Expr {
-        Expr::sequence(vec![T::to_bnf(), <Vec<(S, T)>>::to_bnf()])
+        Expr::sequence(vec![T::to_bnf(), <Vec<(Sep, T)>>::to_bnf()])
     }
 
     fn visit_rules(rules: &mut Rules) {
         T::visit_rules(rules);
-        S::visit_rules(rules);
+        Sep::visit_rules(rules);
     }
 }
 
