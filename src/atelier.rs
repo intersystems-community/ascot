@@ -81,7 +81,8 @@ impl Atelier for crate::bindings::Atelier {
 pub struct AtelierContext {
     atelier: Box<dyn Atelier>,
     // Set once the instance has answered that `%Dictionary.CompiledIndex` has no `_Deferred`
-    // column, as releases before deferred indexes do.
+    // column. For IRIS 2025.1, the last release without deferred indexes: when 2025.1 retires,
+    // drop this and the retry in `all_mem_rows`, and ask for `_Deferred` directly.
     no_deferred_column: AtomicBool,
     cls_cache: Cache<Option<ClassInfo>>,
     routine_cache: Cache<Option<Source>>,
@@ -469,7 +470,7 @@ fn all_mem_rows(
         member_rows(conn, &generating("0"), &params)
     } else {
         match member_rows(conn, &generating("_Deferred"), &params) {
-            // SQLCODE -29, field not found: a release without deferred indexes.
+            // SQLCODE -29, field not found: IRIS 2025.1, without deferred indexes. Drop with it.
             Err(err) if err.to_ascii_uppercase().contains("_DEFERRED") => {
                 conn.no_deferred_column.store(true, Ordering::Relaxed);
                 member_rows(conn, &generating("0"), &params)
