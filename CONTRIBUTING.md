@@ -44,7 +44,7 @@ ASCOT_TEST_IRIS=http://_SYSTEM:SYS@localhost:52773 cargo test --test iris
 CI runs these on the current Community Edition releases only: an image older than about a year
 no longer starts, its Community license having expired. The oldest supported release, 2025.1
 (see the README's supported releases), is the maintainer's to test by hand on an internal
-install before a release, by pointing `ASCOT_TEST_IRIS` at it as above.
+install as part of each release PR, by pointing `ASCOT_TEST_IRIS` at it as above.
 
 ### Diagnostics
 
