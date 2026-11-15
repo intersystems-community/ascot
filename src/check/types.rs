@@ -561,9 +561,10 @@ pub struct ClassTy {
     pub name: String,
     // By parameter name.
     pub generics: BTreeMap<String, String>,
-    // `PATTERN` of a datatype, `%String(PATTERN="1N")`: the one type parameter the checker reads,
-    // as the shape a value must have.
+    // `PATTERN` of a datatype, `%String(PATTERN="1N")`: the shape a value must have.
     pub pattern: Option<String>,
+    // `VALUELIST` of a datatype, `%String(VALUELIST=",A,B")`: the values it may hold.
+    pub value_list: Option<Vec<String>>,
 }
 
 pub fn normalize_class_name(name: &mut String) {
@@ -575,12 +576,12 @@ pub fn normalize_class_name(name: &mut String) {
 impl From<String> for ClassTy {
     fn from(mut name: String) -> Self {
         // `%String(MAXLEN=50)`, as a declaration read from IRIS writes it.
-        let mut pattern = None;
+        let (mut pattern, mut value_list) = (None, None);
         if let Some(i) = name.find('(') {
-            pattern = TypeParamList::parse(&name[i..])
-                .ok()
-                .as_ref()
-                .and_then(pattern_param);
+            if let Ok(params) = TypeParamList::parse(&name[i..]) {
+                pattern = pattern_param(&params);
+                value_list = value_list_param(&params);
+            }
             name.truncate(name[..i].trim_end().len());
         }
         normalize_class_name(&mut name);
@@ -588,23 +589,43 @@ impl From<String> for ClassTy {
             name,
             generics: BTreeMap::new(),
             pattern,
+            value_list,
         }
     }
 }
 
-// The `PATTERN` among a declared type's parameters, its quotes removed.
-fn pattern_param(params: &TypeParamList) -> Option<String> {
-    let param = params.items.iter().find(|p| p.name.print() == "PATTERN")?;
+// The value of `name` among a declared type's parameters, its quotes removed.
+fn string_param(params: &TypeParamList, name: &str) -> Option<String> {
+    let param = params.items.iter().find(|p| p.name.print() == name)?;
     Some(match &param.value {
         OSExpr::String(literal) => super::pattern::unquote(literal),
         other => other.print(),
     })
 }
 
-// `ty` with the `PATTERN` its declaration's type parameters carry, if any.
+fn pattern_param(params: &TypeParamList) -> Option<String> {
+    string_param(params, "PATTERN")
+}
+
+// A `VALUELIST` starts with its own delimiter: `",A,B"` lists `A` and `B`.
+fn value_list_param(params: &TypeParamList) -> Option<Vec<String>> {
+    let list = string_param(params, "VALUELIST")?;
+    let mut chars = list.chars();
+    let delimiter = chars.next()?;
+    Some(
+        chars
+            .as_str()
+            .split(delimiter)
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+// `ty` with the `PATTERN` and `VALUELIST` its declaration's type parameters carry, if any.
 pub(crate) fn with_pattern(mut ty: Ty, params: Option<&TypeParamList>) -> Ty {
     if let (Ty::OREF(ClsOrIns::Ins(cls)), Some(params)) = (&mut ty, params) {
         cls.pattern = pattern_param(params);
+        cls.value_list = value_list_param(params);
     }
     ty
 }
@@ -631,6 +652,10 @@ impl std::fmt::Display for ClassTy {
             .collect();
         if let Some(pattern) = &self.pattern {
             args.push(format!("PATTERN = \"{}\"", pattern.replace('"', "\"\"")));
+        }
+        if let Some(values) = &self.value_list {
+            let list = values.iter().map(|v| format!(",{v}")).collect::<String>();
+            args.push(format!("VALUELIST = \"{}\"", list.replace('"', "\"\"")));
         }
         if !args.is_empty() {
             write!(f, "({})", args.join(", "))?;

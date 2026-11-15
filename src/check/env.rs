@@ -1463,11 +1463,14 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     // Every value of a datatype, when it has few: a declaration is taken as a promise, so a
-    // `%Boolean` is 0 or 1.
+    // `VALUELIST` lists them and a `%Boolean` is 0 or 1.
     pub(crate) fn domain(&self, ty: &Ty) -> Option<Vec<Const>> {
         let Ty::OREF(ClsOrIns::Ins(cls)) = ty else {
             return None;
         };
+        if let Some(values) = &cls.value_list {
+            return Some(values.iter().cloned().map(Const::String).collect());
+        }
         self.ancestry(&cls.name)
             .any(|(cls, _)| cls == "%Library.Boolean")
             .then(|| vec![Const::from(0), Const::from(1)])
@@ -1728,6 +1731,11 @@ impl<'a> WorkspaceEnv<'a> {
                 generics,
                 pattern: if x.pattern == y.pattern {
                     x.pattern.clone()
+                } else {
+                    None
+                },
+                value_list: if x.value_list == y.value_list {
+                    x.value_list.clone()
                 } else {
                     None
                 },
