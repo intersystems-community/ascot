@@ -4698,10 +4698,10 @@ pub enum LevelsClause {
 #[derive(Grammar)]
 #[tygr(name = "sql")]
 pub struct SQL {
-    space_before: Space,
-    view_column_list: Option<(ViewColumnList, Space)>,
-    stat: Stat,
-    space_after: Space,
+    pub space_before: Space,
+    pub view_column_list: Option<(ViewColumnList, Space)>,
+    pub stat: Stat,
+    pub space_after: Space,
 }
 
 #[derive(Grammar)]

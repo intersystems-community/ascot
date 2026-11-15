@@ -78,6 +78,8 @@ struct Shared<'a> {
     creates: RefCell<HashSet<String>>,
     // Every variable written, for a nested label whose block reads them after a `Do` of it.
     writes: RefCell<HashSet<String>>,
+    // The `INTO` list each embedded SQL cursor was declared with, assigned at its `FETCH`.
+    cursors: RefCell<HashMap<String, Vec<String>>>,
     // Set once an `if` branch's checking failed partway (see `check_branch`): the deferred "never
     // read"/"never assigned" reports can't be trusted after that.
     incomplete: std::cell::Cell<bool>,
@@ -491,6 +493,7 @@ impl<'a> Flow<'a> {
                 known_names,
                 creates: RefCell::new(HashSet::new()),
                 writes: RefCell::new(HashSet::new()),
+                cursors: RefCell::new(HashMap::new()),
                 incomplete: std::cell::Cell::new(false),
             }),
             bindings: Some(bindings),
@@ -1324,6 +1327,19 @@ impl<'a> Flow<'a> {
         } else {
             PowerTy::undefined()
         })
+    }
+
+    pub(crate) fn declare_cursor(&self, cursor: String, into: Vec<String>) {
+        self.shared.cursors.borrow_mut().insert(cursor, into);
+    }
+
+    pub(crate) fn cursor_into(&self, cursor: &str) -> Vec<String> {
+        self.shared
+            .cursors
+            .borrow()
+            .get(cursor)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub(crate) fn subscriptable(&mut self, name: &str) -> Result<bool, QuasiTypeError> {
