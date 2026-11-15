@@ -256,6 +256,13 @@ IRIS; `iris` says which:
   instances in the list, and `none` among others is a no-op. The `iris` setting
   of the servers takes a list the same way.
 
+#### Supported IRIS Releases
+
+ascot prioritizes the latest InterSystems IRIS release, which CI tests against,
+and tries to support every release back to the earliest `YYYY.1` within the
+last two and a half years (2025.1 as of this writing): a failure there is a bug
+report we take.
+
 #### Build Your Own Declaration Files
 
 `ascot declare` saves what a live connection would be asked for, so CI and
