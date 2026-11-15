@@ -55,6 +55,17 @@ impl Const {
         }
     }
 
+    // Whether `=` holds between the two: the string equality `$CASE` tests with, so `1` is `"1"`.
+    pub fn same_value(&self, other: &Const) -> bool {
+        match (self, other) {
+            (Const::Integer(a), Const::Integer(b)) => a == b,
+            (Const::String(a), Const::String(b)) => a == b,
+            (Const::Integer(n), Const::String(s)) | (Const::String(s), Const::Integer(n)) => {
+                *s == n.to_string()
+            }
+        }
+    }
+
     // Whether a value tests true: nonzero, a string by its numeric prefix.
     pub fn truthy(&self) -> bool {
         match self {

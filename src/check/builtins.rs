@@ -1658,6 +1658,8 @@ fn check_branches<'a, 'e>(
     let mut exhaustive = false;
     let mut ty = None;
     let mut taken = vec![];
+    let mut values = None;
+    let mut covered = vec![];
     for (condition, value) in branches {
         let condition = match condition {
             Taken::If(condition) => {
@@ -1669,6 +1671,8 @@ fn check_branches<'a, 'e>(
             }
             Taken::Equal(target, this) => {
                 let this = this.to_power_ty(env, flow)?;
+                values.get_or_insert_with(|| values_of(env, target));
+                covered.extend(consts(&this).into_iter().flatten().cloned());
                 related(target, TermOp::Eq, &this).unwrap_or_else(|| PowerTy::from("%Boolean"))
             }
             Taken::Always => PowerTy::Const(Const::from(true)),
@@ -1687,11 +1691,26 @@ fn check_branches<'a, 'e>(
         }
         taken.push(if_true);
     }
+    // Every value the target can hold is listed: no path falls through.
+    if let Some(Some(values)) = values {
+        exhaustive |= values
+            .iter()
+            .all(|v| covered.iter().any(|c| c.same_value(v)));
+    }
     flow.handle_throw()?;
     for branch in taken {
         flow.merge(branch)?;
     }
     Ok((ty.unwrap_or(Ty::Any), exhaustive))
+}
+
+// The values a `$CASE` target can hold, when known: the constants it is one of, or the domain of
+// its declared datatype.
+fn values_of(env: &CodeEnv<'_>, target: &PowerTy) -> Option<Vec<Const>> {
+    match consts(target) {
+        Some(cs) => Some(cs.into_iter().cloned().collect()),
+        None => env.domain(&target.to_ty(env).ok()?),
+    }
 }
 
 // A true `$ISOBJECT(x)` / `$ISOBJECT($GET(x))` proves `x` holds an object, hence is defined.
