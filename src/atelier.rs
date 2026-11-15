@@ -5,6 +5,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -79,6 +80,9 @@ impl Atelier for crate::bindings::Atelier {
 /// The `IrisContext` that looks code up through an `Atelier`, caching what it finds.
 pub struct AtelierContext {
     atelier: Box<dyn Atelier>,
+    // Set once the instance has answered that `%Dictionary.CompiledIndex` has no `_Deferred`
+    // column, as releases before deferred indexes do.
+    no_deferred_column: AtomicBool,
     cls_cache: Cache<Option<ClassInfo>>,
     routine_cache: Cache<Option<Source>>,
     rtn_cache: Cache<Option<RoutineInfo>>,
@@ -88,6 +92,7 @@ impl<A: Atelier + 'static> From<A> for AtelierContext {
     fn from(atelier: A) -> Self {
         Self {
             atelier: Box::new(atelier),
+            no_deferred_column: AtomicBool::new(false),
             cls_cache: Cache::new(),
             routine_cache: Cache::new(),
             rtn_cache: Cache::new(),
@@ -438,12 +443,13 @@ fn all_mem_rows(
              DefaultValue FROM %Dictionary.CompiledParameter WHERE Parent {filter} AND Origin = \
              Parent"
     );
-    let generating = format!(
-        "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, Description, \
+    let generating = |deferred: &str| {
+        format!(
+            "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, Description, \
              Properties AS FormalSpec, NULL AS ReturnType, NULL AS Collection, 0 AS \
              MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
              Deprecated, Origin, Abstract AS IndexAbstract, Condition AS IndexCondition, \
-             CoshardWith AS IndexCoshardWith, Data AS IndexData, _Deferred AS IndexDeferred, \
+             CoshardWith AS IndexCoshardWith, Data AS IndexData, {deferred} AS IndexDeferred, \
              Extent AS IndexExtent, IdKey AS IndexIdKey, Internal AS IndexInternal, PrimaryKey AS \
              IndexPrimaryKey, ShardKey AS IndexShardKey, SqlName AS IndexSqlName, Type AS \
              IndexType, _Unique AS IndexUnique FROM %Dictionary.CompiledIndex WHERE Parent \
@@ -455,9 +461,23 @@ fn all_mem_rows(
              IndexIdKey, 0 AS IndexInternal, 0 AS IndexPrimaryKey, 0 AS IndexShardKey, NULL AS \
              IndexSqlName, NULL AS IndexType, 0 AS IndexUnique FROM %Dictionary.CompiledQuery \
              WHERE Parent {filter} AND Origin = Parent"
-    );
+        )
+    };
     let mut rows = member_rows(conn, &declared, &[params, params, params].concat())?;
-    rows.extend(member_rows(conn, &generating, &[params, params].concat())?);
+    let params = [params, params].concat();
+    let generated = if conn.no_deferred_column.load(Ordering::Relaxed) {
+        member_rows(conn, &generating("0"), &params)
+    } else {
+        match member_rows(conn, &generating("_Deferred"), &params) {
+            // SQLCODE -29, field not found: a release without deferred indexes.
+            Err(err) if err.to_ascii_uppercase().contains("_DEFERRED") => {
+                conn.no_deferred_column.store(true, Ordering::Relaxed);
+                member_rows(conn, &generating("0"), &params)
+            }
+            rows => rows,
+        }
+    };
+    rows.extend(generated?);
     Ok(rows)
 }
 
@@ -793,6 +813,42 @@ mod tests {
         assert!(iris.get_inc("Util").unwrap().is_none());
         assert!(iris.get_rtn("NoSuchRoutine").unwrap().is_none());
         assert!(iris.get_cls("No.Such.Class").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_release_without_deferred_indexes_is_asked_again_without_the_column() {
+        struct Old(std::sync::Arc<Mutex<Vec<String>>>);
+        impl Atelier for Old {
+            fn query(&self, sql: &str, _: &[&str]) -> Result<String, String> {
+                self.0.lock().unwrap().push(sql.to_string());
+                if sql.contains("_Deferred") {
+                    return Err("ERROR #5540: SQLCODE: -29 Message: Field '_DEFERRED' not found in the applicable tables^ SELECT ...".into());
+                }
+                Ok(if sql.contains("%Dictionary.CompiledClass ") {
+                    r#"[{"Name": "A.B", "Super": "%Persistent", "ClassType": "persistent"}]"#
+                } else if sql.contains("%Dictionary.CompiledIndex") {
+                    r#"[{"parent": "A.B", "Name": "ByP", "MemberType": "index", "Description": "", "FormalSpec": "P", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0, "IndexDeferred": 0}]"#
+                } else {
+                    "[]"
+                }
+                .into())
+            }
+            fn get_doc(&self, _: &str) -> Result<Option<String>, String> {
+                Ok(None)
+            }
+        }
+        let asked = std::sync::Arc::new(Mutex::new(vec![]));
+        let iris = AtelierContext::from(Old(asked.clone()));
+        let b = iris.get_cls("A.B").unwrap().unwrap();
+        assert_eq!(b.members.len(), 1);
+        let MemberKind::Index(index) = &b.members[0].kind else {
+            panic!("{:?}", b.members[0].kind)
+        };
+        assert!(!index.deferred);
+        iris.get_cls("A.C").unwrap();
+        let asked = asked.lock().unwrap();
+        let with_deferred = asked.iter().filter(|sql| sql.contains("_Deferred")).count();
+        assert_eq!(with_deferred, 1, "the column is tried once, then left out");
     }
 
     #[test]
