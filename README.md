@@ -258,14 +258,11 @@ IRIS; `iris` says which:
 
 #### Supported IRIS Releases
 
-A live connection works with every InterSystems IRIS and HealthConnect release
-from 2025.1 on. The policy: the earliest `YYYY.1` release within the last two
-and a half years is supported, so 2025.1 is until July 2027, when 2026.1
-becomes the floor. A dictionary column a release lacks (such as an index's
-`Deferred`, new in 2025.2) is read as unset rather than failing the lookup.
-Community Edition images older than about a year will not start, their license
-having expired, so CI runs the live tests on the current release and covers the
-older releases' gaps with unit tests.
+ascot prioritizes the latest InterSystems IRIS release, which CI tests against,
+and tries to support every release back to the earliest `YYYY.1` within the
+last two and a half years (2025.1 as of this writing): a failure there is a bug
+report we take. A dictionary column an older release lacks, such as an index's
+`Deferred` (new in 2025.2), is read as unset rather than failing the lookup.
 
 #### Build Your Own Declaration Files
 
