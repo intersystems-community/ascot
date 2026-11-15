@@ -846,6 +846,9 @@ mod tests {
         };
         assert!(!index.deferred);
         iris.get_cls("A.C").unwrap();
+        // The batched lookup `ascot declare` makes takes the same path.
+        let batch = class_infos(&iris, "IN (?,?)", &["A.B", "A.C"]).unwrap();
+        assert_eq!(batch.len(), 1);
         let asked = asked.lock().unwrap();
         let with_deferred = asked.iter().filter(|sql| sql.contains("_Deferred")).count();
         assert_eq!(with_deferred, 1, "the column is tried once, then left out");
