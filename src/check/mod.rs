@@ -21,6 +21,7 @@ mod errors;
 mod flow;
 mod pattern;
 mod similar;
+mod sql;
 pub mod types;
 mod zutil;
 
@@ -33,7 +34,6 @@ use std::{iter::once, ops::Deref};
 use tygr::{IntoInner, OLC, Parse, Print, Ranged};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::cos::{CommandLike, KeywordKind, KeywordUse, Spelled};
-use tygr_objectscript::sql;
 use types::*;
 
 pub(crate) use env::{DocumentEnv, WorkspaceEnv, labels_of};
@@ -2135,7 +2135,7 @@ impl CheckCommandInner for cos::Command {
                 })
             }
             cos::Command::CallMacro(x) => x.deref().check_as_command(env, flow),
-            cos::Command::ESQL(_, sql, _) => check_embedded_sql(env, flow, sql),
+            cos::Command::ESQL(_, statement, _) => check_embedded_sql(env, flow, statement),
             cos::Command::HTML(_, html, _) => check_embedded_expressions(flow, &html.print()),
             cos::Command::JS(cos::JSCommand { content, .. }) => {
                 check_embedded_expressions(flow, &content.print())
@@ -2664,43 +2664,18 @@ fn check_embedded_expressions(flow: &mut Flow<'_>, text: &str) -> Result<(), Qua
 fn check_embedded_sql<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    sql: &sql::SQL,
+    statement: &tygr_objectscript::sql::SQL,
 ) -> Result<(), QuasiTypeError> {
-    let (declaring, fetching, output) = match &sql.stat {
-        sql::Stat::Declare(
-            sql::Decl::Selct { cursor_name, .. } | sql::Decl::Explain { cursor_name, .. },
-        ) => (Some(cursor_name.1.print()), None, None),
-        sql::Stat::OFC(sql::OFC::Fetch { cursor, .. }) => (None, Some(cursor.print()), None),
-        sql::Stat::Call(call) => {
-            let output = call.output.as_ref().map(|(_, name, ..)| name.print());
-            (None, None, output)
-        }
-        _ => (None, None, None),
-    };
-    let (mut reads, mut into) = (vec![], vec![]);
-    for HostRef {
-        name,
-        subscripted,
-        is_into,
-    } in host_refs(&sql.print())
-    {
-        // A `%` name is public and untracked; `:o.Prop` reads the object, even as a target.
-        if flow::is_percent_variable(&name) {
-            continue;
-        } else if is_into && !name.contains('.') {
-            into.push((name, subscripted));
-        } else {
-            let name = name.split('.').next().unwrap_or_default().to_string();
-            reads.push((name, subscripted));
-        }
-    }
+    let hosts = sql::hosts(statement);
     let subs = |subscripted| if subscripted { vec![Ty::Any] } else { vec![] };
-    for (name, subscripted) in reads {
-        let local = Local {
-            name: name.clone(),
-            subs: subs(subscripted),
-        };
-        let ty = flow.handle_ref(local)?;
+    let local = |(name, subscripted): (String, bool)| Local {
+        name,
+        subs: subs(subscripted),
+    };
+    // A `%` name is public and untracked.
+    let tracked = |(name, _): &(String, bool)| !flow::is_percent_variable(name);
+    for (name, subscripted) in hosts.reads.into_iter().filter(tracked) {
+        let ty = flow.handle_ref(local((name.clone(), subscripted)))?;
         // IRIS reads an undefined input host variable as NULL (documented), so no <UNDEFINED>.
         if ty.to_maybe_ty(env).maybe_defined().is_none() {
             flow.add_soft_diagnostic(TypeErrorKind::UndefinedHostVariable { name }.into());
@@ -2708,104 +2683,22 @@ fn check_embedded_sql<'a>(
             flow.value(&ty, || name)?;
         }
     }
-    if let Some(cursor) = declaring {
-        flow.declare_cursor(cursor, into.into_iter().map(|(name, _)| name).collect());
+    let writes = hosts.writes.into_iter().filter(tracked);
+    if let Some(cursor) = hosts.declares {
+        flow.declare_cursor(cursor, writes.map(|(name, _)| name).collect());
     } else {
-        let declared = fetching
+        let declared = hosts
+            .fetches
             .map(|cursor| flow.cursor_into(&cursor))
             .unwrap_or_default();
-        let writes =
-            (into.into_iter()).chain(declared.into_iter().chain(output).map(|n| (n, false)));
-        for (name, subscripted) in writes {
-            let local = Local {
-                name,
-                subs: subs(subscripted),
-            };
-            flow.handle_set(local, Ty::Any.into(), flow.range())?;
+        for write in writes.chain(declared.into_iter().map(|n| (n, false))) {
+            flow.handle_set(local(write), Ty::Any.into(), flow.range())?;
         }
     }
     flow.invalidate(
         Local::bare("SQLCODE".to_string()),
         Ty::from("%Integer").into(),
     )
-}
-
-struct HostRef {
-    name: String,
-    subscripted: bool,
-    is_into: bool,
-}
-
-// The `:name`, `:name(subs)` and `:obj.prop` references of `sql`, outside quotes and comments,
-// each with whether it stands in an `INTO`/`%INTOLIST` list, which runs to the next keyword.
-fn host_refs(sql: &str) -> Vec<HostRef> {
-    let bytes = sql.as_bytes();
-    let word_end = |mut j: usize| {
-        while j < bytes.len()
-            && (bytes[j].is_ascii_alphanumeric() || matches!(bytes[j], b'%' | b'_'))
-        {
-            j += 1;
-        }
-        j
-    };
-    let (mut refs, mut i, mut into) = (vec![], 0, false);
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b'\'' || c == b'"' {
-            i += 1 + bytes[i + 1..]
-                .iter()
-                .position(|&b| b == c)
-                .map_or(bytes.len(), |n| n + 1);
-        } else if bytes[i..].starts_with(b"--") {
-            i += bytes[i..]
-                .iter()
-                .position(|&b| b == b'\n')
-                .unwrap_or(bytes.len() - i);
-        } else if bytes[i..].starts_with(b"/*") {
-            i += sql[i..].find("*/").map_or(bytes.len() - i, |n| n + 2);
-        } else if c == b':'
-            && bytes
-                .get(i + 1)
-                .is_some_and(|n| n.is_ascii_alphabetic() || *n == b'%')
-            // After a closing quote it is a JSON key's colon (`USING {"header":true}`).
-            && sql[..i].trim_end().as_bytes().last() != Some(&b'"')
-        {
-            let mut end = word_end(i + 1);
-            while bytes.get(end) == Some(&b'.') {
-                end = word_end(end + 1);
-            }
-            let name = sql[i + 1..end].to_string();
-            let subscripted = bytes.get(end) == Some(&b'(');
-            if subscripted {
-                let mut depth = 0;
-                end += bytes[end..]
-                    .iter()
-                    .position(|&b| {
-                        depth += (b == b'(') as i32 - (b == b')') as i32;
-                        depth == 0
-                    })
-                    .map_or(bytes.len() - end, |n| n + 1);
-            }
-            // An instance variable, `:i%Prop` or `:r%Prop`, is no local.
-            if !name[1..].contains('%') {
-                refs.push(HostRef {
-                    name,
-                    subscripted,
-                    is_into: into,
-                });
-            }
-            i = end;
-            continue;
-        } else if c.is_ascii_alphabetic() {
-            let end = word_end(i);
-            let word = &sql[i..end];
-            into = word.eq_ignore_ascii_case("INTO") || word.eq_ignore_ascii_case("INTOLIST");
-            i = end;
-            continue;
-        }
-        i += 1;
-    }
-    refs
 }
 
 impl CheckCommandInner for cos::MergeArgument {
