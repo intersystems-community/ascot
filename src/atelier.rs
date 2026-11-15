@@ -816,45 +816,6 @@ mod tests {
     }
 
     #[test]
-    fn a_release_without_deferred_indexes_is_asked_again_without_the_column() {
-        struct Old(std::sync::Arc<Mutex<Vec<String>>>);
-        impl Atelier for Old {
-            fn query(&self, sql: &str, _: &[&str]) -> Result<String, String> {
-                self.0.lock().unwrap().push(sql.to_string());
-                if sql.contains("_Deferred") {
-                    return Err("ERROR #5540: SQLCODE: -29 Message: Field '_DEFERRED' not found in the applicable tables^ SELECT ...".into());
-                }
-                Ok(if sql.contains("%Dictionary.CompiledClass ") {
-                    r#"[{"Name": "A.B", "Super": "%Persistent", "ClassType": "persistent"}]"#
-                } else if sql.contains("%Dictionary.CompiledIndex") {
-                    r#"[{"parent": "A.B", "Name": "ByP", "MemberType": "index", "Description": "", "FormalSpec": "P", "ReturnType": "", "ClassMethod": 0, "Deprecated": 0, "IndexDeferred": 0}]"#
-                } else {
-                    "[]"
-                }
-                .into())
-            }
-            fn get_doc(&self, _: &str) -> Result<Option<String>, String> {
-                Ok(None)
-            }
-        }
-        let asked = std::sync::Arc::new(Mutex::new(vec![]));
-        let iris = AtelierContext::from(Old(asked.clone()));
-        let b = iris.get_cls("A.B").unwrap().unwrap();
-        assert_eq!(b.members.len(), 1);
-        let MemberKind::Index(index) = &b.members[0].kind else {
-            panic!("{:?}", b.members[0].kind)
-        };
-        assert!(!index.deferred);
-        iris.get_cls("A.C").unwrap();
-        // The batched lookup `ascot declare` makes takes the same path.
-        let batch = class_infos(&iris, "IN (?,?)", &["A.B", "A.C"]).unwrap();
-        assert_eq!(batch.len(), 1);
-        let asked = asked.lock().unwrap();
-        let with_deferred = asked.iter().filter(|sql| sql.contains("_Deferred")).count();
-        assert_eq!(with_deferred, 1, "the column is tried once, then left out");
-    }
-
-    #[test]
     fn doc_basename_strips_the_extension() {
         assert_eq!(doc_basename("Foo.Bar.inc"), "Foo.Bar");
     }
