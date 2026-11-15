@@ -204,9 +204,9 @@ pub struct CommaAt {
 impl<B, A> From<&CommaSep<B, A>> for CommaAt {
     fn from(comma: &CommaSep<B, A>) -> Self {
         CommaAt {
-            start: comma.before.end,
-            before: comma.before.end - comma.before.start,
-            after: comma.after.end - comma.after.start,
+            start: comma.prefix.end,
+            before: comma.prefix.end - comma.prefix.start,
+            after: comma.suffix.end - comma.suffix.start,
         }
     }
 }
@@ -214,8 +214,8 @@ impl<B, A> From<&CommaSep<B, A>> for CommaAt {
 // A list's commas, leaving out those next to an omitted item (`$lb(1,,3)`), which no spacing fits.
 pub fn commas_of<T, B, A>(list: &VecSep<T, CommaSep<B, A>>) -> Vec<CommaAt> {
     let empty_item = |i: usize| {
-        list.seps.get(i).map(|next| next.before.start)
-            == list.seps.get(i.wrapping_sub(1)).map(|prev| prev.after.end)
+        list.seps.get(i).map(|next| next.prefix.start)
+            == list.seps.get(i.wrapping_sub(1)).map(|prev| prev.suffix.end)
     };
     (list.seps.iter().enumerate())
         .filter(|&(i, _)| !empty_item(i) && !empty_item(i + 1))
@@ -858,22 +858,18 @@ pub struct NotFirstNonWhitespace;
 impl Parse for NotFirstNonWhitespace {
     type First = <() as Parse>::First;
 
-    fn parse_at<M: Mode>(
+    fn parse_at<S: Success, L: Level>(
         input: &str,
         pos: usize,
-        _state: State<M>,
-    ) -> Option<(M::Output<Self>, usize)> {
+        _state: State<L>,
+    ) -> Option<(S::Output<Self>, usize)> {
         let before = input.get(..pos)?;
         let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
         if input.get(line_start..pos)?.chars().all(char::is_whitespace) {
             None
         } else {
-            Some((M::build(|_| Self), pos))
+            Some((S::output(|| Self), pos))
         }
-    }
-
-    fn fail_at<M: Mode>(_pos: usize, _state: State<M>) -> bool {
-        false
     }
 
     fn to_bnf() -> bnf::Expr {
@@ -2033,19 +2029,6 @@ pub enum JSString<Embeded: Grammar> {
     B(JSBTString<Embeded>),
 }
 
-// Impossible, which is useful for essentially ignoring embeded language
-
-#[derive(Grammar)]
-#[tygr(validated)]
-pub struct Impossible;
-
-impl Validate for Impossible {
-    const REQUIREMENT: &'static str = "never match";
-    fn validate(&self) -> bool {
-        false
-    }
-}
-
 #[derive(Grammar)]
 pub struct Identifier(pub Ranged<OSSymbol>);
 
@@ -2382,7 +2365,7 @@ pub struct Data(Vec<DataUnit>);
 #[tygr(hidden)]
 pub enum DataUnit {
     Txt(StringOf1<IsDataSafe>),
-    Str(JSDQString<Impossible>),
+    Str(JSDQString<Never>),
     Brs(StringEq!("{"), Vec<DataUnit>, StringEq!("}")),
 }
 
@@ -3165,12 +3148,13 @@ pub enum MemberBody {
     Foreign(Raw<(Space, StringEq!("{"))>, ForeignBody, StringEq!("}")),
 }
 
-fn foreign_body<M: Mode>(input: &str, pos: usize, mut state: State<M>) -> Option<(OSBody, usize)> {
-    let (space, pos) = Space::build_at(input, pos, state.reborrow())?;
-    let (open, start) = <StringEq!("{")>::build_at(input, pos, state.reborrow())?;
-    let end = ForeignBody::check_at(input, start, state.reborrow())?;
+fn foreign_body<L: Level>(input: &str, pos: usize, mut state: State<L>) -> Option<(OSBody, usize)> {
+    let (space, pos) = Space::parse_at::<success::Value, L>(input, pos, state.reborrow())?;
+    let (open, start) =
+        <StringEq!("{")>::parse_at::<success::Value, L>(input, pos, state.reborrow())?;
+    let ((), end) = ForeignBody::parse_at::<success::Unit, L>(input, start, state.reborrow())?;
     let text = Ranged::new(start, OSText(input[start..end].into()), end);
-    let (close, pos) = <StringEq!("}")>::build_at(input, end, state)?;
+    let (close, pos) = <StringEq!("}")>::parse_at::<success::Value, L>(input, end, state)?;
     Some((Prefix::new(space, Wrap::new(open, text, close)), pos))
 }
 
@@ -3197,30 +3181,27 @@ impl MethodHeader {
 impl Parse for Method {
     type First = <MethodHeader as Parse>::First;
 
-    fn parse_at<M: Mode>(
+    fn parse_at<S: Success, L: Level>(
         input: &str,
         pos: usize,
-        mut state: State<M>,
-    ) -> Option<(M::Output<Self>, usize)> {
-        let (header, pos) = MethodHeader::build_at(input, pos, state.reborrow())?;
-        let os_body = |mut state: State<M>| {
-            let (body, end) = OSBody::build_at(input, pos, state.reborrow())?;
-            MemberEnd::check_at(input, end, state)?;
+        mut state: State<L>,
+    ) -> Option<(S::Output<Self>, usize)> {
+        let (header, pos) =
+            MethodHeader::parse_at::<success::Value, L>(input, pos, state.reborrow())?;
+        let os_body = |mut state: State<L>| {
+            let (body, end) = OSBody::parse_at::<success::Value, L>(input, pos, state.reborrow())?;
+            MemberEnd::parse_at::<success::Unit, L>(input, end, state)?;
             Some((body, end))
         };
         let (body, pos) = if header.is_objectscript() {
             os_body(state.reborrow())
                 .or_else(|| foreign_body(input, pos, state.reborrow()))
-                .or_else(|| OSBody::build_at(input, pos, state))?
+                .or_else(|| OSBody::parse_at::<success::Value, L>(input, pos, state))?
         } else {
             foreign_body(input, pos, state.reborrow())
-                .or_else(|| OSBody::build_at(input, pos, state))?
+                .or_else(|| OSBody::parse_at::<success::Value, L>(input, pos, state))?
         };
-        Some((M::build(|_| Method { header, body }), pos))
-    }
-
-    fn fail_at<M: Mode>(pos: usize, state: State<M>) -> bool {
-        MethodHeader::fail_at(pos, state)
+        Some((S::output(|| Method { header, body }), pos))
     }
 
     fn to_bnf() -> bnf::Expr {
@@ -7450,7 +7431,7 @@ mod regression_tests {
     use std::time::{Duration, Instant};
 
     fn routine(body: &str) -> Result<(), Error> {
-        Routine::check(&format!("ROUTINE r [Type=MAC]\n{body}"))
+        Routine::parse(&format!("ROUTINE r [Type=MAC]\n{body}")).map(drop)
     }
 
     fn methods(cls: &ClassDefinition) -> Vec<&Method> {
@@ -7474,7 +7455,9 @@ mod regression_tests {
     fn routine_names_carry_no_caret() {
         routine(" d ^%ZSTART,^ZWELCOME,^%ZLANGC00,Tag^%ZSTOP\n").expect("Ok");
         routine("#include ^ZWELCOME\n q\n").expect_err("an include is named without a caret");
-        Routine::check("ROUTINE ^%ZSTART [Type=MAC]\n q\n").expect_err("a header names no caret");
+        Routine::parse("ROUTINE ^%ZSTART [Type=MAC]\n q\n")
+            .map(drop)
+            .expect_err("a header names no caret");
     }
 
     #[test]
@@ -7710,7 +7693,7 @@ mod regression_tests {
         let methods = methods(&cls);
         assert_eq!(methods.len(), 2);
         for method in methods {
-            ProcedureBody::check(&method.body.prefixed.wrapped.print()).expect("Ok");
+            ProcedureBody::parse(&method.body.prefixed.wrapped.print()).expect("Ok");
         }
     }
 
@@ -7783,7 +7766,7 @@ mod regression_tests {
         )
         .expect("Ok");
         for method in methods(&cls) {
-            ProcedureBody::check(&method.body.prefixed.wrapped.print()).expect("Ok");
+            ProcedureBody::parse(&method.body.prefixed.wrapped.print()).expect("Ok");
         }
     }
 
