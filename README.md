@@ -261,8 +261,7 @@ IRIS; `iris` says which:
 ascot prioritizes the latest InterSystems IRIS release, which CI tests against,
 and tries to support every release back to the earliest `YYYY.1` within the
 last two and a half years (2025.1 as of this writing): a failure there is a bug
-report we take. A dictionary column an older release lacks, such as an index's
-`Deferred` (new in 2025.2), is read as unset rather than failing the lookup.
+report we take.
 
 #### Build Your Own Declaration Files
 
