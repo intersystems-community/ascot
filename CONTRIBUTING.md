@@ -41,6 +41,9 @@ ASCOT_TEST_IRIS=http://_SYSTEM:SYS@localhost:52773 cargo test --test iris
 (cd bindings/js && ASCOT_TEST_IRIS=http://_SYSTEM:SYS@localhost:52773 npm test)
 ```
 
+CI runs these on the current Community Edition releases only: an image older than about a year
+no longer starts, its Community license having expired.
+
 ### Diagnostics
 
 Every kind of diagnostic is declared in `type_error_kinds!` in `src/check/errors.rs`, with its

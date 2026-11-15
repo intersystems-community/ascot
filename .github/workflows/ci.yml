@@ -74,8 +74,13 @@ jobs:
       - name: WASM build
         run: cargo build --target=wasm32-unknown-unknown --release --lib --no-default-features
 
-  iris:
+  iris-release:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Community Edition whose license still lets it start, and the newest.
+        release: ['2026.1', 'latest-cd']
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -86,7 +91,7 @@ jobs:
       # The image's default passwords come expired: every request is a 401 until they're not.
       - name: Start IRIS
         run: |
-          docker run -d --name iris -p 52773:52773 containers.intersystems.com/intersystems/iris-community:2026.1
+          docker run -d --name iris -p 52773:52773 containers.intersystems.com/intersystems/iris-community:${{ matrix.release }}
           timeout 300 bash -c 'until curl -s -o /dev/null http://localhost:52773/api/atelier/; do sleep 2; done'
           docker exec iris iris session IRIS -U %SYS '##class(Security.Users).UnExpireUserPasswords("*")'
 
@@ -110,6 +115,13 @@ jobs:
           npm test
         env:
           ASCOT_TEST_IRIS: http://_SYSTEM:SYS@localhost:52773
+
+  # The one check the merge queue requires, whichever releases the matrix runs.
+  iris:
+    needs: iris-release
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
 
   npm-bindings:
     runs-on: ubuntu-latest

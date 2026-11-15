@@ -5,6 +5,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -79,6 +80,10 @@ impl Atelier for crate::bindings::Atelier {
 /// The `IrisContext` that looks code up through an `Atelier`, caching what it finds.
 pub struct AtelierContext {
     atelier: Box<dyn Atelier>,
+    // Set once the instance has answered that `%Dictionary.CompiledIndex` has no `_Deferred`
+    // column. For IRIS 2025.1, the last release without deferred indexes: when 2025.1 retires,
+    // drop this and the retry in `all_mem_rows`, and ask for `_Deferred` directly.
+    no_deferred_column: AtomicBool,
     cls_cache: Cache<Option<ClassInfo>>,
     routine_cache: Cache<Option<Source>>,
     rtn_cache: Cache<Option<RoutineInfo>>,
@@ -88,6 +93,7 @@ impl<A: Atelier + 'static> From<A> for AtelierContext {
     fn from(atelier: A) -> Self {
         Self {
             atelier: Box::new(atelier),
+            no_deferred_column: AtomicBool::new(false),
             cls_cache: Cache::new(),
             routine_cache: Cache::new(),
             rtn_cache: Cache::new(),
@@ -438,12 +444,13 @@ fn all_mem_rows(
              DefaultValue FROM %Dictionary.CompiledParameter WHERE Parent {filter} AND Origin = \
              Parent"
     );
-    let generating = format!(
-        "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, Description, \
+    let generating = |deferred: &str| {
+        format!(
+            "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, Description, \
              Properties AS FormalSpec, NULL AS ReturnType, NULL AS Collection, 0 AS \
              MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
              Deprecated, Origin, Abstract AS IndexAbstract, Condition AS IndexCondition, \
-             CoshardWith AS IndexCoshardWith, Data AS IndexData, _Deferred AS IndexDeferred, \
+             CoshardWith AS IndexCoshardWith, Data AS IndexData, {deferred} AS IndexDeferred, \
              Extent AS IndexExtent, IdKey AS IndexIdKey, Internal AS IndexInternal, PrimaryKey AS \
              IndexPrimaryKey, ShardKey AS IndexShardKey, SqlName AS IndexSqlName, Type AS \
              IndexType, _Unique AS IndexUnique FROM %Dictionary.CompiledIndex WHERE Parent \
@@ -455,9 +462,23 @@ fn all_mem_rows(
              IndexIdKey, 0 AS IndexInternal, 0 AS IndexPrimaryKey, 0 AS IndexShardKey, NULL AS \
              IndexSqlName, NULL AS IndexType, 0 AS IndexUnique FROM %Dictionary.CompiledQuery \
              WHERE Parent {filter} AND Origin = Parent"
-    );
+        )
+    };
     let mut rows = member_rows(conn, &declared, &[params, params, params].concat())?;
-    rows.extend(member_rows(conn, &generating, &[params, params].concat())?);
+    let params = [params, params].concat();
+    let generated = if conn.no_deferred_column.load(Ordering::Relaxed) {
+        member_rows(conn, &generating("0"), &params)
+    } else {
+        match member_rows(conn, &generating("_Deferred"), &params) {
+            // SQLCODE -29, field not found: IRIS 2025.1, without deferred indexes. Drop with it.
+            Err(err) if err.to_ascii_uppercase().contains("_DEFERRED") => {
+                conn.no_deferred_column.store(true, Ordering::Relaxed);
+                member_rows(conn, &generating("0"), &params)
+            }
+            rows => rows,
+        }
+    };
+    rows.extend(generated?);
     Ok(rows)
 }
 
