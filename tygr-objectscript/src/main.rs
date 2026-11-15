@@ -22,8 +22,8 @@ fn main() {
     let had_error = if path.ends_with(".cls") {
         check_class(&path, &content)
     } else {
-        match cos::Routine::check(&content) {
-            Ok(()) => false,
+        match cos::Routine::parse(&content) {
+            Ok(_) => false,
             Err(err) => {
                 eprintln!("{err}");
                 true
@@ -81,11 +81,11 @@ fn check_method_body(method: &cos::Method) -> Result<(), (usize, tygr::Error)> {
         (
             None | Some(cos::MethodLanguage::ObjectScript(..) | cos::MethodLanguage::Cache(..)),
             None | Some(cos::CodeMode::Code(..)),
-        ) => cos::ProcedureBody::check(&text),
+        ) => cos::ProcedureBody::parse(&text).map(drop),
         (
             None | Some(cos::MethodLanguage::ObjectScript(..) | cos::MethodLanguage::Cache(..)),
             Some(cos::CodeMode::Expression(..)),
-        ) => <cos::ExprBody>::check(&text),
+        ) => <cos::ExprBody>::parse(&text).map(drop),
         // Other languages (Python, ...) and modes (Call, Generator, ...) aren't ObjectScript,
         // so there's nothing here to parse.
         _ => Ok(()),
