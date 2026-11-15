@@ -529,11 +529,8 @@ pub struct HostVar {
     subs: Option<SubList>,
 }
 
-pub type SubList = Wrap<
-    (StringEq!("("), Space),
-    Option<VecSep<Sub, (Space, StringEq!(","), Space)>>,
-    (Space, StringEq!(")")),
->;
+pub type SubList =
+    Wrap<(StringEq!("("), Space), Option<VecSep<Sub, ArgSep>>, (Space, StringEq!(")"))>;
 
 #[derive(Grammar)]
 #[tygr(name = "instance variable host ref")]
@@ -584,16 +581,14 @@ pub enum HostIdentifierPart {
 
 #[derive(Grammar)]
 pub enum Param {
-    Var(Var, Option<SubList>),
-    InstanceVariableHostRef(InstanceVariableHostRef),
-    PropertyHostRef(PropertyHostRef),
+    HostVar(HostVar),
+    Ident(Ident, Option<SubList>),
 }
 
 #[derive(Grammar)]
 pub enum Sub {
     Literal(Literal),
-    HostRef(HostRef),
-    Ident(Ident),
+    Var(Var),
 }
 
 #[derive(Grammar)]
@@ -2081,7 +2076,7 @@ pub enum TargtEnum {
 
 #[derive(Grammar)]
 #[tygr(name = "host list")]
-pub struct HostList(VecSep<Param, (Space, StringEq!(","), Space)>);
+pub struct HostList(VecSep<Param, ArgSep>);
 
 pub type IntoList = Prefix<StringEqCI!("%INTOLIST"), (Space, Param)>;
 
@@ -2365,15 +2360,8 @@ pub struct JSONPathSpecification {
 pub struct TVF {
     pub table: Table,
     pub open: (StringEq!("("), Space),
-    pub args: Option<VecSep<TVFParameter, (Space, StringEq!(","), Space)>>,
+    pub args: Option<VecSep<DTSValSpec, ArgSep>>,
     pub close: (Space, StringEq!(")")),
-}
-
-#[derive(Grammar)]
-#[tygr(name = "tvf_parameter")]
-pub enum TVFParameter {
-    Literal(Literal),
-    HostVar(HostVar),
 }
 
 pub type WhereClause = Prefix<(Space, StringEqCI!("WHERE"), Space), Prdct>;
@@ -2565,9 +2553,7 @@ pub enum ValSpec {
     },
     Var {
         var: Var,
-        open: (StringEq!("("), Space),
-        subscripts: Vec<(Sub, StringEq!(","))>,
-        close: (Space, StringEq!(")")),
+        subs: SubList,
     },
 }
 
@@ -2869,18 +2855,7 @@ pub struct Call {
 #[tygr(name = "routine name")]
 pub struct RoutineName(pub SQLFunctionName);
 
-pub type SQLArgumentList = Wrap<
-    (Space, StringEq!("("), Space),
-    Option<VecSep<SQLArgument, (Space, StringEq!(","), Space)>>,
-    (Space, StringEq!(")")),
->;
-
-#[derive(Grammar)]
-#[tygr(name = "SQL argument")]
-pub enum SQLArgument {
-    Expr(Scalx),
-    HostVar(StringEq!(":"), HostIdentifier),
-}
+pub type SQLArgumentList = ArgsO<VecSep<Scalx, ArgSep>>;
 
 #[derive(Grammar)]
 #[tygr(name = "explain")]
