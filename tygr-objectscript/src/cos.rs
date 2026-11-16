@@ -452,7 +452,7 @@ pub enum SetTarget {
     },
     Indirection(Ranged<Indirection>),
     Fun(SetTargetFun),
-    Special(SpecialVariable),
+    Special(Ranged<SpecialVariable>),
     Sub {
         obj: Ranged<ExprOps<()>>,
         op: SufOp,
@@ -1140,6 +1140,8 @@ pub enum KeywordKind {
     Command,
     // An intrinsic function's name, without its `$`.
     Function,
+    // A system variable's name, without its `$`.
+    Variable,
 }
 
 impl std::fmt::Display for KeywordKind {
@@ -1147,6 +1149,7 @@ impl std::fmt::Display for KeywordKind {
         f.write_str(match self {
             KeywordKind::Command => "Command keyword",
             KeywordKind::Function => "Function",
+            KeywordKind::Variable => "System variable",
         })
     }
 }
@@ -1418,7 +1421,7 @@ pub enum NewArgument {
 #[derive(Grammar)]
 pub enum NewTarget {
     Normal(LocalVariableName),
-    Special(Prefix<StringEq!("$"), SpecialVariable>),
+    Special(Prefix<StringEq!("$"), Ranged<SpecialVariable>>),
 }
 
 #[derive(Grammar)]
@@ -1776,61 +1779,74 @@ pub enum SpecialVariable {
     Unknown(StringOf1<IsAlphabetic>),
 }
 
-// Every full name above (i.e. not its short abbreviation) -- kept in sync by hand alongside the
-// enum, for `UnknownSpecialVariable::from_str`'s error message.
-pub const SPECIAL_VARIABLE_NAMES: &[&str] = &[
-    "DEVICE",
-    "ESTACK",
-    "ETRAP",
-    "ECODE",
-    "HALT",
-    "HOROLOG",
-    "IO",
-    "JOB",
-    "KEY",
-    "MVSYSRETCODE",
-    "MVAM",
-    "MVVM",
-    "MVSM",
-    "NAMESPACE",
-    "PRINCIPAL",
-    "QUIT",
-    "ROLES",
-    "STACK",
-    "SYSTEM",
-    "STORAGE",
-    "THROWOBJ",
-    "TLEVEL",
-    "THIS",
-    "TRS",
-    "TID",
-    "TEST",
-    "USERNAME",
-    "X",
-    "Y",
-    "ZCHILD",
-    "ZEOF",
-    "ZEOS",
-    "ZERROR",
-    "ZHOROLOG",
-    "ZIO",
-    "ZJOB",
-    "ZMODE",
-    "ZNAME",
-    "ZNSPACE",
-    "ZORDER",
-    "ZPARENT",
-    "ZPI",
-    "ZPOSITION",
-    "ZREFERENCE",
-    "ZSTORAGE",
-    "ZTIMESTAMP",
-    "ZTIMEZONE",
-    "ZTRAP",
-    "ZVERSION",
-    "ZA",
-    "ZB",
+// Every name above with its abbreviation, kept in sync by hand alongside the enum.
+pub const SPECIAL_VARIABLES: &[(&str, Option<&str>)] = &[
+    ("DEVICE", Some("D")),
+    ("ESTACK", Some("ES")),
+    ("ETRAP", Some("ET")),
+    ("ECODE", Some("EC")),
+    ("HALT", None),
+    ("HOROLOG", Some("H")),
+    ("IO", Some("I")),
+    ("JOB", Some("J")),
+    ("KEY", Some("K")),
+    ("MVSYSRETCODE", None),
+    ("MVAM", None),
+    ("MVVM", None),
+    ("MVSM", None),
+    ("NAMESPACE", None),
+    ("PRINCIPAL", Some("P")),
+    ("QUIT", Some("Q")),
+    ("ROLES", None),
+    ("STACK", Some("ST")),
+    ("SYSTEM", Some("SY")),
+    ("STORAGE", Some("S")),
+    ("THROWOBJ", None),
+    ("TLEVEL", Some("TL")),
+    ("THIS", None),
+    ("TRS", None),
+    ("TID", None),
+    ("TEST", Some("T")),
+    ("USERNAME", None),
+    ("X", None),
+    ("Y", None),
+    ("ZCHILD", Some("ZC")),
+    ("ZEOF", None),
+    ("ZEOS", None),
+    ("ZERROR", Some("ZE")),
+    ("ZHOROLOG", Some("ZH")),
+    ("ZIO", None),
+    ("ZJOB", Some("ZJ")),
+    ("ZMODE", Some("ZM")),
+    ("ZNAME", None),
+    ("ZNSPACE", Some("ZN")),
+    ("ZORDER", Some("ZO")),
+    ("ZPARENT", Some("ZP")),
+    ("ZPI", None),
+    ("ZPOSITION", Some("ZPOS")),
+    ("ZREFERENCE", Some("ZR")),
+    ("ZSTORAGE", Some("ZS")),
+    ("ZTIMESTAMP", Some("ZTS")),
+    ("ZTIMEZONE", Some("ZTZ")),
+    ("ZTRAP", Some("ZT")),
+    ("ZVERSION", Some("ZV")),
+    ("ZA", None),
+    ("ZB", None),
 ];
+
+pub fn special_variable_use(var: &Ranged<SpecialVariable>) -> Option<KeywordUse> {
+    let text = var.print();
+    let (full, abbr) = SPECIAL_VARIABLES.iter().find(|(full, abbr)| {
+        full.eq_ignore_ascii_case(&text) || *abbr == Some(text.to_ascii_uppercase().as_str())
+    })?;
+    Some(KeywordUse {
+        kind: KeywordKind::Variable,
+        start: var.start,
+        text,
+        full,
+        abbr: *abbr,
+    })
+}
 
 char_class!(pub IsAlphabetic, "alphabetic", |ch| is_letter(ch));
 
@@ -6918,7 +6934,7 @@ pub enum AtomicExpr {
     FunctionCall(Prefix<StringEq!("$"), FunctionCall>),
     SpecialVariable {
         sym: StringEq!("$"),
-        var: SpecialVariable,
+        var: Ranged<SpecialVariable>,
     },
     This(StringEqCI!("##this")),
     Super(Prefix<StringEqCI!("##super"), Ranged<MthArgList>>),

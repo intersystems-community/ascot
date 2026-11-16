@@ -2808,6 +2808,31 @@ mod tests {
     }
 
     #[test]
+    fn system_variables_follow_the_configured_variable_style() {
+        let style = style::parse(
+            r#"{"variable": {"form": "long", "case": "upper"}, "variableZversion": {"form": "short"}}"#,
+        )
+        .unwrap();
+        let workspace = Workspace::new(None, Some(style));
+        let uri = "V.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE V\nf()\n new $namespace\n s $ZT=\"f\",x=$h_$HOROLOG_$ZVERSION_$zv_$X\n q\n"
+                .to_string(),
+        );
+        assert_eq!(
+            style_messages(&workspace, &uri),
+            [
+                "2:6 System variable `$namespace` should be written `$NAMESPACE`",
+                "3:14 System variable `$h` should be written `$HOROLOG`",
+                "3:26 System variable `$ZVERSION` should be written `$ZV`",
+                "3:36 System variable `$zv` should be written `$ZV`",
+                "3:4 System variable `$ZT` should be written `$ZTRAP`",
+            ]
+        );
+    }
+
+    #[test]
     fn method_body_commands_follow_the_configured_style() {
         let style = style::parse(
             r#"{"command": {"form": "short"}, "commandQuit": {"form": "long", "case": "upper"}}"#,

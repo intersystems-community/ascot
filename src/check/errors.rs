@@ -1729,18 +1729,20 @@ type_error_kinds! {
     #[severity = Information]
     #[message = "Do discards the {class} this call returns"]
     DiscardedReturnValue { class: String },
-    /// A command or intrinsic function keyword spelled in a form or case the style's `command` or
-    /// `function` rule, or a per-keyword `command<Name>` or `function<Name>`, doesn't allow: `s`
-    /// under `{"form":"long"}`, `SET` under `{"case":"pascal"}`. IRIS compiles every spelling alike;
-    /// write the one the message gives.
+    /// A command, intrinsic function or system variable keyword spelled in a form or case the
+    /// style's `command`, `function` or `variable` rule, or a per-keyword `command<Name>`,
+    /// `function<Name>` or `variable<Name>`, doesn't allow: `s` under `{"form":"long"}`, `SET`
+    /// under `{"case":"pascal"}`. IRIS compiles every spelling alike; write the one the message
+    /// gives.
     ///
-    /// ```objectscript style={"command":{"form":"long","case":"pascal"},"function":{"form":"long","case":"pascal"}}
+    /// ```objectscript style={"command":{"form":"long","case":"pascal"},"function":{"form":"long","case":"pascal"},"variable":{"form":"long","case":"upper"}}
     /// Class Demo.KeywordStyle
     /// {
     ///
     /// ClassMethod FirstName(fullName As %String) As %String
     /// {
     ///     s first = $Piece(fullName, " ") //! S2839
+    ///     Set first = first _ $h //! S2839
     ///     Quit $zcvt(first, "U") //! S2839
     /// }
     ///

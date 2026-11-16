@@ -1411,7 +1411,7 @@ fn report_keyword_style(
             let range = env.span(kw.start, kw.start + kw.text.len());
             let sigil = match kw.kind {
                 KeywordKind::Command => "",
-                KeywordKind::Function => "$",
+                KeywordKind::Function | KeywordKind::Variable => "$",
             };
             env.soft_diagnostic(
                 TypeErrorKind::KeywordStyle {
@@ -1727,8 +1727,9 @@ impl CheckCommandInner for cos::Command {
                                 cos::NewArgument::Single(cos::AllowMacro::Plain(
                                     cos::AllowIndirection::Plain(cos::NewTarget::Special(special)),
                                 )) => {
+                                    report_style(env, cos::special_variable_use(special), &[]);
                                     if !matches!(
-                                        special.deref(),
+                                        special.deref().deref(),
                                         SpecialVariable::ESTACK(_)
                                             | SpecialVariable::ETRAP(_)
                                             | SpecialVariable::NAMESPACE(_)
@@ -2766,7 +2767,9 @@ impl CheckCommandInner for cos::SetArgument {
         for target in targets {
             match target {
                 // IRIS compiles `Set ($ZTRAP, x) = ...` and fails it when run, label or none.
-                SetTarget::Special(SpecialVariable::ZTRAP(_)) if multi => {
+                SetTarget::Special(var)
+                    if multi && matches!(var.deref(), SpecialVariable::ZTRAP(_)) =>
+                {
                     env.soft_diagnostic(
                         TypeErrorKind::NotAllowedIn {
                             what: "$ZTRAP".into(),
@@ -2932,7 +2935,7 @@ fn check_target<'a>(
         // Every variant is a bare keyword (see `SpecialVariable`) -- nothing to type-check, and
         // setting one has no effect this checker tracks (unlike a local variable's `Flow`
         // binding), except the error traps, which `check_trap_set` has already seen to.
-        SetTarget::Special(..) => {}
+        SetTarget::Special(var) => report_style(env, cos::special_variable_use(var), &[]),
     }
     Ok(None)
 }
@@ -3150,7 +3153,7 @@ fn sets_etrap(set: &SetCommand) -> bool {
             AllowIndirection::Plain(SetArgument { target, .. })
                 if matches!(
                     target.deref(),
-                    cos::AssignTarget::Single(SetTarget::Special(SpecialVariable::ETRAP(_)))
+                    cos::AssignTarget::Single(SetTarget::Special(var)) if matches!(var.deref(), SpecialVariable::ETRAP(_))
                 )
         )
     })
@@ -3633,10 +3636,7 @@ fn is_system_var<T>(base: &ExprOps<T>) -> bool {
     };
     matches!(
         base.deref().deref(),
-        AtomicExpr::SpecialVariable {
-            var: SpecialVariable::SYSTEM(..),
-            ..
-        }
+        AtomicExpr::SpecialVariable { var, .. } if matches!(var.deref(), SpecialVariable::SYSTEM(..))
     )
 }
 
@@ -4152,8 +4152,11 @@ impl CheckExprInner for SpecialVariable {
             SpecialVariable::THIS(..) => Ok(check_this(env, flow).into()),
             SpecialVariable::Unknown(name) => {
                 let name = name.print();
-                let suggestions =
-                    top_similar(&name, cos::SPECIAL_VARIABLE_NAMES.iter().copied(), 5);
+                let suggestions = top_similar(
+                    &name,
+                    cos::SPECIAL_VARIABLES.iter().map(|(name, _)| *name),
+                    5,
+                );
                 Err(TypeErrorKind::UnknownSpecialVariable {
                     name,
                     suggestions: Suggestions(suggestions),
@@ -4219,7 +4222,10 @@ impl CheckExprInner for AtomicExpr {
             AtomicExpr::String(string) => Ok(PowerTy::Const(types::Const::String(
                 string.deref().print().replace("\"\"", "\""),
             ))),
-            AtomicExpr::SpecialVariable { var, .. } => var.to_power_ty(env, flow),
+            AtomicExpr::SpecialVariable { var, .. } => {
+                report_style(env, cos::special_variable_use(var), &[]);
+                var.deref().to_power_ty(env, flow)
+            }
             AtomicExpr::This(..) => Ok(check_this(env, flow).into()),
             // `##class(X)` denotes the class itself, not an instance of it — unlike every
             // other string-to-`Ty` conversion here, which always produces an instance. A class
