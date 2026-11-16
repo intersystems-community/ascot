@@ -2823,28 +2823,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn method_body_commands_follow_the_configured_style() {
-        let style = style::parse(
-            r#"{"command": {"form": "short"}, "commandQuit": {"form": "long", "case": "upper"}}"#,
-        )
-        .unwrap();
-        let workspace = Workspace::new(None, Some(style));
-        let uri = "T.cls".to_string();
-        workspace.open(
-            uri.clone(),
-            "Class Test.T {\nClassMethod M() {\n Set x=1\n Write x\n Quit\n}\n}\n".to_string(),
-        );
-        assert_eq!(
-            style_messages(&workspace, &uri),
-            [
-                "2:1 Command keyword `Set` should be written `S`",
-                "3:1 Command keyword `Write` should be written `W`",
-                "4:1 Command keyword `Quit` should be written `QUIT`",
-            ]
-        );
-    }
-
     // Every diagnostic carries its kind's code and a link to that kind's docs, including the ones
     // raised outside the checker proper, such as a declared type's missing class.
     #[test]

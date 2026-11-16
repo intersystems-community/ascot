@@ -2,7 +2,9 @@
 //! CLI, the `style` setting of the LSP and MCP servers, or the second argument of a JS
 //! `createWorkspace`.
 
-use crate::bindings::{CommandStyle, FunctionStyle, KeywordCase, KeywordForm, Style};
+use crate::bindings::{
+    CommandStyle, FunctionStyle, KeywordCase, KeywordForm, Style, VariableStyle,
+};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -28,6 +30,7 @@ impl Styles {
 pub struct KeywordStyles {
     commands: Kind<CommandStyle>,
     functions: Kind<FunctionStyle>,
+    variables: Kind<VariableStyle>,
 }
 
 struct Kind<T> {
@@ -75,6 +78,7 @@ impl KeywordStyles {
         KeywordStyles {
             commands: Kind::new(&fields, "command"),
             functions: Kind::new(&fields, "function"),
+            variables: Kind::new(&fields, "variable"),
         }
     }
 
@@ -88,6 +92,10 @@ impl KeywordStyles {
             }
             KeywordKind::Function => {
                 let style = self.functions.of(&name);
+                (style.form, style.case)
+            }
+            KeywordKind::Variable => {
+                let style = self.variables.of(&name);
                 (style.form, style.case)
             }
         };

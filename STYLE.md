@@ -8,6 +8,7 @@ A style is a JSON file passed with `--style <file>` to `analyze` and `lsp`; the 
   "commandDo": { "form": "short", "allowPostconditionOnArgument": true },
   "function": { "form": "long", "case": "pascal" },
   "functionListbuild": { "form": "short" },
+  "variable": { "form": "long", "case": "upper" },
   "allowQuitForReturn": false,
   "conditionAnd": "double-ampersand",
   "maxNewPerBlock": 1,
@@ -21,12 +22,12 @@ A style is a JSON file passed with `--style <file>` to `analyze` and `lsp`; the 
 
 ## Keywords
 
-`command` applies to every command keyword, and `command<Name>` (the full name, capitalized: `commandDo`, `commandTstart`) completes it field by field for one; `function` and `function<Name>` do the same for intrinsic functions, without the `$`.
+`command` applies to every command keyword, and `command<Name>` (the full name, capitalized: `commandDo`, `commandTstart`) completes it field by field for one; `function` and `function<Name>` do the same for intrinsic functions, `variable` and `variable<Name>` for system variables (`variableHorolog`), both without the `$`.
 
 | Field | Values | Reports |
 |---|---|---|
 | `form` | `long`, `short` | `s` under `long`, `Set` under `short`; a keyword with no short form is never reported. |
-| `case` | `lower`, `upper`, `pascal` | `SET` under `pascal`. `pascal` spells a keyword as the documentation does (`TStart`, `ZWrite`) and an abbreviation from its full name (`Li` for `List`, `LB` for `ListBuild`). |
+| `case` | `lower`, `upper`, `pascal` | `SET` under `pascal`. `pascal` spells a keyword as the documentation does (`TStart`, `ZWrite`, `$HOROLOG`) and an abbreviation from its full name (`Li` for `List`, `LB` for `ListBuild`). |
 | `allowPostconditionOnArgument` (commands only) | `true`, `false` | Under `false`, a postconditional on an argument (`Do ^R:x`, `Goto L:x`, `Xecute c:x`) rather than on the keyword (`Do:x ^R`). |
 
 With `form` alone, any casing passes; with `case` alone, the form written is kept.

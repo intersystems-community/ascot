@@ -22,6 +22,7 @@ mod wit_bind {
             "iris:ascot/common/style": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/command-style": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/function-style": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/variable-style": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/brace-breaks": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/require-description": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/keyword-form": [#[serde(rename_all = "kebab-case")]],
