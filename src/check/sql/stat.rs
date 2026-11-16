@@ -18,7 +18,7 @@ impl Walk for Stat {
             Stat::TpRelated(tp) => tp.walk(w),
             Stat::Get(get) => {
                 if let Some((_, _, _, var, ..)) = &get.assignment {
-                    w.targets(var)
+                    w.written(var)
                 }
             }
             Stat::Call(call) => call.walk(w),
@@ -157,7 +157,7 @@ impl Walk for Call {
 impl Walk for Explain {
     fn walk(&self, w: &mut Walker) {
         if let Some((.., param)) = &self.into {
-            w.targets(param)
+            w.written(param)
         }
         match &*self.statement.1 {
             ExplainSQLStatement::Select(stat) => stat.walk(w),

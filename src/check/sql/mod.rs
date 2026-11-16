@@ -22,30 +22,36 @@ pub(super) struct Hosts {
 pub(super) fn hosts(sql: &SQL) -> Hosts {
     let mut w = Walker {
         hosts: Hosts::default(),
-        into: false,
+        access: Access::Read,
     };
     sql.stat.walk(&mut w);
     w.hosts
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Access {
+    Read,
+    Write,
+}
+
 struct Walker {
     hosts: Hosts,
-    into: bool,
+    access: Access,
 }
 
 impl Walker {
-    fn targets<T: Walk + ?Sized>(&mut self, t: &T) {
-        self.mode(true, t)
+    fn written<T: Walk + ?Sized>(&mut self, t: &T) {
+        self.with(Access::Write, t)
     }
 
-    fn inputs<T: Walk + ?Sized>(&mut self, t: &T) {
-        self.mode(false, t)
+    fn read<T: Walk + ?Sized>(&mut self, t: &T) {
+        self.with(Access::Read, t)
     }
 
-    fn mode<T: Walk + ?Sized>(&mut self, into: bool, t: &T) {
-        let was = std::mem::replace(&mut self.into, into);
+    fn with<T: Walk + ?Sized>(&mut self, access: Access, t: &T) {
+        let was = std::mem::replace(&mut self.access, access);
         t.walk(self);
-        self.into = was;
+        self.access = was;
     }
 
     fn host(&mut self, host_ref: &HostRef, subscripted: bool) {
@@ -57,10 +63,9 @@ impl Walker {
     }
 
     fn local(&mut self, name: String, subscripted: bool) {
-        if self.into {
-            self.hosts.writes.push((name, subscripted))
-        } else {
-            self.hosts.reads.push((name, subscripted))
+        match self.access {
+            Access::Write => self.hosts.writes.push((name, subscripted)),
+            Access::Read => self.hosts.reads.push((name, subscripted)),
         }
     }
 
@@ -161,7 +166,7 @@ impl<T: Walk + tygr::Grammar> Walk for OptionallyWrapped<T> {
 impl Walk for HostVar {
     fn walk(&self, w: &mut Walker) {
         w.host(&self.host_ref, self.subs.is_some());
-        w.inputs(&self.subs)
+        w.read(&self.subs)
     }
 }
 
@@ -189,7 +194,7 @@ impl Walk for Param {
             Param::HostVar(host_var) => host_var.walk(w),
             Param::Ident(ident, subs) => {
                 w.ident(ident, subs.is_some());
-                w.inputs(subs)
+                w.read(subs)
             }
         }
     }
@@ -251,8 +256,8 @@ impl Walk for Targt {
     fn walk(&self, w: &mut Walker) {
         if let Some((_, targt)) = &self.0 {
             match targt {
-                TargtEnum::Into(into) => w.targets(into),
-                TargtEnum::IntoList(into) => w.targets(&into.prefixed.1),
+                TargtEnum::Into(into) => w.written(into),
+                TargtEnum::IntoList(into) => w.written(&into.prefixed.1),
             }
         }
     }
