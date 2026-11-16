@@ -86,7 +86,11 @@ cargo add ascot --no-default-features --features network
 
 With no flag, the checker reads a workspace, a declaration file, a release whose file is
 already in `~/.ascot`, and a live instance the host connects to itself by implementing the
-`Atelier` trait over its own transport, as the VS Code extension's server does. The CLI can be
+`Atelier` trait over its own transport, as the VS Code extension's server does. Such a host
+can also carry a release's declaration asset itself, read it once with
+`Declarations::from_bytes` and ask it before its instance with `Chain`, so the system classes
+answer from the corrected declarations, the instance only for its own, and nothing is
+downloaded. The CLI can be
 built the same way: `cargo install ascot --no-default-features --features analyze` is an
 `ascot` with the `analyze` subcommand alone and no network code.
 
