@@ -73,9 +73,10 @@ pub mod sarif;
 pub mod settings;
 pub mod style;
 pub use atelier::{Atelier, AtelierContext};
+pub use declared::Declarations;
 #[cfg(not(target_arch = "wasm32"))]
 pub use iris::{
-    DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, LATEST as LATEST_IRIS, NONE as NO_IRIS,
+    Chain, DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, LATEST as LATEST_IRIS, NONE as NO_IRIS,
     open as open_iris, open_all as open_iris_all,
 };
 #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
@@ -231,6 +232,21 @@ pub trait IrisContext: Send + Sync {
 }
 
 type IrisHandle = Box<dyn IrisContext>;
+
+/// A context several workspaces share, each holding an `Arc` of the one parsed set.
+impl<T: IrisContext + ?Sized> IrisContext for std::sync::Arc<T> {
+    fn get_cls(&self, cls: &str) -> Result<Option<bindings::ClassInfo>, String> {
+        (**self).get_cls(cls)
+    }
+
+    fn get_inc(&self, name: &str) -> Result<Option<bindings::Source>, String> {
+        (**self).get_inc(name)
+    }
+
+    fn get_rtn(&self, name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
+        (**self).get_rtn(name)
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 impl IrisContext for bindings::IrisContext {
