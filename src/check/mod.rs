@@ -21,6 +21,7 @@ mod errors;
 mod flow;
 mod pattern;
 mod similar;
+mod sql;
 pub mod types;
 mod zutil;
 
@@ -2134,7 +2135,7 @@ impl CheckCommandInner for cos::Command {
                 })
             }
             cos::Command::CallMacro(x) => x.deref().check_as_command(env, flow),
-            cos::Command::ESQL(_, sql, _) => check_embedded_sql(flow, &sql.print()),
+            cos::Command::ESQL(_, statement, _) => check_embedded_sql(env, flow, statement),
             cos::Command::HTML(_, html, _) => check_embedded_expressions(flow, &html.print()),
             cos::Command::JS(cos::JSCommand { content, .. }) => {
                 check_embedded_expressions(flow, &content.print())
@@ -2656,51 +2657,43 @@ fn check_embedded_expressions(flow: &mut Flow<'_>, text: &str) -> Result<(), Qua
     Ok(())
 }
 
-// Host variables: the `INTO` list is assigned, the others read; every statement sets `SQLCODE`.
-fn check_embedded_sql(flow: &mut Flow<'_>, sql: &str) -> Result<(), QuasiTypeError> {
-    let bytes = sql.as_bytes();
-    let word_end = |mut j: usize| {
-        while j < bytes.len()
-            && (bytes[j].is_ascii_alphanumeric() || matches!(bytes[j], b'%' | b'_'))
-        {
-            j += 1;
-        }
-        j
+// Host variables. IRIS takes an `INTO` list at the top level only (a subquery's or a UNION
+// branch's is an error), so what a statement assigns is its own `INTO` list, a `CALL`'s `:x =`
+// output and, at a `FETCH`, the list its cursor was declared with; a `DECLARE` assigns nothing
+// yet. Every other `:name` is read, inputs before outputs; every statement sets `SQLCODE`.
+fn check_embedded_sql<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    statement: &tygr_objectscript::sql::SQL,
+) -> Result<(), QuasiTypeError> {
+    let hosts = sql::hosts(statement);
+    let subs = |subscripted| if subscripted { vec![Ty::Any] } else { vec![] };
+    let local = |(name, subscripted): (String, bool)| Local {
+        name,
+        subs: subs(subscripted),
     };
-    let (mut i, mut quote, mut into) = (0, None, false);
-    while i < bytes.len() {
-        let c = bytes[i];
-        if let Some(q) = quote {
-            quote = (c != q).then_some(q);
-        } else if c == b'\'' || c == b'"' {
-            quote = Some(c);
-        } else if c == b':'
-            && bytes
-                .get(i + 1)
-                .is_some_and(|n| n.is_ascii_alphabetic() || *n == b'%')
-            // After a closing quote it is a JSON key's colon (`USING {"header":true}`).
-            && sql[..i].trim_end().as_bytes().last() != Some(&b'"')
-        {
-            let end = word_end(i + 1);
-            let name = sql[i + 1..end].to_string();
-            let is_object = bytes.get(end) == Some(&b'.');
-            if flow::is_percent_variable(&name) {
-            } else if into && !is_object {
-                flow.handle_set(Local::bare(name), Ty::Any.into(), flow.range())?;
-            } else {
-                let ty = flow.handle_ref(Local::bare(name.clone()))?;
-                flow.value(&ty, || name)?;
-            }
-            i = end;
-            continue;
-        } else if c.is_ascii_alphabetic() {
-            let end = word_end(i);
-            let word = &sql[i..end];
-            into = word.eq_ignore_ascii_case("INTO") || word.eq_ignore_ascii_case("INTOLIST");
-            i = end;
-            continue;
+    // A `%` name is public and untracked.
+    let tracked = |(name, _): &(String, bool)| !flow::is_percent_variable(name);
+    for (name, subscripted) in hosts.reads.into_iter().filter(tracked) {
+        let ty = flow.handle_ref(local((name.clone(), subscripted)))?;
+        // IRIS reads an undefined input host variable as NULL (documented), so no <UNDEFINED>.
+        if ty.to_maybe_ty(env).maybe_defined().is_none() {
+            flow.add_soft_diagnostic(TypeErrorKind::UndefinedHostVariable { name }.into());
+        } else {
+            flow.value(&ty, || name)?;
         }
-        i += 1;
+    }
+    let writes = hosts.writes.into_iter().filter(tracked);
+    if let Some(cursor) = hosts.declares {
+        flow.declare_cursor(cursor, writes.map(|(name, _)| name).collect());
+    } else {
+        let declared = hosts
+            .fetches
+            .map(|cursor| flow.cursor_into(&cursor))
+            .unwrap_or_default();
+        for write in writes.chain(declared.into_iter().map(|n| (n, false))) {
+            flow.handle_set(local(write), Ty::Any.into(), flow.range())?;
+        }
     }
     flow.invalidate(
         Local::bare("SQLCODE".to_string()),

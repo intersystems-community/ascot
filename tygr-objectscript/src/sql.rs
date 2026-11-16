@@ -524,8 +524,8 @@ pub struct ParameterMarker(pub StringEq!("?"));
 #[derive(Grammar)]
 #[tygr(name = "host var")]
 pub struct HostVar {
-    host_ref: HostRef,
-    subs: Option<SubList>,
+    pub host_ref: HostRef,
+    pub subs: Option<SubList>,
 }
 
 pub type SubList =
@@ -548,8 +548,8 @@ pub enum InstanceVariableHostRef {
 #[tygr(name = "property host ref")]
 pub struct PropertyHostRef {
     colon: Option<StringEq!(":")>,
-    part1: HostIdentifier,
-    parts: Vec1<(StringEq!("."), Either<HostIdentifier, DelimitedIdentifier>)>,
+    pub part1: HostIdentifier,
+    pub parts: Vec1<(StringEq!("."), Either<HostIdentifier, DelimitedIdentifier>)>,
 }
 
 #[derive(Grammar)]
@@ -778,8 +778,8 @@ pub enum Case {
 #[tygr(name = "searched case")]
 pub struct SearchedCase {
     case_kw: (StringEqCI!("CASE"), Space),
-    when_clauses: Vec<SQLWhenClause>,
-    else_clause: Option<SQLElseClause>,
+    pub when_clauses: Vec<SQLWhenClause>,
+    pub else_clause: Option<SQLElseClause>,
     end_kw: (Space, StringEqCI!("END")),
 }
 
@@ -787,9 +787,9 @@ pub struct SearchedCase {
 #[tygr(name = "simple case")]
 pub struct SimpleCase {
     case_kw: (StringEqCI!("CASE"), Space),
-    expr: Scalx,
-    when_clauses: Vec<SQLSimpleCaseWhen>,
-    else_clause: Option<SQLElseClause>,
+    pub expr: Scalx,
+    pub when_clauses: Vec<SQLSimpleCaseWhen>,
+    pub else_clause: Option<SQLElseClause>,
     end_kw: (Space, StringEqCI!("END")),
 }
 
@@ -797,34 +797,34 @@ pub struct SimpleCase {
 #[tygr(inline)]
 pub struct SQLWhenClause {
     when_kw: (Space, StringEqCI!("WHEN"), Space),
-    condition: Prdct,
+    pub condition: Prdct,
     then_kw: (Space, StringEqCI!("THEN"), Space),
-    result: Scalx,
+    pub result: Scalx,
 }
 
 #[derive(Grammar)]
 #[tygr(inline)]
 pub struct SQLSimpleCaseWhen {
     when_kw: (Space, StringEqCI!("WHEN"), Space),
-    value: Scalx,
+    pub value: Scalx,
     then_kw: (Space, StringEqCI!("THEN"), Space),
-    result: Scalx,
+    pub result: Scalx,
 }
 
 #[derive(Grammar)]
 #[tygr(inline)]
 pub struct SQLElseClause {
     else_kw: (Space, StringEqCI!("ELSE"), Space),
-    result: Scalx,
+    pub result: Scalx,
 }
 
 #[derive(Grammar)]
 #[tygr(inline)]
 pub struct SQLCastExpression {
     open: (Space, StringEq!("("), Space),
-    expr: Scalx,
+    pub expr: Scalx,
     as_kw: (Space, StringEqCI!("AS"), Space),
-    cast_type: CastType,
+    pub cast_type: CastType,
     close: (Space, StringEq!(")")),
 }
 
@@ -843,9 +843,9 @@ pub type ArgsR<T = Scalx> = Wrap<(Space, StringEq!("("), Space), T, (Space, Stri
 #[tygr(inline)]
 pub struct ArgsRR<T1: Grammar = Scalx, T2: Grammar = Scalx> {
     open: (Space, StringEq!("("), Space),
-    arg1: T1,
+    pub arg1: T1,
     sep1: ArgSep,
-    arg2: T2,
+    pub arg2: T2,
     close: (Space, StringEq!(")")),
 }
 
@@ -853,11 +853,11 @@ pub struct ArgsRR<T1: Grammar = Scalx, T2: Grammar = Scalx> {
 #[tygr(inline)]
 pub struct ArgsRRR<T1: Grammar = Scalx, T2: Grammar = Scalx, T3: Grammar = Scalx> {
     open: (Space, StringEq!("("), Space),
-    arg1: T1,
+    pub arg1: T1,
     sep1: ArgSep,
-    arg2: T2,
+    pub arg2: T2,
     sep2: ArgSep,
-    arg3: T3,
+    pub arg3: T3,
     close: (Space, StringEq!(")")),
 }
 
@@ -870,13 +870,13 @@ pub struct ArgsRRRR<
     T4: Grammar = Scalx,
 > {
     open: (Space, StringEq!("("), Space),
-    arg1: T1,
+    pub arg1: T1,
     sep1: ArgSep,
-    arg2: T2,
+    pub arg2: T2,
     sep2: ArgSep,
-    arg3: T3,
+    pub arg3: T3,
     sep3: ArgSep,
-    arg4: T4,
+    pub arg4: T4,
     close: (Space, StringEq!(")")),
 }
 
@@ -887,8 +887,8 @@ pub type ArgsO<T = Scalx> =
 #[tygr(inline)]
 pub struct ArgsRO<T1: Grammar = Scalx, T2: Grammar = Scalx> {
     open: (Space, StringEq!("("), Space),
-    arg1: T1,
-    arg2: Option<(ArgSep, T2)>,
+    pub arg1: T1,
+    pub arg2: Option<(ArgSep, T2)>,
     close: (Space, StringEq!(")")),
 }
 
@@ -896,8 +896,8 @@ pub struct ArgsRO<T1: Grammar = Scalx, T2: Grammar = Scalx> {
 #[tygr(inline)]
 pub struct ArgsROO<T1: Grammar = Scalx, T2: Grammar = Scalx, T3: Grammar = Scalx> {
     open: (Space, StringEq!("("), Space),
-    arg1: T1,
-    rest: Option<(ArgSep, T2, Option<(ArgSep, T3)>)>,
+    pub arg1: T1,
+    pub rest: Option<(ArgSep, T2, Option<(ArgSep, T3)>)>,
     close: (Space, StringEq!(")")),
 }
 
@@ -905,10 +905,10 @@ pub struct ArgsROO<T1: Grammar = Scalx, T2: Grammar = Scalx, T3: Grammar = Scalx
 #[tygr(inline)]
 pub struct ArgsRRO<T1: Grammar = Scalx, T2: Grammar = Scalx, T3: Grammar = Scalx> {
     open: (Space, StringEq!("("), Space),
-    arg1: T1,
+    pub arg1: T1,
     sep1: ArgSep,
-    arg2: T2,
-    arg3: Option<(ArgSep, T3)>,
+    pub arg2: T2,
+    pub arg3: Option<(ArgSep, T3)>,
     close: (Space, StringEq!(")")),
 }
 
@@ -921,10 +921,10 @@ pub struct ArgsRROO<
     T4: Grammar = Scalx,
 > {
     open: (Space, StringEq!("("), Space),
-    arg1: T1,
+    pub arg1: T1,
     sep1: ArgSep,
-    arg2: T2,
-    rest: Option<(ArgSep, T3, Option<(ArgSep, T4)>)>,
+    pub arg2: T2,
+    pub rest: Option<(ArgSep, T3, Option<(ArgSep, T4)>)>,
     close: (Space, StringEq!(")")),
 }
 
@@ -1067,7 +1067,7 @@ pub type DatePart = OptionallyWrapped<DatePartCommon>;
 
 #[derive(Grammar)]
 #[tygr(name = "datepart_part")]
-pub struct DatePartPart(OptionallyWrapped<DatePartPartRaw>);
+pub struct DatePartPart(pub OptionallyWrapped<DatePartPartRaw>);
 
 #[derive(Grammar)]
 #[tygr(inline)]
@@ -1196,7 +1196,7 @@ pub enum PredictWith {
 pub struct PredictAssign {
     ident: Ident,
     eq: (Space, StringEq!("="), Space),
-    scalx: Scalx,
+    pub scalx: Scalx,
 }
 
 pub type ProbabilityFor = Prefix<(Space, StringEqCI!("FOR"), Space), Scalx>;
@@ -1218,7 +1218,7 @@ pub type SQLJSONObjectArgs = ArgsO<(SQLJSONKeyValuePairs, Option<JSONNullClause>
 
 #[derive(Grammar)]
 #[tygr(inline)]
-pub struct SQLJSONKeyValuePairs(VecSep<(Scalx, (Space, StringEq!(":"), Space), Scalx), ArgSep>);
+pub struct SQLJSONKeyValuePairs(pub VecSep<(Scalx, (Space, StringEq!(":"), Space), Scalx), ArgSep>);
 
 #[derive(Grammar)]
 #[tygr(name = "JSON null clause")]
@@ -1588,7 +1588,7 @@ pub enum WindowRowsBound {
 }
 #[derive(Grammar)]
 #[tygr(name = "prdct")]
-pub struct Prdct(VecSep<And, (Space, OrOperator, Space)>);
+pub struct Prdct(pub VecSep<And, (Space, OrOperator, Space)>);
 
 #[derive(Grammar)]
 #[tygr(name = "or operator")]
@@ -1599,7 +1599,7 @@ pub enum OrOperator {
 
 #[derive(Grammar)]
 #[tygr(name = "and")]
-pub struct And(VecSep<Cond, (Space, AndOperator, Space)>);
+pub struct And(pub VecSep<Cond, (Space, AndOperator, Space)>);
 
 #[derive(Grammar)]
 #[tygr(name = "and operator")]
@@ -1793,7 +1793,7 @@ pub enum JSONPredicateTypeConstraint {
 
 #[derive(Grammar)]
 #[tygr(name = "with list")]
-pub struct WithList(VecSep<WithListElement, ArgSep>);
+pub struct WithList(pub VecSep<WithListElement, ArgSep>);
 
 pub type WithClause = Prefix<(StringEqCI!("WITH"), Space), WithList>;
 
@@ -1854,7 +1854,7 @@ pub struct Selst {
 
 #[derive(Grammar)]
 #[tygr(name = "select list")]
-pub struct SelectList(VecSep<SelectItem, ArgSep>);
+pub struct SelectList(pub VecSep<SelectItem, ArgSep>);
 
 #[derive(Grammar)]
 #[tygr(name = "select item")]
@@ -1882,7 +1882,7 @@ pub type Into = Prefix<(StringEqCI!("INTO"), Space), HostList>;
 
 #[derive(Grammar)]
 #[tygr(name = "targt")]
-pub struct Targt(Option<(Space, TargtEnum)>);
+pub struct Targt(pub Option<(Space, TargtEnum)>);
 
 #[derive(Grammar)]
 #[tygr(inline)]
@@ -1893,7 +1893,7 @@ pub enum TargtEnum {
 
 #[derive(Grammar)]
 #[tygr(name = "host list")]
-pub struct HostList(VecSep<Param, ArgSep>);
+pub struct HostList(pub VecSep<Param, ArgSep>);
 
 pub type IntoList = Prefix<StringEqCI!("%INTOLIST"), (Space, Param)>;
 
@@ -2207,7 +2207,7 @@ pub enum RowRowsInline {
 }
 
 #[derive(Grammar)]
-pub struct Query(VecSep<QTerm, (Space, QueryOp, Space)>);
+pub struct Query(pub VecSep<QTerm, (Space, QueryOp, Space)>);
 
 #[derive(Grammar)]
 #[tygr(name = "query op")]
@@ -2344,7 +2344,7 @@ pub struct WhereWerop {
     sp1: Space,
     kw: StringEqCI!("WHERE"),
     sp2: Space,
-    werop: Werop,
+    pub werop: Werop,
 }
 
 #[derive(Grammar)]
@@ -2653,9 +2653,9 @@ pub enum ExplainSQLStatement {
 #[derive(Grammar)]
 #[tygr(name = "selct")]
 pub struct Selct {
-    query: Query,
-    order: Option<Order>,
-    row_limiting_clause: Option<RowLimitingClause>,
+    pub query: Query,
+    pub order: Option<Order>,
+    pub row_limiting_clause: Option<RowLimitingClause>,
 }
 
 #[derive(Grammar)]
@@ -3958,8 +3958,8 @@ pub enum TrainWith {
 pub struct WithValueAssignment {
     first_name: Ident,
     first_eq: (Space, StringEq!("="), Space),
-    first_val: WithExpression,
-    rest: Vec<(
+    pub first_val: WithExpression,
+    pub rest: Vec<(
         ArgSep,
         Ident,
         (Space, StringEq!("="), Space),
@@ -4250,10 +4250,10 @@ pub enum LevelsClause {
 #[derive(Grammar)]
 #[tygr(name = "sql")]
 pub struct SQL {
-    space_before: Space,
-    view_column_list: Option<(ViewColumnList, Space)>,
-    stat: Stat,
-    space_after: Space,
+    pub space_before: Space,
+    pub view_column_list: Option<(ViewColumnList, Space)>,
+    pub stat: Stat,
+    pub space_after: Space,
 }
 
 #[derive(Grammar)]
@@ -4266,14 +4266,14 @@ pub struct Thr {
     sp3: Space,
     tname: TName,
     sp4: Space,
-    remote_statement: WithStat<Selct>,
+    pub remote_statement: WithStat<Selct>,
 }
 
 #[derive(Grammar)]
 #[tygr(inline)]
 pub struct WithStat<T: Grammar> {
-    with_clause: Option<(WithClause, Space)>,
-    body: T,
+    pub with_clause: Option<(WithClause, Space)>,
+    pub body: T,
 }
 
 #[derive(Grammar)]
@@ -4343,15 +4343,15 @@ pub enum DatabaseName {
 #[tygr(name = "code specification")]
 pub struct CodeSpecification {
     open: (StringEq!("("), Space),
-    params: ParameterList,
+    pub params: ParameterList,
     close: (Space, StringEq!(")")),
     characteristics: Vec<MethodQueryCharacteristics>,
-    body: (Space, CodeBody),
+    pub body: (Space, CodeBody),
 }
 
 #[derive(Grammar)]
 #[tygr(name = "parameter list")]
-pub struct ParameterList(Option<VecSep<ParameterDeclaration, ArgSep>>);
+pub struct ParameterList(pub Option<VecSep<ParameterDeclaration, ArgSep>>);
 
 #[derive(Grammar)]
 #[tygr(name = "parameter declaration")]
@@ -4359,7 +4359,7 @@ pub struct ParameterDeclaration {
     direction: Option<(ParameterDirection, Space)>,
     name: Ident,
     datyp: (Space, Datyp),
-    default: Option<(Space, DefaultClause)>,
+    pub default: Option<(Space, DefaultClause)>,
 }
 
 #[derive(Grammar)]

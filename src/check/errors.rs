@@ -1020,6 +1020,28 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Variable '{name}' is assigned but never read"]
     UnreadAssignment { name: String },
+    /// An input host variable of embedded SQL, `:name` anywhere but an `INTO` list, that no path
+    /// assigns before the statement. IRIS compiles and runs the code, and the documentation says
+    /// what it does: an undefined input host variable is read as SQL NULL, so a `WHERE Name =
+    /// :name` matches nothing and a `VALUES (:name)` stores NULL. Assign the variable first, or
+    /// use `NULL` when NULL is meant.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UndefinedHostVariable
+    /// {
+    ///
+    /// ClassMethod Description() As %String
+    /// {
+    ///     &sql(SELECT Description INTO :description FROM %Dictionary.ClassDefinition WHERE Name = :className) //! A6627
+    ///     Quit description
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A6627"]
+    #[severity = Warning]
+    #[message = "Host variable ':{name}' is undefined here; embedded SQL reads it as NULL"]
+    UndefinedHostVariable { name: String },
     /// An assignment the body never reads that it cannot drop: the variable a `Catch` names,
     /// which the documentation prefers to a bare `Catch {`, or a formal argument of a method that
     /// overrides one, whose signature it keeps (A1841). IRIS compiles and runs the code; IRIS's own
