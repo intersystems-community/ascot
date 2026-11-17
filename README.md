@@ -83,16 +83,20 @@ cargo add ascot --no-default-features --features network
 - `network`: ascot reaching the network itself, for a live IRIS instance over its REST API
   (`RawAtelier`, `--iris http://...`) and for a release's pre-built declarations
   (`--iris latest`).
+- `bundled-declarations`: the default release's pre-built declarations in the binary,
+  `ascot::BUNDLED_DECLARATIONS`, for a host that resolves IRIS's own classes with nothing
+  downloaded; about 4 MB.
 
-With no flag, the checker reads a workspace, a declaration file, a release whose file is
-already in `~/.ascot`, and a live instance the host connects to itself by implementing the
-`Atelier` trait over its own transport, as the VS Code extension's server does. Such a host
-can also carry a release's declaration asset itself, read it once with
-`Declarations::from_bytes` and ask it before its instance with `Chain`, so the system classes
-answer from the corrected declarations, the instance only for its own, and nothing is
-downloaded. The CLI can be
-built the same way: `cargo install ascot --no-default-features --features analyze` is an
-`ascot` with the `analyze` subcommand alone and no network code.
+The CLI can be built from the same list: `cargo install ascot --no-default-features --features
+analyze` is an `ascot` with the `analyze` subcommand alone and no network code.
+
+With no flag, the checker reads a workspace, a declaration file, a release whose file is already
+in `~/.ascot`, and a live instance the host connects to itself by implementing the `Atelier` trait
+over its own transport, as the VS Code extension's server does. Such a host can also carry a
+release's declaration asset itself, `BUNDLED_DECLARATIONS` with its feature or one it fetched, read
+it once with `Declarations::from_bytes` and ask it before its instance with `Chain`, so the system
+classes answer from the corrected declarations, the instance only for its own, and nothing is
+downloaded.
 
 ### TypeScript/JavaScript (npm)
 
@@ -293,7 +297,12 @@ warning: R.mac:3:2-3 - Command keyword `s` should be written `Set` [S2839]
 warning: R.mac:4:2-8 - Use `Return` to leave a method or procedure; `Quit` is for loops and `Try` blocks [S4151]
 ```
 
-Every rule is described in [STYLE.md](STYLE.md).
+Every rule is described in [STYLE.md](STYLE.md). [`style.json`](style.json) is
+the recommended style, commands long and lowercase, functions and system
+variables long and uppercase; copy it into a folder as `.ascot/style.json` and
+edit it from there. It ships with the npm package (`lib/style.json`), with each
+release, and with each release's
+[diagnostics reference](https://intersystems-community.github.io/ascot/).
 
 ### Diagnostics Filter
 

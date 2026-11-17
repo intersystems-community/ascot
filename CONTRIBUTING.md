@@ -68,7 +68,8 @@ The doc comment is also what a user reads: `ascot diagnostics DIR` renders every
 severity, message and doc comment as Markdown pages, an index and one per code, and `docs/` is
 served by GitHub Pages as the reference the code at the end of a message links to. The convention:
 
-- `docs/unreleased/` is the reference of `main`. After a change to `type_error_kinds!`, run
+- `docs/unreleased/` is the reference of `main`. After a change to `type_error_kinds!`, or to
+  `style.json` (the recommended style, which `ascot diagnostics` copies in beside the pages), run
   `cargo run -- diagnostics docs/unreleased` and commit the result; CI fails when it is stale.
   A PR that touches `docs/unreleased` goes stale in the merge queue when a kind-changing PR
   merges ahead of it, so merge `main` and regenerate before re-queueing.
@@ -115,10 +116,12 @@ shasum -a 256 iris-community-2026.2.d.json.gz > iris-community-2026.2.d.json.gz.
 gh release upload declarations iris-community-2026.2.d.json.gz{,.sha256} --clobber
 ```
 
-Bump `DEFAULT_RELEASE` in `src/release.rs` when a new Community release's file is up. The
-format's version, `DECLARATIONS_VERSION` in `src/declared.rs`, is semver: a file is readable while
-its major part matches, so bump the major for a change old ascots can't read, the minor for an
-addition, and re-upload every release's file after a major bump.
+Bump `DEFAULT_RELEASE` in `src/release.rs` when a new Community release's file is up, and replace
+`declarations/iris-community-<release>.d.json.gz` with it: the `bundled-declarations` feature and
+the npm package carry that copy, and a bump without the file does not build. The format's version,
+`DECLARATIONS_VERSION` in `src/declared.rs`, is semver: a file is readable while its major part
+matches, so bump the major for a change old ascots can't read, the minor for an addition, and
+re-upload every release's file after a major bump.
 
 ### npm package
 
@@ -139,7 +142,7 @@ here, then `npm link @intersystems-community/ascot` there.
 ### Releasing
 
 Pushing a `v*.*.*` tag builds the `ascot` binary for Linux, macOS (Intel and
-Apple silicon) and Windows, attaches them to a GitHub release, publishes the
+Apple silicon) and Windows, attaches them and `style.json` to a GitHub release, publishes the
 `tygr-objectscript` and `ascot` crates to crates.io at the versions in their
 `Cargo.toml`s, and publishes the npm package at the version in
 `bindings/js/package.json`; bump those by hand first. crates.io rejects a

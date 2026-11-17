@@ -1,6 +1,6 @@
 # ascot diagnostics
 
-Every diagnostic ascot reports, from the checker's own definitions (`ascot diagnostics`). A code's page gives its severity and message, when it fires, what IRIS does with such code, what to change, and an example, in which a line ending in `//! A1234` is where that diagnostic lands. A code can be dropped or re-ranked with `-d`, as in `-d off:A1234`; see the README's Diagnostics Filter.
+Every diagnostic ascot reports, from the checker's own definitions (`ascot diagnostics`). A code's page gives its severity and message, when it fires, what IRIS does with such code, what to change, and an example, in which a line ending in `//! A1234` is where that diagnostic lands. A code can be dropped or re-ranked with `-d`, as in `-d off:A1234`; see the README's Diagnostics Filter. The style rules are in STYLE.md, and [style.json](style.json) is the recommended style file: commands long and lowercase, functions and system variables long and uppercase.
 
 ## Errors
 

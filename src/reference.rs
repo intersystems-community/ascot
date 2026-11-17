@@ -28,7 +28,9 @@ pub fn pages() -> Vec<(String, String)> {
               A code's page gives its severity and message, when it fires, what IRIS does with such \
               code, what to change, and an example, in which a line ending in `//! A1234` is where \
               that diagnostic lands. A code can be dropped or re-ranked with `-d`, as in \
-              `-d off:A1234`; see the README's Diagnostics Filter.\n\n";
+              `-d off:A1234`; see the README's Diagnostics Filter. The style rules are in STYLE.md, and \
+              [style.json](style.json) is the recommended style file: commands long and lowercase, \
+              functions and system variables long and uppercase.\n\n";
     for (label, plural) in [
         ("Error", "Errors"),
         ("Warning", "Warnings"),
@@ -63,7 +65,12 @@ pub fn pages() -> Vec<(String, String)> {
     pages
 }
 
-/// Writes the pages into `dir`, and nothing else is left there: a kind that is gone loses its page.
+/// The recommended style file, `style.json` at the repository root, shipped with the npm package,
+/// attached to each release and published with each release's reference.
+pub const STYLE_PRESET: &str = include_str!("../style.json");
+
+/// Writes the pages and the style preset into `dir`; no other page is left there: a kind that is
+/// gone loses its page.
 pub fn write(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     for entry in fs::read_dir(dir)? {
@@ -75,7 +82,7 @@ pub fn write(dir: &Path) -> io::Result<()> {
     for (name, text) in pages() {
         fs::write(dir.join(name), text)?;
     }
-    Ok(())
+    fs::write(dir.join("style.json"), STYLE_PRESET)
 }
 
 fn name(severity: &DiagnosticSeverity) -> &'static str {

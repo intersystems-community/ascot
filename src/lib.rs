@@ -83,6 +83,8 @@ pub use iris::{
 pub use iris_connection::RawAtelier;
 pub(crate) use macro_expand::SourceMap;
 pub(crate) use macro_expand::{Definitions, MacroDefinitions};
+#[cfg(not(target_arch = "wasm32"))]
+pub use release::{BUNDLED_DECLARATIONS, BundledDeclarations, DEFAULT_RELEASE};
 use tygr_objectscript::cos::ClassDefinitionHeader;
 pub use tygr_objectscript::{cos, sql};
 
@@ -1219,7 +1221,7 @@ impl Workspace {
                 return target
                     .members
                     .all()
-                    .find(|m| m.range == location.range)
+                    .find(|m| m.it.name.range == location.range)
                     .map(|m| MemberInfo {
                         uri: Some(location.uri.clone()),
                         ..MemberInfo::from(m)
@@ -2139,7 +2141,15 @@ mod tests {
             )
             .expect("expected a definition at that position");
         assert_eq!(location.uri, base_uri);
-        assert_eq!(location.range.start.line, 1);
+        // The name, `Foo` in `ClassMethod Foo() {`, not the whole member.
+        assert_eq!(
+            (location.range.start.line, location.range.start.character),
+            (1, 12)
+        );
+        assert_eq!(
+            (location.range.end.line, location.range.end.character),
+            (1, 15)
+        );
     }
 
     #[test]
