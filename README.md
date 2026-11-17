@@ -86,7 +86,11 @@ cargo add ascot --no-default-features --features network
 
 With no flag, the checker reads a workspace, a declaration file, a release whose file is
 already in `~/.ascot`, and a live instance the host connects to itself by implementing the
-`Atelier` trait over its own transport, as the VS Code extension's server does. The CLI can be
+`Atelier` trait over its own transport, as the VS Code extension's server does. Such a host
+can also carry a release's declaration asset itself, read it once with
+`Declarations::from_bytes` and ask it before its instance with `Chain`, so the system classes
+answer from the corrected declarations, the instance only for its own, and nothing is
+downloaded. The CLI can be
 built the same way: `cargo install ascot --no-default-features --features analyze` is an
 `ascot` with the `analyze` subcommand alone and no network code.
 
@@ -111,6 +115,12 @@ Lists the commands, and `ascot help <COMMAND>` (or
 `ascot <COMMAND> --help`) shows one's options; the IRIS, style and diagnostics
 ones are the [settings](#settings) described under Advanced Usage.
 
+The code at the end of a message links to its page in the
+[diagnostics reference](https://intersystems-community.github.io/ascot/), one
+per release: severity, message, when it fires, what IRIS does with such code,
+and an example; on a terminal, `analyze` prints the code as that link. `ascot diagnostics DIR`
+writes the pages.
+
 ### `ascot` as a CLI tool
 
 ```sh
@@ -124,10 +134,10 @@ is every file under `DIR` instead, so cross-file references resolve, and the
 a warning. Exits non-zero if any error or warning was found, or if a `PATH`
 doesn't exist.
 
-`--format lsp` prints the LSP diagnostic records per file instead of text, as
-the language server publishes and the MCP `check` tool returns them, and
-`--format sarif` one SARIF 2.1.0 document for code scanning. The summary stays
-on stderr and the exit code is the same.
+`--format lsp` prints the diagnostics of each file as JSON instead of text, in
+the shape the MCP `check` tool returns them, and `--format sarif` one SARIF
+2.1.0 document for code scanning. The summary stays on stderr and the exit code
+is the same.
 
 ### `ascot` as an MCP server
 
@@ -234,7 +244,7 @@ IRIS; `iris` says which:
   into `~/.ascot`.
 - `--iris <release>`: the snapshot of that IRIS release, the tag of its
   `iris-community` image; `--iris irishealth-community:<release>:HSLIB` that of
-  IRIS for Health's `HS` and `Ens` classes (7 MB), the namespace after the tag
+  IRIS for Health's `HS` and `Ens` classes (6 MB), the namespace after the tag
   and `%SYS` when left out; `latest` serves as the tag there too.
 - `--iris http://user:password@host:port[/prefix]` with `--iris-namespace`
   (default `%SYS`): a live connection to IRIS through the Atelier REST API.
@@ -243,6 +253,19 @@ IRIS; `iris` says which:
   requests, and no instance needed.
 - `--iris none`: no environment, so every class, routine or include outside the
   workspace is an error.
+- `--iris` more than once: the sources are asked in order, and the first that
+  holds a class, routine or include answers for it. `--iris latest --iris
+  http://...` reads the system classes from the snapshot, mask corrections
+  included, and your own from the instance; `--iris-namespace` applies to the
+  instances in the list, and `none` among others is a no-op. The `iris` setting
+  of the servers takes a list the same way.
+
+#### Supported IRIS Releases
+
+ascot prioritizes the latest InterSystems IRIS release, which CI tests against,
+and tries to support every release back to the earliest `YYYY.1` within the
+last two and a half years (2025.1 as of this writing): a failure there is a bug
+report we take.
 
 #### Build Your Own Declaration Files
 
@@ -253,7 +276,7 @@ machines without the instance can check against it:
 ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER path/to/declaration.d.json
 ```
 
-Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
+Without the file argument it writes `~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json`.
 
 ### Style
 
@@ -261,7 +284,7 @@ Without the file argument it writes `~/.ascot/<host>-<port>-<namespace>.d.json`.
 should be written; only what's set is checked, as a warning. For example, with
 
 ```json
-{ "command": { "form": "Long", "case": "Pascal" }, "allow_quit_for_return": false }
+{ "command": { "form": "long", "case": "pascal" }, "allowQuitForReturn": false }
 ```
 
 ```

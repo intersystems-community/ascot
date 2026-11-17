@@ -34,7 +34,7 @@ mkdir -p "$GEN"
 # never reach an import (they only parse the header and cache), so they stay sync.
 npx jco transpile "$COMPONENT" \
 	--name ascot \
-	--instantiation async \
+	--map "iris:ascot/imported=../dist/imports.js" \
 	--async-mode jspi \
 	--async-imports \
 		"iris:ascot/imported#[method]iris-context.get-cls" \
@@ -52,19 +52,7 @@ npx jco transpile "$COMPONENT" \
 		"iris:ascot/exported#[method]workspace.query-mem" \
 		"iris:ascot/exported#[method]workspace.document-symbol" \
 		"iris:ascot/exported#[method]workspace.workspace-symbol" \
-	--no-nodejs-compat \
 	-o "$GEN"
-
-# We always pass getCoreModule to instantiate(), so jco's fetch(import.meta.url)
-# fallback is dead code. Drop it: its dynamic `new URL(..., import.meta.url)` makes
-# bundlers glob the whole generated dir (including .d.ts) into a context module.
-echo "stripping dead fetch fallback ..."
-perl -0pi -e 's{^\s*if \(!getCoreModule\) getCoreModule = .*fetchCompile.*$}{    if (!getCoreModule) throw new Error("getCoreModule is required");}m' "$GEN/ascot.js"
-
-# The wasm modules are read via fs at runtime (not bundled as JS), so they live in lib/
-# alongside the original ascot.wasm rather than in the generated dir.
-echo "moving wasm modules to lib/ ..."
-mv "$GEN"/*.wasm lib/
 
 # The pre-built declarations of the IRIS release this ascot defaults to, from the
 # `declarations` GitHub Release, checksum verified: what `createWorkspace()` checks against
@@ -76,12 +64,13 @@ curl -sSLf --retry 3 --retry-all-errors "https://github.com/intersystems-communi
 curl -sSLf --retry 3 --retry-all-errors "https://github.com/intersystems-community/ascot/releases/download/declarations/$ASSET.sha256" -o "lib/$ASSET.sha256"
 (cd lib && (sha256sum -c "$ASSET.sha256" 2>/dev/null || shasum -a 256 -c "$ASSET.sha256") >/dev/null)
 rm "lib/$ASSET.sha256"
-printf '{ "release": "%s", "file": "%s" }\n' "$RELEASE" "$ASSET" > lib/declarations.json
+printf 'export const release = "%s";\nexport const file = new URL("./%s", import.meta.url);\n' "$RELEASE" "$ASSET" > lib/declarations.js
+printf 'export const release: string;\nexport const file: URL;\n' > lib/declarations.d.ts
 
 echo "compiling TypeScript wrapper ..."
 npx tsc -p tsconfig.json
 
 echo "done."
 echo "  glue (bundled):    $GEN/ascot.js + interfaces/"
-echo "  core wasm (fs):    lib/*.wasm"
+echo "  core wasm:         $GEN/ascot.core.wasm"
 echo "  wrapper (bundled): dist/"

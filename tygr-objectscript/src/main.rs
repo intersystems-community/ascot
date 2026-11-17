@@ -4,7 +4,7 @@
 
 use std::ops::Deref;
 use std::{env, fs, process::exit};
-use tygr::{Grammar, OLC};
+use tygr::{OLC, Parse, Print};
 use tygr_objectscript::cos;
 
 fn main() {
@@ -22,8 +22,8 @@ fn main() {
     let had_error = if path.ends_with(".cls") {
         check_class(&path, &content)
     } else {
-        match cos::Routine::scan(&content) {
-            Ok(()) => false,
+        match cos::Routine::parse(&content) {
+            Ok(_) => false,
             Err(err) => {
                 eprintln!("{err}");
                 true
@@ -79,13 +79,13 @@ fn check_method_body(method: &cos::Method) -> Result<(), (usize, tygr::Error)> {
 
     match (language, mode) {
         (
-            None | Some(cos::MethodLanguage::ObjectScript(..)),
+            None | Some(cos::MethodLanguage::ObjectScript(..) | cos::MethodLanguage::Cache(..)),
             None | Some(cos::CodeMode::Code(..)),
-        ) => cos::ProcedureBody::scan(&text),
+        ) => cos::ProcedureBody::parse(&text).map(drop),
         (
-            None | Some(cos::MethodLanguage::ObjectScript(..)),
+            None | Some(cos::MethodLanguage::ObjectScript(..) | cos::MethodLanguage::Cache(..)),
             Some(cos::CodeMode::Expression(..)),
-        ) => cos::ExprEntry::scan(&text),
+        ) => <cos::ExprBody>::parse(&text).map(drop),
         // Other languages (Python, ...) and modes (Call, Generator, ...) aren't ObjectScript,
         // so there's nothing here to parse.
         _ => Ok(()),
@@ -96,7 +96,9 @@ fn check_method_body(method: &cos::Method) -> Result<(), (usize, tygr::Error)> {
 // `err.pos()` is relative to the method body's own text, so it's offset by `body_start` (the
 // body's position within the whole file) to land on the right line/column.
 fn report(path: &str, olc: &OLC, method_name: &str, body_start: usize, err: &tygr::Error) {
-    let (line, character) = olc.offset_to_line_character(body_start + err.pos());
+    let (line, character) = olc
+        .offset_to_line_character(body_start + err.pos())
+        .unwrap_or_else(|e| e.bound);
     eprintln!(
         "{path}:{}:{}: in method {method_name}: {err}",
         line + 1,

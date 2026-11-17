@@ -1,5 +1,5 @@
-//! The `ascot` command-line binary: argument parsing (with `clap`) and the `analyze`, `parse`,
-//! `declare`, `mcp` and `lsp` subcommands documented in README.md.
+//! The `ascot` command-line binary: argument parsing (with `clap`) and the `analyze`, `declare`,
+//! `diagnostics`, `mcp` and `lsp` subcommands documented in README.md.
 //!
 //! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
 //! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
@@ -12,7 +12,7 @@ use ascot::bindings::Style;
 use ascot::diagnostic_filter::Filter;
 use ascot::report::{DiagnosticsResult, FileDiagnostics};
 #[cfg(feature = "lsp")]
-use ascot::settings::{Diagnostics, Settings, StyleSetting};
+use ascot::settings::{Diagnostics, IrisSetting, Settings, StyleSetting};
 use ascot::style;
 use std::fs;
 use std::io::{IsTerminal, Write};
@@ -21,7 +21,7 @@ use std::process::exit;
 #[cfg(feature = "declare")]
 use std::time::Instant;
 #[cfg(feature = "lsp")]
-use tygr::Grammar;
+use tygr::Print;
 
 use ascot::IrisContext;
 #[cfg(feature = "declare")]
@@ -67,8 +67,16 @@ enum Command {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
-    /// Report a file's syntax error, if any
+    /// Write the reference of every diagnostic as Markdown pages
     ///
+    /// An index and a page per code, with its severity, message, explanation and example, from
+    /// the checker's own definitions. In this repository `docs/unreleased` holds them for main and
+    /// `docs/<version>` for each release, published on GitHub Pages as the page the code at the
+    /// end of a message links to.
+    Diagnostics {
+        /// The directory to write; its other Markdown files are removed
+        dir: PathBuf,
+    },
     #[cfg(feature = "declare")]
     /// Save an IRIS namespace's declarations to a file
     ///
@@ -84,7 +92,7 @@ enum Command {
         #[arg(long, value_name = "NS")]
         iris_namespace: Option<String>,
         /// The declaration file to write, for example user.d.json
-        /// [default: ~/.ascot/<host>-<port>-<namespace>.d.json]
+        /// [default: ~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json]
         file: Option<PathBuf>,
     },
     #[cfg(feature = "mcp")]
@@ -124,8 +132,9 @@ struct OutputArgs {
     ///
     /// - `text`: one line per diagnostic, for reading.
     ///
-    /// - `lsp`: JSON, the diagnostics of each file as LSP `Diagnostic` objects, as the language
-    ///   server publishes them.
+    /// - `lsp`: JSON, the diagnostics of each file as the MCP `check` tool returns them: LSP-like
+    ///   records (range, severity, code, message, related information) in the WIT `diagnostic`
+    ///   record's spelling.
     ///
     /// - `sarif`: SARIF 2.1.0, for code scanning.
     ///
@@ -176,8 +185,9 @@ struct StyleArgs {
     /// A JSON file of style rules, such as how command keywords are spelled
     ///
     /// Its shape is the `style` record in src/wit/ascot.wit. Without it, no style is checked.
+    // A `String`: clap's `PathBuf` parser rejects the `""` a plugin's unset setting interpolates to.
     #[arg(long, value_name = "FILE")]
-    style: Option<PathBuf>,
+    style: Option<String>,
 }
 
 #[derive(Args)]
@@ -191,9 +201,12 @@ struct IrisArgs {
     /// another image's, `<image>:<tag>:<namespace>` for a namespace other than %SYS, as
     /// irishealth-community:<tag>:HSLIB for IRIS for Health's HS and Ens classes. An instance is
     /// given as http://user:password@host:port[/prefix]. With `none`, nothing outside the workspace
-    /// exists: every reference to such a class, routine or include is an error. [default: latest]
+    /// exists: every reference to such a class, routine or include is an error. Given more than
+    /// once, the sources are asked in order and the first that holds a document answers for it:
+    /// `--iris latest --iris http://...` reads the system classes from the snapshot and your own
+    /// from the instance. [default: latest]
     #[arg(long, value_name = "RELEASE|URL|FILE|none")]
-    iris: Option<String>,
+    iris: Vec<String>,
     /// The namespace of the live instance to use [default: %SYS]
     ///
     /// A release names its own after its tag, and a declaration file carries its own.
@@ -218,6 +231,12 @@ fn main() {
             filter.filter(),
             output.format,
         ),
+        Command::Diagnostics { dir } => {
+            if let Err(err) = ascot::reference::write(&dir) {
+                eprintln!("diagnostics: {}: {err}", dir.display());
+                exit(1);
+            }
+        }
         #[cfg(feature = "declare")]
         Command::Declare {
             iris,
@@ -237,11 +256,11 @@ fn main() {
             shared_fs,
         } => {
             let settings = Settings {
-                iris: iris.iris,
+                iris: IrisSetting::given(iris.iris),
                 iris_namespace: iris.iris_namespace,
                 style: style.load().map(StyleSetting::from),
                 diagnostics: Some(Diagnostics::List(
-                    filter.filter().0.iter().map(Grammar::print).collect(),
+                    filter.filter().0.iter().map(Print::print).collect(),
                 )),
             };
             if let Err(err) = ascot::lsp::run(settings, shared_fs) {
@@ -256,11 +275,11 @@ impl IrisArgs {
     /// Opens the release's declarations, the connection or the declaration file; `none` is no
     /// environment. Whatever can't be opened or fetched ends the run.
     fn open(self) -> Option<Box<dyn IrisContext>> {
-        let iris = (self.iris).unwrap_or_else(|| ascot::LATEST_IRIS.to_string());
-        match ascot::open_iris(&iris, self.iris_namespace.as_deref()) {
+        let irises: Vec<&str> = self.iris.iter().map(String::as_str).collect();
+        match ascot::open_iris_all(&irises, self.iris_namespace.as_deref()) {
             Ok(iris) => iris,
             Err(err) => {
-                eprintln!("--iris {iris}: {err}");
+                eprintln!("--iris {err}");
                 exit(1);
             }
         }
@@ -271,9 +290,9 @@ impl StyleArgs {
     /// Reads and parses `--style`, if given. Like `--iris`, a file that can't be read or parsed is
     /// an error up front, not a silent fallback to no style.
     fn load(self) -> Option<Style> {
-        let path = self.style.filter(|path| !path.as_os_str().is_empty())?;
+        let path = self.style.filter(|path| !path.is_empty())?;
         let fail = |err: String| -> ! {
-            eprintln!("--style: {}: {err}", path.display());
+            eprintln!("--style: {path}: {err}");
             exit(1)
         };
         let text = fs::read_to_string(&path).unwrap_or_else(|err| fail(err.to_string()));
@@ -436,11 +455,11 @@ fn analyze<'a>(
     workspace.set_diagnostic_filter(filter);
     insert_files(&workspace, &loaded);
 
-    let count = report_diagnostics(&workspace, &files, format);
-    eprintln!("{} diagnostic(s) across {} file(s)", count, files.len());
+    let (total, failing) = report_diagnostics(&workspace, &files, format);
+    eprintln!("{total} diagnostic(s) across {} file(s)", files.len());
     // `exit` runs no destructors; dropping the workspace ends its IRIS session.
     drop(workspace);
-    if count > 0 {
+    if failing > 0 {
         exit(1);
     }
 }
@@ -488,9 +507,9 @@ fn insert_files(workspace: &Workspace, files: &[PathBuf]) {
     }
 }
 
-// Prints every diagnostic, but only `Error`/`Warning` count toward the returned total (which
-// decides the exit code) -- a hint is worth seeing, not worth failing a build over.
-fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) -> usize {
+// Prints every diagnostic; returns the total and the errors and warnings, which alone decide the
+// exit code -- a hint is worth seeing, not worth failing a build over.
+fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) -> (usize, usize) {
     use ascot::bindings::DiagnosticSeverity::*;
     let files: Vec<FileDiagnostics> = files
         .iter()
@@ -500,7 +519,8 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
             FileDiagnostics { uri, diagnostics }
         })
         .collect();
-    let count = files
+    let total: usize = files.iter().map(|file| file.diagnostics.len()).sum();
+    let failing = files
         .iter()
         .flat_map(|file| &file.diagnostics)
         .filter(|diagnostic| matches!(diagnostic.severity, Error | Warning))
@@ -517,9 +537,24 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
                         (Information | Hint, true) => ("\x1b[2m", "\x1b[0m"),
                         (Error, false) => ("error: ", ""),
                         (Warning, false) => ("warning: ", ""),
-                        (Information | Hint, false) => ("hint: ", ""),
+                        (Information, false) => ("information: ", ""),
+                        (Hint, false) => ("hint: ", ""),
                     };
-                    print!("{}{}{}{}", on, file.uri, diagnostic.describe(), off);
+                    let mut text = diagnostic.describe();
+                    // On a terminal the code is a link to its page (OSC 8); a terminal that
+                    // doesn't know the sequence shows the plain code.
+                    if color && !diagnostic.code_description.is_empty() {
+                        let code = format!("[{}]", diagnostic.code);
+                        if let Some((first, rest)) = text.split_once('\n')
+                            && let Some(first) = first.strip_suffix(&code)
+                        {
+                            text = format!(
+                                "{first}\x1b]8;;{}\x1b\\{code}\x1b]8;;\x1b\\\n{rest}",
+                                diagnostic.code_description
+                            );
+                        }
+                    }
+                    print!("{}{}{}{}", on, file.uri, text, off);
                 }
             }
         }
@@ -531,7 +566,7 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
         Format::Sarif => println!("{}", files.into_iter().collect::<ascot::sarif::Log>()),
     }
     let _ = std::io::stdout().flush();
-    count
+    (total, failing)
 }
 
 fn collect_doc(path: &Path, out: &mut Vec<PathBuf>) {
@@ -546,10 +581,7 @@ fn collect_doc(path: &Path, out: &mut Vec<PathBuf>) {
         for entry in entries.flatten() {
             collect_doc(&entry.path(), out);
         }
-    } else if path
-        .extension()
-        .is_some_and(|ext| matches!(ext.to_str(), Some("cls" | "mac" | "int" | "inc")))
-    {
+    } else if path.to_str().and_then(ascot::DocKind::from_uri).is_some() {
         out.push(path.to_path_buf());
     }
 }

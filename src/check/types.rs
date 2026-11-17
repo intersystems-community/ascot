@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use tygr::Grammar;
+use tygr::{Parse, Print};
 
 use crate::bindings::{self, RefMode};
 use crate::check::{WorkspaceEnv, errors::*};
@@ -52,6 +52,17 @@ impl Const {
                 "" => Some(0),
                 prefix => prefix.trim_start_matches('+').parse().ok(),
             },
+        }
+    }
+
+    // Whether `=` holds between the two: the string equality `$CASE` tests with, so `1` is `"1"`.
+    pub fn same_value(&self, other: &Const) -> bool {
+        match (self, other) {
+            (Const::Integer(a), Const::Integer(b)) => a == b,
+            (Const::String(a), Const::String(b)) => a == b,
+            (Const::Integer(n), Const::String(s)) | (Const::String(s), Const::Integer(n)) => {
+                *s == n.to_string()
+            }
         }
     }
 
@@ -263,7 +274,7 @@ impl std::fmt::Display for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Term::Target => write!(f, "%?"),
-            Term::Const(v) => write!(f, "\"{}\"", v),
+            Term::Const(v) => v.fmt(f),
             Term::Neg(inner) => write!(f, "'({})", inner),
             Term::Infix { l, o, r } => write!(f, "{} {} {}", l, o, r),
         }
@@ -330,7 +341,7 @@ pub enum PowerTy {
         cases: Vec<(&'static str, Option<Ty>)>,
         // The outer Option determines if there is a default branch.
         //   There can be no default branches when all possible values are listed by cases.
-        // The inner Option determines if the default is defined, same as in AllBindings.assign
+        // The inner Option determines if the default is defined, same as `Binding::assigned` in `flow.rs`
         default: Option<Option<Ty>>,
     },
 }
@@ -511,7 +522,7 @@ pub enum Ty {
     #[default]
     Any,
     OREF(ClsOrIns),
-    // Only from the mask, and resolved by `Instantiate`.
+    // Only from the mask, and resolved by `ClassNames::instantiate`.
     This,
     Param(String),
 }
@@ -523,10 +534,17 @@ pub enum CollectionClass {
 }
 
 impl CollectionClass {
-    pub fn class(self) -> Ty {
-        Ty::from(match self {
-            CollectionClass::List => "%Collection.AbstractList",
-            CollectionClass::Array => "%Collection.AbstractArray",
+    /// The class a collection runs as: IRIS gives a `list Of` or `array Of` property a
+    /// `%Collection.ListOfDT`, `ListOfObj`, `ArrayOfDT` or `ArrayOfObj` by its element's kind.
+    /// With the element unresolved, the abstract class, which declares what every one has.
+    pub fn class(self, datatype: Option<bool>) -> Ty {
+        Ty::from(match (self, datatype) {
+            (CollectionClass::List, Some(true)) => "%Collection.ListOfDT",
+            (CollectionClass::List, Some(false)) => "%Collection.ListOfObj",
+            (CollectionClass::List, None) => "%Collection.AbstractList",
+            (CollectionClass::Array, Some(true)) => "%Collection.ArrayOfDT",
+            (CollectionClass::Array, Some(false)) => "%Collection.ArrayOfObj",
+            (CollectionClass::Array, None) => "%Collection.AbstractArray",
         })
     }
 
@@ -543,9 +561,10 @@ pub struct ClassTy {
     pub name: String,
     // By parameter name.
     pub generics: BTreeMap<String, String>,
-    // `PATTERN` of a datatype, `%String(PATTERN="1N")`: the one type parameter the checker reads,
-    // as the shape a value must have.
+    // `PATTERN` of a datatype, `%String(PATTERN="1N")`: the shape a value must have.
     pub pattern: Option<String>,
+    // `VALUELIST` of a datatype, `%String(VALUELIST=",A,B")`: the values it may hold.
+    pub value_list: Option<Vec<String>>,
 }
 
 pub fn normalize_class_name(name: &mut String) {
@@ -557,12 +576,12 @@ pub fn normalize_class_name(name: &mut String) {
 impl From<String> for ClassTy {
     fn from(mut name: String) -> Self {
         // `%String(MAXLEN=50)`, as a declaration read from IRIS writes it.
-        let mut pattern = None;
+        let (mut pattern, mut value_list) = (None, None);
         if let Some(i) = name.find('(') {
-            pattern = TypeParamList::parse(&name[i..])
-                .ok()
-                .as_ref()
-                .and_then(pattern_param);
+            if let Ok(params) = TypeParamList::parse(&name[i..]) {
+                pattern = pattern_param(&params);
+                value_list = value_list_param(&params);
+            }
             name.truncate(name[..i].trim_end().len());
         }
         normalize_class_name(&mut name);
@@ -570,23 +589,43 @@ impl From<String> for ClassTy {
             name,
             generics: BTreeMap::new(),
             pattern,
+            value_list,
         }
     }
 }
 
-// The `PATTERN` among a declared type's parameters, its quotes removed.
-fn pattern_param(params: &TypeParamList) -> Option<String> {
-    let param = params.items.iter().find(|p| p.name.print() == "PATTERN")?;
+// The value of `name` among a declared type's parameters, its quotes removed.
+fn string_param(params: &TypeParamList, name: &str) -> Option<String> {
+    let param = params.items.iter().find(|p| p.name.print() == name)?;
     Some(match &param.value {
         OSExpr::String(literal) => super::pattern::unquote(literal),
         other => other.print(),
     })
 }
 
-// `ty` with the `PATTERN` its declaration's type parameters carry, if any.
+fn pattern_param(params: &TypeParamList) -> Option<String> {
+    string_param(params, "PATTERN")
+}
+
+// A `VALUELIST` starts with its own delimiter: `",A,B"` lists `A` and `B`.
+fn value_list_param(params: &TypeParamList) -> Option<Vec<String>> {
+    let list = string_param(params, "VALUELIST")?;
+    let mut chars = list.chars();
+    let delimiter = chars.next()?;
+    Some(
+        chars
+            .as_str()
+            .split(delimiter)
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+// `ty` with the `PATTERN` and `VALUELIST` its declaration's type parameters carry, if any.
 pub(crate) fn with_pattern(mut ty: Ty, params: Option<&TypeParamList>) -> Ty {
     if let (Ty::OREF(ClsOrIns::Ins(cls)), Some(params)) = (&mut ty, params) {
         cls.pattern = pattern_param(params);
+        cls.value_list = value_list_param(params);
     }
     ty
 }
@@ -613,6 +652,10 @@ impl std::fmt::Display for ClassTy {
             .collect();
         if let Some(pattern) = &self.pattern {
             args.push(format!("PATTERN = \"{}\"", pattern.replace('"', "\"\"")));
+        }
+        if let Some(values) = &self.value_list {
+            let list = values.iter().map(|v| format!(",{v}")).collect::<String>();
+            args.push(format!("VALUELIST = \"{}\"", list.replace('"', "\"\"")));
         }
         if !args.is_empty() {
             write!(f, "({})", args.join(", "))?;
@@ -667,17 +710,6 @@ pub enum PropertyTy {
 impl Default for PropertyTy {
     fn default() -> Self {
         PropertyTy::Value(Ty::Any)
-    }
-}
-
-impl PropertyTy {
-    pub fn to_ty(&self) -> Ty {
-        match self {
-            PropertyTy::Value(ty)
-            | PropertyTy::Multidimensional(ty)
-            | PropertyTy::Dispatched(ty) => ty.clone(),
-            PropertyTy::Collection { kind, .. } => kind.class(),
-        }
     }
 }
 
@@ -905,10 +937,10 @@ pub struct TyProcedure {
     // False for a routine label with no `(...)` at all: `Do` and `Goto` reach it, `$$` can't (IRIS
     // raises <PARAMETER>). Labels read from IRIS don't say, so they count as true.
     pub formal_list: bool,
-    // Shared by every parameter's `declared_at`. Only populated for legacy routine labels so far.
+    // Shared by every parameter's `declared_at`.
     pub uri: Option<String>,
     // Where the procedure itself (not a parameter) is declared — e.g. a routine label's own
-    // line. Only populated for legacy routine labels so far.
+    // line.
     pub declared_at: Option<bindings::Range>,
 }
 
@@ -988,6 +1020,38 @@ pub(crate) fn relationship_object(t: Option<String>) -> Ty {
 // member type takes before it leaves its declaring class.
 pub(crate) trait ClassNames {
     fn class_names(&mut self, f: &mut dyn FnMut(&mut Ty));
+
+    // `This` is the receiver's class; `..#NAME` the receiver's argument for the parameter `NAME`
+    // that `owner`, the member's declaring class, defines: the receiver type's own, else the value
+    // `given` finds on the receiver's class, else `owner`'s default.
+    fn instantiate(
+        &mut self,
+        receiver: &ClassTy,
+        owner: &str,
+        given: &dyn Fn(&str) -> Option<String>,
+    ) {
+        self.class_names(&mut |ty| instantiate_ty(ty, receiver, owner, given));
+    }
+}
+
+fn instantiate_ty(
+    ty: &mut Ty,
+    receiver: &ClassTy,
+    owner: &str,
+    given: &dyn Fn(&str) -> Option<String>,
+) {
+    match ty {
+        Ty::This => *ty = Ty::ins(receiver.clone()),
+        Ty::Param(param) => {
+            let arg = (receiver.generics.get(param).cloned())
+                .or_else(|| given(param))
+                .or_else(|| crate::mask::generic_default(owner, param));
+            if let Some(arg) = arg {
+                *ty = Ty::from(arg);
+            }
+        }
+        Ty::Any | Ty::OREF(_) => {}
+    }
 }
 
 impl ClassNames for Ty {
@@ -1035,104 +1099,11 @@ impl ClassNames for PropertyTy {
     }
 }
 
-// `This` is the receiver's class; `..#NAME` the receiver's argument for the parameter `NAME`
-// that `owner`, the member's declaring class, defines: the receiver type's own, else the value
-// `given` finds on the receiver's class, else `owner`'s default.
-pub(crate) trait Instantiate {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    );
-}
-
-impl Instantiate for Ty {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    ) {
-        match self {
-            Ty::This => *self = Ty::ins(receiver.clone()),
-            Ty::Param(param) => {
-                let arg = (receiver.generics.get(param).cloned())
-                    .or_else(|| given(param))
-                    .or_else(|| crate::mask::generic_default(owner, param));
-                if let Some(arg) = arg {
-                    *self = Ty::from(arg);
-                }
-            }
-            Ty::Any | Ty::OREF(_) => {}
-        }
-    }
-}
-
-impl<T: Instantiate> Instantiate for Option<T> {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    ) {
-        if let Some(t) = self {
-            t.instantiate(receiver, owner, given);
-        }
-    }
-}
-
-impl Instantiate for TyProcedure {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    ) {
-        for arg in &mut self.normal_args {
-            arg.ty.instantiate(receiver, owner, given);
-        }
-        if let Some(arg) = &mut self.variadic_arg {
-            arg.ty.instantiate(receiver, owner, given);
-        }
-        self.out.instantiate(receiver, owner, given);
-    }
-}
-
 impl TyProcedureOrAny {
     pub fn procedure(&self) -> Option<&Arc<TyProcedure>> {
         match self {
             TyProcedureOrAny::Procedure(proc) => Some(proc),
             TyProcedureOrAny::Any => None,
-        }
-    }
-}
-
-impl Instantiate for TyProcedureOrAny {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    ) {
-        if let TyProcedureOrAny::Procedure(proc) = self {
-            Arc::make_mut(proc).instantiate(receiver, owner, given);
-        }
-    }
-}
-
-impl Instantiate for PropertyTy {
-    fn instantiate(
-        &mut self,
-        receiver: &ClassTy,
-        owner: &str,
-        given: &dyn Fn(&str) -> Option<String>,
-    ) {
-        match self {
-            PropertyTy::Value(ty)
-            | PropertyTy::Multidimensional(ty)
-            | PropertyTy::Dispatched(ty)
-            | PropertyTy::Collection { element: ty, .. } => ty.instantiate(receiver, owner, given),
         }
     }
 }

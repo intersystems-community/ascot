@@ -341,9 +341,10 @@ impl Server {
         }))
     }
 
-    /// Go to definition: find where the reference at a position is declared (member/method access
-    /// like `x.Foo`, `x.Foo()`, `i%Foo`). Doesn't cover a bare `##class(Name)` or `..Method`
-    /// self-reference — those have no recorded declaration site yet.
+    /// Go to definition: where the reference at a position is declared: a class in
+    /// `##class(Name)`, a member (`x.Foo`, `x.Foo()`, `i%Foo`, `..Foo`) or a label of the same
+    /// routine. Returns no location for what resolves to none: `%New`, a class the environment
+    /// gives no uri for, a computed `Goto`, or anything in SQL.
     #[tool]
     pub async fn definition(
         &self,

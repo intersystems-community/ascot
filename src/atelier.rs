@@ -5,11 +5,13 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::Value;
-use tygr::{Grammar, GrammarRule, Prefix, Raw, StringEq, StringOf1, VecSep};
+use tygr::{Grammar, Parse, Prefix, Print, Raw, StringEq, StringOf1};
+use tygr_objectscript::cos::VecSep;
 
 use crate::IrisContext;
 use crate::bindings::{
@@ -78,6 +80,10 @@ impl Atelier for crate::bindings::Atelier {
 /// The `IrisContext` that looks code up through an `Atelier`, caching what it finds.
 pub struct AtelierContext {
     atelier: Box<dyn Atelier>,
+    // Set once the instance has answered that `%Dictionary.CompiledIndex` has no `_Deferred`
+    // column. For IRIS 2025.1, the last release without deferred indexes: when 2025.1 retires,
+    // drop this and the retry in `all_mem_rows`, and ask for `_Deferred` directly.
+    no_deferred_column: AtomicBool,
     cls_cache: Cache<Option<ClassInfo>>,
     routine_cache: Cache<Option<Source>>,
     rtn_cache: Cache<Option<RoutineInfo>>,
@@ -87,6 +93,7 @@ impl<A: Atelier + 'static> From<A> for AtelierContext {
     fn from(atelier: A) -> Self {
         Self {
             atelier: Box::new(atelier),
+            no_deferred_column: AtomicBool::new(false),
             cls_cache: Cache::new(),
             routine_cache: Cache::new(),
             rtn_cache: Cache::new(),
@@ -283,7 +290,12 @@ fn drop_query_methods(members: &mut Vec<MemberInfo>) {
         else {
             continue;
         };
-        let (normal, variadic) = (sig.normal[1..].to_vec(), sig.variadic.clone());
+        // Its first parameter is the query handle; without one (a hand-written `Execute`, or a
+        // spec the grammar couldn't read) the query keeps its own view.
+        let Some(rest) = sig.normal.get(1..) else {
+            continue;
+        };
+        let (normal, variadic) = (rest.to_vec(), sig.variadic.clone());
         let Some(MemberKind::Query(sig)) = members
             .iter_mut()
             .find(|m| &m.name == query)
@@ -376,13 +388,21 @@ struct MemberRow {
     index_unique: Value,
 }
 
-// The dictionary holds a parameter's compiled value, bare; the header spells it as source, so a
-// non-number is quoted the way `Parameter P = "..."` writes it. A value with a line break has no
-// literal spelling (it came from an `{expression}`), so it is left out.
+// The dictionary holds a parameter's compiled value, bare; the header spells it as source, so
+// anything but a number IRIS compiles bare (`inf`, `NaN` and `1.` are not) is quoted. A value with
+// a line break came from an `{expression}` and has no literal spelling, so it is left out.
 fn parameter_source(value: &str) -> Option<String> {
     if value.contains(['\n', '\r']) {
         None
-    } else if value.parse::<f64>().is_ok() {
+    } else if value.parse::<f64>().is_ok()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b"+-.eE".contains(&b))
+        && value
+            .split('.')
+            .skip(1)
+            .all(|s| s.starts_with(|c: char| c.is_ascii_digit()))
+    {
         Some(value.to_string())
     } else {
         Some(format!("\"{}\"", value.replace('"', "\"\"")))
@@ -401,9 +421,6 @@ fn is_truthy(v: &Value) -> bool {
     matches!(v, Value::Bool(true)) || v.as_str() == Some("1") || v.as_i64() == Some(1)
 }
 
-// Every member declared directly on the classes matching `Parent {filter}`, across all three
-// tables -- one query per batch instead of one per member, since `get_cls` always wants the
-// whole list at once.
 // A class's own members (`Origin = Parent`): methods, properties and parameters, then its indices
 // and queries, whose generated methods ascot synthesizes. Two requests: one `UNION` of all five
 // tables overflows IRIS's query stack for a batch of classes.
@@ -427,12 +444,13 @@ fn all_mem_rows(
              DefaultValue FROM %Dictionary.CompiledParameter WHERE Parent {filter} AND Origin = \
              Parent"
     );
-    let generating = format!(
-        "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, Description, \
+    let generating = |deferred: &str| {
+        format!(
+            "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, Description, \
              Properties AS FormalSpec, NULL AS ReturnType, NULL AS Collection, 0 AS \
              MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
              Deprecated, Origin, Abstract AS IndexAbstract, Condition AS IndexCondition, \
-             CoshardWith AS IndexCoshardWith, Data AS IndexData, _Deferred AS IndexDeferred, \
+             CoshardWith AS IndexCoshardWith, Data AS IndexData, {deferred} AS IndexDeferred, \
              Extent AS IndexExtent, IdKey AS IndexIdKey, Internal AS IndexInternal, PrimaryKey AS \
              IndexPrimaryKey, ShardKey AS IndexShardKey, SqlName AS IndexSqlName, Type AS \
              IndexType, _Unique AS IndexUnique FROM %Dictionary.CompiledIndex WHERE Parent \
@@ -444,9 +462,23 @@ fn all_mem_rows(
              IndexIdKey, 0 AS IndexInternal, 0 AS IndexPrimaryKey, 0 AS IndexShardKey, NULL AS \
              IndexSqlName, NULL AS IndexType, 0 AS IndexUnique FROM %Dictionary.CompiledQuery \
              WHERE Parent {filter} AND Origin = Parent"
-    );
+        )
+    };
     let mut rows = member_rows(conn, &declared, &[params, params, params].concat())?;
-    rows.extend(member_rows(conn, &generating, &[params, params].concat())?);
+    let params = [params, params].concat();
+    let generated = if conn.no_deferred_column.load(Ordering::Relaxed) {
+        member_rows(conn, &generating("0"), &params)
+    } else {
+        match member_rows(conn, &generating("_Deferred"), &params) {
+            // SQLCODE -29, field not found: IRIS 2025.1, without deferred indexes. Drop with it.
+            Err(err) if err.to_ascii_uppercase().contains("_DEFERRED") => {
+                conn.no_deferred_column.store(true, Ordering::Relaxed);
+                member_rows(conn, &generating("0"), &params)
+            }
+            rows => rows,
+        }
+    };
+    rows.extend(generated?);
     Ok(rows)
 }
 
@@ -637,7 +669,16 @@ tygr::char_class!(IsCompiledDefaultText, "default_char", |ch| {
 });
 
 fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
-    let Ok(CompiledFormalSpec(Some(formals))) = CompiledFormalSpec::parse(spec) else {
+    // A spec this grammar can't read is a method of unknown arity, not one without parameters.
+    let Ok(CompiledFormalSpec(formals)) = CompiledFormalSpec::parse(spec) else {
+        let any = VariadicArg {
+            mode: None,
+            name: "args".into(),
+            t: None,
+        };
+        return (vec![], Some(any));
+    };
+    let Some(formals) = formals else {
         return (vec![], None);
     };
     let mut normal = vec![];
@@ -663,11 +704,6 @@ fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
     }
     (normal, variadic)
 }
-
-// Each of `names` that has source, read from the first of `exts` it exists as.
-
-// Every request without a session cookie opens a CSP session, which holds a license slot until
-// the web application's timeout. The agent keeps the cookie, so there's one session; this ends it.
 
 #[cfg(test)]
 mod tests {
@@ -821,6 +857,50 @@ mod tests {
     }
 
     #[test]
+    fn a_query_whose_execute_method_has_no_parameters_keeps_its_own() {
+        let member = |name: &str, kind| MemberInfo {
+            doc: String::new(),
+            name: name.into(),
+            aliases: vec![],
+            deprecated: false,
+            kind,
+            uri: None,
+            origin: None,
+        };
+        let signature = |normal| Signature {
+            normal,
+            variadic: None,
+            t: None,
+            procedure_block: None,
+        };
+        let x = NormalArg {
+            mode: None,
+            name: "x".into(),
+            t: Some("%String".into()),
+            default: None,
+        };
+        let mut members = vec![
+            member("Q", MemberKind::Query(signature(vec![x]))),
+            member("QExecute", MemberKind::ClassMethod(signature(vec![]))),
+        ];
+        drop_query_methods(&mut members);
+        let [query] = &members[..] else {
+            panic!("{members:?}")
+        };
+        let MemberKind::Query(sig) = &query.kind else {
+            panic!("{query:?}")
+        };
+        assert_eq!(sig.normal.len(), 1);
+    }
+
+    #[test]
+    fn an_unreadable_formal_spec_takes_any_arguments() {
+        let (normal, variadic) = parse_formal_spec("x:%String=((");
+        assert!(normal.is_empty());
+        assert!(variadic.is_some());
+    }
+
+    #[test]
     fn empty_formal_spec_has_no_args() {
         let (normal, variadic) = parse_formal_spec("");
         assert!(normal.is_empty());
@@ -836,9 +916,4 @@ mod tests {
             [Some("$$$OK"), Some(r#"$lb(1,"a,b",$g(x))"#), Some("{{}}")]
         );
     }
-
-    // An HTTP server answering each request with the first of `routes` whose path suffix
-    // matches the request's path (`("", ...)` matches anything).
-    // `stub_server` that also sets a session cookie, and records each request as its first line
-    // plus the cookie it carried, if any.
 }

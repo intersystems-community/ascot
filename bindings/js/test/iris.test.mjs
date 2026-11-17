@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
-import ascot from "../dist/index.js";
+import * as ascot from "../dist/index.js";
 
 const { Atelier, createWorkspace } = ascot;
 
@@ -154,15 +154,15 @@ test("a declaration file's bytes are the environment; none is the strictest chec
 });
 
 test("a request that fails leaves what it was for taken on trust, saying why", async () => {
-  const hint = (what) => [
-    "hint",
+  const information = (what) => [
+    "information",
     "A4471",
     `Cannot look up ${what} on the IRIS instance (IRIS is down), so it is taken on trust`,
   ];
   // Once per call into the routine: a failed lookup isn't cached.
   assert.deepEqual((await check(new DeadAtelier())).sort(), [
-    hint("class '%Library.DynamicObject'"),
-    hint("routine '%SYS.API'"),
-    hint("routine '%SYS.API'"),
+    information("class '%Library.DynamicObject'"),
+    information("routine '%SYS.API'"),
+    information("routine '%SYS.API'"),
   ]);
 });

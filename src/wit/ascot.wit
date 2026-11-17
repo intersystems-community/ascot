@@ -142,7 +142,7 @@ interface common {
     // `extends` entry rather than the leftmost.
     enum inheritance { left, right }
 
-    enum language { objectscript, python, tsql, ispl, javascript }
+    enum language { objectscript, python, tsql, ispl, javascript, mvbasic }
 
     // A class as declared: its header, its own members, and the class keywords ascot reads
     // (https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=ROBJ_class),
@@ -222,6 +222,12 @@ interface common {
         case: option<keyword-case>,
     }
 
+    // How a system variable's name is written; a field left out allows either.
+    record variable-style {
+        form: option<keyword-form>,
+        case: option<keyword-case>,
+    }
+
     enum and-operator {
         comma,
         double-ampersand,
@@ -243,7 +249,7 @@ interface common {
 
     // A field left out isn't checked. `command` applies to every command, and `command-<name>`
     // overrides it field by field for one; `function` and `function-<name>` do the same for
-    // intrinsic functions.
+    // intrinsic functions, `variable` and `variable-<name>` for system variables.
     record style {
         // `Return` leaves a method or procedure; `Quit` is for loops and `Try` blocks.
         allow-quit-for-return: option<bool>,
@@ -455,6 +461,58 @@ interface common {
         function-zwpack: option<function-style>,
         function-zwunpack: option<function-style>,
         function-zzenkaku: option<function-style>,
+        variable: option<variable-style>,
+        variable-device: option<variable-style>,
+        variable-estack: option<variable-style>,
+        variable-etrap: option<variable-style>,
+        variable-ecode: option<variable-style>,
+        variable-halt: option<variable-style>,
+        variable-horolog: option<variable-style>,
+        variable-io: option<variable-style>,
+        variable-job: option<variable-style>,
+        variable-key: option<variable-style>,
+        variable-mvsysretcode: option<variable-style>,
+        variable-mvam: option<variable-style>,
+        variable-mvvm: option<variable-style>,
+        variable-mvsm: option<variable-style>,
+        variable-namespace: option<variable-style>,
+        variable-principal: option<variable-style>,
+        variable-quit: option<variable-style>,
+        variable-roles: option<variable-style>,
+        variable-stack: option<variable-style>,
+        variable-system: option<variable-style>,
+        variable-storage: option<variable-style>,
+        variable-throwobj: option<variable-style>,
+        variable-tlevel: option<variable-style>,
+        variable-this: option<variable-style>,
+        variable-trs: option<variable-style>,
+        variable-tid: option<variable-style>,
+        variable-test: option<variable-style>,
+        variable-username: option<variable-style>,
+        variable-x: option<variable-style>,
+        variable-y: option<variable-style>,
+        variable-zchild: option<variable-style>,
+        variable-zeof: option<variable-style>,
+        variable-zeos: option<variable-style>,
+        variable-zerror: option<variable-style>,
+        variable-zhorolog: option<variable-style>,
+        variable-zio: option<variable-style>,
+        variable-zjob: option<variable-style>,
+        variable-zmode: option<variable-style>,
+        variable-zname: option<variable-style>,
+        variable-znspace: option<variable-style>,
+        variable-zorder: option<variable-style>,
+        variable-zparent: option<variable-style>,
+        variable-zpi: option<variable-style>,
+        variable-zposition: option<variable-style>,
+        variable-zreference: option<variable-style>,
+        variable-zstorage: option<variable-style>,
+        variable-ztimestamp: option<variable-style>,
+        variable-ztimezone: option<variable-style>,
+        variable-ztrap: option<variable-style>,
+        variable-zversion: option<variable-style>,
+        variable-za: option<variable-style>,
+        variable-zb: option<variable-style>,
     }
 
     enum diagnostic-severity {

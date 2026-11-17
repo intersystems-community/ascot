@@ -5,8 +5,9 @@
 //! `MacroDefinitions` from a routine and the `.inc` files it includes (found in the `Workspace`,
 //! or via IRIS), (2) produces the expanded text, and (3) builds a `SourceMap` that translates
 //! positions in the expanded text back to the original file. The map is how diagnostics from
-//! `check/` land on the right line and how hover shows "Expands to". Classes are not
-//! macro-expanded yet.
+//! `check/` land on the right line and how hover shows "Expands to". A class's method bodies
+//! are expanded one by one by `expand_method_body`, with its `Include`s' definitions and the
+//! macros earlier bodies `#define`d; hover expansion is routine-only.
 
 use std::{
     borrow::Cow,
@@ -15,12 +16,13 @@ use std::{
     sync::Arc,
 };
 
-use tygr::{Grammar, IntoInner, OLC, Range};
+use tygr::{IntoInner, OLC, Parse, Print, Ranged};
 use tygr_objectscript::cos::{HMacro, MacroArg, MacroCallStruct, MacroedUnit};
 
 use crate::{
     DocDetails, DocKind, WorkspaceStruct,
     bindings::{self, Diagnostic, Location, Position},
+    check::{Expansion, IrisLookup, SyntaxScope, TypeErrorKind},
     cos::{self, HMacroCommand, MacroRedex, Routine, RoutineWithMacro},
     details::Positions,
     tygr_error_to_diagnostics,
@@ -48,10 +50,18 @@ pub struct MacroDefinition {
 }
 
 impl MacroDefinition {
-    // `##safeexpression`/`##expression` run ObjectScript at compile time; `check::mod` knows the
-    // common ones (`$$$ERROR`, ...) by name instead.
+    // `##safeexpression`/`##expression`/`##function` run ObjectScript at compile time;
+    // `check::mod` knows the common ones (`$$$ERROR`, ...) by name instead.
     fn is_compile_time(&self) -> bool {
-        self.body.contains("##safeexpression") || self.body.contains("##expression")
+        ["##safeexpression", "##expression", "##function"]
+            .iter()
+            .any(|directive| self.body.contains(directive))
+    }
+
+    // `##function` splices the arguments into code it runs at compile time, inside a string as
+    // often as not (`"%s"="*"`), so they need not be expressions.
+    pub(crate) fn splices_text(&self) -> bool {
+        self.body.contains("##function")
     }
 }
 
@@ -63,6 +73,84 @@ pub(crate) type MacroDefinitions = HashMap<String, MacroDefinition>;
 pub(crate) struct BodyMacros {
     pub(crate) definitions: MacroDefinitions,
     pub(crate) methods: HashMap<String, String>,
+}
+
+// The definitions in force while expanding: a layer of its own, where `#define`s land, over the
+// base a class shares with every method body, read and never copied.
+pub(crate) struct Definitions<'b> {
+    base: Option<&'b MacroDefinitions>,
+    // `None` is an `#undef` of a base definition.
+    own: HashMap<String, Option<MacroDefinition>>,
+}
+
+impl<'b> Definitions<'b> {
+    fn new() -> Self {
+        Self::from(MacroDefinitions::new())
+    }
+
+    pub(crate) fn over(base: &'b MacroDefinitions) -> Self {
+        Definitions {
+            base: Some(base),
+            own: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&MacroDefinition> {
+        match self.own.get(name) {
+            Some(own) => own.as_ref(),
+            None => self.base.and_then(|base| base.get(name)),
+        }
+    }
+
+    fn contains_key(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
+    fn insert(&mut self, name: String, definition: MacroDefinition) {
+        self.own.insert(name, Some(definition));
+    }
+
+    fn remove(&mut self, name: &str) {
+        if self.base.is_some_and(|base| base.contains_key(name)) {
+            self.own.insert(name.to_string(), None);
+        } else {
+            self.own.remove(name);
+        }
+    }
+
+    // Its own layer, the base left out.
+    pub(crate) fn own(&self) -> impl Iterator<Item = (&String, &MacroDefinition)> {
+        self.own
+            .iter()
+            .filter_map(|(name, definition)| Some((name, definition.as_ref()?)))
+    }
+
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        let base = self.base.into_iter().flat_map(|base| base.keys());
+        let own = self
+            .own
+            .keys()
+            .filter(|name| !self.base.is_some_and(|base| base.contains_key(*name)));
+        base.chain(own)
+            .filter(move |name| self.contains_key(name))
+            .map(String::as_str)
+    }
+
+    fn into_own(self) -> MacroDefinitions {
+        self.own
+            .into_iter()
+            .filter_map(|(name, definition)| Some((name, definition?)))
+            .collect()
+    }
+}
+
+impl From<MacroDefinitions> for Definitions<'_> {
+    fn from(own: MacroDefinitions) -> Self {
+        Definitions {
+            base: None,
+            own: own.into_iter().map(|(k, v)| (k, Some(v))).collect(),
+        }
+    }
 }
 
 // Where a span of expanded text came from. `uri: None` means the top-level file passed to
@@ -149,15 +237,12 @@ impl SourceMap {
         self.include_names.iter()
     }
 
-    fn expanded_line_count(&self) -> usize {
-        self.expanded_text.matches('\n').count() + 1
-    }
-
     // False means `position` definitely isn't part of this expansion (e.g. it's really a
-    // different member's declaration, which happens to share this document's uri) -- callers
-    // must not feed it to any `expanded_olc`-based lookup, which panics out of bounds.
+    // different member's declaration, which happens to share this document's uri): past the last
+    // line, or past its line's end.
     pub(crate) fn is_in_expanded_bounds(&self, position: Position) -> bool {
-        (position.line as usize) < self.expanded_line_count()
+        let line_character = (position.line as usize, position.character as usize);
+        OLC::line_character_to_offset(&self.expanded_olc, line_character).is_ok()
     }
 
     // Relocates a single expanded-text position back to the top-level source, or `None` if it
@@ -168,9 +253,7 @@ impl SourceMap {
             return None;
         }
         let (source_offset, _) = self.to_source_offset(self.expanded_olc.offset(position))?;
-        Some(Position::from(
-            self.source_olc.offset_to_line_character(source_offset),
-        ))
+        Some(self.source_olc.position(source_offset))
     }
 
     // The end is exclusive, so it is relocated through the last character it covers; otherwise
@@ -195,7 +278,7 @@ impl SourceMap {
         };
         Some(bindings::Range {
             start: self.relocate_position(range.start)?,
-            end: Position::from(self.source_olc.offset_to_line_character(end)),
+            end: self.source_olc.position(end),
         })
     }
 
@@ -208,14 +291,14 @@ impl SourceMap {
             return None;
         }
         let offset = self.source_olc.offset(position);
+        // The innermost invocation holding `offset`: a nested call's argument is recorded too.
         let idx = self
             .invocations
-            .partition_point(|span| span.start <= offset)
-            .checked_sub(1)?;
-        let span = self.invocations.get(idx)?;
-        if offset >= span.end {
-            return None;
-        }
+            .partition_point(|span| span.start <= offset);
+        let span = self.invocations[..idx]
+            .iter()
+            .rev()
+            .find(|span| offset < span.end)?;
         let mut pieces: Vec<&(std::ops::Range<usize>, Origin, bool)> = self
             .vec
             .iter()
@@ -226,12 +309,19 @@ impl SourceMap {
             })
             .collect();
         pieces.sort_by_key(|(expanded, ..)| expanded.start);
-        (!pieces.is_empty()).then(|| {
-            pieces
-                .iter()
-                .map(|(expanded, ..)| &self.expanded_text[expanded.clone()])
-                .collect()
-        })
+        // The pieces tile the expansion, so a gap starts another copy of an argument the body
+        // pastes more than once.
+        let mut end = None;
+        let text: String = pieces
+            .iter()
+            .take_while(|(expanded, ..)| {
+                let next = end.is_none_or(|end| end == expanded.start);
+                end = Some(expanded.end);
+                next
+            })
+            .map(|(expanded, ..)| &self.expanded_text[expanded.clone()])
+            .collect();
+        (!text.is_empty()).then_some(text)
     }
 
     fn locate_idx(&self, pos: usize) -> Option<usize> {
@@ -450,14 +540,14 @@ impl SourceMap {
             .collect()
     }
 
-    fn relocate_error(&self, error: tygr::Error, uri: &str) -> Diagnostic {
-        let error = tygr_error_to_diagnostics(error, &self.expanded_text);
+    fn relocate_error(&self, error: tygr::Error, uri: &str, scope: SyntaxScope) -> Diagnostic {
+        let error = tygr_error_to_diagnostics(error, &self.expanded_text, scope);
         self.relocate_diagnostics(vec![error], uri).pop().unwrap()
     }
 }
 
 // An include's uri, full text, and un-substituted macro units.
-pub(crate) type Include = Arc<(String, String, Vec<Range<MacroedUnit>>)>;
+pub(crate) type Include = Arc<(String, String, Vec<Ranged<MacroedUnit>>)>;
 
 // An `Include` that didn't resolve, with why IRIS couldn't be asked for it, when that's why.
 pub(crate) type FailedInclude = (String, Option<String>);
@@ -503,8 +593,9 @@ impl WorkspaceStruct {
         src: &str,
         dones: &mut DoneList,
     ) -> Result<(Routine, MacroDefinitions), tygr::Error> {
-        let (mut definitions, _, _) =
+        let (definitions, _, _) =
             self.resolve_class_includes(&implicit_includes(ROUTINE_IMPLICIT_INCLUDES));
+        let mut definitions = Definitions::from(definitions);
         let RoutineWithMacro {
             header,
             macroed_units,
@@ -524,11 +615,11 @@ impl WorkspaceStruct {
                     true,
                 );
             }
-            return Ok((Routine::parse(&dones.text)?, definitions));
+            return Ok((Routine::parse(&dones.text)?, definitions.into_own()));
         }
         let mut todos = TodoList::new(precise_items(&macroed_units, Origin::top_level));
         self.expand_units(&mut definitions, &mut todos, dones)?;
-        Ok((Routine::parse(&dones.text)?, definitions))
+        Ok((Routine::parse(&dones.text)?, definitions.into_own()))
     }
 
     // The substitution loop: `#define`/`#include`/macro-calls update `definitions` or requeue
@@ -536,7 +627,7 @@ impl WorkspaceStruct {
     // as-is via `dones`.
     fn expand_units(
         &self,
-        definitions: &mut MacroDefinitions,
+        definitions: &mut Definitions<'_>,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
     ) -> Result<(), tygr::Error> {
@@ -546,9 +637,11 @@ impl WorkspaceStruct {
                 MacroedUnit::Redex(redex) => match redex {
                     MacroRedex::H(HMacro { command, input }) => match command.deref() {
                         HMacroCommand::Define { name, args, .. } => {
-                            let params = args
-                                .as_ref()
-                                .map(|args| args.items.iter().map(|arg| arg.print()).collect());
+                            let params = args.as_ref().map(|args| {
+                                (args.iter().flat_map(|list| list.items.iter()))
+                                    .map(|arg| arg.print())
+                                    .collect()
+                            });
                             define(definitions, name, params, false, input);
                         }
                         HMacroCommand::Def1arg { name, arg, .. } => {
@@ -618,11 +711,11 @@ impl WorkspaceStruct {
                         {
                             dones.note_unresolved(
                                 move |name, range| {
-                                    crate::check::TypeError::macro_from_method_body(
+                                    TypeErrorKind::MacroFromMethodBody {
                                         name,
-                                        method.clone(),
-                                        range,
-                                    )
+                                        method: method.clone(),
+                                    }
+                                    .at(range)
                                 },
                                 name.print(),
                                 &origin,
@@ -631,13 +724,25 @@ impl WorkspaceStruct {
                         let substituted = match definitions.get(&name.print()) {
                             Some(_) if origin.depth >= MAX_MACRO_DEPTH => {
                                 dones.note_unresolved(
-                                    crate::check::TypeError::macro_expansion_too_deep,
+                                    |name, range| {
+                                        TypeErrorKind::MacroExpansionTooDeep { name }.at(range)
+                                    },
                                     name.print(),
                                     &origin,
                                 );
                                 false
                             }
                             Some(def) if def.is_compile_time() => false,
+                            // `$$$M` for an `M()` declared with no parameters: the parentheses
+                            // are optional at the call.
+                            Some(MacroDefinition {
+                                params: Some(pars),
+                                body,
+                                ..
+                            }) if pars.is_empty() && args.is_none() => {
+                                todos.push(<Vec<MacroedUnit>>::parse(body)?, origin.deeper());
+                                true
+                            }
                             // `$$$M(args)` on a parameterless `M` keeps the argument list: the
                             // body is typically a method name the arguments then call.
                             Some(MacroDefinition {
@@ -686,13 +791,16 @@ impl WorkspaceStruct {
                                 .is_some_and(|args| args.items.len() != pars.len()) =>
                             {
                                 let expected = pars.len();
-                                let make = if args.as_ref().unwrap().items.len() > expected {
-                                    crate::check::TypeError::macro_too_many_arguments
-                                } else {
-                                    crate::check::TypeError::macro_too_few_arguments
-                                };
+                                let too_many = args.as_ref().unwrap().items.len() > expected;
                                 dones.note_unresolved(
-                                    move |name, range| make(name, expected, range),
+                                    move |name, range| {
+                                        if too_many {
+                                            TypeErrorKind::MacroTooManyArguments { name, expected }
+                                        } else {
+                                            TypeErrorKind::MacroTooFewArguments { name, expected }
+                                        }
+                                        .at(range)
+                                    },
                                     name.print(),
                                     &origin,
                                 );
@@ -733,7 +841,7 @@ impl WorkspaceStruct {
                                 Some(args) => {
                                     let text = unit.print();
                                     let base = origin.range.start;
-                                    let arg_span = |arg: &Range<MacroArg>| {
+                                    let arg_span = |arg: &Ranged<MacroArg>| {
                                         Some(
                                             arg.start.checked_sub(base)?
                                                 ..arg.end.checked_sub(base)?,
@@ -792,7 +900,25 @@ impl WorkspaceStruct {
                             }
                         }
                     }
-                    MacroRedex::Lit(_, text, _) => dones.push(&text.print(), &origin, precise),
+                    // Only `text` is pushed, so a precise origin is narrowed past the `##lit(`.
+                    MacroRedex::Lit(open, text, _) => {
+                        let piece = if precise {
+                            let start = origin.range.start + open.print().len();
+                            origin.with_range(start..start + text.print().len())
+                        } else {
+                            origin.clone()
+                        };
+                        dones.push(&text.print(), &piece, precise)
+                    }
+                    MacroRedex::BeginLit(open, text, _) => {
+                        let piece = if precise {
+                            let start = origin.range.start + open.print().len();
+                            origin.with_range(start..start + text.print().len())
+                        } else {
+                            origin.clone()
+                        };
+                        dones.push(&text.print(), &piece, precise)
+                    }
                     // A comment included: matched whole, nothing in it expands, and a check may
                     // read it.
                     unit => dones.push(&unit.print(), &origin, precise),
@@ -809,7 +935,7 @@ impl WorkspaceStruct {
     // against %occErrors whether or not the file includes it, so those count as defined here.
     fn expand_arg(
         &self,
-        definitions: &mut MacroDefinitions,
+        definitions: &mut Definitions<'_>,
         text: &str,
         compile_time: bool,
     ) -> Result<String, tygr::Error> {
@@ -844,7 +970,7 @@ impl WorkspaceStruct {
 
     fn expand_text(
         &self,
-        definitions: &mut MacroDefinitions,
+        definitions: &mut Definitions<'_>,
         text: &str,
     ) -> Result<String, tygr::Error> {
         let mut dones = DoneList::new();
@@ -858,13 +984,18 @@ impl WorkspaceStruct {
     // and anything else is unresolved (see `resolve_branch`).
     fn resolve_if(
         &self,
-        definitions: &mut MacroDefinitions,
+        definitions: &mut Definitions<'_>,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
         item: TodoItem<'_>,
     ) -> Result<(), tygr::Error> {
-        let MacroedUnit::Redex(MacroRedex::H(HMacro { input, .. })) = item.0.as_ref() else {
+        let MacroedUnit::Redex(MacroRedex::H(HMacro { command, input })) = item.0.as_ref() else {
             unreachable!("resolve_if is only handed an #if or #elseif");
+        };
+        let directive = if matches!(command.prefixed, HMacroCommand::Elseif(..)) {
+            "#elseif"
+        } else {
+            "#if"
         };
         // `#if 0 /* Maintenance */` -- a trailing comment is common and not part of the test.
         fn condition(text: &str) -> &str {
@@ -885,7 +1016,12 @@ impl WorkspaceStruct {
                 let expansion = (expanded != written).then(|| expanded.to_string());
                 dones.note_unresolved(
                     move |written, range| {
-                        crate::check::TypeError::undecided_if(written, expansion.clone(), range)
+                        TypeErrorKind::UndecidedIf {
+                            directive,
+                            condition: written,
+                            expansion: Expansion(expansion.clone()),
+                        }
+                        .at(range)
                     },
                     written.to_string(),
                     &item.1,
@@ -900,7 +1036,7 @@ impl WorkspaceStruct {
     // a dropped one and tries the closing `#elseif` in turn.
     fn resolve_branch(
         &self,
-        definitions: &mut MacroDefinitions,
+        definitions: &mut Definitions<'_>,
         todos: &mut TodoList<'_>,
         dones: &mut DoneList,
         taken: bool,
@@ -923,29 +1059,23 @@ impl WorkspaceStruct {
         &self,
         uri: &str,
         src: &str,
-    ) -> Result<(Routine, SourceMap, MacroDefinitions), Diagnostic> {
+    ) -> Result<(Routine, SourceMap, MacroDefinitions), Vec<Diagnostic>> {
         let mut dones = DoneList::new();
         let result = self.expand_rtn_helper(src, &mut dones);
+        let failed_include = !dones.failed_includes.is_empty();
         let map = dones.into_source_map(src);
         match result {
             Ok((routine, definitions)) => Ok((routine, map, definitions)),
             // A macro left unexpanded by an unresolved `#include` often doesn't re-parse (same
             // failure mode `note_unresolved_include` already calls out for `#include` itself) --
             // report the missing include(s), the actionable root cause, instead of the resulting
-            // generic parse error.
-            Err(error) => match map.unresolved.split_first() {
-                Some((first, rest)) => {
-                    let mut diagnostic = first.clone();
-                    diagnostic.related_information.extend(rest.iter().map(|d| {
-                        bindings::DiagnosticRelatedInformation {
-                            location: Location::new(uri.to_string(), d.range),
-                            message: d.message.clone(),
-                        }
-                    }));
-                    Err(diagnostic)
-                }
-                None => Err(map.relocate_error(error, uri)),
-            },
+            // generic parse error. Anything else noted (an undecided `#if`, a call's arity) leaves
+            // the text as written, so the parse error is the routine's own.
+            Err(error) => {
+                let error =
+                    (!failed_include).then(|| map.relocate_error(error, uri, SyntaxScope::Routine));
+                Err(map.unresolved.into_iter().chain(error).collect())
+            }
         }
     }
 
@@ -953,7 +1083,7 @@ impl WorkspaceStruct {
         &self,
         names: &[String],
     ) -> (MacroDefinitions, Vec<FailedInclude>, HashSet<String>) {
-        let mut definitions = HashMap::new();
+        let mut definitions = Definitions::new();
         let mut failed = Vec::new();
         let mut include_names = HashSet::new();
         for name in names {
@@ -969,12 +1099,13 @@ impl WorkspaceStruct {
                     let _ = self.expand_units(&mut definitions, &mut todos, &mut dones);
                     // Whatever the include itself included: an edit there changes this class too.
                     include_names.extend(dones.include_names);
+                    failed.extend(dones.failed_includes);
                 }
                 Ok(None) => failed.push((name.clone(), None)),
                 Err(reason) => failed.push((name.clone(), Some(reason))),
             }
         }
-        (definitions, failed, include_names)
+        (definitions.into_own(), failed, include_names)
     }
 
     pub(crate) fn implicit_class_definitions(&self) -> (MacroDefinitions, HashSet<String>) {
@@ -990,25 +1121,27 @@ impl WorkspaceStruct {
 
     // `header` is pushed verbatim, unexpanded, ahead of the expanded `body` -- like
     // `expand_rtn_helper` pushes a routine's own header -- so both share one coordinate space.
-    pub(crate) fn expand_method_body(
+    pub(crate) fn expand_method_body<'b>(
         &self,
         uri: &str,
         header: &str,
         body: &str,
-        base_definitions: &MacroDefinitions,
+        base_definitions: &'b MacroDefinitions,
         body_macros: &BodyMacros,
-    ) -> Result<(String, SourceMap, MacroDefinitions), Diagnostic> {
+    ) -> Result<(String, SourceMap, Definitions<'b>), Diagnostic> {
         let mut dones = DoneList::new();
         dones.body_macros = body_macros.methods.clone();
-        // The body's own `#define`s land here too, for `check::mod` to recognize.
-        let mut definitions = base_definitions.clone();
-        definitions.extend(body_macros.definitions.clone());
+        // The body's own `#define`s land in the layer too, for `check::mod` to recognize.
+        let mut definitions = Definitions::over(base_definitions);
+        for (name, definition) in &body_macros.definitions {
+            definitions.insert(name.clone(), definition.clone());
+        }
         // Tokenized together so every offset, including a macro argument's, is relative to the
         // same text; the header itself is copied verbatim (a `{$$$X}` parameter default must not
         // change its length, or the body would be cut at the wrong offset).
         let text = format!("{header}{body}");
         let result = (|| -> Result<(), tygr::Error> {
-            let units = <Vec<Range<MacroedUnit>>>::parse(&text)?;
+            let units = <Vec<Ranged<MacroedUnit>>>::parse(&text)?;
             let (in_header, in_body): (Vec<_>, Vec<_>) =
                 units.iter().partition(|x| x.end <= header.len());
             for x in in_header {
@@ -1023,7 +1156,7 @@ impl WorkspaceStruct {
                 let expanded_text = map.expanded_text.clone();
                 Ok((expanded_text, map, definitions))
             }
-            Err(error) => Err(map.relocate_error(error, uri)),
+            Err(error) => Err(map.relocate_error(error, uri, SyntaxScope::MethodBody)),
         }
     }
 }
@@ -1060,11 +1193,11 @@ fn substitute_macro_body<'a>(
             }
             let mut rest = span.text.as_str();
             loop {
-                // Only the whole name: the `%m` that starts `%maps` is not the parameter.
+                // Only the whole name: the `%m` that starts `%maps` is not the parameter. What
+                // precedes it doesn't matter, since a name can't contain `%`: `%New%args` is
+                // `%New` and then the parameter.
                 let whole = rest.match_indices(name.as_str()).find(|(idx, _)| {
-                    let (before, after) = (&rest[..*idx], &rest[idx + name.len()..]);
-                    !before.ends_with(|c: char| c.is_alphanumeric())
-                        && !after.starts_with(|c: char| c.is_alphanumeric())
+                    !rest[idx + name.len()..].starts_with(|c: char| c.is_alphanumeric())
                 });
                 match whole.map(|(idx, _)| idx) {
                     None => {
@@ -1079,9 +1212,24 @@ fn substitute_macro_body<'a>(
                         break;
                     }
                     Some(idx) => {
-                        if idx > 0 {
+                        let (mut before, mut after) = (&rest[..idx], &rest[idx + name.len()..]);
+                        // IRIS's preprocessor pastes a quoted argument into `$g(%m)` as the string
+                        // alone: it drops the `$g(` and the one character after the parameter,
+                        // taken for the `)`. Its own classes rely on it. `$$g(` is a call.
+                        if replacement.starts_with('"')
+                            && before.len() >= 3
+                            && before.is_char_boundary(before.len() - 3)
+                            && before[before.len() - 3..].eq_ignore_ascii_case("$g(")
+                            && !before[..before.len() - 3].ends_with('$')
+                        {
+                            before = &before[..before.len() - 3];
+                            after = after
+                                .get(after.chars().next().map_or(0, char::len_utf8)..)
+                                .unwrap_or("");
+                        }
+                        if !before.is_empty() {
                             next.push(Span {
-                                text: rest[..idx].to_string(),
+                                text: before.to_string(),
                                 origin: span.origin.clone(),
                                 precise: span.precise,
                                 argument: false,
@@ -1093,7 +1241,7 @@ fn substitute_macro_body<'a>(
                             precise: *arg_precise,
                             argument: true,
                         });
-                        rest = &rest[idx + name.len()..];
+                        rest = after;
                     }
                 }
             }
@@ -1113,16 +1261,25 @@ fn substitute_macro_body<'a>(
         offset += span.text.len();
     }
     let mut items = Vec::new();
-    for unit in <Vec<Range<MacroedUnit>>>::parse(&text)? {
+    for unit in <Vec<Ranged<MacroedUnit>>>::parse(&text)? {
         let overlapping = bounds
             .iter()
             .filter(|(start, end, _)| *start < unit.end && unit.start < *end);
         match unit.deref() {
             MacroedUnit::Plain(_) => {
                 for (start, end, span) in overlapping {
-                    let piece = &text[unit.start.max(*start)..unit.end.min(*end)];
-                    for part in <Vec<MacroedUnit>>::parse(piece)? {
-                        items.push((Cow::Owned(part), span.origin.clone(), span.precise));
+                    let piece_start = unit.start.max(*start);
+                    let piece = &text[piece_start..unit.end.min(*end)];
+                    for part in <Vec<Ranged<MacroedUnit>>>::parse(piece)? {
+                        // A precise span's text sits at its origin, so a part of it is at the
+                        // same offset into the origin.
+                        let origin = if span.precise {
+                            let at = span.origin.range.start + (piece_start - start);
+                            span.origin.with_range(at + part.start..at + part.end)
+                        } else {
+                            span.origin.clone()
+                        };
+                        items.push((Cow::Owned(part.into_inner()), origin, span.precise));
                     }
                 }
             }
@@ -1153,6 +1310,8 @@ struct DoneList {
     // literally, since the raw `#include Name` text rarely re-parses and would otherwise mask
     // this diagnostic behind a generic syntax error.
     unresolved: Vec<(UnresolvedError, String, Origin)>,
+    // The `#include`s among them, for a class, whose `Include` line reports them itself.
+    failed_includes: Vec<FailedInclude>,
     include_directives: Vec<(std::ops::Range<usize>, String)>,
     include_names: HashSet<String>,
     // Macros `#define`d in an earlier method's body, by the method's name: usable, but warned.
@@ -1167,6 +1326,7 @@ impl DoneList {
             included: HashMap::new(),
             invocations: Vec::new(),
             unresolved: Vec::new(),
+            failed_includes: Vec::new(),
             include_directives: Vec::new(),
             include_names: HashSet::new(),
             body_macros: HashMap::new(),
@@ -1174,12 +1334,26 @@ impl DoneList {
     }
 
     fn note_unresolved_include(&mut self, name: String, origin: &Origin) {
-        self.note_unresolved(crate::check::TypeError::cannot_find_include, name, origin);
+        self.failed_includes.push((name.clone(), None));
+        self.note_unresolved(
+            |name, range| TypeErrorKind::CannotFindInclude { name }.at(range),
+            name,
+            origin,
+        );
     }
 
     fn note_lookup_failed(&mut self, name: String, reason: String, origin: &Origin) {
+        self.failed_includes
+            .push((name.clone(), Some(reason.clone())));
         let make = move |name, range| {
-            crate::check::TypeError::iris_lookup_failed(DocKind::Inc, name, reason.clone(), range)
+            TypeErrorKind::IrisLookupFailed {
+                lookup: IrisLookup {
+                    kind: DocKind::Inc,
+                    name,
+                },
+                reason: reason.clone(),
+            }
+            .at(range)
         };
         self.note_unresolved(make, name, origin);
     }
@@ -1260,12 +1434,31 @@ impl DoneList {
             include_directives: self.include_directives,
             include_names: self.include_names,
         };
+        // Reported against the document checked: one from an included file sits at the top-level
+        // `#include` that pulled it in, the hops down as related information.
         map.unresolved = self
             .unresolved
             .into_iter()
             .filter_map(|(make, name, origin)| {
-                let range = map.range_in(&origin.uri, &origin.range)?;
-                Some(make(name, range).into())
+                let mut chain = vec![&origin];
+                while let Some(parent) = chain.last()?.parent.as_deref() {
+                    chain.push(parent);
+                }
+                let top = chain.pop()?;
+                let mut diagnostic: Diagnostic =
+                    make(name, map.range_in(&top.uri, &top.range)?).into();
+                for hop in chain.into_iter().rev() {
+                    diagnostic
+                        .related_information
+                        .push(bindings::DiagnosticRelatedInformation {
+                            location: Location::new(
+                                hop.uri.clone()?,
+                                map.range_in(&hop.uri, &hop.range)?,
+                            ),
+                            message: "↳ In the included file.".into(),
+                        });
+                }
+                Some(diagnostic)
             })
             .collect();
         map
@@ -1304,7 +1497,7 @@ impl<'a> TodoList<'a> {
 }
 
 fn precise_items<'a>(
-    units: impl IntoIterator<Item = &'a Range<MacroedUnit>>,
+    units: impl IntoIterator<Item = &'a Ranged<MacroedUnit>>,
     origin_at: impl Fn(std::ops::Range<usize>) -> Origin,
 ) -> Vec<TodoItem<'a>> {
     units
@@ -1359,7 +1552,7 @@ fn take_branch<'a>(todos: &mut TodoList<'a>) -> (Vec<TodoItem<'a>>, BranchEnd<'a
 }
 
 fn define(
-    definitions: &mut MacroDefinitions,
+    definitions: &mut Definitions<'_>,
     name: &cos::MacroName,
     params: Option<Vec<String>>,
     literal_args: bool,
@@ -1387,7 +1580,9 @@ fn macro_name_in(input: &cos::MacroInput) -> String {
 
 // Joins a macro's (possibly multi-line, `##CONTINUE`-terminated) body into a single string
 // usable as the macro's expansion text. Each continued line is kept as written, since IRIS emits
-// it as a line of its own: one starting with a label stays a label.
+// it as a line of its own: one starting with a label stays a label. A `##;` comment and the
+// whitespace a line ends with are the preprocessor's, not the macro's: `#define KB (2**7) ##;128`
+// expands to `(2**7)`, and a value ending in a tab doesn't put the tab into the code.
 fn import_macro_input(cos::MacroInput { line_i, line_z }: &cos::MacroInput) -> String {
     let mut result = String::new();
     for line in line_i {
@@ -1396,9 +1591,13 @@ fn import_macro_input(cos::MacroInput { line_i, line_z }: &cos::MacroInput) -> S
             .to_ascii_lowercase()
             .find("##continue")
             .unwrap_or(printed.len());
-        result.push_str(&printed[..end]);
+        result.push_str(without_comment(&printed[..end]));
         result.push('\n');
     }
-    result.push_str(&line_z.print());
+    result.push_str(without_comment(&line_z.print()));
     result.trim_start().to_string()
+}
+
+fn without_comment(line: &str) -> &str {
+    line[..line.find("##;").unwrap_or(line.len())].trim_end()
 }

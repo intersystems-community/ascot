@@ -2,9 +2,9 @@
 //! - `WorkspaceEnv`: one per check run. Resolves classes and members across every open document
 //!   (and IRIS, when connected), records cross-file references, and raises "soft" diagnostics
 //!   for anything it couldn't confirm.
-//! - `DocumentEnv`/`ClassDocument`: the file being checked, with its macros, labels and
-//!   `#include`s and, for a class, its inheritance chain and member tables.
-//! - `CodeEnv`: one method body or routine block, with `this`, formal arguments and local labels.
+//! - `DocumentEnv`/`ClassDocument`: the file being checked, with its macros and `#include`s
+//!   and, for a class, its name and language.
+//! - `CodeEnv`: one method body or routine block, with `this` and local labels.
 //!
 //! Reads `details.rs` and `lib.rs`'s `WorkspaceStruct`; produces `types.rs` values for
 //! `mod.rs`/`flow.rs` to check against. `lib.rs` also builds a `WorkspaceEnv` to resolve members
@@ -29,7 +29,9 @@ pub use crate::details::Positions;
 use crate::details::{
     MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
 };
-use crate::{DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos};
+use crate::{
+    Definitions, DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos,
+};
 use std::marker::PhantomData;
 
 // A member a lookup found, with the class declaring it, which its type parameters resolve against.
@@ -45,7 +47,7 @@ type Generated = (Arc<TyProcedure>, bool);
 // One of the three member namespaces IRIS tells apart by syntax -- `..#X`, `..X`, `..X(...)` --
 // and the shape of what it holds.
 pub(crate) trait Namespace {
-    type Ty: Instantiate + ClassNames + Default;
+    type Ty: ClassNames + Default;
     // Where its members are declared.
     const NS: MemberNs;
     // The type of a member a workspace class declares, and whether it's instance-only.
@@ -302,9 +304,9 @@ enum FindError {
 impl From<FindError> for QuasiTypeError {
     fn from(err: FindError) -> Self {
         match err {
-            FindError::NoSuchClass(cls) => QuasiTypeError::cannot_find_class(cls),
+            FindError::NoSuchClass(cls) => TypeErrorKind::CannotFindClass { cls }.into(),
             FindError::InstanceOnly(mem) => {
-                QuasiTypeError::access_instance_only_member_from_class_context(mem)
+                TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name: mem }.into()
             }
         }
     }
@@ -319,18 +321,33 @@ impl<T> Member<T> {
 
 fn generated_procedure(
     normal_args: Vec<NormalArg>,
-    variadic: bool,
+    variadic_arg: Option<VariadicArg>,
     out: Option<Ty>,
 ) -> Arc<TyProcedure> {
     Arc::new(TyProcedure {
         normal_args,
-        variadic_arg: variadic.then(|| VariadicArg::new(None, "args".into(), None)),
+        variadic_arg,
         out,
         procedure_block: Some(vec![]),
         formal_list: true,
         uri: None,
         declared_at: None,
     })
+}
+
+// `args...`: a generated method taking anything.
+fn any_args() -> Option<VariadicArg> {
+    Some(VariadicArg::new(None, "args".into(), None))
+}
+
+// A generated method's argument.
+fn arg(mode: Option<RefMode>, name: &str, ty: impl Into<Ty>, default: Option<&str>) -> NormalArg {
+    NormalArg::new(
+        mode,
+        name.into(),
+        Some(ty.into()),
+        default.map(str::to_string),
+    )
 }
 
 // Where a host-reported member is declared: only known when the host could map it to a uri
@@ -400,27 +417,9 @@ fn query_methods(
     variadic: Option<VariadicArg>,
 ) -> Vec<(String, Generated)> {
     let (by_ref, output) = (Some(RefMode::ByRef), Some(RefMode::Output));
-    let arg = |mode, name: &str, ty: &str, default: Option<&str>| {
-        NormalArg::new(
-            mode,
-            name.into(),
-            Some(Ty::from(ty)),
-            default.map(str::to_string),
-        )
-    };
     let handle = |mode| arg(mode, "qHandle", "%Binary", None);
     let status = || Some(Ty::from("%Status"));
-    let proc = |args, variadic, out| {
-        Arc::new(TyProcedure {
-            normal_args: args,
-            variadic_arg: variadic,
-            out,
-            procedure_block: Some(vec![]),
-            formal_list: true,
-            uri: None,
-            declared_at: None,
-        })
-    };
+    let proc = generated_procedure;
     let execute = std::iter::once(handle(output))
         .chain(normal.iter().cloned())
         .collect();
@@ -487,8 +486,8 @@ fn query_methods(
                 status(),
             ),
         ),
-        ("Prepare", generated_procedure(vec![], true, status())),
-        ("SendODBC", generated_procedure(vec![], true, status())),
+        ("Prepare", proc(vec![], any_args(), status())),
+        ("SendODBC", proc(vec![], any_args(), status())),
     ]
     .into_iter()
     .map(|(suffix, proc)| (suffix.to_string(), (proc, false)))
@@ -503,7 +502,9 @@ enum Arg {
     None,
     Value,
     Id,
-    Concurrency,
+    Force,
+    NoSwizzle,
+    Oid,
 }
 
 #[derive(Clone, Copy)]
@@ -512,28 +513,29 @@ enum Out {
     String,
     Status,
     Boolean,
+    Oid,
 }
 
 impl Shape {
     fn procedure(&self, prop: &Ty) -> Generated {
-        let Shape(_, arg, out, is_instance_only) = *self;
-        let one = |mode, name: &str, ty| vec![NormalArg::new(mode, name.into(), Some(ty), None)];
-        let args = match arg {
+        let Shape(_, shape, out, is_instance_only) = *self;
+        let one = |name, ty: Ty, default| vec![arg(None, name, ty, default)];
+        let args = match shape {
             Arg::None => vec![],
-            Arg::Value => one(None, "value", prop.clone()),
-            Arg::Id => one(None, "id", Ty::from("%String")),
-            Arg::Concurrency => one(Some(RefMode::Output), "concurrency", Ty::from("%Integer")),
+            Arg::Value => one("value", prop.clone(), None),
+            Arg::Id => one("id", Ty::from("%String"), None),
+            Arg::Force => one("force", Ty::from("%Integer"), Some("0")),
+            Arg::NoSwizzle => one("noswizzle", Ty::from("%Boolean"), Some("0")),
+            Arg::Oid => one("newvalue", Ty::from("%ObjectIdentity"), None),
         };
         let out = match out {
             Out::Prop => prop.clone(),
             Out::String => Ty::from("%String"),
             Out::Status => Ty::from("%Status"),
             Out::Boolean => Ty::from("%Boolean"),
+            Out::Oid => Ty::from("%ObjectIdentity"),
         };
-        (
-            generated_procedure(args, false, Some(out)),
-            is_instance_only,
-        )
+        (generated_procedure(args, None, Some(out)), is_instance_only)
     }
 }
 
@@ -541,17 +543,52 @@ const ACCESSORS: &[Shape] = &[
     Shape("Get", Arg::None, Out::Prop, true),
     Shape("Set", Arg::Value, Out::Status, true),
     Shape("IsModified", Arg::None, Out::Boolean, true),
-    Shape("GetStored", Arg::Id, Out::Prop, false),
 ];
 
+// `%Compiler.Type.Object`'s, as the dictionary declares them: an OID in and out of `GetObject`
+// and `SetObject`, `UnSwizzle` private to the class (a plain instance method here).
 const OBJECT_ACCESSORS: &[Shape] = &[
-    Shape("GetObject", Arg::Concurrency, Out::Prop, true),
-    Shape("GetObjectId", Arg::None, Out::String, true),
-    Shape("SetObject", Arg::Value, Out::Status, true),
+    Shape("GetObject", Arg::Force, Out::Oid, true),
+    Shape("GetObjectId", Arg::Force, Out::String, true),
+    Shape("SetObject", Arg::Oid, Out::Status, true),
     Shape("SetObjectId", Arg::Id, Out::Status, true),
     Shape("NewObject", Arg::None, Out::Prop, true),
-    Shape("GetSwizzled", Arg::None, Out::Prop, true),
+    Shape("GetSwizzled", Arg::NoSwizzle, Out::Prop, true),
+    Shape("UnSwizzle", Arg::Force, Out::Status, true),
+    Shape("IsValid", Arg::Value, Out::Status, false),
 ];
+
+// A serial object's alone: `..PetIsEmpty()` on a persistent reference is MPP5376.
+const SERIAL_ACCESSORS: &[Shape] = &[Shape("IsEmpty", Arg::None, Out::Boolean, true)];
+
+// `%Compiler.Type.Collection`'s class methods, as the dictionary declares them.
+fn collection_methods() -> Vec<(String, Generated)> {
+    let val = || arg(None, "val", "%String", Some("\"\""));
+    let delim = || arg(None, "delim", "%String", Some("\"\""));
+    let string = || Some(Ty::from("%String"));
+    [
+        (
+            "BuildValueArray",
+            vec![
+                arg(None, "value", "%Binary", None),
+                arg(Some(RefMode::ByRef), "array", "%Binary", None),
+            ],
+            Some(Ty::from("%Status")),
+        ),
+        ("CollectionToDisplay", vec![val(), delim()], string()),
+        ("CollectionToOdbc", vec![val()], string()),
+        ("DisplayToCollection", vec![val(), delim()], string()),
+        ("OdbcToCollection", vec![val()], string()),
+    ]
+    .into_iter()
+    .map(|(suffix, args, out)| {
+        (
+            suffix.to_string(),
+            (generated_procedure(args, None, out), false),
+        )
+    })
+    .collect()
+}
 
 const CONVERSIONS: &[Shape] = &[
     Shape("IsValid", Arg::Value, Out::Status, false),
@@ -596,6 +633,23 @@ const REGISTERED_OBJECT_MEMBERS: &[&str] = &[
 ];
 
 impl<'a> WorkspaceEnv<'a> {
+    // The method `mem` of `cls` overrides: the first a superclass declares, as `cls` sees it, with
+    // the class that declares it. Nothing is reported for a class in the chain nobody can see.
+    pub(crate) fn overridden_method(
+        &self,
+        cls: &str,
+        mem: &str,
+    ) -> Option<(String, TyProcedureOrAny)> {
+        let receiver = ClassTy::from(cls.to_string());
+        let given = |param: &str| self.parameter_value(cls, param);
+        self.ancestry(cls).skip(1).find_map(|(sup, resolved)| {
+            let found = self.declared_in::<Methods>(&sup, &resolved, mem)?;
+            let mut ty = found.member.ty;
+            ty.instantiate(&receiver, &found.origin, &given);
+            Some((found.origin, ty))
+        })
+    }
+
     // The names in `N`'s namespace along `cls`'s chain -- all ObjectScript can refer to there.
     pub(crate) fn names<N: Namespace>(&self, cls: &str) -> Vec<String> {
         let mut names = Vec::new();
@@ -669,9 +723,15 @@ impl<'a> WorkspaceEnv<'a> {
         };
         match resolved {
             Some(Class::Workspace(_, details)) => {
+                // Written relative to the declaring class, as every declared member type is.
+                let mut qualify = |ty: &mut Ty| self.qualify_ty(ty, &details.name.it);
                 for (name, property) in &details.members.property {
-                    if let MemberKindSpecificDetails::Property { ty, .. } = &property.kind {
-                        add(name, self.property_methods(ty.clone().unwrap_or_default()));
+                    if let MemberKindSpecificDetails::Property { ty, element_ty, .. } =
+                        &property.kind
+                    {
+                        let mut ty = ty.clone().unwrap_or_default();
+                        qualify(&mut ty);
+                        add(name, self.property_methods(ty, element_ty.is_some()));
                     }
                 }
                 for (name, index) in &details.members.index {
@@ -693,8 +753,18 @@ impl<'a> WorkspaceEnv<'a> {
                         ..
                     } = &query.kind
                     {
-                        let normal = normal_args.iter().map(|arg| arg.it.clone()).collect();
-                        let variadic = variadic_arg.as_ref().map(|arg| arg.it.clone());
+                        let normal = (normal_args.iter())
+                            .map(|arg| {
+                                let mut arg = arg.it.clone();
+                                arg.ty.class_names(&mut qualify);
+                                arg
+                            })
+                            .collect();
+                        let variadic = variadic_arg.as_ref().map(|arg| {
+                            let mut arg = arg.it.clone();
+                            arg.ty.class_names(&mut qualify);
+                            arg
+                        });
                         add(name, query_methods(normal, variadic));
                     }
                 }
@@ -713,7 +783,9 @@ impl<'a> WorkspaceEnv<'a> {
                                 Some(PropertyTy::Value(ty)) => ty,
                                 _ => Ty::Any,
                             };
-                            add(name, self.property_methods(ty));
+                            let collection = matches!(&member.kind,
+                                MemberKind::Property(info) if info.collection.is_some());
+                            add(name, self.property_methods(ty, collection));
                         }
                         MemberKind::Index(index) => add(name, self.index_methods(cls, index)),
                         MemberKind::Query(sig) => {
@@ -736,9 +808,10 @@ impl<'a> WorkspaceEnv<'a> {
         generated
     }
 
-    // `Property X As <ty>`'s accessors, object accessors for a reference, and the type class's
-    // class methods projected under `X` (`%String`'s `LogicalToDisplay` becomes `XLogicalToDisplay`).
-    fn property_methods(&self, ty: Ty) -> Vec<(String, Generated)> {
+    // `Property X As <ty>`'s accessors, object accessors for a reference, the collection methods
+    // of a `list Of`/`array Of`, and the type class's class methods projected under `X`
+    // (`%String`'s `LogicalToDisplay` becomes `XLogicalToDisplay`).
+    fn property_methods(&self, ty: Ty, collection: bool) -> Vec<(String, Generated)> {
         let family = |shapes: &[Shape]| -> Vec<(String, Generated)> {
             shapes
                 .iter()
@@ -751,11 +824,22 @@ impl<'a> WorkspaceEnv<'a> {
         };
         // Object accessors need a reference type; assume one when the type can't be resolved.
         let is_datatype = type_class.as_deref().map(|cls| self.is_datatype(cls));
+        let is_reference = is_datatype == Some(Some(false));
         let mut methods = family(ACCESSORS);
+        // `GetStored` yields a reference's stored id, a datatype's stored value.
+        let stored = if is_reference { Out::String } else { Out::Prop };
+        methods.extend(family(&[Shape("GetStored", Arg::Id, stored, false)]));
         if is_datatype.is_some_and(|is_datatype| is_datatype != Some(true)) {
             methods.extend(family(OBJECT_ACCESSORS));
+            let class_type = type_class.as_deref().and_then(|cls| self.class_type(cls));
+            if !is_reference || class_type == Some(bindings::ClassType::Serial) {
+                methods.extend(family(SERIAL_ACCESSORS));
+            }
         }
-        if is_datatype == Some(Some(false)) {
+        if collection {
+            methods.extend(collection_methods());
+        }
+        if is_reference {
             return methods;
         }
         let (projected, complete) = match type_class.as_deref() {
@@ -822,9 +906,6 @@ impl<'a> WorkspaceEnv<'a> {
         {
             return vec![];
         }
-        let arg = |name: &str, mode, ty: Ty, default: Option<&str>| {
-            NormalArg::new(mode, name.into(), Some(ty), default.map(str::to_string))
-        };
         let this = ClsOrIns::Ins(ClassTy::from(cls.to_string()));
         let mut args: Vec<NormalArg> = keys
             .iter()
@@ -845,34 +926,29 @@ impl<'a> WorkspaceEnv<'a> {
                     Some(PropertyTy::Value(ty)) => ty,
                     _ => Ty::Any,
                 };
-                arg("value", None, ty, None)
+                arg(None, "value", ty, None)
             })
             .collect();
         if keys.is_empty() {
-            args.push(arg("id", None, Ty::from("%String"), None));
+            args.push(arg(None, "id", "%String", None));
         }
         let exists = (
             "Exists",
-            vec![arg("id", Some(RefMode::Output), Ty::from("%String"), None)],
+            vec![arg(Some(RefMode::Output), "id", "%String", None)],
             Ty::from("%Boolean"),
         );
         let open_and_delete = [
             (
                 "Open",
                 vec![
-                    arg("concurrency", None, Ty::from("%Integer"), Some("-1")),
-                    arg(
-                        "sc",
-                        Some(RefMode::ByRef),
-                        Ty::from("%Status"),
-                        Some("$$$OK"),
-                    ),
+                    arg(None, "concurrency", "%Integer", Some("-1")),
+                    arg(Some(RefMode::ByRef), "sc", "%Status", Some("$$$OK")),
                 ],
                 Ty::This,
             ),
             (
                 "Delete",
-                vec![arg("concurrency", None, Ty::from("%Integer"), Some("-1"))],
+                vec![arg(None, "concurrency", "%Integer", Some("-1"))],
                 Ty::from("%Status"),
             ),
         ];
@@ -883,7 +959,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let args = args.iter().cloned().chain(extra).collect();
                 (
                     suffix.to_string(),
-                    (generated_procedure(args, false, Some(out)), false),
+                    (generated_procedure(args, None, Some(out)), false),
                 )
             })
             .collect()
@@ -908,29 +984,43 @@ impl<'a> WorkspaceEnv<'a> {
         // access is reported and the rest of the body still checked.
         let err = {
             let names = self.names::<N>(obj.name());
-            let mut suggestions =
-                crate::check::top_similar(&mem, names.iter().map(String::as_str), 5);
+            let mut suggestions = crate::check::top_similar(
+                &mem,
+                names
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|n| !n.contains("%%")),
+                5,
+            );
             let mut has_get = false;
             if N::NS == MemberNs::Property {
-                // Every `%Get`-style accessor regardless of score: a misspelled property is
-                // often one, and a `%Get` means the class may take any name.
-                for name in self.names::<Methods>(obj.name()) {
-                    has_get |= name == "%Get";
-                    if name.starts_with("%Get")
-                        && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(&name))
-                    {
-                        suggestions.push(name);
+                // A `%Get` means the class may take any name, and a misspelled property is
+                // often one of its `%Get`-style accessors, offered regardless of score.
+                let methods = self.names::<Methods>(obj.name());
+                has_get = methods.iter().any(|n| n == "%Get");
+                if has_get {
+                    for name in methods {
+                        if name.starts_with("%Get")
+                            && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(&name))
+                        {
+                            suggestions.push(name);
+                        }
                     }
                 }
             }
             // `##class(X)` names X itself, not some subclass's instance: what it lacks is missing.
             if obj.is_ins() && self.is_abstract(obj.name()) {
-                QuasiTypeError::cannot_find_member_on_abstract(obj.to_string(), mem, suggestions)
+                TypeErrorKind::CannotFindMemberOnAbstract {
+                    cls: obj.to_string(),
+                    mem,
+                    suggestions: Suggestions(suggestions),
+                }
+                .into()
             } else {
                 QuasiTypeError::cannot_find_member(obj.to_string(), mem, suggestions, has_get)
             }
         };
-        self.add_soft_diagnostic(err.into_error(|| range).into());
+        self.add_soft_error(err, range);
         Ok(Member::undeclared(N::Ty::default()))
     }
 
@@ -1064,7 +1154,7 @@ impl<'a> WorkspaceEnv<'a> {
                         let proc = if mem == "%New" {
                             TyProcedureOrAny::Procedure(generated_procedure(
                                 vec![],
-                                true,
+                                any_args(),
                                 Some(Ty::This),
                             ))
                         } else {
@@ -1078,23 +1168,25 @@ impl<'a> WorkspaceEnv<'a> {
                             },
                             None => {
                                 let err = match reason {
-                                    Some(reason) => TypeError::iris_lookup_failed(
-                                        DocKind::Cls,
-                                        cls.clone(),
-                                        reason.clone(),
-                                        range,
-                                    ),
-                                    None => TypeError::unconfirmed_member(
-                                        receiver.name.clone(),
-                                        mem.to_string(),
-                                        cls != receiver.name,
-                                        if matches!(resolved, Some(Class::Unknown(None))) {
+                                    Some(reason) => TypeErrorKind::IrisLookupFailed {
+                                        lookup: IrisLookup {
+                                            kind: DocKind::Cls,
+                                            name: cls.clone(),
+                                        },
+                                        reason: reason.clone(),
+                                    }
+                                    .at(range),
+                                    None => TypeErrorKind::UnconfirmedMember {
+                                        cls: receiver.name.clone(),
+                                        mem: mem.to_string(),
+                                        on: SuperclassOf(cls != receiver.name),
+                                        unseen: if matches!(resolved, Some(Class::Unknown(None))) {
                                             UnseenClass::Unparsed(cls.clone())
                                         } else {
                                             UnseenClass::Missing(cls.clone())
                                         },
-                                        range,
-                                    ),
+                                    }
+                                    .at(range),
                                 };
                                 self.add_soft_diagnostic(err.into());
                                 return Some(Ok(Some(Member::undeclared(N::Ty::default()))));
@@ -1194,8 +1286,10 @@ impl<'a> WorkspaceEnv<'a> {
         }
     }
 
-    // IRIS resolves an unqualified class name (`Extends AbstractModel`, `##class(Date)`) against
-    // the referencing class's own package, then its `Import`s, then `User`.
+    // IRIS resolves an unqualified class name (`Extends AbstractModel`, `##class(Date)`) in the
+    // referencing class's own package and its `Import`s, searched together: a name in more than
+    // one is a compile error (MPP5070 for a body reference, #5373 for a property type or
+    // superclass). A routine's resolves against `User`, which is tried last here for a class too.
     pub(crate) fn qualify_class_name(&self, name: &str, context: Option<&str>) -> String {
         let mut name = name.to_string();
         normalize_class_name(&mut name);
@@ -1368,6 +1462,20 @@ impl<'a> WorkspaceEnv<'a> {
         })
     }
 
+    // Every value of a datatype, when it has few: a declaration is taken as a promise, so a
+    // `VALUELIST` lists them and a `%Boolean` is 0 or 1.
+    pub(crate) fn domain(&self, ty: &Ty) -> Option<Vec<Const>> {
+        let Ty::OREF(ClsOrIns::Ins(cls)) = ty else {
+            return None;
+        };
+        if let Some(values) = &cls.value_list {
+            return Some(values.iter().cloned().map(Const::String).collect());
+        }
+        self.ancestry(&cls.name)
+            .any(|(cls, _)| cls == "%Library.Boolean")
+            .then(|| vec![Const::from(0), Const::from(1)])
+    }
+
     // `None` means we can't tell (class outside the workspace with no IRIS connection).
     pub(crate) fn is_datatype(&self, cls: &str) -> Option<bool> {
         let mut unknown = false;
@@ -1402,13 +1510,24 @@ impl<'a> WorkspaceEnv<'a> {
         }
         let diagnostic = match self.resolve(cls) {
             Some(Class::Workspace(..) | Class::Iris(_)) => return,
-            Some(Class::Unknown(Some(reason))) => {
-                TypeError::iris_lookup_failed(DocKind::Cls, cls.to_string(), reason, range)
+            Some(Class::Unknown(Some(reason))) => TypeErrorKind::IrisLookupFailed {
+                lookup: IrisLookup {
+                    kind: DocKind::Cls,
+                    name: cls.to_string(),
+                },
+                reason,
             }
+            .at(range),
             // Its file is in the workspace; the parse error is reported there.
             Some(Class::Unknown(None)) => return,
-            None if !has_iris => TypeError::cannot_find_class(cls.to_string(), range),
-            None => TypeError::unconfirmed_class(cls.to_string(), has_iris, range),
+            None if !has_iris => TypeErrorKind::CannotFindClass {
+                cls: cls.to_string(),
+            }
+            .at(range),
+            None => TypeErrorKind::UnconfirmedClass {
+                cls: cls.to_string(),
+            }
+            .at(range),
         };
         self.add_soft_diagnostic(diagnostic.into());
     }
@@ -1439,14 +1558,14 @@ impl<'a> WorkspaceEnv<'a> {
             .extend(include_names.into_iter().map(|name| (DocKind::Inc, name)));
     }
 
-    pub(crate) fn expand_method_body(
+    pub(crate) fn expand_method_body<'b>(
         &self,
         uri: &str,
         header: &str,
         body: &str,
-        base_definitions: &MacroDefinitions,
+        base_definitions: &'b MacroDefinitions,
         body_macros: &crate::macro_expand::BodyMacros,
-    ) -> Result<(String, SourceMap, MacroDefinitions), bindings::Diagnostic> {
+    ) -> Result<(String, SourceMap, Definitions<'b>), bindings::Diagnostic> {
         self.workspace
             .expand_method_body(uri, header, body, base_definitions, body_macros)
     }
@@ -1462,17 +1581,32 @@ impl<'a> WorkspaceEnv<'a> {
             return Ok(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
         }
         let Some(iris) = self.workspace.iris.as_ref() else {
-            return Err(QuasiTypeError::cannot_find_routine(name.into()));
+            return Err(TypeErrorKind::CannotFindRoutine {
+                routine: name.into(),
+            }
+            .into());
         };
         let info = iris
             .get_rtn(name)
             .map_err(|reason| {
-                QuasiTypeError::iris_lookup_failed(DocKind::Rtn, name.into(), reason)
+                QuasiTypeError::from(TypeErrorKind::IrisLookupFailed {
+                    lookup: IrisLookup {
+                        kind: DocKind::Rtn,
+                        name: name.into(),
+                    },
+                    reason,
+                })
             })?
-            .ok_or_else(|| QuasiTypeError::routine_not_on_iris(name.into()))?;
-        let labels = info
-            .labels
-            .ok_or_else(|| QuasiTypeError::routine_without_source(name.into()))?;
+            .ok_or_else(|| {
+                QuasiTypeError::from(TypeErrorKind::RoutineNotOnIris {
+                    routine: name.into(),
+                })
+            })?;
+        let labels = info.labels.ok_or_else(|| {
+            QuasiTypeError::from(TypeErrorKind::RoutineWithoutSource {
+                routine: name.into(),
+            })
+        })?;
         let labels = labels.into_iter().map(|label| {
             let proc = label
                 .signature
@@ -1521,8 +1655,12 @@ impl<'a> WorkspaceEnv<'a> {
                 Some(name) => format!("'{name}', declared as {target}"),
                 None => target.to_string(),
             };
-            let err = QuasiTypeError::pattern_mismatch(value.to_string(), what);
-            self.add_soft_diagnostic(err.into_error(|| range).into());
+            let err = TypeErrorKind::PatternMismatch {
+                value: value.to_string(),
+                what,
+            }
+            .into();
+            self.add_soft_error(err, range);
         }
     }
 
@@ -1546,6 +1684,19 @@ impl<'a> WorkspaceEnv<'a> {
 
     fn is_subclass(&self, source: &ClassTy, target: &ClassTy) -> bool {
         self.merge_class(Cow::Borrowed(source), Cow::Borrowed(target)) == *target
+    }
+
+    // Whether `has` names `declares`'s class or a subclass of it, type parameters aside: the test
+    // IRIS applies to an override's formal argument and return class (ERROR #5478). `None` when
+    // either is no class.
+    pub(crate) fn is_class_or_subclass(&self, has: &Ty, declares: &Ty) -> Option<bool> {
+        match (has, declares) {
+            (Ty::OREF(ClsOrIns::Ins(has)), Ty::OREF(ClsOrIns::Ins(declares))) => Some(
+                self.ancestry(&has.name)
+                    .any(|(cls, _)| cls == declares.name),
+            ),
+            _ => None,
+        }
     }
 
     pub fn merge_ty(&self, x: Ty, y: Ty) -> Ty {
@@ -1583,6 +1734,11 @@ impl<'a> WorkspaceEnv<'a> {
                 } else {
                     None
                 },
+                value_list: if x.value_list == y.value_list {
+                    x.value_list.clone()
+                } else {
+                    None
+                },
             };
         }
         let y_ancestors: HashSet<String> = self.ancestors(&y.name).into_iter().collect();
@@ -1602,7 +1758,7 @@ impl<'a> WorkspaceEnv<'a> {
 
     fn is_persistent(&self, cls: &str) -> bool {
         self.ancestry(cls)
-            .any(|(cls, _)| matches!(cls.as_str(), "%Library.Persistent" | "%Persistent"))
+            .any(|(cls, _)| cls == "%Library.Persistent")
     }
 
     pub fn new(workspace: &'a WorkspaceStruct) -> Self {
@@ -1644,6 +1800,10 @@ impl<'a> WorkspaceEnv<'a> {
             return;
         }
         self.soft_diagnostics.borrow_mut().push(diagnostics);
+    }
+
+    pub(crate) fn add_soft_error(&self, err: QuasiTypeError, range: bindings::Range) {
+        self.add_soft_diagnostic(err.into_error(|| range).into());
     }
 
     // Brackets a loop's throwaway priming pass (see `Flow::with_loop`): returns the previous
@@ -1724,7 +1884,7 @@ impl Incompatible {
             None => self.general(),
         };
         if downcast {
-            env.add_soft_diagnostic(err.into_error(|| range).into());
+            env.add_soft_error(err, range);
             return Ok(());
         }
         Err(err)
@@ -1732,17 +1892,35 @@ impl Incompatible {
 
     fn assign(self, name: String) -> QuasiTypeError {
         if self.downcast {
-            QuasiTypeError::downcast_from_abstract(name, self.source, self.target)
+            TypeErrorKind::DowncastFromAbstract {
+                name,
+                source: self.source,
+                target: self.target,
+            }
+            .into()
         } else {
-            QuasiTypeError::assign_incompatible(name, self.source, self.target)
+            TypeErrorKind::AssignIncompatible {
+                name,
+                source: self.source,
+                target: self.target,
+            }
+            .into()
         }
     }
 
     pub(crate) fn general(self) -> QuasiTypeError {
         if self.downcast {
-            QuasiTypeError::type_downcast(self.source, self.target)
+            TypeErrorKind::TypeDowncast {
+                source: self.source,
+                target: self.target,
+            }
+            .into()
         } else {
-            QuasiTypeError::type_incompatible(self.source, self.target)
+            TypeErrorKind::TypeIncompatible {
+                source: self.source,
+                target: self.target,
+            }
+            .into()
         }
     }
 }
@@ -1828,7 +2006,7 @@ impl<'a> DocumentEnv<'a> {
     pub fn for_routine<'b>(
         &'b self,
         labels: ScopedLabels,
-        macro_definitions: &'b MacroDefinitions,
+        macro_definitions: &'b Definitions<'b>,
     ) -> CodeEnv<'b> {
         CodeEnv {
             base: self,
@@ -1851,7 +2029,7 @@ impl<'a> DocumentEnv<'a> {
         this: Option<&'a ClassTy>,
         is_instance: bool,
         method_name: &'a str,
-        macro_definitions: &'a MacroDefinitions,
+        macro_definitions: &'a Definitions<'a>,
         procedure_block: bool,
     ) -> CodeEnv<'_> {
         CodeEnv {
@@ -1948,7 +2126,7 @@ pub struct CodeEnv<'a> {
     method_name: Option<&'a str>,
     // The enclosing class's own resolved `Include`s, for suggesting a similarly named macro on
     // an undefined-macro error -- `None` outside a class method (e.g. a routine).
-    macro_definitions: Option<&'a MacroDefinitions>,
+    macro_definitions: Option<&'a Definitions<'a>>,
     // A procedure block (a method body, `label() {...}`), where IRIS refuses the legacy forms
     // `TypeErrorKind::NotAllowedIn` reports.
     procedure_block: bool,
@@ -1969,6 +2147,26 @@ impl<'a> CodeEnv<'a> {
 
     pub(crate) fn soft_diagnostic(&self, err: TypeError) {
         self.base.base.add_soft_diagnostic(err.into())
+    }
+
+    /// Whether a collection's element class is a datatype; `None` while it is unresolved.
+    pub(crate) fn collection_datatype(&self, element: &Ty) -> Option<bool> {
+        match element {
+            Ty::OREF(ClsOrIns::Ins(cty)) => self.is_datatype(&self.qualify_class_name(&cty.name)),
+            _ => None,
+        }
+    }
+
+    /// A property's value as an expression has it: a collection's is the class it runs as.
+    pub(crate) fn value_ty(&self, property: &PropertyTy) -> Ty {
+        match property {
+            PropertyTy::Value(ty)
+            | PropertyTy::Multidimensional(ty)
+            | PropertyTy::Dispatched(ty) => ty.clone(),
+            PropertyTy::Collection { kind, element } => {
+                kind.class(self.collection_datatype(element))
+            }
+        }
     }
 
     pub(crate) fn qualify_class_name(&self, name: &str) -> String {
@@ -2068,30 +2266,24 @@ impl<'a> CodeEnv<'a> {
         self.trap_joins.borrow_mut().remove(label)
     }
 
-    pub(crate) fn is_defined_macro(&self, name: &str) -> bool {
-        self.macro_definitions
-            .is_some_and(|definitions| definitions.contains_key(name))
+    pub(crate) fn macro_definition(
+        &self,
+        name: &str,
+    ) -> Option<&crate::macro_expand::MacroDefinition> {
+        self.macro_definitions?.get(name)
     }
 
     pub(crate) fn known_macro_names(&self) -> impl Iterator<Item = &str> {
         self.macro_definitions
             .into_iter()
-            .flatten()
-            .map(|(k, _)| k.as_str())
+            .flat_map(Definitions::names)
     }
 }
 
 impl<'a> CodeEnv<'a> {
-    pub(crate) fn line_of(&self, offset: usize) -> usize {
-        self.base
-            .olc
-            .offset_to_line_character(offset + self.offset)
-            .0
-    }
-
     // Whether `node` is text a macro expanded to (or an include supplied), rather than text the
     // document spells out.
-    pub(crate) fn is_expanded<T>(&self, node: &tygr::Range<T>) -> bool {
+    pub(crate) fn is_expanded<T>(&self, node: &tygr::Ranged<T>) -> bool {
         self.base.source_map.is_some_and(|map| {
             map.to_source_offset(node.start + self.offset)
                 .is_none_or(|(_, precise)| !precise)
@@ -2109,7 +2301,10 @@ impl<'a> Deref for CodeEnv<'a> {
 
 impl<'a> CodeEnv<'a> {
     pub(crate) fn this(&self) -> Result<ClsOrIns, QuasiTypeError> {
-        let this = self.this.ok_or_else(QuasiTypeError::not_in_class)?.clone();
+        let this = self
+            .this
+            .ok_or(QuasiTypeError::from(TypeErrorKind::NotInClass))?
+            .clone();
         Ok(if self.is_instance {
             ClsOrIns::Ins(this)
         } else {
@@ -2138,15 +2333,15 @@ impl<'a> CodeEnv<'a> {
         let this = self.this().map_err(|err| err.into_error(|| range))?;
         let mem = self
             .method_name
-            .ok_or_else(QuasiTypeError::not_in_class)
-            .map_err(|err| err.into_error(|| range))?
+            .ok_or_else(|| TypeErrorKind::NotInClass.at(range))?
             .to_string();
         match self.find::<Methods>(&this, &mem, false, range) {
             Ok(Some(method)) => Ok(method.ty),
-            Ok(None) => {
-                let err = QuasiTypeError::super_without_method(mem, this.name().to_string());
-                Err(err.into_error(|| range))
+            Ok(None) => Err(TypeErrorKind::SuperWithoutMethod {
+                method: mem,
+                cls: this.name().to_string(),
             }
+            .at(range)),
             Err(err) => Err(QuasiTypeError::from(err).into_error(|| range)),
         }
     }
@@ -2179,7 +2374,11 @@ impl<'a> CodeEnv<'a> {
                     labels => match labels? {
                         Some(labels) => match labels.get(&label) {
                             Some(proc) => Ok(proc.clone()),
-                            None => Err(QuasiTypeError::cannot_find_label(label, Some(routine))),
+                            None => Err(TypeErrorKind::CannotFindLabel {
+                                label,
+                                routine: InRoutine(Some(routine)),
+                            }
+                            .into()),
                         },
                         None => Ok(TyProcedureOrAny::Any),
                     },
@@ -2192,7 +2391,11 @@ impl<'a> CodeEnv<'a> {
             None => match label {
                 Some(label) => match self.labels.as_ref().and_then(|labels| labels.get(&label)) {
                     Some(label) => Ok(TyProcedureOrAny::Procedure(label.proc.clone())),
-                    None => Err(QuasiTypeError::cannot_find_label(label, None)),
+                    None => Err(TypeErrorKind::CannotFindLabel {
+                        label,
+                        routine: InRoutine(None),
+                    }
+                    .into()),
                 },
                 None => Ok(TyProcedureOrAny::Any),
             },
@@ -2234,11 +2437,15 @@ impl<'a> Locator for DocumentEnv<'a> {
 
 impl<'a> Positions for DocumentEnv<'a> {
     fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
-        self.olc.offset_to_line_character(offset)
+        self.olc
+            .offset_to_line_character(offset)
+            .unwrap_or_else(|e| e.bound)
     }
 
     fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize {
-        self.olc.line_character_to_offset(line_character)
+        self.olc
+            .line_character_to_offset(line_character)
+            .unwrap_or_else(|e| e.bound)
     }
 }
 

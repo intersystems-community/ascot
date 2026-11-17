@@ -16,6 +16,19 @@ mod wit_bind {
         path: "src/wit/ascot.wit",
         additional_derives: [serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq, Hash],
         additional_derives_ignore: ["env"],
+        // The style record's JSON spelling is the JS binding's, camelCase keys and kebab-case values,
+        // so one style file serves every binding; serde would spell the Rust names otherwise.
+        additional_type_attributes: {
+            "iris:ascot/common/style": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/command-style": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/function-style": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/variable-style": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/brace-breaks": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/require-description": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/keyword-form": [#[serde(rename_all = "kebab-case")]],
+            "iris:ascot/common/keyword-case": [#[serde(rename_all = "kebab-case")]],
+            "iris:ascot/common/and-operator": [#[serde(rename_all = "kebab-case")]],
+        },
     });
 
     pub use exports::iris::ascot::exported::{Guest, GuestWorkspace, Workspace};
@@ -126,6 +139,13 @@ impl Range {
             end: position,
         }
     }
+
+    pub fn map(self, mut f: impl FnMut(Position) -> Position) -> Self {
+        Self {
+            start: f(self.start),
+            end: f(self.end),
+        }
+    }
 }
 
 impl From<&check::types::NormalArg> for wit_bind::NormalArg {
@@ -163,7 +183,12 @@ impl From<&MethodDetails> for wit_bind::Signature {
                 .as_deref()
                 .map(bindings::VariadicArg::from),
             t: details.out.it.as_ref().map(|t| t.to_string()),
-            procedure_block: Some(vec![]),
+            procedure_block: Some(
+                details
+                    .procedure_block
+                    .as_ref()
+                    .map_or(vec![], |x| x.iter().map(|x| x.to_string()).collect()),
+            ),
         }
     }
 }
@@ -377,11 +402,14 @@ same_variants! {
 impl From<&cos::MethodLanguage> for Language {
     fn from(language: &cos::MethodLanguage) -> Self {
         match language {
-            cos::MethodLanguage::ObjectScript(_) => Self::Objectscript,
+            cos::MethodLanguage::ObjectScript(_) | cos::MethodLanguage::Cache(_) => {
+                Self::Objectscript
+            }
             cos::MethodLanguage::Python(_) => Self::Python,
             cos::MethodLanguage::TSQL(_) => Self::Tsql,
             cos::MethodLanguage::ISPL(_) => Self::Ispl,
             cos::MethodLanguage::JavaScript(_) => Self::Javascript,
+            cos::MethodLanguage::MVBasic(_) => Self::Mvbasic,
         }
     }
 }

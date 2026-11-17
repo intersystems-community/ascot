@@ -5,20 +5,30 @@
 //! Embedded `&sql(...)` hands off to `sql.rs`.
 
 use std::ops::Deref;
-use std::str::FromStr;
 
 use either::Either;
 // Make key types public for use in corpus tests
 pub use tygr::*;
+
+pub use crate::convert::VecSep;
+use std::borrow::Cow;
 
 use crate::sql;
 
 // tygr 0.2.0 dropped these (previously public) helpers; reimplemented locally
 // against tygr's still-public building blocks.
 char_class!(pub AnyChar, "any", |_ch| true);
-type StringEndsWith<T> = Raw<(Vec<(NotFollowedBy<T>, CharOf<AnyChar>)>, T)>;
 
-char_class!(pub IsNumeric, "numeric", |ch| ch.is_numeric());
+/// A letter as IRIS reads a name: an ASCII or Latin-1 letter, or any code unit from U+0100 up,
+/// `→` and `٣` included (`$ZNAME` on IRIS 2026.3).
+pub const fn is_letter(ch: char) -> bool {
+    ch.is_ascii_alphabetic()
+        || matches!(ch, 'ª' | 'µ' | 'º' | 'À'..='Ö' | 'Ø'..='ö' | 'ø'..='ÿ')
+        || ch as u32 >= 0x100
+}
+type StringEndsWith<T> = Raw<(Vec<(NotFollowedBy<T>, AnyChar)>, T)>;
+
+char_class!(pub IsNumeric, "numeric", |ch| ch.is_ascii_digit());
 
 char_class!(
     pub IsNotLineBreakingWhitespace,
@@ -38,9 +48,10 @@ pub struct Exponential {
 
 #[derive(Grammar)]
 pub enum Number {
+    // `0.` is `0`: the point may end the number.
     FromDigit(
         Digits,
-        Option<(StringEq!("."), Digits)>,
+        Option<(StringEq!("."), Option<Digits>)>,
         Option<Exponential>,
     ),
     FromDot(StringEq!("."), Digits, Option<Exponential>),
@@ -61,7 +72,7 @@ There are three kinds of "gap" between elements:
  */
 
 #[derive(Grammar, Clone)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum SGapUnit {
     RangeComment(RangeComment),
     Space(StringOf1<IsNotLineBreakingWhitespace>),
@@ -69,11 +80,11 @@ pub enum SGapUnit {
 }
 
 #[derive(Grammar, Clone)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct SGap(Raw<Vec<SGapUnit>>);
 
 #[derive(Grammar, Clone)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct SGap1(Raw<Vec1<SGapUnit>>);
 
 #[derive(Grammar, Clone)]
@@ -83,7 +94,7 @@ pub struct LineComment {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct NL {
     gap: SGap,
     comment: Option<LineComment>,
@@ -91,25 +102,25 @@ pub struct NL {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct MGap(Raw<Vec<MGapUnit>>);
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum MGapUnit {
     SGap(SGapUnit),
     NL(NL),
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum LGapNL {
     NL(NL),
     HMacro(HMacro),
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum LGap1Enum {
     MultiLine {
         line_i: Vec1<(SGap, Periods, LGapNL)>,
@@ -119,15 +130,15 @@ pub enum LGap1Enum {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct LGap1(Raw<LGap1Enum>);
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct LGap(Option<LGap1>);
 
 #[derive(Grammar, Clone)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct HMacro {
     // some old routines have a bare "#"
     pub command: Prefix<StringEq!("#"), HMacroCommand>,
@@ -136,13 +147,14 @@ pub struct HMacro {
 
 #[derive(Grammar, Clone)]
 pub enum HMacroCommand {
+    // `#define F()` declares no parameter, which the call may then write as `$$$F` or `$$$F()`.
     Define {
         kw: (StringEqCI!("define"), SGap1),
         name: MacroName,
         args: Option<
             Wrap<
                 (StringEq!("("), SGap),
-                VecSep<Prefix<StringEq!("%"), MacroName>, Wrap<SGap, StringEq!(","), SGap>>,
+                Option<VecSep<Prefix<StringEq!("%"), MacroName>, Wrap<SGap, StringEq!(","), SGap>>>,
                 (SGap, StringEq!(")")),
             >,
         >,
@@ -171,7 +183,7 @@ pub enum HMacroCommand {
     Undef(StringEqCI!("undef"), HMacroKeywordEnd),
 }
 
-type HMacroKeywordEnd = NotFollowedBy<CharOf<IsLetterOrNumber>>;
+type HMacroKeywordEnd = NotFollowedBy<IsLetterOrNumber>;
 
 pub type SGapXSGap<T> = Wrap<SGap, T, SGap>;
 pub type SGapXMGap<T> = Wrap<SGap, T, MGap>;
@@ -179,7 +191,7 @@ pub type MGapXMGap<T> = Wrap<MGap, T, MGap>;
 pub type LGapXLGap<T> = Wrap<LGap, T, LGap>;
 
 // A list's comma, with the whitespace a list allows on each side kept as ranges, for the style.
-pub type CommaSep<Before, After = Before> = Wrap<Range<Before>, StringEq!(","), Range<After>>;
+pub type CommaSep<Before, After = Before> = Wrap<Ranged<Before>, StringEq!(","), Ranged<After>>;
 
 // A comma between two present items: its offset, and the whitespace on each side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,9 +204,9 @@ pub struct CommaAt {
 impl<B, A> From<&CommaSep<B, A>> for CommaAt {
     fn from(comma: &CommaSep<B, A>) -> Self {
         CommaAt {
-            start: comma.before.end,
-            before: comma.before.end - comma.before.start,
-            after: comma.after.end - comma.after.start,
+            start: comma.prefix.end,
+            before: comma.prefix.end - comma.prefix.start,
+            after: comma.suffix.end - comma.suffix.start,
         }
     }
 }
@@ -202,8 +214,8 @@ impl<B, A> From<&CommaSep<B, A>> for CommaAt {
 // A list's commas, leaving out those next to an omitted item (`$lb(1,,3)`), which no spacing fits.
 pub fn commas_of<T, B, A>(list: &VecSep<T, CommaSep<B, A>>) -> Vec<CommaAt> {
     let empty_item = |i: usize| {
-        list.seps.get(i).map(|next| next.before.start)
-            == list.seps.get(i.wrapping_sub(1)).map(|prev| prev.after.end)
+        list.seps.get(i).map(|next| next.prefix.start)
+            == list.seps.get(i.wrapping_sub(1)).map(|prev| prev.suffix.end)
     };
     (list.seps.iter().enumerate())
         .filter(|&(i, _)| !empty_item(i) && !empty_item(i + 1))
@@ -214,7 +226,7 @@ pub fn commas_of<T, B, A>(list: &VecSep<T, CommaSep<B, A>>) -> Vec<CommaAt> {
 type LGapX<T> = Prefix<LGap, T>;
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct SGap1X<T> {
     before: SGap1,
     it: T,
@@ -228,7 +240,7 @@ impl<T> Deref for SGap1X<T> {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct XMGap<T> {
     pub it: T,
     after: MGap,
@@ -253,19 +265,21 @@ pub enum MthArg {
         target: SetTarget,
     },
     Expr {
-        expr: Range<Expr>,
+        expr: Ranged<Expr>,
         expand: Option<StringEq!("...")>,
     },
 }
 
 #[derive(Grammar)]
+// The `:` may start a line of its own: `$select(cond ##continue\n : value, ...)`, and the same in
+// a method body.
 pub struct ExpColExp {
-    pub e1: Range<Expr>,
-    kw: SGapXMGap<StringEq!(":")>,
-    pub e2: Range<Expr>,
+    pub e1: Ranged<Expr>,
+    kw: MGapXMGap<StringEq!(":")>,
+    pub e2: Ranged<Expr>,
 }
 
-pub type ColExp = Prefix<SGapXMGap<StringEq!(":")>, Range<Expr>>;
+pub type ColExp = Prefix<MGapXMGap<StringEq!(":")>, Ranged<Expr>>;
 
 // The expression is parsed once and the `:expr` / `...` suffix decides the `FunArg` variant;
 // trying `ExpColExp` and then `Expr` as separate alternatives re-parsed every argument, doubling
@@ -278,8 +292,8 @@ pub enum FunArgSource {
         md: Option<StarMod>,
     },
     Expr {
-        expr: Range<Expr>,
-        tail: Option<Either<(SGapXMGap<StringEq!(":")>, Range<Expr>), StringEq!("...")>>,
+        expr: Ranged<Expr>,
+        tail: Option<Either<(MGapXMGap<StringEq!(":")>, Ranged<Expr>), StringEq!("...")>>,
     },
     ByRef {
         dot: StringEq!("."),
@@ -287,7 +301,8 @@ pub enum FunArgSource {
     },
 }
 
-#[derive(GrammarFromOther)]
+#[derive(Parse)]
+#[tygr(inline, try_from_infallible = FunArgSource)]
 pub enum FunArg {
     ColonNormal(ExpColExp),
     ColonDefault(ColExp),
@@ -306,8 +321,7 @@ pub enum FunArg {
     },
 }
 
-impl GrammarFrom for FunArg {
-    type Source = FunArgSource;
+impl Print for FunArg {
     fn print_to(&self, buf: &mut String) {
         match self {
             FunArg::ColonNormal(x) => x.print_to(buf),
@@ -322,7 +336,7 @@ impl GrammarFrom for FunArg {
             }
             FunArg::ByRef { dot, target } => {
                 dot.print_to(buf);
-                Grammar::print_to(target, buf);
+                target.print_to(buf);
             }
         }
     }
@@ -358,34 +372,34 @@ pub enum StarModOp {
     Sub(StringEq!("-")),
 }
 
-#[derive(GrammarTryFromOther)]
+#[derive(Parse)]
+#[tygr(try_from = Ranged<ExprOps<()>>)]
 pub enum GetTarget {
     Var(Variable),
     Member {
-        member: Prefix<StringEq!(".."), Range<MemberRef>>,
-        args: Option<Range<MthArgList>>,
+        member: Prefix<StringEq!(".."), Ranged<MemberRef>>,
+        args: Option<Ranged<MthArgList>>,
     },
-    Indirection(Range<Indirection>),
+    Indirection(Ranged<Indirection>),
     Sub {
-        base: Range<ExprOps<()>>,
+        base: Ranged<ExprOps<()>>,
         op: SufOp,
     },
     // A `$z...` system function standing for a reference, e.g. `$order($zobjval(...))`.
     Fun(Box<Prefix<StringEq!("$"), FunctionCall>>),
 }
 
-impl GrammarFrom for GetTarget {
-    type Source = Range<ExprOps<()>>;
+impl Print for GetTarget {
     fn print_to(&self, buf: &mut String) {
         match self {
-            GetTarget::Var(base) => Grammar::print_to(base, buf),
+            GetTarget::Var(base) => base.print_to(buf),
             GetTarget::Member { member, args } => {
                 member.print_to(buf);
                 args.print_to(buf);
             }
             GetTarget::Indirection(ind) => ind.print_to(buf),
             GetTarget::Sub { base, op } => {
-                Grammar::print_to(base, buf);
+                base.print_to(buf);
                 op.print_to(buf);
             }
             GetTarget::Fun(call) => call.print_to(buf),
@@ -393,11 +407,11 @@ impl GrammarFrom for GetTarget {
     }
 }
 
-impl TryFrom<Range<ExprOps<()>>> for GetTarget {
+impl TryFrom<Ranged<ExprOps<()>>> for GetTarget {
     type Error = &'static str;
 
-    fn try_from(value: Range<ExprOps<()>>) -> Result<Self, Self::Error> {
-        let err = "be a valid SET target";
+    fn try_from(value: Ranged<ExprOps<()>>) -> Result<Self, Self::Error> {
+        let err = "name a variable, a property or an indirection";
         match value.into_inner() {
             ExprOps::Then { base, op } => Ok(GetTarget::Sub { base: *base, op }),
             ExprOps::Base(base) => match *base {
@@ -428,18 +442,19 @@ pub struct CacheDirectCallback {
     sub: Option<Prefix<StringEq!("!"), Identifier>>,
 }
 
-#[derive(GrammarTryFromOther)]
+#[derive(Parse)]
+#[tygr(try_from = SetTargetSource)]
 pub enum SetTarget {
     Var(Variable),
     Member {
-        member: Prefix<StringEq!(".."), Range<MemberRef>>,
-        args: Option<Range<MthArgList>>,
+        member: Prefix<StringEq!(".."), Ranged<MemberRef>>,
+        args: Option<Ranged<MthArgList>>,
     },
-    Indirection(Range<Indirection>),
+    Indirection(Ranged<Indirection>),
     Fun(SetTargetFun),
-    Special(SpecialVariable),
+    Special(Ranged<SpecialVariable>),
     Sub {
-        obj: Range<ExprOps<()>>,
+        obj: Ranged<ExprOps<()>>,
         op: SufOp,
     },
     CacheDirectCallback(CacheDirectCallback),
@@ -457,6 +472,10 @@ pub enum SetTargetFun {
     Property(PropertyCall),
     Sequence(SequenceCall),
     MV(MVCall),
+    // `$zobjval(...)`, `$zobjmod(...)`: the undocumented object internals IRIS's own classes set.
+    Undocumented(UnknownFunctionCall),
+    // `$mvv(n)`, a MultiValue system value: IRIS's own classes assign it, undocumented as a target.
+    Simple(SimpleFunctionCall),
 }
 
 // A SET target is an expression of a settable shape -- except `$LISTGET(var1,var2,...)`, which
@@ -465,14 +484,13 @@ pub enum SetTargetFun {
 #[derive(Grammar)]
 pub enum SetTargetSource {
     ListGet(Prefix<StringEq!("$"), ListGetForSet>),
-    Expr(Range<ExprOps<()>>),
+    Expr(Ranged<ExprOps<()>>),
 }
 
-impl GrammarFrom for SetTarget {
-    type Source = SetTargetSource;
+impl Print for SetTarget {
     fn print_to(&self, buf: &mut String) {
         match self {
-            SetTarget::Var(base) => Grammar::print_to(base, buf),
+            SetTarget::Var(base) => base.print_to(buf),
             SetTarget::Member { member, args } => {
                 member.print_to(buf);
                 args.print_to(buf);
@@ -481,9 +499,9 @@ impl GrammarFrom for SetTarget {
             SetTarget::Fun(fun) => fun.print_to(buf),
             SetTarget::Special(var) => {
                 buf.push('$');
-                Grammar::print_to(var, buf);
+                var.print_to(buf);
             }
-            SetTarget::CacheDirectCallback(callback) => Grammar::print_to(callback, buf),
+            SetTarget::CacheDirectCallback(callback) => callback.print_to(buf),
             SetTarget::Sub { obj: base, op } => {
                 base.print_to(buf);
                 op.print_to(buf);
@@ -496,7 +514,7 @@ impl TryFrom<SetTargetSource> for SetTarget {
     type Error = &'static str;
 
     fn try_from(value: SetTargetSource) -> Result<Self, Self::Error> {
-        let err = "be a valid SET target";
+        let err = "be a variable, a property, an indirection or a settable function such as $PIECE";
         let value = match value {
             SetTargetSource::ListGet(call) => {
                 return Ok(SetTarget::Fun(SetTargetFun::ListGet(call.prefixed)));
@@ -544,6 +562,8 @@ impl TryFrom<FunctionCall> for SetTargetFun {
             FunctionCall::Sequence(c) => Ok(SetTargetFun::Sequence(c)),
             FunctionCall::ListBuild(c) => Ok(SetTargetFun::ListBuild(c.try_into()?)),
             FunctionCall::MV(c) => Ok(SetTargetFun::MV(c)),
+            FunctionCall::Unknown(c) if c.is_settable() => Ok(SetTargetFun::Undocumented(c)),
+            FunctionCall::Simple(c) if c.is_settable() => Ok(SetTargetFun::Simple(c)),
             _ => Err(()),
         }
     }
@@ -576,8 +596,8 @@ impl TryFrom<ListBuild> for ListBuildForSet {
 }
 
 fn exp_arg_to_var_arg(
-    arg: Wrap<MGap, Range<Option<Expr>>, MGap>,
-) -> Result<Wrap<MGap, Range<Option<Variable>>, MGap>, ()> {
+    arg: Wrap<MGap, Ranged<Option<Expr>>, MGap>,
+) -> Result<Wrap<MGap, Ranged<Option<Variable>>, MGap>, ()> {
     let arg = arg
         .map(|arg| {
             arg.map(|arg| {
@@ -609,6 +629,8 @@ impl SetTargetFun {
             SetTargetFun::Sequence(c) => c.print_to(buf),
             SetTargetFun::MV(c) => c.print_to(buf),
             SetTargetFun::ListBuild(c) => c.print_to(buf),
+            SetTargetFun::Undocumented(c) => c.print_to(buf),
+            SetTargetFun::Simple(c) => c.print_to(buf),
         }
     }
 }
@@ -622,7 +644,7 @@ impl SetTarget {
     }
 }
 
-pub type PostCondition = Range<Prefix<StringEq!(":"), ExpressionAfterColon>>;
+pub type PostCondition = Ranged<Prefix<StringEq!(":"), ExpressionAfterColon>>;
 
 #[derive(Grammar)]
 pub struct GlobalRef {
@@ -646,7 +668,7 @@ pub enum GlobalRefExtension {
     Bracket(Wrap<StringEq!("["), Option<VecSep<BracketSafeExpr, StringEq!(",")>>, StringEq!("]")>),
 }
 
-type SubscriptList = ParenList<Range<Expr>>;
+type SubscriptList = ParenList<Ranged<Expr>>;
 
 #[derive(Grammar)]
 pub struct GlobalReference {
@@ -655,18 +677,19 @@ pub struct GlobalReference {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
+// The name may be a property or a method's value: `@obj.Name@(sub)`.
 pub struct Indirection {
     pub at: StringEq!("@"),
-    pub expr: Box<Range<ParenedExpr<()>>>,
+    pub expr: Box<Ranged<ExprOps<()>>>,
     pub subscript_indirection: Option<Prefix<StringEq!("@"), SubscriptList>>,
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum AllowIndirection<T> {
     Plain(T),
-    Indirection(Range<Box<Indirection>>),
+    Indirection(Ranged<Box<Indirection>>),
 }
 
 // Dynamic Abstract Object
@@ -679,14 +702,14 @@ pub enum DAO {
     },
     Arr {
         open: StringEq!("["),
-        content: MGapXMGap<Option<VecSep<Range<DAOElem>, CommaSep<MGap>>>>,
+        content: MGapXMGap<Option<VecSep<Ranged<DAOElem>, CommaSep<MGap>>>>,
         close: StringEq!("]"),
     },
 }
 
 #[derive(Grammar)]
 pub enum DAOElem {
-    DAO(Box<Range<DAO>>),
+    DAO(Box<Ranged<DAO>>),
     True(StringEq!("true")),
     False(StringEq!("false")),
     Null(StringEq!("null")),
@@ -694,7 +717,7 @@ pub enum DAOElem {
     Num(Option<StringEq!("-")>, Number),
     OS {
         open: StringEq!("("),
-        content: MGapXMGap<Range<Expr>>,
+        content: MGapXMGap<Ranged<Expr>>,
         close: StringEq!(")"),
     },
 }
@@ -703,7 +726,7 @@ pub enum DAOElem {
 pub struct DAOBind {
     pub key: JSONString,
     pub colon: MGapXMGap<StringEq!(":")>,
-    pub value: Range<DAOElem>,
+    pub value: Ranged<DAOElem>,
 }
 
 // A JSON string: backslash escapes and no doubled quotes, as JSON spells it ("any valid JSON
@@ -712,10 +735,10 @@ pub struct DAOBind {
 pub struct JSONString(Wrap<DQ, Raw<Vec<JSONStringUnit>>, DQ>);
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum JSONStringUnit {
-    Escape(BS, CharOf<IsNotNL>),
-    Plain(CharOf<IsNotDQOrBSOrNL>),
+    Escape(BS, IsNotNL),
+    Plain(IsNotDQOrBSOrNL),
 }
 
 char_class!(pub IsNotDQOrBSOrNL, "not_doublequote_backslash_or_newline", |ch| !matches!(
@@ -724,7 +747,7 @@ char_class!(pub IsNotDQOrBSOrNL, "not_doublequote_backslash_or_newline", |ch| !m
 ));
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum AllowMacro<T> {
     Plain(T),
     Macro(Box<MacroCall>),
@@ -756,7 +779,7 @@ impl MemberRef {
     }
 }
 
-pub type Field = Prefix<StringEq!("."), Range<MemberRef>>;
+pub type Field = Prefix<StringEq!("."), Ranged<MemberRef>>;
 
 // A type's class: a class name (`This` among them, for the receiver's class) or a class
 // parameter's value `..#NAME`. IRIS takes only the first; ascot's declarations use the others.
@@ -770,13 +793,15 @@ pub enum SignatureType {
 pub enum CastReceiver {
     This(StringEq!("$"), StringEqCI!("this")),
     Local(LocalVariableName),
+    // `##class(C)($this).M()`: IRIS compiles the parenthesized receiver too.
+    Parenthesized(Ranged<Paren<Box<CastReceiver>>>),
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct SufOp {
     pub mem: Field,
-    pub args: Option<Range<MthArgList>>,
+    pub args: Option<Ranged<MthArgList>>,
 }
 
 type Pattern = Vec<AllowMacro<AllowIndirection<PatternElement>>>;
@@ -821,7 +846,7 @@ pub enum PatternCode {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum PrefixOperator {
     Not(StringEq!("'")),
     Minus(StringEq!("-")),
@@ -830,33 +855,32 @@ pub enum PrefixOperator {
 
 pub struct NotFirstNonWhitespace;
 
-impl Grammar for NotFirstNonWhitespace {
-    type First = <() as Grammar>::First;
+impl Parse for NotFirstNonWhitespace {
+    type First = <() as Parse>::First;
 
-    fn parse_at(input: &str, pos: usize, state: State) -> Option<(Self, usize)> {
-        let pos = Self::scan_at(input, pos, state)?;
-        Some((Self, pos))
-    }
-
-    fn scan_at(input: &str, pos: usize, _state: State) -> Option<usize> {
+    fn parse_at<S: Success, L: Level>(
+        input: &str,
+        pos: usize,
+        _state: State<L>,
+    ) -> Option<(S::Output<Self>, usize)> {
         let before = input.get(..pos)?;
         let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
         if input.get(line_start..pos)?.chars().all(char::is_whitespace) {
             None
         } else {
-            Some(pos)
+            Some((S::output(|| Self), pos))
         }
     }
-
-    fn print_to(&self, _buf: &mut String) {}
 
     fn to_bnf() -> bnf::Expr {
         bnf::Expr::empty()
     }
 
-    fn fail_at(_pos: usize, _state: State) -> bool {
-        false
-    }
+    fn visit_rules(_rules: &mut bnf::Rules) {}
+}
+
+impl Print for NotFirstNonWhitespace {
+    fn print_to(&self, _buf: &mut String) {}
 }
 
 #[derive(Grammar)]
@@ -902,18 +926,18 @@ pub enum Operator {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct MatchOp {
     not: Option<StringEq!("'")>,
     sym: StringEq!("?"),
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum InfixOperation<BetweenInfix> {
     Other {
         op: Wrap<BetweenInfix, Operator, MGap>,
-        rhs: Range<OpsExpr<()>>,
+        rhs: Ranged<OpsExpr<()>>,
     },
     Match {
         op: Wrap<BetweenInfix, MatchOp, MGap>,
@@ -936,9 +960,9 @@ pub enum AssignTarget {
 
 #[derive(Grammar)]
 pub struct SetArgument {
-    pub target: Range<AssignTarget>,
+    pub target: Ranged<AssignTarget>,
     pub eq: LGapXLGap<StringEq!("=")>,
-    pub value: Range<Expr>,
+    pub value: Ranged<Expr>,
 }
 
 // A command or function name: its documented spelling and abbreviation.
@@ -952,7 +976,7 @@ macro_rules! keywords {
     ($kind:ident, $names:ident [$($extra:literal),*]; $($name:ident: $full:literal $(/ $abbr:literal)?;)*) => {
         $(
             #[derive(Grammar)]
-            #[grammar(inline)]
+            #[tygr(inline)]
             pub enum $name {
                 Full(StringEqCI!($full)),
                 $(Abbr(StringEqCI!($abbr)),)?
@@ -1097,7 +1121,7 @@ keywords! {
 
 // `H` alone halts; with an argument it hangs -- so only `HCommand` knows its full name.
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum KwH {
     Abbr(StringEqCI!("H")),
 }
@@ -1116,6 +1140,8 @@ pub enum KeywordKind {
     Command,
     // An intrinsic function's name, without its `$`.
     Function,
+    // A system variable's name, without its `$`.
+    Variable,
 }
 
 impl std::fmt::Display for KeywordKind {
@@ -1123,6 +1149,7 @@ impl std::fmt::Display for KeywordKind {
         f.write_str(match self {
             KeywordKind::Command => "Command keyword",
             KeywordKind::Function => "Function",
+            KeywordKind::Variable => "System variable",
         })
     }
 }
@@ -1144,7 +1171,7 @@ pub trait Spelled {
     fn spelled(&self) -> KeywordUse;
 }
 
-impl<K: Keyword> Spelled for Range<K> {
+impl<K: Keyword> Spelled for Ranged<K> {
     fn spelled(&self) -> KeywordUse {
         KeywordUse::of(&**self, self.start)
     }
@@ -1192,10 +1219,10 @@ pub enum MergeArgument {
     Pair {
         target: SetTarget,
         eq: LGapXLGap<StringEq!("=")>,
-        source: Range<Expr>,
+        source: Ranged<Expr>,
     },
     // `Merge @x`: argument indirection, `x` holding the whole `target=source` (documented).
-    Indirect(Range<Box<Indirection>>),
+    Indirect(Ranged<Box<Indirection>>),
 }
 
 #[derive(Grammar)]
@@ -1205,17 +1232,19 @@ pub struct DoArgument {
 }
 
 // What `Do` runs: an entry reference, or `$Case(x, value:entry, ..., :entry)` choosing one, each
-// value a `Do` argument (documented for `$CASE`).
+// value a `Do` argument (documented for `$CASE`); or a macro call left unexpanded, undefined or
+// compile-time, which stands for one.
 #[derive(Grammar)]
 pub enum DoTarget {
-    Plain(Range<EntryRefAndArgs>),
+    Plain(Ranged<EntryRefAndArgs>),
     Case(DoCase),
+    Macro(Ranged<MacroCall>),
 }
 
 #[derive(Grammar)]
 pub struct DoCase {
     pub dollar: StringEq!("$"),
-    pub kw: Range<FnCase>,
+    pub kw: Ranged<FnCase>,
     pub open: StringEq!("("),
     pub target: ArgOf<Expr>,
     pub arms: Vec<More<ArgOf<DoCaseArm>>>,
@@ -1224,9 +1253,9 @@ pub struct DoCase {
 
 #[derive(Grammar)]
 pub struct DoCaseArm {
-    pub case: Option<Range<Expr>>,
+    pub case: Option<Ranged<Expr>>,
     pub colon: StringEq!(":"),
-    pub entry_ref: Range<EntryRefAndArgs>,
+    pub entry_ref: Ranged<EntryRefAndArgs>,
 }
 
 #[derive(Grammar)]
@@ -1238,35 +1267,35 @@ pub struct GoToArg {
 #[derive(Grammar)]
 pub enum AllowCase<T> {
     Plain(T),
-    Case(StringEq!("$"), Range<FnCase>, FunArgList),
+    Case(StringEq!("$"), Ranged<FnCase>, FunArgList),
 }
 
 #[derive(Grammar)]
-pub struct Location(pub AllowIndirection<Range<LegacyEntryRef>>);
+pub struct Location(pub AllowIndirection<Ranged<LegacyEntryRef>>);
 
-#[derive(GrammarTryFromOther)]
+#[derive(Parse)]
+#[tygr(try_from = ExprOps<()>)]
 pub enum MethodOrFuncCallExpr {
     /// A receiver expression whose last suffix op is a call.
     Method {
-        obj: Range<ExprOps<()>>,
+        obj: Ranged<ExprOps<()>>,
         mem: Field,
-        args: Range<MthArgList>,
+        args: Ranged<MthArgList>,
     },
     /// A `..member(args)` self-call — unlike `Method`, there's no separate receiver: `..member`
     /// is itself a complete atom, with the call args attaching directly to it.
     SelfMethod {
-        member: Prefix<StringEq!(".."), Range<MemberRef>>,
-        args: Range<MthArgList>,
+        member: Prefix<StringEq!(".."), Ranged<MemberRef>>,
+        args: Ranged<MthArgList>,
     },
     /// A `##super(args)` call — same shape as `SelfMethod`, but calling the superclass's
     /// version of the enclosing method instead of a named member.
-    Super(Prefix<StringEqCI!("##super"), Range<MthArgList>>),
+    Super(Prefix<StringEqCI!("##super"), Ranged<MthArgList>>),
     /// A bare `$`-prefixed function call atom.
     Function(FunctionCall),
 }
 
-impl GrammarFrom for MethodOrFuncCallExpr {
-    type Source = ExprOps<()>;
+impl Print for MethodOrFuncCallExpr {
     fn print_to(&self, buf: &mut String) {
         match self {
             Self::Method { obj, mem, args } => {
@@ -1288,7 +1317,7 @@ impl TryFrom<ExprOps<()>> for MethodOrFuncCallExpr {
     type Error = &'static str;
 
     fn try_from(value: ExprOps<()>) -> Result<Self, Self::Error> {
-        let err = "be a method or function call";
+        let err = "be a method or function call, not a value";
         match value {
             ExprOps::Then {
                 base,
@@ -1321,7 +1350,7 @@ impl TryFrom<ExprOps<()>> for MethodOrFuncCallExpr {
 pub enum EntryRefAndArgs {
     Expression(MethodOrFuncCallExpr),
     Legacy {
-        proc: Range<LegacyEntryRef>,
+        proc: Ranged<LegacyEntryRef>,
         args: Option<MthArgList>,
     },
 }
@@ -1334,8 +1363,8 @@ pub enum LegacyEntryRef {
 
 #[derive(Grammar)]
 pub struct LabelOffsetRoutine {
-    pub label: Range<AllowIndirection<Label>>,
-    pub offset: Option<Prefix<StringEq!("+"), Range<Expr>>>,
+    pub label: Ranged<AllowIndirection<Label>>,
+    pub offset: Option<Prefix<StringEq!("+"), Ranged<Expr>>>,
     pub routine: Option<ExtendedRoutineReference>,
 }
 
@@ -1354,7 +1383,7 @@ char_class!(pub IsMacroArgSafe, "any but comma or paren", |ch| !matches!(
     ',' | '(' | ')' | '"'
 ));
 
-pub type MacroArgList = Paren<VecSep<Range<MacroArg>, StringEq!(",")>>;
+pub type MacroArgList = Paren<VecSep<Ranged<MacroArg>, StringEq!(",")>>;
 pub type MacroArg = Vec<MacroArgUnit>;
 
 #[derive(Grammar, Clone)]
@@ -1367,6 +1396,9 @@ pub enum MacroArgUnit {
 #[derive(Grammar)]
 pub struct ZKillTarget {
     pub var: AllowIndirection<Variable>,
+    // `zkill x:2`, or `x: 2` but not `x :2`: IRIS compiles the suffix, which the document doesn't
+    // have.
+    pub level: Option<(StringEq!(":"), SGap, Ranged<Expr>)>,
 }
 
 #[derive(Grammar)]
@@ -1389,19 +1421,19 @@ pub enum NewArgument {
 #[derive(Grammar)]
 pub enum NewTarget {
     Normal(LocalVariableName),
-    Special(Prefix<StringEq!("$"), SpecialVariable>),
+    Special(Prefix<StringEq!("$"), Ranged<SpecialVariable>>),
 }
 
 #[derive(Grammar)]
 pub enum KillArgument {
-    Single(Range<SetTarget>),
-    Except(Paren<VecSep<Range<SetTarget>, CommaSep<MGap>>>),
+    Single(Ranged<SetTarget>),
+    Except(Paren<VecSep<Ranged<SetTarget>, CommaSep<MGap>>>),
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct IfBranches {
-    pub thn: Range<Block>,
+    pub thn: Ranged<Block>,
     pub eifs: Vec<LGapX<ElseIfBranch>>,
     pub els: Option<LGapX<ElseBranch>>,
 }
@@ -1450,27 +1482,36 @@ pub enum JobLocation {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct LocalJobAnnotation {
-    // todo the official document requires paren (https://docs.intersystems.com/iris20261/csp/docbook/Doc.View.cls?KEY=RCOS_cjob)
-    // but %SYS.Audit doesn't have paren ("j ##Class(%SYS.Audit).ConvertData()::5")
-    process_params: Prefix<StringEq!(":"), Option<AllowMacro<Paren<JobProcessParams>>>>,
-    timeout: Option<Prefix<StringEq!(":"), Expr>>,
+    // The document (RCOS_cjob) requires the parentheses, but %SYS.Audit passes a bare namespace
+    // and IRIS takes it, so that parses too and is reported as undocumented syntax.
+    pub process_params:
+        Prefix<StringEq!(":"), Option<AllowMacro<Either<Paren<JobProcessParams>, Ranged<Expr>>>>>,
+    pub timeout: Option<Prefix<StringEq!(":"), Expr>>,
 }
 
 type JobProcessParams = VecSep<Option<Expr>, StringEq!(":")>;
 
 #[derive(Grammar)]
+// A `#dim` line IRIS splits at its first `=`, so a type's parameters, `(MAXLEN=5)`, make it a
+// `Set` that fails: the type takes none.
 pub enum DimType {
-    ListOf(StringEqCI!("List"), Space1, StringEqCI!("Of"), Space1, Type),
+    ListOf(
+        StringEqCI!("List"),
+        Space1,
+        StringEqCI!("Of"),
+        Space1,
+        SignatureType,
+    ),
     ArrayOf(
         StringEqCI!("Array"),
         Space1,
         StringEqCI!("Of"),
         Space1,
-        Type,
+        SignatureType,
     ),
-    Simple(Type),
+    Simple(SignatureType),
 }
 
 #[derive(Grammar)]
@@ -1483,24 +1524,24 @@ pub struct ForIterator {
 #[derive(Grammar)]
 pub enum ForSpec {
     Range {
-        start: Range<Expr>,
-        increment: Prefix<SGapXMGap<StringEq!(":")>, Range<Expr>>,
-        end: Option<Prefix<SGapXMGap<StringEq!(":")>, Range<Expr>>>,
+        start: Ranged<Expr>,
+        increment: Prefix<SGapXMGap<StringEq!(":")>, Ranged<Expr>>,
+        end: Option<Prefix<SGapXMGap<StringEq!(":")>, Ranged<Expr>>>,
     },
-    Value(Range<Expr>),
+    Value(Ranged<Expr>),
 }
 
 #[derive(Grammar)]
 pub enum WriteArg {
-    Expr(Range<Expr>),
+    Expr(Ranged<Expr>),
     Fmts(Vec1<WriteFChar>),
     Dev {
         sym: StringEq!("*-"),
-        val: Range<Expr>,
+        val: Ranged<Expr>,
     },
     Char {
         sym: StringEq!("*"),
-        val: Range<Expr>,
+        val: Ranged<Expr>,
     },
 }
 
@@ -1508,11 +1549,12 @@ pub enum WriteArg {
 pub enum WriteFChar {
     NewLine(StringEq!("!")),
     FormFeed(StringEq!("#")),
-    Tab(StringEq!("?"), Range<Expr>),
+    // `write ? 5`: IRIS takes a space before the column.
+    Tab(StringEq!("?"), SGap, Ranged<Expr>),
     Mnemonic {
         slash: StringEq!("/"),
         name: LocalVariableName,
-        params: Option<ParenList<Range<Expr>>>,
+        params: Option<ParenList<Ranged<Expr>>>,
     },
 }
 
@@ -1520,7 +1562,7 @@ pub enum WriteFChar {
 pub enum ReadFChar {
     NewLine(StringEq!("!")),
     FormFeed(StringEq!("#")),
-    Tab(StringEq!("?"), Digits),
+    Tab(StringEq!("?"), Ranged<Expr>),
 }
 
 #[derive(Grammar)]
@@ -1528,7 +1570,7 @@ pub enum ReadArg {
     Prompt(OSString),
     Var(
         Option<StringEq!("*")>,
-        Range<SetTarget>,
+        Ranged<SetTarget>,
         Option<ReadMaxLen>,
         Option<ReadTimeout>,
     ),
@@ -1549,7 +1591,8 @@ pub type IOParameters = VecSep<IOParameter, StringEq!(":")>;
 pub struct IOParameter {
     pub key: Option<(StringEq!("/"), Identifier)>,
     pub eq: Option<StringEq!("=")>,
-    pub val: Option<Expr>,
+    // `/args="-c","%U:%G",File`: a list for a parameter that takes one.
+    pub val: Option<VecSep<Expr, StringEq!(",")>>,
     pub ddd: Option<StringEq!("...")>,
 }
 
@@ -1604,7 +1647,7 @@ pub enum PlusMinus {
 #[derive(Grammar)]
 pub struct LockArg {
     plus_minus: Option<PlusMinus>,
-    lock_entry: AllowMacro<LockEntry>,
+    pub lock_entry: AllowMacro<LockEntry>,
 }
 
 #[derive(Grammar)]
@@ -1621,20 +1664,20 @@ type LockName = AllowMacro<Variable>;
 
 #[derive(Grammar)]
 pub struct LockNameType {
-    n: AllowIndirection<LockName>,
-    t: Option<Prefix<StringEq!("#"), Expr>>,
+    pub n: AllowIndirection<LockName>,
+    pub t: Option<Prefix<StringEq!("#"), Expr>>,
 }
 
 // A braced block after a command, `Gap` the whitespace the command allows before the `{`.
 #[derive(Grammar)]
 pub struct CurryBlock<Gap = LGap> {
     // It starts where the command's own text ended.
-    pub gap: Range<Gap>,
-    pub block: Box<Range<Brace<Box<ProcedureBody>>>>,
+    pub gap: Ranged<Gap>,
+    pub block: Box<Ranged<Brace<Box<ProcedureBody>>>>,
 }
 
 impl<Gap> Deref for CurryBlock<Gap> {
-    type Target = Range<Brace<Box<ProcedureBody>>>;
+    type Target = Ranged<Brace<Box<ProcedureBody>>>;
 
     fn deref(&self) -> &Self::Target {
         &self.block
@@ -1644,25 +1687,22 @@ impl<Gap> Deref for CurryBlock<Gap> {
 #[derive(Grammar)]
 pub enum Block {
     Curry(CurryBlock),
-    Command(SGap1X<VecSep<Range<Command>, SGap1>>),
+    Command(SGap1X<VecSep<Ranged<Command>, SGap1>>),
 }
 
 char_class!(pub IsNotSpaceChar, "not_space", |ch| ch != ' ');
 
 #[derive(Grammar)]
 pub struct ElseIfBranch {
-    pub kw: Range<KwElseIf>,
-    // `ElseIf  (x)` with extra spaces: every space but the last is the keyword's, the last
-    // belongs to the condition (as after `If`). Unlike `If`, `ElseIf` is never argumentless.
-    kw_spaces: Raw<Vec<(StringEq!(" "), NotFollowedBy<CharOf<IsNotSpaceChar>>)>>,
-    pub cnds: IfConditions,
-    pub thn: Range<Block>,
+    pub kw: Ranged<KwElseIf>,
+    pub cnds: ElseIfConditions,
+    pub thn: Ranged<Block>,
 }
 
 #[derive(Grammar)]
 pub struct ElseBranch {
-    pub kw: Range<KwElse>,
-    pub body: Option<Range<Block>>,
+    pub kw: Ranged<KwElse>,
+    pub body: Option<Ranged<Block>>,
 }
 
 #[derive(Grammar)]
@@ -1696,7 +1736,7 @@ pub enum SpecialVariable {
     ROLES(StringEqCI!("ROLES")),
 
     // `ST` followed by a letter is `$STORAGE`, below.
-    STACK(Either<StringEqCI!("STACK"), (StringEqCI!("ST"), NotFollowedBy<CharOf<IsAlphabetic>>)>),
+    STACK(Either<StringEqCI!("STACK"), (StringEqCI!("ST"), NotFollowedBy<IsAlphabetic>)>),
     SYSTEM(Either<StringEqCI!("SYSTEM"), StringEqCI!("SY")>),
     STORAGE(Either<StringEqCI!("STORAGE"), StringEqCI!("S")>),
 
@@ -1723,7 +1763,8 @@ pub enum SpecialVariable {
     ZNAME(StringEqCI!("ZNAME")),
     ZNSPACE(Either<StringEqCI!("ZNSPACE"), StringEqCI!("ZN")>),
     ZORDER(Either<StringEqCI!("ZORDER"), StringEqCI!("ZO")>),
-    ZPARENT(Either<StringEqCI!("ZPARENT"), StringEqCI!("ZPA")>),
+    // `ZP` followed by a letter is `$ZPI` or `$ZPOS`, below.
+    ZPARENT(Either<StringEqCI!("ZPARENT"), (StringEqCI!("ZP"), NotFollowedBy<IsAlphabetic>)>),
     ZPI(StringEqCI!("ZPI")),
     ZPOS(Either<StringEqCI!("ZPOSITION"), StringEqCI!("ZPOS")>),
     ZREFERENCE(Either<StringEqCI!("ZREFERENCE"), StringEqCI!("ZR")>),
@@ -1738,63 +1779,76 @@ pub enum SpecialVariable {
     Unknown(StringOf1<IsAlphabetic>),
 }
 
-// Every full name above (i.e. not its short abbreviation) -- kept in sync by hand alongside the
-// enum, for `UnknownSpecialVariable::from_str`'s error message.
-pub const SPECIAL_VARIABLE_NAMES: &[&str] = &[
-    "DEVICE",
-    "ESTACK",
-    "ETRAP",
-    "ECODE",
-    "HALT",
-    "HOROLOG",
-    "IO",
-    "JOB",
-    "KEY",
-    "MVSYSRETCODE",
-    "MVAM",
-    "MVVM",
-    "MVSM",
-    "NAMESPACE",
-    "PRINCIPAL",
-    "QUIT",
-    "ROLES",
-    "STACK",
-    "SYSTEM",
-    "STORAGE",
-    "THROWOBJ",
-    "TLEVEL",
-    "THIS",
-    "TRS",
-    "TID",
-    "TEST",
-    "USERNAME",
-    "X",
-    "Y",
-    "ZCHILD",
-    "ZEOF",
-    "ZEOS",
-    "ZERROR",
-    "ZHOROLOG",
-    "ZIO",
-    "ZJOB",
-    "ZMODE",
-    "ZNAME",
-    "ZNSPACE",
-    "ZORDER",
-    "ZPARENT",
-    "ZPI",
-    "ZPOSITION",
-    "ZREFERENCE",
-    "ZSTORAGE",
-    "ZTIMESTAMP",
-    "ZTIMEZONE",
-    "ZTRAP",
-    "ZVERSION",
-    "ZA",
-    "ZB",
+// Every name above with its abbreviation, kept in sync by hand alongside the enum.
+pub const SPECIAL_VARIABLES: &[(&str, Option<&str>)] = &[
+    ("DEVICE", Some("D")),
+    ("ESTACK", Some("ES")),
+    ("ETRAP", Some("ET")),
+    ("ECODE", Some("EC")),
+    ("HALT", None),
+    ("HOROLOG", Some("H")),
+    ("IO", Some("I")),
+    ("JOB", Some("J")),
+    ("KEY", Some("K")),
+    ("MVSYSRETCODE", None),
+    ("MVAM", None),
+    ("MVVM", None),
+    ("MVSM", None),
+    ("NAMESPACE", None),
+    ("PRINCIPAL", Some("P")),
+    ("QUIT", Some("Q")),
+    ("ROLES", None),
+    ("STACK", Some("ST")),
+    ("SYSTEM", Some("SY")),
+    ("STORAGE", Some("S")),
+    ("THROWOBJ", None),
+    ("TLEVEL", Some("TL")),
+    ("THIS", None),
+    ("TRS", None),
+    ("TID", None),
+    ("TEST", Some("T")),
+    ("USERNAME", None),
+    ("X", None),
+    ("Y", None),
+    ("ZCHILD", Some("ZC")),
+    ("ZEOF", None),
+    ("ZEOS", None),
+    ("ZERROR", Some("ZE")),
+    ("ZHOROLOG", Some("ZH")),
+    ("ZIO", None),
+    ("ZJOB", Some("ZJ")),
+    ("ZMODE", Some("ZM")),
+    ("ZNAME", None),
+    ("ZNSPACE", Some("ZN")),
+    ("ZORDER", Some("ZO")),
+    ("ZPARENT", Some("ZP")),
+    ("ZPI", None),
+    ("ZPOSITION", Some("ZPOS")),
+    ("ZREFERENCE", Some("ZR")),
+    ("ZSTORAGE", Some("ZS")),
+    ("ZTIMESTAMP", Some("ZTS")),
+    ("ZTIMEZONE", Some("ZTZ")),
+    ("ZTRAP", Some("ZT")),
+    ("ZVERSION", Some("ZV")),
+    ("ZA", None),
+    ("ZB", None),
 ];
 
-char_class!(pub IsAlphabetic, "alphabetic", |ch| ch.is_alphabetic());
+pub fn special_variable_use(var: &Ranged<SpecialVariable>) -> Option<KeywordUse> {
+    let text = var.print();
+    let (full, abbr) = SPECIAL_VARIABLES.iter().find(|(full, abbr)| {
+        full.eq_ignore_ascii_case(&text) || *abbr == Some(text.to_ascii_uppercase().as_str())
+    })?;
+    Some(KeywordUse {
+        kind: KeywordKind::Variable,
+        start: var.start,
+        text,
+        full,
+        abbr: *abbr,
+    })
+}
+
+char_class!(pub IsAlphabetic, "alphabetic", |ch| is_letter(ch));
 
 #[derive(Grammar)]
 pub struct Variable {
@@ -1804,17 +1858,17 @@ pub struct Variable {
 
 // https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=RCOS_appx_identifiers#RCOS_appx_identifiers_cos_localvars
 #[derive(Grammar, Clone)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct LocalVariableName(Raw<LocalVariableNameStruct>);
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct LocalVariableNameStruct {
-    first: CharOf<IsLocalVariableNameFirst>,
+    first: IsLocalVariableNameFirst,
     rest: StringOf<IsLocalVariableNameRemaining>,
 }
 char_class!(pub IsLocalVariableNameFirst, "letter or percent sign", |c| {
-    c.is_ascii_alphabetic() || c == '%'
+    is_letter(c) || c == '%'
 });
 type IsLocalVariableNameRemaining = IsLetterOrNumberIncludingUnicode;
 
@@ -1824,14 +1878,13 @@ type IsLocalVariableNameRemaining = IsLetterOrNumberIncludingUnicode;
 pub struct GlobalVariableName(Raw<GlobalVariableNameStruct>);
 #[derive(Grammar)]
 pub struct GlobalVariableNameStruct {
-    first: CharOf<IsGlobalVariableNameFirst>,
+    first: IsGlobalVariableNameFirst,
     remaining: Option<(
-        Vec<(StringOf<IsLetterOrNumber>, StringEq!("."))>,
-        StringOf1<IsLetterOrNumber>,
+        Vec<(StringOf<IsLetterOrNumberIncludingUnicode>, StringEq!("."))>,
+        StringOf1<IsLetterOrNumberIncludingUnicode>,
     )>,
 }
-char_class!(pub IsGlobalVariableNameFirst, "letter or percent sign", |c| c
-    .is_ascii_alphabetic()
+char_class!(pub IsGlobalVariableNameFirst, "letter or percent sign", |c| is_letter(c)
     || c == '%');
 char_class!(pub IsLetterOrNumber, "letter or number", |c| c
     .is_ascii_alphanumeric());
@@ -1841,20 +1894,23 @@ char_class!(pub IsLetterOrNumber, "letter or number", |c| c
 pub struct ClassMemberName(Raw<ClassMemberNameStruct>);
 #[derive(Grammar)]
 pub struct ClassMemberNameStruct {
-    first: CharOf<IsClassMemberNameFirst>,
+    first: IsClassMemberNameFirst,
     remaining: StringOf<IsClassMemberNameRemaining>,
 }
 char_class!(pub IsClassMemberNameFirst, "letter or percent sign", |c| c
     .is_ascii_alphabetic()
     || c == '%');
-char_class!(pub IsClassMemberNameRemaining, "letter or number", |c| c
-    .is_alphanumeric());
+char_class!(pub IsClassMemberNameRemaining, "letter or number", |c| is_letter(c) || c.is_ascii_digit());
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum VariableBase {
-    Instance(Prefix<StringEq!("i%"), Range<QuotableClassMemberName>>),
-    RowInstance(Prefix<StringEq!("r%"), Range<ClassMemberName>>),
+    Instance(Prefix<StringEq!("i%"), Ranged<QuotableClassMemberName>>),
+    RowInstance(Prefix<StringEq!("r%"), Ranged<ClassMemberName>>),
+    // `m%Prop`, a property's modified flag, and `s%Prop`: two more prefixes of IRIS's own classes,
+    // undocumented; the quotes of `i%"%%OID"` go here too.
+    ModifiedInstance(Ranged<Prefix<StringEq!("m%"), Ranged<QuotableClassMemberName>>>),
+    SInstance(Ranged<Prefix<StringEq!("s%"), Ranged<QuotableClassMemberName>>>),
     Public(Prefix<StringEq!("%"), LocalVariableName>),
     Local(LocalVariableName),
     StructureSystemVariable {
@@ -1867,15 +1923,17 @@ pub enum VariableBase {
 
 #[derive(Grammar)]
 pub enum StructureSystemVariable {
-    GLOBAL(StringEqCI!("GLOBAL")),
-    JOB(StringEqCI!("JOB")),
-    LOCK(StringEqCI!("LOCK")),
-    ROUTINE(StringEqCI!("ROUTINE")),
+    GLOBAL(Either<StringEqCI!("GLOBAL"), StringEqCI!("G")>),
+    JOB(Either<StringEqCI!("JOB"), StringEqCI!("J")>),
+    LOCK(Either<StringEqCI!("LOCK"), StringEqCI!("L")>),
+    ROUTINE(Either<StringEqCI!("ROUTINE"), StringEqCI!("R")>),
 }
 
 pub type Periods = Vec<(Vec1<StringEq!(".")>, SGap1)>;
 
-pub type ExprEntry = MGapXMGap<Range<Expr>>;
+pub type ExprEntry = MGapXMGap<Ranged<Expr>>;
+// A `CodeMode = expression` body: IRIS compiles an empty one, comments alone included.
+pub type ExprBody = MGapXMGap<Option<Ranged<Expr>>>;
 
 #[derive(Grammar)]
 pub enum BitLogicOp {
@@ -1894,26 +1952,18 @@ pub enum BitLogicOperand {
 #[derive(Grammar)]
 pub struct BitLogicAtom {
     pub nots: Vec<StringEq!("~")>,
-    pub operand: Range<BitLogicOperand>,
+    pub operand: Ranged<BitLogicOperand>,
 }
 
-pub type BitLogicExpr = VecSep<Range<BitLogicAtom>, MGapXMGap<BitLogicOp>>;
+pub type BitLogicExpr = VecSep<Ranged<BitLogicAtom>, MGapXMGap<BitLogicOp>>;
 
 char_class!(pub IsAny, "any", |_c| true);
 
-char_class!(pub
-    IsSymbolFirst,
-    "ObjectScript symbols (i.e., letters or %)",
-    |ch| ch.is_alphabetic() || ch == '%'
-);
+char_class!(pub IsSymbolFirst, "ObjectScript symbols (i.e., letters or %)", |ch| is_letter(ch) || ch == '%');
 char_class!(pub IsSymbolRest, "letter/digit/%", |ch| {
-    ch.is_alphabetic() || ch.is_ascii_digit() || ch == '%'
+    is_letter(ch) || ch.is_ascii_digit() || ch == '%'
 });
-char_class!(pub
-    IsKeywordValue,
-    "keyword name (i.e., letters, digits, or one of \"_%./-\")",
-    |ch| ch.is_alphabetic() || ch.is_ascii_digit() || matches!(ch, '_' | '/' | '-' | '%' | '.')
-);
+char_class!(pub IsKeywordValue, "keyword name (i.e., letters, digits, or one of \"_%./-\")", |ch| is_letter(ch) || ch.is_ascii_digit() || matches!(ch, '_' | '/' | '-' | '%' | '.'));
 char_class!(pub IsWhitespace, "whitespace", |ch| ch.is_whitespace());
 char_class!(pub IsNotNL, "not_newline", |ch| ch != '\n');
 char_class!(pub IsNotStar, "not_star", |ch| ch != '*');
@@ -1928,7 +1978,7 @@ pub struct RangeComment(Raw<(StringEq!("/*"), StringEndsWith<StringEq!("*/")>)>)
 pub struct BareNL(StringEq!("\n"));
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct GenericLineComment<Prefix: Grammar> {
     head: Prefix,
     rest: StringEndsWith<BareNL>,
@@ -1939,7 +1989,7 @@ char_class!(pub IsNotDQOrNL, "not_doublequote_or_newline", |ch| {
 });
 
 #[derive(Grammar)]
-pub struct OSStringContent(Vec<Either<StringEq!("\"\""), CharOf<IsNotDQOrNL>>>);
+pub struct OSStringContent(Vec<Either<StringEq!("\"\""), IsNotDQOrNL>>);
 
 pub type OSString = Wrap<DQ, Raw<OSStringContent>, DQ>;
 
@@ -1952,21 +2002,21 @@ type BT = StringEq!("`");
 #[derive(Grammar)]
 pub struct JSDQStringStruct<Embeded: Grammar> {
     open: DQ,
-    content: Vec<Either<(BS, CharOf<IsAny>), Either<Embeded, CharOf<IsJSDQStringSafe>>>>,
+    content: Vec<Either<(BS, IsAny), Either<Embeded, IsJSDQStringSafe>>>,
     close: DQ,
 }
 
 #[derive(Grammar)]
 pub struct JSSQStringStruct<Embeded: Grammar> {
     open: SQ,
-    content: Vec<Either<(BS, CharOf<IsAny>), Either<Embeded, CharOf<IsJSSQStringSafe>>>>,
+    content: Vec<Either<(BS, IsAny), Either<Embeded, IsJSSQStringSafe>>>,
     close: SQ,
 }
 
 #[derive(Grammar)]
 pub struct JSBTStringStruct<Embeded: Grammar> {
     open: BT,
-    content: Vec<Either<(BS, CharOf<IsAny>), Either<Embeded, CharOf<IsJSBTStringSafe>>>>,
+    content: Vec<Either<(BS, IsAny), Either<Embeded, IsJSBTStringSafe>>>,
     close: BT,
 }
 
@@ -1995,27 +2045,14 @@ pub enum JSString<Embeded: Grammar> {
     B(JSBTString<Embeded>),
 }
 
-// Impossible, which is useful for essentially ignoring embeded language
+#[derive(Grammar)]
+pub struct Identifier(pub Ranged<OSSymbol>);
 
 #[derive(Grammar)]
-#[grammar(validated)]
-pub struct Impossible;
-
-impl Validate for Impossible {
-    const REQUIREMENT: &'static str = "never match";
-    fn validate(&self) -> bool {
-        false
-    }
-}
-
-#[derive(Grammar)]
-pub struct Identifier(pub Range<OSSymbol>);
-
-#[derive(Grammar)]
-pub struct QuotableClassMemberName(pub Range<QuotableClassMemberNameEnum>);
+pub struct QuotableClassMemberName(pub Ranged<QuotableClassMemberNameEnum>);
 
 impl Deref for QuotableClassMemberName {
-    type Target = Range<QuotableClassMemberNameEnum>;
+    type Target = Ranged<QuotableClassMemberNameEnum>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -2042,7 +2079,7 @@ pub enum QuotableClassMemberNameEnum {
 
 #[derive(Grammar)]
 pub struct OSSymbolStruct {
-    first: CharOf<IsSymbolFirst>,
+    first: IsSymbolFirst,
     rest: StringOf<IsSymbolRest>,
 }
 
@@ -2051,7 +2088,7 @@ pub struct OSSymbol(Raw<OSSymbolStruct>);
 
 // https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=RCOS_appx_identifiers#RCOS_appx_identifiers_classes
 #[derive(Grammar)]
-#[grammar(validated)]
+#[tygr(validated)]
 pub struct PackageAndClassName(VecSep<ShortPackageAndClassName, StringEq!(".")>);
 // All non-first short package names must start with a letter
 impl Validate for PackageAndClassName {
@@ -2083,7 +2120,7 @@ pub enum QuotableClassName {
 
 #[derive(Grammar)]
 pub struct ShortPackageAndClassName {
-    first: CharOf<IsShortPackageAndClassNameFirst>,
+    first: IsShortPackageAndClassNameFirst,
     remaining: StringOf<IsPackageAndClassNameRemaining>,
 }
 
@@ -2093,11 +2130,7 @@ char_class!(pub IsLetterOrPercent, "letter or percent sign", |c| c
     || c == '%');
 
 type IsPackageAndClassNameRemaining = IsLetterOrNumberIncludingUnicode;
-char_class!(
-    pub IsLetterOrNumberIncludingUnicode,
-    "letter or number",
-    |c| c.is_alphanumeric()
-);
+char_class!(pub IsLetterOrNumberIncludingUnicode, "letter or number", |c| is_letter(c) || c.is_ascii_digit());
 
 /*
 There are two entry points for ObjectScript:
@@ -2112,7 +2145,7 @@ The key differences are:
 */
 
 #[derive(Grammar)]
-#[grammar(name = "ObjectScript")]
+#[tygr(name = "ObjectScript")]
 pub struct OSText(Raw<Vec<OSTextUnit>>);
 
 #[derive(Grammar)]
@@ -2126,7 +2159,7 @@ pub enum OSExpr {
     },
     Brace {
         open: StringEq!("{"),
-        content: Range<OSText>,
+        content: Ranged<OSText>,
         close: StringEq!("}"),
     },
 }
@@ -2134,7 +2167,7 @@ pub enum OSExpr {
 type Line = (StringOf<IsNotNL>, BareNL);
 
 #[derive(Grammar, Clone)]
-#[grammar(validated)]
+#[tygr(validated)]
 pub struct ContinueLine(Line);
 
 impl Validate for ContinueLine {
@@ -2200,7 +2233,7 @@ char_class!(pub IsEJGSafe, "embeded_js_safe", |ch| !matches!(
 ));
 
 #[derive(Grammar)]
-#[grammar(validated)]
+#[tygr(validated)]
 pub struct AndWhatever(StringOf<IsAlphabetic>);
 // I could use IsOSExprSafe instead of IsAlphabetic, but filter is expensive so better to filter a shorter string.
 
@@ -2212,7 +2245,7 @@ impl Validate for AndWhatever {
     }
 }
 
-char_class!(pub IsOSExprSafe, "expr_char", |ch| ch.is_alphanumeric()
+char_class!(pub IsOSExprSafe, "expr_char", |ch| is_letter(ch) || ch.is_ascii_digit()
 || matches!(
     ch,
     '$' | '.'
@@ -2238,7 +2271,7 @@ char_class!(pub IsOSExprSafe, "expr_char", |ch| ch.is_alphanumeric()
 ));
 
 // Like expr safe but add parentheses and whitespace
-char_class!(pub IsOSTextSafe, "objectscript_text", |ch| ch.is_alphanumeric()
+char_class!(pub IsOSTextSafe, "objectscript_text", |ch| is_letter(ch) || ch.is_ascii_digit()
 || (ch.is_whitespace() && ch != '\n')
 || matches!(
     ch,
@@ -2273,28 +2306,29 @@ pub struct HashEmbededOS(StringEq!("#("), StringEndsWith<StringEq!(")#")>);
 #[derive(Grammar)]
 pub struct AngularEmbededOS(StringEq!("<%"), StringEndsWith<StringEq!("%>")>);
 
+// `&html<...>` ends at the `>` that balances its `<`: IRIS counts every `<` and `>` of the text,
+// in a quoted attribute, a comment or a `#()#` expression as much as in a tag, and nothing else,
+// except that from any `<script` on the text is raw up to the next `</script>`, and the block
+// fails without one.
 #[derive(Grammar)]
 pub struct HTML(Raw<Vec<HTMLUnit>>);
 
 #[derive(Grammar)]
 pub enum HTMLUnit {
-    EmbededOS1(HashEmbededOS),
-    EmbededOS2(AngularEmbededOS),
-    Text(CharOf<IsHTMLContentSafe>),
-    // Quotes are safe outside of tags
-    DQ(DQ),
-    SQ(SQ),
-    JS(
-        Raw<(StringEqCI!("<script"), HTMLTagContent, StringEq!(">"))>,
+    Script(
+        Raw<(StringEqCI!("<script"), Vec<HTMLUnit>, StringEq!(">"))>,
         StringEndsWith<StringEqCI!("</script>")>,
     ),
-    CSS(
-        Raw<(StringEqCI!("<style"), HTMLTagContent, StringEq!(">"))>,
-        StringEndsWith<StringEqCI!("</style>")>,
+    Nested(
+        StringEq!("<"),
+        NotFollowedBy<StringEqCI!("script")>,
+        Vec<HTMLUnit>,
+        StringEq!(">"),
     ),
-    CMT(XMLComment),
-    Tag(StringEq!("<"), HTMLTagContent, StringEq!(">")),
+    Other(IsNotAngleBracket),
 }
+
+char_class!(pub IsNotAngleBracket, "not an angle bracket", |ch| !matches!(ch, '<' | '>'));
 
 #[derive(Grammar)]
 pub enum HTMLTagContentUnit {
@@ -2302,17 +2336,19 @@ pub enum HTMLTagContentUnit {
     Embeded2(AngularEmbededOS),
     // A quote is plain text: IRIS ends the block at the first balancing `>`, quoted or not.
     Quote(Either<DQ, SQ>),
-    Sym(CharOf<IsHTMLContentSafe>),
+    Sym(IsHTMLContentSafe),
 }
 
 type HTMLTagContent = Vec<HTMLTagContentUnit>;
 
-char_class!(pub IsHTMLContentSafe, "html safe characters", |ch| ch
-.is_alphanumeric()
+// A `\` or `~` is as plain as the rest: a Windows path in an XData's attribute.
+char_class!(pub IsHTMLContentSafe, "html safe characters", |ch| is_letter(ch) || ch.is_ascii_digit()
 || ch.is_whitespace()
 || matches!(
     ch,
     '=' | ':'
+        | '\\'
+        | '~'
         | '&'
         | ';'
         | '['
@@ -2342,10 +2378,10 @@ char_class!(pub IsHTMLContentSafe, "html safe characters", |ch| ch
 pub struct Data(Vec<DataUnit>);
 
 #[derive(Grammar)]
-#[grammar(hidden)]
+#[tygr(hidden)]
 pub enum DataUnit {
     Txt(StringOf1<IsDataSafe>),
-    Str(JSDQString<Impossible>),
+    Str(JSDQString<Never>),
     Brs(StringEq!("{"), Vec<DataUnit>, StringEq!("}")),
 }
 
@@ -2385,8 +2421,12 @@ type WithSpace<X> = (X, Space);
 
 #[derive(Grammar)]
 pub enum KeywordValueEnum {
-    // `Data = (Tags(ELEMENTS))` names a collection's subvalues as an index key does.
-    Atom(StringOf1<IsKeywordValue>, Option<IndexPropertyKind>),
+    // `Data = (Tags(ELEMENTS))` names a collection's subvalues as an index key does, but IRIS
+    // reads this form case-sensitively, unlike the `On` clause's.
+    Atom(
+        StringOf1<IsKeywordValue>,
+        Option<Either<StringEq!("(KEYS)"), StringEq!("(ELEMENTS)")>>,
+    ),
     String(OSString),
     OS(StringEq!("{"), OSText, StringEq!("}")),
     Paren(
@@ -2427,11 +2467,11 @@ impl<Entry: Grammar> KeywordList<Entry> {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct CommaWithSpace(Raw<(StringEq!(","), Space)>);
 
 // Ranged so a diagnostic about one keyword (`[ CompileAfter = , ... ]`) can point at it.
-pub type KeywordEntryWithSpace<Entry = KeywordEntry> = Range<Suffix<Entry, Space>>;
+pub type KeywordEntryWithSpace<Entry = KeywordEntry> = Ranged<Suffix<Entry, Space>>;
 
 /// An entry read as one of the declaration's keywords `K`, or kept as written when it is none.
 /// IRIS parses any entry here; what it does with one it doesn't know is the checker's to report.
@@ -2465,13 +2505,13 @@ impl KeywordEntry {
 // Where a keyword's name or value ends: before anything but another name character, so that
 // `Final` doesn't match the start of `FinalFoo`, nor `persistent` of `persistentfoo`.
 #[derive(Grammar)]
-#[grammar(hidden)]
-pub struct KeywordEnd(NotFollowedBy<CharOf<IsKeywordValue>>);
+#[tygr(hidden)]
+pub struct KeywordEnd(NotFollowedBy<IsKeywordValue>);
 
 /// A flag keyword: `Name` sets it, `Not Name` clears it. `Name = 1` is no flag: IRIS refuses it on a
 /// member, and takes it on a class as a bare `Name` whatever the value.
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum Flag<Name> {
     Not {
         not: Raw<(StringEqCI!("Not"), Space1)>,
@@ -2493,12 +2533,12 @@ impl<Name: Grammar> Flag<Name> {
 }
 
 #[derive(Grammar)]
-#[grammar(hidden)]
+#[tygr(hidden)]
 pub struct NoAssign(NotFollowedBy<Raw<(Space, StringEq!("="))>>);
 
 /// The `0` or `1` of `ProcedureBlock = 1` and `ServerOnly = 0`.
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum Bit {
     Off(StringEq!("0")),
     On(StringEq!("1")),
@@ -2512,7 +2552,7 @@ impl Bit {
 
 /// A keyword taking a value of the shape `Value`: `Name = value`.
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct Valued<Name, Value> {
     name: Name,
     end: KeywordEnd,
@@ -2524,7 +2564,7 @@ pub struct Valued<Name, Value> {
 // Spelled as IRIS accepts them: `ClassType` in lowercase only, the rest in any case.
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum ClassType {
     Datatype(StringEq!("datatype")),
     Dynamic(StringEq!("dynamic")),
@@ -2537,7 +2577,7 @@ pub enum ClassType {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum Inheritance {
     Left(StringEqCI!("left")),
     Right(StringEqCI!("right")),
@@ -2582,7 +2622,7 @@ pub enum ClassKeyword {
 
 /// The keywords every member takes, besides its kind's own.
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum MemberKeyword {
     Deprecated(Flag<StringEqCI!("Deprecated")>),
     Internal(Flag<StringEqCI!("Internal")>),
@@ -2659,7 +2699,7 @@ pub enum MethodKeyword {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum Cardinality {
     One(StringEqCI!("one")),
     Many(StringEqCI!("many")),
@@ -2710,7 +2750,7 @@ pub enum ParameterKeyword {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum IndexType {
     Bitmap(StringEqCI!("bitmap")),
     Bitslice(StringEqCI!("bitslice")),
@@ -2799,7 +2839,7 @@ pub enum ProjectionKeyword {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum ImportIncludeLCPrefix {
     SS(StringEq!("//")),
 }
@@ -2812,7 +2852,7 @@ pub enum DocumentLevelWhitespace {
 }
 
 #[derive(Grammar)]
-#[grammar(hidden)]
+#[tygr(hidden)]
 pub struct ImportIncludeGap(pub Raw<Vec<DocumentLevelWhitespace>>);
 
 #[derive(Grammar)]
@@ -2824,21 +2864,21 @@ pub struct Import {
 
 #[derive(Grammar)]
 pub enum ClassList {
-    Single(Range<ClassName>),
+    Single(Ranged<ClassName>),
     // An entry may be empty, `(, A)` or `(A, , B)`: IRIS compiles the list with it.
     Multiple {
-        open: Range<Raw<(StringEq!("("), Space)>>,
-        first: Option<Range<ClassName>>,
+        open: Ranged<Raw<(StringEq!("("), Space)>>,
+        first: Option<Ranged<ClassName>>,
         rest: Vec<(
-            Range<Raw<(Space, StringEq!(","), Space)>>,
-            Option<Range<ClassName>>,
+            Ranged<Raw<(Space, StringEq!(","), Space)>>,
+            Option<Ranged<ClassName>>,
         )>,
         close: Raw<(Space, StringEq!(")"))>,
     },
 }
 
 impl ClassList {
-    pub fn classes(&self) -> Vec<&Range<ClassName>> {
+    pub fn classes(&self) -> Vec<&Ranged<ClassName>> {
         match self {
             ClassList::Single(id) => vec![id],
             ClassList::Multiple { first, rest, .. } => (first.iter())
@@ -2869,14 +2909,14 @@ impl ClassList {
 #[derive(Grammar)]
 pub struct IncludeCode {
     pub keyword: Raw<(StringEqCI!("Include"), Space1)>,
-    pub files: Range<ClassList>,
+    pub files: Ranged<ClassList>,
     pub gap: ImportIncludeGap,
 }
 
 #[derive(Grammar)]
 pub struct IncludeGeneratorCode {
     pub keyword: Raw<(StringEqCI!("IncludeGenerator"), Space1)>,
-    pub files: Range<ClassList>,
+    pub files: Ranged<ClassList>,
     pub gap: ImportIncludeGap,
 }
 
@@ -2899,7 +2939,7 @@ pub struct ForeignKey {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct FKKeyProps {
     open: Raw<(StringEq!("("), Space)>,
     first: Option<ClassName>,
@@ -2908,7 +2948,7 @@ pub struct FKKeyProps {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct RefIndex {
     open: Raw<(StringEq!("("), Space)>,
     name: Option<Identifier>,
@@ -2939,7 +2979,7 @@ impl Index {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct IndexOn {
     keyword: Raw<(Space1, StringEqCI!("On"), Space1)>,
     properties: IndexPropertyList,
@@ -2948,14 +2988,14 @@ pub struct IndexOn {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum IndexPropertyList {
     Single(IndexProperty),
     Multiple(IndexPropertyMultiple),
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct IndexPropertyMultiple {
     open: Raw<(StringEq!("("), Space)>,
     first: Option<IndexProperty>,
@@ -2989,14 +3029,14 @@ impl IndexProperty {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum IndexPropertyKind {
-    Keys(StringEq!("(KEYS)")),
-    Elements(StringEq!("(ELEMENTS)")),
+    Keys(StringEqCI!("(KEYS)")),
+    Elements(StringEqCI!("(ELEMENTS)")),
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct AsCollation {
     keyword: Raw<(Space1, StringEqCI!("As"), Space1)>,
     collation: CollationType,
@@ -3010,11 +3050,17 @@ pub enum CollationType {
     Truncate(Truncating<StringEqCI!("TRUNCATE")>),
     Plus(StringEqCI!("PLUS")),
     Minus(StringEqCI!("MINUS")),
+    // The legacy collations: of these only `STRING` takes a length (`UPPER(50)` is IRIS #5177).
+    Upper(StringEqCI!("UPPER")),
+    Space(StringEqCI!("SPACE")),
+    AlphaUp(StringEqCI!("ALPHAUP")),
+    Mvr(StringEqCI!("MVR")),
+    String(Truncating<StringEqCI!("STRING")>),
 }
 
 // A collation that may truncate to a length: `SQLUPPER(250)`.
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct Truncating<K> {
     keyword: K,
     length: Option<(StringEq!("("), StringOf1<IsDigit>, StringEq!(")"))>,
@@ -3027,7 +3073,7 @@ pub struct MethodHeader {
     pub keyword: MethodKind,
     pub name: QuotableClassMemberName,
     pub formal_spec: Option<FormalSpec>,
-    pub return_type: Range<Option<As<Type>>>,
+    pub return_type: Ranged<Option<As<Type>>>,
     pub keywords: Option<KeywordList<FailableKeyword<MethodKeyword>>>,
 }
 
@@ -3051,8 +3097,12 @@ pub enum MethodLanguage {
     Python(StringEqCI!("Python")),
     JavaScript(StringEqCI!("JavaScript")),
     ObjectScript(StringEqCI!("ObjectScript")),
+    // The legacy name IRIS still compiles as ObjectScript.
+    Cache(StringEqCI!("Cache")),
     TSQL(StringEqCI!("TSQL")),
     ISPL(StringEqCI!("ISPL")),
+    // Not among the document's values; IRIS's own `%MV` classes compile with it.
+    MVBasic(StringEqCI!("MVBasic")),
 }
 
 impl Default for MethodLanguage {
@@ -3063,10 +3113,10 @@ impl Default for MethodLanguage {
 
 pub struct Method {
     pub header: MethodHeader,
-    pub body: Prefix<Space, Brace<Range<OSText>>>,
+    pub body: Prefix<Space, Brace<Ranged<OSText>>>,
 }
 
-type OSBody = Prefix<Space, Brace<Range<OSText>>>;
+type OSBody = Prefix<Space, Brace<Ranged<OSText>>>;
 
 // What may follow a member's closing `}`: another member, a `///` doc comment, or the class's own
 // closing `}` ending the document (a bare `}` may just as well be the enclosing method's).
@@ -3084,13 +3134,7 @@ pub enum AfterMember {
     Projection(Raw<(StringEqCI!("Projection"), Space1)>),
     Storage(Raw<(StringEqCI!("Storage"), Space1)>),
     Doc(StringEq!("///")),
-    Close(
-        (
-            StringEq!("}"),
-            ImportIncludeGap,
-            NotFollowedBy<CharOf<AnyChar>>,
-        ),
-    ),
+    Close((StringEq!("}"), ImportIncludeGap, NotFollowedBy<AnyChar>)),
 }
 
 // A body in another language (`[ Language = python ]`) can't be brace-matched with ObjectScript
@@ -3099,7 +3143,7 @@ pub enum AfterMember {
 pub type ForeignBodyEnd = (StringEq!("\n}"), ImportIncludeGap, AfterMember);
 
 pub type ForeignBody = Raw<(
-    Vec<(NotFollowedBy<ForeignBodyEnd>, CharOf<AnyChar>)>,
+    Vec<(NotFollowedBy<ForeignBodyEnd>, AnyChar)>,
     StringEq!("\n"),
 )>;
 
@@ -3120,12 +3164,13 @@ pub enum MemberBody {
     Foreign(Raw<(Space, StringEq!("{"))>, ForeignBody, StringEq!("}")),
 }
 
-fn foreign_body(input: &str, pos: usize, mut state: State) -> Option<(OSBody, usize)> {
-    let (space, pos) = Space::parse_at(input, pos, state.reborrow())?;
-    let (open, start) = <StringEq!("{")>::parse_at(input, pos, state.reborrow())?;
-    let end = ForeignBody::scan_at(input, start, state.reborrow())?;
-    let text = Range::new(start, OSText(input[start..end].into()), end);
-    let (close, pos) = <StringEq!("}")>::parse_at(input, end, state)?;
+fn foreign_body<L: Level>(input: &str, pos: usize, mut state: State<L>) -> Option<(OSBody, usize)> {
+    let (space, pos) = Space::parse_at::<success::Value, L>(input, pos, state.reborrow())?;
+    let (open, start) =
+        <StringEq!("{")>::parse_at::<success::Value, L>(input, pos, state.reborrow())?;
+    let ((), end) = ForeignBody::parse_at::<success::Unit, L>(input, start, state.reborrow())?;
+    let text = Ranged::new(start, OSText(input[start..end].into()), end);
+    let (close, pos) = <StringEq!("}")>::parse_at::<success::Value, L>(input, end, state)?;
     Some((Prefix::new(space, Wrap::new(open, text, close)), pos))
 }
 
@@ -3139,49 +3184,56 @@ impl MethodHeader {
                 Either::Left(MethodKeyword::Language(language)) => Some(&language.value),
                 _ => None,
             });
-        matches!(language, None | Some(MethodLanguage::ObjectScript(..)))
+        matches!(
+            language,
+            None | Some(MethodLanguage::ObjectScript(..) | MethodLanguage::Cache(..))
+        )
     }
 }
 
 // Hand-written so the body scanner can depend on the header's `Language` keyword. Without one
 // the body is brace-matched as ObjectScript -- but only believed if that ends where a member may
 // end, since the class-level `[ Language = python ]` default isn't visible here.
-impl Grammar for Method {
-    type First = <MethodHeader as Grammar>::First;
+impl Parse for Method {
+    type First = <MethodHeader as Parse>::First;
 
-    fn parse_at(input: &str, pos: usize, mut state: State) -> Option<(Self, usize)> {
-        let (header, pos) = MethodHeader::parse_at(input, pos, state.reborrow())?;
-        let os_body = |mut state: State| {
-            let (body, end) = OSBody::parse_at(input, pos, state.reborrow())?;
-            MemberEnd::scan_at(input, end, state)?;
+    fn parse_at<S: Success, L: Level>(
+        input: &str,
+        pos: usize,
+        mut state: State<L>,
+    ) -> Option<(S::Output<Self>, usize)> {
+        let (header, pos) =
+            MethodHeader::parse_at::<success::Value, L>(input, pos, state.reborrow())?;
+        let os_body = |mut state: State<L>| {
+            let (body, end) = OSBody::parse_at::<success::Value, L>(input, pos, state.reborrow())?;
+            MemberEnd::parse_at::<success::Unit, L>(input, end, state)?;
             Some((body, end))
         };
         let (body, pos) = if header.is_objectscript() {
             os_body(state.reborrow())
                 .or_else(|| foreign_body(input, pos, state.reborrow()))
-                .or_else(|| OSBody::parse_at(input, pos, state))?
+                .or_else(|| OSBody::parse_at::<success::Value, L>(input, pos, state))?
         } else {
             foreign_body(input, pos, state.reborrow())
-                .or_else(|| OSBody::parse_at(input, pos, state))?
+                .or_else(|| OSBody::parse_at::<success::Value, L>(input, pos, state))?
         };
-        Some((Method { header, body }, pos))
-    }
-
-    fn scan_at(input: &str, pos: usize, state: State) -> Option<usize> {
-        Self::parse_at(input, pos, state).map(|(_, end)| end)
-    }
-
-    fn print_to(&self, buf: &mut String) {
-        self.header.print_to(buf);
-        self.body.print_to(buf);
+        Some((S::output(|| Method { header, body }), pos))
     }
 
     fn to_bnf() -> bnf::Expr {
         bnf::Expr::sequence(vec![MethodHeader::to_bnf(), OSBody::to_bnf()])
     }
 
-    fn fail_at(pos: usize, state: State) -> bool {
-        MethodHeader::fail_at(pos, state)
+    fn visit_rules(rules: &mut bnf::Rules) {
+        MethodHeader::visit_rules(rules);
+        OSBody::visit_rules(rules);
+    }
+}
+
+impl Print for Method {
+    fn print_to(&self, buf: &mut String) {
+        self.header.print_to(buf);
+        self.body.print_to(buf);
     }
 }
 
@@ -3194,7 +3246,7 @@ impl Deref for Method {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum MethodKind {
     Method(Raw<(StringEqCI!("Method"), Space1)>),
     ClassMethod(Raw<(StringEqCI!("ClassMethod"), Space1)>),
@@ -3209,14 +3261,14 @@ pub struct FormalSpec {
 }
 
 impl FormalSpec {
-    pub fn formals(&self) -> Vec<&Range<Formal>> {
+    pub fn formals(&self) -> Vec<&Ranged<Formal>> {
         self.formals
             .iter()
             .flat_map(|formals| formals.0.items.iter())
             .collect()
     }
 
-    pub fn into_formals(self) -> Vec<Range<Formal>> {
+    pub fn into_formals(self) -> Vec<Ranged<Formal>> {
         self.formals
             .into_iter()
             .flat_map(|formals| formals.0.items)
@@ -3225,25 +3277,25 @@ impl FormalSpec {
 }
 
 #[derive(Grammar)]
-pub struct FormalList(pub VecSep<Range<Formal>, Raw<(Space, StringEq!(","), Space)>>);
+pub struct FormalList(pub VecSep<Ranged<Formal>, Raw<(Space, StringEq!(","), Space)>>);
 
 #[derive(Grammar)]
 pub struct Formal {
     pub call_type: Option<Suffix<CallType, Space1>>,
-    pub name: Range<LocalVariableName>,
+    pub name: Ranged<LocalVariableName>,
     pub variadic: Option<StringEq!("...")>,
     pub as_type: Option<As<Type>>,
     pub default: Option<FormalDefault>,
 }
 
-pub type FormalDefault = Prefix<Raw<(Space, StringEq!("="), Space)>, Range<FormalDefaultValue>>;
+pub type FormalDefault = Prefix<Raw<(Space, StringEq!("="), Space)>, Ranged<FormalDefaultValue>>;
 
 // `= literal`, or `= {expr}`: code of the method, run on entry when the argument wasn't passed.
 #[derive(Grammar)]
 pub enum FormalDefaultValue {
     Brace {
         open: Raw<(StringEq!("{"), Space)>,
-        expr: Range<Expr>,
+        expr: Ranged<Expr>,
         close: Raw<(Space, StringEq!("}"))>,
     },
     // Including braces whose text is no expression, for the checker to report.
@@ -3264,11 +3316,14 @@ impl Default for CallType {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct As<Type: Grammar> {
-    as_kw: Raw<(Space1, StringEqCI!("As"), Space1)>,
+    as_kw: Raw<(Space1, StringEqCI!("As"), AfterAs)>,
     pub ann: Type,
 }
+
+// `As%String`, without the space: IRIS takes it at class level and in a bare `#dim`.
+type AfterAs = Either<Space1, NotFollowedBy<IsLetterOrNumber>>;
 
 impl<T: Grammar> Deref for As<T> {
     type Target = T;
@@ -3278,7 +3333,7 @@ impl<T: Grammar> Deref for As<T> {
     }
 }
 
-type DefaultValue = Prefix<Raw<(Space, StringEq!("="), Space)>, Range<OSExpr>>;
+type DefaultValue = Prefix<Raw<(Space, StringEq!("="), Space)>, Ranged<OSExpr>>;
 
 #[derive(Grammar)]
 pub struct Parameter {
@@ -3386,7 +3441,7 @@ impl XData {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct XDataOfXML {
     keyword: Raw<(StringEqCI!("XData"), Space1)>,
     name: QuotableClassMemberName,
@@ -3397,7 +3452,7 @@ pub struct XDataOfXML {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct XDataOfOther {
     keyword: Raw<(StringEqCI!("XData"), Space1)>,
     name: QuotableClassMemberName,
@@ -3408,7 +3463,7 @@ pub struct XDataOfOther {
 }
 
 #[derive(Grammar)]
-#[grammar(validated)]
+#[tygr(validated)]
 pub struct KeywordListWithMimeTypeIsXML(KeywordList<FailableKeyword<XDataKeyword>>);
 
 impl Validate for KeywordListWithMimeTypeIsXML {
@@ -3425,6 +3480,8 @@ impl Validate for KeywordListWithMimeTypeIsXML {
 pub enum XMLUnit {
     S(Space1),
     C(XMLComment),
+    // `<?xml version="1.0"?>`, which an XData may open with.
+    PI(StringEq!("<?"), StringEndsWith<StringEq!("?>")>),
     JS(
         Raw<(StringEqCI!("<script"), HTMLTagContent, StringEq!(">"))>,
         StringEndsWith<StringEqCI!("</script>")>,
@@ -3467,8 +3524,21 @@ pub struct XMLCloseTag(StringEqCI!("</"), XMLTagContent, StringEqCI!(">"));
 #[derive(Grammar)]
 pub enum XMLTagContentUnit {
     Txt(StringOf1<IsXMLTagSafe>),
-    Str(JSString<HashEmbededOS>),
+    Str(XMLString),
+    // A quote with no closing one is text: IRIS doesn't hold an XData to well-formedness.
+    Quote(Either<DQ, SQ>),
 }
+
+// An attribute value runs to its closing quote, a `#()#` expression inside allowed: no `\`
+// escapes, as a `C:\dir\` path ends in one.
+#[derive(Grammar)]
+pub enum XMLString {
+    DQ(DQ, Vec<Either<HashEmbededOS, IsNotDQ>>, DQ),
+    SQ(SQ, Vec<Either<HashEmbededOS, IsNotSQ>>, SQ),
+}
+
+char_class!(pub IsNotDQ, "not a double quote", |ch| ch != '"');
+char_class!(pub IsNotSQ, "not a single quote", |ch| ch != '\'');
 type XMLTagContent = Vec<XMLTagContentUnit>;
 
 #[derive(Grammar)]
@@ -3491,18 +3561,69 @@ pub enum Member {
 #[derive(Grammar)]
 pub struct MemberList {
     open: (Space, StringEq!("{")),
-    pub members: VecSep<ImportIncludeGap, Range<Member>>,
+    pub members: VecSep<ImportIncludeGap, Ranged<Member>>,
     close: StringEq!("}"),
 }
 
+// IRIS compiles the three in any order, one of each (a repeat fails the load).
 #[derive(Grammar)]
+pub enum ClassDirective {
+    Import(Import),
+    Include(IncludeCode),
+    IncludeGenerator(IncludeGeneratorCode),
+}
+
+impl ClassDirective {
+    pub fn gap(&self) -> &ImportIncludeGap {
+        match self {
+            ClassDirective::Import(d) => &d.gap,
+            ClassDirective::Include(d) => &d.gap,
+            ClassDirective::IncludeGenerator(d) => &d.gap,
+        }
+    }
+}
+
+#[derive(Grammar)]
+#[tygr(validated)]
 pub struct ClassDefinitionHeader {
     pub gap_start: ImportIncludeGap,
-    pub import: Option<Import>,
-    pub include: Option<IncludeCode>,
-    pub include_gen: Option<IncludeGeneratorCode>,
+    pub directives: Vec<ClassDirective>,
     pub class_keyword: (StringEqCI!("Class"), Space1),
-    pub name: Range<ClassName>,
+    pub name: Ranged<ClassName>,
+}
+
+impl Validate for ClassDefinitionHeader {
+    const REQUIREMENT: &'static str = "name Import, Include and IncludeGenerator at most once each";
+    fn validate(&self) -> bool {
+        let count =
+            |is: fn(&ClassDirective) -> bool| self.directives.iter().filter(|d| is(d)).count();
+        count(|d| matches!(d, ClassDirective::Import(_))) <= 1
+            && count(|d| matches!(d, ClassDirective::Include(_))) <= 1
+            && count(|d| matches!(d, ClassDirective::IncludeGenerator(_))) <= 1
+    }
+}
+
+impl ClassDefinitionHeader {
+    pub fn import(&self) -> Option<&Import> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::Import(import) => Some(import),
+            _ => None,
+        })
+    }
+
+    pub fn include(&self) -> Option<&IncludeCode> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::Include(include) => Some(include),
+            _ => None,
+        })
+    }
+
+    pub fn include_gen(&self) -> Option<&IncludeGeneratorCode> {
+        self.directives.iter().find_map(|d| match d {
+            ClassDirective::IncludeGenerator(include) => Some(include),
+            _ => None,
+        })
+    }
 }
 
 #[derive(Grammar)]
@@ -3522,11 +3643,17 @@ impl Deref for ClassDefinition {
     }
 }
 
-type CommandArgument<T> = Prefix<StringEq!(" "), Box<Range<T>>>;
+type CommandArgument<T> = Prefix<StringEq!(" "), Box<Ranged<T>>>;
 
 #[derive(Grammar)]
 pub struct IfConditions {
-    pub first: Range<ExpressionAfterIf>,
+    pub first: Ranged<ExpressionAfterIf>,
+    pub remaining: Vec<Conjunct>,
+}
+
+#[derive(Grammar)]
+pub struct ElseIfConditions {
+    pub first: Ranged<ExpressionAfterElseIf>,
     pub remaining: Vec<Conjunct>,
 }
 
@@ -3534,11 +3661,11 @@ pub struct IfConditions {
 #[derive(Grammar)]
 pub struct Conjunct {
     pub comma: CommaSep<LGap>,
-    pub expr: Range<Expr>,
+    pub expr: Ranged<Expr>,
 }
 
 impl Deref for Conjunct {
-    type Target = Range<Expr>;
+    type Target = Ranged<Expr>;
 
     fn deref(&self) -> &Self::Target {
         &self.expr
@@ -3547,7 +3674,7 @@ impl Deref for Conjunct {
 
 #[derive(Grammar)]
 pub struct WhileConditions {
-    pub first: Range<ExpressionAfterWhile>,
+    pub first: Ranged<ExpressionAfterWhile>,
     pub remaining: Vec<Conjunct>,
 }
 
@@ -3557,7 +3684,7 @@ pub struct DoWhileCommand {
     // Not a `Block`: the body must have braces.
     pub iter: CurryBlock<MGap>,
     gap: MGap,
-    pub kw_while: Range<KwWhile>,
+    pub kw_while: Ranged<KwWhile>,
     pub cnds: Option<WhileConditions>,
 }
 
@@ -3587,7 +3714,7 @@ pub struct ForCommand {
     pub kw: KwFor,
     pub iter: Option<SGap1X<ForIterator>>,
     // Some older code does not have an assoicated block
-    pub bdy: Option<Range<Block>>,
+    pub bdy: Option<Ranged<Block>>,
 }
 
 #[derive(Grammar)]
@@ -3608,7 +3735,7 @@ pub struct BreakCommand {
 pub struct QuitCommand {
     pub kw: KwQuit,
     pub pc: Option<PostCondition>,
-    pub exp: Range<Option<CommandArgument<Expr>>>,
+    pub exp: Ranged<Option<CommandArgument<Expr>>>,
 }
 
 #[derive(Grammar)]
@@ -3622,7 +3749,7 @@ pub struct ZQuitCommand {
 pub struct ReturnCommand {
     pub kw: KwReturn,
     pub pc: Option<PostCondition>,
-    pub exp: Range<Option<CommandArgument<Expr>>>,
+    pub exp: Ranged<Option<CommandArgument<Expr>>>,
 }
 
 #[derive(Grammar)]
@@ -3633,50 +3760,63 @@ pub struct ContinueCommand {
 
 #[derive(Grammar)]
 pub struct DimCommand {
+    pub bare: BareDim,
+    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Ranged<GenericExpr<(), SGap>>>>,
+}
+
+// `#dim a, b As T, c As U`: each group of names has its type; one without takes the next's.
+#[derive(Grammar)]
+pub struct BareDim {
     pub kw: StringEqCI!("#dim"),
     pub g: SGap1,
+    pub declarations: VecSep<DimDeclaration, CommaSep<SGap>>,
+}
+
+#[derive(Grammar)]
+pub struct DimDeclaration {
     pub name: VecSep<LocalVariableName, CommaSep<SGap>>,
     // The reference makes `As <Type>` mandatory; it is accepted as optional here.
-    pub as_type: Range<Option<As<DimType>>>,
-    pub default: Option<Prefix<SGapXSGap<StringEq!("=")>, Range<GenericExpr<(), SGap>>>>,
+    pub as_type: Ranged<Option<As<DimType>>>,
 }
 
 #[derive(Grammar)]
 pub struct SetCommand {
     pub kw: KwSet,
     pub pc: Option<PostCondition>,
-    pub assignments: CommandArgument<VecSep<Range<AllowIndirection<SetArgument>>, CommaSep<LGap>>>,
+    pub assignments: CommandArgument<VecSep<Ranged<AllowIndirection<SetArgument>>, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
 pub struct KillCommand {
     pub kw: KwKill,
     pub pc: Option<PostCondition>,
-    pub targets: Option<CommandArgument<VecSep<Range<AllowMacro<KillArgument>>, CommaSep<LGap>>>>,
+    pub targets: Option<CommandArgument<VecSep<Ranged<AllowMacro<KillArgument>>, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
 pub struct NewCommand {
     pub kw: KwNew,
     pub pc: Option<PostCondition>,
-    pub targets: Option<CommandArgument<VecSep<Range<NewArgument>, CommaSep<LGap>>>>,
+    pub targets: Option<CommandArgument<VecSep<Ranged<NewArgument>, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
 pub struct MergeCommand {
     pub kw: KwMerge,
     pub pc: Option<PostCondition>,
-    pub merge_arguments: CommandArgument<VecSep<Range<MergeArgument>, CommaSep<LGap>>>,
+    pub merge_arguments: CommandArgument<VecSep<Ranged<MergeArgument>, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
 pub struct TryCommand {
     pub kw_try: KwTry,
-    pub b1: XMGap<Range<Block>>,
-    pub kw_catch: Range<KwCatch>,
+    pub b1: Ranged<Block>,
+    pub dims: Option<TryDims>,
+    gap: MGap,
+    pub kw_catch: Ranged<KwCatch>,
     pub g3: SGap,
     pub catch_target: Option<CatchTarget>,
-    pub b2: Range<Block>,
+    pub b2: Ranged<Block>,
 }
 
 #[derive(Grammar)]
@@ -3796,14 +3936,14 @@ pub struct TRollbackCommand {
 pub struct ZWriteCommand {
     pub kw: KwZWrite,
     pub pc: Option<PostCondition>,
-    pub exp: Option<CommandArgument<Expr>>,
+    pub exp: Option<CommandArgument<VecSep<Expr, CommaSep<LGap>>>>,
 }
 
 #[derive(Grammar)]
 pub struct ZKillCommand {
     pub kw: KwZKill,
     pub pc: Option<PostCondition>,
-    pub targets: CommandArgument<VecSep<Range<ZKillTarget>, CommaSep<LGap>>>,
+    pub targets: CommandArgument<VecSep<Ranged<ZKillTarget>, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
@@ -3943,16 +4083,16 @@ pub enum Command {
 
 #[derive(Grammar)]
 pub struct UserCommand {
-    pub name: Range<UserCommandName>,
+    pub name: Ranged<UserCommandName>,
     pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<VecSep<Range<Expr>, CommaSep<LGap>>>>,
+    pub args: Option<CommandArgument<VecSep<Ranged<Expr>, CommaSep<LGap>>>>,
 }
 
 // `Z` and letters, and not a command IRIS has. Validated rather than converted: a word that
 // isn't one is `UnknownCommand`'s to report, and a conversion failure's own message would be
 // appended to that report.
 #[derive(Grammar)]
-#[grammar(validated)]
+#[tygr(validated)]
 pub struct UserCommandName(pub StringOf1<IsAlphabetic>);
 
 impl Validate for UserCommandName {
@@ -3961,9 +4101,9 @@ impl Validate for UserCommandName {
         let s = self.0.print();
         s.len() > 1
             && s.starts_with(['Z', 'z'])
-            && !COMMAND_NAMES
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(&s))
+            && !COMMAND_NAMES.iter().any(|(name, abbr)| {
+                name.eq_ignore_ascii_case(&s) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(&s))
+            })
     }
 }
 
@@ -4172,29 +4312,36 @@ impl CommandLike for Command {
     }
 }
 
-#[derive(GrammarFromStr)]
+#[derive(Parse)]
+#[tygr(try_from = StringOf1<IsAlphabetic>)]
 pub struct UnknownCommand(pub std::convert::Infallible);
 
-impl GrammarFrom for UnknownCommand {
-    type Source = StringOf1<IsAlphabetic>;
-
+impl Print for UnknownCommand {
     fn print_to(&self, _buf: &mut String) {
         match self.0 {}
     }
 }
 
-impl FromStr for UnknownCommand {
-    type Err = String;
+impl TryFrom<StringOf1<IsAlphabetic>> for UnknownCommand {
+    type Error = Cow<'static, str>;
 
-    fn from_str(s: &str) -> Result<Self, String> {
+    fn try_from(word: StringOf1<IsAlphabetic>) -> Result<Self, Cow<'static, str>> {
+        let s = word.as_str();
+        // A known command lands here when its own grammar failed right after the word.
+        if COMMAND_NAMES.iter().any(|(name, abbr)| {
+            name.eq_ignore_ascii_case(s) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(s))
+        }) {
+            return Err("be followed by a well-formed argument".into());
+        }
         Err(format!(
-            "'{s}' is not a recognized command; available: {}",
+            "be a command; the commands are {}",
             COMMAND_NAMES
                 .iter()
                 .map(|(name, _)| *name)
                 .collect::<Vec<_>>()
                 .join(", ")
-        ))
+        )
+        .into())
     }
 }
 
@@ -4320,16 +4467,16 @@ pub struct PrintArgs {
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum ParenedExpr<BeforeFirst = ()> {
-    Normal(Prefix<BeforeFirst, Range<AtomicExpr>>),
+    Normal(Prefix<BeforeFirst, Ranged<AtomicExpr>>),
     // The interesting case for BeforeFirst -- When the expression is parenthesized, the BeforeFirst is optional
     Paren(Prefix<Option<BeforeFirst>, ParenExpr>),
 }
 
 #[derive(Grammar)]
 pub struct DText {
-    pub kw: Range<FnText>,
+    pub kw: Ranged<FnText>,
     lp: StringEq!("("),
     pub arg: DTextArg,
     end: StringEq!(")"),
@@ -4340,20 +4487,20 @@ pub enum DTextArg {
     Label(AllowIndirection<LabelOffsetRoutine>),
     // `$TEXT(+0)`, `$TEXT(+3^rtn)`: an offset with no label.
     Offset(
-        Prefix<StringEq!("+"), Range<Expr>>,
+        Prefix<StringEq!("+"), Ranged<Expr>>,
         Option<ExtendedRoutineReference>,
     ),
 }
 
-type ArgOf<T> = Wrap<MGap, Range<T>, MGap>;
+pub type ArgOf<T> = Wrap<MGap, Ranged<T>, MGap>;
 // An argument that may be left empty, as in `$FN(x,,0)`.
-type OptArgOf<T> = Wrap<MGap, Option<Range<T>>, MGap>;
-type More<T> = Prefix<StringEq!(","), T>;
+type OptArgOf<T> = Wrap<MGap, Option<Ranged<T>>, MGap>;
+pub type More<T> = Prefix<StringEq!(","), T>;
 
 // ---- Function arguments ---------------------------------------------------------------------
 // Every known function parses its arguments generically and `fun_args!` converts them, so a
 // wrong number or kind of argument is reported by number rather than as a low-level parse error.
-pub type GenericFunArgs = Option<VecSep<ArgOf<Option<FunArg>>, Range<StringEq!(",")>>>;
+pub type GenericFunArgs = Option<VecSep<ArgOf<Option<FunArg>>, Ranged<StringEq!(",")>>>;
 
 // The commas of a generic argument list, as `commas_of` lists them.
 fn arg_commas(args: &GenericFunArgs) -> Vec<CommaAt> {
@@ -4375,7 +4522,7 @@ fn arg_commas(args: &GenericFunArgs) -> Vec<CommaAt> {
 pub enum FunArgError {
     TooMany {
         max: usize,
-        extra: Vec<(usize, String)>,
+        given: usize,
     },
     TooFew {
         min: usize,
@@ -4394,14 +4541,12 @@ impl std::fmt::Display for FunArgError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let plural = |n: usize| if n == 1 { "" } else { "s" };
         match self {
-            Self::TooMany { max, extra } => {
-                write!(f, "takes at most {max} argument{}; extra: ", plural(*max))?;
-                for (i, (n, text)) in extra.iter().enumerate() {
-                    let sep = if i == 0 { "" } else { ", " };
-                    write!(f, "{sep}argument {n} (`{text}`)")?;
-                }
-                Ok(())
-            }
+            Self::TooMany { max, given } => write!(
+                f,
+                "takes at most {max} argument{}, but {given} {} given",
+                plural(*max),
+                if *given == 1 { "was" } else { "were" }
+            ),
             Self::TooFew { min, given } => write!(
                 f,
                 "takes at least {min} argument{}, but {given} {} given",
@@ -4421,58 +4566,58 @@ impl std::fmt::Display for FunArgError {
 // What one non-empty argument converts into.
 pub trait FromFunArg: Sized {
     const EXPECTED: &'static str;
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self>;
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self>;
 }
 
-// A field's ranged payload: `Range<T>`, or `Range<Option<T>>`/`Option<Range<T>>` when the
+// A field's ranged payload: `Ranged<T>`, or `Ranged<Option<T>>`/`Option<Ranged<T>>` when the
 // argument may be left empty.
 pub trait FromOptFunArg: Sized {
     const EXPECTED: &'static str;
     const ACCEPTS_EMPTY: bool;
-    fn from_opt_fun_arg(arg: Range<Option<FunArg>>) -> Option<Self>;
+    fn from_opt_fun_arg(arg: Ranged<Option<FunArg>>) -> Option<Self>;
 }
 
-impl<T: FromFunArg> FromOptFunArg for Range<T> {
+impl<T: FromFunArg> FromOptFunArg for Ranged<T> {
     const EXPECTED: &'static str = T::EXPECTED;
     const ACCEPTS_EMPTY: bool = false;
-    fn from_opt_fun_arg(arg: Range<Option<FunArg>>) -> Option<Self> {
+    fn from_opt_fun_arg(arg: Ranged<Option<FunArg>>) -> Option<Self> {
         let (start, end) = (arg.start, arg.end);
-        T::from_fun_arg(arg.transpose()?).map(|t| Range::new(start, t, end))
+        T::from_fun_arg(arg.transpose()?).map(|t| Ranged::new(start, t, end))
     }
 }
 
-impl<T: FromFunArg> FromOptFunArg for Range<Option<T>> {
+impl<T: FromFunArg> FromOptFunArg for Ranged<Option<T>> {
     const EXPECTED: &'static str = T::EXPECTED;
     const ACCEPTS_EMPTY: bool = true;
-    fn from_opt_fun_arg(arg: Range<Option<FunArg>>) -> Option<Self> {
+    fn from_opt_fun_arg(arg: Ranged<Option<FunArg>>) -> Option<Self> {
         if arg.is_none() {
             return Some(arg.map(|_| None));
         }
-        <Range<T>>::from_opt_fun_arg(arg).map(|r| r.map(Some))
+        <Ranged<T>>::from_opt_fun_arg(arg).map(|r| r.map(Some))
     }
 }
 
-impl<T: FromFunArg> FromOptFunArg for Option<Range<T>> {
+impl<T: FromFunArg> FromOptFunArg for Option<Ranged<T>> {
     const EXPECTED: &'static str = T::EXPECTED;
     const ACCEPTS_EMPTY: bool = true;
-    fn from_opt_fun_arg(arg: Range<Option<FunArg>>) -> Option<Self> {
+    fn from_opt_fun_arg(arg: Ranged<Option<FunArg>>) -> Option<Self> {
         if arg.is_none() {
             return Some(None);
         }
-        <Range<T>>::from_opt_fun_arg(arg).map(Some)
+        <Ranged<T>>::from_opt_fun_arg(arg).map(Some)
     }
 }
 
-fn normal_arg(arg: Range<FunArg>) -> Option<Range<Expr>> {
+fn normal_arg(arg: Ranged<FunArg>) -> Option<Ranged<Expr>> {
     let (start, end) = (arg.start, arg.end);
     match arg.into_inner() {
-        FunArg::Normal { expr, expand: None } => Some(Range::new(start, expr, end)),
+        FunArg::Normal { expr, expand: None } => Some(Ranged::new(start, expr, end)),
         _ => None,
     }
 }
 
 // An expression that is a single operand.
-fn into_ops(expr: Expr) -> Option<Range<ExprOps<()>>> {
+fn into_ops(expr: Expr) -> Option<Ranged<ExprOps<()>>> {
     let GenericExpr { base, ops } = expr.0;
     if !ops.is_empty() {
         return None;
@@ -4503,21 +4648,21 @@ fn into_global_reference(Variable { base, subs }: Variable) -> Option<GlobalRefe
 
 impl FromFunArg for Expr {
     const EXPECTED: &'static str = "an expression";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
-        normal_arg(arg).map(Range::into_inner)
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
+        normal_arg(arg).map(Ranged::into_inner)
     }
 }
 
 impl FromFunArg for GetTarget {
     const EXPECTED: &'static str = "a variable or property";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
         GetTarget::try_from(into_ops(normal_arg(arg)?.into_inner())?).ok()
     }
 }
 
 impl FromFunArg for Variable {
     const EXPECTED: &'static str = "a variable";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
         match into_atomic(normal_arg(arg)?.into_inner())? {
             AtomicExpr::Variable(v) => Some(v),
             _ => None,
@@ -4527,14 +4672,14 @@ impl FromFunArg for Variable {
 
 impl FromFunArg for GlobalReference {
     const EXPECTED: &'static str = "a global reference";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
         into_global_reference(Variable::from_fun_arg(arg)?)
     }
 }
 
 impl FromFunArg for AllowIndirection<Variable> {
     const EXPECTED: &'static str = "a variable";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
         match into_atomic(normal_arg(arg)?.into_inner())? {
             AtomicExpr::Variable(v) => Some(Self::Plain(v)),
             AtomicExpr::Indirection(ind) => Some(Self::Indirection(ind.map(Box::new))),
@@ -4545,7 +4690,7 @@ impl FromFunArg for AllowIndirection<Variable> {
 
 impl FromFunArg for AllowIndirection<GlobalReference> {
     const EXPECTED: &'static str = "a global reference";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
         match <AllowIndirection<Variable>>::from_fun_arg(arg)? {
             AllowIndirection::Plain(v) => into_global_reference(v).map(Self::Plain),
             AllowIndirection::Indirection(ind) => Some(Self::Indirection(ind)),
@@ -4555,7 +4700,7 @@ impl FromFunArg for AllowIndirection<GlobalReference> {
 
 impl FromFunArg for ExpColExp {
     const EXPECTED: &'static str = "`value:result`";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
         match arg.into_inner() {
             FunArg::ColonNormal(x) => Some(x),
             _ => None,
@@ -4572,7 +4717,7 @@ pub enum CaseArm {
 
 impl FromFunArg for CaseArm {
     const EXPECTED: &'static str = "`value:result` or `:default`";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
         match arg.into_inner() {
             FunArg::ColonNormal(x) => Some(Self::Branch(x)),
             FunArg::ColonDefault(x) => Some(Self::Default(x)),
@@ -4583,7 +4728,7 @@ impl FromFunArg for CaseArm {
 
 impl FromFunArg for CondValue {
     const EXPECTED: &'static str = "a value or `condition:value`";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
         let (start, end) = (arg.start, arg.end);
         match arg.into_inner() {
             FunArg::ColonNormal(ExpColExp { e1, kw, e2 }) => Some(CondValue {
@@ -4592,7 +4737,7 @@ impl FromFunArg for CondValue {
             }),
             FunArg::Normal { expr, expand: None } => Some(CondValue {
                 cond: None,
-                value: Range::new(start, expr, end),
+                value: Ranged::new(start, expr, end),
             }),
             _ => None,
         }
@@ -4601,11 +4746,11 @@ impl FromFunArg for CondValue {
 
 impl FromFunArg for PositionArg {
     const EXPECTED: &'static str = "a position";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
         let (start, end) = (arg.start, arg.end);
         match arg.into_inner() {
             FunArg::Star { kw, md } => Some(Self::Rel { star: kw, md }),
-            FunArg::Normal { expr, expand: None } => Some(Self::Abs(Range::new(start, expr, end))),
+            FunArg::Normal { expr, expand: None } => Some(Self::Abs(Ranged::new(start, expr, end))),
             _ => None,
         }
     }
@@ -4613,12 +4758,12 @@ impl FromFunArg for PositionArg {
 
 impl FromFunArg for MthArg {
     const EXPECTED: &'static str = "an argument";
-    fn from_fun_arg(arg: Range<FunArg>) -> Option<Self> {
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
         let (start, end) = (arg.start, arg.end);
         match arg.into_inner() {
             FunArg::ByRef { dot, target } => Some(Self::ByRef { dot, target }),
             FunArg::Normal { expr, expand } => Some(Self::Expr {
-                expr: Range::new(start, expr, end),
+                expr: Ranged::new(start, expr, end),
                 expand,
             }),
             _ => None,
@@ -4667,14 +4812,10 @@ impl ArgCursor {
         if let Some(max) = self.max
             && self.given > max
         {
-            let extra = self
-                .args
-                .iter()
-                .skip(max)
-                .enumerate()
-                .map(|(i, (_, item))| (max + i + 1, item.print().trim().to_string()))
-                .collect();
-            return Err(FunArgError::TooMany { max, extra });
+            return Err(FunArgError::TooMany {
+                max,
+                given: self.given,
+            });
         }
         if self.given < self.min {
             return Err(self.too_few());
@@ -4713,9 +4854,9 @@ impl ArgCursor {
 
     fn finish(self) -> Result<(), FunArgError> {
         match self.args.front() {
-            Some((_, item)) if self.given > 0 => Err(FunArgError::TooMany {
+            Some(_) if self.given > 0 => Err(FunArgError::TooMany {
                 max: self.max.unwrap_or(self.index),
-                extra: vec![(self.index + 1, item.print().trim().to_string())],
+                given: self.given,
             }),
             _ => Ok(()),
         }
@@ -4796,19 +4937,18 @@ impl<P: FromOptFunArg> FunArgField for Vec<Prefix<Comma, Wrap<MGap, P, MGap>>> {
 // the arguments of one function, parsed generically and converted field by field.
 macro_rules! fun_args {
     ($name:literal $ty:ident { $first:ident : $firstty:ty $(, $field:ident : $fty:ty)* $(,)? }) => {
-        #[derive(GrammarTryFromOther)]
-        #[grammar(name = $name)]
+        #[derive(Parse)]
+        #[tygr(name = $name, try_from = GenericFunArgs)]
         pub struct $ty {
             pub $first: $firstty,
             $(pub $field: $fty,)*
             pub commas: Vec<CommaAt>,
         }
 
-        impl GrammarFrom for $ty {
-            type Source = GenericFunArgs;
+        impl Print for $ty {
             fn print_to(&self, buf: &mut String) {
-                Grammar::print_to(&self.$first, buf);
-                $(Grammar::print_to(&self.$field, buf);)*
+                self.$first.print_to(buf);
+                $(self.$field.print_to(buf);)*
             }
         }
 
@@ -4837,10 +4977,10 @@ macro_rules! fun_args {
 #[derive(Grammar)]
 pub struct CondValue {
     pub cond: Option<CondPrefix>,
-    pub value: Range<Expr>,
+    pub value: Ranged<Expr>,
 }
 
-type CondPrefix = Suffix<Range<Expr>, SGapXMGap<StringEq!(":")>>;
+type CondPrefix = Suffix<Ranged<Expr>, MGapXMGap<StringEq!(":")>>;
 
 fun_args!("$LIST" ListRangeCallArgs {
     list: ArgOf<Expr>,
@@ -4851,7 +4991,7 @@ fun_args!("$LIST" ListRangeCallArgs {
 /// `$LIST(list, start1:end1, ...)` -- read-only, not a valid SET target.
 #[derive(Grammar)]
 pub struct ListRangeCall {
-    pub kw: Range<FnList>,
+    pub kw: Ranged<FnList>,
     pub lp: StringEq!("("),
     pub args: ListRangeCallArgs,
     pub rp: StringEq!(")"),
@@ -4873,7 +5013,7 @@ fun_args!("$LIST" ListPlainCallArgs {
 /// `$LIST(list, position, end)` -- the plain form, settable via `SET`.
 #[derive(Grammar)]
 pub struct ListPlainCall {
-    pub kw: Range<FnList>,
+    pub kw: Ranged<FnList>,
     pub lp: StringEq!("("),
     pub args: ListPlainCallArgs,
     pub rp: StringEq!(")"),
@@ -4897,7 +5037,7 @@ fun_args!("$PIECE" PieceCallArgs {
 /// and [`SetTargetFun`] can hold them.
 #[derive(Grammar)]
 pub struct PieceCall {
-    pub kw: Range<FnPiece>,
+    pub kw: Ranged<FnPiece>,
     pub lp: StringEq!("("),
     pub args: PieceCallArgs,
     pub rp: StringEq!(")"),
@@ -4914,14 +5054,23 @@ impl Deref for PieceCall {
 // but used throughout the corpus for MultiValue-BASIC field/value/subvalue addressing, both as
 // a read and, like `$PIECE`, as a `SET` target. Modeled with an open-ended `rest` since real
 // usage runs from 1 up to 5 trailing positional args and its exact upper bound is unconfirmed.
-fun_args!("$MV" MVCallArgs {
-    record: ArgOf<Expr>,
-    rest: Vec<More<ArgOf<Expr>>>,
-});
+// Hand-written rather than through `fun_args!`, since `-1::1` separates positions with `:`, any
+// of them left empty.
+#[derive(Grammar)]
+pub struct MVCallArgs {
+    pub record: ArgOf<Expr>,
+    pub rest: Vec<More<ArgOf<MVPosition>>>,
+}
+
+#[derive(Grammar)]
+pub struct MVPosition {
+    pub first: Option<Ranged<Expr>>,
+    pub more: Vec<Ranged<Prefix<SGapXSGap<StringEq!(":")>, Option<Ranged<Expr>>>>>,
+}
 
 #[derive(Grammar)]
 pub struct MVCall {
-    pub kw: Range<FnMV>,
+    pub kw: Ranged<FnMV>,
     pub lp: StringEq!("("),
     pub args: MVCallArgs,
     pub rp: StringEq!(")"),
@@ -4940,7 +5089,7 @@ pub enum PositionArg {
         star: StringEq!("*"),
         md: Option<StarMod>,
     },
-    Abs(Range<Expr>),
+    Abs(Ranged<Expr>),
 }
 
 fun_args!("$EXTRACT" ExtractCallArgs {
@@ -4951,7 +5100,7 @@ fun_args!("$EXTRACT" ExtractCallArgs {
 
 #[derive(Grammar)]
 pub struct ExtractCall {
-    pub kw: Range<FnExtract>,
+    pub kw: Ranged<FnExtract>,
     pub lp: StringEq!("("),
     pub args: ExtractCallArgs,
     pub rp: StringEq!(")"),
@@ -4972,7 +5121,7 @@ fun_args!("$LISTGET" ListGetCallArgs {
 
 #[derive(Grammar)]
 pub struct ListGetCall {
-    pub kw: Range<FnListGet>,
+    pub kw: Ranged<FnListGet>,
     pub lp: StringEq!("("),
     pub args: ListGetCallArgs,
     pub rp: StringEq!(")"),
@@ -4992,7 +5141,7 @@ fun_args!("$BIT" BitCallArgs {
 
 #[derive(Grammar)]
 pub struct BitCall {
-    pub kw: Range<FnBit>,
+    pub kw: Ranged<FnBit>,
     pub lp: StringEq!("("),
     pub args: BitCallArgs,
     pub rp: StringEq!(")"),
@@ -5013,7 +5162,7 @@ fun_args!("$VECTOR" VectorCallArgs {
 
 #[derive(Grammar)]
 pub struct VectorCall {
-    pub kw: Range<FnVector>,
+    pub kw: Ranged<FnVector>,
     pub lp: StringEq!("("),
     pub args: VectorCallArgs,
     pub rp: StringEq!(")"),
@@ -5034,7 +5183,7 @@ fun_args!("$WEXTRACT" WExtractCallArgs {
 
 #[derive(Grammar)]
 pub struct WExtractCall {
-    pub kw: Range<FnWExtract>,
+    pub kw: Ranged<FnWExtract>,
     pub lp: StringEq!("("),
     pub args: WExtractCallArgs,
     pub rp: StringEq!(")"),
@@ -5055,7 +5204,7 @@ fun_args!("$PROPERTY" PropertyCallArgs {
 
 #[derive(Grammar)]
 pub struct PropertyCall {
-    pub kw: Either<Range<FnProperty>, Range<FnZObjProperty>>,
+    pub kw: Either<Ranged<FnProperty>, Ranged<FnZObjProperty>>,
     pub lp: StringEq!("("),
     pub args: PropertyCallArgs,
     pub rp: StringEq!(")"),
@@ -5074,7 +5223,7 @@ fun_args!("$SEQUENCE" SequenceCallArgs {
 
 #[derive(Grammar)]
 pub struct SequenceCall {
-    pub kw: Range<FnSequence>,
+    pub kw: Ranged<FnSequence>,
     pub lp: StringEq!("("),
     pub args: SequenceCallArgs,
     pub rp: StringEq!(")"),
@@ -5094,7 +5243,7 @@ fun_args!("$LISTBUILD" ListBuildArgs {
 
 #[derive(Grammar)]
 pub struct ListBuild {
-    pub kw: Range<FnListBuild>,
+    pub kw: Ranged<FnListBuild>,
     pub lp: StringEq!("("),
     pub args: ListBuildArgs,
     pub rp: StringEq!(")"),
@@ -5109,7 +5258,7 @@ impl Deref for ListBuild {
 
 #[derive(Grammar)]
 pub struct ListBuildForSet {
-    pub kw: Range<FnListBuild>,
+    pub kw: Ranged<FnListBuild>,
     pub lp: StringEq!("("),
     pub first: ArgOf<Option<Variable>>,
     pub rest: Vec<More<ArgOf<Option<Variable>>>>,
@@ -5120,7 +5269,7 @@ pub struct ListBuildForSet {
 // skip -- see `SetTargetSource`.
 #[derive(Grammar)]
 pub struct ListGetForSet {
-    pub kw: Range<FnListGet>,
+    pub kw: Ranged<FnListGet>,
     pub lp: StringEq!("("),
     pub first: ArgOf<Option<Variable>>,
     pub rest: Vec<More<ArgOf<Option<Variable>>>>,
@@ -5225,12 +5374,13 @@ fun_args!("$LISTUPDATE" ListUpdateArgs {
     rest: Vec<More<ArgOf<CondValue>>>,
 });
 
+// An optional argument may be left out of the middle: `$LOCATE(s, re,, start)`.
 fun_args!("$LOCATE" LocateArgs {
     string: ArgOf<Expr>,
     regexp: More<ArgOf<Expr>>,
-    start: Option<More<ArgOf<Expr>>>,
-    end: Option<More<ArgOf<Variable>>>,
-    val: Option<More<ArgOf<Variable>>>,
+    start: Option<More<OptArgOf<Expr>>>,
+    end: Option<More<OptArgOf<Variable>>>,
+    val: Option<More<OptArgOf<Variable>>>,
 });
 
 fun_args!("$METHOD" MethodArgs {
@@ -5250,8 +5400,8 @@ fun_args!("$PARAMETER" ParameterArgs {
 });
 
 fun_args!("$PREFETCHOFF" PrefetchOffArgs {
-    first: Option<ArgOf<GlobalReference>>,
-    second: Option<More<ArgOf<GlobalReference>>>,
+    first: Option<ArgOf<AllowIndirection<GlobalReference>>>,
+    second: Option<More<ArgOf<AllowIndirection<GlobalReference>>>>,
 });
 
 fun_args!("$PREFETCHON" PrefetchOnArgs {
@@ -5271,11 +5421,11 @@ fun_args!("$SELECT" SelectArgs {
 });
 
 fun_args!("$SORTBEGIN" SortBeginArgs {
-    set_global: ArgOf<GlobalReference>,
+    set_global: ArgOf<AllowIndirection<GlobalReference>>,
 });
 
 fun_args!("$SORTEND" SortEndArgs {
-    first: Option<ArgOf<Option<GlobalReference>>>,
+    first: Option<ArgOf<Option<AllowIndirection<GlobalReference>>>>,
     dosort: Option<More<ArgOf<Expr>>>,
 });
 
@@ -5296,9 +5446,10 @@ fun_args!("$WCHAR" WCharArgs {
     rest: Vec<More<ArgOf<Expr>>>,
 });
 
+// A parameter may be passed by reference, `.var`, as to a method.
 fun_args!("$XECUTE" XecuteArgs {
     code: ArgOf<Expr>,
-    params: Vec<More<ArgOf<Expr>>>,
+    params: Vec<More<ArgOf<MthArg>>>,
 });
 
 fun_args!("$CLASSMETHOD" ClassMethodArgs {
@@ -5311,7 +5462,7 @@ fun_args!("$COMPILE" CompileArgs {
     source: ArgOf<AllowIndirection<Variable>>,
     qspec: More<ArgOf<Expr>>,
     errors: More<ArgOf<Option<Variable>>>,
-    object: Option<More<ArgOf<Option<Variable>>>>,
+    object: Option<More<ArgOf<Option<AllowIndirection<Variable>>>>>,
     arg5: Option<More<ArgOf<Option<Expr>>>>,
     arg6: Option<More<ArgOf<Option<Expr>>>>,
     rname: Option<More<ArgOf<Option<Expr>>>>,
@@ -5359,101 +5510,101 @@ fun_args!("$ZTIME/$ZTIMEH" ZTimeArgs {
 pub enum FunctionCall {
     DText(DText),
     Length {
-        kw: Range<FnLength>,
+        kw: Ranged<FnLength>,
         lp: StringEq!("("),
         args: LengthArgs,
         rp: StringEq!(")"),
     },
     Data {
-        kw: Range<FnData>,
+        kw: Ranged<FnData>,
         lp: StringEq!("("),
         args: DataArgs,
         rp: StringEq!(")"),
     },
     Order {
-        kw: Range<FnOrder>,
+        kw: Ranged<FnOrder>,
         lp: StringEq!("("),
         args: OrderArgs,
         rp: StringEq!(")"),
     },
     Get {
-        kw: Range<FnGet>,
+        kw: Ranged<FnGet>,
         lp: StringEq!("("),
         args: GetArgs,
         rp: StringEq!(")"),
     },
     Case {
-        kw: Range<FnCase>,
+        kw: Ranged<FnCase>,
         lp: StringEq!("("),
         args: CaseArgs,
         rp: StringEq!(")"),
     },
     Bit(BitCall),
     BitCount {
-        kw: Range<FnBitCount>,
+        kw: Ranged<FnBitCount>,
         lp: StringEq!("("),
         args: BitCountArgs,
         rp: StringEq!(")"),
     },
     BitFind {
-        kw: Range<FnBitFind>,
+        kw: Ranged<FnBitFind>,
         lp: StringEq!("("),
         args: BitFindArgs,
         rp: StringEq!(")"),
     },
     BitLogic {
-        kw: Range<FnBitLogic>,
+        kw: Ranged<FnBitLogic>,
         lp: StringEq!("("),
         expr: ArgOf<BitLogicExpr>,
         length: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
     Change {
-        kw: Range<FnChange>,
+        kw: Ranged<FnChange>,
         lp: StringEq!("("),
         args: ChangeArgs,
         rp: StringEq!(")"),
     },
     Char {
-        kw: Range<FnChar>,
+        kw: Ranged<FnChar>,
         lp: StringEq!("("),
         args: CharArgs,
         rp: StringEq!(")"),
     },
     ClassName {
-        kw: Either<Range<FnClassName>, Range<FnZObjClass>>,
+        kw: Either<Ranged<FnClassName>, Ranged<FnZObjClass>>,
         lp: StringEq!("("),
         args: ClassNameArgs,
         rp: StringEq!(")"),
     },
     Decimal {
-        kw: Range<FnDecimal>,
+        kw: Ranged<FnDecimal>,
         lp: StringEq!("("),
         args: DecimalArgs,
         rp: StringEq!(")"),
     },
     Double {
-        kw: Range<FnDouble>,
+        kw: Ranged<FnDouble>,
         lp: StringEq!("("),
         args: DoubleArgs,
         rp: StringEq!(")"),
     },
     Extract(ExtractCall),
     FNumber {
-        kw: Range<FnFNumber>,
+        kw: Ranged<FnFNumber>,
         lp: StringEq!("("),
         args: FNumberArgs,
         rp: StringEq!(")"),
     },
     IsObject {
-        kw: Range<FnIsObject>,
+        kw: Ranged<FnIsObject>,
         lp: StringEq!("("),
         args: IsObjectArgs,
         rp: StringEq!(")"),
     },
     // The "I" case is dangerous
     Increment {
-        kw: Either<Range<FnIncrement>, Range<FnZIncrement>>,
+        kw: Either<Ranged<FnIncrement>, Ranged<FnZIncrement>>,
         lp: StringEq!("("),
         args: IncrementArgs,
         rp: StringEq!(")"),
@@ -5462,182 +5613,175 @@ pub enum FunctionCall {
     ListRange(ListRangeCall),
     ListBuild(ListBuild),
     ListData {
-        kw: Range<FnListData>,
+        kw: Ranged<FnListData>,
         lp: StringEq!("("),
         args: ListDataArgs,
         rp: StringEq!(")"),
     },
     ListGet(ListGetCall),
     ListNext {
-        kw: Range<FnListNext>,
+        kw: Ranged<FnListNext>,
         lp: StringEq!("("),
         args: ListNextArgs,
         rp: StringEq!(")"),
     },
     ListUpdate {
-        kw: Range<FnListUpdate>,
+        kw: Ranged<FnListUpdate>,
         lp: StringEq!("("),
         args: ListUpdateArgs,
         rp: StringEq!(")"),
     },
     Locate {
-        kw: Range<FnLocate>,
+        kw: Ranged<FnLocate>,
         lp: StringEq!("("),
         args: LocateArgs,
         rp: StringEq!(")"),
     },
     MV(MVCall),
     Method {
-        kw: Either<Range<FnMethod>, Range<FnZObjMethod>>,
+        kw: Either<Ranged<FnMethod>, Ranged<FnZObjMethod>>,
         lp: StringEq!("("),
         args: MethodArgs,
         rp: StringEq!(")"),
     },
     Name {
-        kw: Range<FnName>,
+        kw: Ranged<FnName>,
         lp: StringEq!("("),
         args: NameArgs,
         rp: StringEq!(")"),
     },
     Parameter {
-        kw: Range<FnParameter>,
+        kw: Ranged<FnParameter>,
         lp: StringEq!("("),
         args: ParameterArgs,
         rp: StringEq!(")"),
     },
     Piece(PieceCall),
     PrefetchOff {
-        kw: Range<FnPrefetchOff>,
+        kw: Ranged<FnPrefetchOff>,
         lp: StringEq!("("),
         args: PrefetchOffArgs,
         rp: StringEq!(")"),
     },
     PrefetchOn {
-        kw: Range<FnPrefetchOn>,
+        kw: Ranged<FnPrefetchOn>,
         lp: StringEq!("("),
         args: PrefetchOnArgs,
         rp: StringEq!(")"),
     },
     Property(PropertyCall),
     Query {
-        kw: Range<FnQuery>,
+        kw: Ranged<FnQuery>,
         lp: StringEq!("("),
         args: QueryArgs,
         rp: StringEq!(")"),
     },
     Select {
-        kw: Range<FnSelect>,
+        kw: Ranged<FnSelect>,
         lp: StringEq!("("),
         args: SelectArgs,
         rp: StringEq!(")"),
     },
     Sequence(SequenceCall),
     SortBegin {
-        kw: Range<FnSortBegin>,
+        kw: Ranged<FnSortBegin>,
         lp: StringEq!("("),
         args: SortBeginArgs,
         rp: StringEq!(")"),
     },
     SortEnd {
-        kw: Range<FnSortEnd>,
+        kw: Ranged<FnSortEnd>,
         lp: StringEq!("("),
         args: SortEndArgs,
         rp: StringEq!(")"),
     },
     Vector(VectorCall),
     VectorDefined {
-        kw: Range<FnVectorDefined>,
+        kw: Ranged<FnVectorDefined>,
         lp: StringEq!("("),
         args: VectorDefinedArgs,
         rp: StringEq!(")"),
     },
     VectorOp {
-        kw: Range<FnVectorOp>,
+        kw: Ranged<FnVectorOp>,
         lp: StringEq!("("),
         args: VectorOpArgs,
         rp: StringEq!(")"),
     },
     WChar {
-        kw: Range<FnWChar>,
+        kw: Ranged<FnWChar>,
         lp: StringEq!("("),
         args: WCharArgs,
         rp: StringEq!(")"),
     },
     WExtract(WExtractCall),
     Xecute {
-        kw: Range<FnXecute>,
+        kw: Ranged<FnXecute>,
         lp: StringEq!("("),
         args: XecuteArgs,
         rp: StringEq!(")"),
     },
     ClassMethod {
-        kw: Either<Range<FnClassMethod>, Range<FnZObjClassMethod>>,
+        kw: Either<Ranged<FnClassMethod>, Ranged<FnZObjClassMethod>>,
         lp: StringEq!("("),
         args: ClassMethodArgs,
         rp: StringEq!(")"),
     },
     Compile {
-        kw: Range<FnCompile>,
+        kw: Ranged<FnCompile>,
         lp: StringEq!("("),
         args: CompileArgs,
         rp: StringEq!(")"),
     },
-    // Unlike every other special variable, `$ZVERSION` also has a one-argument function form
-    // (its abbreviation `$ZV` doesn't) -- easiest modeled as its own `FunctionCall` variant
-    // rather than teaching `SpecialVariable` about arguments generally.
     // Legacy `$ZPREVIOUS(glvn)`/`$ZP`: the last subscript at that level, a one-argument reverse
     // `$ORDER`. Modeled on its own rather than folded into `Order`.
     ZP {
-        kw: Range<FnZPrevious>,
+        kw: Ranged<FnZPrevious>,
         lp: StringEq!("("),
         args: ZPArgs,
         rp: StringEq!(")"),
     },
-    // `$ZBITAND(b1,b2)`/`$ZBITOR`/`$ZBITXOR`: bitwise combination of two bitstrings.
-    // `$ZBITFIND(bits, value[, position])`: the position of the next bit with `value`.
-    // `$ZBITSTR(length[, value])`: a bitstring of `length` bits, all `value` (default 0).
-    // `$LOCK(lockname[, info_type])`: information about a held lock.
     // Legacy `$ZORDER(glvn)`/`$ZO` and `$NEXT(glvn)`/`$N`: the next node/subscript, like `$ORDER`.
     ZOrder {
-        kw: Range<FnZOrder>,
+        kw: Ranged<FnZOrder>,
         lp: StringEq!("("),
         args: ZOrderArgs,
         rp: StringEq!(")"),
     },
     Next {
-        kw: Range<FnNext>,
+        kw: Ranged<FnNext>,
         lp: StringEq!("("),
         args: NextArgs,
         rp: StringEq!(")"),
     },
     // Internal: the object's underlying storage handle, used by system collection classes.
     ZObjRef {
-        kw: Range<FnZObjRef>,
+        kw: Ranged<FnZObjRef>,
         lp: StringEq!("("),
         args: ZObjRefArgs,
         rp: StringEq!(")"),
     },
     ZStrip {
-        kw: Range<FnZStrip>,
+        kw: Ranged<FnZStrip>,
         lp: StringEq!("("),
         args: ZStripArgs,
         rp: StringEq!(")"),
     },
     ZDateTime {
         // The `H` forms first: `ZDATETIME` and `ZDT` are prefixes of them.
-        kw: Either<Range<FnZDateTimeH>, Range<FnZDateTime>>,
+        kw: Either<Ranged<FnZDateTimeH>, Ranged<FnZDateTime>>,
         lp: StringEq!("("),
         args: ZDateTimeArgs,
         rp: StringEq!(")"),
     },
     ZDate {
-        kw: Either<Range<FnZDateH>, Range<FnZDate>>,
+        kw: Either<Ranged<FnZDateH>, Ranged<FnZDate>>,
         lp: StringEq!("("),
         args: ZDateArgs,
         rp: StringEq!(")"),
     },
     ZTime {
-        kw: Either<Range<FnZTimeH>, Range<FnZTime>>,
+        kw: Either<Ranged<FnZTimeH>, Ranged<FnZTime>>,
         lp: StringEq!("("),
         args: ZTimeArgs,
         rp: StringEq!(")"),
@@ -5645,7 +5789,7 @@ pub enum FunctionCall {
     // `$ZF(-n, …)` callouts, per selector. `-100` precedes `-1` because
     // `StringEq` matches without a word boundary, so `-1` prefixes `-100`.
     ZFm100 {
-        kw: Range<FnZF>,
+        kw: Ranged<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-100"), SGap>,
         flags: More<ArgOf<Expr>>,
@@ -5654,7 +5798,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm1 {
-        kw: Range<FnZF>,
+        kw: Ranged<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-1"), SGap>,
         program: Option<More<ArgOf<Expr>>>,
@@ -5663,14 +5807,14 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm2 {
-        kw: Range<FnZF>,
+        kw: Ranged<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-2"), SGap>,
         program: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
     ZFm3 {
-        kw: Range<FnZF>,
+        kw: Ranged<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-3"), SGap>,
         dll: More<ArgOf<Expr>>,
@@ -5678,16 +5822,17 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm4 {
-        kw: Range<FnZF>,
+        kw: Ranged<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-4"), SGap>,
         n: More<ArgOf<Expr>>,
-        third: More<ArgOf<Expr>>,
+        // `$ZF(-4,2)` unloads every DLL: no third argument.
+        third: Option<More<ArgOf<Expr>>>,
         fourth: Option<More<ArgOf<Expr>>>,
         rp: StringEq!(")"),
     },
     ZFm5 {
-        kw: Range<FnZF>,
+        kw: Ranged<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-5"), SGap>,
         dll_id: More<ArgOf<Expr>>,
@@ -5696,7 +5841,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZFm6 {
-        kw: Range<FnZF>,
+        kw: Ranged<FnZF>,
         lp: StringEq!("("),
         selector: Wrap<SGap, StringEq!("-6"), SGap>,
         dll_index: More<ArgOf<Expr>>,
@@ -5704,7 +5849,7 @@ pub enum FunctionCall {
         rp: StringEq!(")"),
     },
     ZU {
-        kw: Range<FnZUtil>,
+        kw: Ranged<FnZUtil>,
         args: FunArgList,
     },
     // Every function whose arguments are all plain expressions, parsed with any number of them
@@ -5747,7 +5892,8 @@ impl FunctionCall {
             FunctionCall::ListNext { args, .. } => args.commas.clone(),
             FunctionCall::ListUpdate { args, .. } => args.commas.clone(),
             FunctionCall::Locate { args, .. } => args.commas.clone(),
-            FunctionCall::MV(call) => call.args.commas.clone(),
+            // Hand-written arguments, their commas unplaced; `$MV` is undocumented.
+            FunctionCall::MV(_) => vec![],
             FunctionCall::Method { args, .. } => args.commas.clone(),
             FunctionCall::Name { args, .. } => args.commas.clone(),
             FunctionCall::Parameter { args, .. } => args.commas.clone(),
@@ -5867,8 +6013,9 @@ impl FunctionCall {
 }
 
 impl SetTargetFun {
-    pub fn name(&self) -> KeywordUse {
-        match self {
+    // An undocumented function has no spelling to hold it to.
+    pub fn name(&self) -> Option<KeywordUse> {
+        Some(match self {
             SetTargetFun::Piece(call) => call.kw.spelled(),
             SetTargetFun::Extract(call) => call.kw.spelled(),
             SetTargetFun::List(call) => call.kw.spelled(),
@@ -5880,7 +6027,9 @@ impl SetTargetFun {
             SetTargetFun::Property(call) => call.kw.spelled(),
             SetTargetFun::Sequence(call) => call.kw.spelled(),
             SetTargetFun::MV(call) => call.kw.spelled(),
-        }
+            SetTargetFun::Simple(call) => call.spelled(),
+            SetTargetFun::Undocumented(_) => return None,
+        })
     }
 }
 
@@ -6382,9 +6531,10 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
         max: 1,
         ret: "%String",
     },
+    // `$ZSEEK()` reads the position without moving.
     SimpleFunction {
         names: &["ZSeek"],
-        min: 1,
+        min: 0,
         max: 2,
         ret: "%Integer",
     },
@@ -6411,7 +6561,7 @@ pub const SIMPLE_FUNCTIONS: &[SimpleFunction] = &[
 // Arguments past the documented ones that IRIS takes, and the checker reports (A5156): a fourth
 // of `$ZBITSET`, and of `$VIEW` in mode -7 alone, which IRIS's own routines pass; in any other mode
 // a fourth raises <FUNCTION>.
-fn undocumented_extra(function: &SimpleFunction, args: &[Range<Option<Expr>>]) -> usize {
+fn undocumented_extra(function: &SimpleFunction, args: &[Ranged<Option<Expr>>]) -> usize {
     match function.names[0] {
         "ZBitSet" => 1,
         "View" if args.get(1).is_some_and(|mode| mode.print().trim() == "-7") => 1,
@@ -6426,7 +6576,7 @@ pub fn simple_function(name: &str) -> Option<&'static SimpleFunction> {
 }
 
 #[derive(Grammar)]
-#[grammar(validated)]
+#[tygr(validated)]
 pub struct SimpleFunctionName(pub StringOf1<IsAlphabetic>);
 
 impl Validate for SimpleFunctionName {
@@ -6436,19 +6586,33 @@ impl Validate for SimpleFunctionName {
     }
 }
 
-pub type ExprArgList = ParenList<Range<Option<Expr>>>;
+pub type ExprArgList = ParenList<Ranged<Option<Expr>>>;
 
 #[derive(Grammar)]
 pub struct SimpleFunctionCallSource {
-    name: Range<SimpleFunctionName>,
+    name: Ranged<SimpleFunctionName>,
     args: ExprArgList,
 }
 
-#[derive(GrammarTryFromOther)]
-#[grammar(name = "simple function call")]
+#[derive(Parse)]
+#[tygr(name = "simple function call", try_from = SimpleFunctionCallSource)]
 pub struct SimpleFunctionCall {
-    pub name: Range<SimpleFunctionName>,
+    pub name: Ranged<SimpleFunctionName>,
     pub args: ExprArgList,
+}
+
+impl SimpleFunctionCall {
+    pub fn is_settable(&self) -> bool {
+        self.name.print().eq_ignore_ascii_case("MVV")
+    }
+
+    // How many arguments are given: `f()` parses as one empty argument, and means none.
+    pub fn given(&self) -> usize {
+        match self.args.items.as_slice() {
+            [only] if only.is_none() => 0,
+            items => items.len(),
+        }
+    }
 }
 
 impl Spelled for SimpleFunctionCall {
@@ -6464,8 +6628,7 @@ impl Spelled for SimpleFunctionCall {
     }
 }
 
-impl GrammarFrom for SimpleFunctionCall {
-    type Source = SimpleFunctionCallSource;
+impl Print for SimpleFunctionCall {
     fn print_to(&self, buf: &mut String) {
         self.name.print_to(buf);
         self.args.print_to(buf);
@@ -6488,23 +6651,13 @@ impl TryFrom<SimpleFunctionCallSource> for SimpleFunctionCall {
         SimpleFunctionCallSource { name, args }: SimpleFunctionCallSource,
     ) -> Result<Self, NamedFunArgError> {
         let function = simple_function(&name.print()).expect("validated by the grammar");
-        let named = |err| NamedFunArgError(name.print(), err);
-        let items = &args.items;
-        let given = if let [only] = items.as_slice()
-            && only.is_none()
-        {
-            0
-        } else {
-            items.len()
-        };
+        let call = Self { name, args };
+        let named = |err| NamedFunArgError(call.name.print(), err);
+        let items = &call.args.items;
+        let given = call.given();
         let max = function.max + undocumented_extra(function, items);
         if given > max {
-            let extra = items[max..]
-                .iter()
-                .enumerate()
-                .map(|(i, arg)| (max + i + 1, arg.print().trim().to_string()))
-                .collect();
-            return Err(named(FunArgError::TooMany { max, extra }));
+            return Err(named(FunArgError::TooMany { max, given }));
         }
         if given < function.min {
             return Err(named(FunArgError::TooFew {
@@ -6512,7 +6665,7 @@ impl TryFrom<SimpleFunctionCallSource> for SimpleFunctionCall {
                 given,
             }));
         }
-        Ok(Self { name, args })
+        Ok(call)
     }
 }
 
@@ -6524,7 +6677,7 @@ const HAND_WRITTEN_ARITY: &[(&[&str], usize, usize)] = &[
 ];
 
 #[derive(Grammar)]
-#[grammar(validated)]
+#[tygr(validated)]
 pub struct HandWrittenFunctionName(pub StringOf1<IsAlphabetic>);
 
 impl Validate for HandWrittenFunctionName {
@@ -6547,15 +6700,14 @@ pub struct GenericFunctionCallSource {
     args: Paren<GenericFunArgs>,
 }
 
-#[derive(GrammarTryFromOther)]
-#[grammar(name = "function call")]
+#[derive(Parse)]
+#[tygr(name = "function call", try_from = GenericFunctionCallSource)]
 pub struct GenericFunctionCall {
     pub name: HandWrittenFunctionName,
     pub args: Paren<GenericFunArgs>,
 }
 
-impl GrammarFrom for GenericFunctionCall {
-    type Source = GenericFunctionCallSource;
+impl Print for GenericFunctionCall {
     fn print_to(&self, buf: &mut String) {
         self.name.print_to(buf);
         self.args.print_to(buf);
@@ -6580,15 +6732,16 @@ impl TryFrom<GenericFunctionCallSource> for GenericFunctionCall {
 }
 
 #[derive(Grammar)]
-#[grammar(validated)]
+#[tygr(validated)]
 pub struct UnknownFunctionName(pub StringOf1<IsAlphabetic>);
 
 impl Validate for UnknownFunctionName {
     const REQUIREMENT: &'static str = "not be a known function";
     fn validate(&self) -> bool {
         let name = self.0.print();
-        !FUNCTION_NAMES.iter().any(|n| n.eq_ignore_ascii_case(&name))
-            && simple_function(&name).is_none()
+        !FUNCTION_KEYWORDS.iter().any(|(full, abbr)| {
+            full.eq_ignore_ascii_case(&name) || abbr.is_some_and(|a| a.eq_ignore_ascii_case(&name))
+        }) && simple_function(&name).is_none()
             && hand_written_arity(&name).is_none()
     }
 }
@@ -6599,8 +6752,18 @@ pub struct UnknownFunctionCall {
     pub args: FunArgList,
 }
 
-// Every full function name (including nested Bit/Extract/DText/Z*Kw calls) -- kept in sync by
-// hand, for `UnknownSpecialVariable::from_str`'s error message.
+impl UnknownFunctionCall {
+    // The object internals IRIS's own classes assign to, undocumented like the rest of `$ZOBJ*`.
+    pub fn is_settable(&self) -> bool {
+        let name = self.name.print();
+        ["ZOBJVAL", "ZOBJOID", "ZOBJMOD", "ZOBJMODS"]
+            .iter()
+            .any(|settable| settable.eq_ignore_ascii_case(&name))
+    }
+}
+
+// Every full function name, hand-written or in `SIMPLE_FUNCTIONS`, for the checker's did-you-mean
+// list; the style test keeps it in sync with `FUNCTION_KEYWORDS` and `SIMPLE_FUNCTIONS`.
 pub const FUNCTION_NAMES: &[&str] = &[
     "TEXT",
     "LENGTH",
@@ -6629,7 +6792,6 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "ISVECTOR",
     "INCREMENT",
     "ZINCREMENT",
-    "ZINCR",
     "JUSTIFY",
     "LIST",
     "LISTBUILD",
@@ -6722,7 +6884,6 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "ZVERSION",
     "ZPOWER",
     "ZPOSITION",
-    "ZP",
     "ZCRC",
     "ZBITGET",
     "ZBITAND",
@@ -6757,7 +6918,7 @@ pub const FUNCTION_NAMES: &[&str] = &[
 ];
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum AtomicExpr {
     DAO(DAO),
     Number(Number),
@@ -6766,17 +6927,17 @@ pub enum AtomicExpr {
     String(OSString),
     CallSubroutine {
         prefix: StringEq!("$$"),
-        label: Range<Option<Range<AllowIndirection<Label>>>>,
+        label: Ranged<Option<Ranged<AllowIndirection<Label>>>>,
         routine: Option<ExtendedRoutineReference>,
         args: Option<MthArgList>,
     },
     FunctionCall(Prefix<StringEq!("$"), FunctionCall>),
     SpecialVariable {
         sym: StringEq!("$"),
-        var: SpecialVariable,
+        var: Ranged<SpecialVariable>,
     },
     This(StringEqCI!("##this")),
-    Super(Prefix<StringEqCI!("##super"), Range<MthArgList>>),
+    Super(Prefix<StringEqCI!("##super"), Ranged<MthArgList>>),
     Class {
         kw: StringEqCI!("##class"),
         cls: Paren<QuotableClassName>,
@@ -6798,35 +6959,35 @@ pub enum AtomicExpr {
         cls: MacroArgList,
     },
     Member {
-        member: Prefix<StringEq!(".."), Range<MemberRef>>,
-        args: Option<Range<MthArgList>>,
+        member: Prefix<StringEq!(".."), Ranged<MemberRef>>,
+        args: Option<Ranged<MthArgList>>,
     },
     BeginQuoteEndQuote(
         StringEqCI!("##beginquote"),
         StringEndsWith<StringEqCI!("##EndQuote")>,
     ),
     // Indirection is eval
-    Indirection(Range<Indirection>),
+    Indirection(Ranged<Indirection>),
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct ExprOpsStruct<BeforeFirst> {
-    pub base: Box<Range<ParenedExpr<BeforeFirst>>>,
+    pub base: Box<Ranged<ParenedExpr<BeforeFirst>>>,
     pub ops: Vec<SufOp>,
 }
 
-#[derive(GrammarFromOther)]
+#[derive(Parse)]
+#[tygr(inline, try_from_infallible = ExprOpsStruct<BeforeFirst>)]
 pub enum ExprOps<BeforeFirst> {
     Base(Box<ParenedExpr<BeforeFirst>>),
     Then {
-        base: Box<Range<ExprOps<BeforeFirst>>>,
+        base: Box<Ranged<ExprOps<BeforeFirst>>>,
         op: SufOp,
     },
 }
 
-impl<BeforeFirst: Grammar> GrammarFrom for ExprOps<BeforeFirst> {
-    type Source = ExprOpsStruct<BeforeFirst>;
+impl<BeforeFirst: Print> Print for ExprOps<BeforeFirst> {
     fn print_to(&self, buf: &mut String) {
         match self {
             ExprOps::Base(base) => base.print_to(buf),
@@ -6838,7 +6999,7 @@ impl<BeforeFirst: Grammar> GrammarFrom for ExprOps<BeforeFirst> {
     }
 }
 
-impl<BeforeFirst: Grammar> From<ExprOpsStruct<BeforeFirst>> for ExprOps<BeforeFirst> {
+impl<BeforeFirst: Parse> From<ExprOpsStruct<BeforeFirst>> for ExprOps<BeforeFirst> {
     fn from(value: ExprOpsStruct<BeforeFirst>) -> Self {
         let start = value.base.start;
         let mut end = value.base.end;
@@ -6846,7 +7007,7 @@ impl<BeforeFirst: Grammar> From<ExprOpsStruct<BeforeFirst>> for ExprOps<BeforeFi
         for op in value.ops {
             let op_end = op.args.as_ref().map_or(op.mem.end, |args| args.end);
             base = Self::Then {
-                base: Box::new(Range::new(start, base, end)),
+                base: Box::new(Ranged::new(start, base, end)),
                 op,
             };
             end = op_end;
@@ -6856,17 +7017,17 @@ impl<BeforeFirst: Grammar> From<ExprOpsStruct<BeforeFirst>> for ExprOps<BeforeFi
 }
 
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum OpsExpr<BeforeFirst = ()> {
     Base(ExprOps<BeforeFirst>),
     Prefixed {
         op: Wrap<BeforeFirst, PrefixOperator, MGap>,
-        remaining: Box<Range<OpsExpr<()>>>,
+        remaining: Box<Ranged<OpsExpr<()>>>,
     },
 }
 
 #[derive(Grammar)]
-#[grammar(name = "Expression")]
+#[tygr(name = "Expression")]
 pub struct Expr(GenericExpr);
 
 impl std::ops::DerefMut for Expr {
@@ -6894,6 +7055,20 @@ impl std::ops::DerefMut for ExpressionAfterIf {
 
 impl Deref for ExpressionAfterIf {
     type Target = GenericExpr<StringEq!(" ")>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+// Unlike `If`, `ElseIf` is never argumentless, and IRIS takes any same-line gap before its
+// condition, spaces, tabs and comments, or none before a parenthesis, `ElseIf(x)`, where `If` wants
+// the one space.
+#[derive(Grammar)]
+pub struct ExpressionAfterElseIf(GenericExpr<SGap1>);
+
+impl Deref for ExpressionAfterElseIf {
+    type Target = GenericExpr<SGap1>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -6936,62 +7111,61 @@ impl Deref for ExpressionAfterColon {
 
 #[derive(Grammar)]
 pub struct GenericExpr<BeforeFirst = (), BetweenInfix = MGap> {
-    pub base: Range<OpsExpr<BeforeFirst>>,
-    pub ops: Vec<Range<InfixOperation<BetweenInfix>>>,
+    pub base: Ranged<OpsExpr<BeforeFirst>>,
+    pub ops: Vec<Ranged<InfixOperation<BetweenInfix>>>,
 }
 
 impl Expr {
     pub fn as_variable(&self) -> Option<&Variable> {
+        match self.as_atomic()? {
+            AtomicExpr::Variable(this) => Some(this),
+            _ => None,
+        }
+    }
+
+    // The one atom this is, under no operator and in no parentheses.
+    pub fn as_atomic(&self) -> Option<&AtomicExpr> {
         if !self.ops.is_empty() {
             return None;
         }
-        let OpsExpr::Base(this) = self.base.deref() else {
-            return None;
-        };
-        let ExprOps::Base(this) = this else {
+        let OpsExpr::Base(ExprOps::Base(this)) = self.base.deref() else {
             return None;
         };
         let ParenedExpr::Normal(this) = this.deref() else {
             return None;
         };
-        match this.deref().deref() {
-            AtomicExpr::Variable(this) => Some(this),
-            _ => None,
-        }
+        Some(this.deref().deref())
     }
 }
 
 pub type ParenExpr = Paren<Wrap<MGap, Expr, MGap>>;
 
 pub type ParenList<Item> = Paren<MGapXMGap<VecSep<Item, CommaSep<MGap>>>>;
-pub type MthArgList = ParenList<Range<Option<MthArg>>>;
-pub type FunArgList = ParenList<Range<Option<FunArg>>>;
+pub type MthArgList = ParenList<Ranged<Option<MthArg>>>;
+pub type FunArgList = ParenList<Ranged<Option<FunArg>>>;
 
 char_class!(pub IsSpaceOrTab, "space", |ch| matches!(ch, ' ' | '\t'));
 
 #[derive(Grammar)]
-#[grammar(hidden)]
+#[tygr(hidden)]
 pub struct SpaceOrTab(StringOf<IsSpaceOrTab>);
 #[derive(Grammar)]
-#[grammar(hidden)]
+#[tygr(hidden)]
 pub struct SpaceOrTab1(StringOf1<IsSpaceOrTab>);
 
 char_class!(pub IsRoutineNamePart, "routine_name_part", |ch| {
-    ch.is_alphanumeric() || ch == '.'
+    is_letter(ch) || ch.is_ascii_digit() || ch == '.'
 });
 
 // https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=RCOS_appx_identifiers#RCOS_appx_identifiers_cos_routines
 #[derive(Grammar, Clone, PartialEq, Eq)]
 pub struct RoutineNameAndLabel {
-    head: CharOf<IsLetterOrPercent>,
+    head: IsLetterOrPercent,
     body: Option<(
         Vec<(StringOf<IsLetterOrNumberIncludingUnicode>, StringEq!("."))>,
         StringOf1<IsLetterOrNumberIncludingUnicode>,
     )>,
 }
-
-#[derive(Grammar, Clone, PartialEq, Eq)]
-pub struct ZLangRoutineName(Raw<(StringEq!("^%ZLANG"), StringOf<IsRoutineNamePart>)>);
 
 #[derive(Grammar)]
 pub enum Label {
@@ -7001,11 +7175,11 @@ pub enum Label {
 }
 
 char_class!(pub IsMacroNameChar, "macro_name_char", |ch| {
-    ch.is_alphanumeric() || ch == '%'
+    is_letter(ch) || ch.is_ascii_digit() || ch == '%'
 });
 
 #[derive(Grammar, Clone)]
-pub struct MacroName(pub Range<MacroNameText>);
+pub struct MacroName(pub Ranged<MacroNameText>);
 
 #[derive(Grammar, Clone)]
 pub struct MacroNameText(StringOf1<IsMacroNameChar>);
@@ -7019,18 +7193,7 @@ pub enum ScopeKeyword {
     Public(StringEqCI!("Public")),
 }
 
-#[derive(Grammar, Clone, PartialEq, Eq)]
-pub enum RoutineName {
-    ZWelcome(StringEq!("^ZWELCOME")),
-    ZAuthenticate(StringEq!("^ZAUTHENTICATE")),
-    ZAuthorize(StringEq!("^ZAUTHORIZE")),
-    ZMirror(StringEq!("^ZMIRROR")),
-    ZStart(StringEq!("^%ZSTART")),
-    ZStop(StringEq!("^%ZSTOP")),
-    ZJRead(StringEq!("^%ZJREAD")),
-    ZLang(ZLangRoutineName),
-    Other(RoutineNameAndLabel),
-}
+pub type RoutineName = RoutineNameAndLabel;
 
 #[derive(Grammar)]
 pub enum RoutineType {
@@ -7065,7 +7228,7 @@ impl RoutineAttributes {
 #[derive(Grammar)]
 pub struct RoutineHeader {
     keyword: Raw<(StringEqCI!("ROUTINE"), SpaceOrTab1)>,
-    pub name: Range<RoutineName>,
+    pub name: Ranged<RoutineName>,
     pub type_spec: Option<SpaceThen<RoutineTypeSpec>>,
 }
 
@@ -7074,7 +7237,7 @@ pub type SpaceThen<T> = Prefix<SpaceOrTab, T>;
 #[derive(Grammar)]
 pub struct ParameterEntry {
     pub by_ref: Option<StringEq!("&")>,
-    pub param: Range<LocalVariableName>,
+    pub param: Ranged<LocalVariableName>,
     pub expand: Option<StringEq!("...")>,
     pub default: Option<Prefix<Raw<Wrap<MGap, StringEq!("="), MGap>>, Value>>,
 }
@@ -7087,7 +7250,7 @@ pub type ParameterList = Wrap<
 
 pub type PublicVarList = Wrap<
     Raw<(StringEq!("["), MGap)>,
-    Option<VecSep<Range<AllowMacro<LocalVariableName>>, Raw<(MGap, StringEq!(","), MGap)>>>,
+    Option<VecSep<Ranged<AllowMacro<LocalVariableName>>, Raw<(MGap, StringEq!(","), MGap)>>>,
     Raw<(MGap, StringEq!("]"))>,
 >;
 
@@ -7095,7 +7258,7 @@ pub type PublicVarList = Wrap<
 #[derive(Grammar)]
 pub struct SubroutineHeader {
     // It is weird but some subroutine headers are integer
-    pub label: Range<Label>,
+    pub label: Ranged<Label>,
     pub params: Option<SpaceThen<ParameterList>>,
     pub scope: Option<SpaceThen<ScopeKeyword>>,
 }
@@ -7104,42 +7267,52 @@ pub struct SubroutineHeader {
 #[derive(Grammar)]
 pub struct Subroutine {
     pub header: AllowMacro<SubroutineHeader>,
-    pub body: Range<RoutineMain>,
+    pub body: Ranged<RoutineMain>,
 }
 
 // https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=GCOS_procedures#GCOS_procedures_procsyntax
 #[derive(Grammar)]
 pub struct ProcedureHeader {
-    pub label: Range<Label>,
-    pub params: Option<SpaceThen<ParameterList>>,
+    pub label: Ranged<Label>,
+    // `lab {` without one IRIS refuses (ERROR #1026).
+    pub params: SpaceThen<ParameterList>,
     pub publics: Option<Prefix<StringOf<IsWhitespace>, AllowMacro<PublicVarList>>>,
     pub scope: Option<SpaceThen<ScopeKeyword>>,
 }
 
 #[derive(Grammar)]
 pub struct Procedure {
-    pub header: Range<AllowMacro<ProcedureHeader>>,
+    pub header: Ranged<AllowMacro<ProcedureHeader>>,
     gap: Raw<VecSep<SGap, NL>>,
-    pub body: Range<Brace<ProcedureBody>>,
+    pub body: Ranged<Brace<ProcedureBody>>,
     end: Raw<EndOfLine>,
     pub trailer: Option<ProcedureTrailer>,
+}
+
+// Bare `#dim` lines between a Try block and its `Catch`, one to a line: the preprocessor drops
+// each, so IRIS takes them. A default would leave a `Set` there, and one on the block's own line
+// takes the `Catch` with it; IRIS refuses both, and neither parses.
+#[derive(Grammar)]
+pub struct TryDims {
+    pub lines: Vec1<Prefix<Raw<(Vec1<NL>, SGap)>, Ranged<BareDim>>>,
+    end: Raw<Vec1<NL>>,
 }
 
 // Command lines after a procedure's `}` and before the next label: IRIS compiles them, though only
 // an offset reaches them. The lookahead for a line keeps an empty main from taking the newlines
 // the next label is parted by.
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct ProcedureTrailer {
     gap: Raw<(Vec1<NL>, NotFollowedBy<NotFollowedBy<SGap1>>)>,
-    pub lines: Range<RoutineMain>,
+    pub lines: Ranged<RoutineMain>,
 }
 
 #[derive(Grammar)]
 pub struct ProcedureBody {
     // The first line needs no space and does not permit dots
     pub main: ProcedureMain,
-    pub subroutines: Option<Prefix<Raw<Vec1<NL>>, VecSep<Subroutine, Raw<Vec1<NL>>>>>,
+    pub subroutines: Option<Prefix<Raw<Vec1<NL>>, VecSep<RoutineElement, Raw<Vec1<NL>>>>>,
     end: Raw<VecSep<SGap, NL>>,
 }
 
@@ -7162,7 +7335,7 @@ pub struct Routine {
 // The labels after the main body, each behind the newlines, comment lines among them, that part
 // it from what precedes it.
 #[derive(Grammar)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub struct Subroutines {
     pub gap: Raw<Vec1<NL>>,
     pub list: VecSep<RoutineElement, Raw<Vec1<NL>>>,
@@ -7179,13 +7352,13 @@ impl Deref for Subroutines {
 #[derive(Grammar)]
 pub struct RoutineWithMacro {
     pub header: RoutineHeader,
-    pub macroed_units: Vec<Range<MacroedUnit>>,
+    pub macroed_units: Vec<Ranged<MacroedUnit>>,
 }
 
 #[derive(Grammar, Clone)]
 pub enum MacroedUnit {
     Redex(MacroRedex),
-    Plain(Raw<Vec1<(NotFollowedBy<MacroRedex>, CharOf<AnyChar>)>>),
+    Plain(Raw<Vec1<(NotFollowedBy<MacroRedex>, AnyChar)>>),
 }
 
 char_class!(pub IsNotCloseParen, "not_close_paren", |ch| ch != ')');
@@ -7197,6 +7370,12 @@ pub enum MacroRedex {
         StringEqCI!("##lit("),
         StringOf<IsNotCloseParen>,
         StringEq!(")"),
+    ),
+    // `##beginlit text ##endlit`: the same, undocumented, in IRIS's own includes.
+    BeginLit(
+        StringEqCI!("##beginlit"),
+        Raw<Vec<(NotFollowedBy<StringEqCI!("##endlit")>, AnyChar)>>,
+        StringEqCI!("##endlit"),
     ),
     H(HMacro),
     // Passed through whole, so a `;` inside (`&nbsp;`, a JavaScript statement) isn't a comment.
@@ -7222,7 +7401,7 @@ pub struct CommandLine<Start> {
     start_of_line: Start,
     // some old routines contain no space between the last dot and the first command
     pub periods: Vec<(StringEq!("."), SGap)>,
-    pub commands: Option<VecSep<Range<Command>, SGap1>>,
+    pub commands: Option<VecSep<Ranged<Command>, SGap1>>,
 }
 
 // Main Blocks should never ends with '\n'
@@ -7236,7 +7415,7 @@ pub struct ProcedureMain {
 char_class!(pub IsNotHash, "not_hash", |ch| ch != '#');
 
 // A command line starts with whitespace (column 0 is for labels) -- except a `#dim` at column 0.
-pub type LineStart = Either<SGap1, NotFollowedBy<CharOf<IsNotHash>>>;
+pub type LineStart = Either<SGap1, NotFollowedBy<IsNotHash>>;
 
 #[derive(Grammar)]
 pub struct RoutineMain {
@@ -7245,7 +7424,7 @@ pub struct RoutineMain {
 }
 
 #[derive(Grammar, Clone)]
-#[grammar(inline)]
+#[tygr(inline)]
 pub enum LineCommentStart {
     LLLineComment(StringEq!("//")),
     ELineComment(StringEq!(";")),
@@ -7268,7 +7447,7 @@ mod regression_tests {
     use std::time::{Duration, Instant};
 
     fn routine(body: &str) -> Result<(), Error> {
-        Routine::scan(&format!("ROUTINE r [Type=MAC]\n{body}"))
+        Routine::parse(&format!("ROUTINE r [Type=MAC]\n{body}")).map(drop)
     }
 
     fn methods(cls: &ClassDefinition) -> Vec<&Method> {
@@ -7286,6 +7465,156 @@ mod regression_tests {
     #[test]
     fn storage_special_variable() {
         routine(" w $STORAGE,$ST,$S,$SY,$STACK,$SYSTEM\n").expect("Ok");
+    }
+
+    #[test]
+    fn routine_names_carry_no_caret() {
+        routine(" d ^%ZSTART,^ZWELCOME,^%ZLANGC00,Tag^%ZSTOP\n").expect("Ok");
+        routine("#include ^ZWELCOME\n q\n").expect_err("an include is named without a caret");
+        Routine::parse("ROUTINE ^%ZSTART [Type=MAC]\n q\n")
+            .map(drop)
+            .expect_err("a header names no caret");
+    }
+
+    #[test]
+    fn zseek_without_arguments() {
+        routine(" s p=$ZSEEK(),q=$ZSEEK(0,1),r=$ZSEEK(10)\n").expect("Ok");
+        routine(" s p=$ZSEEK(1,2,3)\n").expect_err("at most two");
+    }
+
+    #[test]
+    fn zf_minus_4_takes_two_arguments() {
+        routine(" s x=$ZF(-4,2),y=$ZF(-4,1,\"dll\"),z=$ZF(-4,2,id,1)\n").expect("Ok");
+        routine(" s x=$ZF(-4)\n").expect_err("the utility number is required");
+    }
+
+    #[test]
+    fn known_command_without_its_argument_is_not_reported_as_unknown() {
+        for line in [" set\n", " s\n", " merge\n", " zkill\n", " zk\n"] {
+            let err = routine(line).expect_err(line).to_string();
+            assert!(
+                err.contains("be followed by a well-formed argument"),
+                "{line}: {err}"
+            );
+        }
+        let err = routine(" foo 1\n").expect_err("foo").to_string();
+        assert!(err.contains("be a command; the commands are"), "{err}");
+    }
+
+    #[test]
+    fn z_command_abbreviation_without_its_argument_is_not_a_user_command() {
+        routine(" zk x\n zn \"USER\"\n ZDN x\n").expect("Ok");
+        routine(" zk\n").expect_err("ZKILL needs an argument");
+        routine(" zn\n").expect_err("ZNSPACE needs an argument");
+    }
+
+    #[test]
+    fn abbreviated_function_with_bad_arguments_is_not_unknown() {
+        for call in [
+            "$P(a)",
+            "$E()",
+            "$LG(a,1,2,3)",
+            "$ZDT()",
+            "$ZINCR()",
+            "$ZP()",
+        ] {
+            let err = routine(&format!(" s x={call}\n"))
+                .expect_err(call)
+                .to_string();
+            assert!(err.contains("argument"), "{call}: {err}");
+        }
+    }
+
+    #[test]
+    fn read_column_is_an_expression() {
+        routine(" r ?n,x:0 r ?(n+1),y:0 r ?$l(\"abc\"),z:0 r !?5,w\n").expect("Ok");
+    }
+
+    #[test]
+    fn variable_names_may_start_with_or_contain_any_letter() {
+        routine(" s Ω=1,aé=3,%é=2 s ^é=2,^a.é.b=1,^|\"USER\"|é=3,^%é=4\n").expect("Ok");
+    }
+
+    #[test]
+    fn language_cache_is_objectscript() {
+        let cls = ClassDefinition::parse(
+            "Class A.L\n{\n\nClassMethod M() [ Language = cache ]\n{\n quit 1\n}\n\n}\n",
+        )
+        .expect("Ok");
+        assert!(methods(&cls)[0].header.is_objectscript());
+    }
+
+    #[test]
+    fn legacy_index_collations() {
+        let index = |index: &str| {
+            let cls = ClassDefinition::parse(&format!(
+                "Class A.C Extends %Persistent\n{{\n\nProperty Name As %String;\n\n{index}\n\n}}\n"
+            ))?;
+            let collations: Vec<_> = cls
+                .member_list
+                .members
+                .seps
+                .iter()
+                .filter_map(|member| match member.deref() {
+                    Member::Index(index) => Some(index),
+                    _ => None,
+                })
+                .flat_map(|index| index.on_properties().unwrap_or_default())
+                .map(|key| key.collation())
+                .collect();
+            Ok::<_, Error>(collations)
+        };
+        assert_eq!(
+            index("Index A On Name As Upper;\n\nIndex B On Name As String(50);").expect("Ok"),
+            [Some("Upper".to_string()), Some("String(50)".to_string())]
+        );
+        index(
+            "Index A On Name As Space;\n\nIndex B On Name As AlphaUp;\n\nIndex C On Name As Mvr;",
+        )
+        .expect("Ok");
+        index("Index A On Name As Upper(50);").expect_err("only STRING takes a length");
+    }
+
+    #[test]
+    fn class_header_directives_in_any_order() {
+        let class =
+            |header: &str| ClassDefinition::parse(&format!("{header}\nClass A.H\n{{\n\n}}\n"));
+        class("Include %occInclude\nImport %SYS\n").expect("Ok");
+        class("Import %SYS\nIncludeGenerator %occInclude\nInclude %occInclude\n").expect("Ok");
+        assert!(
+            class("Include %occInclude\nInclude %occStatus\n").is_err(),
+            "IRIS refuses a repeat"
+        );
+    }
+
+    #[test]
+    fn index_key_kind_case() {
+        let class = |index: &str| {
+            ClassDefinition::parse(&format!(
+                "Class A.I Extends %Persistent\n{{\n\nProperty Tags As list Of %String;\n\n{index}\n\n}}\n"
+            ))
+        };
+        class("Index TagsIdx On Tags(elements);").expect("Ok");
+        class("Index TagsIdx On Tags(ELEMENTS) [ Data = (Tags(ELEMENTS)) ];").expect("Ok");
+        assert!(
+            class("Index TagsIdx On Tags(ELEMENTS) [ Data = (Tags(elements)) ];").is_err(),
+            "IRIS reads the Data form case-sensitively"
+        );
+    }
+
+    #[test]
+    fn structured_system_variable_abbreviations() {
+        routine(" w $d(^$J($j)),^$L(\"x\"),^$R(\"x\"),^$G(\"^x\"),^$GLOBAL(\"^x\")\n").expect("Ok");
+        routine(" w ^$JO($j)\n").expect_err("JO is neither JOB nor J");
+    }
+
+    #[test]
+    fn zparent_special_variable() {
+        routine(" w $ZPARENT,$ZP,$ZPI,$ZPOS,$ZPOSITION\n").expect("Ok");
+        assert!(matches!(
+            SpecialVariable::parse("ZPA"),
+            Ok(SpecialVariable::Unknown(_))
+        ));
     }
 
     #[test]
@@ -7340,7 +7669,7 @@ mod regression_tests {
     #[test]
     fn command_keywords_carry_their_offsets_and_documented_spellings() {
         let command =
-            Range::<Command>::parse("if x { Quit } elseif y { Quit } E { Quit }").expect("Ok");
+            Ranged::<Command>::parse("if x { Quit } elseif y { Quit } E { Quit }").expect("Ok");
         let keywords = command.keywords(command.start);
         let keywords: Vec<_> = keywords
             .iter()
@@ -7380,7 +7709,7 @@ mod regression_tests {
         let methods = methods(&cls);
         assert_eq!(methods.len(), 2);
         for method in methods {
-            ProcedureBody::scan(&method.body.prefixed.wrapped.print()).expect("Ok");
+            ProcedureBody::parse(&method.body.prefixed.wrapped.print()).expect("Ok");
         }
     }
 
@@ -7453,7 +7782,7 @@ mod regression_tests {
         )
         .expect("Ok");
         for method in methods(&cls) {
-            ProcedureBody::scan(&method.body.prefixed.wrapped.print()).expect("Ok");
+            ProcedureBody::parse(&method.body.prefixed.wrapped.print()).expect("Ok");
         }
     }
 

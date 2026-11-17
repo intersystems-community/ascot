@@ -30,9 +30,9 @@ cargo clippy --lib --no-default-features --features lsp -- -D warnings
 
 ### Against IRIS
 
-`tests/iris.rs` and the JavaScript binding's `npm test` run against the instance in
-`ASCOT_TEST_IRIS`, and do nothing without it. To run one in Docker (its default passwords
-come expired):
+`tests/iris.rs` runs against the instance in `ASCOT_TEST_IRIS` and does nothing without it;
+the JavaScript binding's `npm test` skips only its live test. To run one in Docker (its default
+passwords come expired):
 
 ```sh
 docker run -d --name iris -p 52773:52773 containers.intersystems.com/intersystems/iris-community:2026.1
@@ -40,6 +40,9 @@ docker exec iris iris session IRIS -U %SYS '##class(Security.Users).UnExpireUser
 ASCOT_TEST_IRIS=http://_SYSTEM:SYS@localhost:52773 cargo test --test iris
 (cd bindings/js && ASCOT_TEST_IRIS=http://_SYSTEM:SYS@localhost:52773 npm test)
 ```
+
+CI runs these on the current Community Edition releases only: an image older than about a year
+no longer starts, its Community license having expired.
 
 ### Diagnostics
 
@@ -60,6 +63,19 @@ one marker per diagnostic the line gets. Two checks hold the example to its word
   statement runs; a warning's or hint's example, and a block marked
   ```` ```objectscript compiles ````, must compile; ```` ```objectscript rejected ```` says IRIS
   refuses the example although ascot only warns or hints. CI runs it in the `iris` job.
+
+The doc comment is also what a user reads: `ascot diagnostics DIR` renders every kind's code,
+severity, message and doc comment as Markdown pages, an index and one per code, and `docs/` is
+served by GitHub Pages as the reference the code at the end of a message links to. The convention:
+
+- `docs/unreleased/` is the reference of `main`. After a change to `type_error_kinds!`, run
+  `cargo run -- diagnostics docs/unreleased` and commit the result; CI fails when it is stale.
+  A PR that touches `docs/unreleased` goes stale in the merge queue when a kind-changing PR
+  merges ahead of it, so merge `main` and regenerate before re-queueing.
+- A release PR copies it, `cp -r docs/unreleased docs/<version>`, and adds the version to
+  `docs/index.md`. A release's binary links to `/<version>/<CODE>`, so CI fails a PR that bumps
+  the version without the directory, and the Release workflow refuses a tag without it.
+- The generated pages are never edited by hand; the doc comment is the place to write.
 
 A private corpus of annotated ObjectScript pins what ascot reports on every file, hints and
 all. It is not run in CI, so a PR that changes what is reported should say so in its
@@ -99,8 +115,8 @@ shasum -a 256 iris-community-2026.2.d.json.gz > iris-community-2026.2.d.json.gz.
 gh release upload declarations iris-community-2026.2.d.json.gz{,.sha256} --clobber
 ```
 
-Bump `DEFAULT_RELEASE` in `src/prebuilt.rs` when a new Community release's file is up. The
-format's version, `DECLARATIONS_VERSION` in `src/iris.rs`, is semver: a file is readable while
+Bump `DEFAULT_RELEASE` in `src/release.rs` when a new Community release's file is up. The
+format's version, `DECLARATIONS_VERSION` in `src/declared.rs`, is semver: a file is readable while
 its major part matches, so bump the major for a change old ascots can't read, the minor for an
 addition, and re-upload every release's file after a major bump.
 

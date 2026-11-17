@@ -3,7 +3,8 @@
 
 use std::str::FromStr;
 
-use tygr::{Grammar, GrammarRule, StringEq, StringOf1, Suffix, VecSep, bnf_rules, char_class};
+use tygr::{Grammar, Parse, Print, StringEq, StringOf1, Suffix, char_class};
+use tygr_objectscript::cos::VecSep;
 
 use crate::bindings::{Diagnostic, DiagnosticSeverity};
 use crate::check::TypeErrorKind;
@@ -61,7 +62,10 @@ char_class!(pub CodeChar, "letters or digits", |c| c.is_ascii_alphanumeric());
 
 /// The syntax of a value, for help and error messages.
 pub fn bnf() -> String {
-    bnf_rules![Batch, Verb, Severity, Target, Code]
+    Batch::bnf_rules()
+        .iter()
+        .map(|rule| format!("{rule}\n"))
+        .collect()
 }
 
 impl Filter {

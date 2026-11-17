@@ -9,6 +9,7 @@
 use crate::bindings;
 use crate::bindings::Location;
 use crate::bindings::RefMode;
+use crate::check::CheckCommand;
 use crate::check::env::*;
 use crate::check::errors::*;
 use crate::check::types::*;
@@ -66,6 +67,8 @@ struct Shared<'a> {
     output: OutputCell,
     ty_var: RefCell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
+    // The entries of `reading_list` that are information rather than a warning when never read.
+    unread_roles: RefCell<HashMap<Written, UnreadRole>>,
     // In declaration order, for a deterministic diagnostic when more than one qualifies.
     ref_params: RefCell<Vec<RefParam>>,
     // Visible in the signature already, so excluded from `creates` below.
@@ -75,6 +78,8 @@ struct Shared<'a> {
     creates: RefCell<HashSet<String>>,
     // Every variable written, for a nested label whose block reads them after a `Do` of it.
     writes: RefCell<HashSet<String>>,
+    // The `INTO` list each embedded SQL cursor was declared with, assigned at its `FETCH`.
+    cursors: RefCell<HashMap<String, Vec<String>>>,
     // Set once an `if` branch's checking failed partway (see `check_branch`): the deferred "never
     // read"/"never assigned" reports can't be trusted after that.
     incomplete: std::cell::Cell<bool>,
@@ -132,6 +137,9 @@ impl TrapVar {
 struct Traps {
     active: Option<(TrapVar, Option<String>)>,
     joins: HashMap<String, Join>,
+    // The `Try` blocks this path is in, innermost last: each the merge of every state its `Catch`
+    // can be entered from.
+    catches: Vec<Bindings>,
 }
 
 impl Traps {
@@ -145,14 +153,29 @@ impl Traps {
             self.active = them.active;
         }
         for (label, join) in them.joins {
-            match self.joins.get_mut(&label) {
-                Some(mine) => mine.bindings.merge(Some(join.bindings), env, undeclared)?,
-                None => {
-                    self.joins.insert(label, join);
-                }
-            }
+            self.join(label, join, env, undeclared)?;
+        }
+        for (mine, theirs) in self.catches.iter_mut().zip(them.catches) {
+            mine.merge(Some(theirs), env, undeclared)?;
         }
         Ok(())
+    }
+
+    // `join` is one more state `label`'s handler can be entered from.
+    fn join(
+        &mut self,
+        label: String,
+        join: Join,
+        env: &WorkspaceEnv<'_>,
+        undeclared: &Binding,
+    ) -> Result<(), QuasiTypeError> {
+        match self.joins.get_mut(&label) {
+            Some(mine) => mine.bindings.merge(Some(join.bindings), env, undeclared),
+            None => {
+                self.joins.insert(label, join);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -213,9 +236,7 @@ impl<'a> Flow<'a> {
     // one (e.g. it isn't tied to the expression currently being checked). A no-op during a
     // loop's throwaway priming pass (see `WorkspaceEnv::suppress_soft_diagnostics`).
     pub(crate) fn add_soft_diagnostic(&self, err: QuasiTypeError) {
-        self.shared
-            .env
-            .add_soft_diagnostic(err.into_error(|| self.current_range).into());
+        self.shared.env.add_soft_error(err, self.current_range);
     }
 
     // `ty` read as a value (`text` is its source): an undefined one is reported softly and read
@@ -253,15 +274,23 @@ impl<'a> Flow<'a> {
     }
 
     // A label, held to `output` (see `LabelEntry::output`); an error handler starts from `join`,
-    // the states it can be entered from (see `Traps`). Returns what it creates.
+    // the states it can be entered from (see `Traps`). Its `body` falls through to `next`.
+    // Returns what it creates.
     pub(crate) fn with_label(
         env: &'a CodeEnv<'a>,
         range: bindings::Range,
         args: Vec<WithRange<NormalArg>>,
         output: OutputCell,
         join: Option<Join>,
-        handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
+        body: &impl CheckCommand,
+        next: Option<&OnceCell<OutputCell>>,
     ) -> Result<Effects, TypeError> {
+        let handler = |flow: &mut Self| {
+            let checked = body.check(env, flow);
+            env.deposit_traps(flow.take_traps());
+            checked?;
+            flow.tail_call(next, range)
+        };
         Self::run(env, range, args, None, output, join, handler, false, false)
     }
 
@@ -307,7 +336,7 @@ impl<'a> Flow<'a> {
                 self.share_output(next);
                 self.mark_incomplete();
             }
-            None => self.add_soft_diagnostic(TypeError::missing_quit(range).into()),
+            None => self.add_soft_diagnostic(TypeErrorKind::MissingQuit.at(range).into()),
         }
         self.handle_void()
     }
@@ -447,7 +476,7 @@ impl<'a> Flow<'a> {
                 bindings,
                 Traps {
                     active: Some((var, None)),
-                    joins: HashMap::new(),
+                    ..Traps::default()
                 },
             ),
             None => (Bindings { bindings }, Traps::default()),
@@ -459,10 +488,12 @@ impl<'a> Flow<'a> {
                 output,
                 ty_var: RefCell::new(0),
                 reading_list: RefCell::new(reading_list),
+                unread_roles: RefCell::new(HashMap::new()),
                 ref_params: RefCell::new(ref_params),
                 known_names,
                 creates: RefCell::new(HashSet::new()),
                 writes: RefCell::new(HashSet::new()),
+                cursors: RefCell::new(HashMap::new()),
                 incomplete: std::cell::Cell::new(false),
             }),
             bindings: Some(bindings),
@@ -495,7 +526,7 @@ impl<'a> Flow<'a> {
                 unread.map(|(w, _)| (w.name.clone(), w.range)).collect()
             };
             for (name, range) in unread {
-                flow.add_soft_diagnostic(TypeError::unread_assignment(name, range).into());
+                flow.add_soft_diagnostic(flow.unread(name, range).into());
             }
             // The caller reads a by-reference parameter, and need not set an `Output` one, so the
             // body's own use says which mode fits: a `ByRef` written without its incoming value
@@ -505,12 +536,12 @@ impl<'a> Flow<'a> {
                 let (name, range) = (param.name.clone(), param.range);
                 let err = match (param.mode, param.needed, param.written, param.read) {
                     (RefMode::ByRef, false, true, _) if output_keyword => {
-                        TypeError::by_ref_never_read(name, range)
+                        TypeErrorKind::ByRefNeverRead { name }.at(range)
                     }
-                    (RefMode::ByRef, false, false, false) => {
-                        TypeError::unread_assignment(name, range)
+                    (RefMode::ByRef, false, false, false) => flow.unread(name, range),
+                    (RefMode::Output, true, true, _) => {
+                        TypeErrorKind::OutputReadFirst { name }.at(range)
                     }
-                    (RefMode::Output, true, true, _) => TypeError::output_read_first(name, range),
                     _ => continue,
                 };
                 flow.add_soft_diagnostic(err.into());
@@ -524,10 +555,10 @@ impl<'a> Flow<'a> {
                 .iter()
                 .find(|param| param.mode == RefMode::Output && !param.written)
         {
-            return Err(TypeError::output_never_assigned(
-                param.name.clone(),
-                param.range,
-            ));
+            return Err(TypeErrorKind::OutputNeverAssigned {
+                name: param.name.clone(),
+            }
+            .at(param.range));
         }
         drop(ref_params);
         let mut creates: Vec<String> = flow
@@ -560,13 +591,7 @@ impl<'a> Flow<'a> {
         // (`check_branch`) and carry on, and a leaked context would then trip its `merge`.
         let quits = std::mem::replace(&mut self.loop_context, outer).map(|context| context.quits);
         result?;
-        for WithRange {
-            it: bindings,
-            range,
-        } in quits.unwrap_or_default()
-        {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        self.merge_states(quits.unwrap_or_default())?;
         if optional {
             self.merge(before)?;
         }
@@ -583,17 +608,15 @@ impl<'a> Flow<'a> {
     ) -> Result<(), QuasiTypeError> {
         self.primed(env, &handler)?;
         // Run the body a second time, starting with union of all continue and the before
-        for bindings in self.loop_context.take().unwrap().continues {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        let continues = self.loop_context.take().unwrap().continues;
+        self.merge_states(continues.into_iter().map(|b| WithRange::new(b, range)))?;
         self.merge_bindings(before.bindings.clone())
             .with_range(|| range)?;
         self.loop_context = Some(LoopContext::new(range));
         handler(self)?;
         // A `Continue` heads back to the loop head just like falling off the end of the body.
-        for bindings in std::mem::take(&mut self.loop_context.as_mut().unwrap().continues) {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        let continues = std::mem::take(&mut self.loop_context.as_mut().unwrap().continues);
+        self.merge_states(continues.into_iter().map(|b| WithRange::new(b, range)))?;
         if infinite {
             self.bindings = None;
         }
@@ -620,17 +643,11 @@ impl<'a> Flow<'a> {
         let Some(context) = context else {
             return Ok(());
         };
-        for WithRange {
-            it: bindings,
-            range,
-        } in context.quits
-        {
-            self.merge_bindings(Some(bindings)).with_range(|| range)?;
-        }
+        self.merge_states(context.quits)?;
         if !context.continues.is_empty() {
             match &mut self.loop_context {
                 Some(outer) => outer.continues.extend(context.continues),
-                None => return Err(QuasiTypeError::continue_not_in_loop()),
+                None => return Err(TypeErrorKind::ContinueNotInLoop.into()),
             }
         }
         Ok(())
@@ -666,7 +683,7 @@ impl<'a> Flow<'a> {
     fn settle(&mut self, value: bool, report: bool) -> Flow<'a> {
         let mut false_branch = self.split();
         if report {
-            self.add_soft_diagnostic(QuasiTypeError::condition_always(value));
+            self.add_soft_diagnostic(TypeErrorKind::ConditionAlways { value }.into());
         }
         if value {
             false_branch.bindings = None;
@@ -714,6 +731,17 @@ impl<'a> Flow<'a> {
         }
     }
 
+    // Each of `states` (a loop's `Quit`s or `Continue`s) joins this path, at its own range.
+    fn merge_states(
+        &mut self,
+        states: impl IntoIterator<Item = WithRange<Bindings>>,
+    ) -> Result<(), TypeError> {
+        for WithRange { it, range } in states {
+            self.merge_bindings(Some(it)).with_range(|| range)?;
+        }
+        Ok(())
+    }
+
     fn merge_bindings(&mut self, that: Option<Bindings>) -> Result<(), QuasiTypeError> {
         let undeclared = self.undeclared();
         match &mut self.bindings {
@@ -738,9 +766,10 @@ impl<'a> Flow<'a> {
             }
             (None, None) => {}
             (Some(_), None) | (None, Some(_)) => {
-                return Err(QuasiTypeError::unimplemented(
-                    "Internal error: inconsistent loop context".to_string(),
-                ));
+                return Err(TypeErrorKind::Unimplemented {
+                    what: "Internal error: inconsistent loop context".to_string(),
+                }
+                .into());
             }
         }
         Ok(())
@@ -752,7 +781,7 @@ impl<'a> Flow<'a> {
             Some(context) => {
                 context.continues.push(bindings);
             }
-            None => return Err(QuasiTypeError::continue_not_in_loop()),
+            None => return Err(TypeErrorKind::ContinueNotInLoop.into()),
         }
         self.bindings = None;
         Ok(())
@@ -826,6 +855,11 @@ impl<'a> Flow<'a> {
         Ok(())
     }
 
+    // Whether a path still runs here: a `Quit`, `Return` or `Throw` on every way in ends it.
+    pub(crate) fn is_live(&self) -> bool {
+        self.bindings.is_some()
+    }
+
     pub(crate) fn handle_void(&mut self) -> Result<(), TypeError> {
         self.bindings = None;
         Ok(())
@@ -854,10 +888,11 @@ impl<'a> Flow<'a> {
     // it may also read what this body assigns, so the deferred reports can't be trusted.
     pub(crate) fn arm_trap(&mut self, var: TrapVar, label: String) -> Result<(), QuasiTypeError> {
         let bindings = self.bindings()?.clone();
+        let undeclared = self.undeclared();
         self.mark_incomplete();
         self.traps.active = Some((var, Some(label.clone())));
-        self.traps.joins.insert(label, Join { var, bindings });
-        Ok(())
+        let join = Join { var, bindings };
+        self.traps.join(label, join, self.shared.env, &undeclared)
     }
 
     // `var` is cleared or unknown. `$ZTRAP` takes precedence, so clearing `$ETRAP` under it
@@ -868,8 +903,27 @@ impl<'a> Flow<'a> {
         }
     }
 
+    // A `Try` block starts: an error anywhere in it enters its `Catch`, so this state and each one
+    // after it (`step_traps`) join into what the catch block is checked from.
+    pub(crate) fn enter_try(&mut self) -> Result<(), QuasiTypeError> {
+        let bindings = self.bindings()?.clone();
+        self.traps.catches.push(bindings);
+        Ok(())
+    }
+
+    // The `Try` block ended: the flow its `Catch` block is checked from.
+    pub(crate) fn leave_try(&mut self) -> Flow<'a> {
+        let caught = self.traps.catches.pop();
+        let mut catch = self.split();
+        catch.bindings = caught;
+        catch
+    }
+
     pub(crate) fn step_traps(&mut self) -> Result<(), QuasiTypeError> {
         let undeclared = self.undeclared();
+        for join in &mut self.traps.catches {
+            join.merge(self.bindings.clone(), self.shared.env, &undeclared)?;
+        }
         let Some((_, Some(label))) = &self.traps.active else {
             return Ok(());
         };
@@ -888,7 +942,7 @@ impl<'a> Flow<'a> {
     fn bindings(&mut self) -> Result<&mut Bindings, QuasiTypeError> {
         self.bindings
             .as_mut()
-            .ok_or_else(QuasiTypeError::unreachable)
+            .ok_or_else(|| TypeErrorKind::Unreachable.into())
     }
 
     fn lookup(&mut self, name: String) -> Result<&mut Binding, QuasiTypeError> {
@@ -922,26 +976,23 @@ impl<'a> Flow<'a> {
         // IRIS refuses to `New` a private variable of a procedure block (#1038), parameters
         // included, in every frame of the block; only a public one may be.
         if self.lookup(name.clone())?.private {
-            self.add_soft_diagnostic(QuasiTypeError::WithRange(
-                TypeError::new_in_procedure_block(name, range),
-            ));
+            self.add_soft_diagnostic(TypeErrorKind::NewInProcedureBlock { name }.at(range).into());
             return Ok(());
         }
         let uri = self.shared.env.uri().to_string();
         let binding = self.lookup(name.clone())?;
-        if let Some(previous) = binding.new_at {
-            return Err(QuasiTypeError::WithRange(TypeError::redundant_new(
-                name,
-                range,
-                Location::new(uri, previous),
-            )));
-        }
+        let previous = binding.new_at;
         binding.new = Some(true);
         binding.new_at = Some(range);
         // Like `Kill`: undefined until set again.
         binding.assigned = PowerTy::undefined();
         binding.assigned_at = HashSet::new();
         binding.subscript_assigned = None;
+        if let Some(previous) = previous {
+            self.add_soft_diagnostic(
+                TypeError::redundant_new(name, range, Location::new(uri, previous)).into(),
+            );
+        }
         Ok(())
     }
 
@@ -955,9 +1006,11 @@ impl<'a> Flow<'a> {
     ) -> Result<(), QuasiTypeError> {
         for name in keep {
             if !is_percent_variable(name) && self.lookup(name.clone())?.private {
-                self.add_soft_diagnostic(QuasiTypeError::WithRange(
-                    TypeError::new_in_procedure_block(name.clone(), range),
-                ));
+                self.add_soft_diagnostic(
+                    TypeErrorKind::NewInProcedureBlock { name: name.clone() }
+                        .at(range)
+                        .into(),
+                );
             }
         }
         for name in self.other_names(keep)? {
@@ -1017,6 +1070,22 @@ impl<'a> Flow<'a> {
     ) -> Result<(), QuasiTypeError> {
         self.lookup(name)?.declared = Some(ty);
         Ok(())
+    }
+
+    // An assignment at `range` that is information rather than a warning when never read.
+    pub(crate) fn note_unread_role(&self, name: String, range: bindings::Range, role: UnreadRole) {
+        self.shared
+            .unread_roles
+            .borrow_mut()
+            .insert(Written::new(name, range), role);
+    }
+
+    fn unread(&self, name: String, range: bindings::Range) -> TypeError {
+        let role = self.shared.unread_roles.borrow();
+        match role.get(&Written::new(name.clone(), range)) {
+            Some(role) => TypeErrorKind::UnreadRequired { role: *role, name }.at(range),
+            None => TypeErrorKind::UnreadAssignment { name }.at(range),
+        }
     }
 
     pub(crate) fn handle_set(
@@ -1121,7 +1190,26 @@ impl<'a> Flow<'a> {
     // site wants both. Ignores `local.subs`: a callee-mutated variable is invalidated wholesale
     // either way.
     pub(crate) fn invalidate(&mut self, local: Local, ty: PowerTy) -> Result<(), QuasiTypeError> {
-        self.note_ref_param(&local.name, RefUse::Ref)?;
+        self.invalidate_used(local, ty, RefUse::Ref)
+    }
+
+    // The same for a callee's `Output` parameter, which disclaims the prior value: no read of
+    // what came in, so handing on one of our own `Output` params is not A7781.
+    pub(crate) fn invalidate_output(
+        &mut self,
+        local: Local,
+        ty: PowerTy,
+    ) -> Result<(), QuasiTypeError> {
+        self.invalidate_used(local, ty, RefUse::Get)
+    }
+
+    fn invalidate_used(
+        &mut self,
+        local: Local,
+        ty: PowerTy,
+        used: RefUse,
+    ) -> Result<(), QuasiTypeError> {
+        self.note_ref_param(&local.name, used)?;
         self.note_ref_param(&local.name, RefUse::Set)?;
         self.read(&local.name)?;
         let binding = self.lookup(local.name.clone())?;
@@ -1153,15 +1241,10 @@ impl<'a> Flow<'a> {
     // touches `subscript_assigned`, regardless of whether the target itself was subscripted.
     pub(crate) fn handle_zkill(&mut self, local: Local) -> Result<(), QuasiTypeError> {
         self.note_ref_param(&local.name, RefUse::Set)?;
-        let binding = self.lookup(local.name)?;
-        binding.assigned = PowerTy::undefined();
-        binding.assigned_at = HashSet::new();
-        Ok(())
-    }
-
-    pub(crate) fn read_publics(&mut self) -> Result<(), QuasiTypeError> {
-        for name in self.bindings()?.publics() {
-            self.read(&name)?
+        if local.subs.is_empty() {
+            let binding = self.lookup(local.name)?;
+            binding.assigned = PowerTy::undefined();
+            binding.assigned_at = HashSet::new();
         }
         Ok(())
     }
@@ -1246,6 +1329,19 @@ impl<'a> Flow<'a> {
         })
     }
 
+    pub(crate) fn declare_cursor(&self, cursor: String, into: Vec<String>) {
+        self.shared.cursors.borrow_mut().insert(cursor, into);
+    }
+
+    pub(crate) fn cursor_into(&self, cursor: &str) -> Vec<String> {
+        self.shared
+            .cursors
+            .borrow()
+            .get(cursor)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub(crate) fn subscriptable(&mut self, name: &str) -> Result<bool, QuasiTypeError> {
         Ok(self.lookup(name.to_string())?.subscript_assigned.is_some())
     }
@@ -1324,11 +1420,12 @@ impl Binding {
             (Some(this_d), Some(that_d)) if this_d.it == that_d.it => Some(this_d),
             (Some(_), None) | (None, Some(_)) | (None, None) => None,
             (this_d, that_d) => {
-                return Err(QuasiTypeError::inconsistent_declaration(
-                    name.to_string(),
-                    this_d.map(|d| d.it),
-                    that_d.map(|d| d.it),
-                ));
+                return Err(TypeErrorKind::InconsistentDeclaration {
+                    name: name.to_string(),
+                    ty1: Declared(this_d.map(|d| d.it)),
+                    ty2: Declared(that_d.map(|d| d.it)),
+                }
+                .into());
             }
         };
         let new = match (self.new, that.new) {

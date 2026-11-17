@@ -15,13 +15,15 @@ pub struct Settings {
     /// declarations ascot downloads once; an IRIS instance, `scheme://user:pass@host:port`,
     /// queried via the Atelier REST API; the path of a declaration file written by
     /// `ascot declare`; or `none`, for no environment at all. Defaults to the newest release ascot
-    /// was built for.
-    pub iris: Option<String>,
-    /// IRIS namespace to query against. Only meaningful when `iris` is set. Defaults to `%SYS`
-    /// for a URL; for a declaration file it must match the namespace it declares.
+    /// was built for. A list of these is asked in order, and the first that holds a document
+    /// answers for it: `["latest", "http://..."]` reads the system classes from the snapshot and
+    /// your own from the instance.
+    pub iris: Option<IrisSetting>,
+    /// The namespace of a live instance, `%SYS` by default. A release names its own after its tag
+    /// and a declaration file carries its own, so giving one with either is an error.
     pub iris_namespace: Option<String>,
-    /// Workspace-wide style rules, e.g. `{"command": {"form": "Long"}, "command_do": {"form": "Short"}}` to
-    /// have every command keyword but `Do`'s written in full; `function` and `function_<name>` do
+    /// Workspace-wide style rules, e.g. `{"command": {"form": "long"}, "commandDo": {"form": "short"}}` to
+    /// have every command keyword but `Do`'s written in full; `function` and `function<Name>` do
     /// the same for intrinsic functions. Applies to every document. The keys are documented at
     /// https://github.com/intersystems-community/ascot/blob/main/STYLE.md. When the server shares
     /// the client's file system, the path of a JSON file holding the object is accepted too.
@@ -33,6 +35,29 @@ pub struct Settings {
     /// of them separated by spaces. For example `["off:A5579,A4043"]`, `"off:hint,information"`,
     /// or `["off:all", "on:A7095,A6851"]`.
     pub diagnostics: Option<Diagnostics>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum IrisSetting {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl IrisSetting {
+    /// The sources named, empty strings left out.
+    pub fn names(&self) -> Vec<&str> {
+        let names: Vec<&str> = match self {
+            IrisSetting::One(name) => vec![name.as_str()],
+            IrisSetting::Many(names) => names.iter().map(String::as_str).collect(),
+        };
+        names.into_iter().filter(|name| !name.is_empty()).collect()
+    }
+
+    /// `names` as a setting, none when there are none.
+    pub fn given(names: Vec<String>) -> Option<Self> {
+        (!names.is_empty()).then_some(IrisSetting::Many(names))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -54,11 +79,13 @@ impl Settings {
     pub fn overlay(self, over: Settings) -> Settings {
         let (style, diagnostics) = (over.has_style(), over.has_diagnostics());
         Settings {
-            iris: over.iris().map(str::to_string).or(self.iris),
-            iris_namespace: over
-                .iris_namespace()
-                .map(str::to_string)
-                .or(self.iris_namespace),
+            iris: over.iris().cloned().or(self.iris),
+            iris_namespace: over.iris_namespace().map(str::to_string).or_else(|| {
+                self.iris_namespace.filter(|_| {
+                    over.iris()
+                        .is_none_or(|iris| iris.names().iter().any(|name| name.contains("://")))
+                })
+            }),
             style: if style { over.style } else { self.style },
             diagnostics: if diagnostics {
                 over.diagnostics
@@ -68,8 +95,8 @@ impl Settings {
         }
     }
 
-    pub fn iris(&self) -> Option<&str> {
-        given(&self.iris)
+    pub fn iris(&self) -> Option<&IrisSetting> {
+        self.iris.as_ref().filter(|iris| !iris.names().is_empty())
     }
 
     pub fn iris_namespace(&self) -> Option<&str> {
@@ -93,10 +120,10 @@ impl Settings {
     }
 
     /// The environment `iris` names, the newest release's declarations when none is given; `none`
-    /// is no environment.
+    /// is no environment, and a list is asked in order.
     pub fn open_iris(&self) -> Result<Option<Box<dyn IrisContext>>, String> {
-        let name = self.iris().unwrap_or(iris::LATEST);
-        iris::open(name, self.iris_namespace()).map_err(|err| format!("iris {name}: {err}"))
+        let names = self.iris().map(IrisSetting::names).unwrap_or_default();
+        iris::open_all(&names, self.iris_namespace()).map_err(|err| format!("iris {err}"))
     }
 
     /// The style given, if any. A path is read only when the server shares the client's file
@@ -162,9 +189,26 @@ mod tests {
         let flags = parse(r#"{"iris": "none", "diagnostics": "off:A7095"}"#);
         let options = parse(r#"{"iris": "", "style": "", "diagnostics": ""}"#);
         let settings = flags.overlay(options);
-        assert_eq!(settings.iris(), Some("none"));
+        assert_eq!(settings.iris().unwrap().names(), ["none"]);
         assert!(!settings.has_style());
         assert_eq!(settings.filter().unwrap().0.len(), 1);
+    }
+
+    #[test]
+    fn a_namespace_stays_only_while_iris_stays_a_live_instance() {
+        let flags = parse(r#"{"iris": "http://u:p@h:1", "iris_namespace": "USER"}"#);
+        let to_url = flags
+            .clone()
+            .overlay(parse(r#"{"iris": "http://u:p@h:2"}"#));
+        assert_eq!(to_url.iris_namespace(), Some("USER"));
+        let to_release = flags.clone().overlay(parse(r#"{"iris": "latest"}"#));
+        assert_eq!(to_release.iris_namespace(), None);
+        let to_list = flags.overlay(parse(r#"{"iris": ["latest", "http://u:p@h:3"]}"#));
+        assert_eq!(to_list.iris_namespace(), Some("USER"));
+        assert_eq!(
+            to_list.iris().unwrap().names(),
+            ["latest", "http://u:p@h:3"]
+        );
     }
 
     #[test]
@@ -181,7 +225,7 @@ mod tests {
         let settings = parse(r#"{"style": "/no/such/style.json"}"#);
         assert!(settings.style(false).unwrap_err().contains("--shared-fs"));
         assert!(settings.style(true).is_err());
-        let object = parse(r#"{"style": {"command": {"form": "Long"}}}"#);
+        let object = parse(r#"{"style": {"command": {"form": "long"}}}"#);
         assert!(object.style(false).unwrap().is_some());
         assert!(parse(r#"{"style": {"commnad": {}}}"#).style(false).is_err());
     }

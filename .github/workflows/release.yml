@@ -86,10 +86,21 @@ jobs:
           path: '*.tar.gz'
           if-no-files-found: error
 
+  # The release's diagnostics reference, `docs/<version>`, which its binaries link to.
+  docs:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          version=${GITHUB_REF_NAME#v}
+          test -d "docs/$version" || { echo "docs/$version is missing: the release PR copies docs/unreleased there"; exit 1; }
+          diff -r docs/unreleased "docs/$version"
+
   # One job publishes the release, so the generated notes appear once and all assets land together.
   release:
     if: github.ref_type == 'tag'
-    needs: [ci, build, universal]
+    needs: [ci, build, universal, docs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8

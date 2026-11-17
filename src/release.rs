@@ -1,5 +1,5 @@
 //! A Community release's pre-built declarations as `--iris` names them (`2026.2`, `latest`,
-//! `irishealth-community:2026.2:HSLIB`), and where `~/.ascot` keeps the file; `prebuilt`
+//! `irishealth-community:2026.2:HSLIB`), and where `~/.ascot` keeps the file; `download`
 //! downloads it there.
 
 use std::path::PathBuf;

@@ -1268,6 +1268,7 @@
   "%Collection.AbstractArray": {
    "header": "Class %Collection.AbstractArray",
    "members": [
+    { "header": "Property ElementType As %RawString" },
     { "header": "Method Find(element As ..#ELEMENTTYPE, key As %String) As %String" },
     { "header": "Method GetPrevious(ByRef key As %String) As ..#ELEMENTTYPE" },
     { "header": "Method RemoveAt(key As %String) As ..#ELEMENTTYPE" },
@@ -1293,6 +1294,9 @@
   "%Collection.AbstractIterator": {
    "header": "Class %Collection.AbstractIterator",
    "members": [
+    { "header": "ClassMethod %ClassName(fullname As %Boolean = 0) As %String" },
+    { "header": "ClassMethod %Extends(isclass As %String) As %Integer" },
+    { "header": "ClassMethod %IsA(isclass As %String) As %Integer" },
     { "header": "Method GetAt(key As %RawString = \"\") As ..#ELEMENTTYPE" },
     { "header": "Method GetNext(ByRef key As %RawString) As ..#ELEMENTTYPE" },
     { "header": "Method Next(key As %RawString = \"\") As ..#ELEMENTTYPE" }
@@ -1304,6 +1308,7 @@
   "%Collection.AbstractList": {
    "header": "Class %Collection.AbstractList",
    "members": [
+    { "header": "Property ElementType As %RawString" },
     { "header": "Method Find(element As ..#ELEMENTTYPE, key As %Integer) As %String" },
     { "header": "Method GetAt(key As %Integer = 0) As ..#ELEMENTTYPE" },
     { "header": "Method GetNext(ByRef key As %Integer) As ..#ELEMENTTYPE" },
@@ -1312,7 +1317,8 @@
     { "header": "Method InsertAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" },
     { "header": "Method InsertOrdered(element As ..#ELEMENTTYPE) As %Status" },
     { "header": "Method RemoveAt(key As %Integer) As ..#ELEMENTTYPE" },
-    { "header": "Method SetAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" }
+    { "header": "Method SetAt(element As ..#ELEMENTTYPE, key As %Integer) As %Status" },
+    { "header": "Property Size As %Integer" }
    ],
    "generics": {
     "ELEMENTTYPE": "%RawString"
@@ -2645,6 +2651,7 @@
   "%Library.AbstractResultSet": {
    "header": "Class %Library.AbstractResultSet",
    "members": [
+    { "header": "Method %Next(Output sc As %Status) As %Integer" },
     { "header": "Method GetObject() As %Library.Any" }
    ]
   },
@@ -2792,6 +2799,12 @@
     { "header": "Method %Clone() As This" },
     { "header": "Method %DispatchGetProperty(propertyName As %String)" },
     { "header": "Method %DispatchSetProperty(propertyName As %String, value As %String)" },
+    { "header": "Method %Get(key As %DataType, default As %Any = \"\", type As %String = \"\") As %Any" },
+    { "header": "Method %GetTypeCodeOf(key As %DataType) As %Integer" },
+    { "header": "Method %IsDefined(key As %DataType) As %Boolean" },
+    { "header": "Method %IsModified() As %Boolean" },
+    { "header": "Method %Remove(key As %DataType) As %Any" },
+    { "header": "Method %Set(key As %DataType, value As %Any, type As %String = \"\") As This" },
     { "header": "ClassMethod %FromJSON(str As %RawString) As This" },
     { "header": "ClassMethod %FromJSONFile(filename As %RawString, TranslateTable As %String = \"UTF8\") As This" },
     { "header": "ClassMethod %FromJSONStats(str As %RawString, stats As %RawString) As This" },
@@ -2815,8 +2828,8 @@
     { "header": "Method %DispatchMethod(methodName As %String(PATTERN=\"1.E1(1\"\"Get\"\",1\"\"Set\"\")\"), args As %Any = \"\") As %Any" },
     { "header": "Method %Get(key As %Integer, default As %Any = \"\", type As %String = \"\") As %Any" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
-    { "header": "Method %Push(value As %Any, type As %String = \"\") As %DynamicAbstractObject" },
-    { "header": "Method %Set(key As %Integer, value As %Any, type As %String = \"\") As %DynamicAbstractObject" },
+    { "header": "Method %Push(value As %Any, type As %String = \"\") As This" },
+    { "header": "Method %Set(key As %Integer, value As %Any, type As %String = \"\") As This" },
     { "header": "Method add(value As %Any) As This" },
     { "header": "Method addAll(value As %AbstractSet) As This" },
     { "header": "ClassMethod fromObject(source = \"\", returnValue = \"\", laxMode As %Integer = 1) As This" }
@@ -2842,7 +2855,7 @@
     { "header": "Method %DispatchMethod(methodName As %String(PATTERN=\"1.E1(1\"\"Get\"\",1\"\"Set\"\")\"), args As %Any = \"\") As %Any" },
     { "header": "Method %Get(key As %String, default As %Any = \"\", type As %String = \"\") As %Any" },
     { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
-    { "header": "Method %Set(key As %String, value As %Any, type As %String = \"\") As %DynamicAbstractObject" }
+    { "header": "Method %Set(key As %String, value As %Any, type As %String = \"\") As This" }
    ]
   },
   "%Library.EnsembleMgr": {
@@ -2959,6 +2972,7 @@
   "%Library.GlobalEdit": {
    "header": "Class %Library.GlobalEdit",
    "members": [
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
     { "header": "ClassMethod GetGlobalSizeBySubscriptPrecise(Directory As %String, BlockSize As %String, MaxSize As %String, Block As %Integer, StartingNode As %String, EndingNode As %String, StartKey As %String, EndKey As %String = \"\", CalculateAverages As %Boolean = 0, Output Level As %String = 0, ByRef TotalNodes As %Integer = 0, ByRef TotalNodesPages As %Integer = 0)" },
     { "header": "ClassMethod Open(Name As %String, Directory As %String = {$zu(12,\"\")}, System As %String = \"\", concurrency As %Integer = -1, ByRef sc As %Status = {$$$OK}) As This" }
    ]
@@ -3030,6 +3044,12 @@
    "generics": {
     "ELEMENTTYPE": "%Library.Any"
    }
+  },
+  "%Library.MessageDictionary": {
+   "header": "Class %Library.MessageDictionary",
+   "members": [
+    { "header": "Method %OnNew(initvalue = \"\") As %Status" }
+   ]
   },
   "%Library.MethodDefinition": {
    "header": "Class %Library.MethodDefinition",
@@ -3121,11 +3141,12 @@
   "%Library.ResultSet": {
    "header": "Class %Library.ResultSet",
    "members": [
+    { "header": "Method %Next(Output sc As %Status) As %Integer" },
     { "header": "Method %OnNew(initvalue As %String = \"\") As %Status" },
     { "header": "ClassMethod %PrepareMetaData(pQueryId As %String(MAXLEN=\"\"), Output returnError As %SYSTEM.Error = \"\", importPackages As %RawString = \"\") As %ResultSet.MetaData" },
     { "header": "Method GetInfo(extoption = \"\") As %Status" },
     { "header": "Method GetObject() As %Library.Any" },
-    { "header": "Method Next(ByRef sc As %Status = \"\") As %Integer" }
+    { "header": "Method Next(Output sc As %Status) As %Integer" }
    ]
   },
   "%Library.Routine": {
@@ -3263,6 +3284,7 @@
   "%Library.Transaction": {
    "header": "Class %Library.Transaction",
    "members": [
+    { "header": "Method %OnNew(initvalue As %RawString = \"\") As %Status" },
     { "header": "Property object As %Library.Any [ MultiDimensional ]" }
    ]
   },

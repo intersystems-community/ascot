@@ -26,30 +26,6 @@ impl QuasiTypeError {
         }
     }
 
-    pub fn unimplemented(msg: String) -> Self {
-        TypeErrorKind::Unimplemented { what: msg }.into()
-    }
-
-    pub fn quit_exits() -> Self {
-        TypeErrorKind::QuitExits.into()
-    }
-
-    pub fn undefined_macro(name: String, suggestions: Vec<String>) -> Self {
-        TypeErrorKind::UndefinedMacro {
-            name,
-            suggestions: Suggestions(suggestions),
-        }
-        .into()
-    }
-
-    pub fn unreachable() -> Self {
-        TypeErrorKind::Unreachable.into()
-    }
-
-    pub(crate) fn condition_always(value: bool) -> Self {
-        TypeErrorKind::ConditionAlways { value }.into()
-    }
-
     pub(crate) fn return_nothing_for_x(wanted: Ty, declared_at: Location) -> Self {
         Self::WithoutRange(
             TypeErrorKind::ReturnNothingForX { wanted },
@@ -99,69 +75,6 @@ impl QuasiTypeError {
         self
     }
 
-    pub fn type_incompatible(source: Ty, target: Ty) -> Self {
-        TypeErrorKind::TypeIncompatible { source, target }.into()
-    }
-
-    pub fn assign_incompatible(name: String, source: Ty, target: Ty) -> Self {
-        TypeErrorKind::AssignIncompatible {
-            name,
-            source,
-            target,
-        }
-        .into()
-    }
-
-    pub fn pattern_mismatch(value: String, what: String) -> Self {
-        TypeErrorKind::PatternMismatch { value, what }.into()
-    }
-
-    pub fn downcast_from_abstract(name: String, source: Ty, target: Ty) -> Self {
-        TypeErrorKind::DowncastFromAbstract {
-            name,
-            source,
-            target,
-        }
-        .into()
-    }
-
-    pub fn type_downcast(source: Ty, target: Ty) -> Self {
-        TypeErrorKind::TypeDowncast { source, target }.into()
-    }
-
-    pub fn access_instance_only_member_from_class_context(name: String) -> Self {
-        TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name }.into()
-    }
-
-    pub fn node_without_subscripts(name: String) -> Self {
-        TypeErrorKind::NodeWithoutSubscripts { name }.into()
-    }
-
-    pub fn undocumented_argument(function: String, documented: usize, given: usize) -> Self {
-        TypeErrorKind::UndocumentedArgument {
-            function,
-            documented,
-            given,
-        }
-        .into()
-    }
-
-    pub fn not_multidimensional(name: String) -> Self {
-        TypeErrorKind::NotMultidimensional { name }.into()
-    }
-
-    pub fn parameter_is_constant(name: String) -> Self {
-        TypeErrorKind::ParameterIsConstant { name }.into()
-    }
-
-    pub fn not_in_class() -> Self {
-        TypeErrorKind::NotInClass.into()
-    }
-
-    pub fn require_private_variable(name: String) -> Self {
-        TypeErrorKind::RequirePrivateVariable { name }.into()
-    }
-
     pub fn too_few_arguments(next_arg: String, declared_at: Option<Location>) -> Self {
         Self::WithoutRange(
             TypeErrorKind::TooFewArguments { next_arg },
@@ -174,69 +87,6 @@ impl QuasiTypeError {
                 })
                 .unwrap_or_default(),
         )
-    }
-
-    pub fn too_many_arguments(takes: usize) -> Self {
-        TypeErrorKind::TooManyArguments {
-            takes: ArgCount(takes),
-        }
-        .into()
-    }
-
-    pub fn case_default_not_last() -> Self {
-        TypeErrorKind::CaseDefaultNotLast.into()
-    }
-
-    pub fn legacy_zutil(call: String, replacement: Option<&str>) -> Self {
-        TypeErrorKind::LegacyZUtil {
-            call,
-            replacement: Replacement(replacement.map(str::to_string)),
-        }
-        .into()
-    }
-
-    pub fn undocumented_zutil(call: String) -> Self {
-        TypeErrorKind::UndocumentedZUtil { call }.into()
-    }
-
-    pub fn undocumented_function(name: String) -> Self {
-        TypeErrorKind::UndocumentedFunction { name }.into()
-    }
-
-    pub fn unknown_function(name: String, suggestions: Vec<String>) -> Self {
-        TypeErrorKind::UnknownFunction {
-            name,
-            suggestions: Suggestions(suggestions),
-        }
-        .into()
-    }
-
-    pub fn unknown_special_variable(name: String, suggestions: Vec<String>) -> Self {
-        TypeErrorKind::UnknownSpecialVariable {
-            name,
-            suggestions: Suggestions(suggestions),
-        }
-        .into()
-    }
-
-    pub fn invalid_macro_argument(msg: impl Into<String>) -> Self {
-        TypeErrorKind::InvalidMacroArgument { reason: msg.into() }.into()
-    }
-
-    pub fn invalid_zstrip_action(action: String, reason: &'static str) -> Self {
-        TypeErrorKind::InvalidZStripAction { action, reason }.into()
-    }
-
-    pub fn number_implicitly_converted_to_string(value: String) -> Self {
-        TypeErrorKind::NumberImplicitlyConvertedToString { value }.into()
-    }
-
-    pub fn discarded_return_value(class: String) -> Self {
-        TypeErrorKind::DiscardedReturnValue { class }.into()
-    }
-
-    pub fn invalid_fnumber_format(format: String, reason: String) -> Self {
-        TypeErrorKind::InvalidFNumberFormat { format, reason }.into()
     }
 
     pub fn cannot_find_member(
@@ -252,100 +102,6 @@ impl QuasiTypeError {
             suggestions: Suggestions(suggestions),
         }
         .into()
-    }
-
-    pub fn user_command(name: String) -> Self {
-        TypeErrorKind::UserCommand { name }.into()
-    }
-
-    pub fn cannot_find_member_on_abstract(
-        cls: String,
-        mem: String,
-        suggestions: Vec<String>,
-    ) -> Self {
-        TypeErrorKind::CannotFindMemberOnAbstract {
-            cls,
-            mem,
-            suggestions: Suggestions(suggestions),
-        }
-        .into()
-    }
-
-    pub fn cannot_find_class(cls: String) -> Self {
-        TypeErrorKind::CannotFindClass { cls }.into()
-    }
-
-    pub fn super_without_method(method: String, cls: String) -> Self {
-        TypeErrorKind::SuperWithoutMethod { method, cls }.into()
-    }
-
-    pub fn cannot_find_label(label: String, routine: Option<String>) -> Self {
-        TypeErrorKind::CannotFindLabel {
-            label,
-            routine: InRoutine(routine),
-        }
-        .into()
-    }
-
-    pub fn goto_out_of_block(label: String) -> Self {
-        TypeErrorKind::GotoOutOfBlock { label }.into()
-    }
-
-    pub fn cannot_find_routine(routine: String) -> Self {
-        TypeErrorKind::CannotFindRoutine { routine }.into()
-    }
-
-    pub fn routine_not_on_iris(routine: String) -> Self {
-        TypeErrorKind::RoutineNotOnIris { routine }.into()
-    }
-
-    pub fn private_variable_not_allowed(function: String, name: String) -> Self {
-        TypeErrorKind::PrivateVariableNotAllowed { function, name }.into()
-    }
-
-    pub fn by_ref_argument_not_allowed(function: String) -> Self {
-        TypeErrorKind::ByRefArgumentNotAllowed { function }.into()
-    }
-
-    pub fn omitted_argument(function: String, position: usize) -> Self {
-        TypeErrorKind::OmittedArgument { function, position }.into()
-    }
-
-    pub fn set_vector_without_type() -> Self {
-        TypeErrorKind::SetVectorWithoutType.into()
-    }
-
-    pub fn routine_without_source(routine: String) -> Self {
-        TypeErrorKind::RoutineWithoutSource { routine }.into()
-    }
-
-    pub fn iris_lookup_failed(kind: crate::DocKind, name: String, reason: String) -> Self {
-        TypeErrorKind::IrisLookupFailed {
-            lookup: IrisLookup { kind, name },
-            reason,
-        }
-        .into()
-    }
-
-    pub fn continue_not_in_loop() -> Self {
-        TypeErrorKind::ContinueNotInLoop.into()
-    }
-
-    pub(crate) fn inconsistent_declaration(
-        name: String,
-        ty1: Option<Ty>,
-        ty2: Option<Ty>,
-    ) -> QuasiTypeError {
-        TypeErrorKind::InconsistentDeclaration {
-            name,
-            ty1: Declared(ty1),
-            ty2: Declared(ty2),
-        }
-        .into()
-    }
-
-    pub(crate) fn mixed_precedence() -> QuasiTypeError {
-        TypeErrorKind::MixedPrecedence.into()
     }
 }
 
@@ -378,8 +134,8 @@ impl<T> IntoTypeError<T> for Result<T, QuasiTypeError> {
     }
 }
 
-// Declares `TypeErrorKind` with each variant's diagnostic code next to it, so the code, the
-// variant's docs.rs anchor and the code shown in its docs all come from one place.
+// Declares `TypeErrorKind` with each variant's diagnostic code next to it, so the code, its
+// entry in the reference and the code shown in its docs all come from one place.
 // Each variant's `#[message]` is its message, with its fields in `{braces}`; its doc comment, if
 // any, explains it. `#[severity]` names a `DiagnosticSeverity` variant.
 macro_rules! type_error_kinds {
@@ -428,6 +184,10 @@ macro_rules! type_error_kinds {
             /// examples `tests/examples.rs` and `scripts/verify-examples.py` check.
             pub const DOCS: &[(&str, &str)] = &[$(($code, concat!($($doc, "\n",)*)),)*];
 
+            /// Every kind's code, severity and message template, for `reference::pages`.
+            pub const REFERENCE: &[(&str, DiagnosticSeverity, &str)] =
+                &[$(($code, DiagnosticSeverity::$severity, $message),)*];
+
             /// This kind's diagnostic code.
             pub fn code(&self) -> &'static str {
                 match self {
@@ -441,14 +201,13 @@ macro_rules! type_error_kinds {
                 }
             }
 
-            /// This kind's documentation on docs.rs, for the running version.
+            /// This kind's page in the reference of the running version, `docs/<version>` on
+            /// GitHub Pages, which `reference::pages` renders.
             pub fn code_description(&self) -> String {
-                let variant = match self {
-                    $(Self::$variant { .. } => stringify!($variant),)*
-                };
                 format!(
-                    "https://docs.rs/ascot/{}/ascot/check/enum.TypeErrorKind.html#variant.{variant}",
-                    env!("CARGO_PKG_VERSION")
+                    "https://intersystems-community.github.io/ascot/{}/{}",
+                    env!("CARGO_PKG_VERSION"),
+                    self.code()
                 )
             }
         }
@@ -495,9 +254,9 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A1054"]
-    #[severity = Hint]
-    #[message = "Cannot {lookup}"]
-    UnconfirmedClass { lookup: ClassLookup },
+    #[severity = Information]
+    #[message = "Cannot find class '{cls}' in the workspace or on the IRIS instance"]
+    UnconfirmedClass { cls: String },
     /// No class along the receiver's hierarchy declares the member, nor does IRIS generate one
     /// with that name; the nearest declared names follow as suggestions. IRIS refuses to compile
     /// `..Name` for a property or method the class doesn't have. Spell the member as the class
@@ -547,7 +306,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4718"]
     #[severity = Warning]
-    #[message = "Cannot find member '{mem}' in {cls}, an abstract class: the value is a subclass's, which may have it{suggestions}"]
+    #[message = "Cannot find member '{mem}' in {cls}, an abstract class whose subclass here may have it{suggestions}"]
     CannotFindMemberOnAbstract {
         cls: String,
         mem: String,
@@ -572,13 +331,70 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A9360"]
-    #[severity = Hint]
-    #[message = "Cannot confirm '{mem}' exists on {on}{cls} — its class hierarchy includes {unseen}"]
+    #[severity = Information]
+    #[message = "Cannot confirm '{mem}' exists on {on}{cls}: its hierarchy includes {unseen}"]
     UnconfirmedMember {
         cls: String,
         mem: String,
         on: SuperclassOf,
         unseen: UnseenClass,
+    },
+    /// A method of the same name as one a superclass declares overrides it and is reached through
+    /// the superclass's signature: a caller holding the superclass passes the formal arguments it
+    /// declares. An override that takes another number of them, or takes one in another mode (by
+    /// value, `ByRef`, `Output`), leaves that caller passing what the override does not take. IRIS
+    /// compiles and runs it all the same, dropping an extra argument and leaving a missing one
+    /// undefined. `%OnNew` is exempt: `%New` alone calls it, with `%New`'s own arguments, so each
+    /// class declares what it is built with. A formal argument or return of another class is
+    /// A3604.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.OverrideSignature Extends %Persistent
+    /// {
+    ///
+    /// Method %OnBeforeSave() As %Status //! A1841
+    /// {
+    ///     Return $$$OK
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A1841"]
+    #[severity = Warning]
+    #[message = "Method '{name}' overrides {cls}'s {difference}"]
+    OverrideSignature {
+        name: String,
+        cls: String,
+        difference: OverrideDifference,
+    },
+    /// An override's formal argument keeps the class the superclass declares, and its return class
+    /// is the superclass's or a subclass of it. A formal argument of a subclass of the declared
+    /// class takes less than a caller holding the superclass may pass, and IRIS passes it anyway,
+    /// untyped, so the override fails on it when it runs; one of any other class, a return class
+    /// that is neither the declared one nor a subclass, and no return class where one is declared,
+    /// IRIS refuses to compile (`ERROR #5478 Keyword signature error`). Two classes are the same
+    /// here when a value of each serves as the other, so the datatypes, which IRIS converts
+    /// between, are interchangeable where they are related; an untyped formal argument on either
+    /// side is not compared. `%OnNew` is exempt, as for A1841.
+    ///
+    /// ```objectscript rejected
+    /// Class Demo.OverrideRefused Extends %Persistent
+    /// {
+    ///
+    /// Method %OnBeforeSave(insert As %Boolean) As %String //! A3604
+    /// {
+    ///     Return insert
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A3604"]
+    #[severity = Error]
+    #[message = "Method '{name}' overrides {cls}'s but {difference}"]
+    OverrideRefused {
+        name: String,
+        cls: String,
+        difference: OverrideDifference,
     },
     /// `##super()` binds to the superclass's version of the enclosing method at compile time, and
     /// no superclass declares a method of that name; no `%DispatchMethod` and no same-named
@@ -598,7 +414,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7461"]
     #[severity = Error]
-    #[message = "Method '{method}' does not exist in any superclass of {cls}, so ##super has nothing to call"]
+    #[message = "No superclass of {cls} has a method '{method}' for ##super to call"]
     SuperWithoutMethod { method: String, cls: String },
     /// `$$Label` calls a label as a function, which a label is only when it declares a formal
     /// parameter list, even an empty `()`. `Do Label` reaches any label, but `$$` of a bare one
@@ -616,7 +432,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7604"]
     #[severity = Error]
-    #[message = "Label '{label}' has no formal parameter list, so $$ cannot call it (IRIS: <PARAMETER>); `{label}()` would make it a function"]
+    #[message = "Label '{label}' has no formal argument list, so $$ cannot call it (IRIS: <PARAMETER>)"]
     LabelNotAFunction { label: String },
     /// `Do Label`, `$$Label()`, `Goto Label` or `Set $ZTRAP = "Label"` names a label the routine
     /// or body doesn't declare, or `Label^Routine` names one that routine lacks. IRIS refuses to
@@ -638,8 +454,9 @@ type_error_kinds! {
     CannotFindLabel { label: String, routine: InRoutine },
     /// `Label+n` enters the label's code `n` lines down, where its formal list no longer applies,
     /// and which line that is depends on the compiled routine. ascot confirms the label exists but
-    /// leaves the call untyped and the offset unchecked; IRIS compiles and runs it. The code is not
-    /// in question, only how far ascot can check it; a call without the offset is checked in full.
+    /// leaves the call untyped and the offset unchecked; IRIS compiles and runs it, unless the line
+    /// is a procedure block's (A7217). The code is not in question, only how far ascot can check
+    /// it; a call without the offset is checked in full.
     ///
     /// ```objectscript compiles
     /// ROUTINE Demo.LabelOffset
@@ -652,9 +469,29 @@ type_error_kinds! {
     ///     Quit
     /// ```
     #[code = "A5213"]
-    #[severity = Hint]
-    #[message = "The label is confirmed, but not where its offset lands: the call is checked as untyped and the offset is not checked"]
+    #[severity = Information]
+    #[message = "The label exists, but ascot does not follow the offset, so the call is not checked"]
     LabelOffset,
+    /// `Label+n` names the line `n` lines after `Label`, and `Label() { }` is a procedure block,
+    /// whose lines only the label itself enters. IRIS compiles the call and raises `<NOLINE>` when
+    /// it runs. ascot flags every offset from a block's label, including one large enough to land
+    /// past its closing brace, which IRIS would run.
+    ///
+    /// ```objectscript raises=<NOLINE> Do Main^Demo.OffsetIntoBlock
+    /// ROUTINE Demo.OffsetIntoBlock
+    /// Main
+    ///     Do Report+1 //! A7217
+    ///     Quit
+    /// Report() public {
+    ///     Write "heading", !
+    ///     Write "details", !
+    ///     Quit
+    /// }
+    /// ```
+    #[code = "A7217"]
+    #[severity = Error]
+    #[message = "An offset cannot enter the procedure block at label '{label}' (IRIS: <NOLINE>)"]
+    OffsetIntoProcedureBlock { label: String },
     /// A `Goto` inside a procedure block, `Label() { }`, or a `$ZTRAP` set there, names one of
     /// the routine's labels outside the block, where a block's `Goto` cannot jump. IRIS refuses to
     /// compile the routine (`<NOLINE>`); `Do Label` may still call the label, or the block can
@@ -673,7 +510,7 @@ type_error_kinds! {
     /// ```
     #[code = "A1073"]
     #[severity = Error]
-    #[message = "Cannot GOTO label '{label}' from inside a procedure block: it is outside the block"]
+    #[message = "Label '{label}' is outside this procedure block, which GOTO cannot leave"]
     GotoOutOfBlock { label: String },
     /// IRIS takes a label inside a `{ }` block as a label of the whole body, which the braces hide;
     /// ascot reads it where it stands, so its checks of the lines after the label may not match
@@ -694,7 +531,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7408"]
     #[severity = Warning]
-    #[message = "Label '{label}' is inside nested braces; ascot only understands labels at the top level of a method or routine body, so the checks after it may be inaccurate or incomplete"]
+    #[message = "Label '{label}' is inside braces, where ascot does not follow labels, so the checks after it may be incomplete"]
     LabelInBlock { label: String },
     /// `Label^Routine` or `^Routine` names a routine that isn't open in the workspace, and there is
     /// no environment (`--iris none`) to look it up in, so the call is checked as untyped. IRIS
@@ -710,7 +547,7 @@ type_error_kinds! {
     /// ```
     #[code = "A3303"]
     #[severity = Warning]
-    #[message = "Cannot find routine '{routine}' in this workspace, with no IRIS connection to check it against"]
+    #[message = "Cannot find routine '{routine}' in the workspace; there is no IRIS environment to check against"]
     CannotFindRoutine { routine: String },
     /// `Label^Routine` or `^Routine` names a routine that is neither open in the workspace nor on
     /// the IRIS instance (or in its declarations), so the call can only fail: IRIS compiles it and
@@ -739,7 +576,7 @@ type_error_kinds! {
     ///     Quit
     /// ```
     #[code = "A3794"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "The labels of routine '{routine}' aren't known, so calls into it can't be checked precisely"]
     RoutineWithoutSource { routine: String },
     /// `#include Name` in a routine or method body, or `Include Name` before a class, names an
@@ -755,12 +592,12 @@ type_error_kinds! {
     /// ```
     #[code = "A7831"]
     #[severity = Error]
-    #[message = "Include file '{name}' is not defined in the current workspace"]
+    #[message = "Cannot find include file '{name}' in the workspace or on the IRIS instance"]
     CannotFindInclude { name: String },
     /// The condition of an `#if` or `#elseif` is not the literal `1` or `0` once its macros are
     /// expanded. IRIS evaluates any expression at compile time and compiles the branch it picks;
-    /// ascot does not evaluate, so it checks the first branch and skips the rest, which may not be
-    /// what IRIS compiles. The code is fine as far as IRIS is concerned; a macro that expands to
+    /// ascot does not evaluate, so it checks that directive's branch and skips the rest, which may
+    /// not be what IRIS compiles. The code is fine as far as IRIS is concerned; a macro that expands to
     /// `1` or `0` (`#define DEBUG 1`, `#if $$$DEBUG`) would make the choice visible to ascot.
     ///
     /// ```objectscript compiles
@@ -775,16 +612,20 @@ type_error_kinds! {
     ///     Quit
     /// ```
     #[code = "A5540"]
-    #[severity = Hint]
-    #[message = "Cannot decide `#if {condition}`{expansion} at compile time, so its first branch is assumed"]
-    UndecidedIf { condition: String, expansion: Expansion },
+    #[severity = Information]
+    #[message = "Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken"]
+    UndecidedIf {
+        directive: &'static str,
+        condition: String,
+        expansion: Expansion,
+    },
     /// The IRIS connection failed to answer a lookup: a class, routine or include file the
     /// workspace doesn't hold was asked of the instance, and the request itself failed (the
     /// instance is down, the credentials are refused), as opposed to the instance not having it.
     /// The name is taken to exist and nothing about it is checked. The code may well be fine;
     /// restore the connection, or check without one (`--iris none`), for a verdict on it.
     #[code = "A4471"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "Cannot look up {lookup} on the IRIS instance ({reason}), so it is taken on trust"]
     IrisLookupFailed { lookup: IrisLookup, reason: String },
     /// A macro's body invokes the macro itself, directly or through other macros, so expanding it
@@ -853,10 +694,11 @@ type_error_kinds! {
     /// ```
     #[code = "A3485"]
     #[severity = Error]
-    #[message = "{function} can't take '{name}', which is private to this procedure block"]
+    #[message = "{function} can't take the private variable '{name}'"]
     PrivateVariableNotAllowed { function: String, name: String },
-    /// `$ZF(-3)` has no by-reference arguments: a `.x` in the call is a syntax error IRIS refuses
-    /// to compile. Pass the value itself and take what the function returns.
+    /// `$ZF(-3)`, `$ZF(-5)` and `$ZF(-6)` have no by-reference arguments: a `.x` in the call is a
+    /// syntax error IRIS refuses to compile. Pass the value itself and take what the function
+    /// returns.
     ///
     /// ```objectscript
     /// Class Demo.ByRefArgumentNotAllowed
@@ -910,8 +752,8 @@ type_error_kinds! {
     /// ```
     #[code = "A4652"]
     #[severity = Error]
-    #[message = "{function} takes only a plain local variable as its handle"]
-    HandleNotALocal { function: String },
+    #[message = "$ZCONVERT's fourth argument must be an unsubscripted local variable"]
+    HandleNotALocal,
     /// `Set $VECTOR(v, position) = value` leaves out the element type, which the settable form
     /// always takes as its third argument: IRIS refuses to compile it, a vector that already
     /// exists included. Write `$VECTOR(v, position, "integer")`, or whichever type the vector
@@ -953,7 +795,7 @@ type_error_kinds! {
     /// ```
     #[code = "A8914"]
     #[severity = Error]
-    #[message = "Cannot reference instance-only member '{name}' in a class method"]
+    #[message = "Cannot reference instance member '{name}' from a class method"]
     AccessInstanceOnlyMemberFromClassContext { name: String },
     /// A method's or label's formal parameter list declares the same name twice, so one parameter
     /// would shadow the other. IRIS refuses to compile it: `#1050 Duplicate variable names in
@@ -991,7 +833,7 @@ type_error_kinds! {
     /// ```
     #[code = "A1817"]
     #[severity = Warning]
-    #[message = "Variable '{name}' is already NEW'd; this NEW resets it to undefined, discarding its current value — `Kill {name}` says that explicitly"]
+    #[message = "Variable '{name}' is already NEW'd; this NEW discards its current value"]
     RedundantNew { name: String },
     /// `New` names a variable private to the procedure block: a parameter, or a local the body
     /// creates, which the block already scopes to itself on entry. IRIS refuses to compile it:
@@ -1013,7 +855,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6866"]
     #[severity = Error]
-    #[message = "Cannot NEW the private variable '{name}' in a procedure block, where every local variable is already NEW'd on entry"]
+    #[message = "Cannot NEW the private variable '{name}' in a procedure block"]
     NewInProcedureBlock { name: String },
     /// An entry in the class's `[ ... ]` keyword list is no class keyword as written: misspelled,
     /// or a member's keyword in the wrong list. IRIS compiles the class without the entry, so what
@@ -1051,7 +893,7 @@ type_error_kinds! {
     /// ```
     #[code = "A5431"]
     #[severity = Error]
-    #[message = "A Caché Direct callback, `_name` or `_form!control`, raises <_CALLBACK SYNTAX> in IRIS, which has no client to call"]
+    #[message = "A Caché Direct callback raises <_CALLBACK SYNTAX>: IRIS has no client to call"]
     CacheDirectCallback,
     /// A form the documentation doesn't give, which IRIS compiles all the same: `list Of` before a
     /// relationship's class, which it ignores, or an empty entry in `Extends`, `Import` or
@@ -1154,12 +996,13 @@ type_error_kinds! {
     /// ```
     #[code = "A7155"]
     #[severity = Warning]
-    #[message = "ObjectScript has no operator precedence and evaluates strictly left-to-right; this may not compute what you expect"]
+    #[message = "ObjectScript evaluates operators strictly left to right, without precedence; this may not compute what you expect"]
     MixedPrecedence,
     /// A `Set` whose value no path reads before the variable is assigned again, killed or out of
-    /// scope; a parameter the body never reads is reported the same way, its value being the
-    /// caller's assignment. IRIS compiles and runs the code; the assignment is dead. Delete it, or
-    /// read the variable where it was meant to be read.
+    /// scope; a formal argument the body never reads is reported the same way, its value being
+    /// the caller's assignment. IRIS compiles and runs the code; the assignment is dead. Delete it,
+    /// or read the variable where it was meant to be read. A `Catch` variable, or a formal argument
+    /// of a method that overrides one, is A4269 instead: neither can go.
     ///
     /// ```objectscript compiles
     /// Class Demo.UnreadAssignment
@@ -1177,6 +1020,50 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Variable '{name}' is assigned but never read"]
     UnreadAssignment { name: String },
+    /// An input host variable of embedded SQL, `:name` anywhere but an `INTO` list, that no path
+    /// assigns before the statement. IRIS compiles and runs the code, and the documentation says
+    /// what it does: an undefined input host variable is read as SQL NULL, so a `WHERE Name =
+    /// :name` matches nothing and a `VALUES (:name)` stores NULL. Assign the variable first, or
+    /// use `NULL` when NULL is meant.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UndefinedHostVariable
+    /// {
+    ///
+    /// ClassMethod Description() As %String
+    /// {
+    ///     &sql(SELECT Description INTO :description FROM %Dictionary.ClassDefinition WHERE Name = :className) //! A6627
+    ///     Quit description
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A6627"]
+    #[severity = Warning]
+    #[message = "Host variable ':{name}' is undefined here; embedded SQL reads it as NULL"]
+    UndefinedHostVariable { name: String },
+    /// An assignment the body never reads that it cannot drop: the variable a `Catch` names,
+    /// which the documentation prefers to a bare `Catch {`, or a formal argument of a method that
+    /// overrides one, whose signature it keeps (A1841). IRIS compiles and runs the code; IRIS's own
+    /// classes leave a `Catch` variable unread in most of their handlers. Nothing needs changing;
+    /// the information says the value goes unused.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UnreadRequired Extends %Persistent
+    /// {
+    ///
+    /// Method %OnBeforeSave(insert As %Boolean) As %Status //! A4269
+    /// {
+    ///     Try { Set ^Demo("saved") = $Horolog } Catch ex { Return $$$OK } //! A4269
+    ///     Return $$$OK
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A4269"]
+    #[severity = Information]
+    #[message = "{role} '{name}' is never read"]
+    UnreadRequired { role: UnreadRole, name: String },
     /// An `Output` parameter no path of the body assigns. The caller passes a variable to receive a
     /// value and gets none, so its first read of the variable raises `<UNDEFINED>`; IRIS compiles
     /// the method all the same, since `Output` only documents intent. Assign the parameter on every
@@ -1195,7 +1082,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4476"]
     #[severity = Warning]
-    #[message = "Output parameter '{name}' is never assigned; its caller will get an undefined value"]
+    #[message = "Output formal argument '{name}' is never assigned"]
     OutputNeverAssigned { name: String },
     /// A `ByRef` parameter whose incoming value no path reads before writing it: the body only
     /// produces the value, so the caller need not pass one, which is what `Output` declares and
@@ -1395,7 +1282,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6274"]
     #[severity = Warning]
-    #[message = "Assigning {source}, an abstract class, to '{name}' declared as {target}: the value is a subclass's, which may be one"]
+    #[message = "Assigning {source}, an abstract class, to '{name}' declared as {target}"]
     DowncastFromAbstract {
         name: String,
         source: Ty,
@@ -1431,7 +1318,7 @@ type_error_kinds! {
     /// ```
     #[code = "A8139"]
     #[severity = Warning]
-    #[message = "{source} is abstract, so this value is a subclass's, which may be the {target} it is taken for"]
+    #[message = "{source} is abstract, so this value may not be the {target} it is taken for"]
     TypeDowncast { source: Ty, target: Ty },
     /// Every path to this statement has already quit, returned or thrown, so it never runs. IRIS
     /// compiles it all the same. Delete the statement, or move it before the exit that precedes
@@ -1516,7 +1403,7 @@ type_error_kinds! {
     /// ```
     #[code = "A3942"]
     #[severity = Error]
-    #[message = "Property '{name}' is MultiDimensional, so `{name}()` names no node: give it a subscript"]
+    #[message = "MultiDimensional property '{name}' takes a subscript, not empty parentheses"]
     NodeWithoutSubscripts { name: String },
     /// A function is called with more arguments than its documentation names: `$ZF(-1, command)`
     /// with a third, `$ZBITSET` or `$VIEW` in mode -7 with a fourth. IRIS compiles and runs the call
@@ -1555,7 +1442,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4418"]
     #[severity = Warning]
-    #[message = "{call} {replacement}"]
+    #[message = "{call} is a legacy $ZUTIL call{replacement}"]
     LegacyZUtil { call: String, replacement: Replacement },
     /// The leading literal arguments of this `$ZUTIL` (`$ZU`) call match nothing in the
     /// "Replacements for ObjectScript $ZUTIL Functions" list, and IRIS documents no `$ZUTIL`
@@ -1595,7 +1482,7 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A5362"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "'{name}' is a user-defined command (^%ZLANGC00), so the call is not checked"]
     UserCommand { name: String },
     /// A `$Z` function IRIS compiles and runs but does not document (`$ZOBJEXPORT`, `$ZOBJVAL`,
@@ -1615,7 +1502,7 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A6037"]
-    #[severity = Hint]
+    #[severity = Information]
     #[message = "${name} is not documented for IRIS, so the call is not checked"]
     UndocumentedFunction { name: String },
     /// `..#NAME(args)` calls the class parameter `NAME`, or `Set ..#NAME = v` assigns it, and a
@@ -1662,7 +1549,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6705"]
     #[severity = Warning]
-    #[message = "Too few arguments: '{next_arg}' is required. Only arguments with default values and `Output` arguments are considered optional."]
+    #[message = "Too few arguments: '{next_arg}' is required"]
     TooFewArguments { next_arg: String },
     /// The call passes more arguments than the callee declares, and the callee has no `args...`
     /// to take the rest. IRIS compiles the call and raises `<PARAMETER>` when it runs. The first
@@ -1687,7 +1574,7 @@ type_error_kinds! {
     /// ```
     #[code = "A5523"]
     #[severity = Error]
-    #[message = "Too many arguments: the callee takes {takes}, and this one is extra"]
+    #[message = "Too many arguments: the callee takes {takes}"]
     TooManyArguments { takes: ArgCount },
     /// `$CASE` takes its `:default` as the last argument only; an arm after it is a syntax error
     /// IRIS refuses to compile. Move the `:default` to the end.
@@ -1705,7 +1592,7 @@ type_error_kinds! {
     /// ```
     #[code = "A7139"]
     #[severity = Error]
-    #[message = "$CASE's `:default` must be its last argument"]
+    #[message = "Only $CASE's last argument may omit the value before its colon"]
     CaseDefaultNotLast,
     /// A `$` function with a name ObjectScript has no function for, usually a misspelling; the
     /// nearest names follow as suggestions. IRIS refuses to compile the call.
@@ -1818,7 +1705,8 @@ type_error_kinds! {
     /// callee's report of whether it worked: the caller goes on as if it had. IRIS compiles and
     /// runs the call. Where the outcome matters, `Set sc = ..Save(...)` followed by `$$$ISERR(sc)`,
     /// or `If ..Save(...)`, puts the result to use; where it does not, the `Do` is a choice, not a
-    /// mistake.
+    /// mistake, and the usual one: IRIS's own classes write streams and collections this way, so
+    /// this is information, not a warning.
     ///
     /// ```objectscript compiles
     /// Class Demo.DiscardedReturnValue
@@ -1838,21 +1726,23 @@ type_error_kinds! {
     /// }
     /// ```
     #[code = "A4556"]
-    #[severity = Warning]
-    #[message = "This call returns {class}, which Do discards -- consider Set to capture it, or checking it directly"]
+    #[severity = Information]
+    #[message = "Do discards the {class} this call returns"]
     DiscardedReturnValue { class: String },
-    /// A command or intrinsic function keyword spelled in a form or case the style's `command` or
-    /// `function` rule, or a per-keyword `command_<name>` or `function_<name>`, doesn't allow: `s`
-    /// under `{"form":"Long"}`, `SET` under `{"case":"Pascal"}`. IRIS compiles every spelling alike;
-    /// write the one the message gives.
+    /// A command, intrinsic function or system variable keyword spelled in a form or case the
+    /// style's `command`, `function` or `variable` rule, or a per-keyword `command<Name>`,
+    /// `function<Name>` or `variable<Name>`, doesn't allow: `s` under `{"form":"long"}`, `SET`
+    /// under `{"case":"pascal"}`. IRIS compiles every spelling alike; write the one the message
+    /// gives.
     ///
-    /// ```objectscript style={"command":{"form":"Long","case":"Pascal"},"function":{"form":"Long","case":"Pascal"}}
+    /// ```objectscript style={"command":{"form":"long","case":"pascal"},"function":{"form":"long","case":"pascal"},"variable":{"form":"long","case":"upper"}}
     /// Class Demo.KeywordStyle
     /// {
     ///
     /// ClassMethod FirstName(fullName As %String) As %String
     /// {
     ///     s first = $Piece(fullName, " ") //! S2839
+    ///     Set first = first _ $h //! S2839
     ///     Quit $zcvt(first, "U") //! S2839
     /// }
     ///
@@ -1866,11 +1756,11 @@ type_error_kinds! {
         found: String,
         expected: String,
     },
-    /// Under `{"allow_quit_for_return":false}`, a `Quit` that leaves the method or procedure, with no
+    /// Under `{"allowQuitForReturn":false}`, a `Quit` that leaves the method or procedure, with no
     /// loop or `Try` block around it to leave instead. There it does what `Return` does, and IRIS runs
     /// either; write `Return`, keeping `Quit` for loops and `Try` blocks.
     ///
-    /// ```objectscript style={"allow_quit_for_return":false}
+    /// ```objectscript style={"allowQuitForReturn":false}
     /// Class Demo.QuitExits
     /// {
     ///
@@ -1890,12 +1780,12 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Use `Return` to leave a method or procedure; `Quit` is for loops and `Try` blocks"]
     QuitExits,
-    /// Under `{"command":{"allow_postcondition_on_argument":false}}` (or `command_do`, `command_goto`,
-    /// `command_xecute` for one command), a postconditional on an argument of `Do`, `Goto` or
+    /// Under `{"command":{"allowPostconditionOnArgument":false}}` (or `commandDo`, `commandGoto`,
+    /// `commandXecute` for one command), a postconditional on an argument of `Do`, `Goto` or
     /// `Xecute`, `Do ^R:x`, rather than on the keyword, `Do:x ^R`. IRIS accepts both, and with a
     /// single argument they mean the same; move the condition onto the keyword.
     ///
-    /// ```objectscript style={"command":{"allow_postcondition_on_argument":false}}
+    /// ```objectscript style={"command":{"allowPostconditionOnArgument":false}}
     /// Class Demo.ArgumentPostconditional
     /// {
     ///
@@ -1916,11 +1806,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Put the postconditional on the command keyword, not on its argument"]
     ArgumentPostconditional,
-    /// Under `{"condition_and":"DoubleAmpersand"}`, the conditions of an `If`, `ElseIf` or `While`
-    /// joined by a comma, `If a, b`; under `"Comma"`, ones joined by `&&`. To IRIS the two mean the
+    /// Under `{"conditionAnd":"double-ampersand"}`, the conditions of an `If`, `ElseIf` or `While`
+    /// joined by a comma, `If a, b`; under `"comma"`, ones joined by `&&`. To IRIS the two mean the
     /// same; join them as the message says.
     ///
-    /// ```objectscript style={"condition_and":"DoubleAmpersand"}
+    /// ```objectscript style={"conditionAnd":"double-ampersand"}
     /// Class Demo.AndOperator
     /// {
     ///
@@ -1936,11 +1826,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Join these conditions with `{wanted}`"]
     AndOperator { wanted: crate::bindings::AndOperator },
-    /// Under `{"max_new_per_block":N}`, each `New` past the Nth in one method body, label body or
+    /// Under `{"maxNewPerBlock":N}`, each `New` past the Nth in one method body, label body or
     /// `{ }` block; a nested block counts its own. IRIS runs any number of them; gather the names into
     /// one `New a, b`.
     ///
-    /// ```objectscript style={"max_new_per_block":1}
+    /// ```objectscript style={"maxNewPerBlock":1}
     /// ROUTINE Demo.NewPerBlock
     /// Report
     ///     New count
@@ -1953,11 +1843,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "The style allows {max} `New` per block; this is one more"]
     NewPerBlock { max: u32 },
-    /// Under `{"max_commands_per_line":N}`, each command past the Nth on one line; a brace-less `If`,
+    /// Under `{"maxCommandsPerLine":N}`, each command past the Nth on one line; a brace-less `If`,
     /// `Else` or `For` and the commands it governs count as one. IRIS reads the line as it would the
     /// commands on separate lines; give each its own.
     ///
-    /// ```objectscript style={"max_commands_per_line":1}
+    /// ```objectscript style={"maxCommandsPerLine":1}
     /// Class Demo.CommandsPerLine
     /// {
     ///
@@ -1972,12 +1862,12 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "The style allows {max} command(s) per line; this is one more"]
     CommandsPerLine { max: u32 },
-    /// Under `{"require_description":{"min_body_lines":N}}`, a method, or a routine label with a
+    /// Under `{"requireDescription":{"minBodyLines":N}}`, a method, or a routine label with a
     /// parameter list, whose body spans at least N lines and has no description: `///` lines right
     /// above a method, comment lines right above a label. Private methods are exempt. IRIS compiles
     /// it with or without; say what it does above it.
     ///
-    /// ```objectscript style={"require_description":{"min_body_lines":2}}
+    /// ```objectscript style={"requireDescription":{"minBodyLines":2}}
     /// Class Demo.Undescribed
     /// {
     ///
@@ -1998,13 +1888,13 @@ type_error_kinds! {
     /// ```
     #[code = "S7126"]
     #[severity = Warning]
-    #[message = "Describe this {kind}: its body is {lines} lines"]
+    #[message = "Describe this {kind}: its body is {lines} line(s)"]
     Undescribed { kind: String, lines: usize },
-    /// Under `{"open_brace":{"newline_before":false}}`, a block's `{` on a line of its own below its
+    /// Under `{"openBrace":{"newlineBefore":false}}`, a block's `{` on a line of its own below its
     /// command; under `true`, one on the command's line, `If x {`. IRIS accepts either layout; move
     /// the brace.
     ///
-    /// ```objectscript style={"open_brace":{"newline_before":false}}
+    /// ```objectscript style={"openBrace":{"newlineBefore":false}}
     /// Class Demo.OpenBraceBreak
     /// {
     ///
@@ -2023,11 +1913,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Put {wanted} before `{{`"]
     OpenBraceBreak { wanted: Break },
-    /// Under `{"open_brace":{"newline_after":true}}`, a block's first command on the line of its `{`,
+    /// Under `{"openBrace":{"newlineAfter":true}}`, a block's first command on the line of its `{`,
     /// `If x { Set y = 1`; under `false`, one on the next line. IRIS accepts either layout; break the
     /// line after the brace, or join it.
     ///
-    /// ```objectscript style={"open_brace":{"newline_after":true}}
+    /// ```objectscript style={"openBrace":{"newlineAfter":true}}
     /// Class Demo.BodyBreak
     /// {
     ///
@@ -2043,11 +1933,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Put {wanted} after `{{`"]
     BodyBreak { wanted: Break },
-    /// Under `{"close_brace":{"newline_before":true}}`, a block's `}` on the line of its last command,
+    /// Under `{"closeBrace":{"newlineBefore":true}}`, a block's `}` on the line of its last command,
     /// `Set y = 1 }`; under `false`, one on a line of its own. IRIS accepts either layout; move the
     /// brace.
     ///
-    /// ```objectscript style={"close_brace":{"newline_before":true}}
+    /// ```objectscript style={"closeBrace":{"newlineBefore":true}}
     /// Class Demo.CloseBraceBreak
     /// {
     ///
@@ -2064,11 +1954,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Put {wanted} before `}}`"]
     CloseBraceBreak { wanted: Break },
-    /// Under `{"close_brace":{"newline_after":false}}`, an `Else`, `ElseIf` or `Catch` on the line
+    /// Under `{"closeBrace":{"newlineAfter":false}}`, an `Else`, `ElseIf` or `Catch` on the line
     /// below the `}` it follows; under `true`, one on the brace's line, `} Else {`. IRIS accepts either
     /// layout; move the keyword.
     ///
-    /// ```objectscript style={"close_brace":{"newline_after":false}}
+    /// ```objectscript style={"closeBrace":{"newlineAfter":false}}
     /// Class Demo.ChainBreak
     /// {
     ///
@@ -2091,12 +1981,12 @@ type_error_kinds! {
         keyword: &'static str,
         wanted: Break,
     },
-    /// Under `{"space_after_comma":true}`, a list's comma with no space after it or one before,
+    /// Under `{"spaceAfterComma":true}`, a list's comma with no space after it or one before,
     /// `$ListBuild(a,b)`; under `false`, one with a space on either side. A comma whose whitespace holds
     /// a line break, and the two around an omitted argument, are left alone. IRIS ignores the
     /// spacing; respace the comma.
     ///
-    /// ```objectscript style={"space_after_comma":true}
+    /// ```objectscript style={"spaceAfterComma":true}
     /// Class Demo.CommaSpacing
     /// {
     ///
@@ -2109,7 +1999,7 @@ type_error_kinds! {
     /// ```
     #[code = "S5583"]
     #[severity = Warning]
-    #[message = "Put {wanted}"]
+    #[message = "This comma wants {wanted}"]
     CommaSpacing { wanted: CommaSpace },
     /// `$FNUMBER`'s format is a string of the codes `+ - , . D E G L N O P T`, in any combination
     /// but the pairs IRIS forbids (such as `,` with `.`); this constant format has a character
@@ -2150,7 +2040,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6781"]
     #[severity = Error]
-    #[message = "Expected return value of type '{wanted}' but got nothing"]
+    #[message = "Returns nothing where '{wanted}' is declared"]
     ReturnNothingForX { wanted: Ty },
     /// The method declares no return type, and this `Quit` or `Return` carries a value: a caller
     /// that asks for one gets it, but nothing in the signature says so. IRIS compiles and runs
@@ -2170,7 +2060,7 @@ type_error_kinds! {
     /// ```
     #[code = "A8997"]
     #[severity = Warning]
-    #[message = "Unexpected return value of type '{actual}'"]
+    #[message = "Returns a '{actual}' where no return type is declared"]
     ReturnXForNothing { actual: Ty },
     /// This `Quit` carries a value inside a `For`, `While`, `Do ... While`, `Try` or `Catch`
     /// block, which it leaves instead of the method, so it has no caller to hand the value to.
@@ -2196,17 +2086,51 @@ type_error_kinds! {
     /// ```
     #[code = "A4963"]
     #[severity = Error]
-    #[message = "Quit with {actual} inside control structure"]
+    #[message = "Quit inside a loop or Try block takes no value; this one carries {actual}"]
     QuitXInControl { actual: Ty },
     /// The argument and the parameter disagree on by-reference passing: a plain argument where
-    /// the parameter is `ByRef` or `Output`, so the callee's assignments never reach the caller,
-    /// or a dotted one where the parameter is neither, so they do without the signature saying
-    /// so. Only the caller's `.` passes by reference; `ByRef` and `Output` just declare the
-    /// intent, so IRIS compiles and runs either way. Add or drop the `.`, or correct the
-    /// declaration.
+    /// the parameter is `Output`, so the callee's result never reaches the caller, or a dotted one
+    /// where the parameter is neither `ByRef` nor `Output`, so the callee's assignments do without
+    /// the signature saying so. Only the caller's `.` passes by reference; `ByRef` and `Output`
+    /// just declare the intent, so IRIS compiles and runs either way. Add or drop the `.`, or
+    /// correct the declaration. A plain variable where `ByRef` is declared is A6204, an
+    /// Information, since it is as often meant as not.
     ///
     /// ```objectscript compiles
     /// Class Demo.MismatchArgumentAndArgumentMode
+    /// {
+    ///
+    /// ClassMethod Next(Output value As %Integer)
+    /// {
+    ///     Set value = 1
+    /// }
+    ///
+    /// ClassMethod Call() As %Integer
+    /// {
+    ///     Set value = 0
+    ///     Do ..Next(value) //! A5579
+    ///     Quit value
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A5579"]
+    #[severity = Warning]
+    #[message = "Passing {actual} argument to '{name}', which is {wanted} formal argument"]
+    MismatchArgumentAndArgumentMode {
+        name: String,
+        wanted: Mode,
+        actual: Mode,
+    },
+    /// A plain variable where the parameter is `ByRef`: the callee gets a copy, and whatever it
+    /// assigns to the parameter stays with it. IRIS compiles and runs the call. As often as not
+    /// this is meant: `ByRef` also marks a parameter that may take an array, `%Prepare`'s
+    /// statement text or `Read`'s length, and an input passed by value loses nothing. It is a
+    /// mistake only when the caller reads the variable afterwards for the callee's result; a `.`
+    /// before the argument passes it by reference.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.ByValueToByRef
     /// {
     ///
     /// ClassMethod Increment(ByRef counter As %Integer)
@@ -2217,20 +2141,16 @@ type_error_kinds! {
     /// ClassMethod Call() As %Integer
     /// {
     ///     Set counter = 0
-    ///     Do ..Increment(counter) //! A5579
+    ///     Do ..Increment(counter) //! A6204
     ///     Quit counter
     /// }
     ///
     /// }
     /// ```
-    #[code = "A5579"]
-    #[severity = Warning]
-    #[message = "Passing {actual} argument to '{name}', {wanted} parameter"]
-    MismatchArgumentAndArgumentMode {
-        name: String,
-        wanted: Mode,
-        actual: Mode,
-    },
+    #[code = "A6204"]
+    #[severity = Information]
+    #[message = "'{name}' is a ByRef formal argument and gets a copy of the argument: an assignment the callee makes to it stays there, which may be intended"]
+    ByValueToByRef { name: String },
     /// The variable has a value on some of the paths that reach this use and none on the others:
     /// an assignment under a condition, or a `Kill` on one branch. IRIS compiles the code and raises
     /// `<UNDEFINED>` when it runs along a path without the value. Assign it on every path, or read
@@ -2309,7 +2229,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4025"]
     #[severity = Error]
-    #[message = "The procedure call requires the private variable '{name}' to be public"]
+    #[message = "The callee's public list names '{name}', which is private here"]
     RequirePrivateVariable { name: String },
     /// A construct ascot doesn't model: an argumentless `Do` and its dotted block, a stand-alone
     /// `Else` or `ElseIf`, a `Goto` without an argument or with several, a `Break` with an
@@ -2355,7 +2275,7 @@ type_error_kinds! {
     /// ```
     #[code = "A3904"]
     #[severity = Warning]
-    #[message = "The macro '{name}' is defined in the body of method '{method}'; IRIS keeps it for the methods compiled after it (alphabetically), but it belongs in an include file or at class level"]
+    #[message = "The macro '{name}' is defined in the body of method '{method}', which only the methods compiled after it see"]
     MacroFromMethodBody { name: String, method: String },
     /// `$$$Name` names a macro no `#define` in reach declares: not in the file, its `#include`s,
     /// nor, for a class, the system include files every class gets; the nearest known names
@@ -2416,7 +2336,7 @@ type_error_kinds! {
     /// ```
     #[code = "A3119"]
     #[severity = Error]
-    #[message = "The member name {name} is defined twice"]
+    #[message = "Member '{name}' is defined twice"]
     DuplicatedMemberName { name: String },
     /// Another open document declares a class of this name, so the workspace holds two definitions
     /// and whichever claimed the name last answers for it wherever the class is looked up. IRIS
@@ -2444,8 +2364,11 @@ type_error_kinds! {
     /// ```
     #[code = "A8073"]
     #[severity = Error]
-    #[message = "{err}"]
-    InvalidSyntax { err: SyntaxErrorText },
+    #[message = "Syntax error {scope}: {detail}"]
+    InvalidSyntax {
+        scope: SyntaxScope,
+        detail: SyntaxErrorText,
+    },
     /// A class header or member declaration, or a line of a routine or include file, that doesn't
     /// parse; a method body that doesn't is A8073 instead, and the message reads the same way.
     /// Nothing else in the document is checked, and IRIS refuses to compile it. Correct the marked
@@ -2461,8 +2384,11 @@ type_error_kinds! {
     /// ```
     #[code = "A1727"]
     #[severity = Error]
-    #[message = "{err}"]
-    DocumentSyntaxError { err: SyntaxErrorText },
+    #[message = "Syntax error {scope}: {detail}"]
+    DocumentSyntaxError {
+        scope: SyntaxScope,
+        detail: SyntaxErrorText,
+    },
     /// The body of a label, or a routine's main body, runs off its end without a `Quit` or
     /// `Return`, and no label follows for it to fall into: it is the last, or a procedure block
     /// comes next. IRIS compiles it and quits there implicitly, so the code runs; an explicit `Quit`
@@ -2479,12 +2405,13 @@ type_error_kinds! {
     /// ```
     #[code = "A7548"]
     #[severity = Warning]
-    #[message = "Missing an explicit QUIT or RETURN; execution falls through to whatever follows"]
+    #[message = "No QUIT or RETURN; execution falls through to what follows"]
     MissingQuit,
     /// A form IRIS refuses where it stands, named with IRIS's own error: an error trap set inside a
     /// `Try` block, a `*` or routine-qualified `$ZTRAP` value in a procedure block, an offset in a
     /// trap label, a `Goto` in a procedure block whose label is indirect (`Goto @target`) or
-    /// carries an offset (`Goto Done+1`), a `New` of a special variable other than `$ESTACK`,
+    /// carries an offset (`Goto Done+1`), a `Do` there with an offset to a label of the block
+    /// (`Do Done+1`), a `New` of a special variable other than `$ESTACK`,
     /// `$ETRAP`, `$NAMESPACE` and `$ROLES`. `ZQUIT` in a procedure block with private variables is
     /// the one IRIS compiles, to raise `<COMMAND>` when it runs. In the example the `Catch` already
     /// handles the error, so the trap goes.
@@ -2538,7 +2465,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6613"]
     #[severity = Warning]
-    #[message = "ZQUIT wants an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack"]
+    #[message = "ZQUIT takes an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack"]
     ZQuitArgument { value: String },
     /// An error raised on purpose (`ZTrap`, `Throw` outside a `Try`, a non-empty `$ECODE`) inside
     /// the handler the trap still names, or a `$ETRAP` command that raises one. IRIS compiles it,
@@ -2558,7 +2485,7 @@ type_error_kinds! {
     /// ```
     #[code = "A4344"]
     #[severity = Warning]
-    #[message = "An error here re-enters the handler {var} still names; set {var} to \"\" first"]
+    #[message = "An error here re-enters the handler {var} still names"]
     TrapReenters { var: &'static str },
     /// This marks a limit of ascot, not a fault in the code. ascot follows error handling only in
     /// the forms it can read: a `Try`/`Catch`, a literal `$ZTRAP` label, a `$ETRAP` that is a plain
@@ -2580,8 +2507,8 @@ type_error_kinds! {
     ///     Quit
     /// ```
     #[code = "A3913"]
-    #[severity = Hint]
-    #[message = "{what} is not checked"]
+    #[severity = Information]
+    #[message = "{what} is beyond what ascot checks"]
     NotChecked { what: &'static str },
     /// `ZQUIT` in a procedure block without private variables, where IRIS lets it unwind; the same
     /// block with any, an argument or a local, fails with `<COMMAND>` when it runs. The code works
@@ -2602,7 +2529,7 @@ type_error_kinds! {
     /// ```
     #[code = "A5780"]
     #[severity = Hint]
-    #[message = "ZQUIT unwinds here only because this procedure block has no private variables; one with any fails with <COMMAND>, so its error handling may not be what you expect"]
+    #[message = "ZQUIT unwinds here only because this procedure block has no private variables; with any, it fails with <COMMAND>"]
     ZQuitWithoutPrivates,
     /// A `$ETRAP` whose code is a single `Goto Label` does what `Set $ZTRAP = "Label"` does, and
     /// ascot checks it as that handler, which is how it can check it at all. The two differ in
@@ -2630,6 +2557,12 @@ type_error_kinds! {
 // The conditional parts of messages, each rendering nothing or a fragment of its kind's message.
 
 /// "; did you mean: …?", or nothing without suggestions.
+impl TypeErrorKind {
+    pub(crate) fn at(self, range: Range) -> TypeError {
+        TypeError::new(self, range, vec![])
+    }
+}
+
 #[derive(Debug)]
 pub struct Suggestions(pub Vec<String>);
 
@@ -2660,32 +2593,8 @@ pub struct Replacement(pub Option<String>);
 impl std::fmt::Display for Replacement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            Some(replacement) => write!(f, "is superseded: use {replacement}"),
-            None => f.write_str("is deprecated, with no replacement"),
-        }
-    }
-}
-
-/// What an unconfirmed class lookup couldn't do, depending on whether IRIS was asked.
-#[derive(Debug)]
-pub struct ClassLookup {
-    pub cls: String,
-    pub has_iris: bool,
-}
-
-impl std::fmt::Display for ClassLookup {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let cls = &self.cls;
-        if self.has_iris {
-            write!(
-                f,
-                "find class '{cls}' in the workspace or on the IRIS instance"
-            )
-        } else {
-            write!(
-                f,
-                "confirm class '{cls}' exists — it isn't open in this workspace, with no IRIS connection to check it against"
-            )
+            Some(replacement) => write!(f, "; use {replacement} instead"),
+            None => f.write_str(", deprecated with no replacement"),
         }
     }
 }
@@ -2718,9 +2627,9 @@ pub struct Mode(pub Option<RefMode>);
 impl std::fmt::Display for Mode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self.0 {
-            None => "a normal",
-            Some(RefMode::Output) => "an output",
-            Some(RefMode::ByRef) => "a by-ref",
+            None => "a by-value",
+            Some(RefMode::Output) => "an Output",
+            Some(RefMode::ByRef) => "a ByRef",
         })
     }
 }
@@ -2798,6 +2707,107 @@ impl std::fmt::Display for TypeParamHint {
     }
 }
 
+/// What makes an unread assignment one the body cannot drop (A4269).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnreadRole {
+    Catch,
+    Inherited,
+}
+
+impl std::fmt::Display for UnreadRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            UnreadRole::Catch => "Catch variable",
+            UnreadRole::Inherited => "Inherited formal argument",
+        })
+    }
+}
+
+/// How an override departs from the method it overrides (A1841, A3604).
+#[derive(Debug)]
+pub enum OverrideDifference {
+    Count {
+        has: usize,
+        declares: usize,
+    },
+    Mode {
+        arg: String,
+        has: Option<RefMode>,
+        declares: Option<RefMode>,
+    },
+    Narrower {
+        arg: String,
+        has: Ty,
+        declares: Ty,
+    },
+    Wider {
+        arg: String,
+        has: Ty,
+        declares: Ty,
+    },
+    Return {
+        has: Option<Ty>,
+        declares: Ty,
+    },
+}
+
+fn mode_words(mode: Option<RefMode>) -> &'static str {
+    match mode {
+        None => "by value",
+        Some(RefMode::ByRef) => "ByRef",
+        Some(RefMode::Output) => "Output",
+    }
+}
+
+fn formal_arguments(n: usize) -> String {
+    match n {
+        0 => "no formal arguments".into(),
+        1 => "1 formal argument".into(),
+        n => format!("{n} formal arguments"),
+    }
+}
+
+impl std::fmt::Display for OverrideDifference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Count { has, declares } => write!(
+                f,
+                "with {} where it declares {}",
+                formal_arguments(*has),
+                formal_arguments(*declares)
+            ),
+            Self::Mode { arg, has, declares } => write!(
+                f,
+                "with formal argument '{arg}' {} where it declares {}",
+                mode_words(*has),
+                mode_words(*declares)
+            ),
+            Self::Narrower { arg, has, declares } => write!(
+                f,
+                "takes formal argument '{arg}' As {has}, a subclass of the {declares} it declares, which a caller holding the superclass may pass"
+            ),
+            Self::Wider { arg, has, declares } => write!(
+                f,
+                "takes formal argument '{arg}' As {has}, neither the {declares} it declares nor a subclass, which IRIS refuses (ERROR #5478)"
+            ),
+            Self::Return {
+                has: Some(has),
+                declares,
+            } => write!(
+                f,
+                "returns {has}, neither the {declares} it declares nor a subclass, which IRIS refuses (ERROR #5478)"
+            ),
+            Self::Return {
+                has: None,
+                declares,
+            } => write!(
+                f,
+                "returns nothing where it declares {declares}, which IRIS refuses (ERROR #5478)"
+            ),
+        }
+    }
+}
+
 /// "declared as '…'", or "undeclared".
 #[derive(Debug)]
 pub struct Declared(pub Option<Ty>);
@@ -2859,9 +2869,9 @@ pub struct CommaSpace(pub bool);
 impl std::fmt::Display for CommaSpace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(if self.0 {
-            "one space after this comma, and none before"
+            "one space after it and none before"
         } else {
-            "no space around this comma"
+            "no space on either side"
         })
     }
 }
@@ -2879,36 +2889,167 @@ impl std::fmt::Display for Expansion {
     }
 }
 
-/// A syntax error, in the grammar's own words where it has some.
+/// Where a syntax error sits, after "Syntax error": the document's own parse (A1727) or a method
+/// body's (A8073).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxScope {
+    ClassDefinition,
+    Routine,
+    IncludeFile,
+    MethodBody,
+    ArgumentDefault,
+}
+
+impl std::fmt::Display for SyntaxScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SyntaxScope::ClassDefinition => "in the class definition",
+            SyntaxScope::Routine => "in the routine",
+            SyntaxScope::IncludeFile => "in the include file",
+            SyntaxScope::MethodBody => "in the method body",
+            SyntaxScope::ArgumentDefault => "in an argument default",
+        })
+    }
+}
+
+/// A syntax error in one line: the grammar's own words where it has some (an unknown command, a
+/// function given the wrong arguments, a value that fails a check), else what could come next.
 #[derive(Debug)]
-pub struct SyntaxErrorText(pub tygr::Error);
+pub struct SyntaxErrorText(pub String);
 
 impl std::fmt::Display for SyntaxErrorText {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let error = &self.0;
-        // Prefer a catch-all-first `Unknown*` variant's own friendly failure (see
-        // `cos::Command`/`SpecialVariable`) over the generic "expected one of: ..." dump.
-        // A function's arguments (`cos::fun_args!`) are named after it; when several of
-        // its forms fail at the same spot, the first form's message stands for all.
+        f.write_str(&self.0)
+    }
+}
+
+impl SyntaxErrorText {
+    pub fn new(error: &tygr::Error, src: &str) -> Self {
+        // A function's arguments (`cos::fun_args!`) are a rule named after it, which words the whole
+        // message; when several of its forms fail at the same spot, the first form's stands for all.
         let mut named = std::collections::HashSet::new();
         let mut friendly: Vec<String> = error
             .traces()
             .iter()
-            .filter_map(|trace| match &trace.expectation {
-                tygr::Expectation::GrammarFrom { into, fail, .. } if into.starts_with('$') => {
-                    named.insert(into).then(|| format!("{into} {fail}"))
+            .filter_map(|trace| {
+                // The rule a conversion failed in: a function's arguments are a rule named after it.
+                let rule = trace.context.last().map_or("", |frame| frame.node);
+                match &trace.expectation {
+                    tygr::Expectation::Convertible { error, .. } if rule.starts_with('$') => {
+                        named.insert(rule).then(|| format!("{rule} {error}"))
+                    }
+                    tygr::Expectation::Convertible { error, .. } if error.starts_with('$') => {
+                        Some(error.to_string())
+                    }
+                    tygr::Expectation::Convertible { range, error, .. } => {
+                        Some(format!("`{}` must {error}", &src[range.clone()]))
+                    }
+                    tygr::Expectation::Rejected {
+                        range, requirement, ..
+                    } => Some(format!("`{}` must {requirement}", &src[range.clone()])),
+                    _ => None,
                 }
-                tygr::Expectation::GrammarFrom { fail, .. } => Some(fail.clone()),
-                _ => None,
             })
             .collect();
-        friendly.dedup();
-        if friendly.is_empty() {
-            // The parser's own words: `parse error at ..., expected: ...`.
-            write!(f, "{error}")
-        } else {
-            write!(f, "{}", friendly.join("\n"))
+        let mut seen = std::collections::HashSet::new();
+        friendly.retain(|message| seen.insert(message.clone()));
+        if !friendly.is_empty() {
+            return Self(friendly.join("; "));
         }
+        let pos = error.pos();
+        let mut expected: Vec<String> = error
+            .traces()
+            .iter()
+            .filter_map(|trace| match trace.context.last() {
+                Some(frame) if frame.pos == pos => Some(rule_in_words(frame.node)),
+                _ => match &trace.expectation {
+                    tygr::Expectation::Token { text, .. } => Some(token_in_words(text)),
+                    tygr::Expectation::CharClass(class) => Some(class_in_words(class)),
+                    tygr::Expectation::Rejected { node, .. } => Some(rule_in_words(node)),
+                    tygr::Expectation::Convertible { into, .. } => Some(rule_in_words(into)),
+                    _ => None,
+                },
+            })
+            .collect();
+        // The broad before the narrow: "a variable" says more than the ten tokens that may
+        // start one, and an expression or a command more than a particular variable.
+        let rank = |what: &str| match what {
+            "an expression" => 0,
+            "a command" => 1,
+            "a variable" => 2,
+            "a number" | "a global" | "a comment" => 3,
+            w if w.starts_with('`') => 5,
+            _ => 4,
+        };
+        expected.sort_by_key(|what| (rank(what), what.clone()));
+        expected.dedup();
+        Self(match expected.len() {
+            0 => "unexpected text".into(),
+            1 => format!("expected {}", expected[0]),
+            n if n <= 10 => format!(
+                "expected {} or {}",
+                expected[..n - 1].join(", "),
+                expected[n - 1]
+            ),
+            n => format!("expected {} or {} more", expected[..9].join(", "), n - 9),
+        })
+    }
+}
+
+// A grammar rule's name as the message says it: `GenericExpr` is "an expression", every
+// `*Command` "a command", `CacheDirectCallback` "a cache direct callback".
+fn rule_in_words(name: &str) -> String {
+    let words = match name {
+        "Variable" | "LocalVariable" => "variable".to_string(),
+        "GlobalRef" => "global".to_string(),
+        "Number" | "Digits" => "number".to_string(),
+        "LineComment" | "RangeComment" => "comment".to_string(),
+        "FunctionCall" => "function".to_string(),
+        "MemberRef" => "member".to_string(),
+        n if n.ends_with("Expr") => "expression".to_string(),
+        n if n.ends_with("Command") => "command".to_string(),
+        n => {
+            let mut words = String::new();
+            let mut prev = ' ';
+            for c in n.chars() {
+                if c.is_uppercase() && prev.is_lowercase() {
+                    words.push(' ');
+                }
+                words.extend(c.to_lowercase());
+                prev = c;
+            }
+            words
+        }
+    };
+    let article = if words.starts_with(['a', 'e', 'i', 'o']) || words.starts_with("un") {
+        "an"
+    } else {
+        "a"
+    };
+    format!("{article} {words}")
+}
+
+// How a character class reads in a message.
+fn class_in_words(class: &str) -> String {
+    match class {
+        "whitespace" | "space" | "not line breaking whitespace" => "a space".into(),
+        "digit" | "numeric" => "a digit".into(),
+        "alphabetic" => "a letter".into(),
+        "letter or number" => "a letter or digit".into(),
+        "letter or percent sign" => "a letter or %".into(),
+        "any" => "any character".into(),
+        _ => format!("a {class} character"),
+    }
+}
+
+// A literal the parser wanted, in backticks, whitespace by name.
+fn token_in_words(token: &str) -> String {
+    match token {
+        "\n" => "a line break".into(),
+        "\r\n" => "a line break".into(),
+        " " => "a space".into(),
+        "\t" => "a tab".into(),
+        _ => format!("`{token}`"),
     }
 }
 
@@ -2932,51 +3073,6 @@ impl TypeError {
         }
     }
 
-    fn at(kind: TypeErrorKind, range: Range) -> Self {
-        Self::new(kind, range, vec![])
-    }
-
-    pub fn too_many_arguments(takes: usize, range: Range) -> Self {
-        QuasiTypeError::too_many_arguments(takes).into_error(|| range)
-    }
-
-    // Built with a range directly, unlike `QuasiTypeError`'s deferred ones — there's no `Flow`
-    // yet to attach one lazily this early (during macro expansion).
-    pub fn label_in_block(label: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::LabelInBlock { label }, range)
-    }
-
-    pub(crate) fn cannot_find_class(cls: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::CannotFindClass { cls }, range)
-    }
-
-    pub(crate) fn unconfirmed_class(cls: String, has_iris: bool, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::UnconfirmedClass {
-                lookup: ClassLookup { cls, has_iris },
-            },
-            range,
-        )
-    }
-
-    pub(crate) fn unconfirmed_member(
-        cls: String,
-        mem: String,
-        superclass: bool,
-        unseen: UnseenClass,
-        range: Range,
-    ) -> Self {
-        Self::at(
-            TypeErrorKind::UnconfirmedMember {
-                cls,
-                mem,
-                on: SuperclassOf(superclass),
-                unseen,
-            },
-            range,
-        )
-    }
-
     pub(crate) fn duplicate_class_name(range: Range, name: String, other: Location) -> Self {
         Self::new(
             TypeErrorKind::DuplicateClassName {
@@ -2988,105 +3084,15 @@ impl TypeError {
         )
     }
 
-    pub(crate) fn document_syntax_error(range: Range, err: tygr::Error) -> Self {
-        Self::at(
-            TypeErrorKind::DocumentSyntaxError {
-                err: SyntaxErrorText(err),
-            },
-            range,
-        )
-    }
-
-    pub fn cannot_find_include(name: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::CannotFindInclude { name }, range)
-    }
-
-    pub fn argument_postconditional(range: Range) -> Self {
-        Self::at(TypeErrorKind::ArgumentPostconditional, range)
-    }
-
-    pub fn and_operator(wanted: crate::bindings::AndOperator, range: Range) -> Self {
-        Self::at(TypeErrorKind::AndOperator { wanted }, range)
-    }
-
-    pub fn new_per_block(max: u32, range: Range) -> Self {
-        Self::at(TypeErrorKind::NewPerBlock { max }, range)
-    }
-
-    pub fn undescribed(kind: &str, lines: usize, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::Undescribed {
-                kind: kind.to_string(),
-                lines,
-            },
-            range,
-        )
-    }
-
-    pub fn commands_per_line(max: u32, range: Range) -> Self {
-        Self::at(TypeErrorKind::CommandsPerLine { max }, range)
-    }
-
-    pub fn open_brace_break(newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::OpenBraceBreak { wanted }, range)
-    }
-
-    pub fn body_break(newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::BodyBreak { wanted }, range)
-    }
-
-    pub fn close_brace_break(newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::CloseBraceBreak { wanted }, range)
-    }
-
-    pub fn chain_break(keyword: &'static str, newline: bool, range: Range) -> Self {
-        let wanted = Break(newline);
-        Self::at(TypeErrorKind::ChainBreak { keyword, wanted }, range)
-    }
-
-    pub fn comma_spacing(space_after: bool, range: Range) -> Self {
-        let wanted = CommaSpace(space_after);
-        Self::at(TypeErrorKind::CommaSpacing { wanted }, range)
-    }
-
-    pub fn undecided_if(condition: String, expansion: Option<String>, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::UndecidedIf {
-                condition,
-                expansion: Expansion(expansion),
-            },
-            range,
-        )
-    }
-
-    pub fn iris_lookup_failed(
-        kind: crate::DocKind,
-        name: String,
-        reason: String,
-        range: Range,
-    ) -> Self {
-        QuasiTypeError::iris_lookup_failed(kind, name, reason).into_error(|| range)
-    }
-
-    pub fn macro_expansion_too_deep(name: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::MacroExpansionTooDeep { name }, range)
-    }
-
-    pub fn macro_too_many_arguments(name: String, expected: usize, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::MacroTooManyArguments { name, expected },
-            range,
-        )
-    }
-
-    pub fn macro_too_few_arguments(name: String, expected: usize, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::MacroTooFewArguments { name, expected },
-            range,
-        )
+    pub fn syntax_error(range: Range, err: &tygr::Error, src: &str, scope: SyntaxScope) -> Self {
+        let detail = SyntaxErrorText::new(err, src);
+        let kind = match scope {
+            SyntaxScope::MethodBody | SyntaxScope::ArgumentDefault => {
+                TypeErrorKind::InvalidSyntax { scope, detail }
+            }
+            _ => TypeErrorKind::DocumentSyntaxError { scope, detail },
+        };
+        kind.at(range)
     }
 
     pub fn mismatch_argument_mode(
@@ -3119,29 +3125,14 @@ impl TypeError {
         )
     }
 
-    pub fn invalid_syntax(range: Range, err: tygr::Error) -> Self {
-        Self::at(
-            TypeErrorKind::InvalidSyntax {
-                err: SyntaxErrorText(err),
-            },
+    pub fn by_value_to_by_ref(name: String, range: Range, declared_at: Option<Location>) -> Self {
+        Self::new(
+            TypeErrorKind::ByValueToByRef { name },
             range,
+            declared_at
+                .map(|location| related(location, "Parameter declared here."))
+                .unwrap_or_default(),
         )
-    }
-
-    pub fn unread_assignment(name: String, range: Range) -> TypeError {
-        Self::at(TypeErrorKind::UnreadAssignment { name }, range)
-    }
-
-    pub fn output_never_assigned(name: String, range: Range) -> TypeError {
-        Self::at(TypeErrorKind::OutputNeverAssigned { name }, range)
-    }
-
-    pub fn by_ref_never_read(name: String, range: Range) -> TypeError {
-        Self::at(TypeErrorKind::ByRefNeverRead { name }, range)
-    }
-
-    pub fn output_read_first(name: String, range: Range) -> TypeError {
-        Self::at(TypeErrorKind::OutputReadFirst { name }, range)
     }
 
     pub fn duplicated_member_name(range: Range, name: String, previous: Location) -> Self {
@@ -3152,31 +3143,11 @@ impl TypeError {
         )
     }
 
-    pub fn missing_quit(range: Range) -> Self {
-        Self::at(TypeErrorKind::MissingQuit, range)
-    }
-
     pub fn redeclare_variable(name: String, range: Range, previous: Location) -> Self {
         Self::new(
             TypeErrorKind::RedeclareVariable { name },
             range,
             related(previous, "Previous declaration"),
-        )
-    }
-
-    pub fn keyword_style(
-        kind: tygr_objectscript::cos::KeywordKind,
-        found: String,
-        expected: String,
-        range: Range,
-    ) -> Self {
-        Self::at(
-            TypeErrorKind::KeywordStyle {
-                kind,
-                found,
-                expected,
-            },
-            range,
         )
     }
 
@@ -3188,71 +3159,6 @@ impl TypeError {
         )
     }
 
-    pub fn macro_from_method_body(name: String, method: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::MacroFromMethodBody { name, method }, range)
-    }
-
-    pub fn handle_not_a_local(function: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::HandleNotALocal { function }, range)
-    }
-
-    pub fn label_not_a_function(label: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::LabelNotAFunction { label }, range)
-    }
-
-    pub fn new_in_procedure_block(name: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::NewInProcedureBlock { name }, range)
-    }
-
-    pub fn label_offset(range: Range) -> Self {
-        Self::at(TypeErrorKind::LabelOffset, range)
-    }
-
-    pub fn unrecognized_class_keyword(entry: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::UnrecognizedClassKeyword { entry }, range)
-    }
-
-    pub fn undocumented_syntax(what: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::UndocumentedSyntax { what }, range)
-    }
-
-    pub fn not_allowed_in(
-        what: impl Into<String>,
-        context: &'static str,
-        iris: &'static str,
-        range: Range,
-    ) -> Self {
-        let what = what.into();
-        Self::at(
-            TypeErrorKind::NotAllowedIn {
-                what,
-                context,
-                iris,
-            },
-            range,
-        )
-    }
-
-    pub fn zquit_argument(value: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::ZQuitArgument { value }, range)
-    }
-
-    pub fn trap_reenters(var: &'static str, range: Range) -> Self {
-        Self::at(TypeErrorKind::TrapReenters { var }, range)
-    }
-
-    pub fn not_checked(what: &'static str, range: Range) -> Self {
-        Self::at(TypeErrorKind::NotChecked { what }, range)
-    }
-
-    pub fn etrap_goto(label: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::ETrapGoto { label }, range)
-    }
-
-    pub fn zquit_without_privates(range: Range) -> Self {
-        Self::at(TypeErrorKind::ZQuitWithoutPrivates, range)
-    }
-
     pub fn unrecognized_type_param(
         name: String,
         class: String,
@@ -3260,32 +3166,16 @@ impl TypeError {
         suggestions: Vec<String>,
         range: Range,
     ) -> Self {
-        Self::at(
-            TypeErrorKind::UnrecognizedTypeParam {
-                hint: if is_property_keyword {
-                    TypeParamHint::PropertyKeyword(name.clone())
-                } else {
-                    TypeParamHint::Suggestions(Suggestions(suggestions))
-                },
-                name,
-                class,
+        TypeErrorKind::UnrecognizedTypeParam {
+            hint: if is_property_keyword {
+                TypeParamHint::PropertyKeyword(name.clone())
+            } else {
+                TypeParamHint::Suggestions(Suggestions(suggestions))
             },
-            range,
-        )
-    }
-
-    pub fn unrecognized_keyword(kind: &'static str, entry: String, range: Range) -> Self {
-        Self::at(TypeErrorKind::UnrecognizedKeyword { kind, entry }, range)
-    }
-
-    pub fn unrecognized_parameter_type(meta_type: String, range: Range) -> Self {
-        Self::at(
-            TypeErrorKind::UnrecognizedParameterType {
-                meta_type,
-                available: Available(PARAMETER_TYPE_KEYWORDS),
-            },
-            range,
-        )
+            name,
+            class,
+        }
+        .at(range)
     }
 }
 
