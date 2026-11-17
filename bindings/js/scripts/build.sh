@@ -54,16 +54,14 @@ npx jco transpile "$COMPONENT" \
 		"iris:ascot/exported#[method]workspace.workspace-symbol" \
 	-o "$GEN"
 
-# The pre-built declarations of the IRIS release this ascot defaults to, from the
-# `declarations` GitHub Release, checksum verified: what `createWorkspace()` checks against
-# when the host passes no env, as `--iris latest` does on the command line.
-RELEASE=$(sed -n 's/^pub const DEFAULT_RELEASE: &str = "\(.*\)";/\1/p' "$REPO_ROOT/src/release.rs")
-ASSET="iris-community-$RELEASE.d.json.gz"
-echo "fetching $ASSET ..."
-curl -sSLf --retry 3 --retry-all-errors "https://github.com/intersystems-community/ascot/releases/download/declarations/$ASSET" -o "lib/$ASSET"
-curl -sSLf --retry 3 --retry-all-errors "https://github.com/intersystems-community/ascot/releases/download/declarations/$ASSET.sha256" -o "lib/$ASSET.sha256"
-(cd lib && (sha256sum -c "$ASSET.sha256" 2>/dev/null || shasum -a 256 -c "$ASSET.sha256") >/dev/null)
-rm "lib/$ASSET.sha256"
+# The pre-built declarations of the IRIS release this ascot defaults to, the copy under
+# `declarations/` that the crate's `bundled-declarations` feature carries too: what `createWorkspace()`
+# checks against when the host passes no env, as `--iris latest` does on the command line.
+ASSET=$(basename "$REPO_ROOT"/declarations/iris-community-*.d.json.gz)
+RELEASE=${ASSET#iris-community-}
+RELEASE=${RELEASE%.d.json.gz}
+echo "bundling $ASSET ..."
+cp "$REPO_ROOT/declarations/$ASSET" "lib/$ASSET"
 printf 'export const release = "%s";\nexport const file = new URL("./%s", import.meta.url);\n' "$RELEASE" "$ASSET" > lib/declarations.js
 printf 'export const release: string;\nexport const file: URL;\n' > lib/declarations.d.ts
 

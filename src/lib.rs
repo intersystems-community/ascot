@@ -83,6 +83,8 @@ pub use iris::{
 pub use iris_connection::RawAtelier;
 pub(crate) use macro_expand::SourceMap;
 pub(crate) use macro_expand::{Definitions, MacroDefinitions};
+#[cfg(not(target_arch = "wasm32"))]
+pub use release::{BUNDLED_DECLARATIONS, BundledDeclarations, DEFAULT_RELEASE};
 use tygr_objectscript::cos::ClassDefinitionHeader;
 pub use tygr_objectscript::{cos, sql};
 

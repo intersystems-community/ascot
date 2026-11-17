@@ -35,6 +35,9 @@ mcp = ["dep:clap", "dep:rmcp", "dep:tokio"]
 # `--iris http://...`) and a release's pre-built declarations from the project's GitHub release
 # (`--iris latest`). A host with its own transport implements `Atelier` without it.
 network = ["dep:ureq", "dep:sha2", "dep:base64", "dep:percent-encoding"]
+# The default release's pre-built declarations in the binary (`ascot::BUNDLED_DECLARATIONS`), for
+# a host that resolves IRIS's own classes with nothing downloaded; about 4 MB.
+bundled-declarations = []
 
 [package.metadata.docs.rs]
 all-features = true
