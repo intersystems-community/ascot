@@ -64,6 +64,7 @@ echo "bundling $ASSET ..."
 cp "$REPO_ROOT/declarations/$ASSET" "lib/$ASSET"
 printf 'export const release = "%s";\nexport const file = new URL("./%s", import.meta.url);\n' "$RELEASE" "$ASSET" > lib/declarations.js
 printf 'export const release: string;\nexport const file: URL;\n' > lib/declarations.d.ts
+cp "$REPO_ROOT/style.json" lib/style.json
 
 echo "compiling TypeScript wrapper ..."
 npx tsc -p tsconfig.json

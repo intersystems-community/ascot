@@ -68,7 +68,8 @@ The doc comment is also what a user reads: `ascot diagnostics DIR` renders every
 severity, message and doc comment as Markdown pages, an index and one per code, and `docs/` is
 served by GitHub Pages as the reference the code at the end of a message links to. The convention:
 
-- `docs/unreleased/` is the reference of `main`. After a change to `type_error_kinds!`, run
+- `docs/unreleased/` is the reference of `main`. After a change to `type_error_kinds!`, or to
+  `style.json` (the recommended style, which `ascot diagnostics` copies in beside the pages), run
   `cargo run -- diagnostics docs/unreleased` and commit the result; CI fails when it is stale.
   A PR that touches `docs/unreleased` goes stale in the merge queue when a kind-changing PR
   merges ahead of it, so merge `main` and regenerate before re-queueing.
@@ -141,7 +142,7 @@ here, then `npm link @intersystems-community/ascot` there.
 ### Releasing
 
 Pushing a `v*.*.*` tag builds the `ascot` binary for Linux, macOS (Intel and
-Apple silicon) and Windows, attaches them to a GitHub release, publishes the
+Apple silicon) and Windows, attaches them and `style.json` to a GitHub release, publishes the
 `tygr-objectscript` and `ascot` crates to crates.io at the versions in their
 `Cargo.toml`s, and publishes the npm package at the version in
 `bindings/js/package.json`; bump those by hand first. crates.io rejects a
