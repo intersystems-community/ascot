@@ -203,8 +203,8 @@ pub(crate) fn class_infos(
     params: &[&str],
 ) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = format!(
-        "SELECT Name, Description, Super, IncludeCode, Import, ClassType, Deprecated, Abstract, Inheritance, \
-         _Language, ProcedureBlock, PropertyClass FROM %Dictionary.CompiledClass WHERE Name {filter}"
+        "SELECT Name, Description, Super, IncludeCode, Import, ClassType, Deprecated, Abstract, Final, \
+         Inheritance, _Language, ProcedureBlock, PropertyClass FROM %Dictionary.CompiledClass WHERE Name {filter}"
     );
     let rows = conn.rows(&sql, params)?;
     if rows.is_empty() {
@@ -265,6 +265,7 @@ fn assemble(
                 class_type: parsed::<cos::ClassType, _>(str_field("ClassType")),
                 deprecated: row.get("Deprecated").is_some_and(is_truthy),
                 abstract_: row.get("Abstract").is_some_and(is_truthy),
+                final_: row.get("Final").is_some_and(is_truthy),
                 inheritance: parsed::<cos::Inheritance, _>(str_field("Inheritance")),
                 language: parsed::<cos::MethodLanguage, _>(str_field("_Language")),
                 procedure_block: row.get("ProcedureBlock").map(is_truthy),
@@ -357,6 +358,8 @@ struct MemberRow {
     multi_dimensional: Value,
     class_method: Value,
     deprecated: Value,
+    #[serde(default, rename = "Final")]
+    final_: Value,
     #[serde(default, deserialize_with = "empty_string_as_none")]
     origin: Option<String>,
     // An index's keywords.
@@ -432,15 +435,15 @@ fn all_mem_rows(
     let declared = format!(
         "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, Description, \
              FormalSpec, ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS \
-             Relationship, NULL AS Cardinality, ClassMethod, Deprecated, Origin, NULL AS \
+             Relationship, NULL AS Cardinality, ClassMethod, Deprecated, Final, Origin, NULL AS \
              DefaultValue FROM %Dictionary.CompiledMethod WHERE Parent {filter} AND Origin = \
              Parent UNION ALL SELECT Parent, Name, Aliases, 'property' AS MemberType, Description, \
              NULL AS FormalSpec, Type AS ReturnType, Collection, MultiDimensional, Relationship, \
-             Cardinality, 0 AS ClassMethod, Deprecated, Origin, NULL AS DefaultValue FROM \
+             Cardinality, 0 AS ClassMethod, Deprecated, Final, Origin, NULL AS DefaultValue FROM \
              %Dictionary.CompiledProperty WHERE Parent {filter} AND Origin = Parent UNION ALL \
              SELECT Parent, Name, NULL AS Aliases, 'parameter' AS MemberType, Description, NULL AS \
              FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS \
-             Relationship, NULL AS Cardinality, 0 AS ClassMethod, Deprecated, Origin, _Default AS \
+             Relationship, NULL AS Cardinality, 0 AS ClassMethod, Deprecated, Final, Origin, _Default AS \
              DefaultValue FROM %Dictionary.CompiledParameter WHERE Parent {filter} AND Origin = \
              Parent"
     );
@@ -449,7 +452,7 @@ fn all_mem_rows(
             "SELECT Parent, Name, NULL AS Aliases, 'index' AS MemberType, Description, \
              Properties AS FormalSpec, NULL AS ReturnType, NULL AS Collection, 0 AS \
              MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
-             Deprecated, Origin, Abstract AS IndexAbstract, Condition AS IndexCondition, \
+             Deprecated, 0 AS Final, Origin, Abstract AS IndexAbstract, Condition AS IndexCondition, \
              CoshardWith AS IndexCoshardWith, Data AS IndexData, {deferred} AS IndexDeferred, \
              Extent AS IndexExtent, IdKey AS IndexIdKey, Internal AS IndexInternal, PrimaryKey AS \
              IndexPrimaryKey, ShardKey AS IndexShardKey, SqlName AS IndexSqlName, Type AS \
@@ -457,7 +460,7 @@ fn all_mem_rows(
              {filter} AND Origin = Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, 'query' \
              AS MemberType, Description, FormalSpec, Type AS ReturnType, NULL AS Collection, 0 \
              AS MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
-             Deprecated, Origin, 0 AS IndexAbstract, NULL AS IndexCondition, NULL AS \
+             Deprecated, Final, Origin, 0 AS IndexAbstract, NULL AS IndexCondition, NULL AS \
              IndexCoshardWith, NULL AS IndexData, 0 AS IndexDeferred, 0 AS IndexExtent, 0 AS \
              IndexIdKey, 0 AS IndexInternal, 0 AS IndexPrimaryKey, 0 AS IndexShardKey, NULL AS \
              IndexSqlName, NULL AS IndexType, 0 AS IndexUnique FROM %Dictionary.CompiledQuery \
@@ -520,6 +523,7 @@ fn member_row_to_info(row: MemberRow) -> MemberInfo {
         name,
         aliases,
         deprecated: is_truthy(&row.deprecated),
+        final_: is_truthy(&row.final_),
         kind: row_to_member_kind(&row),
         uri: None,
         origin,
@@ -863,6 +867,7 @@ mod tests {
             name: name.into(),
             aliases: vec![],
             deprecated: false,
+            final_: false,
             kind,
             uri: None,
             origin: None,

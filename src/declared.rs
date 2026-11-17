@@ -218,6 +218,9 @@ fn member_header(member: &MemberInfo) -> Option<String> {
     if member.deprecated {
         keywords.push("Deprecated".to_string());
     }
+    if member.final_ {
+        keywords.push("Final".to_string());
+    }
     let header = match &member.kind {
         MemberKind::Parameter(p) => {
             let value =
@@ -361,6 +364,9 @@ impl From<&ClassInfo> for DeclaredClass {
         }
         if info.deprecated {
             keywords.push("Deprecated".to_string());
+        }
+        if info.final_ {
+            keywords.push("Final".to_string());
         }
         if let Some(i) = info.inheritance {
             keywords.push(format!("Inheritance = {}", spelled(&i)));
@@ -511,6 +517,7 @@ mod tests {
             name: "IDKEY".to_string(),
             aliases: vec![],
             deprecated: false,
+            final_: false,
             kind: MemberKind::Index(crate::bindings::IndexInfo {
                 on: Some(vec![crate::bindings::IndexKey {
                     property: "element_key".to_string(),
@@ -551,6 +558,7 @@ mod tests {
             name: name.to_string(),
             aliases: vec![],
             deprecated: name == "Make",
+            final_: false,
             kind,
             uri: None,
             origin: Some("Demo.Thing".to_string()),
@@ -588,6 +596,7 @@ mod tests {
             uri: None,
             class_type: Some(ClassType::Persistent),
             deprecated: false,
+            final_: false,
             abstract_: true,
             inheritance: Some(Inheritance::Right),
             language: None,

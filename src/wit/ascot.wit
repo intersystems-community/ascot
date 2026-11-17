@@ -130,6 +130,8 @@ interface common {
         name: string,
         aliases: list<string>,
         deprecated: bool,
+        // `[ Final ]`: no subclass may redeclare it.
+        final: bool,
         kind: member-kind,
         uri: option<string>,
         // The class declaring it; `none` in the workspace.
@@ -168,6 +170,8 @@ interface common {
         deprecated: bool,
         // `[ Abstract ]`: never instantiated itself, so a value of this type is some subclass's.
         abstract: bool,
+        // `[ Final ]`: no class may extend it.
+        final: bool,
         inheritance: option<inheritance>,
         // The language of its methods unless they say otherwise; ObjectScript when absent.
         language: option<language>,

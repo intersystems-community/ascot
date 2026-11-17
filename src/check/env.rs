@@ -35,10 +35,10 @@ use crate::{
 use std::marker::PhantomData;
 
 // A member a lookup found, with the class declaring it, which its type parameters resolve against.
-struct Found<T> {
-    member: Member<T>,
+pub(crate) struct Found<T> {
+    pub(crate) member: Member<T>,
     is_instance_only: bool,
-    origin: String,
+    pub(crate) origin: String,
 }
 
 // A generated method, and whether it's instance-only.
@@ -315,7 +315,11 @@ impl From<FindError> for QuasiTypeError {
 impl<T> Member<T> {
     // A member no source declares: generated, dispatched, or taken on trust.
     fn undeclared(ty: T) -> Self {
-        Member { ty, location: None }
+        Member {
+            ty,
+            location: None,
+            final_: false,
+        }
     }
 }
 
@@ -390,9 +394,14 @@ fn iris_found<N: Namespace>(mut member: bindings::MemberInfo, cls: &str) -> Opti
         member.kind = masked.kind.clone();
     }
     let location = location(&member);
+    let final_ = member.final_;
     let (ty, is_instance_only) = N::reported(member)?;
     Some(Found {
-        member: Member { ty, location },
+        member: Member {
+            ty,
+            location,
+            final_,
+        },
         is_instance_only,
         origin,
     })
@@ -640,14 +649,19 @@ impl<'a> WorkspaceEnv<'a> {
         cls: &str,
         mem: &str,
     ) -> Option<(String, TyProcedureOrAny)> {
+        let found = self.overridden::<Methods>(cls, mem)?;
         let receiver = ClassTy::from(cls.to_string());
         let given = |param: &str| self.parameter_value(cls, param);
-        self.ancestry(cls).skip(1).find_map(|(sup, resolved)| {
-            let found = self.declared_in::<Methods>(&sup, &resolved, mem)?;
-            let mut ty = found.member.ty;
-            ty.instantiate(&receiver, &found.origin, &given);
-            Some((found.origin, ty))
-        })
+        let mut ty = found.member.ty;
+        ty.instantiate(&receiver, &found.origin, &given);
+        Some((found.origin, ty))
+    }
+
+    // The nearest superclass declaration of `mem` in `N`'s namespace, which `cls`'s own overrides.
+    pub(crate) fn overridden<N: Namespace>(&self, cls: &str, mem: &str) -> Option<Found<N::Ty>> {
+        self.ancestry(cls)
+            .skip(1)
+            .find_map(|(sup, resolved)| self.declared_in::<N>(&sup, &resolved, mem))
     }
 
     // The names in `N`'s namespace along `cls`'s chain -- all ObjectScript can refer to there.
@@ -1240,6 +1254,7 @@ impl<'a> WorkspaceEnv<'a> {
                     member: Member {
                         ty,
                         location: Some(location),
+                        final_: member.final_,
                     },
                     is_instance_only,
                     origin: details.name.it.clone(),
@@ -1437,6 +1452,14 @@ impl<'a> WorkspaceEnv<'a> {
         match self.resolve(cls) {
             Some(Class::Workspace(_, details)) => details.keywords.abstract_,
             Some(Class::Iris(info)) => info.abstract_ || crate::mask::is_abstract(&info.name),
+            Some(Class::Unknown(_)) | None => false,
+        }
+    }
+
+    pub(crate) fn is_final(&self, cls: &str) -> bool {
+        match self.resolve(cls) {
+            Some(Class::Workspace(_, details)) => details.keywords.final_,
+            Some(Class::Iris(info)) => info.final_,
             Some(Class::Unknown(_)) | None => false,
         }
     }
@@ -2477,6 +2500,7 @@ mod tests {
             name: "Children".to_string(),
             aliases: vec![],
             deprecated: false,
+            final_: false,
             kind: MemberKind::Relationship(bindings::RelationshipInfo {
                 t: Some("Ext.Child".to_string()),
                 cardinality: Some(bindings::Cardinality::Many),

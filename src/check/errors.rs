@@ -339,6 +339,60 @@ type_error_kinds! {
         on: SuperclassOf,
         unseen: UnseenClass,
     },
+    /// `Extends` names a class declared `[ Final ]`, which no class may extend: IRIS refuses to
+    /// compile the subclass (`ERROR #5254`).
+    ///
+    /// ```objectscript
+    /// Class Demo.Sealed Extends %RegisteredObject [ Final ]
+    /// {
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript
+    /// Class Demo.Opened Extends Demo.Sealed //! A5254
+    /// {
+    ///
+    /// }
+    /// ```
+    #[code = "A5254"]
+    #[severity = Error]
+    #[message = "Cannot inherit from final class '{cls}'"]
+    FinalClassInherited { cls: String },
+    /// A method, property or parameter a superclass declares `[ Final ]`, redeclared, even
+    /// unchanged: IRIS refuses to compile the subclass (`ERROR #5272`).
+    ///
+    /// ```objectscript
+    /// Class Demo.Account Extends %RegisteredObject
+    /// {
+    ///
+    /// Method Balance() As %Integer [ Final ]
+    /// {
+    ///     Quit 0
+    /// }
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript
+    /// Class Demo.Savings Extends Demo.Account
+    /// {
+    ///
+    /// Method Balance() As %Integer //! A5272
+    /// {
+    ///     Quit 1
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A5272"]
+    #[severity = Error]
+    #[message = "Cannot change final {kind} '{name}' of {cls}"]
+    FinalMemberChanged {
+        kind: String,
+        name: String,
+        cls: String,
+    },
     /// A method of the same name as one a superclass declares overrides it and is reached through
     /// the superclass's signature: a caller holding the superclass passes the formal arguments it
     /// declares. An override that takes another number of them, or takes one in another mode (by

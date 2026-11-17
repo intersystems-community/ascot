@@ -25,7 +25,9 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A4963](A4963.md) | Quit inside a loop or Try block takes no value; this one carries {actual} |
 | [A4983](A4983.md) | Variable '{name}' is already declared |
 | [A5090](A5090.md) | The macro '{name}' expands recursively without end |
+| [A5254](A5254.md) | Cannot inherit from final class '{cls}' |
 | [A5268](A5268.md) | {function} takes no by-reference argument |
+| [A5272](A5272.md) | Cannot change final {kind} '{name}' of {cls} |
 | [A5431](A5431.md) | A Caché Direct callback raises <_CALLBACK SYNTAX>: IRIS has no client to call |
 | [A5523](A5523.md) | Too many arguments: the callee takes {takes} |
 | [A5789](A5789.md) | CONTINUE is not within a loop |
