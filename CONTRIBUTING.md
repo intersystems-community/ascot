@@ -115,10 +115,12 @@ shasum -a 256 iris-community-2026.2.d.json.gz > iris-community-2026.2.d.json.gz.
 gh release upload declarations iris-community-2026.2.d.json.gz{,.sha256} --clobber
 ```
 
-Bump `DEFAULT_RELEASE` in `src/release.rs` when a new Community release's file is up. The
-format's version, `DECLARATIONS_VERSION` in `src/declared.rs`, is semver: a file is readable while
-its major part matches, so bump the major for a change old ascots can't read, the minor for an
-addition, and re-upload every release's file after a major bump.
+Bump `DEFAULT_RELEASE` in `src/release.rs` when a new Community release's file is up, and replace
+`declarations/iris-community-<release>.d.json.gz` with it: the `bundled` feature and the npm package
+carry that copy, and a bump without the file does not build. The format's version,
+`DECLARATIONS_VERSION` in `src/declared.rs`, is semver: a file is readable while its major part
+matches, so bump the major for a change old ascots can't read, the minor for an addition, and
+re-upload every release's file after a major bump.
 
 ### npm package
 

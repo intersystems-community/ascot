@@ -61,11 +61,12 @@ jobs:
       # A library host takes the checker alone, or with any one flag; the CLI can be `analyze` alone.
       - name: Feature gates
         run: |
-          for features in "" analyze declare lsp mcp network; do
+          for features in "" analyze declare lsp mcp network bundled; do
             cargo clippy --lib --no-default-features ${features:+--features "$features"} -- -D warnings
           done
           cargo clippy --bin ascot --no-default-features --features analyze -- -D warnings
           cargo test --lib --no-default-features
+          cargo test --lib --no-default-features --features bundled release::
 
       # `--all-targets` above skips doctests (a cargo quirk, not an oversight) — run them too.
       - name: Doc tests

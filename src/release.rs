@@ -4,8 +4,39 @@
 
 use std::path::PathBuf;
 
+/// The literal of [`DEFAULT_RELEASE`], for `concat!` to name the bundled asset by.
+macro_rules! default_release {
+    () => {
+        "2026.2"
+    };
+}
+
 /// The release `--iris` means when it isn't given: the newest one ascot was built for.
-pub const DEFAULT_RELEASE: &str = "2026.2";
+pub const DEFAULT_RELEASE: &str = default_release!();
+
+/// A release's declaration asset carried in the binary.
+#[derive(Debug, Clone, Copy)]
+pub struct Bundled {
+    /// What `--iris` would name it: `iris-community:2026.2`.
+    pub release: &'static str,
+    /// The gzipped declaration file, for [`crate::Declarations::from_bytes`].
+    pub declarations: &'static [u8],
+}
+
+/// [`DEFAULT_RELEASE`]'s `%SYS` declarations, what `latest` names, carried in the binary by the
+/// `bundled` feature so a host resolves IRIS's own classes with nothing downloaded; `None` without
+/// the feature.
+#[cfg(feature = "bundled")]
+pub const BUNDLED: Option<Bundled> = Some(Bundled {
+    release: concat!("iris-community:", default_release!()),
+    declarations: include_bytes!(concat!(
+        "../declarations/iris-community-",
+        default_release!(),
+        ".d.json.gz"
+    )),
+});
+#[cfg(not(feature = "bundled"))]
+pub const BUNDLED: Option<Bundled> = None;
 
 /// A pre-built declaration file's coordinates as `--iris` names them, `[image:]tag[:namespace]`:
 /// the Community image, `iris-community` unless named; its tag, a release such as `2026.2`, or
@@ -145,5 +176,20 @@ mod tests {
         ] {
             assert!(Release::parse(not_one).is_none(), "{not_one}");
         }
+    }
+
+    #[cfg(feature = "bundled")]
+    #[test]
+    fn the_bundled_declarations_are_the_default_release() {
+        let bundled = BUNDLED.unwrap();
+        assert_eq!(bundled.release, release("latest").to_string());
+        let declarations = crate::Declarations::from_bytes(bundled.declarations).unwrap();
+        assert_eq!(declarations.namespace, crate::iris::DEFAULT_NAMESPACE);
+        assert!(
+            declarations.iris_version.contains(DEFAULT_RELEASE),
+            "{}",
+            declarations.iris_version
+        );
+        assert!(declarations.classes.contains_key("%Library.String"));
     }
 }
