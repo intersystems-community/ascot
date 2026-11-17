@@ -66,6 +66,7 @@ curl -sSLf --retry 3 --retry-all-errors "https://github.com/intersystems-communi
 rm "lib/$ASSET.sha256"
 printf 'export const release = "%s";\nexport const file = new URL("./%s", import.meta.url);\n' "$RELEASE" "$ASSET" > lib/declarations.js
 printf 'export const release: string;\nexport const file: URL;\n' > lib/declarations.d.ts
+cp "$REPO_ROOT/style.json" lib/style.json
 
 echo "compiling TypeScript wrapper ..."
 npx tsc -p tsconfig.json

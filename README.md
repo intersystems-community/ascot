@@ -293,7 +293,12 @@ warning: R.mac:3:2-3 - Command keyword `s` should be written `Set` [S2839]
 warning: R.mac:4:2-8 - Use `Return` to leave a method or procedure; `Quit` is for loops and `Try` blocks [S4151]
 ```
 
-Every rule is described in [STYLE.md](STYLE.md).
+Every rule is described in [STYLE.md](STYLE.md). [`style.json`](style.json) is
+the recommended style, commands long and lowercase, functions and system
+variables long and uppercase; copy it into a folder as `.ascot/style.json` and
+edit it from there. It ships with the npm package (`lib/style.json`), with each
+release, and with each release's
+[diagnostics reference](https://intersystems-community.github.io/ascot/).
 
 ### Diagnostics Filter
 

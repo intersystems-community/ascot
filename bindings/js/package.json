@@ -31,7 +31,8 @@
     "generated",
     "lib/*.d.json.gz",
     "lib/*.js",
-    "lib/*.d.ts"
+    "lib/*.d.ts",
+    "lib/style.json"
   ],
   "engines": {
     "node": ">=24"

@@ -1,0 +1,5 @@
+{
+  "command": { "form": "long", "case": "lower" },
+  "function": { "form": "long", "case": "upper" },
+  "variable": { "form": "long", "case": "upper" }
+}
