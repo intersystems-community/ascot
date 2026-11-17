@@ -1235,7 +1235,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let (mut ty, is_instance_only) = N::declared(member, uri)?;
                 // A member's declared type names are written relative to the declaring class.
                 ty.class_names(&mut |t| self.qualify_ty(t, &details.name.it));
-                let location = bindings::Location::new(uri.to_string(), member.range);
+                let location = bindings::Location::new(uri.to_string(), member.it.name.range);
                 Some(Found {
                     member: Member {
                         ty,
