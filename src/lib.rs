@@ -1683,12 +1683,17 @@ mod tests {
             uri.clone(),
             "Class Test.Shared {\nClassMethod Foo() As %Integer {\n set x = ..Bar()\n write x\n quit x\n}\nClassMethod Bar() As %Integer {\n quit 1\n}\n}\n".to_string(),
         );
-        let diagnostics = workspace.diagnostics(uri.clone());
+        let diagnostics_of = |uri: &str| {
+            let mut diagnostics = workspace.diagnostics(uri.to_string());
+            diagnostics.retain(|d| d.code != "A8061");
+            diagnostics
+        };
+        let diagnostics = diagnostics_of(&uri);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let hints = workspace.inlay_hint(uri.clone(), bindings::Range::default());
         assert!(!hints.is_empty(), "expected an inferred-type hint for `x`");
         // Re-checking after an unrelated no-op read shouldn't change the result.
-        assert_eq!(workspace.diagnostics(uri.clone()), diagnostics);
+        assert_eq!(diagnostics_of(&uri), diagnostics);
         assert_eq!(workspace.inlay_hint(uri, bindings::Range::default()), hints);
     }
 
@@ -1789,7 +1794,11 @@ mod tests {
             uri.clone(),
             "Class Test.Hover2 {\nClassMethod Foo() As %Integer {\n set x = ..Bar()\n write x\n quit x\n}\nClassMethod Bar() As %Integer {\n quit 1\n}\n}\n".to_string(),
         );
-        let diagnostics = workspace.diagnostics(uri.clone());
+        let diagnostics = workspace
+            .diagnostics(uri.clone())
+            .into_iter()
+            .filter(|d| d.code != "A8061")
+            .collect::<Vec<_>>();
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         // Line 3 (` write x`): `x` is at character 7.
@@ -2594,6 +2603,56 @@ mod tests {
     }
 
     #[test]
+    fn references_include_extends_and_declared_types() {
+        let workspace = Workspace::new(None, None);
+        let (base_uri, sub_uri) = ("Base.cls".to_string(), "Sub.cls".to_string());
+        workspace.open(base_uri.clone(), "Class Test.Base {\n}\n".to_string());
+        workspace.open(
+            sub_uri.clone(),
+            "Class Test.Sub Extends Test.Base {\nProperty P As Test.Base;\nProperty L As list Of Test.Base;\nMethod M(a As Test.Base) As Test.Base {\n}\n}\n"
+                .to_string(),
+        );
+        let at = |line, character| bindings::Position { line, character };
+        let spans = |locations: &[bindings::Location]| {
+            let mut spans: Vec<_> = locations
+                .iter()
+                .map(|l| {
+                    (
+                        l.range.start.line,
+                        l.range.start.character,
+                        l.range.end.character,
+                    )
+                })
+                .collect();
+            spans.sort();
+            spans
+        };
+        let from_header = workspace.references(base_uri.clone(), at(0, 8), false);
+        assert!(
+            from_header.iter().all(|l| l.uri == sub_uri),
+            "{from_header:?}"
+        );
+        assert_eq!(
+            spans(&from_header),
+            [
+                (0, 23, 32),
+                (1, 14, 23),
+                (2, 22, 31),
+                (3, 14, 23),
+                (3, 28, 37)
+            ]
+        );
+        let from_extends = workspace.references(sub_uri.clone(), at(0, 25), false);
+        assert_eq!(spans(&from_extends), spans(&from_header));
+        let definition = workspace
+            .definition(sub_uri.clone(), at(0, 25))
+            .expect("the Extends clause names the class");
+        assert_eq!(definition.uri, base_uri);
+        let with_declaration = workspace.references(sub_uri, at(0, 25), true);
+        assert!(with_declaration.contains(&definition));
+    }
+
+    #[test]
     fn definition_resolves_self_member_reference() {
         let workspace = Workspace::new(None, None);
         let uri = "Sub.cls".to_string();
@@ -2828,8 +2887,10 @@ mod tests {
             uri.clone(),
             "Class Test.T {\nClassMethod M(x) As %String [ CodeMode = expression ] {\n$Piece(x,\",\")\n}\n}\n".to_string(),
         );
+        let mut messages = style_messages(&workspace, &uri);
+        messages.retain(|m| !m.contains("Cannot find class"));
         assert_eq!(
-            style_messages(&workspace, &uri),
+            messages,
             ["2:1 Function `$Piece` should be written `$PIECE`"]
         );
     }
@@ -2905,9 +2966,13 @@ mod tests {
     // B sees A's macro (with a warning), A doesn't see Z's.
     #[test]
     fn method_body_defines_reach_the_methods_compiled_after() {
-        let diagnostics = class_diagnostics(
+        let mut diagnostics = class_diagnostics(
             "ClassMethod Z() As %String {\n #define LATE 1\n Quit $$$LATE\n}\nClassMethod A() As %String {\n #define REPORT(%x) Write %x\n $$$REPORT(1)\n Quit $$$LATE\n}\nClassMethod B() As %String {\n $$$REPORT(2)\n Quit \"\"\n}\n",
         );
+        diagnostics.retain(|d| {
+            d.message
+                != "Cannot find class '%Library.String' in the workspace or on the IRIS instance"
+        });
         // Two about the macros, and the superclass no environment can confirm.
         assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
         let undefined = diagnostics

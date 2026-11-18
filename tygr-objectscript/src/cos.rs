@@ -2392,7 +2392,7 @@ char_class!(pub IsDataSafe, "xdata_safe", |ch| !matches!(
 
 #[derive(Grammar)]
 pub struct Type {
-    pub class_name: SignatureType,
+    pub class_name: Ranged<SignatureType>,
     pub params: Option<TypeParamList>,
 }
 
