@@ -118,6 +118,18 @@ impl IrisContext for Chain {
         self.first(|source| source.get_cls(cls))
     }
 
+    fn sql_names_declared(&self) -> bool {
+        self.0.iter().all(|source| source.sql_names_declared())
+    }
+
+    fn find_cls_by_sql(&self, schema: &str, table: &str) -> Result<Option<String>, String> {
+        self.first(|source| source.find_cls_by_sql(schema, table))
+    }
+
+    fn find_sql_proc(&self, schema: &str, name: &str) -> Result<Option<String>, String> {
+        self.first(|source| source.find_sql_proc(schema, name))
+    }
+
     fn get_inc(&self, name: &str) -> Result<Option<crate::bindings::Source>, String> {
         self.first(|source| source.get_inc(name))
     }

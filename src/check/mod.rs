@@ -21,7 +21,7 @@ mod errors;
 mod flow;
 mod pattern;
 mod similar;
-mod sql;
+pub(crate) mod sql;
 pub mod types;
 mod zutil;
 
@@ -2667,7 +2667,7 @@ fn check_embedded_sql<'a>(
     flow: &mut Flow<'a>,
     statement: &tygr_objectscript::sql::SQL,
 ) -> Result<(), QuasiTypeError> {
-    let hosts = sql::hosts(statement);
+    let hosts = sql::resolve::check(env, flow, statement);
     let subs = |subscripted| if subscripted { vec![Ty::Any] } else { vec![] };
     let local = |(name, subscripted): (String, bool)| Local {
         name,

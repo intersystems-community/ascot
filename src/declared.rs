@@ -15,7 +15,7 @@ use crate::bindings::{
 use crate::details::ClassDetails;
 
 /// The declaration format's version, semver: a file is readable while its major part matches.
-pub(crate) const DECLARATIONS_VERSION: &str = "1.0.0";
+pub(crate) const DECLARATIONS_VERSION: &str = "1.1.0";
 
 /// One namespace as `ascot declare` writes it: each `IrisContext` lookup as a map from its
 /// argument to its answer. A class holds only its own members; ascot walks its superclasses.
@@ -81,6 +81,75 @@ impl IrisContext for Declarations {
 
     fn get_rtn(&self, name: &str) -> Result<Option<RoutineInfo>, String> {
         Ok(self.routines.get(name).cloned())
+    }
+
+    fn sql_names_declared(&self) -> bool {
+        !self.version.starts_with("1.0.")
+    }
+
+    fn find_cls_by_sql(&self, schema: &str, table: &str) -> Result<Option<String>, String> {
+        let mut in_package = false;
+        for name in self.in_schema(schema) {
+            in_package = true;
+            let Some(info) = self.get_cls(name)? else {
+                continue;
+            };
+            let short = name.rsplit('.').next().unwrap_or(name);
+            let own = info.sql_table_name.as_deref().unwrap_or(short);
+            if own.eq_ignore_ascii_case(table)
+                || crate::check::sql::views(&info).any(|view| view.eq_ignore_ascii_case(table))
+            {
+                return Ok(Some(name.clone()));
+            }
+        }
+        self.settled(in_package)
+    }
+
+    // A `SqlName` some class declares, else the class before the underscore of a default
+    // `Class_Member` name, under which every procedure the class projects goes.
+    fn find_sql_proc(&self, schema: &str, name: &str) -> Result<Option<String>, String> {
+        let (mut in_package, mut by_default) = (false, None);
+        for cls in self.in_schema(schema) {
+            in_package = true;
+            let short = cls.rsplit('.').next().unwrap_or(cls);
+            if let Some(prefix) = name.get(..short.len())
+                && prefix.eq_ignore_ascii_case(short)
+                && name[short.len()..].starts_with('_')
+            {
+                by_default = Some(cls.clone());
+            }
+            let Some(info) = self.get_cls(cls)? else {
+                continue;
+            };
+            if info.members.iter().any(|m| {
+                (crate::check::sql::projection(&m.kind).and_then(|sql| sql.name.as_deref()))
+                    .is_some_and(|sql_name| sql_name.eq_ignore_ascii_case(name))
+            }) {
+                return Ok(Some(cls.clone()));
+            }
+        }
+        match by_default {
+            Some(cls) => Ok(Some(cls)),
+            None => self.settled(in_package),
+        }
+    }
+}
+
+impl Declarations {
+    fn in_schema<'a>(&'a self, schema: &'a str) -> impl Iterator<Item = &'a String> + 'a {
+        self.classes.keys().filter(move |name| {
+            name.rsplit_once('.')
+                .is_some_and(|(package, _)| crate::sql_schema(package).eq_ignore_ascii_case(schema))
+        })
+    }
+
+    // Without SQL names recorded, a class of the package may still project the name: no answer.
+    fn settled(&self, in_package: bool) -> Result<Option<String>, String> {
+        if in_package && !self.sql_names_declared() {
+            Err("the declarations predate SQL names".to_string())
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -202,6 +271,24 @@ fn signature(sig: &Signature) -> String {
     format!("({}){}", args.join(", "), as_type(sig.t.as_deref()))
 }
 
+fn sql_keywords(sig: &Signature, keywords: &mut Vec<String>) {
+    let Some(sql) = &sig.sql else {
+        return;
+    };
+    if let Some(n) = &sql.name {
+        keywords.push(format!("SqlName = {n}"));
+    }
+    if sql.procedure {
+        keywords.push("SqlProc".to_string());
+    }
+    if sql.view {
+        keywords.push("SqlView".to_string());
+    }
+    if let Some(n) = &sql.view_name {
+        keywords.push(format!("SqlViewName = {n}"));
+    }
+}
+
 // Whether a member of this header has a `{ }` body in the class syntax.
 fn has_body(header: &str) -> bool {
     matches!(
@@ -245,11 +332,17 @@ fn member_header(member: &MemberInfo) -> Option<String> {
             if p.multidimensional {
                 keywords.push("MultiDimensional".to_string());
             }
+            if let Some(n) = &p.sql_field_name {
+                keywords.push(format!("SqlFieldName = {n}"));
+            }
             format!("Property {name}{t}{}", keyword_list(&keywords))
         }
         MemberKind::Relationship(r) => {
             if let Some(c) = r.cardinality {
                 keywords.push(format!("Cardinality = {}", spelled(&c)));
+            }
+            if let Some(n) = &r.sql_field_name {
+                keywords.push(format!("SqlFieldName = {n}"));
             }
             format!(
                 "Relationship {name}{}{}",
@@ -321,12 +414,15 @@ fn member_header(member: &MemberInfo) -> Option<String> {
             )
         }
         MemberKind::Query(sig) => {
+            sql_keywords(sig, &mut keywords);
             format!("Query {name}{}{}", signature(sig), keyword_list(&keywords))
         }
         MemberKind::Method(sig) => {
+            sql_keywords(sig, &mut keywords);
             format!("Method {name}{}{}", signature(sig), keyword_list(&keywords))
         }
         MemberKind::ClassMethod(sig) => {
+            sql_keywords(sig, &mut keywords);
             format!(
                 "ClassMethod {name}{}{}",
                 signature(sig),
@@ -384,6 +480,12 @@ impl From<&ClassInfo> for DeclaredClass {
                 "PropertyClass = ({})",
                 short(&info.property_class.join(", "))
             ));
+        }
+        if let Some(n) = &info.sql_row_id_name {
+            keywords.push(format!("SqlRowIdName = {n}"));
+        }
+        if let Some(n) = &info.sql_table_name {
+            keywords.push(format!("SqlTableName = {n}"));
         }
         Self {
             doc: info.doc.clone(),
@@ -585,6 +687,12 @@ mod tests {
             }),
             t: Some("%Status".to_string()),
             procedure_block: Some(vec![]),
+            sql: Some(crate::bindings::SqlProjection {
+                procedure: true,
+                name: Some("Thing_Run".to_string()),
+                view: false,
+                view_name: None,
+            }),
         };
         let info = ClassInfo {
             doc: "A thing.\nTwo lines.".to_string(),
@@ -602,6 +710,8 @@ mod tests {
             language: None,
             procedure_block: Some(false),
             property_class: vec!["Demo.PropertyClass".to_string()],
+            sql_table_name: Some("Things".to_string()),
+            sql_row_id_name: Some("Key".to_string()),
             members: vec![
                 member(
                     "MAX",
@@ -618,6 +728,7 @@ mod tests {
                         t: Some("%String".to_string()),
                         collection: Some(crate::bindings::CollectionKind::List),
                         multidimensional: false,
+                        sql_field_name: Some("NAMES".to_string()),
                     }),
                 ),
                 member(
@@ -626,6 +737,7 @@ mod tests {
                     MemberKind::Relationship(RelationshipInfo {
                         t: Some("Demo.Child".to_string()),
                         cardinality: Some(Cardinality::Many),
+                        sql_field_name: Some("KIDS".to_string()),
                     }),
                 ),
                 member(

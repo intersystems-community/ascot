@@ -425,7 +425,7 @@ fn location_of(class: &Class) -> Option<bindings::Location> {
 
 // A class as a check run sees it; `None` from `resolve` means no class by that name exists: IRIS
 // has none, or there is no IRIS at all and the class isn't in the workspace.
-enum Class {
+pub(super) enum Class {
     Workspace(String, Arc<crate::ClassDetails>),
     Iris(Arc<bindings::ClassInfo>),
     // One nobody can see: an IRIS lookup that failed (with its reason), or a workspace file that
@@ -1365,7 +1365,7 @@ impl<'a> WorkspaceEnv<'a> {
         self.resolve(cls).is_some()
     }
 
-    fn resolve(&self, cls: &str) -> Option<Class> {
+    pub(super) fn resolve(&self, cls: &str) -> Option<Class> {
         if let Some(uri) = self.resolve_uri(DocKind::Cls, cls) {
             return Some(match self.workspace.cls_details(&uri) {
                 Ok(details) => Class::Workspace(uri, details),
@@ -1393,7 +1393,7 @@ impl<'a> WorkspaceEnv<'a> {
 
     // `cls` and its ancestors, nearest first in IRIS's precedence order and each once, resolved
     // as they come so a search stops as soon as it can.
-    fn ancestry(&self, cls: &str) -> impl Iterator<Item = (String, Option<Class>)> + '_ {
+    pub(super) fn ancestry(&self, cls: &str) -> impl Iterator<Item = (String, Option<Class>)> + '_ {
         let mut seen = HashSet::new();
         let mut pending = vec![cls.to_string()];
         std::iter::from_fn(move || {
@@ -1471,7 +1471,7 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     // `None` for a plain registered object, or when nobody can see.
-    fn class_type(&self, cls: &str) -> Option<bindings::ClassType> {
+    pub(super) fn class_type(&self, cls: &str) -> Option<bindings::ClassType> {
         self.ancestry(cls).find_map(|(_, resolved)| match resolved {
             Some(Class::Workspace(_, details)) => details.keywords.class_type,
             Some(Class::Iris(info)) => info.class_type,
@@ -1786,7 +1786,7 @@ impl<'a> WorkspaceEnv<'a> {
         self.ancestry(cls).map(|(cls, _)| cls).collect()
     }
 
-    fn is_persistent(&self, cls: &str) -> bool {
+    pub(super) fn is_persistent(&self, cls: &str) -> bool {
         self.ancestry(cls)
             .any(|(cls, _)| cls == "%Library.Persistent")
     }
@@ -1801,6 +1801,7 @@ impl<'a> WorkspaceEnv<'a> {
             iris_classes: RefCell::new(HashMap::new()),
             suppress_soft_diagnostics: Cell::new(false),
             qualifying: RefCell::new(HashSet::new()),
+            sql: RefCell::new(Default::default()),
         }
     }
 
@@ -1808,7 +1809,7 @@ impl<'a> WorkspaceEnv<'a> {
         self.touched.borrow().clone()
     }
 
-    fn resolve_uri(&self, kind: DocKind, name: &str) -> Option<String> {
+    pub(super) fn resolve_uri(&self, kind: DocKind, name: &str) -> Option<String> {
         self.touched.borrow_mut().insert((kind, name.to_string()));
         self.workspace.resolve_uri(kind, name)
     }
@@ -1956,7 +1957,7 @@ impl Incompatible {
 }
 
 pub struct WorkspaceEnv<'a> {
-    workspace: &'a WorkspaceStruct,
+    pub(super) workspace: &'a WorkspaceStruct,
     // Every name this check looked up, found or not -- see `WorkspaceStruct::record_deps`.
     touched: RefCell<HashSet<Name>>,
     references: RefCell<Vec<(bindings::Range, bindings::Location)>>,
@@ -1970,6 +1971,8 @@ pub struct WorkspaceEnv<'a> {
     // The classes whose `Extends` are being resolved, whose ancestors `qualify_class_name` can't
     // consult yet.
     qualifying: RefCell<HashSet<String>>,
+    // What embedded SQL's names resolved to so far (see `sql::resolve`).
+    pub(super) sql: RefCell<crate::check::sql::resolve::SqlState>,
 }
 
 pub struct ClassDocument {
@@ -2511,6 +2514,7 @@ mod tests {
             kind: MemberKind::Relationship(bindings::RelationshipInfo {
                 t: Some("Ext.Child".to_string()),
                 cardinality: Some(bindings::Cardinality::Many),
+                sql_field_name: None,
             }),
             uri: None,
             origin: None,

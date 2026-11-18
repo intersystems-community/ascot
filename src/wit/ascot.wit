@@ -42,6 +42,16 @@ interface common {
         t: option<string>,
     }
 
+    // What `[ SqlProc ]` and `[ SqlView ]` project a method or class query as: a stored procedure
+    // named `Class_Member` (a leading `%` spelled `sys_`) unless `[ SqlName = ... ]` renames it, a
+    // view named after the query unless `[ SqlViewName = ... ]` renames it.
+    record sql-projection {
+        procedure: bool,
+        name: option<string>,
+        view: bool,
+        view-name: option<string>,
+    }
+
     // A method's or a label's formal list and what it returns.
     record signature {
         normal: list<normal-arg>,
@@ -49,6 +59,8 @@ interface common {
         t: option<string>,
         // A procedure's public list; `none` for a subroutine.
         procedure-block: option<list<string>>,
+        // How SQL reaches the method or class query, when it does.
+        sql: option<sql-projection>,
     }
 
     record parameter-info {
@@ -63,6 +75,8 @@ interface common {
         t: option<string>,
         collection: option<collection-kind>,
         multidimensional: bool,
+        // `[ SqlFieldName = ... ]`; `none` for the default, the property's name.
+        sql-field-name: option<string>,
     }
 
     enum cardinality { one, many, parent, children }
@@ -71,6 +85,8 @@ interface common {
     record relationship-info {
         t: option<string>,
         cardinality: option<cardinality>,
+        // `[ SqlFieldName = ... ]`; `none` for the default, the relationship's name.
+        sql-field-name: option<string>,
     }
 
     variant member-kind {
@@ -178,6 +194,11 @@ interface common {
         // Whether each ObjectScript method is a procedure block unless it says otherwise; on by
         // default.
         procedure-block: option<bool>,
+        // `[ SqlTableName = ... ]`; `none` for the default, the class's own name. The schema is
+        // the package, dots as underscores, `User` as `SQLUser`.
+        sql-table-name: option<string>,
+        // `[ SqlRowIdName = ... ]`: the row id column's name in place of `ID`.
+        sql-row-id-name: option<string>,
         // Its own (not inherited) `[ PropertyClass = ... ]` classes.
         property-class: list<string>,
     }

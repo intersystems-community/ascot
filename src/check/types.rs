@@ -1110,6 +1110,7 @@ impl From<bindings::Signature> for TyProcedure {
             variadic,
             t,
             procedure_block,
+            sql: _,
         }: bindings::Signature,
     ) -> Self {
         Self {
@@ -1153,6 +1154,7 @@ impl TyProcedure {
                 ..bindings::VariadicArg::from(arg)
             }),
             t: None,
+            sql: None,
             procedure_block: self.procedure_block.clone(),
         };
         bindings::LabelInfo {

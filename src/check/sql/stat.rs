@@ -2,7 +2,7 @@ use either::Either;
 use tygr::Print;
 use tygr_objectscript::sql::*;
 
-use super::{Walk, Walker};
+use super::{SqlProcedureUse, Walk, Walker, name_of};
 
 impl Walk for Stat {
     fn walk(&self, w: &mut Walker) {
@@ -11,8 +11,8 @@ impl Walk for Stat {
             Stat::Insert(stat) => stat.walk(w),
             Stat::Update(stat) => stat.walk(w),
             Stat::Delete(stat) => stat.walk(w),
-            Stat::Thr(thr) => thr.remote_statement.walk(w),
-            Stat::DDL(ddl) => ddl.walk(w),
+            Stat::Thr(thr) => w.unchecked(&thr.remote_statement),
+            Stat::DDL(ddl) => w.unchecked(ddl),
             Stat::Declare(decl) => decl.walk(w),
             Stat::OFC(ofc) => ofc.walk(w),
             Stat::TpRelated(tp) => tp.walk(w),
@@ -33,42 +33,55 @@ impl Walk for Stat {
     }
 }
 
+// The target table is the frame of the column list, the `SET` and the `WHERE`.
 impl Walk for Insrt {
     fn walk(&self, w: &mut Walker) {
+        w.push_frame();
         self.target.1.walk(w);
-        self.assignment.1.walk(w)
+        self.assignment.1.walk(w);
+        w.pop_frame()
     }
 }
 
 impl Walk for Updat {
     fn walk(&self, w: &mut Walker) {
-        if let Updat::Update {
-            target,
-            assignment,
-            from,
-            where_clause,
-            ..
-        } = self
-        {
-            target.1.walk(w);
-            assignment.1.walk(w);
-            from.walk(w);
-            where_clause.walk(w)
+        w.push_frame();
+        match self {
+            Updat::Update {
+                target,
+                assignment,
+                from,
+                where_clause,
+                ..
+            } => {
+                target.1.walk(w);
+                from.walk(w);
+                where_clause.walk(w);
+                assignment.1.walk(w)
+            }
+            Updat::UpdateStats { table, .. } => w.table(Some(name_of(&table.0)), None),
         }
+        w.pop_frame()
     }
 }
 
 impl Walk for Delet {
     fn walk(&self, w: &mut Walker) {
+        w.push_frame();
         self.target.1.walk(w);
-        self.where_clause.walk(w)
+        self.where_clause.walk(w);
+        w.pop_frame()
     }
 }
 
 impl Walk for IUDTarget {
     fn walk(&self, w: &mut Walker) {
-        if let IUDTarget::Subquery { query, .. } = self {
-            query.walk(w)
+        match self {
+            IUDTarget::Table { name, alias } => w.table(Some(name_of(&name.0)), alias.as_ref()),
+            IUDTarget::Subquery { query, alias } => {
+                w.table(None, alias.as_ref());
+                query.walk(w)
+            }
         }
     }
 }
@@ -77,7 +90,12 @@ impl Walk for Asign {
     fn walk(&self, w: &mut Walker) {
         match self {
             Asign::SetList { assignments, .. } => assignments.1.walk(w),
-            Asign::ColumnList { values, .. } => values.1.walk(w),
+            Asign::ColumnList { columns, values } => {
+                for column in columns.iter().flat_map(|list| list.wrapped.items.iter()) {
+                    w.column(column)
+                }
+                w.outside(&values.1)
+            }
             Asign::DefaultValues(..) => {}
         }
     }
@@ -85,6 +103,7 @@ impl Walk for Asign {
 
 impl Walk for SQLSetAssignment {
     fn walk(&self, w: &mut Walker) {
+        w.column(&self.column);
         self.value.walk(w)
     }
 }
@@ -144,6 +163,12 @@ impl Walk for OFC {
 
 impl Walk for Call {
     fn walk(&self, w: &mut Walker) {
+        let args = self
+            .args
+            .wrapped
+            .as_ref()
+            .map_or(0, |args| args.items.len());
+        w.call(&self.routine.1.0.0, args, SqlProcedureUse::Call);
         self.args.walk(w);
         if let Some((.., name)) = &self.using {
             w.hosts.reads.push((name.print(), false))

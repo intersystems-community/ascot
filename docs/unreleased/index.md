@@ -8,11 +8,14 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | --- | --- |
 | [A1073](A1073.md) | Label '{label}' is outside this procedure block, which GOTO cannot leave |
 | [A1727](A1727.md) | Syntax error {scope}: {detail} |
+| [A1935](A1935.md) | Too many arguments: '{name}' takes {takes}; the statement fails when it runs |
 | [A2357](A2357.md) | '{name}' is not a parameter of {class}{hint} |
 | [A2716](A2716.md) | Too many arguments to the macro '{name}', which takes {expected} |
 | [A2797](A2797.md) | The macro '{name}' is undefined{suggestions} |
+| [A2957](A2957.md) | No {used} '{name}': no method or class query of the schema's package is SqlProc under that name |
 | [A3119](A3119.md) | Member '{name}' is defined twice |
 | [A3139](A3139.md) | Cannot find member '{mem}' in {cls}{suggestions}{dynamic} |
+| [A3261](A3261.md) | Table '{table}' not found; the statement gets SQLCODE -30 when it runs |
 | [A3286](A3286.md) | '{action}' is not a valid $ZSTRIP action: {reason} |
 | [A3485](A3485.md) | {function} can't take the private variable '{name}' |
 | [A3604](A3604.md) | Method '{name}' overrides {cls}'s but {difference} |
@@ -24,6 +27,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A4652](A4652.md) | $ZCONVERT's fourth argument must be an unsubscripted local variable |
 | [A4963](A4963.md) | Quit inside a loop or Try block takes no value; this one carries {actual} |
 | [A4983](A4983.md) | Variable '{name}' is already declared |
+| [A5086](A5086.md) | Label '{label}' is not listed among the applicable tables; the statement gets SQLCODE -23 when it runs |
 | [A5090](A5090.md) | The macro '{name}' expands recursively without end |
 | [A5254](A5254.md) | Cannot inherit from final class '{cls}' |
 | [A5268](A5268.md) | {function} takes no by-reference argument |
@@ -34,6 +38,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A5967](A5967.md) | {source} is incompatible with {target} |
 | [A6127](A6127.md) | Not enough arguments to the macro '{name}', which takes {expected} |
 | [A6319](A6319.md) | Parameter '{name}' is a constant: it takes no arguments and can't be assigned |
+| [A6418](A6418.md) | '{name}' is a {actual}, which cannot serve as a {used}; the statement fails when it runs |
 | [A6587](A6587.md) | Invalid macro argument: {reason} |
 | [A6781](A6781.md) | Returns nothing where '{wanted}' is declared |
 | [A6851](A6851.md) | Cannot find label '{label}' in {routine} |
@@ -41,6 +46,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A7095](A7095.md) | This value is undefined{expr} |
 | [A7139](A7139.md) | Only $CASE's last argument may omit the value before its colon |
 | [A7217](A7217.md) | An offset cannot enter the procedure block at label '{label}' (IRIS: <NOLINE>) |
+| [A7340](A7340.md) | Field '{field}' not found in the applicable tables ({tables}); the statement gets SQLCODE -29 when it runs |
 | [A7342](A7342.md) | Argument {position} of {function} can't be left empty |
 | [A7461](A7461.md) | No superclass of {cls} has a method '{method}' for ##super to call |
 | [A7604](A7604.md) | Label '{label}' has no formal argument list, so $$ cannot call it (IRIS: <PARAMETER>) |
@@ -120,6 +126,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A5540](A5540.md) | Cannot decide `{directive} {condition}`{expansion} at compile time, so its branch is assumed taken |
 | [A6037](A6037.md) | ${name} is not documented for IRIS, so the call is not checked |
 | [A6204](A6204.md) | '{name}' is a ByRef formal argument and gets a copy of the argument: an assignment the callee makes to it stays there, which may be intended |
+| [A8172](A8172.md) | ascot cannot confirm {what}: the IRIS environment in use carries no SQL names |
 | [A9360](A9360.md) | Cannot confirm '{mem}' exists on {on}{cls}: its hierarchy includes {unseen} |
 
 ## Hints
