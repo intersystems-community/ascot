@@ -262,14 +262,30 @@ fn check_empty_args(call: &cos::FunctionCall) -> Result<(), QuasiTypeError> {
 }
 
 // IRIS won't name a procedure block's private variable.
+// `$NAME`, `$QUERY` and `$ZORDER` refuse a private local; `$ORDER` and `$ZPREVIOUS` one without
+// subscripts, as measured.
 fn require_public<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     target: &cos::GetTarget,
     function: &str,
+    subscripted_too: bool,
 ) -> Result<(), QuasiTypeError> {
-    if let cos::GetTarget::Var(variable) = target
-        && let Left(local) = variable.as_local(env, flow)?
+    if let cos::GetTarget::Var(variable) = target {
+        require_public_variable(env, flow, variable, function, subscripted_too)?;
+    }
+    Ok(())
+}
+
+fn require_public_variable<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    variable: &Variable,
+    function: &str,
+    subscripted_too: bool,
+) -> Result<(), QuasiTypeError> {
+    if let Left(local) = variable.as_local(env, flow)?
+        && (subscripted_too || local.subs.is_empty())
         && !flow.is_public(&local.name)?
     {
         return Err(TypeErrorKind::PrivateVariableNotAllowed {
@@ -730,7 +746,7 @@ impl CheckExprInner for cos::FunctionCall {
                 },
                 ..
             } => {
-                require_public(env, flow, variable.deref(), "$NAME")?;
+                require_public(env, flow, variable.deref(), "$NAME", true)?;
                 if let Left(local) = target_as_local(env, flow, variable)? {
                     flow.handle_get(local)?;
                 }
@@ -777,7 +793,7 @@ impl CheckExprInner for cos::FunctionCall {
                     },
                 ..
             } => {
-                require_public(env, flow, reference.deref(), "$QUERY")?;
+                require_public(env, flow, reference.deref(), "$QUERY", true)?;
                 if let Left(local) = target_as_local(env, flow, reference)? {
                     flow.handle_get(local)?;
                 }
@@ -911,15 +927,22 @@ impl CheckExprInner for cos::FunctionCall {
                 args: ZOrderArgs { variable, .. },
                 ..
             } => {
+                require_public(env, flow, variable.deref(), "$ZORDER", true)?;
+                let _ = variable.to_maybe_ty(env, flow)?;
+                Ok(PowerTy::from("%DataType"))
+            }
+            FunctionCall::ZP {
+                args: ZPArgs { variable, .. },
+                ..
+            } => {
+                if let AllowIndirection::Plain(plain) = variable.deref().deref() {
+                    require_public_variable(env, flow, plain, "$ZPREVIOUS", false)?;
+                }
                 let _ = variable.to_maybe_ty(env, flow)?;
                 Ok(PowerTy::from("%DataType"))
             }
             FunctionCall::Next {
                 args: NextArgs { variable, .. },
-                ..
-            }
-            | FunctionCall::ZP {
-                args: ZPArgs { variable, .. },
                 ..
             } => {
                 let _ = variable.to_maybe_ty(env, flow)?;
@@ -946,6 +969,19 @@ fn define_set_target_base<'a>(
             .is_none()
     {
         flow.handle_set(local, Ty::from("%String").into(), range)?;
+    }
+    Ok(())
+}
+
+// `SET $PIECE(..P, ...) = v` writes a node of the object, which a MultiDimensional property is;
+// any other property is `<OBJECT DISPATCH>` when it runs.
+fn require_variable_base<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    base: Option<&AtomicExpr>,
+) -> Result<(), QuasiTypeError> {
+    if let Some(AtomicExpr::Member { member, args: None }) = base {
+        super::require_multidimensional(env, flow, member.deref())?;
     }
     Ok(())
 }
@@ -1008,30 +1044,39 @@ pub(super) fn check_settarget_fun<'a>(
     super::report_style(env, fun.name(), &[]);
     use cos::SetTargetFun::*;
     match fun {
-        Piece(c) => check_set_fun(
-            env,
-            flow,
-            c.string.as_variable(),
-            env.range(c.string.deref()),
-            c,
-            check_piece_call,
-        )?,
-        Extract(c) => check_set_fun(
-            env,
-            flow,
-            c.string.as_variable(),
-            env.range(c.string.deref()),
-            c,
-            check_extract_call,
-        )?,
-        List(c) => check_set_fun(
-            env,
-            flow,
-            c.list.as_variable(),
-            env.range(c.list.deref()),
-            c,
-            check_list_plain_call,
-        )?,
+        Piece(c) => {
+            require_variable_base(env, flow, c.string.as_atomic())?;
+            check_set_fun(
+                env,
+                flow,
+                c.string.as_variable(),
+                env.range(c.string.deref()),
+                c,
+                check_piece_call,
+            )?
+        }
+        Extract(c) => {
+            require_variable_base(env, flow, c.string.as_atomic())?;
+            check_set_fun(
+                env,
+                flow,
+                c.string.as_variable(),
+                env.range(c.string.deref()),
+                c,
+                check_extract_call,
+            )?
+        }
+        List(c) => {
+            require_variable_base(env, flow, c.list.as_atomic())?;
+            check_set_fun(
+                env,
+                flow,
+                c.list.as_variable(),
+                env.range(c.list.deref()),
+                c,
+                check_list_plain_call,
+            )?
+        }
         ListGet(c) => check_set_var_list(env, flow, &c.first, &c.rest)?,
         Bit(c) => check_set_fun(
             env,
@@ -1054,14 +1099,17 @@ pub(super) fn check_settarget_fun<'a>(
                 check_vector_call,
             )?;
         }
-        WExtract(c) => check_set_fun(
-            env,
-            flow,
-            c.string.as_variable(),
-            env.range(c.string.deref()),
-            c,
-            check_wextract_call,
-        )?,
+        WExtract(c) => {
+            require_variable_base(env, flow, c.string.as_atomic())?;
+            check_set_fun(
+                env,
+                flow,
+                c.string.as_variable(),
+                env.range(c.string.deref()),
+                c,
+                check_wextract_call,
+            )?
+        }
         Property(c) => {
             let _ = check_property_call(env, flow, c)?;
         }
@@ -2123,6 +2171,7 @@ fn check_order<'a>(
     direction: Option<&Ranged<Expr>>,
     target: Option<&Ranged<Variable>>,
 ) -> Result<PowerTy, QuasiTypeError> {
+    require_public(env, flow, variable.deref(), "$ORDER", false)?;
     let new_ty = variable
         .to_maybe_ty(env, flow)?
         .maybe_defined()

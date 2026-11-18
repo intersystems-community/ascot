@@ -729,10 +729,10 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Not enough arguments to the macro '{name}', which takes {expected}"]
     MacroTooFewArguments { name: String, expected: usize },
-    /// `$NAME` and `$QUERY` take a variable the code can reach by name at run time, which a
-    /// procedure block's private locals are not: IRIS refuses to compile either on a local the
-    /// method has not listed as public. Add the variable to the method's `PublicList`, or use a
-    /// global.
+    /// `$NAME`, `$QUERY` and `$ZORDER` take a variable the code can reach by name at run time,
+    /// which a procedure block's private locals are not: IRIS refuses to compile any of them on a
+    /// local the method has not listed as public, and `$ORDER` or `$ZPREVIOUS` on one without
+    /// subscripts. Add the variable to the method's `PublicList`, or use a global.
     ///
     /// ```objectscript
     /// Class Demo.PrivateVariableNotAllowed
@@ -1647,7 +1647,8 @@ type_error_kinds! {
     NotMultidimensional { name: String },
     /// `..X` where IRIS wants a variable: the argument of `$GET`, `$DATA`, `$ORDER`, `$QUERY`,
     /// `$NAME`, `$INCREMENT`, `$ZORDER`, `$SEQUENCE` or `$VECTOR`, either side of `MERGE`, an
-    /// element of `SET $LISTBUILD(...) =`. A `MultiDimensional` property is a variable there; any
+    /// element of `SET $LISTBUILD(...) =`, the base of `SET $PIECE(..., ...) =` and the other
+    /// settable functions. A `MultiDimensional` property is a variable there; any
     /// other property compiles and throws `<OBJECT DISPATCH>` on reaching it. Where an expression
     /// is wanted, `$LISTBUILD(..X)` or `$BIT(..X, 1)`, the property's value serves.
     ///
