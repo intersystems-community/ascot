@@ -56,7 +56,7 @@ pub enum Ident {
 
 #[derive(Grammar)]
 #[tygr(validated, inline)]
-pub struct SQLIdentNonKeyword(Ident);
+pub struct SQLIdentNonKeyword(pub Ident);
 
 impl Validate for SQLIdentNonKeyword {
     const REQUIREMENT: &'static str = "not be a reserved keyword";
@@ -416,24 +416,30 @@ pub struct DelimitedIdentifier(Raw<SQLDelimitedIdentStruct>);
 #[derive(Grammar)]
 #[tygr(inline)]
 pub struct DottedIdent {
-    head: Ident,
-    rest: Vec<(StringEq!("."), Ident)>,
+    pub head: Ident,
+    pub rest: Vec<(StringEq!("."), Ident)>,
+}
+
+impl DottedIdent {
+    pub fn parts(&self) -> impl Iterator<Item = &Ident> {
+        std::iter::once(&self.head).chain(self.rest.iter().map(|(_, ident)| ident))
+    }
 }
 
 #[derive(Grammar)]
-pub struct TName(DottedIdent);
+pub struct TName(pub Ranged<DottedIdent>);
 
 pub type Table = TName;
 
 #[derive(Grammar)]
 #[tygr(name = "SQL function name")]
-pub struct SQLFunctionName(DottedIdent);
+pub struct SQLFunctionName(pub Ranged<DottedIdent>);
 
 #[derive(Grammar)]
 #[tygr(name = "colmn")]
 pub enum Colmn {
-    Str(Ident, Space, StringEq!("."), Space, StringEq!("*")),
-    Arr(DottedIdent, Vec<ArrowRef>),
+    Str(Ranged<Ident>, Space, StringEq!("."), Space, StringEq!("*")),
+    Arr(Ranged<DottedIdent>, Vec<ArrowRef>),
 }
 
 /// Arrow reference for object property access (Cache/IRIS extension)
@@ -1872,7 +1878,7 @@ pub enum SelectItem {
 
 // The Space must be inside the Option to prevent partial consumption
 
-type SQLTableAlias = (
+pub type SQLTableAlias = (
     Space,
     Option<(StringEqCI!("AS"), Space)>,
     SQLIdentNonKeyword,

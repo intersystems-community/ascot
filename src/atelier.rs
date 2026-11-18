@@ -17,7 +17,7 @@ use crate::IrisContext;
 use crate::bindings::{
     Cardinality, ClassInfo, CollectionKind, IndexInfo, IndexKey, IndexSubscript, MemberInfo,
     MemberKind, NormalArg, ParameterInfo, PropertyInfo, RefMode, RelationshipInfo, RoutineInfo,
-    Signature, Source, VariadicArg,
+    Signature, Source, SqlProjection, VariadicArg,
 };
 use crate::cos::{self, LocalVariableName, OSString, Space, Type};
 
@@ -87,6 +87,8 @@ pub struct AtelierContext {
     cls_cache: Cache<Option<ClassInfo>>,
     routine_cache: Cache<Option<Source>>,
     rtn_cache: Cache<Option<RoutineInfo>>,
+    // By `schema.name` in upper case, tables and procedures apart.
+    sql_cache: Cache<Option<String>>,
 }
 
 impl<A: Atelier + 'static> From<A> for AtelierContext {
@@ -97,6 +99,7 @@ impl<A: Atelier + 'static> From<A> for AtelierContext {
             cls_cache: Cache::new(),
             routine_cache: Cache::new(),
             rtn_cache: Cache::new(),
+            sql_cache: Cache::new(),
         }
     }
 }
@@ -110,6 +113,37 @@ impl IrisContext for AtelierContext {
 
     fn get_inc(&self, name: &str) -> Result<Option<Source>, String> {
         self.fetch_routine(&[format!("{name}.inc")])
+    }
+
+    fn sql_names_declared(&self) -> bool {
+        true
+    }
+
+    // The dictionary compares its names exactly; SQL doesn't mind case, so both sides are folded.
+    fn find_cls_by_sql(&self, schema: &str, table: &str) -> Result<Option<String>, String> {
+        self.sql_cache.get_or_try_insert(&format!("table {schema}.{table}").to_ascii_uppercase(), || {
+            let table_sql = "SELECT Name FROM %Dictionary.CompiledClass WHERE %SQLUPPER(SqlSchemaName) = \
+                 %SQLUPPER(?) AND %SQLUPPER(SqlTableName) = %SQLUPPER(?)";
+            let view_sql = "SELECT c.Name AS Name FROM %Dictionary.CompiledQuery q JOIN \
+                 %Dictionary.CompiledClass c ON c.Name = q.Parent WHERE q.SqlView = 1 AND \
+                 %SQLUPPER(c.SqlSchemaName) = %SQLUPPER(?) AND %SQLUPPER(q.SqlViewName) = %SQLUPPER(?)";
+            self.first_name(&[table_sql, view_sql], &[schema, table])
+        })
+    }
+
+    fn find_sql_proc(&self, schema: &str, name: &str) -> Result<Option<String>, String> {
+        self.sql_cache.get_or_try_insert(
+            &format!("proc {schema}.{name}").to_ascii_uppercase(),
+            || {
+                let method_sql = "SELECT m.Parent AS Name FROM %Dictionary.CompiledMethod m JOIN \
+                 %Dictionary.CompiledClass c ON c.Name = m.Parent WHERE m.SqlProc = 1 AND \
+                 %SQLUPPER(c.SqlSchemaName) = %SQLUPPER(?) AND %SQLUPPER(m.SqlName) = %SQLUPPER(?)";
+                let query_sql = "SELECT q.Parent AS Name FROM %Dictionary.CompiledQuery q JOIN \
+                 %Dictionary.CompiledClass c ON c.Name = q.Parent WHERE q.SqlProc = 1 AND \
+                 %SQLUPPER(c.SqlSchemaName) = %SQLUPPER(?) AND %SQLUPPER(q.SqlName) = %SQLUPPER(?)";
+                self.first_name(&[method_sql, query_sql], &[schema, name])
+            },
+        )
     }
 
     // The `.int` first: it is the instance's own macro expansion of the `.mac`, so no expansion
@@ -132,6 +166,21 @@ impl IrisContext for AtelierContext {
 }
 
 impl AtelierContext {
+    // The `Name` the first of the queries answers with.
+    fn first_name(&self, queries: &[&str], params: &[&str]) -> Result<Option<String>, String> {
+        for sql in queries {
+            let rows = self.rows(sql, params)?;
+            if let Some(name) = rows
+                .first()
+                .and_then(|row| row.get("Name"))
+                .and_then(Value::as_str)
+            {
+                return Ok(Some(name.to_string()));
+            }
+        }
+        Ok(None)
+    }
+
     pub(crate) fn rows(&self, sql: &str, params: &[&str]) -> Result<Vec<Value>, String> {
         let rows = self.atelier.query(sql, params)?;
         serde_json::from_str(&rows)
@@ -204,7 +253,8 @@ pub(crate) fn class_infos(
 ) -> Result<HashMap<String, ClassInfo>, String> {
     let sql = format!(
         "SELECT Name, Description, Super, IncludeCode, Import, ClassType, Deprecated, Abstract, Final, \
-         Inheritance, _Language, ProcedureBlock, PropertyClass FROM %Dictionary.CompiledClass WHERE Name {filter}"
+         Inheritance, _Language, ProcedureBlock, PropertyClass, SqlTableName, SqlRowIdName FROM \
+         %Dictionary.CompiledClass WHERE Name {filter}"
     );
     let rows = conn.rows(&sql, params)?;
     if rows.is_empty() {
@@ -270,6 +320,13 @@ fn assemble(
                 language: parsed::<cos::MethodLanguage, _>(str_field("_Language")),
                 procedure_block: row.get("ProcedureBlock").map(is_truthy),
                 property_class: split_classes(str_field("PropertyClass")),
+                // The dictionary holds the defaults: the class's short name, `ID`.
+                sql_table_name: Some(str_field("SqlTableName"))
+                    .filter(|n| !n.is_empty() && Some(*n) != cls.rsplit('.').next())
+                    .map(str::to_string),
+                sql_row_id_name: Some(str_field("SqlRowIdName"))
+                    .filter(|n| !n.is_empty() && !n.eq_ignore_ascii_case("ID"))
+                    .map(str::to_string),
             };
             Some((cls, info))
         })
@@ -362,6 +419,16 @@ struct MemberRow {
     final_: Value,
     #[serde(default, deserialize_with = "empty_string_as_none")]
     origin: Option<String>,
+    // A method's or query's `SqlName`, a property's `SqlFieldName`; the dictionary holds the
+    // defaults (`Class_Method`, the property's name).
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    sql_name: Option<String>,
+    #[serde(default)]
+    sql_proc: Value,
+    #[serde(default)]
+    sql_view: Value,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    sql_view_name: Option<String>,
     // An index's keywords.
     #[serde(default)]
     index_abstract: Value,
@@ -436,16 +503,18 @@ fn all_mem_rows(
         "SELECT Parent, Name, NULL AS Aliases, 'method' AS MemberType, Description, \
              FormalSpec, ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS \
              Relationship, NULL AS Cardinality, ClassMethod, Deprecated, Final, Origin, NULL AS \
-             DefaultValue FROM %Dictionary.CompiledMethod WHERE Parent {filter} AND Origin = \
-             Parent UNION ALL SELECT Parent, Name, Aliases, 'property' AS MemberType, Description, \
-             NULL AS FormalSpec, Type AS ReturnType, Collection, MultiDimensional, Relationship, \
-             Cardinality, 0 AS ClassMethod, Deprecated, Final, Origin, NULL AS DefaultValue FROM \
-             %Dictionary.CompiledProperty WHERE Parent {filter} AND Origin = Parent UNION ALL \
-             SELECT Parent, Name, NULL AS Aliases, 'parameter' AS MemberType, Description, NULL AS \
-             FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS MultiDimensional, 0 AS \
-             Relationship, NULL AS Cardinality, 0 AS ClassMethod, Deprecated, Final, Origin, _Default AS \
-             DefaultValue FROM %Dictionary.CompiledParameter WHERE Parent {filter} AND Origin = \
-             Parent"
+             DefaultValue, SqlName, SqlProc, 0 AS SqlView, NULL AS SqlViewName FROM \
+             %Dictionary.CompiledMethod WHERE Parent {filter} AND Origin = Parent UNION ALL SELECT \
+             Parent, Name, Aliases, 'property' AS MemberType, Description, NULL AS FormalSpec, \
+             Type AS ReturnType, Collection, MultiDimensional, Relationship, Cardinality, 0 AS \
+             ClassMethod, Deprecated, Final, Origin, NULL AS DefaultValue, SqlFieldName AS SqlName, \
+             0 AS SqlProc, 0 AS SqlView, NULL AS SqlViewName FROM %Dictionary.CompiledProperty WHERE \
+             Parent {filter} AND Origin = Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, \
+             'parameter' AS MemberType, Description, NULL AS FormalSpec, Type AS ReturnType, NULL \
+             AS Collection, 0 AS MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS \
+             ClassMethod, Deprecated, Final, Origin, _Default AS DefaultValue, NULL AS SqlName, 0 AS \
+             SqlProc, 0 AS SqlView, NULL AS SqlViewName FROM %Dictionary.CompiledParameter WHERE \
+             Parent {filter} AND Origin = Parent"
     );
     let generating = |deferred: &str| {
         format!(
@@ -456,15 +525,16 @@ fn all_mem_rows(
              CoshardWith AS IndexCoshardWith, Data AS IndexData, {deferred} AS IndexDeferred, \
              Extent AS IndexExtent, IdKey AS IndexIdKey, Internal AS IndexInternal, PrimaryKey AS \
              IndexPrimaryKey, ShardKey AS IndexShardKey, SqlName AS IndexSqlName, Type AS \
-             IndexType, _Unique AS IndexUnique FROM %Dictionary.CompiledIndex WHERE Parent \
-             {filter} AND Origin = Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, 'query' \
-             AS MemberType, Description, FormalSpec, Type AS ReturnType, NULL AS Collection, 0 \
-             AS MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
+             IndexType, _Unique AS IndexUnique, NULL AS SqlName, 0 AS SqlProc, 0 AS SqlView, NULL \
+             AS SqlViewName FROM %Dictionary.CompiledIndex WHERE Parent {filter} AND Origin = \
+             Parent UNION ALL SELECT Parent, Name, NULL AS Aliases, 'query' AS MemberType, \
+             Description, FormalSpec, Type AS ReturnType, NULL AS Collection, 0 AS \
+             MultiDimensional, 0 AS Relationship, NULL AS Cardinality, 0 AS ClassMethod, 0 AS \
              Deprecated, Final, Origin, 0 AS IndexAbstract, NULL AS IndexCondition, NULL AS \
              IndexCoshardWith, NULL AS IndexData, 0 AS IndexDeferred, 0 AS IndexExtent, 0 AS \
              IndexIdKey, 0 AS IndexInternal, 0 AS IndexPrimaryKey, 0 AS IndexShardKey, NULL AS \
-             IndexSqlName, NULL AS IndexType, 0 AS IndexUnique FROM %Dictionary.CompiledQuery \
-             WHERE Parent {filter} AND Origin = Parent"
+             IndexSqlName, NULL AS IndexType, 0 AS IndexUnique, SqlName, SqlProc, SqlView, \
+             SqlViewName FROM %Dictionary.CompiledQuery WHERE Parent {filter} AND Origin = Parent"
         )
     };
     let mut rows = member_rows(conn, &declared, &[params, params, params].concat())?;
@@ -536,6 +606,7 @@ fn property_type(
     collection: Option<&str>,
     ty: Option<String>,
     multidimensional: bool,
+    sql_field_name: Option<String>,
 ) -> PropertyInfo {
     PropertyInfo {
         t: ty,
@@ -545,7 +616,25 @@ fn property_type(
             _ => None,
         },
         multidimensional,
+        sql_field_name,
     }
+}
+
+// A method's or query's `SqlProc`/`SqlView`, with the names the dictionary reports beside the
+// defaults it fills in: `Class_Member`, a leading `%` as `sys_`, and the query's own name.
+fn sql_projection(row: &MemberRow) -> Option<SqlProjection> {
+    let class = row.parent.rsplit('.').next().unwrap_or_default();
+    let default_name = match row.name.strip_prefix('%') {
+        Some(rest) => format!("{class}_sys_{rest}"),
+        None => format!("{class}_{}", row.name),
+    };
+    let (procedure, view) = (is_truthy(&row.sql_proc), is_truthy(&row.sql_view));
+    (procedure || view).then(|| SqlProjection {
+        procedure,
+        name: row.sql_name.clone().filter(|name| *name != default_name),
+        view,
+        view_name: row.sql_view_name.clone().filter(|name| *name != row.name),
+    })
 }
 
 fn row_to_member_kind(row: &MemberRow) -> MemberKind {
@@ -564,11 +653,13 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
                 Some("children") => Some(Cardinality::Children),
                 _ => None,
             },
+            sql_field_name: row.sql_name.clone().filter(|name| *name != row.name),
         }),
         "property" => MemberKind::Property(property_type(
             row.collection.as_deref(),
             row.return_type.clone(),
             is_truthy(&row.multi_dimensional),
+            row.sql_name.clone().filter(|name| *name != row.name),
         )),
         "parameter" => MemberKind::Parameter(ParameterInfo {
             t: row.return_type.clone(),
@@ -608,6 +699,7 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
                 variadic,
                 t: row.return_type.clone(),
                 procedure_block: None,
+                sql: sql_projection(row),
             })
         }
         _ => {
@@ -617,6 +709,7 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
                 variadic,
                 t: row.return_type.clone(),
                 procedure_block: None,
+                sql: sql_projection(row),
             };
             if is_truthy(&row.class_method) {
                 MemberKind::ClassMethod(info)
@@ -715,13 +808,13 @@ mod tests {
 
     #[test]
     fn a_collection_property_keeps_its_element_type() {
-        let list = property_type(Some("list"), Some("%String".into()), false);
+        let list = property_type(Some("list"), Some("%String".into()), false, None);
         assert_eq!(list.collection, Some(CollectionKind::List));
         assert_eq!(list.t.as_deref(), Some("%String"));
-        let array = property_type(Some("array"), Some("Foo.Bar".into()), false);
+        let array = property_type(Some("array"), Some("Foo.Bar".into()), false, None);
         assert_eq!(array.collection, Some(CollectionKind::Array));
         assert_eq!(
-            property_type(None, Some("%String".into()), false).collection,
+            property_type(None, Some("%String".into()), false, None).collection,
             None
         );
     }
@@ -877,6 +970,7 @@ mod tests {
             variadic: None,
             t: None,
             procedure_block: None,
+            sql: None,
         };
         let x = NormalArg {
             mode: None,

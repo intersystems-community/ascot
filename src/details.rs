@@ -228,6 +228,8 @@ pub(crate) struct ClassKeywords {
     pub(crate) language: Option<bindings::Language>,
     pub(crate) procedure_block: Option<bool>,
     pub(crate) property_class: Vec<String>,
+    pub(crate) sql_table_name: Option<String>,
+    pub(crate) sql_row_id_name: Option<String>,
 }
 
 // A keyword list entry that is no keyword of its declaration as written.
@@ -296,6 +298,8 @@ pub enum MemberKindSpecificDetails {
         element_ty: Option<Ty>,
         // `[ InitialExpression = v ]` when `v` is a constant.
         initial: Option<WithRange<Const>>,
+        // `[ SqlFieldName = n ]`: the column's name in place of the property's.
+        sql_field_name: Option<String>,
     },
     Parameter {
         ty: Option<Ty>,
@@ -315,6 +319,7 @@ pub enum MemberKindSpecificDetails {
         normal_args: Vec<WithRange<NormalArg>>,
         variadic_arg: Option<WithRange<VariadicArg>>,
         ty: Option<Ty>,
+        sql: Option<bindings::SqlProjection>,
     },
 }
 
@@ -328,6 +333,7 @@ pub struct MethodDetails {
     pub procedure_block: ProcedureBlock,
     pub is_abstract: bool,
     pub is_private: bool,
+    pub sql: Option<bindings::SqlProjection>,
     pub body: WithRange<String>,
     // Byte offset of the method's own declaration (`Method`/`ClassMethod` keyword).
     pub header_start: usize,
@@ -795,6 +801,8 @@ impl TryFrom<&str> for ClassDetails {
                 PropertyClass(v) => {
                     keywords.property_class = v.value.classes().iter().map(|c| c.print()).collect()
                 }
+                SqlTableName(v) => keywords.sql_table_name = Some(sql_name(&v.value)),
+                SqlRowIdName(v) => keywords.sql_row_id_name = Some(sql_name(&v.value)),
                 _ => {}
             }
         }
@@ -1016,6 +1024,7 @@ fn process_member(
                     multidimensional: typed(keywords.as_ref()).any(|keyword| {
                         matches!(keyword, cos::PropertyKeyword::MultiDimensional(flag) if flag.is_set())
                     }),
+                    sql_field_name: sql_field_name(keywords.as_ref()),
                 },
             ),
             cos::Property::Relationship {
@@ -1045,6 +1054,7 @@ fn process_member(
                         element_ty: None,
                         initial: None,
                         multidimensional: false,
+                        sql_field_name: sql_field_name(keywords.as_ref()),
                     },
                 )
             }
@@ -1059,6 +1069,21 @@ fn process_member(
                     normal_args,
                     variadic_arg,
                     ty: query.return_type.as_deref().map(Ty::from),
+                    sql: {
+                        let mut sql = bindings::SqlProjection::default();
+                        for keyword in typed(query.keywords.as_ref()) {
+                            match keyword {
+                                cos::QueryKeyword::SqlProc(flag) => sql.procedure = flag.is_set(),
+                                cos::QueryKeyword::SqlName(v) => sql.name = Some(sql_name(&v.value)),
+                                cos::QueryKeyword::SqlView(flag) => sql.view = flag.is_set(),
+                                cos::QueryKeyword::SqlViewName(v) => {
+                                    sql.view_name = Some(sql_name(&v.value))
+                                }
+                                _ => {}
+                            }
+                        }
+                        Some(sql).filter(|sql| *sql != bindings::SqlProjection::default())
+                    },
                 },
             )
         }
@@ -1123,6 +1148,7 @@ fn method_kind(
     let mut public_list = Vec::new();
     let mut is_abstract = false;
     let mut is_private = false;
+    let mut sql = bindings::SqlProjection::default();
     let keywords = method.header.keywords.take().into_iter();
     for entry in keywords
         .flat_map(|list| list.entries)
@@ -1143,6 +1169,8 @@ fn method_kind(
             }
             Left(Abstract(flag)) => is_abstract = flag.is_set(),
             Left(Private(flag)) => is_private = flag.is_set(),
+            Left(SqlProc(flag)) => sql.procedure = flag.is_set(),
+            Left(SqlName(v)) => sql.name = Some(sql_name(&v.value)),
             _ => {}
         }
     }
@@ -1165,5 +1193,20 @@ fn method_kind(
         procedure_block,
         is_abstract,
         is_private,
+        sql: Some(sql).filter(|sql| *sql != bindings::SqlProjection::default()),
     }))
+}
+
+// A SQL name as a keyword value: bare, or in quotes.
+fn sql_name(value: &cos::KeywordValue) -> String {
+    value.print().trim_matches('"').to_string()
+}
+
+fn sql_field_name(
+    keywords: Option<&cos::KeywordList<cos::FailableKeyword<cos::PropertyKeyword>>>,
+) -> Option<String> {
+    typed(keywords).find_map(|keyword| match keyword {
+        cos::PropertyKeyword::SqlFieldName(v) => Some(sql_name(&v.value)),
+        _ => None,
+    })
 }

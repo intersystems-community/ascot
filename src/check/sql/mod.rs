@@ -1,14 +1,21 @@
 //! The checker of embedded SQL. It walks the parsed statement node by node, the way the
-//! ObjectScript checker does, and today records what the flow needs: every host variable as a
-//! read or a write, and the cursor the statement declares or fetches.
+//! ObjectScript checker does, and records what the flow needs -- every host variable as a read or
+//! a write, and the cursor the statement declares or fetches -- and the names `resolve` checks.
+
+use std::ops::Range;
 
 use either::Either;
-use tygr::{Prefix, Print, Suffix, Vec1, Wrap};
+use tygr::{Prefix, Print, Ranged, Suffix, Vec1, Wrap};
+
+use crate::bindings::{ClassInfo, MemberKind, SqlProjection};
+use crate::check::errors::{SqlProcedureUse, TypeErrorKind};
+use resolve::{Columns, Lookup, ProcInfo};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::sql::*;
 
 mod expr;
 mod query;
+pub(crate) mod resolve;
 mod stat;
 
 #[derive(Default)]
@@ -19,9 +26,88 @@ pub(super) struct Hosts {
     pub fetches: Option<String>,
 }
 
-pub(super) fn hosts(sql: &SQL) -> Hosts {
+// A query's bindings while it is walked: its `FROM` items, each with its table's columns when
+// they are known, the CTEs of a `WITH`, and the select aliases.
+#[derive(Default)]
+pub(crate) struct Frame {
+    pub tables: Vec<(TableRef, Option<Columns>)>,
+    pub ctes: Vec<String>,
+    pub aliases: Vec<String>,
+    // A `SELECT` statement around its branches: it takes the first branch's names, which its
+    // trailing `ORDER BY` sees and the other branches don't.
+    pub branches: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct TableRef {
+    // `None` for a subquery, a table-valued function or a JSON_TABLE.
+    pub name: Option<Name>,
+    pub alias: Option<String>,
+}
+
+// A dotted name as SQL reads it, quotes dropped, at its byte range in the text.
+#[derive(Clone)]
+pub(crate) struct Name {
+    pub parts: Vec<String>,
+    pub range: Range<usize>,
+}
+
+pub(crate) struct ColumnRef {
+    pub qualifier: Vec<String>,
+    // `None` for `label.*`.
+    pub name: Option<String>,
+    pub range: Range<usize>,
+}
+
+// What the walker asks of the checker, when there is one (see `resolve`).
+pub(crate) trait Resolver {
+    fn table(&self, schema: &str, table: &str) -> Lookup<Option<Columns>>;
+    fn procedure(&self, schema: &str, name: &str) -> Lookup<ProcInfo>;
+    fn report(&self, kind: TypeErrorKind, range: &Range<usize>);
+}
+
+// An identifier's text, a delimited one without its quotes.
+fn text(ident: &Ident) -> String {
+    match ident {
+        Ident::Simple(name) => name.print(),
+        Ident::Delimited(name) => name.print().trim_matches('"').replace("\"\"", "\""),
+    }
+}
+
+fn name_of(dotted: &Ranged<DottedIdent>) -> Name {
+    Name {
+        parts: dotted.parts().map(text).collect(),
+        range: dotted.range(),
+    }
+}
+
+// A method's or class query's SQL projection, as declared.
+pub(crate) fn projection(kind: &MemberKind) -> Option<&SqlProjection> {
+    match kind {
+        MemberKind::Method(sig) | MemberKind::ClassMethod(sig) | MemberKind::Query(sig) => {
+            sig.sql.as_ref()
+        }
+        _ => None,
+    }
+}
+
+// The views the class's `[ SqlView ]` queries project, by name.
+pub(crate) fn views(info: &ClassInfo) -> impl Iterator<Item = &str> {
+    info.members.iter().filter_map(|m| match &m.kind {
+        MemberKind::Query(sig) => {
+            let sql = sig.sql.as_ref().filter(|sql| sql.view)?;
+            Some(sql.view_name.as_deref().unwrap_or(&m.name))
+        }
+        _ => None,
+    })
+}
+
+pub(super) fn analyze(sql: &SQL, check: Option<&dyn Resolver>) -> Hosts {
     let mut w = Walker {
         hosts: Hosts::default(),
+        frames: vec![Frame::default()],
+        check,
+        unchecked: false,
         access: Access::Read,
     };
     sql.stat.walk(&mut w);
@@ -34,12 +120,106 @@ enum Access {
     Write,
 }
 
-struct Walker {
+struct Walker<'r> {
     hosts: Hosts,
+    // The statement's frame first, the innermost query's last.
+    frames: Vec<Frame>,
+    check: Option<&'r dyn Resolver>,
+    // Inside DDL or a statement for a foreign server, whose names are not this namespace's.
+    unchecked: bool,
     access: Access,
 }
 
-impl Walker {
+impl Walker<'_> {
+    fn unchecked<T: Walk + ?Sized>(&mut self, t: &T) {
+        let was = std::mem::replace(&mut self.unchecked, true);
+        t.walk(self);
+        self.unchecked = was;
+    }
+
+    fn push_frame(&mut self) {
+        self.frames.push(Frame::default());
+    }
+
+    // A statement's frame takes its first branch's names, for the trailing `ORDER BY`.
+    fn pop_frame(&mut self) {
+        let frame = self.frames.pop().expect("a frame was pushed");
+        if let Some(statement) = self.frames.last_mut()
+            && statement.branches
+            && statement.tables.is_empty()
+            && statement.aliases.is_empty()
+        {
+            statement.tables = frame.tables;
+            statement.aliases = frame.aliases;
+        }
+    }
+
+    fn current(&mut self) -> &mut Frame {
+        self.frames.last_mut().expect("the statement's frame stays")
+    }
+
+    // Whether the current frame is a branch of a `SELECT` statement.
+    fn in_statement(&self) -> bool {
+        self.frames.len() >= 2 && self.frames[self.frames.len() - 2].branches
+    }
+
+    // Walks `t` in the enclosing frame: the query feeding an `INSERT` does not see its target.
+    fn outside<T: Walk + ?Sized>(&mut self, t: &T) {
+        let frame = self.frames.pop().expect("a frame was pushed");
+        t.walk(self);
+        self.frames.push(frame);
+    }
+
+    fn table(&mut self, name: Option<Name>, alias: Option<&SQLTableAlias>) {
+        if self.unchecked {
+            return;
+        }
+        let alias = alias.map(|(_, _, ident)| text(&ident.0));
+        let columns = match (&name, self.check) {
+            (Some(name), Some(check)) => resolve::table(check, &self.frames, name),
+            _ => None,
+        };
+        self.current()
+            .tables
+            .push((TableRef { name, alias }, columns));
+    }
+
+    fn alias(&mut self, alias: &SQLIdentNonKeyword) {
+        let alias = text(&alias.0);
+        self.current().aliases.push(alias);
+    }
+
+    fn column(&mut self, column: &Colmn) {
+        let Some(check) = self.check.filter(|_| !self.unchecked) else {
+            return;
+        };
+        let column = match column {
+            Colmn::Str(label, ..) => ColumnRef {
+                qualifier: vec![text(label)],
+                name: None,
+                range: label.range(),
+            },
+            Colmn::Arr(dotted, _) => {
+                let mut qualifier: Vec<String> = dotted.parts().map(text).collect();
+                let name = qualifier.pop();
+                ColumnRef {
+                    qualifier,
+                    name,
+                    range: dotted.range(),
+                }
+            }
+        };
+        if let Some(kind) = resolve::column_issue(&self.frames, &column) {
+            check.report(kind, &column.range);
+        }
+    }
+
+    fn call(&mut self, name: &Ranged<DottedIdent>, args: usize, used: SqlProcedureUse) {
+        if let Some(check) = self.check.filter(|_| !self.unchecked) {
+            resolve::call(check, &name_of(name), args, used);
+        }
+    }
+
     fn written<T: Walk + ?Sized>(&mut self, t: &T) {
         self.with(Access::Write, t)
     }
@@ -275,7 +455,128 @@ mod tests {
     use tygr::Parse;
 
     fn hosts_of(text: &str) -> Hosts {
-        hosts(&SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+        analyze(
+            &SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")),
+            None,
+        )
+    }
+
+    // Two tables and a view, a method and a class query; what gets reported, as `CODE at offset`.
+    struct Mock(std::cell::RefCell<Vec<String>>);
+
+    impl Resolver for Mock {
+        fn table(&self, schema: &str, table: &str) -> Lookup<Option<Columns>> {
+            let columns = |names: &[&str]| {
+                Some(Columns {
+                    names: names.iter().map(|n| n.to_string()).collect(),
+                    complete: true,
+                })
+            };
+            match (schema, table.to_ascii_uppercase().as_str()) {
+                ("Demo", "T") => Lookup::Found(columns(&["Name", "Age", "ID"])),
+                ("Demo", "U") => Lookup::Found(columns(&["Name", "Title", "ID"])),
+                ("Demo", "V") => Lookup::Found(None),
+                _ => Lookup::Missing,
+            }
+        }
+
+        fn procedure(&self, _: &str, name: &str) -> Lookup<ProcInfo> {
+            match name.to_ascii_uppercase().as_str() {
+                "T_COUNT" => Lookup::Found(ProcInfo {
+                    is_query: false,
+                    takes: 0,
+                    variadic: false,
+                }),
+                "T_BYNAME" => Lookup::Found(ProcInfo {
+                    is_query: true,
+                    takes: 1,
+                    variadic: false,
+                }),
+                _ => Lookup::Missing,
+            }
+        }
+
+        fn report(&self, kind: TypeErrorKind, range: &Range<usize>) {
+            self.0
+                .borrow_mut()
+                .push(format!("{} at {}", kind.code(), range.start));
+        }
+    }
+
+    fn reports(text: &str) -> Vec<String> {
+        let mock = Mock(Default::default());
+        analyze(
+            &SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")),
+            Some(&mock),
+        );
+        mock.0.into_inner()
+    }
+
+    #[test]
+    fn every_table_column_and_procedure_of_a_statement() {
+        let fine = [
+            // A correlated reference reaches the enclosing query's names.
+            "SELECT Name INTO :n FROM Demo.T p WHERE EXISTS (SELECT 1 FROM Demo.U u WHERE u.Title = p.Name)",
+            // A trailing `ORDER BY` names the first branch's columns and aliases.
+            "SELECT Name AS N FROM Demo.T UNION SELECT Name FROM Demo.U ORDER BY N",
+            // A CTE's columns are not known, nor a view's.
+            "WITH C AS (SELECT Name FROM Demo.T) SELECT Nope FROM C",
+            "SELECT V.Nope FROM Demo.V",
+            "SELECT Name FROM Demo.T t WHERE FOR SOME (Demo.U e) (e.Title = t.Name)",
+            "INSERT INTO Demo.T (Name) SELECT Name FROM Demo.U",
+            "SELECT %ID, x__classname FROM Demo.T t WHERE t.* IS NULL",
+            "SELECT Demo.T_Count() FROM Demo.T",
+            // A function without a schema may be a built-in.
+            "SELECT Nope() FROM Demo.T",
+            "THROUGH FOREIGN SERVER s SELECT Nope FROM Demo.Nope",
+            "CREATE VIEW v AS SELECT Nope FROM Demo.Nope",
+        ];
+        for text in fine {
+            assert_eq!(reports(text), Vec::<String>::new(), "{text}");
+        }
+        let wrong = [
+            ("SELECT Name FROM Demo.Nope", "Demo.Nope", "A3261"),
+            ("SELECT Nope FROM Demo.T", "Nope", "A7340"),
+            ("SELECT p.Age FROM Demo.U p", "p.Age", "A7340"),
+            (
+                "SELECT Name FROM Demo.T p WHERE EXISTS (SELECT 1 FROM Demo.U u WHERE q.Name = 1)",
+                "q.Name",
+                "A5086",
+            ),
+            // A branch does not see the first branch's names; the `ORDER BY` does.
+            (
+                "SELECT Name FROM Demo.T UNION SELECT Age FROM Demo.U",
+                "Age",
+                "A7340",
+            ),
+            (
+                "SELECT Name AS N FROM Demo.T UNION SELECT Name FROM Demo.U ORDER BY Nope",
+                "Nope",
+                "A7340",
+            ),
+            ("INSERT INTO Demo.T (Title) VALUES (1)", "Title", "A7340"),
+            // The query feeding an `INSERT` does not see the target.
+            (
+                "INSERT INTO Demo.T (Name) SELECT Age FROM Demo.U",
+                "Age",
+                "A7340",
+            ),
+            (
+                "SELECT Demo.T_Count(1) FROM Demo.T",
+                "Demo.T_Count",
+                "A1935",
+            ),
+            (
+                "SELECT Demo.T_ByName('x') FROM Demo.T",
+                "Demo.T_ByName",
+                "A6418",
+            ),
+            ("CALL Demo.Nope()", "Demo.Nope", "A2957"),
+        ];
+        for (text, at, code) in wrong {
+            let expected = format!("{code} at {}", text.find(at).unwrap());
+            assert_eq!(reports(text), [expected], "{text}");
+        }
     }
 
     fn names(occurrences: &[(String, bool)]) -> Vec<&str> {
@@ -285,7 +586,7 @@ mod tests {
     #[test]
     fn every_role_of_a_host_variable() {
         let h = hosts_of("SELECT Name INTO :name, :o.Prop FROM T WHERE Id = :id AND Age > :a(:i)");
-        assert_eq!(names(&h.reads), ["o", "id", "a", "i"]);
+        assert_eq!(names(&h.reads), ["id", "a", "i", "o"]);
         assert_eq!(h.writes, [("name".to_string(), false)]);
         assert!(h.reads.iter().any(|(n, s)| n == "a" && *s));
 
@@ -315,7 +616,7 @@ mod tests {
 
         let h =
             hosts_of("UPDATE T SET A = :a, B = (SELECT MAX(X) FROM U WHERE Z = :z) WHERE Id = :id");
-        assert_eq!(names(&h.reads), ["a", "z", "id"]);
+        assert_eq!(names(&h.reads), ["id", "a", "z"]);
 
         let h = hosts_of(
             "SELECT X INTO :x FROM T WHERE Y IN (SELECT Y FROM U WHERE V = :v) UNION SELECT X FROM W WHERE Q = :q",
@@ -345,7 +646,7 @@ mod tests {
                 continue;
             };
             parsed += 1;
-            let h = hosts(&sql);
+            let h = analyze(&sql, None);
             let found: Vec<&str> = h
                 .reads
                 .iter()

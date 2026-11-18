@@ -189,6 +189,7 @@ impl From<&MethodDetails> for wit_bind::Signature {
                     .as_ref()
                     .map_or(vec![], |x| x.iter().map(|x| x.to_string()).collect()),
             ),
+            sql: details.sql.clone(),
         }
     }
 }
@@ -210,15 +211,18 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                     variadic: None,
                     t: None,
                     procedure_block: None,
+                    sql: None,
                 })
             }
             MemberKindSpecificDetails::Property {
                 ty,
                 element_ty,
                 multidimensional,
+                sql_field_name,
                 ..
             } => {
                 let multidimensional = *multidimensional;
+                let sql_field_name = sql_field_name.clone();
                 // A `many`/`children` relationship was read as the collection of the related
                 // objects (see `details`); reported as the relationship it is.
                 if let Some(check::types::Ty::OREF(check::types::ClsOrIns::Ins(cls))) = ty
@@ -228,6 +232,7 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                     return MemberKind::Relationship(wit_bind::RelationshipInfo {
                         t: Some(element),
                         cardinality: Some(wit_bind::Cardinality::Many),
+                        sql_field_name,
                     });
                 }
                 MemberKind::Property(match (ty, element_ty) {
@@ -239,11 +244,13 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                             wit_bind::CollectionKind::Array
                         }),
                         multidimensional,
+                        sql_field_name,
                     },
                     (ty, _) => wit_bind::PropertyInfo {
                         t: ty.as_ref().map(|t| t.to_string()),
                         collection: None,
                         multidimensional,
+                        sql_field_name,
                     },
                 })
             }
@@ -265,6 +272,7 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                 normal_args,
                 variadic_arg,
                 ty,
+                sql,
                 ..
             } => MemberKind::Query(wit_bind::Signature {
                 normal: normal_args
@@ -275,6 +283,7 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                 variadic: variadic_arg.as_deref().map(bindings::VariadicArg::from),
                 t: ty.as_ref().map(|t| t.to_string()),
                 procedure_block: None,
+                sql: sql.clone(),
             }),
         }
     }
@@ -358,6 +367,8 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
             language: k.language,
             procedure_block: k.procedure_block,
             property_class: k.property_class.clone(),
+            sql_table_name: k.sql_table_name.clone(),
+            sql_row_id_name: k.sql_row_id_name.clone(),
         }
     }
 }
@@ -383,6 +394,20 @@ impl Default for wit_bind::ClassInfo {
             language: None,
             procedure_block: None,
             property_class: vec![],
+            sql_table_name: None,
+            sql_row_id_name: None,
+        }
+    }
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for wit_bind::SqlProjection {
+    fn default() -> Self {
+        Self {
+            procedure: false,
+            name: None,
+            view: false,
+            view_name: None,
         }
     }
 }

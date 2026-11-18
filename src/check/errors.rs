@@ -1100,6 +1100,188 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Variable '{name}' is assigned but never read"]
     UnreadAssignment { name: String },
+    /// The `FROM`, `INSERT INTO`, `UPDATE` or `DELETE FROM` of embedded SQL names a table no class
+    /// projects: no persistent class in the workspace or on the IRIS instance has the schema's
+    /// package and the table's name as its own or as its `SqlTableName`, and no class query of
+    /// the package is a `SqlView` of that name. IRIS compiles the statement and gives it SQLCODE
+    /// -30 when it runs. The schema is the package with dots as underscores, `SQLUser` for `User`,
+    /// and an unqualified table is in `SQLUser`.
+    ///
+    /// ```objectscript env=none compiles
+    /// Class Demo.SqlTableNotFound
+    /// {
+    ///
+    /// ClassMethod Count() As %Integer
+    /// {
+    ///     &sql(SELECT COUNT(*) INTO :count FROM Demo.Missing) //! A3261
+    ///     Quit count
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A3261"]
+    #[severity = Error]
+    #[message = "Table '{table}' not found; the statement gets SQLCODE -30 when it runs"]
+    SqlTableNotFound { table: String },
+    /// A column that none of the applicable tables has: the table is a class, and no property of
+    /// it or of its ancestors is projected under that name -- a property's `SqlFieldName` or its
+    /// own name, `ID` or the class's `SqlRowIdName`, a serial property's fields as
+    /// `Property_Field`. IRIS compiles the statement and gives it SQLCODE -29 when it runs.
+    ///
+    /// ```objectscript
+    /// Class Demo.SqlPerson Extends %Persistent
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// Property Age As %Integer [ SqlFieldName = Years ];
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.SqlFieldNotFound
+    /// {
+    ///
+    /// ClassMethod Oldest() As %String
+    /// {
+    ///     &sql(SELECT Name INTO :name FROM Demo.SqlPerson WHERE Age > 90) //! A7340
+    ///     Quit name
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A7340"]
+    #[severity = Error]
+    #[message = "Field '{field}' not found in the applicable tables ({tables}); the statement gets SQLCODE -29 when it runs"]
+    SqlFieldNotFound { field: String, tables: String },
+    /// A qualified column, `label.column` or `label.*`, whose label is neither a table of the
+    /// statement's `FROM` nor an alias of one; a table given an alias goes by the alias alone.
+    /// IRIS compiles the statement and gives it SQLCODE -23 when it runs.
+    ///
+    /// ```objectscript
+    /// Class Demo.SqlPerson Extends %Persistent
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.SqlLabelNotFound
+    /// {
+    ///
+    /// ClassMethod Named() As %String
+    /// {
+    ///     &sql(SELECT p.Name INTO :name FROM Demo.SqlPerson person) //! A5086
+    ///     Quit name
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A5086"]
+    #[severity = Error]
+    #[message = "Label '{label}' is not listed among the applicable tables; the statement gets SQLCODE -23 when it runs"]
+    SqlLabelNotFound { label: String },
+    /// `CALL schema.name(...)`, `schema.name(...)` in an expression or `FROM schema.name(...)`
+    /// names a stored procedure no class provides: no method or class query of the schema's
+    /// package, inherited ones included, is `[ SqlProc ]` under that name -- `Class_Member` by
+    /// default, a leading `%` spelled `sys_`, or the member's own `SqlName`. IRIS refuses to
+    /// compile the `CALL`; the other two compile and get SQLCODE -359 or -30 when the statement
+    /// runs. A function without a schema is left alone: it may be a built-in.
+    ///
+    /// ```objectscript env=none
+    /// Class Demo.SqlProcedureNotFound
+    /// {
+    ///
+    /// ClassMethod Promote(name As %String) As %Integer [ SqlProc ]
+    /// {
+    ///     Quit $Length(name)
+    /// }
+    ///
+    /// ClassMethod Run() As %Integer
+    /// {
+    ///     &sql(CALL Demo.SqlProcedureNotFound_Promot('Ann')) //! A2957
+    ///     Quit SQLCODE
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A2957"]
+    #[severity = Error]
+    #[message = "No {used} '{name}': no method or class query of the schema's package is SqlProc under that name"]
+    SqlProcedureNotFound { name: String, used: SqlProcedureUse },
+    /// A class query's stored procedure used as a function in an expression, or a method's used as
+    /// a table-valued function in `FROM`: SQL calls a method as a function, and a class query with
+    /// `CALL` or in `FROM`. IRIS compiles the statement and gives it SQLCODE -357 (a class query
+    /// as a function) or -30 (a method in `FROM`) when it runs.
+    ///
+    /// ```objectscript
+    /// Class Demo.SqlPerson Extends %Persistent
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.SqlProcedureMisused
+    /// {
+    ///
+    /// Query ByName(name As %String) As %SQLQuery [ SqlProc ]
+    /// {
+    ///     SELECT Name FROM Demo.SqlPerson WHERE Name = :name
+    /// }
+    ///
+    /// ClassMethod First() As %String
+    /// {
+    ///     &sql(SELECT Demo.SqlProcedureMisused_ByName('Ann') INTO :first) //! A6418
+    ///     Quit first
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A6418"]
+    #[severity = Error]
+    #[message = "'{name}' is a {actual}, which cannot serve as a {used}; the statement fails when it runs"]
+    SqlProcedureMisused { name: String, actual: SqlMemberKind, used: SqlProcedureUse },
+    /// A stored procedure called with more arguments than its method or class query declares,
+    /// and no `args...` to take the rest. IRIS refuses to compile a `CALL` with too many arguments
+    /// (SQLCODE -370); a function compiles and fails inside the method with `<PARAMETER>`, SQLCODE
+    /// -149, when the statement runs.
+    ///
+    /// ```objectscript env=none compiles
+    /// Class Demo.SqlTooManyArguments
+    /// {
+    ///
+    /// ClassMethod Twice(n As %Integer) As %Integer [ SqlProc ]
+    /// {
+    ///     Quit n * 2
+    /// }
+    ///
+    /// ClassMethod Run() As %Integer
+    /// {
+    ///     &sql(SELECT Demo.SqlTooManyArguments_Twice(1, 2) INTO :result) //! A1935
+    ///     Quit result
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A1935"]
+    #[severity = Error]
+    #[message = "Too many arguments: '{name}' takes {takes}; the statement fails when it runs"]
+    SqlTooManyArguments { name: String, takes: ArgCount },
+    /// A table, field or procedure of embedded SQL the workspace doesn't settle, checked against
+    /// IRIS declarations from before ascot recorded SQL names (format 1.0): the schema's package
+    /// has classes there, and any of them may project the name through a `SqlTableName`,
+    /// `SqlFieldName`, `SqlProc` or `SqlName` the declarations leave out. Nothing is reported as
+    /// wrong; declarations `ascot declare` writes now, or a live instance, settle it.
+    #[code = "A8172"]
+    #[severity = Information]
+    #[message = "ascot cannot confirm {what}: the IRIS environment in use carries no SQL names"]
+    SqlUnconfirmed { what: String },
     /// An input host variable of embedded SQL, `:name` anywhere but an `INTO` list, that no path
     /// assigns before the statement. IRIS compiles and runs the code, and the documentation says
     /// what it does: an undefined input host variable is read as SQL NULL, so a `WHERE Name =
@@ -2916,6 +3098,40 @@ impl std::fmt::Display for ArgCount {
             1 => f.write_str("1 argument"),
             n => write!(f, "{n} arguments"),
         }
+    }
+}
+
+// How a statement reaches a stored procedure: `CALL`, as a function in an expression, or as a
+// table-valued function in `FROM`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SqlProcedureUse {
+    Call,
+    Function,
+    Table,
+}
+
+impl std::fmt::Display for SqlProcedureUse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SqlProcedureUse::Call => "procedure",
+            SqlProcedureUse::Function => "function",
+            SqlProcedureUse::Table => "table-valued function",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SqlMemberKind {
+    Method,
+    Query,
+}
+
+impl std::fmt::Display for SqlMemberKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SqlMemberKind::Method => "method",
+            SqlMemberKind::Query => "class query",
+        })
     }
 }
 

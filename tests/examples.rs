@@ -117,6 +117,15 @@ impl IrisContext for Shared {
     fn get_rtn(&self, name: &str) -> Result<Option<ascot::bindings::RoutineInfo>, String> {
         self.0.get_rtn(name)
     }
+    fn sql_names_declared(&self) -> bool {
+        self.0.sql_names_declared()
+    }
+    fn find_cls_by_sql(&self, schema: &str, table: &str) -> Result<Option<String>, String> {
+        self.0.find_cls_by_sql(schema, table)
+    }
+    fn find_sql_proc(&self, schema: &str, name: &str) -> Result<Option<String>, String> {
+        self.0.find_sql_proc(schema, name)
+    }
 }
 
 fn environment() -> Arc<Box<dyn IrisContext>> {
@@ -190,6 +199,10 @@ const NO_EXAMPLE: &[(&str, &str)] = &[
     (
         "A3717",
         "needs two documents declaring one class name, and an example's documents are named after their class",
+    ),
+    (
+        "A8172",
+        "fires only against IRIS declarations from before SQL names were recorded, which the examples' environment may or may not be",
     ),
 ];
 

@@ -1,7 +1,7 @@
 use either::Either;
 use tygr_objectscript::sql::*;
 
-use super::{Walk, Walker};
+use super::{SqlProcedureUse, Walk, Walker};
 
 impl Walk for Scalx {
     fn walk(&self, w: &mut Walker) {
@@ -22,12 +22,16 @@ impl Walk for Term {
             Term::OdbcEscape(escape) => escape.walk(w),
             Term::Scalx(scalx) => scalx.walk(w),
             Term::Query(query) => query.walk(w),
-            Term::UserDefinedFunction(f) => f.args.walk(w),
+            Term::UserDefinedFunction(f) => {
+                let args = f.args.wrapped.as_ref().map_or(0, |args| args.items.len());
+                w.call(&f.name.0, args, SqlProcedureUse::Function);
+                f.args.walk(w)
+            }
             Term::HostVar(host_var) => host_var.walk(w),
+            Term::Column(column) => w.column(column),
             Term::Macro(..)
             | Term::Literal(_)
             | Term::ParameterMarker(_)
-            | Term::Column(_)
             | Term::SpecialSystemVariable(_)
             | Term::Null(_)
             | Term::CurrentDate(_)
@@ -586,14 +590,21 @@ impl Walk for Cond {
             Cond::Not { condition, .. } => condition.walk(w),
             Cond::Paren { predicate, .. } => predicate.walk(w),
             Cond::Exists { query, .. } => query.walk(w),
-            Cond::ForSomeElement { predicate, .. } => predicate.walk(w),
+            Cond::ForSomeElement {
+                column, predicate, ..
+            } => {
+                w.column(column);
+                w.unchecked(predicate)
+            }
             Cond::ForSome {
                 tables, condition, ..
             } => {
+                w.push_frame();
                 tables.walk(w);
                 if let Some((_, condition)) = condition {
                     condition.walk(w)
                 }
+                w.pop_frame()
             }
             Cond::Comparison {
                 scalx, comparison, ..

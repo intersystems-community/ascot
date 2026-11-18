@@ -231,6 +231,29 @@ pub trait IrisContext: Send + Sync {
     // The full text of `name.inc`, code included.
     fn get_inc(&self, name: &str) -> Result<Option<bindings::Source>, String>;
     fn get_rtn(&self, name: &str) -> Result<Option<bindings::RoutineInfo>, String>;
+    /// Whether the classes come with their SQL names (`SqlTableName`, `SqlFieldName`, `SqlProc`,
+    /// ...), which a declaration file from before 1.1 leaves out.
+    fn sql_names_declared(&self) -> bool {
+        false
+    }
+    /// The class projected as the table or view `schema.table`, compared as SQL does, without
+    /// regard to case; `Err` when the context cannot tell.
+    fn find_cls_by_sql(&self, _schema: &str, _table: &str) -> Result<Option<String>, String> {
+        Err("the context does not answer SQL names".to_string())
+    }
+    /// The class whose method or class query is the stored procedure `schema.name`.
+    fn find_sql_proc(&self, _schema: &str, _name: &str) -> Result<Option<String>, String> {
+        Err("the context does not answer SQL names".to_string())
+    }
+}
+
+/// The SQL schema of a package: `User` is `SQLUser`, and dots are underscores.
+pub fn sql_schema(package: &str) -> String {
+    if package.eq_ignore_ascii_case("User") {
+        "SQLUser".to_string()
+    } else {
+        package.replace('.', "_")
+    }
 }
 
 type IrisHandle = Box<dyn IrisContext>;
@@ -247,6 +270,18 @@ impl<T: IrisContext + ?Sized> IrisContext for std::sync::Arc<T> {
 
     fn get_rtn(&self, name: &str) -> Result<Option<bindings::RoutineInfo>, String> {
         (**self).get_rtn(name)
+    }
+
+    fn sql_names_declared(&self) -> bool {
+        (**self).sql_names_declared()
+    }
+
+    fn find_cls_by_sql(&self, schema: &str, table: &str) -> Result<Option<String>, String> {
+        (**self).find_cls_by_sql(schema, table)
+    }
+
+    fn find_sql_proc(&self, schema: &str, name: &str) -> Result<Option<String>, String> {
+        (**self).find_sql_proc(schema, name)
     }
 }
 
@@ -444,6 +479,13 @@ impl WorkspaceStruct {
     fn doc_text(&self, uri: &str) -> Option<String> {
         let cell = self.doc_cache.get(uri)?.as_ref().ok()?;
         Some(cell.borrow().text.clone())
+    }
+
+    // Every open class by name, with its uri.
+    pub(crate) fn class_uris(&self) -> Vec<(String, String)> {
+        (self.class_index.borrow().iter())
+            .map(|(name, uri)| (name.clone(), uri.clone()))
+            .collect()
     }
 
     pub(crate) fn cls_details(&self, uri: &str) -> Result<Arc<ClassDetails>, Vec<Diagnostic>> {
@@ -2758,6 +2800,7 @@ mod tests {
                 variadic: None,
                 t: t.map(str::to_string),
                 procedure_block: None,
+                sql: None,
             }),
             uri: None,
             origin: None,
