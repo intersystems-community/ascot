@@ -2444,7 +2444,7 @@ pub struct KeywordValue(Raw<KeywordValueEnum>);
 #[derive(Grammar)]
 pub struct PropertyType {
     pub collection: Option<CollectionKind>,
-    pub class_name: SignatureType,
+    pub ty: Type,
 }
 
 #[derive(Grammar)]
@@ -3359,8 +3359,8 @@ pub enum Property {
     Simple {
         keyword: Raw<(StringEqCI!("Property"), Space1)>,
         name: QuotableClassMemberName,
-        as_type: Option<As<PropertyType>>,
-        type_params: Option<TypeParamList>,
+        // `As T(...)`, or the parameters alone: the type is then `%String`.
+        as_type: Option<Either<As<PropertyType>, TypeParamList>>,
         keywords: Option<KeywordList<FailableKeyword<PropertyKeyword>>>,
         semicolon: Raw<(Space, StringEq!(";"))>,
     },
@@ -3368,8 +3368,7 @@ pub enum Property {
     Relationship {
         keyword: Raw<(StringEqCI!("Relationship"), Space1)>,
         name: QuotableClassMemberName,
-        as_type: Option<As<PropertyType>>,
-        type_params: Option<TypeParamList>,
+        as_type: Option<Either<As<PropertyType>, TypeParamList>>,
         keywords: Option<KeywordList<FailableKeyword<PropertyKeyword>>>,
         semicolon: Raw<(Space, StringEq!(";"))>,
     },

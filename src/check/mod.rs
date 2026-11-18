@@ -5077,7 +5077,6 @@ fn check_property_or_parameter_declaration(
         MemberKindSpecificDetails::Property {
             ty,
             element_ty,
-            type_param_names,
             initial,
             ..
         } => {
@@ -5090,12 +5089,15 @@ fn check_property_or_parameter_declaration(
                 let name = env.base.qualify_class_name(&cty.name, Some(class_name));
                 env.base.check_declared_class_exists(&name, member.range);
             }
+            // For `list Of X(...)` / `array Of X(...)` the parameters are the element's.
+            let (type_class, type_param_names) = match element_ty.as_ref().or(ty.as_ref()) {
+                Some(Ty::OREF(ClsOrIns::Ins(cty))) => (
+                    Some(cty.name.clone()),
+                    cty.params.keys().collect::<Vec<_>>(),
+                ),
+                _ => (None, vec![]),
+            };
             if !type_param_names.is_empty() {
-                // For `list Of X(...)` / `array Of X(...)` the parameters are the element's.
-                let type_class = match element_ty.as_ref().or(ty.as_ref()) {
-                    Some(Ty::OREF(ClsOrIns::Ins(cty))) => Some(cty.name.clone()),
-                    _ => None,
-                };
                 // A type-param can also come from a `[PropertyClass = ...]` on this class or an
                 // ancestor (e.g. %JSON.Adaptor lists %JSON.PropertyParameters, making
                 // `%JSONFIELDNAME` valid everywhere) -- see `WorkspaceEnv::property_classes`.
