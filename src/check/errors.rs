@@ -1111,7 +1111,7 @@ type_error_kinds! {
     /// Class Demo.SqlTableNotFound
     /// {
     ///
-    /// ClassMethod Count() As %Integer
+    /// ClassMethod Count() As %Integer //! A8061
     /// {
     ///     &sql(SELECT COUNT(*) INTO :count FROM Demo.Missing) //! A3261
     ///     Quit count
@@ -1195,12 +1195,12 @@ type_error_kinds! {
     /// Class Demo.SqlProcedureNotFound
     /// {
     ///
-    /// ClassMethod Promote(name As %String) As %Integer [ SqlProc ]
+    /// ClassMethod Promote(name As %String) As %Integer [ SqlProc ] //! A8061
     /// {
     ///     Quit $Length(name)
     /// }
     ///
-    /// ClassMethod Run() As %Integer
+    /// ClassMethod Run() As %Integer //! A8061
     /// {
     ///     &sql(CALL Demo.SqlProcedureNotFound_Promot('Ann')) //! A2957
     ///     Quit SQLCODE
@@ -1256,12 +1256,12 @@ type_error_kinds! {
     /// Class Demo.SqlTooManyArguments
     /// {
     ///
-    /// ClassMethod Twice(n As %Integer) As %Integer [ SqlProc ]
+    /// ClassMethod Twice(n As %Integer) As %Integer [ SqlProc ] //! A8061
     /// {
     ///     Quit n * 2
     /// }
     ///
-    /// ClassMethod Run() As %Integer
+    /// ClassMethod Run() As %Integer //! A8061
     /// {
     ///     &sql(SELECT Demo.SqlTooManyArguments_Twice(1, 2) INTO :result) //! A1935
     ///     Quit result
