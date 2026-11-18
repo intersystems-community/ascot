@@ -1,19 +1,16 @@
-//! Markdown rendering of a class member's signature (`MemberInfo` from `bindings.rs`) for hover
-//! text. Used by `Workspace::hover` in `lib.rs`; the LSP and MCP front ends pass the result
-//! through unchanged.
+//! Markdown rendering of a class member for hover text, in the form the InterSystems Language
+//! Server gives its own: `(**Class**) Kind <u>**Name**</u>(*arg* As **Type**) As **Type**`, a
+//! rule, the description as written. Used by `Workspace::hover` in `lib.rs`.
 
 use crate::bindings::{CollectionKind, MemberInfo, MemberKind, RefMode, Signature};
 
-pub(crate) fn format_member_hover(member: &MemberInfo) -> String {
+pub(crate) fn format_member_hover(member: &MemberInfo, class: Option<&str>) -> String {
     let name = &member.name;
-    let signature = match &member.kind {
-        MemberKind::Method(info) => format!("Method {name}{}", format_method_signature(info)),
-        MemberKind::ClassMethod(info) => {
-            format!("ClassMethod {name}{}", format_method_signature(info))
-        }
-        MemberKind::ClientMethod(info) => {
-            format!("ClientMethod {name}{}", format_method_signature(info))
-        }
+    let (kind, rest) = match &member.kind {
+        MemberKind::Method(info) => ("Method", format_method_signature(info)),
+        MemberKind::ClassMethod(info) => ("ClassMethod", format_method_signature(info)),
+        MemberKind::ClientMethod(info) => ("ClientMethod", format_method_signature(info)),
+        MemberKind::Query(info) => ("Query", format_method_signature(info)),
         MemberKind::Property(info) => {
             let of = match info.collection {
                 Some(CollectionKind::List) => "list Of ",
@@ -21,45 +18,61 @@ pub(crate) fn format_member_hover(member: &MemberInfo) -> String {
                 None => "",
             };
             let t = info.t.as_deref().map(|t| format!("{of}{t}"));
-            format!("Property {name}{}", format_as(t.as_deref()))
+            ("Property", format_as(t.as_deref()))
         }
-        MemberKind::Relationship(info) => {
-            format!("Relationship {name}{}", format_as(info.t.as_deref()))
-        }
+        MemberKind::Relationship(info) => ("Relationship", format_as(info.t.as_deref())),
         MemberKind::Parameter(info) => {
             let default = info
                 .v
                 .as_deref()
                 .map(|v| format!(" = {v}"))
                 .unwrap_or_default();
-            format!("Parameter {name}{}{default}", format_as(info.t.as_deref()))
+            (
+                "Parameter",
+                format!("{}{default}", format_as(info.t.as_deref())),
+            )
         }
-        MemberKind::ForeignKey => format!("ForeignKey {name}"),
-        MemberKind::Index(_) => format!("Index {name}"),
-        MemberKind::Projection => format!("Projection {name}"),
-        MemberKind::Trigger => format!("Trigger {name}"),
-        MemberKind::XData => format!("XData {name}"),
-        MemberKind::Storage => format!("Storage {name}"),
-        MemberKind::Query(info) => format!("Query {name}{}", format_method_signature(info)),
+        MemberKind::ForeignKey => ("ForeignKey", String::new()),
+        MemberKind::Index(_) => ("Index", String::new()),
+        MemberKind::Projection => ("Projection", String::new()),
+        MemberKind::Trigger => ("Trigger", String::new()),
+        MemberKind::XData => ("XData", String::new()),
+        MemberKind::Storage => ("Storage", String::new()),
     };
-    if member.doc.is_empty() {
-        format!("```objectscript\n{signature}\n```")
+    let class = class.map(|c| format!("(**{c}**) ")).unwrap_or_default();
+    let header = format!("{class}{kind} <u>**{name}**</u>{rest}");
+    let body: Vec<&str> = [
+        member.doc.trim(),
+        if member.deprecated {
+            "*Deprecated*"
+        } else {
+            ""
+        },
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect();
+    if body.is_empty() {
+        header
     } else {
-        format!("```objectscript\n{signature}\n```\n\n{}", member.doc)
+        format!("{header}\n***\n{}", body.join("\n\n"))
     }
 }
 
 fn format_as(ty: Option<&str>) -> String {
-    ty.map(|t| format!(" As {t}")).unwrap_or_default()
+    ty.map(|t| format!(" As **{t}**")).unwrap_or_default()
 }
 
 fn format_method_signature(info: &Signature) -> String {
-    let mut args: Vec<String> = info
-        .normal
-        .iter()
+    let mut args: Vec<String> = (info.normal.iter())
         .map(|arg| {
+            let default = arg
+                .default
+                .as_deref()
+                .map(|d| format!(" = {d}"))
+                .unwrap_or_default();
             format!(
-                "{}{}{}",
+                "{}*{}*{}{default}",
                 arg_mode_prefix(arg.mode),
                 arg.name,
                 format_as(arg.t.as_deref())
@@ -68,7 +81,7 @@ fn format_method_signature(info: &Signature) -> String {
         .collect();
     if let Some(variadic) = &info.variadic {
         args.push(format!(
-            "{}{}...{}",
+            "{}*{}*...{}",
             arg_mode_prefix(variadic.mode),
             variadic.name,
             format_as(variadic.t.as_deref())
