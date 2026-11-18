@@ -63,6 +63,10 @@ pub trait Atelier: Send + Sync {
     fn query(&self, sql: &str, params: &[&str]) -> Result<String, String>;
     /// The text of `/doc/{name}`; `None` if there's no such document.
     fn get_doc(&self, name: &str) -> Result<Option<String>, String>;
+    /// The uri the host opens the document under, if it has one.
+    fn doc_uri(&self, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -74,6 +78,10 @@ impl Atelier for crate::bindings::Atelier {
 
     fn get_doc(&self, name: &str) -> Result<Option<String>, String> {
         crate::bindings::Atelier::get_doc(self, name)
+    }
+
+    fn doc_uri(&self, name: &str) -> Option<String> {
+        crate::bindings::Atelier::doc_uri(self, name)
     }
 }
 
@@ -193,14 +201,17 @@ impl AtelierContext {
             .get_or_try_insert(&docs.join("|"), || self.first_doc(docs))
     }
 
-    // The first of `docs` that exists. The Atelier REST API has no uri scheme of its own to offer.
+    // The first of `docs` that exists.
     pub(crate) fn first_doc(
         &self,
         docs: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<Option<Source>, String> {
         for doc in docs {
             if let Some(text) = self.atelier.get_doc(doc.as_ref())? {
-                return Ok(Some(Source { text, uri: None }));
+                return Ok(Some(Source {
+                    text,
+                    uri: self.atelier.doc_uri(doc.as_ref()),
+                }));
             }
         }
         Ok(None)
@@ -274,7 +285,14 @@ pub(crate) fn class_infos(
             Some((field("Parent")?, field("Type").filter(|t| !t.is_empty())?))
         })
         .collect();
-    Ok(assemble(rows, members, &storages))
+    let mut classes = assemble(rows, members, &storages);
+    for (name, info) in &mut classes {
+        info.uri = conn.atelier.doc_uri(&format!("{name}.cls"));
+        for member in &mut info.members {
+            member.uri = info.uri.clone();
+        }
+    }
+    Ok(classes)
 }
 
 fn assemble(
@@ -310,7 +328,6 @@ fn assemble(
                 members: members.remove(&cls).unwrap_or_default(),
                 include: split_classes(str_field("IncludeCode")),
                 import: Some(split_classes(str_field("Import"))).filter(|i| !i.is_empty()),
-                // The Atelier REST API has no uri scheme of its own to offer here.
                 uri: None,
                 class_type: parsed::<cos::ClassType, _>(str_field("ClassType")),
                 deprecated: row.get("Deprecated").is_some_and(is_truthy),
@@ -903,14 +920,46 @@ mod tests {
             fn get_doc(&self, name: &str) -> Result<Option<String>, String> {
                 Ok((name == "Util.mac").then(|| "ROUTINE Util\nFoo(a)\n Quit".into()))
             }
+            fn doc_uri(&self, name: &str) -> Option<String> {
+                Some(format!("isfs://srv/{name}"))
+            }
         }
         let iris = AtelierContext::from(Docs);
-        let util = iris.get_rtn("Util").unwrap().unwrap().labels.unwrap();
-        let labels: Vec<_> = util.iter().map(|label| label.name.as_str()).collect();
+        let util = iris.get_rtn("Util").unwrap().unwrap();
+        assert_eq!(util.uri.as_deref(), Some("isfs://srv/Util.mac"));
+        let labels: Vec<_> = (util.labels.unwrap().iter())
+            .map(|label| label.name.clone())
+            .collect();
         assert_eq!(labels, ["Foo"]);
         assert!(iris.get_inc("Util").unwrap().is_none());
         assert!(iris.get_rtn("NoSuchRoutine").unwrap().is_none());
         assert!(iris.get_cls("No.Such.Class").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_class_from_the_host_is_located_at_the_hosts_uri() {
+        struct One;
+        impl Atelier for One {
+            fn query(&self, sql: &str, _: &[&str]) -> Result<String, String> {
+                Ok(if sql.contains("%Dictionary.CompiledClass ") {
+                    r#"[{"Name": "A.B", "Super": "%RegisteredObject"}]"#
+                } else if sql.contains("%Dictionary.CompiledMethod") {
+                    r#"[{"parent": "A.B", "Name": "M", "MemberType": "method", "Description": "", "FormalSpec": "", "ReturnType": "", "ClassMethod": 1, "Deprecated": 0}]"#
+                } else {
+                    "[]"
+                }
+                .into())
+            }
+            fn get_doc(&self, _: &str) -> Result<Option<String>, String> {
+                Ok(None)
+            }
+            fn doc_uri(&self, name: &str) -> Option<String> {
+                Some(format!("isfs://srv/{name}"))
+            }
+        }
+        let cls = AtelierContext::from(One).get_cls("A.B").unwrap().unwrap();
+        assert_eq!(cls.uri.as_deref(), Some("isfs://srv/A.B.cls"));
+        assert_eq!(cls.members[0].uri, cls.uri);
     }
 
     #[test]

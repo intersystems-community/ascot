@@ -6,3 +6,4 @@ dist/
 lib/*.d.json.gz
 lib/*.js
 lib/*.d.ts
+lib/style.json
