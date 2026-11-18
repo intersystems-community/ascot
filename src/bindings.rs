@@ -223,10 +223,10 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                 // objects (see `details`); reported as the relationship it is.
                 if let Some(check::types::Ty::OREF(check::types::ClsOrIns::Ins(cls))) = ty
                     && cls.name == "%Library.RelationshipObject"
-                    && let Some(element) = cls.generics.get("ELEMENTTYPE")
+                    && let Some(element) = cls.param("ELEMENTTYPE")
                 {
                     return MemberKind::Relationship(wit_bind::RelationshipInfo {
-                        t: Some(element.clone()),
+                        t: Some(element),
                         cardinality: Some(wit_bind::Cardinality::Many),
                     });
                 }

@@ -15,7 +15,7 @@ use tygr::{Parse, Print};
 
 use crate::bindings::{self, RefMode};
 use crate::check::{WorkspaceEnv, errors::*};
-use crate::cos::{CallType, CollectionKind, Formal, OSExpr, PropertyType, Type, TypeParamList};
+use crate::cos::{CallType, CollectionKind, Formal, PropertyType, Type, TypeParamList};
 use crate::details::WithRange;
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -559,12 +559,9 @@ impl CollectionClass {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClassTy {
     pub name: String,
-    // By parameter name.
-    pub generics: BTreeMap<String, String>,
-    // `PATTERN` of a datatype, `%String(PATTERN="1N")`: the shape a value must have.
-    pub pattern: Option<String>,
-    // `VALUELIST` of a datatype, `%String(VALUELIST=",A,B")`: the values it may hold.
-    pub value_list: Option<Vec<String>>,
+    // The type's parameters as written, `%String(MAXLEN = 50)`: each value's text by name, a
+    // string literal with its quotes.
+    pub params: BTreeMap<String, String>,
 }
 
 pub fn normalize_class_name(name: &mut String) {
@@ -576,64 +573,69 @@ pub fn normalize_class_name(name: &mut String) {
 impl From<String> for ClassTy {
     fn from(mut name: String) -> Self {
         // `%String(MAXLEN=50)`, as a declaration read from IRIS writes it.
-        let (mut pattern, mut value_list) = (None, None);
+        let mut params = BTreeMap::new();
         if let Some(i) = name.find('(') {
-            if let Ok(params) = TypeParamList::parse(&name[i..]) {
-                pattern = pattern_param(&params);
-                value_list = value_list_param(&params);
+            if let Ok(list) = TypeParamList::parse(&name[i..]) {
+                params = params_of(&list);
             }
             name.truncate(name[..i].trim_end().len());
         }
         normalize_class_name(&mut name);
-        ClassTy {
-            name,
-            generics: BTreeMap::new(),
-            pattern,
-            value_list,
-        }
+        ClassTy { name, params }
     }
 }
 
-// The value of `name` among a declared type's parameters, its quotes removed.
-fn string_param(params: &TypeParamList, name: &str) -> Option<String> {
-    let param = params.items.iter().find(|p| p.name.print() == name)?;
-    Some(match &param.value {
-        OSExpr::String(literal) => super::pattern::unquote(literal),
-        other => other.print(),
-    })
+fn params_of(list: &TypeParamList) -> BTreeMap<String, String> {
+    (list.items.iter())
+        .map(|param| (param.name.print(), param.value.print()))
+        .collect()
 }
 
-fn pattern_param(params: &TypeParamList) -> Option<String> {
-    string_param(params, "PATTERN")
+// A string literal's text; anything else as it is.
+pub(crate) fn unquoted(value: &str) -> String {
+    match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        Some(inner) => inner.replace("\"\"", "\""),
+        None => value.to_string(),
+    }
 }
 
-// A `VALUELIST` starts with its own delimiter: `",A,B"` lists `A` and `B`.
-fn value_list_param(params: &TypeParamList) -> Option<Vec<String>> {
-    let list = string_param(params, "VALUELIST")?;
-    let mut chars = list.chars();
-    let delimiter = chars.next()?;
-    Some(
-        chars
-            .as_str()
-            .split(delimiter)
-            .map(str::to_string)
-            .collect(),
-    )
+pub(crate) fn quoted(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-// `ty` with the `PATTERN` and `VALUELIST` its declaration's type parameters carry, if any.
-pub(crate) fn with_pattern(mut ty: Ty, params: Option<&TypeParamList>) -> Ty {
+impl ClassTy {
+    // The parameter's value, a string literal unquoted.
+    pub(crate) fn param(&self, name: &str) -> Option<String> {
+        self.params.get(name).map(|value| unquoted(value))
+    }
+
+    // A `VALUELIST` starts with its own delimiter: `",A,B"` lists `A` and `B`.
+    pub(crate) fn value_list(&self) -> Option<Vec<String>> {
+        let list = self.param("VALUELIST")?;
+        let mut chars = list.chars();
+        let delimiter = chars.next()?;
+        Some(
+            chars
+                .as_str()
+                .split(delimiter)
+                .map(str::to_string)
+                .collect(),
+        )
+    }
+}
+
+// `ty` with the parameters its declaration writes, if any.
+pub(crate) fn with_params(mut ty: Ty, params: Option<&TypeParamList>) -> Ty {
     if let (Ty::OREF(ClsOrIns::Ins(cls)), Some(params)) = (&mut ty, params) {
-        cls.pattern = pattern_param(params);
-        cls.value_list = value_list_param(params);
+        cls.params = params_of(params);
     }
     ty
 }
 
 impl Ty {
-    pub(crate) fn pattern(&self) -> Option<&str> {
+    pub(crate) fn pattern(&self) -> Option<String> {
         match self {
-            Ty::OREF(ClsOrIns::Ins(cls) | ClsOrIns::Cls(cls)) => cls.pattern.as_deref(),
+            Ty::OREF(ClsOrIns::Ins(cls) | ClsOrIns::Cls(cls)) => cls.param("PATTERN"),
             _ => None,
         }
     }
@@ -645,18 +647,9 @@ impl std::fmt::Display for ClassTy {
             Some(this) => write!(f, "%{}", this)?,
             None => write!(f, "{}", self.name)?,
         }
-        let mut args: Vec<_> = self
-            .generics
-            .iter()
-            .map(|(name, arg)| format!("{name} = \"{arg}\""))
+        let args: Vec<_> = (self.params.iter())
+            .map(|(name, value)| format!("{name} = {value}"))
             .collect();
-        if let Some(pattern) = &self.pattern {
-            args.push(format!("PATTERN = \"{}\"", pattern.replace('"', "\"\"")));
-        }
-        if let Some(values) = &self.value_list {
-            let list = values.iter().map(|v| format!(",{v}")).collect::<String>();
-            args.push(format!("VALUELIST = \"{}\"", list.replace('"', "\"\"")));
-        }
         if !args.is_empty() {
             write!(f, "({})", args.join(", "))?;
         }
@@ -796,7 +789,7 @@ impl From<&str> for Ty {
 
 impl From<&Type> for Ty {
     fn from(value: &Type) -> Self {
-        with_pattern(Self::from(value.class_name.print()), value.params.as_ref())
+        with_params(Self::from(value.class_name.print()), value.params.as_ref())
     }
 }
 
@@ -807,7 +800,7 @@ impl From<&PropertyType> for Ty {
                 CollectionKind::ListOf(..) => Self::from("%Collection.AbstractList"),
                 CollectionKind::ArrayOf(..) => Self::from("%Collection.AbstractArray"),
             },
-            None => Self::from(value.class_name.print()),
+            None => Self::from(&value.ty),
         }
     }
 }
@@ -1009,8 +1002,8 @@ pub(crate) fn ty_from_declared(t: Option<String>) -> Option<Ty> {
 
 pub(crate) fn relationship_object(t: Option<String>) -> Ty {
     let mut cls = ClassTy::from("%Library.RelationshipObject".to_string());
-    cls.generics = t
-        .map(|t| ("ELEMENTTYPE".to_string(), t))
+    cls.params = t
+        .map(|t| ("ELEMENTTYPE".to_string(), quoted(&t)))
         .into_iter()
         .collect();
     Ty::OREF(ClsOrIns::Ins(cls))
@@ -1044,7 +1037,8 @@ fn instantiate_ty(
     match ty {
         Ty::This => *ty = Ty::ins(receiver.clone()),
         Ty::Param(param) => {
-            let arg = (receiver.generics.get(param).cloned())
+            let arg = receiver
+                .param(param)
                 .or_else(|| given(param))
                 .or_else(|| crate::mask::generic_default(owner, param));
             if let Some(arg) = arg {
@@ -1195,8 +1189,8 @@ mod tests {
     fn a_value_type_is_instantiated_too() {
         let mut receiver = ClassTy::from("%Library.RelationshipObject".to_string());
         receiver
-            .generics
-            .insert("ELEMENTTYPE".to_string(), "Demo.Child".to_string());
+            .params
+            .insert("ELEMENTTYPE".to_string(), quoted("Demo.Child"));
         let mut element = Ty::from("..#ELEMENTTYPE");
         element.instantiate(&receiver, "%Library.RelationshipObject", &|_| None);
         assert!(matches!(element, Ty::OREF(ClsOrIns::Ins(c)) if c.name == "Demo.Child"));

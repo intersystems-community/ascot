@@ -18,7 +18,7 @@ use tygr::{Grammar, IntoInner, OLC, Parse, Prefix, Print, Ranged, StringOf};
 
 use crate::bindings::{self, RefMode};
 use crate::check::types::{
-    Const, NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty, with_pattern,
+    Const, NormalArg, ProcedureBlock, Ty, TyProcedure, VariadicArg, parameter_ty, with_params,
 };
 use crate::cos::{self, AllowMacro, FailableKeyword, HasMemberKeyword, KeywordList};
 
@@ -291,7 +291,6 @@ pub enum MemberKindSpecificDetails {
         multidimensional: bool,
         // Names from the type's own `(...)` parameter list -- e.g. %String's `MAXLEN` -- easy to
         // confuse with the `[...]` keywords (see `check::mod`'s hint when one is written there).
-        type_param_names: Vec<String>,
         // For a collection property, the element class (see `element_ty`).
         element_ty: Option<Ty>,
         // `[ InitialExpression = v ]` when `v` is a constant.
@@ -662,10 +661,10 @@ fn class_list_text(value: &str) -> Vec<String> {
         .collect()
 }
 
-// `list Of X` / `array Of X`: the element class `X`, which is what the type parameters describe.
+// `list Of X(...)` / `array Of X(...)`: the element class `X`, with the parameters.
 fn element_ty(property_type: &cos::PropertyType) -> Option<Ty> {
     property_type.collection.as_ref()?;
-    Some(Ty::from(property_type.class_name.print()))
+    Some(Ty::from(&property_type.ty))
 }
 
 // `[ InitialExpression = v ]` with `v` a constant, a quoted string or a number; an expression in
@@ -681,14 +680,6 @@ fn initial_expression(
         let constant = Const::from_literal(&valued.value.print())?;
         Some(WithRange::new(constant, olc.range(entry)))
     })
-}
-
-fn type_param_names(type_params: &Option<cos::TypeParamList>) -> Vec<String> {
-    type_params
-        .iter()
-        .flat_map(|params| params.deref().items.iter())
-        .map(|param| param.name.print())
-        .collect()
 }
 
 impl ClassDetails {
@@ -834,7 +825,7 @@ impl TryFrom<&str> for ClassDetails {
 fn undocumented_in(member: &Ranged<cos::Member>, olc: &OLC) -> Vec<WithRange<String>> {
     match member.deref() {
         cos::Member::Property(cos::Property::Relationship {
-            as_type: Some(as_type),
+            as_type: Some(Left(as_type)),
             ..
         }) if let Some(collection) = &as_type.collection => vec![WithRange::new(
             format!(
@@ -974,7 +965,6 @@ fn process_member(
             cos::Property::Simple {
                 name,
                 as_type,
-                type_params,
                 keywords,
                 ..
             } => (
@@ -982,18 +972,15 @@ fn process_member(
                 deprecated || is_deprecated(keywords.as_ref()),
                 keyword_issues_in(keywords.as_ref(), olc),
                 MemberKindSpecificDetails::Property {
-                    // `list Of X(PATTERN=...)`: the parameters describe the element.
-                    ty: as_type.as_deref().map(|t| match t.collection {
-                        Some(_) => Ty::from(t),
-                        None => with_pattern(Ty::from(t), type_params.as_ref()),
+                    ty: as_type.as_ref().map(|t| match t {
+                        Left(t) => Ty::from(&**t),
+                        Right(params) => with_params(Ty::from("%Library.String"), Some(params)),
                     }),
-                    element_ty: (as_type.as_deref().and_then(element_ty))
-                        .map(|element| with_pattern(element, type_params.as_ref())),
+                    element_ty: (as_type.as_ref().and_then(|t| t.as_ref().left())).and_then(|t| element_ty(t)),
                     initial: initial_expression(keywords.as_ref(), olc),
                     multidimensional: typed(keywords.as_ref()).any(|keyword| {
                         matches!(keyword, cos::PropertyKeyword::MultiDimensional(flag) if flag.is_set())
                     }),
-                    type_param_names: type_param_names(&type_params),
                 },
             ),
             cos::Property::Relationship {
@@ -1002,6 +989,7 @@ fn process_member(
                 keywords,
                 ..
             } => {
+                let class = as_type.as_ref().and_then(|t| t.as_ref().left()).map(|t| &**t);
                 // A `many`/`children` relationship is the collection of the related objects.
                 let is_collection = typed(keywords.as_ref()).any(|keyword| {
                     matches!(keyword, cos::PropertyKeyword::Cardinality(cardinality)
@@ -1014,15 +1002,14 @@ fn process_member(
                     MemberKindSpecificDetails::Property {
                         ty: if is_collection {
                             Some(crate::check::types::relationship_object(
-                                as_type.as_deref().map(|t| t.class_name.print()),
+                                class.map(|t| t.ty.class_name.print()),
                             ))
                         } else {
-                            as_type.as_deref().map(|t| Ty::from(t.class_name.print()))
+                            class.map(|t| Ty::from(t.ty.class_name.print()))
                         },
                         element_ty: None,
                         initial: None,
                         multidimensional: false,
-                        type_param_names: vec![],
                     },
                 )
             }

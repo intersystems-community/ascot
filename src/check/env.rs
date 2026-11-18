@@ -114,7 +114,7 @@ fn serves(hook: &TyProcedure, name_arg: usize, mem: &str) -> bool {
         .normal_args
         .get(name_arg)
         .and_then(|arg| arg.ty.as_ref()?.pattern()))
-    .is_none_or(|pattern| crate::check::pattern::matches(pattern, mem) != Some(false))
+    .is_none_or(|pattern| crate::check::pattern::matches(&pattern, mem) != Some(false))
 }
 
 impl Namespace for Parameters {
@@ -1295,8 +1295,10 @@ impl<'a> WorkspaceEnv<'a> {
     pub(crate) fn qualify_ty(&self, ty: &mut Ty, context: &str) {
         if let Ty::OREF(ClsOrIns::Ins(c) | ClsOrIns::Cls(c)) = ty {
             c.name = self.qualify_class_name(&c.name, Some(context));
-            for arg in c.generics.values_mut() {
-                *arg = self.qualify_class_name(arg, Some(context));
+            for (param, arg) in c.params.iter_mut() {
+                if crate::mask::generic_default(&c.name, param).is_some() {
+                    *arg = quoted(&self.qualify_class_name(&unquoted(arg), Some(context)));
+                }
             }
         }
     }
@@ -1491,8 +1493,8 @@ impl<'a> WorkspaceEnv<'a> {
         let Ty::OREF(ClsOrIns::Ins(cls)) = ty else {
             return None;
         };
-        if let Some(values) = &cls.value_list {
-            return Some(values.iter().cloned().map(Const::String).collect());
+        if let Some(values) = cls.value_list() {
+            return Some(values.into_iter().map(Const::String).collect());
         }
         self.ancestry(&cls.name)
             .any(|(cls, _)| cls == "%Library.Boolean")
@@ -1672,7 +1674,7 @@ impl<'a> WorkspaceEnv<'a> {
         name: Option<&str>,
     ) {
         if let (PowerTy::Const(value), Some(pattern)) = (source, target.pattern())
-            && crate::check::pattern::matches(pattern, &value.as_string()) == Some(false)
+            && crate::check::pattern::matches(&pattern, &value.as_string()) == Some(false)
         {
             let what = match name {
                 Some(name) => format!("'{name}', declared as {target}"),
@@ -1735,33 +1737,26 @@ impl<'a> WorkspaceEnv<'a> {
         if x == y {
             return x.into_owned();
         }
-        // Same class, different arguments: merge each argument both sides give.
+        // Same class, different parameters: keep each one both sides agree on, and merge the
+        // classes a class-valued one names.
         if x.name == y.name {
-            let generics = x
-                .generics
-                .iter()
+            let params = (x.params.iter())
                 .filter_map(|(param, a)| {
-                    let b = y.generics.get(param)?;
+                    let b = y.params.get(param)?;
+                    if a == b {
+                        return Some((param.clone(), a.clone()));
+                    }
+                    crate::mask::generic_default(&x.name, param)?;
                     let merged = self.merge_class(
-                        Cow::Owned(ClassTy::from(a.clone())),
-                        Cow::Owned(ClassTy::from(b.clone())),
+                        Cow::Owned(ClassTy::from(unquoted(a))),
+                        Cow::Owned(ClassTy::from(unquoted(b))),
                     );
-                    Some((param.clone(), merged.name))
+                    Some((param.clone(), quoted(&merged.name)))
                 })
                 .collect();
             return ClassTy {
                 name: x.name.clone(),
-                generics,
-                pattern: if x.pattern == y.pattern {
-                    x.pattern.clone()
-                } else {
-                    None
-                },
-                value_list: if x.value_list == y.value_list {
-                    x.value_list.clone()
-                } else {
-                    None
-                },
+                params,
             };
         }
         let y_ancestors: HashSet<String> = self.ancestors(&y.name).into_iter().collect();
@@ -2514,9 +2509,6 @@ mod tests {
             panic!("not an instance")
         };
         assert_eq!(cls.name, "%Library.RelationshipObject");
-        assert_eq!(
-            cls.generics,
-            [("ELEMENTTYPE".to_string(), "Ext.Child".to_string())].into()
-        );
+        assert_eq!(cls.param("ELEMENTTYPE").as_deref(), Some("Ext.Child"));
     }
 }
