@@ -1,5 +1,10 @@
 {
-  "command": { "form": "long", "case": "lower" },
+  "command": { "form": "long", "case": "lower", "allowPostconditionOnArgument": false },
   "function": { "form": "long", "case": "upper" },
-  "variable": { "form": "long", "case": "upper" }
+  "variable": { "form": "long", "case": "upper" },
+  "allowQuitForReturn": false,
+  "maxCommandsPerLine": 1,
+  "spaceAfterComma": true,
+  "openBrace": { "newlineBefore": false, "newlineAfter": true },
+  "closeBrace": { "newlineBefore": true, "newlineAfter": false }
 }
