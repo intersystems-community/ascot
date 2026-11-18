@@ -243,9 +243,9 @@ Classes, routines and include files outside the workspace are resolved against
 IRIS; `iris` says which:
 
 - `--iris latest` (default): the newest declaration-only snapshot of IRIS this
-  ascot knows, downloaded once (4 MB) from this repository's
-  [`declarations` release](https://github.com/intersystems-community/ascot/releases/tag/declarations)
-  into `~/.ascot`.
+  ascot knows, downloaded once (4 MB) from this ascot's own
+  [release](https://github.com/intersystems-community/ascot/releases) into
+  `~/.ascot`.
 - `--iris <release>`: the snapshot of that IRIS release, the tag of its
   `iris-community` image; `--iris irishealth-community:<release>:HSLIB` that of
   IRIS for Health's `HS` and `Ens` classes (6 MB), the namespace after the tag

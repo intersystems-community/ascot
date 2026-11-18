@@ -1,4 +1,4 @@
-//! Downloading a release's pre-built declarations from the project's GitHub release into
+//! Downloading a release's pre-built declarations from this ascot's own GitHub release into
 //! `~/.ascot`, checksum verified, where [`crate::release`] then finds them. Part of the `network`
 //! feature.
 
@@ -16,17 +16,26 @@ const RELEASES: &str = "https://github.com/intersystems-community/ascot/releases
 /// Downloads `release`'s declaration file into `~/.ascot` and returns its path; one already there
 /// is returned as is.
 pub(crate) fn fetch(release: &Release<'_>) -> Result<PathBuf, String> {
-    fetch_into(release, &format!("{RELEASES}/declarations"), &cache_dir()?)
+    // A release carries its own files; a build with no release yet finds them on the
+    // `declarations` release.
+    let own = format!("{RELEASES}/v{}", env!("CARGO_PKG_VERSION"));
+    fetch_into(
+        release,
+        &[&own, &format!("{RELEASES}/declarations")],
+        &cache_dir()?,
+    )
 }
 
-pub(crate) fn fetch_into(release: &Release<'_>, base: &str, dir: &Path) -> Result<PathBuf, String> {
+pub(crate) fn fetch_into(
+    release: &Release<'_>,
+    bases: &[&str],
+    dir: &Path,
+) -> Result<PathBuf, String> {
     let asset = release.asset();
     let path = dir.join(asset.trim_end_matches(".gz"));
     if path.exists() {
         return Ok(path);
     }
-    let url = format!("{}/{asset}", base.trim_end_matches('/'));
-    eprintln!("--iris {release}: downloading {url} into {}", dir.display());
     let tls = ureq::tls::TlsConfig::builder()
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build();
@@ -37,7 +46,16 @@ pub(crate) fn fetch_into(release: &Release<'_>, base: &str, dir: &Path) -> Resul
             .tls_config(tls)
             .build(),
     );
-    let body = get(&agent, &url)?;
+    let (mut url, mut body) = (String::new(), Err(String::new()));
+    for base in bases {
+        url = format!("{}/{asset}", base.trim_end_matches('/'));
+        eprintln!("--iris {release}: downloading {url} into {}", dir.display());
+        body = get(&agent, &url);
+        if body.is_ok() {
+            break;
+        }
+    }
+    let body = body?;
     let expected = String::from_utf8_lossy(&get(&agent, &format!("{url}.sha256"))?)
         .split_whitespace()
         .next()
@@ -150,11 +168,11 @@ mod tests {
             ),
         ]);
         let dir = temp_dir("ok");
-        let path = fetch_into(&release("2026.2"), &url, &dir).unwrap();
+        let path = fetch_into(&release("2026.2"), &[&url], &dir).unwrap();
         assert_eq!(path, dir.join("iris-community-2026.2.d.json"));
         assert_eq!(Declarations::load(&path).unwrap().namespace, "%SYS");
         assert_eq!(*hits.lock().unwrap(), 2);
-        assert_eq!(fetch_into(&release("2026.2"), &url, &dir).unwrap(), path);
+        assert_eq!(fetch_into(&release("2026.2"), &[&url], &dir).unwrap(), path);
         assert_eq!(
             *hits.lock().unwrap(),
             2,
@@ -174,10 +192,35 @@ mod tests {
             ),
         ]);
         let dir = temp_dir("bad");
-        let err = fetch_into(&release("2026.1"), &url, &dir).unwrap_err();
+        let err = fetch_into(&release("2026.1"), &[&url], &dir).unwrap_err();
         assert!(err.contains("checksum"), "{err}");
-        let err = fetch_into(&release("2024.1"), &url, &dir).unwrap_err();
+        let err = fetch_into(&release("2024.1"), &[&url], &dir).unwrap_err();
         assert!(err.contains("404"), "{err}");
         assert!(!dir.exists(), "nothing is written for a failed download");
+    }
+
+    #[test]
+    fn a_release_without_the_file_falls_back_to_the_next_location() {
+        let declarations = Declarations {
+            version: crate::declared::DECLARATIONS_VERSION.to_string(),
+            namespace: "%SYS".to_string(),
+            ..Default::default()
+        };
+        let gz = gzipped(&serde_json::to_string(&declarations).unwrap());
+        let sum = format!("{:x}  {}\n", Sha256::digest(&gz), release("2026.2").asset());
+        let (empty, empty_hits) = server(vec![]);
+        let (url, hits) = server(vec![
+            (format!("/{}", release("2026.2").asset()), gz),
+            (
+                format!("/{}.sha256", release("2026.2").asset()),
+                sum.into_bytes(),
+            ),
+        ]);
+        let dir = temp_dir("fallback");
+        let path = fetch_into(&release("2026.2"), &[&empty, &url], &dir).unwrap();
+        assert_eq!(path, dir.join("iris-community-2026.2.d.json"));
+        assert_eq!(*empty_hits.lock().unwrap(), 1);
+        assert_eq!(*hits.lock().unwrap(), 2);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

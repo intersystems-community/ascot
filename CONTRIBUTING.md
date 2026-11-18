@@ -101,13 +101,16 @@ is embedded in ascot and applied over a live instance. Its `sources` name lines 
 the script replaces in the file by their decided form, for what IRIS decides at compile time and
 ascot can't, such as `#if $$$comClassDefined(...)`; an include the namespace lacks is skipped.
 
-The generated files are published as assets of the `declarations` GitHub Release, a prerelease
-on a fixed tag that is never GitHub's "latest" (which `releases/latest/download` must keep
-resolving to an ascot build); its notes are `.github/declarations-release.md`, re-applied by each run.
-The assets are named
-`iris-community-<release>.d.json.gz` with a `.sha256` beside each, which is where
-`--iris <release>` downloads from. The `Declarations` workflow builds and uploads one
-(`Run workflow`, with the release), or by hand:
+Each release builds the files for the current Community release (the `declarations` job of the
+Release workflow: `iris-community` and `irishealth-community` `%SYS`, and IRIS for Health's
+`HSLIB` and `HSSYS`) and attaches them beside the binaries, named
+`<image>-<release>[.<namespace>].d.json.gz` with a `.sha256` beside each; `--iris <release>`
+downloads from the release of the ascot that asks, into `~/.ascot/<ascot version>`, and falls back
+to the `declarations` GitHub Release, a prerelease on a fixed tag that is never GitHub's "latest"
+(which `releases/latest/download` must keep resolving to an ascot build), where releases before
+0.7.1 kept them; its notes are `.github/declarations-release.md`, re-applied by each run. The
+`Declarations` workflow still builds and uploads one there (`Run workflow`, with the release), or
+by hand:
 
 ```sh
 scripts/prebuilt-declarations.sh 2026.2 iris-community-2026.2.d.json

@@ -91,8 +91,8 @@ impl<'a> Release<'a> {
         self.namespace.unwrap_or(crate::iris::DEFAULT_NAMESPACE)
     }
 
-    /// The asset in the `declarations` GitHub Release: image and tag dash-joined, then the
-    /// namespace unless it is `%SYS`.
+    /// The asset among a release's: image and tag dash-joined, then the namespace unless it is
+    /// `%SYS`.
     pub fn asset(&self) -> String {
         let namespace = match self.namespace() {
             crate::iris::DEFAULT_NAMESPACE => String::new(),
@@ -119,11 +119,12 @@ impl Release<'_> {
     }
 }
 
-/// `~/.ascot`, where downloaded declaration files live.
+/// `~/.ascot/<ascot version>`, where downloaded declaration files live: each release's own.
 pub fn cache_dir() -> Result<PathBuf, String> {
     Ok(std::env::home_dir()
         .ok_or("cannot find the home directory to keep the declarations in")?
-        .join(".ascot"))
+        .join(".ascot")
+        .join(env!("CARGO_PKG_VERSION")))
 }
 
 #[cfg(test)]
