@@ -616,13 +616,16 @@ interface imported {
         get-inc: func(name: string) -> result<option<source>, string>;
     }
 
-    // The two Atelier REST API requests, for ascot to make `iris-context`'s lookups with.
+    // The Atelier REST API requests, for ascot to make `iris-context`'s lookups with. A class and
+    // its members come from the dictionary through `query`, never as text; `get-doc` fetches
+    // routines and include files only, which ascot parses itself.
     resource atelier {
         // The rows of `/action/query` as a JSON array, each an object keyed by column name.
         query: func(sql: string, params: list<string>) -> result<string, string>;
         // The text of `/doc/{name}`; `none` if there's no such document.
         get-doc: func(name: string) -> result<option<string>, string>;
-        // The uri the host opens the document under, if it has one.
+        // The uri the host opens the document under, if it has one: where a definition in a
+        // class, routine or include points, since `query` and `get-doc` carry none.
         doc-uri: func(name: string) -> option<string>;
     }
 
