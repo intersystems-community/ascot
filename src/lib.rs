@@ -1031,7 +1031,11 @@ impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn hover(&self, uri: String, position: bindings::Position) -> Option<String> {
         if let Some(member) = self.hover_member(uri.clone(), position) {
-            return Some(render::format_member_hover(&member));
+            let this = self.borrow();
+            let class = (member.uri.as_deref())
+                .and_then(|uri| this.cls_details(uri).ok())
+                .map(|details| details.name.it.clone());
+            return Some(render::format_member_hover(&member, class.as_deref()));
         }
         let ty = self
             .hover_type(uri.clone(), position)
@@ -2106,7 +2110,7 @@ mod tests {
                 },
             )
             .expect("expected hover text at that position");
-        assert!(markdown.contains("ClassMethod Foo"));
+        assert_eq!(markdown, "(**Test.Hover**) ClassMethod <u>**Foo**</u>()");
     }
 
     #[test]
