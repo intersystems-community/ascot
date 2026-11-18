@@ -2066,6 +2066,25 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Use `Return` to leave a method or procedure; `Quit` is for loops and `Try` blocks"]
     QuitExits,
+    /// Under `{"allowRequiredAfterOptional":false}`, a formal argument without a default after one
+    /// with a default, `M(a As %String = "", b As %String)`. IRIS compiles it, and a caller passing
+    /// the first argument alone leaves the required one undefined. Put the required arguments first.
+    ///
+    /// ```objectscript style={"allowRequiredAfterOptional":false}
+    /// Class Demo.RequiredAfterOptional
+    /// {
+    ///
+    /// ClassMethod Greet(greeting As %String = "Hello", name As %String) As %String //! S6174
+    /// {
+    ///     Return greeting _ ", " _ name
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "S6174"]
+    #[severity = Warning]
+    #[message = "Argument '{name}' has no default but follows one that has"]
+    RequiredAfterOptional { name: String },
     /// Under `{"command":{"allowPostconditionOnArgument":false}}` (or `commandDo`, `commandGoto`,
     /// `commandXecute` for one command), a postconditional on an argument of `Do`, `Goto` or
     /// `Xecute`, `Do ^R:x`, rather than on the keyword, `Do:x ^R`. IRIS accepts both, and with a

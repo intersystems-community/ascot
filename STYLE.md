@@ -10,6 +10,7 @@ A style is a JSON file passed with `--style <file>` to `analyze` and `lsp`; the 
   "functionListbuild": { "form": "short" },
   "variable": { "form": "long", "case": "upper" },
   "allowQuitForReturn": false,
+  "allowRequiredAfterOptional": false,
   "conditionAnd": "double-ampersand",
   "maxNewPerBlock": 1,
   "maxCommandsPerLine": 1,
@@ -37,6 +38,7 @@ With `form` alone, any casing passes; with `case` alone, the form written is kep
 | Key | Values | Reports |
 |---|---|---|
 | `allowQuitForReturn` | `true`, `false` | Under `false`, a `Quit` that leaves the method or procedure, where `Return` belongs. A `Quit` that leaves a loop or a `Try` block is what `Quit` is for. |
+| `allowRequiredAfterOptional` | `true`, `false` | Under `false`, a formal argument without a default after one with a default: `M(a As %String = "", b As %String)`. IRIS compiles it; a caller passing the first argument alone leaves the required one undefined. |
 | `conditionAnd` | `double-ampersand`, `comma` | Conditions of `If`, `ElseIf` and `While` joined the other way: `If a, b` under `double-ampersand`, `If a && b` under `comma`. |
 | `maxNewPerBlock` | a count | Each `New` past the count in one block or routine body. A nested `{ }` block counts its own. |
 | `maxCommandsPerLine` | a count | Each command past the count on one line. A brace-less `If`, `Else` or `For` and the commands it governs count as one. |
