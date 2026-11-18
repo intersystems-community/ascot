@@ -693,6 +693,7 @@ impl ClsOrIns {
 pub struct Member<T> {
     pub ty: T,
     pub location: Option<bindings::Location>,
+    pub final_: bool,
 }
 
 // What a property holds: a value, or a `list Of X` / `array Of X` collection. Collections don't

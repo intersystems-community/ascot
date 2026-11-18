@@ -2693,6 +2693,7 @@ mod tests {
             name: name.to_string(),
             aliases: vec![],
             deprecated: false,
+            final_: false,
             kind: bindings::MemberKind::Method(bindings::Signature {
                 normal,
                 variadic: None,

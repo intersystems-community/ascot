@@ -154,7 +154,7 @@ use crate::{
     SourceMap,
     bindings::{self, Diagnostic, DiagnosticRelatedInformation, InlayHint, Location, RefMode},
     cos::{self, *},
-    details::{self, MemberDetails, MemberKindSpecificDetails, MethodDetails, WithRange},
+    details::{self, MemberDetails, MemberKindSpecificDetails, MemberNs, MethodDetails, WithRange},
 };
 
 pub(crate) trait CheckMember {
@@ -4842,6 +4842,7 @@ fn body_lines(range: bindings::Range, braced: bool) -> usize {
 
 // What IRIS does with a class keyword it can't place: refuse the class for a bad `ClassType`,
 // silently drop anything else.
+
 fn class_keyword_issue(issue: &WithRange<details::KeywordIssue>) -> TypeError {
     let details::KeywordIssue { entry, keyword } = &issue.it;
     if keyword.eq_ignore_ascii_case("ClassType") {
@@ -4880,6 +4881,13 @@ pub(crate) fn check_cls(
     for sup in &cls.extends {
         let name = env.base.qualify_class_name(&sup.it, Some(&cls.name.it));
         env.base.check_declared_class_exists(&name, sup.range);
+        if env.base.is_final(&name) {
+            diagnostics.push(
+                TypeErrorKind::FinalClassInherited { cls: name }
+                    .at(sup.range)
+                    .into(),
+            );
+        }
     }
     // Available to every class without an explicit `Include` (see `CLASS_IMPLICIT_INCLUDES`) --
     // resolved silently (no diagnostic on failure, unlike an explicit `Include`).
@@ -4974,6 +4982,39 @@ pub(crate) fn check_cls(
         }
         for issue in &member.keyword_issues {
             diagnostics.push(member_keyword_issue(member, issue).into());
+        }
+        let name = &member.name.it;
+        let (kind, overridden) = match MemberNs::of(&member.kind) {
+            MemberNs::Method => (
+                "Method",
+                env.base
+                    .overridden::<Methods>(&cls.name.it, name)
+                    .map(|f| (f.origin, f.member.final_)),
+            ),
+            MemberNs::Property => (
+                "Property",
+                env.base
+                    .overridden::<Properties<Read>>(&cls.name.it, name)
+                    .map(|f| (f.origin, f.member.final_)),
+            ),
+            MemberNs::Parameter => (
+                "Parameter",
+                env.base
+                    .overridden::<Parameters>(&cls.name.it, name)
+                    .map(|f| (f.origin, f.member.final_)),
+            ),
+            _ => ("", None),
+        };
+        if let Some((origin, true)) = overridden {
+            diagnostics.push(
+                TypeErrorKind::FinalMemberChanged {
+                    kind: kind.to_string(),
+                    name: name.clone(),
+                    cls: origin,
+                }
+                .at(member.name.range)
+                .into(),
+            );
         }
         for what in &member.undocumented {
             diagnostics.push(

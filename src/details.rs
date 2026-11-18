@@ -223,6 +223,7 @@ pub(crate) struct ClassKeywords {
     pub(crate) abstract_: bool,
     pub(crate) class_type: Option<bindings::ClassType>,
     pub(crate) deprecated: bool,
+    pub(crate) final_: bool,
     pub(crate) inheritance: Option<bindings::Inheritance>,
     pub(crate) language: Option<bindings::Language>,
     pub(crate) procedure_block: Option<bool>,
@@ -248,6 +249,7 @@ pub struct MemberDetails {
     pub name: WithRange<String>,
     pub doc: String,
     pub deprecated: bool,
+    pub final_: bool,
     // What in its keyword list is no keyword of its kind as written; `check_cls` reports it.
     pub keyword_issues: Vec<WithRange<KeywordIssue>>,
     // Forms the documentation doesn't give, which IRIS compiles; `check_cls` reports them.
@@ -619,6 +621,20 @@ fn is_deprecated<K: Grammar + HasMemberKeyword>(
     })
 }
 
+fn is_final(member: &cos::Member) -> bool {
+    match member {
+        cos::Member::Method(m) => typed(m.keywords.as_ref())
+            .any(|k| matches!(k, cos::MethodKeyword::Final(flag) if flag.is_set())),
+        cos::Member::Property(
+            cos::Property::Simple { keywords, .. } | cos::Property::Relationship { keywords, .. },
+        ) => typed(keywords.as_ref())
+            .any(|k| matches!(k, cos::PropertyKeyword::Final(flag) if flag.is_set())),
+        cos::Member::Parameter(p) => typed(p.keywords.as_ref())
+            .any(|k| matches!(k, cos::ParameterKeyword::Final(flag) if flag.is_set())),
+        _ => false,
+    }
+}
+
 // `None` for a standard index (`index`).
 pub(crate) fn index_type(type_: &cos::IndexType) -> Option<bindings::IndexType> {
     Some(match type_ {
@@ -748,6 +764,7 @@ impl TryFrom<&str> for ClassDetails {
                     keywords.class_type = v.value.as_ref().left().map(bindings::ClassType::from)
                 }
                 Deprecated(flag) => keywords.deprecated = flag.is_set(),
+                Final(flag) => keywords.final_ = flag.is_set(),
                 Inheritance(v) => keywords.inheritance = Some((&v.value).into()),
                 Language(v) => keywords.language = Some((&v.value).into()),
                 ProcedureBlock(flag) => keywords.procedure_block = Some(flag.is_set()),
@@ -776,6 +793,7 @@ impl TryFrom<&str> for ClassDetails {
             let doc = extract_document_comments(before_member.0.as_str());
             let range = olc.range(&member);
             let undocumented_member = undocumented_in(&member, &olc);
+            let final_ = is_final(&member);
             let (name, deprecated, keyword_issues, kind) = process_member(
                 &olc,
                 src,
@@ -788,6 +806,7 @@ impl TryFrom<&str> for ClassDetails {
                     name,
                     doc,
                     deprecated,
+                    final_,
                     keyword_issues,
                     undocumented: undocumented_member,
                     kind,
