@@ -997,6 +997,32 @@ type_error_kinds! {
         class: String,
         hint: TypeParamHint,
     },
+    /// A type in a method's or query's signature, `a As %String(MAXLEN = 50)` or `As %Integer(MINVAL
+    /// = 0)`, may carry the type's parameters, and this name is none of them. IRIS compiles the
+    /// class: a signature's type parameters are kept as documentation and neither checked nor
+    /// applied, so a misspelling that a property would be refused for (A2357) passes unnoticed.
+    /// Fix the spelling, or drop the parameter.
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.UnrecognizedSignatureTypeParam Extends %RegisteredObject
+    /// {
+    ///
+    /// Method Greet(name As %String(MAXLN = 50)) As %String //! A3372
+    /// {
+    ///     Return "Hello, " _ name
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A3372"]
+    #[severity = Warning]
+    #[message = "'{name}' is not a parameter of {class}, the type of {of}{hint}"]
+    UnrecognizedSignatureTypeParam {
+        name: String,
+        class: String,
+        of: String,
+        hint: Suggestions,
+    },
     /// An entry in a member's `[ ... ]` keyword list is no keyword of that kind of member as
     /// written (misspelled, or another kind's), or the class's `ClassType` names no class type.
     /// IRIS refuses to compile the class. Fix the spelling, move the keyword to the member it

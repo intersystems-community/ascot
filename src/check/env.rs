@@ -1475,13 +1475,14 @@ impl<'a> WorkspaceEnv<'a> {
         })
     }
 
-    // Whose parameters (`CAPTION`, ...) a property of type `ty` takes besides the type's own.
+    // Whose parameters (`CAPTION`, ...) a property of type `ty` takes besides the type's own. A
+    // serial type takes `%Compiler.Type.Object`'s (`CLASSNAME`, `STORAGEDEFAULT`; measured on
+    // 2026.2), not `%Compiler.Type.Embedded`'s, which declares none.
     pub(crate) fn property_class(&self, ty: &str) -> Option<&'static str> {
         use bindings::ClassType::*;
         Some(match (self.is_datatype(ty)?, self.class_type(ty)) {
             (true, _) => "%Compiler.Type.Literal",
-            (false, Some(Persistent)) => "%Compiler.Type.Object",
-            (false, Some(Serial)) => "%Compiler.Type.Embedded",
+            (false, Some(Persistent | Serial)) => "%Compiler.Type.Object",
             (false, Some(Stream)) => "%Compiler.Type.Stream",
             (false, _) => "%Compiler.Type.RegisteredObject",
         })

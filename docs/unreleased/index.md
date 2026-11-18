@@ -65,6 +65,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A1817](A1817.md) | Variable '{name}' is already NEW'd; this NEW discards its current value |
 | [A1841](A1841.md) | Method '{name}' overrides {cls}'s {difference} |
 | [A3303](A3303.md) | Cannot find routine '{routine}' in the workspace; there is no IRIS environment to check against |
+| [A3372](A3372.md) | '{name}' is not a parameter of {class}, the type of {of}{hint} |
 | [A3717](A3717.md) | Class '{name}' is also declared in {other_uri} |
 | [A3904](A3904.md) | The macro '{name}' is defined in the body of method '{method}', which only the methods compiled after it see |
 | [A4344](A4344.md) | An error here re-enters the handler {var} still names |

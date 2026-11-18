@@ -5098,46 +5098,28 @@ fn check_property_or_parameter_declaration(
                 _ => (None, vec![]),
             };
             if !type_param_names.is_empty() {
-                // A type-param can also come from a `[PropertyClass = ...]` on this class or an
-                // ancestor (e.g. %JSON.Adaptor lists %JSON.PropertyParameters, making
-                // `%JSONFIELDNAME` valid everywhere) -- see `WorkspaceEnv::property_classes`.
-                let property_classes = env.base.property_classes(class_name);
-                // And its property class's, `%Compiler.Type.Collection` for a `list Of`.
-                let implicit = if element_ty.is_some() {
-                    Some("%Compiler.Type.Collection")
-                } else {
-                    type_class
-                        .as_deref()
-                        .and_then(|ty| env.base.property_class(ty))
-                };
-                let candidate_classes: Vec<&str> = (type_class.as_deref().into_iter())
-                    .chain(implicit)
-                    .chain(property_classes.iter().map(String::as_str))
-                    .collect();
+                let candidate_classes = type_param_sources(
+                    env,
+                    class_name,
+                    type_class.as_deref(),
+                    element_ty.is_some(),
+                );
+                let candidate_classes: Vec<&str> =
+                    candidate_classes.iter().map(String::as_str).collect();
+                // A missing type is reported on its own and says nothing about the parameter.
+                if type_class
+                    .as_deref()
+                    .is_some_and(|ty| !env.base.class_exists(ty))
+                {
+                    return;
+                }
                 for name in type_param_names {
                     // Spelled like a property keyword, flag or valued (`= 1` fits every value
                     // shape but Cardinality's).
                     let is_property_keyword = cos::PropertyKeyword::parse(name).is_ok()
                         || cos::PropertyKeyword::parse(&format!("{name} = 1")).is_ok();
-                    // Probed quietly: a candidate nobody can see resolves the parameter on trust,
-                    // and offline that is every system type class.
-                    let was_suppressed = env.base.suppress_soft_diagnostics();
-                    let mut found = false;
-                    let mut absent = vec![];
-                    for cls in &candidate_classes {
-                        let ty = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.to_string())));
-                        match env
-                            .base
-                            .lookup_mem::<Parameters>(&ty, name, member.range, true)
-                        {
-                            Ok(Some(_)) => found = true,
-                            Ok(None) => absent.push(*cls),
-                            // A missing class is reported on its own and says nothing about
-                            // the parameter.
-                            Err(_) => {}
-                        }
-                    }
-                    env.base.restore_soft_diagnostics(was_suppressed);
+                    let (found, absent) =
+                        declares_param(env, &candidate_classes, name, member.range);
                     let confirmed_absent = !found && !absent.is_empty();
                     if is_property_keyword || confirmed_absent {
                         let class = type_class
@@ -5170,6 +5152,22 @@ fn check_property_or_parameter_declaration(
                 }
             }
         }
+        MemberKindSpecificDetails::MethodOrClassMethod(method) => check_signature_type_params(
+            env,
+            class_name,
+            &method.normal_args,
+            method.out.it.as_ref().map(|ty| (ty, method.out.range)),
+            diagnostics,
+        ),
+        MemberKindSpecificDetails::Query {
+            normal_args, ty, ..
+        } => check_signature_type_params(
+            env,
+            class_name,
+            normal_args,
+            ty.as_ref().map(|ty| (ty, member.range)),
+            diagnostics,
+        ),
         MemberKindSpecificDetails::Parameter { as_type, .. } => {
             if let Some(meta_type) = as_type
                 && !contains_ci(PARAMETER_TYPE_KEYWORDS, meta_type)
@@ -5186,6 +5184,96 @@ fn check_property_or_parameter_declaration(
         }
         _ => {}
     }
+}
+
+fn check_signature_type_params(
+    env: &DocumentEnv,
+    class_name: &str,
+    args: &[WithRange<NormalArg>],
+    out: Option<(&Ty, bindings::Range)>,
+    diagnostics: &mut Vec<bindings::Diagnostic>,
+) {
+    let written = (args.iter())
+        .filter_map(|arg| {
+            Some((
+                arg.it.ty.as_ref()?,
+                format!("argument '{}'", arg.it.name),
+                arg.range,
+            ))
+        })
+        .chain(out.map(|(ty, range)| (ty, "the return value".to_string(), range)));
+    for (ty, of, range) in written {
+        let Ty::OREF(ClsOrIns::Ins(cty)) = ty else {
+            continue;
+        };
+        if cty.params.is_empty() {
+            continue;
+        }
+        let class = env.base.qualify_class_name(&cty.name, Some(class_name));
+        if !env.base.class_exists(&class) {
+            continue;
+        }
+        let candidates = type_param_sources(env, class_name, Some(&class), false);
+        let candidates: Vec<&str> = candidates.iter().map(String::as_str).collect();
+        for name in cty.params.keys() {
+            let (found, absent) = declares_param(env, &candidates, name, range);
+            if !found && !absent.is_empty() {
+                let names = env.base.names::<Parameters>(&class);
+                diagnostics.push(
+                    TypeErrorKind::UnrecognizedSignatureTypeParam {
+                        name: name.clone(),
+                        class: class.clone(),
+                        of: of.clone(),
+                        hint: Suggestions(top_similar(name, names.iter().map(String::as_str), 5)),
+                    }
+                    .at(range)
+                    .into(),
+                );
+            }
+        }
+    }
+}
+
+// The classes whose parameters a type written as `type_class(...)` takes: the type's own, its
+// property class's (`%Compiler.Type.Collection` for a `list Of`), and those of the containing
+// class's `PropertyClass` keyword, inherited.
+fn type_param_sources(
+    env: &DocumentEnv,
+    class_name: &str,
+    type_class: Option<&str>,
+    collection: bool,
+) -> Vec<String> {
+    let implicit = if collection {
+        Some("%Compiler.Type.Collection")
+    } else {
+        type_class.and_then(|ty| env.base.property_class(ty))
+    };
+    (type_class.into_iter().chain(implicit))
+        .map(str::to_string)
+        .chain(env.base.property_classes(class_name))
+        .collect()
+}
+
+// Whether a class among `candidates` declares the parameter `name`, and which are known not to; a
+// candidate nobody can see says nothing, and the probe is quiet.
+fn declares_param<'c>(
+    env: &DocumentEnv,
+    candidates: &[&'c str],
+    name: &str,
+    range: bindings::Range,
+) -> (bool, Vec<&'c str>) {
+    let was_suppressed = env.base.suppress_soft_diagnostics();
+    let (mut found, mut absent) = (false, vec![]);
+    for cls in candidates {
+        let ty = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.to_string())));
+        match env.base.lookup_mem::<Parameters>(&ty, name, range, true) {
+            Ok(Some(_)) => found = true,
+            Ok(None) => absent.push(*cls),
+            Err(_) => {}
+        }
+    }
+    env.base.restore_soft_diagnostics(was_suppressed);
+    (found, absent)
 }
 
 impl From<TypeError> for bindings::Diagnostic {
