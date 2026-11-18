@@ -832,7 +832,7 @@ impl CheckExprInner for cos::FunctionCall {
                     },
                 ..
             } => {
-                check_lenient_arg(env, flow, vector.as_ref())?;
+                check_vector_arg(env, flow, vector.as_ref())?;
                 check_read_args(env, flow, [Some(position.deref().deref())], "%Boolean")?;
                 check_out_var(env, flow, arg(value), "%String")?;
                 Ok(Ty::from("%Boolean").into())
@@ -843,7 +843,7 @@ impl CheckExprInner for cos::FunctionCall {
                 },
                 ..
             } => {
-                check_lenient_arg(env, flow, first.deref().as_ref())?;
+                check_vector_arg(env, flow, first.deref().as_ref())?;
                 check_read_args(
                     env,
                     flow,
@@ -910,8 +910,11 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::ZOrder {
                 args: ZOrderArgs { variable, .. },
                 ..
+            } => {
+                let _ = variable.to_maybe_ty(env, flow)?;
+                Ok(PowerTy::from("%DataType"))
             }
-            | FunctionCall::Next {
+            FunctionCall::Next {
                 args: NextArgs { variable, .. },
                 ..
             }
@@ -979,6 +982,20 @@ fn check_lenient_arg<'a>(
         }
     }
     Ok(())
+}
+
+// A vector is a variable or a literal; a property is one only when MultiDimensional.
+fn check_vector_arg<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    arg: Ranged<&cos::VarOrExpr>,
+) -> Result<(), QuasiTypeError> {
+    if let cos::VarOrExpr::Expr(expr) = arg.ranged
+        && let Some(AtomicExpr::Member { member, args: None }) = expr.as_atomic()
+    {
+        super::require_multidimensional(env, flow, member.deref())?;
+    }
+    check_lenient_arg(env, flow, arg)
 }
 
 /// Check a [`SetTargetFun`] -- the settable functions on the left of `SET`.
@@ -1106,7 +1123,7 @@ fn check_unknown_call<'a>(
 }
 
 // One variable slot of `SET $LISTBUILD(a,,b)=` / `SET $LISTGET(a,,b)=`, empty for a placeholder.
-type SetVarArg = Wrap<MGap, Ranged<Option<Variable>>, MGap>;
+type SetVarArg = Wrap<MGap, Ranged<Option<GetTarget>>, MGap>;
 
 // `SET $LISTBUILD(a,,b)=list` / `SET $LISTGET(a,,b)=list`: every named variable is assigned.
 fn check_set_var_list<'a>(
@@ -1117,10 +1134,28 @@ fn check_set_var_list<'a>(
 ) -> Result<(), QuasiTypeError> {
     for arg in once(first.deref()).chain(each_arg(rest)) {
         let range = env.range(arg);
-        if let Some(arg) = arg.deref()
-            && let Left(arg) = arg.as_local(env, flow)?
-        {
-            flow.handle_set(arg, Ty::Any.into(), range)?
+        match arg.deref() {
+            Some(GetTarget::Var(variable)) => {
+                if let Left(local) = variable.as_local(env, flow)? {
+                    flow.handle_set(local, Ty::Any.into(), range)?
+                }
+            }
+            Some(GetTarget::Member { member, args }) => {
+                if args.is_none() {
+                    super::require_multidimensional(env, flow, member.deref())?;
+                }
+                let obj = env.this_ty(flow);
+                super::check_set_member(env, flow, obj, member.deref(), args.as_ref())?;
+            }
+            Some(GetTarget::Sub { base, op }) => {
+                let obj = base.to_ty(env, flow)?;
+                super::check_set_member(env, flow, obj, op.mem.deref(), op.args.as_ref())?;
+            }
+            Some(GetTarget::Indirection(indirection)) => {
+                let _ = indirection.expr.to_ty(env, flow)?;
+                flow.invalidate_all()?;
+            }
+            Some(GetTarget::Fun(_)) | None => {}
         }
     }
     Ok(())
@@ -1131,9 +1166,7 @@ fn check_sequence_call<'a>(
     flow: &mut Flow<'a>,
     c: &SequenceCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    if let AllowIndirection::Plain(gvar) = c.gvar.deref().deref()
-        && let Left(local) = gvar.as_local(env, flow)?
-    {
+    if let Left(local) = target_as_local(env, flow, &c.gvar)? {
         flow.handle_set(
             local,
             Ty::from("%Integer").into(),
@@ -1258,7 +1291,7 @@ fn check_vector_call<'a>(
     flow: &mut Flow<'a>,
     c: &VectorCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    check_lenient_arg(env, flow, c.vector.as_ref())?;
+    check_vector_arg(env, flow, c.vector.as_ref())?;
     check_read_args(
         env,
         flow,
@@ -1325,6 +1358,16 @@ impl CheckExprInner for cos::BitLogicOperand {
     ) -> Result<PowerTy, QuasiTypeError> {
         match self {
             cos::BitLogicOperand::Paren(exp) => exp.to_power_ty(env, flow),
+            cos::BitLogicOperand::Property { member, args } => {
+                let obj = env.this_ty(flow);
+                super::defined(super::check_member(
+                    obj,
+                    member.deref(),
+                    args.as_ref(),
+                    env,
+                    flow,
+                )?)
+            }
             // An undefined operand is an empty bit string.
             cos::BitLogicOperand::Variable(var) => match var.as_local(env, flow)? {
                 Left(local) => flow.handle_get(local),

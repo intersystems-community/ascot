@@ -555,7 +555,9 @@ impl TryFrom<FunctionCall> for SetTargetFun {
             FunctionCall::Extract(c) => Ok(SetTargetFun::Extract(c)),
             // Only the plain form is settable; ListRange is read-only.
             FunctionCall::ListPlain(c) => Ok(SetTargetFun::List(c)),
-            FunctionCall::Bit(c) => Ok(SetTargetFun::Bit(c)),
+            FunctionCall::Bit(c) if matches!(c.bits.deref().deref(), VarOrExpr::Var(_)) => {
+                Ok(SetTargetFun::Bit(c))
+            }
             FunctionCall::Vector(c) => Ok(SetTargetFun::Vector(c)),
             FunctionCall::WExtract(c) => Ok(SetTargetFun::WExtract(c)),
             FunctionCall::Property(c) => Ok(SetTargetFun::Property(c)),
@@ -595,15 +597,23 @@ impl TryFrom<ListBuild> for ListBuildForSet {
     }
 }
 
+// `SET $LISTBUILD(a, ..M, @x) = list`: each element a variable, a property or an indirection.
 fn exp_arg_to_var_arg(
     arg: Wrap<MGap, Ranged<Option<VarOrExpr>>, MGap>,
-) -> Result<Wrap<MGap, Ranged<Option<Variable>>, MGap>, ()> {
+) -> Result<Wrap<MGap, Ranged<Option<GetTarget>>, MGap>, ()> {
     let arg = arg
         .map(|arg| {
             arg.map(|arg| {
                 arg.map(|arg| match arg {
-                    VarOrExpr::Var(AllowIndirection::Plain(variable)) => Ok(variable),
-                    _ => Err(()),
+                    VarOrExpr::Var(AllowIndirection::Plain(variable)) => {
+                        Ok(GetTarget::Var(variable))
+                    }
+                    VarOrExpr::Var(AllowIndirection::Indirection(ind)) => {
+                        Ok(GetTarget::Indirection(ind.map(|ind| *ind)))
+                    }
+                    VarOrExpr::Expr(expr) => {
+                        GetTarget::try_from(into_ops(expr).ok_or(())?).map_err(|_| ())
+                    }
                 })
                 .transpose()
             })
@@ -1941,9 +1951,14 @@ pub enum BitLogicOp {
     Xor(StringEq!("^")),
 }
 
+// A variable, a property or `""`; a property or an undefined variable is an empty bit string.
 #[derive(Grammar)]
 pub enum BitLogicOperand {
     Paren(Paren<MGapXMGap<Box<BitLogicExpr>>>),
+    Property {
+        member: Prefix<StringEq!(".."), Ranged<MemberRef>>,
+        args: Option<Ranged<MthArgList>>,
+    },
     Variable(AllowIndirection<Variable>),
     Empty(StringEq!("\"\"")),
 }
@@ -5259,7 +5274,7 @@ impl Deref for PropertyCall {
 }
 
 fun_args!("$SEQUENCE" SequenceCallArgs {
-    gvar: ArgOf<AllowIndirection<Variable>>,
+    gvar: ArgOf<GetTarget>,
 });
 
 #[derive(Grammar)]
@@ -5301,8 +5316,8 @@ impl Deref for ListBuild {
 pub struct ListBuildForSet {
     pub kw: Ranged<FnListBuild>,
     pub lp: StringEq!("("),
-    pub first: ArgOf<Option<Variable>>,
-    pub rest: Vec<More<ArgOf<Option<Variable>>>>,
+    pub first: ArgOf<Option<GetTarget>>,
+    pub rest: Vec<More<ArgOf<Option<GetTarget>>>>,
     pub rp: StringEq!(")"),
 }
 
@@ -5312,8 +5327,8 @@ pub struct ListBuildForSet {
 pub struct ListGetForSet {
     pub kw: Ranged<FnListGet>,
     pub lp: StringEq!("("),
-    pub first: ArgOf<Option<Variable>>,
-    pub rest: Vec<More<ArgOf<Option<Variable>>>>,
+    pub first: ArgOf<Option<GetTarget>>,
+    pub rest: Vec<More<ArgOf<Option<GetTarget>>>>,
     pub rp: StringEq!(")"),
 }
 
@@ -5514,7 +5529,7 @@ fun_args!("$ZPREVIOUS" ZPArgs {
 });
 
 fun_args!("$ZORDER" ZOrderArgs {
-    variable: ArgOf<AllowIndirection<Variable>>,
+    variable: ArgOf<GetTarget>,
 });
 
 fun_args!("$NEXT" NextArgs {

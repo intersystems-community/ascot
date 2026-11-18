@@ -2710,6 +2710,12 @@ impl CheckCommandInner for cos::MergeArgument {
     ) -> Result<(), QuasiTypeError> {
         match self {
             cos::MergeArgument::Pair { target, source, .. } => {
+                if let SetTarget::Member { member, args: None } = target {
+                    require_multidimensional(env, flow, member.deref())?;
+                }
+                if let Some(AtomicExpr::Member { member, args: None }) = source.as_atomic() {
+                    require_multidimensional(env, flow, member.deref())?;
+                }
                 let ty = source.to_ranged_power_ty(env, flow)?;
                 // The target carries no range of its own; anchor on the source instead.
                 let range = env.range(&ty);
@@ -3702,6 +3708,32 @@ fn defined(ty: Option<Ty>) -> Result<PowerTy, QuasiTypeError> {
     ty.map(PowerTy::from).ok_or_else(QuasiTypeError::undefined)
 }
 
+// `..P` where IRIS wants a variable (`$GET`, `MERGE`, `SET $LISTBUILD(...) =`): a MultiDimensional
+// property is one; any other compiles and throws `<OBJECT DISPATCH>` on reaching it.
+fn require_multidimensional<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    member: &Ranged<MemberRef>,
+) -> Result<(), QuasiTypeError> {
+    if member.is_parameter() {
+        return Ok(());
+    }
+    let name = member.id();
+    let property =
+        env.lookup_mem::<Properties<Read>>(&env.this_ty(flow), &name, env.range(member), true)?;
+    match property.map(|property| property.ty) {
+        None
+        | Some(
+            PropertyTy::Multidimensional(_)
+            | PropertyTy::Dispatched(_)
+            | PropertyTy::Value(Ty::Any),
+        ) => Ok(()),
+        Some(_) => Err(TypeErrorKind::PropertyAsVariable { name }
+            .at(env.range(member))
+            .into()),
+    }
+}
+
 impl CheckExprInner for cos::GetTarget {
     fn to_power_ty<'a>(
         &self,
@@ -3711,6 +3743,9 @@ impl CheckExprInner for cos::GetTarget {
         match self {
             cos::GetTarget::Var(var) => var.to_power_ty(env, flow),
             cos::GetTarget::Member { member, args } => {
+                if args.is_none() {
+                    require_multidimensional(env, flow, member.deref())?;
+                }
                 let obj = env.this_ty(flow);
                 defined(check_member(obj, member.deref(), args.as_ref(), env, flow)?)
             }

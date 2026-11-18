@@ -1645,6 +1645,29 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Property '{name}' is not MultiDimensional, so it takes no subscripts"]
     NotMultidimensional { name: String },
+    /// `..X` where IRIS wants a variable: the argument of `$GET`, `$DATA`, `$ORDER`, `$QUERY`,
+    /// `$NAME`, `$INCREMENT`, `$ZORDER`, `$SEQUENCE` or `$VECTOR`, either side of `MERGE`, an
+    /// element of `SET $LISTBUILD(...) =`. A `MultiDimensional` property is a variable there; any
+    /// other property compiles and throws `<OBJECT DISPATCH>` on reaching it. Where an expression
+    /// is wanted, `$LISTBUILD(..X)` or `$BIT(..X, 1)`, the property's value serves.
+    ///
+    /// ```objectscript raises=<OBJECT DISPATCH> do ##class(Demo.PropertyAsVariable).%New().Call()
+    /// Class Demo.PropertyAsVariable Extends %RegisteredObject
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// Method Call() As %String
+    /// {
+    ///     Quit $Get(..Name) //! A2746
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A2746"]
+    #[severity = Error]
+    #[message = "Property '{name}' is not MultiDimensional, so it stands for no variable here"]
+    PropertyAsVariable { name: String },
     /// `..X()` names a node of the `MultiDimensional` property `X` without the subscripts that
     /// pick one; `..X` without parentheses is the property's own value. IRIS throws
     /// `<OBJECT DISPATCH>` ("missing subscripts") on reading `..X()`, and refuses to compile

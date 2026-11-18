@@ -11,6 +11,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A1935](A1935.md) | Too many arguments: '{name}' takes {takes}; the statement fails when it runs |
 | [A2357](A2357.md) | '{name}' is not a parameter of {class}{hint} |
 | [A2716](A2716.md) | Too many arguments to the macro '{name}', which takes {expected} |
+| [A2746](A2746.md) | Property '{name}' is not MultiDimensional, so it stands for no variable here |
 | [A2797](A2797.md) | The macro '{name}' is undefined{suggestions} |
 | [A2957](A2957.md) | No {used} '{name}': no method or class query of the schema's package is SqlProc under that name |
 | [A3119](A3119.md) | Member '{name}' is defined twice |
