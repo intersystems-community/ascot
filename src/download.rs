@@ -16,8 +16,8 @@ const RELEASES: &str = "https://github.com/intersystems-community/ascot/releases
 /// Downloads `release`'s declaration file into `~/.ascot` and returns its path; one already there
 /// is returned as is.
 pub(crate) fn fetch(release: &Release<'_>) -> Result<PathBuf, String> {
-    // A release carries its files from 0.7.1 on; before that, and for a build with no release
-    // yet, the `declarations` release has them.
+    // A release carries its own files; a build with no release yet finds them on the
+    // `declarations` release.
     let own = format!("{RELEASES}/v{}", env!("CARGO_PKG_VERSION"));
     fetch_into(
         release,
