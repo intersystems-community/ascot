@@ -265,6 +265,7 @@ impl From<&details::MemberKindSpecificDetails> for wit_bind::MemberKind {
                 normal_args,
                 variadic_arg,
                 ty,
+                ..
             } => MemberKind::Query(wit_bind::Signature {
                 normal: normal_args
                     .iter()
