@@ -555,7 +555,9 @@ impl TryFrom<FunctionCall> for SetTargetFun {
             FunctionCall::Extract(c) => Ok(SetTargetFun::Extract(c)),
             // Only the plain form is settable; ListRange is read-only.
             FunctionCall::ListPlain(c) => Ok(SetTargetFun::List(c)),
-            FunctionCall::Bit(c) => Ok(SetTargetFun::Bit(c)),
+            FunctionCall::Bit(c) if matches!(c.bits.deref().deref(), VarOrExpr::Var(_)) => {
+                Ok(SetTargetFun::Bit(c))
+            }
             FunctionCall::Vector(c) => Ok(SetTargetFun::Vector(c)),
             FunctionCall::WExtract(c) => Ok(SetTargetFun::WExtract(c)),
             FunctionCall::Property(c) => Ok(SetTargetFun::Property(c)),
@@ -595,16 +597,23 @@ impl TryFrom<ListBuild> for ListBuildForSet {
     }
 }
 
+// `SET $LISTBUILD(a, ..M, @x) = list`: each element a variable, a property or an indirection.
 fn exp_arg_to_var_arg(
-    arg: Wrap<MGap, Ranged<Option<Expr>>, MGap>,
-) -> Result<Wrap<MGap, Ranged<Option<Variable>>, MGap>, ()> {
+    arg: Wrap<MGap, Ranged<Option<VarOrExpr>>, MGap>,
+) -> Result<Wrap<MGap, Ranged<Option<GetTarget>>, MGap>, ()> {
     let arg = arg
         .map(|arg| {
             arg.map(|arg| {
-                arg.map(|arg| {
-                    arg.as_variable()
-                        .map(|arg| Variable::parse(&arg.print()).unwrap())
-                        .ok_or(())
+                arg.map(|arg| match arg {
+                    VarOrExpr::Var(AllowIndirection::Plain(variable)) => {
+                        Ok(GetTarget::Var(variable))
+                    }
+                    VarOrExpr::Var(AllowIndirection::Indirection(ind)) => {
+                        Ok(GetTarget::Indirection(ind.map(|ind| *ind)))
+                    }
+                    VarOrExpr::Expr(expr) => {
+                        GetTarget::try_from(into_ops(expr).ok_or(())?).map_err(|_| ())
+                    }
                 })
                 .transpose()
             })
@@ -1942,9 +1951,14 @@ pub enum BitLogicOp {
     Xor(StringEq!("^")),
 }
 
+// A variable, a property or `""`; a property or an undefined variable is an empty bit string.
 #[derive(Grammar)]
 pub enum BitLogicOperand {
     Paren(Paren<MGapXMGap<Box<BitLogicExpr>>>),
+    Property {
+        member: Prefix<StringEq!(".."), Ranged<MemberRef>>,
+        args: Option<Ranged<MthArgList>>,
+    },
     Variable(AllowIndirection<Variable>),
     Empty(StringEq!("\"\"")),
 }
@@ -4687,6 +4701,49 @@ impl FromFunArg for AllowIndirection<Variable> {
     }
 }
 
+// An argument the function reads leniently when it names a variable, taking an undefined one as
+// absent (`$LISTBUILD`'s null element, `$BIT`'s empty bit string), and needs otherwise.
+pub enum VarOrExpr {
+    Var(AllowIndirection<Variable>),
+    Expr(Expr),
+}
+
+impl VarOrExpr {
+    pub fn as_variable(&self) -> Option<&Variable> {
+        match self {
+            VarOrExpr::Var(AllowIndirection::Plain(variable)) => Some(variable),
+            _ => None,
+        }
+    }
+}
+
+impl Print for VarOrExpr {
+    fn print_to(&self, buf: &mut String) {
+        match self {
+            VarOrExpr::Var(var) => var.print_to(buf),
+            VarOrExpr::Expr(expr) => expr.print_to(buf),
+        }
+    }
+}
+
+impl FromFunArg for VarOrExpr {
+    const EXPECTED: &'static str = "an expression";
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
+        let expr = normal_arg(arg)?.into_inner();
+        if !matches!(
+            expr.as_atomic(),
+            Some(AtomicExpr::Variable(_) | AtomicExpr::Indirection(_))
+        ) {
+            return Some(Self::Expr(expr));
+        }
+        Some(Self::Var(match into_atomic(expr)? {
+            AtomicExpr::Variable(v) => AllowIndirection::Plain(v),
+            AtomicExpr::Indirection(ind) => AllowIndirection::Indirection(ind.map(Box::new)),
+            _ => return None,
+        }))
+    }
+}
+
 impl FromFunArg for AllowIndirection<GlobalReference> {
     const EXPECTED: &'static str = "a global reference";
     fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
@@ -5134,7 +5191,7 @@ impl Deref for ListGetCall {
 }
 
 fun_args!("$BIT" BitCallArgs {
-    bits: ArgOf<Expr>,
+    bits: ArgOf<VarOrExpr>,
     position: More<ArgOf<Expr>>,
 });
 
@@ -5154,7 +5211,7 @@ impl Deref for BitCall {
 }
 
 fun_args!("$VECTOR" VectorCallArgs {
-    vector: ArgOf<Expr>,
+    vector: ArgOf<VarOrExpr>,
     position: More<ArgOf<Expr>>,
     third: Option<More<ArgOf<Expr>>>,
 });
@@ -5217,7 +5274,7 @@ impl Deref for PropertyCall {
 }
 
 fun_args!("$SEQUENCE" SequenceCallArgs {
-    gvar: ArgOf<AllowIndirection<Variable>>,
+    gvar: ArgOf<GetTarget>,
 });
 
 #[derive(Grammar)]
@@ -5236,8 +5293,8 @@ impl Deref for SequenceCall {
 }
 
 fun_args!("$LISTBUILD" ListBuildArgs {
-    first: ArgOf<Option<Expr>>,
-    rest: Vec<More<ArgOf<Option<Expr>>>>,
+    first: ArgOf<Option<VarOrExpr>>,
+    rest: Vec<More<ArgOf<Option<VarOrExpr>>>>,
 });
 
 #[derive(Grammar)]
@@ -5259,8 +5316,8 @@ impl Deref for ListBuild {
 pub struct ListBuildForSet {
     pub kw: Ranged<FnListBuild>,
     pub lp: StringEq!("("),
-    pub first: ArgOf<Option<Variable>>,
-    pub rest: Vec<More<ArgOf<Option<Variable>>>>,
+    pub first: ArgOf<Option<GetTarget>>,
+    pub rest: Vec<More<ArgOf<Option<GetTarget>>>>,
     pub rp: StringEq!(")"),
 }
 
@@ -5270,8 +5327,8 @@ pub struct ListBuildForSet {
 pub struct ListGetForSet {
     pub kw: Ranged<FnListGet>,
     pub lp: StringEq!("("),
-    pub first: ArgOf<Option<Variable>>,
-    pub rest: Vec<More<ArgOf<Option<Variable>>>>,
+    pub first: ArgOf<Option<GetTarget>>,
+    pub rest: Vec<More<ArgOf<Option<GetTarget>>>>,
     pub rp: StringEq!(")"),
 }
 
@@ -5302,12 +5359,12 @@ fun_args!("$CASE" CaseArgs {
 });
 
 fun_args!("$BITCOUNT" BitCountArgs {
-    bits: ArgOf<Expr>,
+    bits: ArgOf<VarOrExpr>,
     value: Option<More<ArgOf<Expr>>>,
 });
 
 fun_args!("$BITFIND" BitFindArgs {
-    bits: ArgOf<Expr>,
+    bits: ArgOf<VarOrExpr>,
     value: More<ArgOf<Expr>>,
     position: Option<More<ArgOf<Expr>>>,
     direction: Option<More<ArgOf<Expr>>>,
@@ -5429,14 +5486,14 @@ fun_args!("$SORTEND" SortEndArgs {
 });
 
 fun_args!("$VECTORDEFINED" VectorDefinedArgs {
-    vector: ArgOf<Expr>,
+    vector: ArgOf<VarOrExpr>,
     position: More<ArgOf<Expr>>,
     value: Option<More<ArgOf<Variable>>>,
 });
 
 fun_args!("$VECTOROP" VectorOpArgs {
     op: ArgOf<Expr>,
-    first: More<ArgOf<Expr>>,
+    first: More<ArgOf<VarOrExpr>>,
     rest: Vec<More<ArgOf<Expr>>>,
 });
 
@@ -5472,7 +5529,7 @@ fun_args!("$ZPREVIOUS" ZPArgs {
 });
 
 fun_args!("$ZORDER" ZOrderArgs {
-    variable: ArgOf<AllowIndirection<Variable>>,
+    variable: ArgOf<GetTarget>,
 });
 
 fun_args!("$NEXT" NextArgs {

@@ -729,10 +729,10 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Not enough arguments to the macro '{name}', which takes {expected}"]
     MacroTooFewArguments { name: String, expected: usize },
-    /// `$NAME` and `$QUERY` take a variable the code can reach by name at run time, which a
-    /// procedure block's private locals are not: IRIS refuses to compile either on a local the
-    /// method has not listed as public. Add the variable to the method's `PublicList`, or use a
-    /// global.
+    /// `$NAME`, `$QUERY` and `$ZORDER` take a variable the code can reach by name at run time,
+    /// which a procedure block's private locals are not: IRIS refuses to compile any of them on a
+    /// local the method has not listed as public, and `$ORDER` or `$ZPREVIOUS` on one without
+    /// subscripts. Add the variable to the method's `PublicList`, or use a global.
     ///
     /// ```objectscript
     /// Class Demo.PrivateVariableNotAllowed
@@ -1645,6 +1645,30 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Property '{name}' is not MultiDimensional, so it takes no subscripts"]
     NotMultidimensional { name: String },
+    /// `..X` where IRIS wants a variable: the argument of `$GET`, `$DATA`, `$ORDER`, `$QUERY`,
+    /// `$NAME`, `$INCREMENT`, `$ZORDER`, `$SEQUENCE` or `$VECTOR`, either side of `MERGE`, an
+    /// element of `SET $LISTBUILD(...) =`, the base of `SET $PIECE(..., ...) =` and the other
+    /// settable functions. A `MultiDimensional` property is a variable there; any
+    /// other property compiles and throws `<OBJECT DISPATCH>` on reaching it. Where an expression
+    /// is wanted, `$LISTBUILD(..X)` or `$BIT(..X, 1)`, the property's value serves.
+    ///
+    /// ```objectscript raises=<OBJECT DISPATCH> do ##class(Demo.PropertyAsVariable).%New().Call()
+    /// Class Demo.PropertyAsVariable Extends %RegisteredObject
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// Method Call() As %String
+    /// {
+    ///     Quit $Get(..Name) //! A2746
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A2746"]
+    #[severity = Error]
+    #[message = "Property '{name}' is not MultiDimensional, so it stands for no variable here"]
+    PropertyAsVariable { name: String },
     /// `..X()` names a node of the `MultiDimensional` property `X` without the subscripts that
     /// pick one; `..X` without parentheses is the property's own value. IRIS throws
     /// `<OBJECT DISPATCH>` ("missing subscripts") on reading `..X()`, and refuses to compile
@@ -2436,7 +2460,10 @@ type_error_kinds! {
     MaybeUndefined { ty: Ty, expr: Detail },
     /// The variable has no value on any path that reaches this use: nothing assigns it, or every
     /// assignment is killed or skipped on the way here. IRIS compiles the code and raises
-    /// `<UNDEFINED>` when it runs. Assign it first, or read it through `$Get`.
+    /// `<UNDEFINED>` when it runs. Assign it first, or read it through `$Get`. A variable named
+    /// alone as an argument of `$DATA`, `$GET`, `$INCREMENT`, `$ORDER`, `$QUERY`, `$NAME`,
+    /// `$LISTBUILD` (the null element), `$BIT`, `$BITCOUNT`, `$BITFIND`, `$BITLOGIC` or
+    /// `$VECTOR` (an empty string) is taken in stride, as IRIS takes it, and is not flagged.
     ///
     /// ```objectscript raises=<UNDEFINED> do ##class(Demo.Undefined).Total()
     /// Class Demo.Undefined
