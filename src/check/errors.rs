@@ -2436,7 +2436,10 @@ type_error_kinds! {
     MaybeUndefined { ty: Ty, expr: Detail },
     /// The variable has no value on any path that reaches this use: nothing assigns it, or every
     /// assignment is killed or skipped on the way here. IRIS compiles the code and raises
-    /// `<UNDEFINED>` when it runs. Assign it first, or read it through `$Get`.
+    /// `<UNDEFINED>` when it runs. Assign it first, or read it through `$Get`. A variable named
+    /// alone as an argument of `$DATA`, `$GET`, `$INCREMENT`, `$ORDER`, `$QUERY`, `$NAME`,
+    /// `$LISTBUILD` (the null element), `$BIT`, `$BITCOUNT`, `$BITFIND`, `$BITLOGIC` or
+    /// `$VECTOR` (an empty string) is taken in stride, as IRIS takes it, and is not flagged.
     ///
     /// ```objectscript raises=<UNDEFINED> do ##class(Demo.Undefined).Total()
     /// Class Demo.Undefined

@@ -596,15 +596,14 @@ impl TryFrom<ListBuild> for ListBuildForSet {
 }
 
 fn exp_arg_to_var_arg(
-    arg: Wrap<MGap, Ranged<Option<Expr>>, MGap>,
+    arg: Wrap<MGap, Ranged<Option<VarOrExpr>>, MGap>,
 ) -> Result<Wrap<MGap, Ranged<Option<Variable>>, MGap>, ()> {
     let arg = arg
         .map(|arg| {
             arg.map(|arg| {
-                arg.map(|arg| {
-                    arg.as_variable()
-                        .map(|arg| Variable::parse(&arg.print()).unwrap())
-                        .ok_or(())
+                arg.map(|arg| match arg {
+                    VarOrExpr::Var(AllowIndirection::Plain(variable)) => Ok(variable),
+                    _ => Err(()),
                 })
                 .transpose()
             })
@@ -4687,6 +4686,49 @@ impl FromFunArg for AllowIndirection<Variable> {
     }
 }
 
+// An argument the function reads leniently when it names a variable, taking an undefined one as
+// absent (`$LISTBUILD`'s null element, `$BIT`'s empty bit string), and needs otherwise.
+pub enum VarOrExpr {
+    Var(AllowIndirection<Variable>),
+    Expr(Expr),
+}
+
+impl VarOrExpr {
+    pub fn as_variable(&self) -> Option<&Variable> {
+        match self {
+            VarOrExpr::Var(AllowIndirection::Plain(variable)) => Some(variable),
+            _ => None,
+        }
+    }
+}
+
+impl Print for VarOrExpr {
+    fn print_to(&self, buf: &mut String) {
+        match self {
+            VarOrExpr::Var(var) => var.print_to(buf),
+            VarOrExpr::Expr(expr) => expr.print_to(buf),
+        }
+    }
+}
+
+impl FromFunArg for VarOrExpr {
+    const EXPECTED: &'static str = "an expression";
+    fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
+        let expr = normal_arg(arg)?.into_inner();
+        if !matches!(
+            expr.as_atomic(),
+            Some(AtomicExpr::Variable(_) | AtomicExpr::Indirection(_))
+        ) {
+            return Some(Self::Expr(expr));
+        }
+        Some(Self::Var(match into_atomic(expr)? {
+            AtomicExpr::Variable(v) => AllowIndirection::Plain(v),
+            AtomicExpr::Indirection(ind) => AllowIndirection::Indirection(ind.map(Box::new)),
+            _ => return None,
+        }))
+    }
+}
+
 impl FromFunArg for AllowIndirection<GlobalReference> {
     const EXPECTED: &'static str = "a global reference";
     fn from_fun_arg(arg: Ranged<FunArg>) -> Option<Self> {
@@ -5134,7 +5176,7 @@ impl Deref for ListGetCall {
 }
 
 fun_args!("$BIT" BitCallArgs {
-    bits: ArgOf<Expr>,
+    bits: ArgOf<VarOrExpr>,
     position: More<ArgOf<Expr>>,
 });
 
@@ -5154,7 +5196,7 @@ impl Deref for BitCall {
 }
 
 fun_args!("$VECTOR" VectorCallArgs {
-    vector: ArgOf<Expr>,
+    vector: ArgOf<VarOrExpr>,
     position: More<ArgOf<Expr>>,
     third: Option<More<ArgOf<Expr>>>,
 });
@@ -5236,8 +5278,8 @@ impl Deref for SequenceCall {
 }
 
 fun_args!("$LISTBUILD" ListBuildArgs {
-    first: ArgOf<Option<Expr>>,
-    rest: Vec<More<ArgOf<Option<Expr>>>>,
+    first: ArgOf<Option<VarOrExpr>>,
+    rest: Vec<More<ArgOf<Option<VarOrExpr>>>>,
 });
 
 #[derive(Grammar)]
@@ -5302,12 +5344,12 @@ fun_args!("$CASE" CaseArgs {
 });
 
 fun_args!("$BITCOUNT" BitCountArgs {
-    bits: ArgOf<Expr>,
+    bits: ArgOf<VarOrExpr>,
     value: Option<More<ArgOf<Expr>>>,
 });
 
 fun_args!("$BITFIND" BitFindArgs {
-    bits: ArgOf<Expr>,
+    bits: ArgOf<VarOrExpr>,
     value: More<ArgOf<Expr>>,
     position: Option<More<ArgOf<Expr>>>,
     direction: Option<More<ArgOf<Expr>>>,
@@ -5429,14 +5471,14 @@ fun_args!("$SORTEND" SortEndArgs {
 });
 
 fun_args!("$VECTORDEFINED" VectorDefinedArgs {
-    vector: ArgOf<Expr>,
+    vector: ArgOf<VarOrExpr>,
     position: More<ArgOf<Expr>>,
     value: Option<More<ArgOf<Variable>>>,
 });
 
 fun_args!("$VECTOROP" VectorOpArgs {
     op: ArgOf<Expr>,
-    first: More<ArgOf<Expr>>,
+    first: More<ArgOf<VarOrExpr>>,
     rest: Vec<More<ArgOf<Expr>>>,
 });
 

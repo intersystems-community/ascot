@@ -507,7 +507,10 @@ impl CheckExprInner for cos::FunctionCall {
             FunctionCall::BitCount {
                 args: BitCountArgs { bits, value, .. },
                 ..
-            } => check_read_args(env, flow, [Some(bits.deref()), arg(value)], "%Integer"),
+            } => {
+                check_lenient_arg(env, flow, bits.as_ref())?;
+                check_read_args(env, flow, [arg(value)], "%Integer")
+            }
             FunctionCall::BitFind {
                 args:
                     BitFindArgs {
@@ -518,17 +521,15 @@ impl CheckExprInner for cos::FunctionCall {
                         ..
                     },
                 ..
-            } => check_read_args(
-                env,
-                flow,
-                [
-                    Some(bits.deref()),
-                    Some(value.deref().deref()),
-                    arg(position),
-                    arg(direction),
-                ],
-                "%Integer",
-            ),
+            } => {
+                check_lenient_arg(env, flow, bits.as_ref())?;
+                check_read_args(
+                    env,
+                    flow,
+                    [Some(value.deref().deref()), arg(position), arg(direction)],
+                    "%Integer",
+                )
+            }
             FunctionCall::BitLogic { expr, length, .. } => {
                 check_bitlogic(env, flow, expr.deref(), arg(length))
             }
@@ -615,7 +616,9 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             }) => {
                 for arg in once(first.deref()).chain(each_arg(rest)) {
-                    arg.check(env, flow)?;
+                    if let Some(element) = arg.deref() {
+                        check_lenient_arg(env, flow, Ranged::new(arg.start, element, arg.end))?;
+                    }
                 }
                 Ok(Ty::from("%List").into())
             }
@@ -728,7 +731,9 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => {
                 require_public(env, flow, variable.deref(), "$NAME")?;
-                let _ = variable.deref().to_ty(env, flow)?;
+                if let Left(local) = target_as_local(env, flow, variable)? {
+                    flow.handle_get(local)?;
+                }
                 check_read_args(env, flow, [arg(integer)], "%String")
             }
             FunctionCall::Parameter {
@@ -773,7 +778,9 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => {
                 require_public(env, flow, reference.deref(), "$QUERY")?;
-                let _ = reference.deref().to_ty(env, flow)?;
+                if let Left(local) = target_as_local(env, flow, reference)? {
+                    flow.handle_get(local)?;
+                }
                 if let Some(direction) = arg(direction) {
                     let _ = direction.to_ty(env, flow)?;
                 }
@@ -825,12 +832,8 @@ impl CheckExprInner for cos::FunctionCall {
                     },
                 ..
             } => {
-                check_read_args(
-                    env,
-                    flow,
-                    [Some(vector.deref()), Some(position.deref().deref())],
-                    "%Boolean",
-                )?;
+                check_lenient_arg(env, flow, vector.as_ref())?;
+                check_read_args(env, flow, [Some(position.deref().deref())], "%Boolean")?;
                 check_out_var(env, flow, arg(value), "%String")?;
                 Ok(Ty::from("%Boolean").into())
             }
@@ -839,14 +842,15 @@ impl CheckExprInner for cos::FunctionCall {
                     op, first, rest, ..
                 },
                 ..
-            } => check_read_args(
-                env,
-                flow,
-                [Some(op.deref()), Some(first.deref().deref())]
-                    .into_iter()
-                    .chain(each_arg(rest).map(Some)),
-                "%String",
-            ),
+            } => {
+                check_lenient_arg(env, flow, first.deref().as_ref())?;
+                check_read_args(
+                    env,
+                    flow,
+                    once(Some(op.deref())).chain(each_arg(rest).map(Some)),
+                    "%String",
+                )
+            }
             FunctionCall::WChar {
                 args: WCharArgs { first, rest, .. },
                 ..
@@ -927,9 +931,10 @@ impl CheckExprInner for cos::FunctionCall {
 fn define_set_target_base<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    string: &Ranged<Expr>,
+    variable: Option<&Variable>,
+    range: bindings::Range,
 ) -> Result<(), QuasiTypeError> {
-    if let Some(variable) = string.as_variable()
+    if let Some(variable) = variable
         && let Left(local) = variable.as_local(env, flow)?
         && flow
             .handle_get(local.clone())?
@@ -937,7 +942,7 @@ fn define_set_target_base<'a>(
             .maybe_defined()
             .is_none()
     {
-        flow.handle_set(local, Ty::from("%String").into(), env.range(string))?;
+        flow.handle_set(local, Ty::from("%String").into(), range)?;
     }
     Ok(())
 }
@@ -946,12 +951,33 @@ fn define_set_target_base<'a>(
 fn check_set_fun<'a, C>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    base: &Ranged<Expr>,
+    base: Option<&Variable>,
+    range: bindings::Range,
     c: &C,
     check: impl FnOnce(&CodeEnv<'a>, &mut Flow<'a>, &C) -> Result<PowerTy, QuasiTypeError>,
 ) -> Result<(), QuasiTypeError> {
-    define_set_target_base(env, flow, base)?;
+    define_set_target_base(env, flow, base, range)?;
     let _ = check(env, flow, c)?;
+    Ok(())
+}
+
+// A variable named alone is read leniently, an undefined one as absent; any other expression
+// must have a value.
+fn check_lenient_arg<'a>(
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+    arg: Ranged<&cos::VarOrExpr>,
+) -> Result<(), QuasiTypeError> {
+    match arg.ranged {
+        cos::VarOrExpr::Var(var) => {
+            if let Left(local) = var.as_local(env, flow)? {
+                flow.handle_get(local)?;
+            }
+        }
+        cos::VarOrExpr::Expr(expr) => {
+            let _ = Ranged::new(arg.start, expr, arg.end).to_ty(env, flow)?;
+        }
+    }
     Ok(())
 }
 
@@ -965,18 +991,60 @@ pub(super) fn check_settarget_fun<'a>(
     super::report_style(env, fun.name(), &[]);
     use cos::SetTargetFun::*;
     match fun {
-        Piece(c) => check_set_fun(env, flow, &c.string, c, check_piece_call)?,
-        Extract(c) => check_set_fun(env, flow, &c.string, c, check_extract_call)?,
-        List(c) => check_set_fun(env, flow, &c.list, c, check_list_plain_call)?,
+        Piece(c) => check_set_fun(
+            env,
+            flow,
+            c.string.as_variable(),
+            env.range(c.string.deref()),
+            c,
+            check_piece_call,
+        )?,
+        Extract(c) => check_set_fun(
+            env,
+            flow,
+            c.string.as_variable(),
+            env.range(c.string.deref()),
+            c,
+            check_extract_call,
+        )?,
+        List(c) => check_set_fun(
+            env,
+            flow,
+            c.list.as_variable(),
+            env.range(c.list.deref()),
+            c,
+            check_list_plain_call,
+        )?,
         ListGet(c) => check_set_var_list(env, flow, &c.first, &c.rest)?,
-        Bit(c) => check_set_fun(env, flow, &c.bits, c, check_bit_call)?,
+        Bit(c) => check_set_fun(
+            env,
+            flow,
+            c.bits.as_variable(),
+            env.range(c.bits.deref()),
+            c,
+            check_bit_call,
+        )?,
         Vector(c) => {
             if c.third.is_none() {
                 return Err(TypeErrorKind::SetVectorWithoutType.into());
             }
-            check_set_fun(env, flow, &c.vector, c, check_vector_call)?;
+            check_set_fun(
+                env,
+                flow,
+                c.vector.as_variable(),
+                env.range(c.vector.deref()),
+                c,
+                check_vector_call,
+            )?;
         }
-        WExtract(c) => check_set_fun(env, flow, &c.string, c, check_wextract_call)?,
+        WExtract(c) => check_set_fun(
+            env,
+            flow,
+            c.string.as_variable(),
+            env.range(c.string.deref()),
+            c,
+            check_wextract_call,
+        )?,
         Property(c) => {
             let _ = check_property_call(env, flow, c)?;
         }
@@ -1080,12 +1148,8 @@ fn check_bit_call<'a>(
     flow: &mut Flow<'a>,
     c: &BitCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    check_read_args(
-        env,
-        flow,
-        [Some(c.bits.deref()), Some(c.position.deref().deref())],
-        "%Integer",
-    )
+    check_lenient_arg(env, flow, c.bits.as_ref())?;
+    check_read_args(env, flow, [Some(c.position.deref().deref())], "%Integer")
 }
 
 fn check_piece_call<'a>(
@@ -1194,14 +1258,11 @@ fn check_vector_call<'a>(
     flow: &mut Flow<'a>,
     c: &VectorCall,
 ) -> Result<PowerTy, QuasiTypeError> {
+    check_lenient_arg(env, flow, c.vector.as_ref())?;
     check_read_args(
         env,
         flow,
-        [
-            Some(c.vector.deref()),
-            Some(c.position.deref().deref()),
-            arg(&c.third),
-        ],
+        [Some(c.position.deref().deref()), arg(&c.third)],
         "%String",
     )
 }
@@ -1240,7 +1301,7 @@ impl CheckExprInner for cos::BitLogicExpr {
         flow: &mut Flow<'a>,
     ) -> Result<PowerTy, QuasiTypeError> {
         for atom in self.items.iter() {
-            let _ = atom.to_ty(env, flow)?;
+            let _ = atom.to_power_ty(env, flow)?;
         }
         Ok(PowerTy::from("%DataType"))
     }
@@ -1252,7 +1313,7 @@ impl CheckExprInner for cos::BitLogicAtom {
         env: &CodeEnv<'a>,
         flow: &mut Flow<'a>,
     ) -> Result<PowerTy, QuasiTypeError> {
-        Ok(self.operand.to_ty(env, flow)?.into())
+        Ok(self.operand.to_power_ty(env, flow)?)
     }
 }
 
@@ -1263,8 +1324,12 @@ impl CheckExprInner for cos::BitLogicOperand {
         flow: &mut Flow<'a>,
     ) -> Result<PowerTy, QuasiTypeError> {
         match self {
-            cos::BitLogicOperand::Paren(exp) => Ok(exp.to_ty(env, flow)?.into()),
-            cos::BitLogicOperand::Variable(var) => Ok(var.to_ty(env, flow)?.into()),
+            cos::BitLogicOperand::Paren(exp) => exp.to_power_ty(env, flow),
+            // An undefined operand is an empty bit string.
+            cos::BitLogicOperand::Variable(var) => match var.as_local(env, flow)? {
+                Left(local) => flow.handle_get(local),
+                Right(ty) => Ok(ty),
+            },
             cos::BitLogicOperand::Empty(_) => Ok(PowerTy::from("%DataType")),
         }
     }
