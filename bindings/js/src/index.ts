@@ -125,6 +125,9 @@ class FailingAtelier extends Atelier {
 	override getDoc(name: string): Promise<string | undefined> {
 		return payload(() => this.inner.getDoc(name));
 	}
+	override docUri(name: string): Promise<string | undefined> {
+		return this.inner.docUri(name);
+	}
 }
 
 async function payload<T>(request: () => Promise<T>): Promise<T> {

@@ -622,6 +622,8 @@ interface imported {
         query: func(sql: string, params: list<string>) -> result<string, string>;
         // The text of `/doc/{name}`; `none` if there's no such document.
         get-doc: func(name: string) -> result<option<string>, string>;
+        // The uri the host opens the document under, if it has one.
+        doc-uri: func(name: string) -> option<string>;
     }
 
     variant env {

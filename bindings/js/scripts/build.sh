@@ -42,6 +42,7 @@ npx jco transpile "$COMPONENT" \
 		"iris:ascot/imported#[method]iris-context.get-rtn" \
 		"iris:ascot/imported#[method]atelier.query" \
 		"iris:ascot/imported#[method]atelier.get-doc" \
+		"iris:ascot/imported#[method]atelier.doc-uri" \
 	--async-exports \
 		"iris:ascot/exported#[method]workspace.diagnostics" \
 		"iris:ascot/exported#[method]workspace.inlay-hint" \

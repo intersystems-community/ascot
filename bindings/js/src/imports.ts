@@ -30,4 +30,8 @@ export class Atelier {
 	async getDoc(_name: string): Promise<string | undefined> {
 		throw new Error("no IRIS connection");
 	}
+	/** The uri the host opens the document under, if it has one: where a definition in it points. */
+	async docUri(_name: string): Promise<string | undefined> {
+		return undefined;
+	}
 }
