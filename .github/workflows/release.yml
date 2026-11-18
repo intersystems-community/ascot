@@ -86,6 +86,37 @@ jobs:
           path: '*.tar.gz'
           if-no-files-found: error
 
+  # The pre-built declaration files `--iris <release>` downloads, each from its Community image.
+  declarations:
+    if: github.ref_type == 'tag'
+    strategy:
+      matrix:
+        include:
+          - { image: iris-community, namespace: '%SYS' }
+          - { image: irishealth-community, namespace: '%SYS' }
+          - { image: irishealth-community, namespace: HSLIB }
+          - { image: irishealth-community, namespace: HSSYS }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: Declare
+        run: |
+          RELEASE=$(basename declarations/iris-community-*.d.json.gz .d.json.gz)
+          RELEASE=${RELEASE#iris-community-}
+          NAME=${{ matrix.image }}-$RELEASE.d.json
+          [ "${{ matrix.namespace }}" = %SYS ] || NAME=${{ matrix.image }}-$RELEASE.${{ matrix.namespace }}.d.json
+          scripts/prebuilt-declarations.sh $RELEASE $NAME ${{ matrix.image }} ${{ matrix.namespace }}
+          gzip -9 $NAME
+          sha256sum $NAME.gz > $NAME.gz.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: declarations-${{ matrix.image }}-${{ matrix.namespace }}
+          path: '*.d.json.gz*'
+          if-no-files-found: error
+
   # The release's diagnostics reference, `docs/<version>`, which its binaries link to.
   docs:
     if: github.ref_type == 'tag'
@@ -100,7 +131,7 @@ jobs:
   # One job publishes the release, so the generated notes appear once and all assets land together.
   release:
     if: github.ref_type == 'tag'
-    needs: [ci, build, universal, docs]
+    needs: [ci, build, universal, declarations, docs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -113,6 +144,8 @@ jobs:
             *.tar.gz
             *.zip
             style.json
+            *.d.json.gz
+            *.d.json.gz.sha256
           generate_release_notes: true
 
       - name: Update the Homebrew tap
