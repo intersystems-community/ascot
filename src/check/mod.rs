@@ -4088,18 +4088,31 @@ fn check_macro_arg_as_expr<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
-    env.assert_compatible(
-        expr_from_macro_arg(arg)
-            .map_err(|()| {
-                QuasiTypeError::from(TypeErrorKind::InvalidMacroArgument {
-                    reason: "expected an expression".into(),
-                })
-            })?
-            .to_ty(env, flow)
-            .map_err(|err| relocate_macro_arg_error(env, arg.start, err))?,
-        expected_ty,
-    )
-    .map_err(Incompatible::general)
+    let expr = expr_from_macro_arg(arg).map_err(|()| {
+        QuasiTypeError::from(TypeErrorKind::InvalidMacroArgument {
+            reason: "expected an expression".into(),
+        })
+    })?;
+    let (diagnostics_mark, references_mark) = (env.soft_diagnostics_mark(), env.references_mark());
+    let ty = expr
+        .to_ty(env, flow)
+        .map_err(|err| relocate_macro_arg_error(env, arg.start, err))?;
+    // What the walk recorded is in the fresh text's coordinates too.
+    let at = |range: bindings::Range| range.map(|pos| env.position(env.offset(pos) + arg.start));
+    for mut diagnostic in env.soft_diagnostics_since(diagnostics_mark) {
+        diagnostic.range = at(diagnostic.range);
+        for info in &mut diagnostic.related_information {
+            if info.location.uri == env.uri() {
+                info.location.range = at(info.location.range);
+            }
+        }
+        env.add_soft_diagnostic(diagnostic);
+    }
+    for (range, location) in env.references_since(references_mark) {
+        env.reference(at(range), location);
+    }
+    env.assert_compatible(ty, expected_ty)
+        .map_err(Incompatible::general)
 }
 
 // `expr_from_macro_arg` re-prints `arg` and re-parses it as a standalone `Expr`, so a `WithRange`
