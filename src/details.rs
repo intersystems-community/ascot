@@ -254,6 +254,7 @@ pub struct MemberDetails {
     pub keyword_issues: Vec<WithRange<KeywordIssue>>,
     // Forms the documentation doesn't give, which IRIS compiles; `check_cls` reports them.
     pub undocumented: Vec<WithRange<String>>,
+    pub type_names: Vec<WithRange<String>>,
     pub kind: MemberKindSpecificDetails,
 }
 
@@ -572,6 +573,38 @@ pub(crate) fn with_range_name<T: Grammar>(
 }
 
 // A member's name without the quotes of a quoted one: `Method "_isLabeled"()` declares `_isLabeled`.
+fn type_names(member: &cos::Member, olc: &OLC) -> Vec<WithRange<String>> {
+    let class = |class_name: &Ranged<cos::SignatureType>| match class_name.deref() {
+        cos::SignatureType::Class(name) => {
+            Some(WithRange::new(name.print(), olc.range(class_name)))
+        }
+        cos::SignatureType::Parameter(..) => None,
+    };
+    let of_type = |ty: Option<&cos::Type>| ty.and_then(|t| class(&t.class_name));
+    let formals = |spec: Option<&cos::FormalSpec>| -> Vec<WithRange<String>> {
+        (spec.into_iter().flat_map(cos::FormalSpec::formals))
+            .filter_map(|formal| of_type(formal.as_type.as_deref()))
+            .collect()
+    };
+    match member {
+        cos::Member::Property(
+            cos::Property::Simple { as_type, .. } | cos::Property::Relationship { as_type, .. },
+        ) => (as_type.as_ref().and_then(|t| t.as_ref().left()))
+            .and_then(|t| class(&t.ty.class_name))
+            .into_iter()
+            .collect(),
+        cos::Member::Method(method) => of_type(method.header.return_type.deref().as_deref())
+            .into_iter()
+            .chain(formals(method.header.formal_spec.as_ref()))
+            .collect(),
+        cos::Member::Query(query) => of_type(query.return_type.as_deref())
+            .into_iter()
+            .chain(formals(query.formal_spec.as_ref()))
+            .collect(),
+        _ => vec![],
+    }
+}
+
 fn with_range_member_name(
     name: &cos::QuotableClassMemberName,
     pos: &impl Positions,
@@ -784,6 +817,7 @@ impl TryFrom<&str> for ClassDetails {
             let doc = extract_document_comments(before_member.0.as_str());
             let range = olc.range(&member);
             let undocumented_member = undocumented_in(&member, &olc);
+            let type_names = type_names(&member, &olc);
             let final_ = is_final(&member);
             let (name, deprecated, keyword_issues, kind) = process_member(
                 &olc,
@@ -800,6 +834,7 @@ impl TryFrom<&str> for ClassDetails {
                     final_,
                     keyword_issues,
                     undocumented: undocumented_member,
+                    type_names,
                     kind,
                 },
                 range,

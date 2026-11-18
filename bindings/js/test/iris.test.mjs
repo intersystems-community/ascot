@@ -116,7 +116,11 @@ test("the bundled declarations are the default; none is the strictest check", as
   assert.match(ascot.LATEST_RELEASE, /^\d{4}\.\d+$/);
   assert.deepEqual(await run(), []);
   assert.deepEqual(await run("latest"), []);
-  assert.deepEqual(await run("none"), [["error", "A2797"]]);
+  // Without an environment, the return type `%Status` is a class outside the workspace too.
+  assert.deepEqual(await run("none"), [
+    ["error", "A2797"],
+    ["error", "A8061"],
+  ]);
 });
 
 // A declaration file's bytes stand in for a server too, gzipped as the asset ships or not.
@@ -150,7 +154,10 @@ test("a declaration file's bytes are the environment; none is the strictest chec
   };
   assert.deepEqual(await run(new Uint8Array(gzipSync(declarations))), []);
   assert.deepEqual(await run(new TextEncoder().encode(declarations)), []);
-  assert.deepEqual(await run("none"), [["error", "A8061"]]);
+  assert.deepEqual(await run("none"), [
+    ["error", "A8061"],
+    ["error", "A8061"],
+  ]);
 });
 
 test("a request that fails leaves what it was for taken on trust, saying why", async () => {

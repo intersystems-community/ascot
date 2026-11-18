@@ -323,7 +323,7 @@ type_error_kinds! {
     /// Class Demo.UnconfirmedMember Extends %Persistent //! A8061
     /// {
     ///
-    /// Method Store() As %Status
+    /// Method Store() As %Status //! A8061
     /// {
     ///     Quit ..%Save() //! A9360
     /// }

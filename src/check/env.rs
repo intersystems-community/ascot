@@ -407,6 +407,22 @@ fn iris_found<N: Namespace>(mut member: bindings::MemberInfo, cls: &str) -> Opti
     })
 }
 
+fn location_of(class: &Class) -> Option<bindings::Location> {
+    match class {
+        Class::Workspace(uri, details) => {
+            Some(bindings::Location::new(uri.clone(), details.name.range))
+        }
+        Class::Iris(info) => {
+            let zero = bindings::Range::point(bindings::Position {
+                line: 0,
+                character: 0,
+            });
+            Some(bindings::Location::new(info.uri.clone()?, zero))
+        }
+        Class::Unknown(_) => None,
+    }
+}
+
 // A class as a check run sees it; `None` from `resolve` means no class by that name exists: IRIS
 // has none, or there is no IRIS at all and the class isn't in the workspace.
 enum Class {
@@ -1417,19 +1433,7 @@ impl<'a> WorkspaceEnv<'a> {
 
     // Where the class `name` is declared, for go-to-definition.
     pub fn class_location(&self, name: &str) -> Option<bindings::Location> {
-        match self.resolve(name)? {
-            Class::Workspace(uri, details) => {
-                Some(bindings::Location::new(uri, details.name.range))
-            }
-            Class::Iris(info) => {
-                let zero = bindings::Range::point(bindings::Position {
-                    line: 0,
-                    character: 0,
-                });
-                Some(bindings::Location::new(info.uri.clone()?, zero))
-            }
-            Class::Unknown(_) => None,
-        }
+        location_of(&self.resolve(name)?)
     }
 
     pub fn can_assign_to(&self, source: &Ty, target: &Ty) -> bool {
@@ -1529,13 +1533,20 @@ impl<'a> WorkspaceEnv<'a> {
     // With IRIS, a `%`-prefixed system class is trusted, a misspelled one (`%Sting`) included:
     // IRIS lists them all, and the system ones are essentially never workspace files. Without
     // IRIS nothing is, and a class outside the workspace is an error.
-    pub(crate) fn check_declared_class_exists(&self, cls: &str, range: bindings::Range) {
+    // A class name written in a declaration: a reference to the class, or a report that there is
+    // no such class.
+    pub(crate) fn check_declared_class(&self, cls: &str, range: bindings::Range) {
         let has_iris = self.workspace.iris.is_some();
         if cls.starts_with('%') && has_iris {
             return;
         }
         let diagnostic = match self.resolve(cls) {
-            Some(Class::Workspace(..) | Class::Iris(_)) => return,
+            Some(class @ (Class::Workspace(..) | Class::Iris(_))) => {
+                if let Some(location) = location_of(&class) {
+                    self.reference(range, location);
+                }
+                return;
+            }
             Some(Class::Unknown(Some(reason))) => TypeErrorKind::IrisLookupFailed {
                 lookup: IrisLookup {
                     kind: DocKind::Cls,
