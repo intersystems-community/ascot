@@ -3,6 +3,7 @@
   "function": { "form": "long", "case": "upper" },
   "variable": { "form": "long", "case": "upper" },
   "allowQuitForReturn": false,
+  "allowRequiredAfterOptional": false,
   "maxCommandsPerLine": 1,
   "spaceAfterComma": true,
   "openBrace": { "newlineBefore": false, "newlineAfter": true },

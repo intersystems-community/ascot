@@ -4815,6 +4815,7 @@ pub(crate) fn check_rtn(
                 );
             }
         }
+        check_argument_order(env.style(), &details.normal_args, &mut diagnostics);
         let result = match elem {
             cos::RoutineElement::Procedure(procedure) => {
                 if let Some(trailer) = &procedure.trailer {
@@ -5043,6 +5044,15 @@ pub(crate) fn check_cls(
             );
         }
         check_property_or_parameter_declaration(env, &cls.name.it, member, &mut diagnostics);
+        match &member.kind {
+            MemberKindSpecificDetails::MethodOrClassMethod(method) => {
+                check_argument_order(env.style(), &method.normal_args, &mut diagnostics)
+            }
+            MemberKindSpecificDetails::Query { normal_args, .. } => {
+                check_argument_order(env.style(), normal_args, &mut diagnostics)
+            }
+            _ => {}
+        }
         // A missing `Include` (already reported once above) commonly leaves some macro
         // unexpanded in a way that breaks a method body's parse -- don't also raise the
         // resulting generic syntax error, same reasoning as `expand_rtn`'s own fallback.
@@ -5082,6 +5092,30 @@ fn member_keyword_issue(
         entry: issue.it.entry.clone(),
     }
     .at(issue.range)
+}
+
+fn check_argument_order(
+    style: Option<&crate::style::Styles>,
+    args: &[WithRange<NormalArg>],
+    diagnostics: &mut Vec<bindings::Diagnostic>,
+) {
+    if style.and_then(|s| s.rules.allow_required_after_optional) != Some(false) {
+        return;
+    }
+    let mut optional = false;
+    for arg in args {
+        if arg.it.default.is_some() {
+            optional = true;
+        } else if optional {
+            diagnostics.push(
+                TypeErrorKind::RequiredAfterOptional {
+                    name: arg.it.name.clone(),
+                }
+                .at(arg.range)
+                .into(),
+            );
+        }
+    }
 }
 
 fn check_property_or_parameter_declaration(

@@ -104,6 +104,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [S4933](S4933.md) | Put {wanted} after `{` |
 | [S5260](S5260.md) | The style allows {max} command(s) per line; this is one more |
 | [S5583](S5583.md) | This comma wants {wanted} |
+| [S6174](S6174.md) | Argument '{name}' has no default but follows one that has |
 | [S6307](S6307.md) | Put the postconditional on the command keyword, not on its argument |
 | [S7126](S7126.md) | Describe this {kind}: its body is {lines} line(s) |
 | [S7442](S7442.md) | Join these conditions with `{wanted}` |

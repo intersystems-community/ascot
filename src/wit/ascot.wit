@@ -278,6 +278,8 @@ interface common {
     record style {
         // `Return` leaves a method or procedure; `Quit` is for loops and `Try` blocks.
         allow-quit-for-return: option<bool>,
+        // A formal argument without a default after one with a default.
+        allow-required-after-optional: option<bool>,
         // How the conditions of `If`, `ElseIf` and `While` are joined.
         condition-and: option<and-operator>,
         max-new-per-block: option<u32>,
