@@ -830,7 +830,7 @@ impl<'a> Flow<'a> {
             *self.shared.output.borrow_mut() = Some(established.clone());
             established
         });
-        match (&established.it, it) {
+        let checked = match (&established.it, it) {
             (Some(wanted), Some(actual)) => {
                 self.shared.env.check_pattern(&actual, wanted, range, None);
                 (self.shared.env.assert_value_compatible(&actual, wanted))
@@ -849,10 +849,11 @@ impl<'a> Flow<'a> {
                 }
                 Ok(())
             }
-        }
-        .map_err(|err| err.into_error(|| range))?;
+        };
+        // Right or wrong, the value leaves: the path ends before the failure is raised, so the
+        // rest of the body is checked as what follows a return, not as its continuation.
         self.bindings = None;
-        Ok(())
+        checked.map_err(|err| err.into_error(|| range))
     }
 
     // Whether a path still runs here: a `Quit`, `Return` or `Throw` on every way in ends it.
