@@ -2476,6 +2476,13 @@
     { "header": "Method createIndex(indexName As %RawString = \"\", propertyName As %RawString = \"\", unique As %Integer = 0, collationExpression As %String = \"\") As This" }
    ]
   },
+  "%DocDB.REST": {
+   "header": "Class %DocDB.REST",
+   "members": [
+    { "header": "ClassMethod AccessibleNamespaces() As %DynamicArray" },
+    { "header": "ClassMethod exceptionToHttpResponse(exception As %Exception.AbstractException) As %DynamicObject" }
+   ]
+  },
   "%Document.Model.Schema.abstractNode": {
    "header": "Class %Document.Model.Schema.abstractNode",
    "members": [
@@ -6195,6 +6202,12 @@
     { "header": "ClassMethod GetValidConditionActions() As %Any" }
    ]
   },
+  "Ens.ServiceRegistry.External.API": {
+   "header": "Class Ens.ServiceRegistry.External.API",
+   "members": [
+    { "header": "ClassMethod PerformSearch(ByRef pSearchCriteria, ByRef pExtendedCriteria, pStatus As %Status = {$$$OK}) As %SQL.StatementResult" }
+   ]
+  },
   "Ens.Util.Documentation": {
    "header": "Class Ens.Util.Documentation",
    "members": [
@@ -7406,6 +7419,12 @@
    "header": "Class SYS.Monitor.SAM.Config",
    "members": [
     { "header": "ClassMethod Open() As This" }
+   ]
+  },
+  "SYS.Monitor.SAM.Sensors": {
+   "header": "Class SYS.Monitor.SAM.Sensors",
+   "members": [
+    { "header": "ClassMethod InteropMetrics(pMetric As %Integer = 1, pStart As %TimeStamp = \"\", pEnd As %TimeStamp = \"\", pNamespace As %String = \"\", pDatabase As %String = \"\") As %String" }
    ]
   },
   "SYS.Stats.Buffer": {
