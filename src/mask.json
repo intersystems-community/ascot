@@ -636,7 +636,7 @@
   "%Atelier.REST": {
    "header": "Class %Atelier.REST",
    "members": [
-    { "header": "ClassMethod RenderResponseBody(pStatus As %Status, pMsgPart As %DynamicArray = \"\", pResPart As %DynamicObject = \"\") As %Status" },
+    { "header": "ClassMethod RenderResponseBody(pStatus As %Status, pMsgPart As %DynamicArray = \"\", pResPart As %DynamicAbstractObject = \"\") As %Status" },
     { "header": "ClassMethod ServeDoc(pDocName As %String, pStatus As %Status, pMsgArray As %DynamicArray, ByRef pResArray As %String, pTimeStamp As %String = \"\", pUpToDate As %Boolean, pExtensionContent As %DynamicObject = \"\") As %Status" }
    ]
   },
@@ -651,6 +651,7 @@
    "members": [
     { "header": "ClassMethod GetModifiedClassesIndex(ByRef dirlist, dbdir As %String, dbname As %String, pShowGenerated As %Boolean, hashIn As %String, Output hashOut As %String) As %Status" },
     { "header": "ClassMethod GetModifiedRoutinesIndex(pType As %String, ByRef dirlist, dbdir As %String, dbname As %String, pShowGenerated As %Boolean, hashIn As %String, Output hashOut As %String) As %Status" },
+    { "header": "ClassMethod GetNameFromDocArray(ByRef pTextArray, Output pName) As %Status" },
     { "header": "ClassMethod TS(pDocName, ByRef pUpToDate = \"\") As %String" }
    ]
   },
@@ -2470,6 +2471,9 @@
    "members": [
     { "header": "Method %Clear(databaseName) As This" },
     { "header": "ClassMethod %CreateDatabase(databaseName As %String(MAXLEN=220) = \"\", documentType As %String = \"%Library.DynamicAbstractObject\", resource As %String = \"\") As This" },
+    { "header": "Method %CreateProperty(propertyName As %String(MAXLEN=220), propertyType As %String(MAXLEN=220), propertyExpression As %String(MAXLEN=\"\") = \"\", unique = 0) As This" },
+    { "header": "Method %DeleteDocument(documentID As %Integer) As %DynamicAbstractObject" },
+    { "header": "Method %DeleteDocumentByKey(keyName As %String(MAXLEN=220), keyValue As %String(MAXLEN=\"\")) As %DynamicAbstractObject" },
     { "header": "Method %DropProperty(propertyName As %String(MAXLEN=220)) As This" },
     { "header": "Method %FromJSON(jsonValue As %RawString) As This" },
     { "header": "ClassMethod %GetDatabase(databaseName) As This" },
@@ -4189,6 +4193,12 @@
     { "header": "ClassMethod Exists(UTCTimeStamp As %String = \"\", SystemID As %String = \"\", AuditIndex As %Integer = 0, Output Audit As This, ByRef Status As %Status) As %Boolean" },
     { "header": "ClassMethod OpenAuditItem(UTCTimeStamp As %String, SystemID As %String, AuditIndex As %BigInt, ByRef Status As %Status) As This" },
     { "header": "ClassMethod UpdateIndicesFromData(Namespace, UTCTimeStamp As %String, SystemID As %String, AuditIndex As %Integer, Data As %List, Delete As %Boolean = 0)" }
+   ]
+  },
+  "%SYS.BackgroundTask": {
+   "header": "Class %SYS.BackgroundTask",
+   "members": [
+    { "header": "ClassMethod Register(args...) As This" }
    ]
   },
   "%SYS.Bench.Run": {
@@ -6078,6 +6088,7 @@
   "Config.CommonMapMethods": {
    "header": "Class Config.CommonMapMethods",
    "members": [
+    { "header": "ClassMethod Create(Namespace As %String, Name As %String, ByRef Properties As %String, ByRef CPFFile As %String = \"\", Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As %Status" },
     { "header": "ClassMethod Exists(Namespace, Name As %String, Output Obj As This, Output Status As %Status, ByRef CPFFile As %String = \"\", Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As %Boolean" },
     { "header": "ClassMethod Open(Namespace As %String, Name As %String, ByRef CPFFile As %String = \"\", concurrency As %Integer = -1, ByRef Status As %Status, Flags As %Integer = {$$$CPFSave+$$$CPFWrite+$$$CPFActivate}) As This" }
    ]
@@ -7308,6 +7319,8 @@
   "OAuth2.ResourceServer": {
    "header": "Class OAuth2.ResourceServer",
    "members": [
+    { "header": "ClassMethod Delete(Name As %String) As %Status" },
+    { "header": "ClassMethod Exists(Name As %String, Output ResourceServer As This, Output Status As %Status) As %Boolean" },
     { "header": "Method ValidateAccessToken(token As %String, service As %String, Output properties As %String) As %Status" }
    ]
   },
