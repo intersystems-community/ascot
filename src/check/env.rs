@@ -962,6 +962,31 @@ impl<'a> WorkspaceEnv<'a> {
         if keys.is_empty() {
             args.push(arg(None, "id", "%String", None));
         }
+        // A child class's id follows its parent's, so its id-key accessors take the parent's id
+        // first: `IDKEYExists(parentId, key)`; without it, <UNDEFINED>.
+        let parent = index.id_key.then(|| match self.resolve(cls)? {
+            Class::Workspace(_, details) => (details.members.property.iter())
+                .find(|(_, property)| {
+                    matches!(
+                        &property.kind,
+                        MemberKindSpecificDetails::Property {
+                            cardinality: Some(bindings::Cardinality::Parent),
+                            ..
+                        }
+                    )
+                })
+                .map(|(name, _)| name.clone()),
+            Class::Iris(info) => (info.members.iter())
+                .find(|member| {
+                    matches!(&member.kind, MemberKind::Relationship(relationship)
+                        if matches!(relationship.cardinality, Some(bindings::Cardinality::Parent)))
+                })
+                .map(|member| member.name.clone()),
+            Class::Unknown(_) => None,
+        });
+        if let Some(parent) = parent.flatten() {
+            args.insert(0, arg(None, &parent, "%String", None));
+        }
         let exists = (
             "Exists",
             vec![arg(Some(RefMode::Output), "id", "%String", None)],

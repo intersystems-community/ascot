@@ -300,6 +300,8 @@ pub enum MemberKindSpecificDetails {
         initial: Option<WithRange<Const>>,
         // `[ SqlFieldName = n ]`: the column's name in place of the property's.
         sql_field_name: Option<String>,
+        // A relationship's; `None` for a property.
+        cardinality: Option<bindings::Cardinality>,
     },
     Parameter {
         ty: Option<Ty>,
@@ -1025,6 +1027,7 @@ fn process_member(
                         matches!(keyword, cos::PropertyKeyword::MultiDimensional(flag) if flag.is_set())
                     }),
                     sql_field_name: sql_field_name(keywords.as_ref()),
+                    cardinality: None,
                 },
             ),
             cos::Property::Relationship {
@@ -1035,10 +1038,19 @@ fn process_member(
             } => {
                 let class = as_type.as_ref().and_then(|t| t.as_ref().left()).map(|t| &**t);
                 // A `many`/`children` relationship is the collection of the related objects.
-                let is_collection = typed(keywords.as_ref()).any(|keyword| {
-                    matches!(keyword, cos::PropertyKeyword::Cardinality(cardinality)
-                        if matches!(cardinality.value, cos::Cardinality::Many(_) | cos::Cardinality::Children(_)))
+                let cardinality = typed(keywords.as_ref()).find_map(|keyword| match keyword {
+                    cos::PropertyKeyword::Cardinality(c) => Some(match &c.value {
+                        cos::Cardinality::One(_) => bindings::Cardinality::One,
+                        cos::Cardinality::Many(_) => bindings::Cardinality::Many,
+                        cos::Cardinality::Parent(_) => bindings::Cardinality::Parent,
+                        cos::Cardinality::Children(_) => bindings::Cardinality::Children,
+                    }),
+                    _ => None,
                 });
+                let is_collection = matches!(
+                    cardinality,
+                    Some(bindings::Cardinality::Many | bindings::Cardinality::Children)
+                );
                 (
                     with_range_member_name(&name, olc),
                     deprecated || is_deprecated(keywords.as_ref()),
@@ -1055,6 +1067,7 @@ fn process_member(
                         initial: None,
                         multidimensional: false,
                         sql_field_name: sql_field_name(keywords.as_ref()),
+                        cardinality,
                     },
                 )
             }
