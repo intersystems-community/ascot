@@ -33,6 +33,9 @@ echo "waiting for $IMAGE on port $PORT ..."
 until [ "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$PORT/api/atelier/")" != 000 ]; do sleep 2; done
 # The image's passwords come expired, which the terminal below minds.
 docker exec "$NAME" iris session IRIS -U %SYS '##class(Security.Users).UnExpireUserPasswords("*")' >/dev/null
+# A port that answers is not an instance that serves: the first query after start-up has come back
+# "Peer disconnected". Wait until an authenticated request succeeds.
+until [ "$(curl -s -o /dev/null -w '%{http_code}' -u _SYSTEM:SYS "http://localhost:$PORT/api/atelier/v1/%25SYS")" = 200 ]; do sleep 2; done
 
 "$ASCOT" declare --iris "http://_SYSTEM:SYS@localhost:$PORT" --iris-namespace "$NAMESPACE" "$OUT"
 
