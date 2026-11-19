@@ -1583,6 +1583,10 @@ impl<'a> WorkspaceEnv<'a> {
         (definitions, failed)
     }
 
+    pub(crate) fn include_labels(&self, names: &[String]) -> Labels {
+        self.workspace.include_labels(names)
+    }
+
     pub(crate) fn implicit_class_definitions(&self) -> MacroDefinitions {
         let (definitions, include_names) = self.workspace.implicit_class_definitions();
         self.touch_includes(include_names);
@@ -1981,6 +1985,8 @@ pub struct ClassDocument {
     pub language: Option<bindings::Language>,
     pub macro_definitions: MacroDefinitions,
     pub body_macros: RefCell<crate::macro_expand::BodyMacros>,
+    // The labels its include files define, which every method body may call.
+    pub include_labels: Rc<ScopedLabels>,
 }
 
 impl ClassDocument {
@@ -1988,8 +1994,27 @@ impl ClassDocument {
         class: ClassTy,
         language: Option<bindings::Language>,
         macro_definitions: MacroDefinitions,
+        include_labels: Labels,
     ) -> Self {
+        let include_labels = Rc::new(
+            (include_labels.into_iter())
+                .filter_map(|(name, proc)| match proc {
+                    TyProcedureOrAny::Procedure(proc) => Some((
+                        name,
+                        LabelEntry {
+                            proc,
+                            outside_block: false,
+                            next: None,
+                            nested: false,
+                            output: OnceCell::new(),
+                        },
+                    )),
+                    TyProcedureOrAny::Any => None,
+                })
+                .collect(),
+        );
         Self {
+            include_labels,
             class,
             language,
             macro_definitions,
@@ -2059,7 +2084,7 @@ impl<'a> DocumentEnv<'a> {
     pub fn for_member(
         &self,
         offset: usize,
-        this: Option<&'a ClassTy>,
+        cls: &'a ClassDocument,
         is_instance: bool,
         method_name: &'a str,
         macro_definitions: &'a Definitions<'a>,
@@ -2069,8 +2094,8 @@ impl<'a> DocumentEnv<'a> {
             base: self,
             is_instance,
             offset,
-            this,
-            labels: None,
+            this: Some(&cls.class),
+            labels: (!cls.include_labels.is_empty()).then(|| cls.include_labels.clone()),
             method_name: Some(method_name),
             procedure_block,
             trap_joins: Default::default(),

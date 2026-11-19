@@ -1108,6 +1108,25 @@ impl WorkspaceStruct {
         (definitions.into_own(), failed, include_names)
     }
 
+    // The labels the include files' own code lines define, callable from the including class's
+    // method bodies as from a routine.
+    pub(crate) fn include_labels(&self, names: &[String]) -> crate::check::Labels {
+        let mut labels = crate::check::Labels::new();
+        for name in names {
+            if let Ok(Some(include)) = self.resolve_include(name) {
+                let (uri, text, _) = &*include;
+                if let Ok((routine, map, _)) = self.expand_rtn(uri, text) {
+                    labels.extend(crate::check::labels_of(
+                        &map.expanded_olc,
+                        &routine,
+                        Some(uri),
+                    ));
+                }
+            }
+        }
+        labels
+    }
+
     pub(crate) fn implicit_class_definitions(&self) -> (MacroDefinitions, HashSet<String>) {
         self.implicit_definitions
             .borrow_mut()
