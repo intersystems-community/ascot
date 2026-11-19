@@ -1630,22 +1630,18 @@ impl CheckCommandInner for cos::Command {
                     {
                         flow.add_soft_diagnostic(TypeErrorKind::QuitExits.into());
                     }
-                    let exp_ty = exp
-                        .deref()
-                        .as_ref()
-                        .map(|e| exit_value(e, env, flow))
-                        .transpose()?;
-                    flow.handle_quit(env.with_range(exp.as_ref().map(|_| exp_ty)))
+                    let (ty, failed) =
+                        exit_value_or_any(exp.deref().as_ref().map(|e| exit_value(e, env, flow)));
+                    let ended = flow.handle_quit(env.with_range(exp.as_ref().map(|_| ty)));
+                    failed.map_or(ended, Err)
                 })
             }
             cos::Command::Return(cos::ReturnCommand { pc, exp, .. }) => {
                 check_pc(pc, env, flow, |flow| {
-                    let ty = exp
-                        .deref()
-                        .as_ref()
-                        .map(|e| exit_value(e, env, flow))
-                        .transpose()?;
-                    Ok(flow.handle_return(env.with_range(exp.as_ref().map(|_| ty)))?)
+                    let (ty, failed) =
+                        exit_value_or_any(exp.deref().as_ref().map(|e| exit_value(e, env, flow)));
+                    let ended = flow.handle_return(env.with_range(exp.as_ref().map(|_| ty)));
+                    failed.map_or(ended.map_err(Into::into), Err)
                 })
             }
             cos::Command::Continue(cos::ContinueCommand { pc, .. }) => {
@@ -2216,10 +2212,19 @@ fn exit_value<'a>(
                 .map_err(|err| err.into_error(|| env.range(exp)))?;
             Ok(ty)
         })
-        .map_err(|err| {
-            let _ = flow.handle_void();
-            err.into()
-        })
+        .map_err(Into::into)
+}
+
+// What a `Quit`/`Return` hands back: a value that fails to check leaves as `Any`, and the failure
+// is returned once the exit has ended the path, so what follows is checked as unreachable code,
+// not as the continuation of a method that never returned.
+fn exit_value_or_any(
+    value: Option<Result<PowerTy, QuasiTypeError>>,
+) -> (Option<PowerTy>, Option<QuasiTypeError>) {
+    match value.transpose() {
+        Ok(ty) => (ty, None),
+        Err(err) => (Some(PowerTy::plain(Ty::Any)), Some(err)),
+    }
 }
 
 // One `if`/`elseif`/`else` branch's own checking failure (e.g. genuinely unreachable code, per
