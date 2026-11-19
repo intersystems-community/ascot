@@ -36,7 +36,7 @@ use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::cos::{CommandLike, KeywordKind, KeywordUse, Spelled};
 use types::*;
 
-pub(crate) use env::{DocumentEnv, WorkspaceEnv, labels_of};
+pub(crate) use env::{DocumentEnv, Labels, WorkspaceEnv, labels_of};
 pub use errors::{
     ArgCount, Available, Declared, Detail, DynamicGet, InRoutine, OverrideDifference, Suggestions,
     SuperclassOf, SyntaxErrorText, SyntaxScope, TypeErrorKind, TypeParamHint, UnreadRole,
@@ -425,7 +425,7 @@ impl MethodDetails {
         // relocating diagnostics/references/hints already recorded before the error.
         let code_env = method_env.for_member(
             header_len,
-            Some(&cls.class),
+            cls,
             !self.is_class_method,
             name,
             &definitions,
@@ -451,7 +451,7 @@ impl MethodDetails {
                 let marks = (env.base.soft_diagnostics_mark(), env.base.references_mark());
                 let default_env = env.for_member(
                     0,
-                    Some(&cls.class),
+                    cls,
                     !self.is_class_method,
                     name,
                     &definitions,
@@ -4936,10 +4936,15 @@ pub(crate) fn check_cls(
         };
         diagnostics.push(err.into());
     }
+    let mut include_labels = env
+        .base
+        .include_labels(&env.base.inherited_include_names(cls));
+    include_labels.extend(env.base.include_labels(&include_names));
     let doc = ClassDocument::new(
         cls.name.it.to_string().into(),
         cls.keywords.language,
         macro_definitions,
+        include_labels,
     );
     for member in &cls.members.duplicates {
         let name = &member.name.it;
