@@ -1245,8 +1245,10 @@ pub struct DoArgument {
 // compile-time, which stands for one.
 #[derive(Grammar)]
 pub enum DoTarget {
-    Plain(Ranged<EntryRefAndArgs>),
+    // Before `Plain`: `$Case(x, v:..M(), ...)` also reads as one expression whose arms are calls,
+    // and then `..M()` is asked for a value it doesn't return.
     Case(DoCase),
+    Plain(Ranged<EntryRefAndArgs>),
     Macro(Ranged<MacroCall>),
 }
 
@@ -1263,7 +1265,7 @@ pub struct DoCase {
 #[derive(Grammar)]
 pub struct DoCaseArm {
     pub case: Option<Ranged<Expr>>,
-    pub colon: StringEq!(":"),
+    pub colon: MGapXMGap<StringEq!(":")>,
     pub entry_ref: Ranged<EntryRefAndArgs>,
 }
 
