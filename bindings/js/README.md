@@ -110,6 +110,7 @@ as in the Language Server Protocol.
 | `close(uri)`                                    | uris whose analysis is now stale                                                            |
 | `setEnv(iris?)`                                 | every uri: new sources stale all analysis; rejects for a declaration file that doesn't read |
 | `setStyle(style?)`                              | every uri: a new style stales every check                                                   |
+| `setInlayHints(options)`                        | every uri: a new spelling of the hints stales every check                                   |
 | `setDiagnostics(filter)`                        | every uri: a new filter may change every report                                             |
 | `diagnostics(uri)`                              | `Diagnostic[]`                                                                              |
 | `inlayHint(uri, range)`                         | `InlayHint[]`                                                                               |

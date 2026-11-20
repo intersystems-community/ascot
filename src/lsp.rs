@@ -83,6 +83,7 @@ fn serve(connection: &Connection, mut settings: Settings, shared_fs: bool) -> Fa
     let filter = applied(connection, settings.filter())?;
     let workspace = Workspace::native(iris, style);
     workspace.set_diagnostic_filter(filter);
+    workspace.set_inlay_hints(settings.inlay_hints.unwrap_or_default());
     // Insert every `.cls`/`.mac`/`.int`/`.inc` file under the workspace root up front, so
     // cross-file references (`##class(...)`, `#include`) resolve correctly from the start —
     // otherwise a file that's opened on its own, without whatever it `#include`s also being
@@ -360,6 +361,10 @@ fn reconfigure(connection: &Connection, server: &Server, changes: Settings) -> F
             }
             Err(err) => show_error(connection, err)?,
         }
+    }
+    if let Some(options) = changes.inlay_hints {
+        server.settings.borrow_mut().inlay_hints = Some(options);
+        publish_all(connection, workspace, workspace.set_inlay_hints(options))?;
     }
     if changes.has_diagnostics() {
         match changes.filter() {

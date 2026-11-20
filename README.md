@@ -231,12 +231,14 @@ claude plugin install ascot-lsp@ascot-plugins
 
 Which IRIS to ask, the style to check and the diagnostics to report are the same
 three settings everywhere; the `ascot-lsp` plugin asks for them when enabled.
+How inlay hints are spelled is a fourth, for the servers and the binding;
+`analyze` shows none.
 
-| | [IRIS](#documents-on-iris) | [Style](#style) | [Diagnostics](#diagnostics-filter) |
-| --- | --- | --- | --- |
-| [CLI](#ascot-as-a-cli-tool), [LSP](#ascot-as-an-lsp-server) | `--iris`, `--iris-namespace` | `--style FILE` | `-d VERB:TARGETS` |
-| [MCP](#ascot-as-an-mcp-server) (`create_workspace`), [LSP](#ascot-as-an-lsp-server) (`initializationOptions` and `workspace/didChangeConfiguration`) | `iris`, `iris_namespace` | `style` | `diagnostics` |
-| [TS/JS](#typescriptjavascript-npm) (`createWorkspace`) | `env` | `style` | `diagnostics` |
+| | [IRIS](#documents-on-iris) | [Style](#style) | [Diagnostics](#diagnostics-filter) | [Inlay hints](#inlay-hints) |
+| --- | --- | --- | --- | --- |
+| [CLI](#ascot-as-a-cli-tool), [LSP](#ascot-as-an-lsp-server) | `--iris`, `--iris-namespace` | `--style FILE` | `-d VERB:TARGETS` | |
+| [MCP](#ascot-as-an-mcp-server) (`create_workspace`), [LSP](#ascot-as-an-lsp-server) (`initializationOptions` and `workspace/didChangeConfiguration`) | `iris`, `iris_namespace` | `style` | `diagnostics` | `inlay_hints` |
+| [TS/JS](#typescriptjavascript-npm) (`createWorkspace`) | `env` | `style` | `diagnostics` | `setInlayHints(options)` |
 
 ### Documents on IRIS
 
@@ -323,6 +325,18 @@ ascot analyze -d hint:A4471 src/                 # report one as a hint
 
 The exit code follows what is reported, so a dropped or downgraded warning no
 longer fails a build.
+
+### Inlay Hints
+
+`inlay_hints` says how a hint is spelled; nothing is reported. `typeAnnotation`
+chooses how the type hinted after a `Set` target whose value's type isn't plain
+from the code is written: `as`, the default, spells it as a declaration does,
+`Set tId As %Integer = ..%Id()`; `colon` spells it `Set tId: %Integer = ..%Id()`.
+Hover text and printed declarations keep `As`.
+
+```json
+{ "typeAnnotation": "colon" }
+```
 
 ### Shared file system
 
