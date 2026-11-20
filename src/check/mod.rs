@@ -3424,7 +3424,7 @@ fn eval(x: &Const, o: TermOp, y: &Const) -> Option<Const> {
     t.eval(&types::Const::Integer(0))
 }
 
-impl<T> CheckExprInner for cos::OpsExpr<T> {
+impl<T: Print> CheckExprInner for cos::OpsExpr<T> {
     fn to_power_ty<'a>(
         &self,
         env: &CodeEnv<'a>,
@@ -3473,7 +3473,18 @@ fn check_prefix(op: &PrefixOperator, ty: PowerTy, env: &CodeEnv) -> Result<Power
     }
 }
 
-impl<T> CheckExprInner for ExprOps<T> {
+// The object a member is taken from, read at its own range: an undefined one is reported there,
+// not over the whole member expression, and the member is still resolved on its type.
+fn receiver<'a, T: Print>(
+    base: &Ranged<ExprOps<T>>,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+) -> Result<Ty, QuasiTypeError> {
+    let ty = CheckExprInner::to_power_ty(base.deref(), env, flow)?;
+    flow.with_range(env.range(base), |flow| flow.value(&ty, || base.print()))
+}
+
+impl<T: Print> CheckExprInner for ExprOps<T> {
     fn to_power_ty<'a>(
         &self,
         env: &CodeEnv<'a>,
@@ -3494,7 +3505,7 @@ impl<T> CheckExprInner for ExprOps<T> {
 
 // The base of a member operation, keeping a collection property a collection (rather than its
 // `%Collection.Abstract*` class) so `..List.GetAt(i)` is typed by the element.
-fn base_property<'a, T>(
+fn base_property<'a, T: Print>(
     base: &Ranged<ExprOps<T>>,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -3504,7 +3515,7 @@ fn base_property<'a, T>(
     }
     let (obj, mem) = match base.deref() {
         ExprOps::Then { base: inner, op } if op.args.is_none() && !op.mem.is_parameter() => {
-            (inner.to_ty(env, flow)?, op.mem.deref())
+            (receiver(inner, env, flow)?, op.mem.deref())
         }
         ExprOps::Base(atom)
             if let ParenedExpr::Normal(atom) = atom.deref()
@@ -3512,7 +3523,7 @@ fn base_property<'a, T>(
         {
             (env.this_ty(flow), member.deref())
         }
-        _ => return base.to_ty(env, flow).map(PropertyTy::Value),
+        _ => return receiver(base, env, flow).map(PropertyTy::Value),
     };
     let range = env.range(mem);
     referenced(
@@ -4221,7 +4232,7 @@ impl CheckExprInner for SpecialVariable {
     }
 }
 
-impl<T> CheckExprInner for ParenedExpr<T> {
+impl<T: Print> CheckExprInner for ParenedExpr<T> {
     fn to_power_ty<'a>(
         &self,
         env: &CodeEnv<'a>,
