@@ -1523,8 +1523,11 @@ fn check_out_var<'a>(
 }
 
 /// `$LISTNEXT(list, ptr, value)` iterates a list. `ptr` is read (IRIS raises `<FUNCTION>` on an
-/// undefined or empty pointer), then becomes a defined integer unconditionally, but `value` may be
-/// undefined even when the call returns true: a null element leaves it so.
+/// undefined or empty pointer), then becomes a defined integer unconditionally; `value` is set when
+/// the call returns true and left as it was when it returns false. A null element leaves it
+/// undefined although the call returns true, which is not modeled: such lists are rare, and
+/// reporting every read of the value as possibly undefined drowned the real cases; the price is
+/// that a `$DATA(value)` guard in the loop reads as always true.
 fn check_listnext<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1536,9 +1539,8 @@ fn check_listnext<'a>(
     let _ = ptr.to_ty(env, flow)?;
     check_out_var(env, flow, Some(ptr), "%Integer")?;
     if let Left(local) = value.as_local(env, flow)? {
-        let range = env.range(value);
-        flow.handle_get(local.clone())?;
-        flow.handle_set(local, MaybeTy::Maybe(Ty::from("%String")).into(), range)?;
+        let cases = |old: Option<Ty>| vec![("0", old), ("1", Some(Ty::from("%String")))];
+        return bind_out_var(env, flow, local, env.range(value), cases, None);
     }
     Ok(Ty::from("%Boolean").into())
 }

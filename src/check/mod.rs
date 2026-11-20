@@ -2360,10 +2360,10 @@ fn check_do_while<'a>(
     cnds: &WhileConditions,
 ) -> Result<(), QuasiTypeError> {
     flow.with_loop(range, false, false, env, |flow| block.check(env, flow))?;
-    // See `check_while`: prime with a throwaway evaluation before the real one below.
-    flow.primed(env, |flow| {
-        check_and(&cnds.first, &cnds.remaining, env, flow, false)
-    })?;
+    // See `check_while`: prime with a throwaway evaluation before the real one below, on a copy,
+    // so what it writes is primed but its refinement (the condition held) doesn't carry over.
+    let mut primer = flow.split();
+    flow.primed(env, |_| check_and(&cnds.first, &cnds.remaining, env, &mut primer, false))?;
     let if_false = check_and(&cnds.first, &cnds.remaining, env, flow, false)?;
     flow.merge(if_false)
 }
