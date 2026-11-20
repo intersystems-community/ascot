@@ -1347,6 +1347,10 @@ impl<'a> Flow<'a> {
         Ok(self.lookup(name.to_string())?.subscript_assigned.is_some())
     }
 
+    pub(crate) fn declared_ty(&mut self, name: &str) -> Result<Option<Ty>, QuasiTypeError> {
+        Ok((self.lookup(name.to_string())?.declared.as_ref()).map(|declared| declared.it.clone()))
+    }
+
     pub(crate) fn is_public(&mut self, name: &str) -> Result<bool, QuasiTypeError> {
         Ok(!self.lookup(name.to_string())?.private)
     }
