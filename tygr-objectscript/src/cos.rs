@@ -7245,10 +7245,12 @@ pub struct MacroNameText(StringOf1<IsMacroNameChar>);
 #[derive(Grammar)]
 pub struct Value(Expr);
 
+/// `methodimpl` is how IRIS marks a method's compiled code in a class's `.int` routine.
 #[derive(Grammar)]
 pub enum ScopeKeyword {
     Private(StringEqCI!("Private")),
     Public(StringEqCI!("Public")),
+    MethodImpl(StringEqCI!("methodimpl")),
 }
 
 pub type RoutineName = RoutineNameAndLabel;
@@ -7279,6 +7281,13 @@ impl RoutineAttributes {
         match self {
             RoutineAttributes::Typed { routine_type, .. } => Some(routine_type),
             RoutineAttributes::Generated(_) => None,
+        }
+    }
+
+    pub fn generated(&self) -> bool {
+        match self {
+            RoutineAttributes::Typed { generated, .. } => generated.is_some(),
+            RoutineAttributes::Generated(_) => true,
         }
     }
 }

@@ -136,7 +136,8 @@ workspace and prints diagnostics for all of them. With `--root`, the workspace
 is every file under `DIR` instead, so cross-file references resolve, and the
 `PATH`s choose whose diagnostics are printed; one outside `DIR` is skipped with
 a warning. Exits non-zero if any error or warning was found, or if a `PATH`
-doesn't exist.
+doesn't exist. A routine IRIS generated, `Generated` in its header as a class's
+compiled `.int` has, is loaded for navigation only: nothing is reported on it.
 
 `--format lsp` prints the diagnostics of each file as JSON instead of text, in
 the shape the MCP `check` tool returns them, and `--format sarif` one SARIF
