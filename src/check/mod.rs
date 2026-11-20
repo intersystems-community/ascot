@@ -2330,7 +2330,17 @@ fn check_try<'a>(
         // `CatchTarget` carries no range of its own; anchor on the catch block instead.
         let range = env.range(catch_block);
         catch_flow.note_unread_role(local.name.clone(), range, UnreadRole::Catch);
-        catch_flow.handle_set(local, Ty::Any.into(), range)?
+        // What is caught is an exception whatever was thrown: IRIS raises <ILLEGAL VALUE> for a
+        // value and <METHOD DOES NOT EXIST> for an object of another class, both
+        // %Exception.SystemException (measured on 2026.3). A `#dim` naming a subclass stands.
+        let exception = Ty::from("%Exception.AbstractException");
+        let ty = match catch_flow.declared_ty(&local.name)? {
+            Some(declared) if env.is_class_or_subclass(&declared, &exception) == Some(true) => {
+                declared
+            }
+            _ => exception,
+        };
+        catch_flow.handle_set(local, ty.into(), range)?
     }
     catch_flow.with_block(env.range(catch_block), |flow| catch_block.check(env, flow))?;
     flow.merge(catch_flow)
@@ -3504,10 +3514,65 @@ impl<T: Print> CheckExprInner for ExprOps<T> {
                     return Ok(Ty::OREF(cls).into());
                 }
                 let ty = base_property(base, env, flow)?;
-                defined(check_member_of(ty, &op.mem, op.args.as_ref(), env, flow)?)
+                let result = check_member_of(ty, &op.mem, op.args.as_ref(), env, flow)?;
+                match narrow_is_a(base, op, env, flow)? {
+                    Some(narrowing) => Ok(narrowing),
+                    None => defined(result),
+                }
             }
         }
     }
+}
+
+// A true `x.%IsA("C")` or `x.%Extends("C")` proves the local `x` an instance of `C`: it reads as
+// `C` there when `C` is its class or a subclass of it, and stays as it was where the test holds
+// nothing new. Both methods are %SystemBase's, hard-coded here as `$ISOBJECT` is.
+fn narrow_is_a<'a, T: Print>(
+    base: &Ranged<ExprOps<T>>,
+    op: &SufOp,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+) -> Result<Option<PowerTy>, QuasiTypeError> {
+    if !matches!(op.mem.id().as_str(), "%IsA" | "%Extends") {
+        return Ok(None);
+    }
+    let Some(args) = &op.args else {
+        return Ok(None);
+    };
+    let [arg] = args.items(env).as_slice() else {
+        return Ok(None);
+    };
+    let Some(cos::MthArg::Expr { expr, expand: None }) = arg.deref() else {
+        return Ok(None);
+    };
+    let Some(Const::String(class)) = Const::from_literal(&expr.print()) else {
+        return Ok(None);
+    };
+    let ExprOps::Base(atom) = base.deref() else {
+        return Ok(None);
+    };
+    let ParenedExpr::Normal(atom) = atom.deref() else {
+        return Ok(None);
+    };
+    let AtomicExpr::Variable(variable) = atom.deref().deref() else {
+        return Ok(None);
+    };
+    let Left(local) = variable.as_local(env, flow)? else {
+        return Ok(None);
+    };
+    if !local.subs.is_empty() {
+        return Ok(None);
+    }
+    let old_ty = flow.handle_get(local.clone())?.to_ty(env).ok();
+    let target = Ty::from(class);
+    let narrowed = match &old_ty {
+        Some(old) if env.is_class_or_subclass(&target, old) == Some(false) => old.clone(),
+        _ => target,
+    };
+    let var = flow.fresh();
+    let cases = vec![("0", old_ty), ("1", Some(narrowed))];
+    flow.handle_refine(local, PowerTy::case(var, cases, None))?;
+    Ok(Some(PowerTy::bind(var)))
 }
 
 // The base of a member operation, keeping a collection property a collection (rather than its
