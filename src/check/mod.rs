@@ -1130,8 +1130,9 @@ fn never_returns(ty: &Ty, member: &str) -> bool {
 // `Do` never looks at what its call returns -- fine for a procedure with nothing meaningful to
 // report, but a %Status/%Boolean return almost always means the caller is expected to check it
 // (e.g. `$$$ISERR`/`If`), so silently dropping it here is usually a real mistake.
-// An override is reached through the superclass's signature, so it keeps it: the same formal
-// arguments in count and mode (A1841, a warning, IRIS compiling it), each of the class declared,
+// An override is reached through the superclass's signature, so it keeps it: no formal argument
+// dropped or required past the superclass's, each in the mode declared (A1841, a warning, IRIS
+// compiling it), each of the class declared,
 // judged as an assignment is so the datatypes are interchangeable, and a return class the caller
 // can use as the declared one (A3604, an error: IRIS refuses all but the narrowed argument, which
 // fails when run). `args` and `out` carry the types qualified, `method` the ranges.
@@ -1172,9 +1173,15 @@ fn check_override(
             .assert_value_compatible(&PowerTy::plain(from.clone()), to)
             .is_ok()
     };
-    let has = args.len() + usize::from(method.variadic_arg.is_some());
-    let declares = sup.normal_args.len() + usize::from(sup.variadic_arg.is_some());
-    if has != declares {
+    // `args` ends with the `args...` entry, which has a default: a caller holding the superclass
+    // fills what it declares, so the override may drop nothing and require nothing past it.
+    let (normal, variadic) = (method.normal_args.len(), method.variadic_arg.is_some());
+    let (declared, sup_variadic) = (sup.normal_args.len(), sup.variadic_arg.is_some());
+    let drops = !variadic && declared > normal;
+    let requires = !sup_variadic && args.iter().skip(declared).any(|arg| arg.it.required());
+    if drops || requires {
+        let has = normal + usize::from(variadic);
+        let declares = declared + usize::from(sup_variadic);
         let olc = env.olc();
         let header = method
             .header_text
