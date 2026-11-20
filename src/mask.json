@@ -652,7 +652,8 @@
     { "header": "ClassMethod GetModifiedClassesIndex(ByRef dirlist, dbdir As %String, dbname As %String, pShowGenerated As %Boolean, hashIn As %String, Output hashOut As %String) As %Status" },
     { "header": "ClassMethod GetModifiedRoutinesIndex(pType As %String, ByRef dirlist, dbdir As %String, dbname As %String, pShowGenerated As %Boolean, hashIn As %String, Output hashOut As %String) As %Status" },
     { "header": "ClassMethod GetNameFromDocArray(ByRef pTextArray, Output pName) As %Status" },
-    { "header": "ClassMethod TS(pDocName, ByRef pUpToDate = \"\") As %String" }
+    { "header": "ClassMethod TS(pDocName, ByRef pUpToDate = \"\") As %String" },
+    { "header": "ClassMethod WrapRtnDocWithXML(ByRef pDocumentArray As %String, Output pWrappedDocument As %Stream) As %Status" }
    ]
   },
   "%Atelier.v5.XDebugAgent": {
@@ -4198,7 +4199,8 @@
   "%SYS.BackgroundTask": {
    "header": "Class %SYS.BackgroundTask",
    "members": [
-    { "header": "ClassMethod Register(args...) As This" }
+    { "header": "ClassMethod Register(ByRef args...) As This" },
+    { "header": "Method Run(ByRef args...) As %Status [ Final ]" }
    ]
   },
   "%SYS.Bench.Run": {
@@ -4962,7 +4964,7 @@
   "%Wallet.Collection": {
    "header": "Class %Wallet.Collection",
    "members": [
-    { "header": "ClassMethod Exists(name As %String, obj As %Wallet.Collection = \"\", sc As %Status = \"\") As %Boolean" }
+    { "header": "ClassMethod Exists(name As %String, Output obj As %Wallet.Collection = \"\", Output sc As %Status = \"\") As %Boolean" }
    ]
   },
   "%Wallet.LocalStorage": {
@@ -4974,7 +4976,7 @@
   "%Wallet.Secret": {
    "header": "Class %Wallet.Secret",
    "members": [
-    { "header": "ClassMethod Exists(name As %String, obj As %Wallet.Secret = \"\", sc As %Status = \"\") As %Boolean" },
+    { "header": "ClassMethod Exists(name As %String, Output obj As %Wallet.Secret = \"\", Output sc As %Status = \"\") As %Boolean" },
     { "header": "ClassMethod ExportInternal(writer As %XML.Writer, collections As %String, secrets As %String, Output numExported)" }
    ]
   },
@@ -7563,6 +7565,7 @@
   "Security.Servers": {
    "header": "Class Security.Servers",
    "members": [
+    { "header": "ClassMethod Create(Port As %Integer, BindAddress As %String = \"\", ByRef Properties As %String) As %Status" },
     { "header": "ClassMethod Exists(Port As %String, BindAddress As %String = \"\", Output Server As This, ByRef Status As %Status) As %Boolean" }
    ]
   },
@@ -7583,7 +7586,7 @@
   "Security.Users": {
    "header": "Class Security.Users",
    "members": [
-    { "header": "ClassMethod Create(Username As %String, UserRoles As %String, Password As %String = \"\", FullName As %String = \"\", NameSpace As %String = \"\", Routine As %String = \"\", ExpirationDate As %String = \"\", ChangePassword As %Boolean = \"\", Enabled As %Boolean = \"\", Comment As %String = \"\", Flags As %String = 1, PhoneNumber As %String = \"\", PhoneProvider As %String = \"\", ByRef Attributes As %String = \"\", AccountNeverExpires As %Boolean = \"\", PasswordNeverExpires As %Boolean = \"\", PasswordHashAlgorithm As %String = \"\", PasswordHashWorkFactor As %Integer = \"\", EscalationRoles As %String = \"\") As %Status" },
+    { "header": "ClassMethod Create(Username As %String, ByRef UserRoles As %String, Password As %String = \"\", FullName As %String = \"\", NameSpace As %String = \"\", Routine As %String = \"\", ExpirationDate As %String = \"\", ChangePassword As %Boolean = \"\", Enabled As %Boolean = \"\", Comment As %String = \"\", Flags As %String = 1, PhoneNumber As %String = \"\", PhoneProvider As %String = \"\", ByRef Attributes As %String = \"\", AccountNeverExpires As %Boolean = \"\", PasswordNeverExpires As %Boolean = \"\", PasswordHashAlgorithm As %String = \"\", PasswordHashWorkFactor As %Integer = \"\", EscalationRoles As %String = \"\") As %Status" },
     { "header": "ClassMethod Exists(Username As %String, Output User As This, Output Status As %Status, Flag As %Integer = 0) As %Boolean" }
    ]
   },
