@@ -4178,6 +4178,12 @@
     { "header": "Method getTransporter(pClass, Output pSC As %Status) As %String" }
    ]
   },
+  "%SYS.Api.Admin.Util.AsyncTaskEndpoint": {
+   "header": "Class %SYS.Api.Admin.Util.AsyncTaskEndpoint",
+   "members": [
+    { "header": "Method SaveRequestBody(requestBody As %DynamicAbstractObject) As %Status" }
+   ]
+  },
   "%SYS.AppMetadataStack.SQL": {
    "header": "Class %SYS.AppMetadataStack.SQL",
    "members": [
