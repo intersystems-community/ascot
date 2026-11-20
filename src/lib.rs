@@ -11,7 +11,7 @@
 //! use ascot::Workspace;
 //! use ascot::bindings::GuestWorkspace;
 //!
-//! let workspace = Workspace::new(None, None);
+//! let workspace = Workspace::new();
 //! workspace.open(
 //!     "Test.cls".to_string(),
 //!     "Class Test.Foo {\nClassMethod Bar() {\n set x = 1\n}\n}\n".to_string(),
@@ -76,7 +76,7 @@ pub use atelier::{Atelier, AtelierContext};
 pub use declared::Declarations;
 #[cfg(not(target_arch = "wasm32"))]
 pub use iris::{
-    Chain, DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, LATEST as LATEST_IRIS, NONE as NO_IRIS,
+    DEFAULT_NAMESPACE as DEFAULT_IRIS_NAMESPACE, LATEST as LATEST_IRIS, NONE as NO_IRIS,
     open as open_iris, open_all as open_iris_all,
 };
 #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
@@ -857,21 +857,81 @@ fn drop_derived(cell: &RefCell<DocCache>, expansion: bool) {
     }
 }
 
-// A declaration file that doesn't read is no environment at all, the strictest check; the host
-// is expected to pass the asset it bundles unchanged.
-fn iris_handle(env: Option<bindings::Env>) -> Option<IrisHandle> {
-    match env? {
-        bindings::Env::Declarations(bytes) => declared::Declarations::from_bytes(&bytes)
-            .ok()
-            .map(|declarations| Box::new(declarations) as IrisHandle),
-        #[cfg(target_arch = "wasm32")]
-        bindings::Env::Context(context) => Some(Box::new(context)),
-        #[cfg(target_arch = "wasm32")]
-        bindings::Env::Atelier(atelier) => Some(Box::new(AtelierContext::from(atelier))),
-        // Never carries a real connection natively -- use `native` for that.
-        #[cfg(not(target_arch = "wasm32"))]
-        _ => None,
+/// Sources asked in order. A document is the first source's that has it; a source that fails is
+/// passed over, and its failure is the answer only when no later source has the document.
+pub(crate) struct Chain(pub(crate) Vec<Box<dyn IrisContext>>);
+
+impl Chain {
+    fn first<T>(
+        &self,
+        get: impl Fn(&dyn IrisContext) -> Result<Option<T>, String>,
+    ) -> Result<Option<T>, String> {
+        let mut failed = None;
+        for source in &self.0 {
+            match get(source.as_ref()) {
+                Ok(Some(found)) => return Ok(Some(found)),
+                Ok(None) => {}
+                Err(err) => {
+                    failed.get_or_insert(err);
+                }
+            }
+        }
+        failed.map_or(Ok(None), Err)
     }
+}
+
+impl IrisContext for Chain {
+    fn get_cls(&self, cls: &str) -> Result<Option<crate::bindings::ClassInfo>, String> {
+        self.first(|source| source.get_cls(cls))
+    }
+
+    fn sql_names_declared(&self) -> bool {
+        self.0.iter().all(|source| source.sql_names_declared())
+    }
+
+    fn find_cls_by_sql(&self, schema: &str, table: &str) -> Result<Option<String>, String> {
+        self.first(|source| source.find_cls_by_sql(schema, table))
+    }
+
+    fn find_sql_proc(&self, schema: &str, name: &str) -> Result<Option<String>, String> {
+        self.first(|source| source.find_sql_proc(schema, name))
+    }
+
+    fn get_inc(&self, name: &str) -> Result<Option<crate::bindings::Source>, String> {
+        self.first(|source| source.get_inc(name))
+    }
+
+    fn get_rtn(&self, name: &str) -> Result<Option<crate::bindings::RoutineInfo>, String> {
+        self.first(|source| source.get_rtn(name))
+    }
+}
+
+// The sources as the host lists them, asked in order; a declaration file that doesn't read is
+// the error, so the host learns of it rather than checking against nothing.
+fn iris_handle(env: Vec<bindings::Env>) -> Result<Option<IrisHandle>, String> {
+    let mut sources: Vec<IrisHandle> = Vec::new();
+    for source in env {
+        match source {
+            bindings::Env::Declarations(bytes) => sources.push(Box::new(
+                declared::Declarations::from_bytes(&bytes)
+                    .map_err(|err| format!("declarations: {err}"))?,
+            )),
+            #[cfg(target_arch = "wasm32")]
+            bindings::Env::Context(context) => sources.push(Box::new(context)),
+            #[cfg(target_arch = "wasm32")]
+            bindings::Env::Atelier(atelier) => {
+                sources.push(Box::new(AtelierContext::from(atelier)))
+            }
+            // Never carries a real connection natively -- use `native` for that.
+            #[cfg(not(target_arch = "wasm32"))]
+            _ => {}
+        }
+    }
+    Ok(match sources.len() {
+        0 => None,
+        1 => sources.pop(),
+        _ => Some(Box::new(Chain(sources))),
+    })
 }
 
 fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> WorkspaceStruct {
@@ -949,11 +1009,8 @@ impl Workspace {
 
 impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
-    fn new(env: Option<bindings::Env>, style: Option<Style>) -> Self {
-        Workspace(RefCell::new(build_workspace_struct(
-            iris_handle(env),
-            style,
-        )))
+    fn new() -> Self {
+        Workspace(RefCell::new(build_workspace_struct(None, None)))
     }
 
     #[allow(async_fn_in_trait)]
@@ -967,8 +1024,8 @@ impl bindings::GuestWorkspace for Workspace {
     }
 
     #[allow(async_fn_in_trait)]
-    fn set_env(&self, env: Option<bindings::Env>) -> Vec<String> {
-        self.set_iris(iris_handle(env))
+    fn set_env(&self, env: Vec<bindings::Env>) -> Result<Vec<String>, String> {
+        Ok(self.set_iris(iris_handle(env)?))
     }
 
     #[allow(async_fn_in_trait)]
@@ -1403,7 +1460,7 @@ mod tests {
 
     // `Test.Sub` calls `Test.Base`'s `Foo`, each in its own document.
     fn base_and_sub() -> (Workspace, String, String) {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let (base_uri, sub_uri) = ("Base.cls".to_string(), "Sub.cls".to_string());
         workspace.open(
             base_uri.clone(),
@@ -1442,7 +1499,7 @@ mod tests {
 
     #[test]
     fn include_dependency_invalidation() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let inc_uri = "Shared.inc".to_string();
         let mac_uri = "Main.mac".to_string();
         workspace.open(
@@ -1470,7 +1527,7 @@ mod tests {
 
     #[test]
     fn opening_a_missing_include_later_invalidates_its_includers() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let mac_uri = "Main.mac".to_string();
         let cls_uri = "User.cls".to_string();
         let inc_uri = "Shared.inc".to_string();
@@ -1509,7 +1566,7 @@ mod tests {
 
     #[test]
     fn opening_a_missing_class_later_invalidates_its_users() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let base_uri = "Base.cls".to_string();
         let sub_uri = "Sub.cls".to_string();
         workspace.open(
@@ -1539,7 +1596,7 @@ mod tests {
         std::fs::write(dir.join("pkg/A.cls"), "Class Test.A {\n}\n").unwrap();
         std::fs::write(dir.join("R.mac"), "ROUTINE R\n Quit\n").unwrap();
         std::fs::write(dir.join("notes.txt"), "skipped").unwrap();
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let (mut opened, affected) = workspace.open_directory(&dir);
         std::fs::remove_dir_all(&dir).unwrap();
         opened.sort();
@@ -1562,7 +1619,10 @@ mod tests {
             "Class Test.Owner {\nProperty P As App.NotOpen;\n}\n".to_string(),
         );
         assert!(workspace.diagnostics(uri.clone()).is_empty());
-        assert_eq!(workspace.set_env(None), std::slice::from_ref(&uri));
+        assert_eq!(
+            workspace.set_env(vec![]).unwrap(),
+            std::slice::from_ref(&uri)
+        );
         let diagnostics = workspace.diagnostics(uri);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(diagnostics[0].message.contains("App.NotOpen"));
@@ -1586,26 +1646,22 @@ mod tests {
             gz.finish().unwrap(),
             file(declared::DECLARATIONS_VERSION).into_bytes(),
         ] {
-            let workspace = Workspace::new(Some(bindings::Env::Declarations(bytes)), None);
+            let workspace = Workspace::new();
+            workspace
+                .set_env(vec![bindings::Env::Declarations(bytes)])
+                .unwrap();
             workspace.open("Use.cls".to_string(), source.to_string());
             let diagnostics = workspace.diagnostics("Use.cls".to_string());
             assert!(diagnostics.is_empty(), "{diagnostics:?}");
         }
+        // One another ascot wrote is refused.
         let incompatible = bindings::Env::Declarations(file("0.1.0").into_bytes());
-        let workspace = Workspace::new(Some(incompatible), None);
-        workspace.open("Use.cls".to_string(), source.to_string());
-        let diagnostics = workspace.diagnostics("Use.cls".to_string());
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.message.contains("Cannot find class 'Demo.Base'")),
-            "{diagnostics:?}"
-        );
+        assert!(Workspace::new().set_env(vec![incompatible]).is_err());
     }
 
     #[test]
     fn without_iris_a_property_type_outside_the_workspace_is_an_error() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Owner.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -1645,7 +1701,7 @@ mod tests {
 
     #[test]
     fn without_iris_a_superclass_outside_the_workspace_is_an_error_at_the_extends() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Probe.cls".to_string();
         // With no IRIS there is no environment: `%RegisteredObject` doesn't exist, which is
         // reported where it is named; past it the hierarchy is unknown, so a member nobody
@@ -1703,7 +1759,10 @@ mod tests {
             r#"{{"version":"{}","namespace":"%SYS","classes":{{}},"includes":{{}},"routines":{{}}}}"#,
             declared::DECLARATIONS_VERSION
         );
-        let workspace = Workspace::new(Some(bindings::Env::Declarations(empty.into_bytes())), None);
+        let workspace = Workspace::new();
+        workspace
+            .set_env(vec![bindings::Env::Declarations(empty.into_bytes())])
+            .unwrap();
         let uri = "Probe.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -1729,7 +1788,7 @@ mod tests {
 
     #[test]
     fn open_ignores_a_file_with_an_unrecognized_extension() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "notes.txt".to_string();
         workspace.open(
             uri.clone(),
@@ -1740,7 +1799,7 @@ mod tests {
 
     #[test]
     fn diagnostics_and_inlay_hint_share_one_check() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Shared.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -1762,7 +1821,7 @@ mod tests {
 
     #[test]
     fn creates_hint_shows_non_new_variable_written_in_subroutine() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "CreatesTest.mac".to_string();
         // A legacy subroutine (no `Public(...)` clause) defaults every undeclared local to
         // shared/non-`New`'d — writing `foo` here silently leaks it into the caller's scope.
@@ -1780,7 +1839,7 @@ mod tests {
 
     #[test]
     fn creates_hint_shows_non_new_variable_written_via_merge() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "CreatesTest3.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -1802,7 +1861,7 @@ mod tests {
 
     #[test]
     fn creates_hint_is_absent_for_a_private_by_default_method() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "CreatesTest2.cls".to_string();
         // A `ClassMethod` is private-by-default (unlike a legacy subroutine): an undeclared
         // local defaults to `New`'d, so writing one isn't a "creates" leak.
@@ -1851,7 +1910,7 @@ mod tests {
 
     #[test]
     fn hover_type_shows_inferred_local_variable_type() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Hover2.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -1892,7 +1951,7 @@ mod tests {
 
     #[test]
     fn quoted_argument_pasted_into_dollar_g_is_the_string_alone() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "QuotedArg.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -1918,7 +1977,7 @@ mod tests {
 
     #[test]
     fn macro_expansion_shows_expanded_text() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "MacroHover.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -1955,7 +2014,7 @@ mod tests {
 
     #[test]
     fn query_cls_and_query_mem_prefix_match() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         workspace.open(
             "Test.Foo.cls".to_string(),
             "Class Test.Foo {\nClassMethod Bar() {\n}\nClassMethod Baz() {\n}\n}\n".to_string(),
@@ -1978,7 +2037,7 @@ mod tests {
 
     #[test]
     fn document_symbol_returns_class_and_members() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Test.Foo.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -2013,7 +2072,7 @@ mod tests {
 
     #[test]
     fn workspace_symbol_finds_classes_and_members_by_name() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         workspace.open(
             "Test.Foo.cls".to_string(),
             "Class Test.Foo {\nClassMethod Bar() {\n}\n}\n".to_string(),
@@ -2037,7 +2096,7 @@ mod tests {
 
     #[test]
     fn document_symbol_returns_routine_and_labels() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Test.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -2066,7 +2125,7 @@ mod tests {
 
     #[test]
     fn workspace_symbol_finds_routines_and_labels_by_name() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         workspace.open(
             "Test.mac".to_string(),
             "ROUTINE Test\n\n\tQuit\n\nFoo\t;\n\tQuit\n".to_string(),
@@ -2088,7 +2147,7 @@ mod tests {
 
     #[test]
     fn workspace_symbol_parses_a_never_checked_matching_routine() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         // Opened but never otherwise analyzed (no diagnostics/document_symbol/etc. called) --
         // a name match still gets full detail (its label included), same as a class: tier A
         // (the name) is always available for free, but a *match* is worth paying for tier B.
@@ -2104,7 +2163,7 @@ mod tests {
 
     #[test]
     fn hover_member_on_a_call_shows_the_callee_not_the_caller() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "HoverCallee.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -2131,7 +2190,7 @@ mod tests {
 
     #[test]
     fn hover_member_returns_member_at_position() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Hover.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -2162,7 +2221,7 @@ mod tests {
 
     #[test]
     fn hover_renders_member_as_markdown() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Hover.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -2182,7 +2241,7 @@ mod tests {
 
     #[test]
     fn hover_shows_both_type_and_macro_expansion_when_both_apply() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "MacroArg.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -2325,7 +2384,7 @@ mod tests {
 
     #[test]
     fn definition_resolves_same_routine_label_call() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Test.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -2540,7 +2599,7 @@ mod tests {
 
     #[test]
     fn definition_resolves_cross_routine_label_call() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let callee_uri = "Callee.mac".to_string();
         workspace.open(
             callee_uri.clone(),
@@ -2567,7 +2626,7 @@ mod tests {
 
     #[test]
     fn definition_resolves_goto_target() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Test.mac".to_string();
         // No `Quit` before the `Goto` — a bare fallthrough would be flagged, and `where` would
         // be flagged as unread unless `Goto` (like `Do`) is treated as sharing scope with its
@@ -2595,7 +2654,7 @@ mod tests {
 
     #[test]
     fn definition_resolves_label_after_include() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let inc_uri = "Shared.inc".to_string();
         let mac_uri = "Test.mac".to_string();
         workspace.open(
@@ -2626,7 +2685,7 @@ mod tests {
 
     #[test]
     fn references_finds_all_call_sites_from_either_end() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let base_uri = "Base.cls".to_string();
         let sub_uri = "Sub.cls".to_string();
         workspace.open(
@@ -2675,7 +2734,7 @@ mod tests {
 
     #[test]
     fn references_include_extends_and_declared_types() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let (base_uri, sub_uri) = ("Base.cls".to_string(), "Sub.cls".to_string());
         workspace.open(base_uri.clone(), "Class Test.Base {\n}\n".to_string());
         workspace.open(
@@ -2725,7 +2784,7 @@ mod tests {
 
     #[test]
     fn definition_resolves_self_member_reference() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Sub.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -2854,7 +2913,7 @@ mod tests {
     #[test]
     fn set_style_rechecks_every_document_against_the_new_style() {
         let style = style::parse(r#"{"command": {"form": "long", "case": "pascal"}}"#).unwrap();
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Style.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -2873,7 +2932,8 @@ mod tests {
     #[test]
     fn command_keywords_follow_the_configured_style() {
         let style = style::parse(r#"{"command": {"form": "long", "case": "pascal"}}"#).unwrap();
-        let workspace = Workspace::new(None, Some(style));
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
         let uri = "Style.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -2907,7 +2967,8 @@ mod tests {
             r#"{"function": {"form": "long", "case": "pascal"}, "functionListbuild": {"form": "short"}}"#,
         )
         .unwrap();
-        let workspace = Workspace::new(None, Some(style));
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
         let uri = "F.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -2925,7 +2986,8 @@ mod tests {
     #[test]
     fn set_targets_follow_the_configured_function_style() {
         let style = style::parse(r#"{"function": {"form": "long", "case": "pascal"}}"#).unwrap();
-        let workspace = Workspace::new(None, Some(style));
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
         let uri = "S.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -2953,7 +3015,8 @@ mod tests {
     #[test]
     fn expression_methods_follow_the_configured_function_style() {
         let style = style::parse(r#"{"function": {"case": "upper"}}"#).unwrap();
-        let workspace = Workspace::new(None, Some(style));
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
         let uri = "T.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -3009,7 +3072,7 @@ mod tests {
     }
 
     fn class_diagnostics(body: &str) -> Vec<bindings::Diagnostic> {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "F.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -3019,7 +3082,7 @@ mod tests {
     }
 
     fn diagnostics_for(files: &[(&str, &str)]) -> Vec<bindings::Diagnostic> {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         for (uri, text) in files {
             workspace.open(uri.to_string(), text.to_string());
         }
@@ -3078,7 +3141,7 @@ mod tests {
 
     #[test]
     fn hover_past_the_end_of_a_routine_is_none() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Short.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -3097,7 +3160,7 @@ mod tests {
     fn dim_at_column_zero_in_a_routine_is_checked_in_place() {
         let body =
             "#dim x As %String\n\tWrite x\n\tQuit\nlbl\n#dim y As %Integer\n\tWrite y\n\tQuit\n";
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let col0 = "Col0.mac".to_string();
         let indented = "Indented.mac".to_string();
         workspace.open(col0.clone(), format!("ROUTINE Col0\n{body}"));
@@ -3118,7 +3181,7 @@ mod tests {
 
     #[test]
     fn get_of_a_maybe_undefined_variable_merges_with_the_default() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "G.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -3147,7 +3210,7 @@ mod tests {
 
     #[test]
     fn routine_expansion_computed_for_symbols_still_tracks_its_includes() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         workspace.open(
             "A.inc".to_string(),
             "ROUTINE A [Type=INC]\n#define X 1\n".to_string(),
@@ -3172,7 +3235,7 @@ mod tests {
 
     #[test]
     fn class_depends_on_transitively_included_files() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         workspace.open(
             "B.inc".to_string(),
             "ROUTINE B [Type=INC]\n#define X 1\n".to_string(),
@@ -3201,7 +3264,7 @@ mod tests {
 
     #[test]
     fn class_index_forgets_a_name_its_file_no_longer_declares() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         workspace.open(
             "C.cls".to_string(),
             "Class Test.C {\nClassMethod M() {\n Do ##class(Test.Foo).Baz()\n}\n}\n".to_string(),
@@ -3221,7 +3284,7 @@ mod tests {
 
     #[test]
     fn closing_one_of_two_same_named_classes_leaves_the_other_indexed() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         workspace.open(
             "C.cls".to_string(),
             "Class Test.C {\nClassMethod M() {\n Do ##class(Test.Foo).Baz()\n}\n}\n".to_string(),
@@ -3247,7 +3310,7 @@ mod tests {
     // `%flag` inside the pasted argument is the caller's variable, not `Has`'s second parameter.
     #[test]
     fn macro_arguments_are_not_rescanned_for_other_parameters() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Sub.mac".to_string();
         workspace.open(
             uri.clone(),
@@ -3337,7 +3400,7 @@ mod tests {
     // character further, past the newline, onto the next line.
     #[test]
     fn loop_end_hints_sit_after_the_closing_brace() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let uri = "Loops.cls".to_string();
         workspace.open(
             uri.clone(),
@@ -3361,7 +3424,7 @@ mod tests {
     // Go to definition on a class's `Include X` or a routine's `#include X` opens `X.inc`.
     #[test]
     fn include_names_have_a_definition() {
-        let workspace = Workspace::new(None, None);
+        let workspace = Workspace::new();
         let inc = "ROUTINE Test.Shared [Type=INC]\n#define X 1\n";
         let cls = "Include (Test.Other, Test.Shared)\n\nClass Test.C {\nClassMethod M() {\n Write $$$X\n}\n}\n";
         let mac = "ROUTINE R\n#include Test.Shared\n\tWrite $$$X\n\tQuit\n";

@@ -86,57 +86,8 @@ pub fn open_all(
     Ok(match sources.len() {
         0 => None,
         1 => sources.pop(),
-        _ => Some(Box::new(Chain(sources))),
+        _ => Some(Box::new(crate::Chain(sources))),
     })
-}
-
-/// Sources asked in order. A document is the first source's that has it; a source that fails is
-/// passed over, and its failure is the answer only when no later source has the document.
-pub struct Chain(pub Vec<Box<dyn IrisContext>>);
-
-impl Chain {
-    fn first<T>(
-        &self,
-        get: impl Fn(&dyn IrisContext) -> Result<Option<T>, String>,
-    ) -> Result<Option<T>, String> {
-        let mut failed = None;
-        for source in &self.0 {
-            match get(source.as_ref()) {
-                Ok(Some(found)) => return Ok(Some(found)),
-                Ok(None) => {}
-                Err(err) => {
-                    failed.get_or_insert(err);
-                }
-            }
-        }
-        failed.map_or(Ok(None), Err)
-    }
-}
-
-impl IrisContext for Chain {
-    fn get_cls(&self, cls: &str) -> Result<Option<crate::bindings::ClassInfo>, String> {
-        self.first(|source| source.get_cls(cls))
-    }
-
-    fn sql_names_declared(&self) -> bool {
-        self.0.iter().all(|source| source.sql_names_declared())
-    }
-
-    fn find_cls_by_sql(&self, schema: &str, table: &str) -> Result<Option<String>, String> {
-        self.first(|source| source.find_cls_by_sql(schema, table))
-    }
-
-    fn find_sql_proc(&self, schema: &str, name: &str) -> Result<Option<String>, String> {
-        self.first(|source| source.find_sql_proc(schema, name))
-    }
-
-    fn get_inc(&self, name: &str) -> Result<Option<crate::bindings::Source>, String> {
-        self.first(|source| source.get_inc(name))
-    }
-
-    fn get_rtn(&self, name: &str) -> Result<Option<crate::bindings::RoutineInfo>, String> {
-        self.first(|source| source.get_rtn(name))
-    }
 }
 
 /// The `--iris` value for no environment: nothing outside the workspace exists.
@@ -183,6 +134,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::Chain;
     use crate::bindings::{ClassInfo, RoutineInfo, Source};
 
     fn class_info(name: &str) -> ClassInfo {
