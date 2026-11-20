@@ -637,7 +637,8 @@
    "header": "Class %Atelier.REST",
    "members": [
     { "header": "ClassMethod RenderResponseBody(pStatus As %Status, pMsgPart As %DynamicArray = \"\", pResPart As %DynamicAbstractObject = \"\") As %Status" },
-    { "header": "ClassMethod ServeDoc(pDocName As %String, pStatus As %Status, pMsgArray As %DynamicArray, ByRef pResArray As %String, pTimeStamp As %String = \"\", pUpToDate As %Boolean, pExtensionContent As %DynamicObject = \"\") As %Status" }
+    { "header": "ClassMethod ServeDoc(pDocName As %String, pStatus As %Status, pMsgArray As %DynamicArray, ByRef pResArray As %String = \"\", pTimeStamp As %String = \"\", ByRef pUpToDate As %Boolean = \"\", pExtensionContent As %DynamicObject = \"\") As %Status" },
+    { "header": "ClassMethod ServeXml(pDocName As %String, pStatus As %Status, pMsgArray As %DynamicArray, pStream As %Stream.Object, pTimeStamp As %String = \"\") As %Status" }
    ]
   },
   "%Atelier.SourceControl": {
@@ -653,7 +654,13 @@
     { "header": "ClassMethod GetModifiedRoutinesIndex(pType As %String, ByRef dirlist, dbdir As %String, dbname As %String, pShowGenerated As %Boolean, hashIn As %String, Output hashOut As %String) As %Status" },
     { "header": "ClassMethod GetNameFromDocArray(ByRef pTextArray, Output pName) As %Status" },
     { "header": "ClassMethod TS(pDocName, ByRef pUpToDate = \"\") As %String" },
-    { "header": "ClassMethod WrapRtnDocWithXML(ByRef pDocumentArray As %String, Output pWrappedDocument As %Stream) As %Status" }
+    { "header": "ClassMethod WrapRtnDocWithXML(ByRef pDocumentArray As %String, Output pWrappedDocument As %Stream.GlobalCharacter) As %Status" }
+   ]
+  },
+  "%Atelier.v1.Utils.TextServices": {
+   "header": "Class %Atelier.v1.Utils.TextServices",
+   "members": [
+    { "header": "ClassMethod SetTextFromArray(ByRef pDocumentArray As %String, pFlags As %Integer = 0, pDocName As %String, pCategory As %String = \"\", pBinary As %Boolean = 0) As %Status" }
    ]
   },
   "%Atelier.v5.XDebugAgent": {
@@ -3550,6 +3557,12 @@
     { "header": "ClassMethod %ProcessErrorNew(gateway As %Net.Remote.Gateway, error As %String = \"\")" }
    ]
   },
+  "%Net.Remote.Service": {
+   "header": "Class %Net.Remote.Service",
+   "members": [
+    { "header": "ClassMethod IsGatewayRunning(pHost As %String = \"127.0.0.1\", pPort As %String = \"\", pVerbose As %Boolean = 0, Output pSC As %Status, pPing As %Boolean = 1, bindtoip As %String = \"\", sslConfiguration As %String = \"\") As %Boolean" }
+   ]
+  },
   "%Net.Remote.Utility": {
    "header": "Class %Net.Remote.Utility",
    "members": [
@@ -4241,6 +4254,7 @@
   "%SYS.Journal.File": {
    "header": "Class %SYS.Journal.File",
    "members": [
+    { "header": "ClassMethod CheckIntegrity(ByRef jrnlist As %String, Detail As %Integer = 0, ByRef SrcDirs As %String = \"\", quietly As %Integer = 1) As %Status" },
     { "header": "ClassMethod Locate(Output LocatedFiles As %String, ByRef JrnFileList As %String, LocDirList As %String) As %Status" },
     { "header": "ClassMethod RequiredForRecovery(Output FileName As %String, Output FileCount As %Integer) As %Status" },
     { "header": "ClassMethod SelectRange(Output SelectedFiles As %String, FirstFile As %String = \"\", LastFile As %String = \"\", JrnLogPath As %String = \"\") As %Status" },
@@ -4278,6 +4292,7 @@
   "%SYS.MFT.Connection.Base": {
    "header": "Class %SYS.MFT.Connection.Base",
    "members": [
+    { "header": "Method GetAuthorizationCodeURL(redirect As %String = \"\", scope As %String = \"\", ByRef properties As %String = \"\", Output sc As %Status) As %String" },
     { "header": "ClassMethod Open(name As %String, Output sc As %Status) As This" }
    ]
   },
@@ -4470,9 +4485,10 @@
   "%SYSTEM.AbstractWorkMgr": {
    "header": "Class %SYSTEM.AbstractWorkMgr",
    "members": [
-    { "header": "Method %OnNew(ByRef qstruct As %String, numberjobs As %Integer, category = \"\", target = \"\") As %Status" },
+    { "header": "Method %OnNew(ByRef qstruct As %String = \"\", ByRef numberjobs As %Integer = \"\", ByRef category = \"\", target = \"\") As %Status" },
     { "header": "ClassMethod Initialize(qspec As %String = \"\", Output sc As %Status, numworkers As %Integer = \"\") As This [ Deprecated ]" },
-    { "header": "ClassMethod InitializeClass(iscname As %String, qspec As %String = \"\", Output sc As %Status, numworkers As %Integer) As This" }
+    { "header": "ClassMethod InitializeClass(iscname As %String, qspec As %String = \"\", Output sc As %Status, numworkers As %Integer) As This" },
+    { "header": "Method WaitOne(timeout As %Integer = 9999, Output worksc As %Status, Output workargs As %Binary, Output workresult As %Binary) As %Boolean" }
    ]
   },
   "%SYSTEM.AutoLock": {
@@ -4544,7 +4560,7 @@
     { "header": "ClassMethod GetClassList(Output items As %String, qspec As %String = \"\") As %Status" },
     { "header": "ClassMethod GetPackageList(Output items As %String, package As %String, qspec As %String = \"\") As %Status" },
     { "header": "ClassMethod Load(file As %String = \"\", qspec As %String = \"\", ByRef errorlog As %String = \"\", ByRef loadedlist As %String = \"\", listonly As %Boolean = 0, ByRef selecteditems As %String = \"\", displayname As %String = \"\", charset As %String = \"\", ByRef description As %String = \"\") As %Status [ Deprecated ]" },
-    { "header": "ClassMethod LoadStream(stream As %AbstractStream, qspec As %String = \"\", ByRef errorlog As %String, Output loadedlist As %String, listonly As %Boolean = \"\", selecteditems As %String = \"\", displayname As %String = \"\", charset As %String = \"\") As %Status" },
+    { "header": "ClassMethod LoadStream(stream As %Stream.Object, qspec As %String = \"\", ByRef errorlog As %String, Output loadedlist As %String, listonly As %Boolean = \"\", selecteditems As %String = \"\", displayname As %String = \"\", charset As %String = \"\") As %Status" },
     { "header": "ClassMethod SetConcurrencyMode(value As %Integer = 1, Output pStatus As %Status) As %Integer" },
     { "header": "ClassMethod SetTransactionMode(value As %Integer = 1, Output pStatus As %Status) As %Integer" }
    ]
@@ -4606,6 +4622,18 @@
     { "header": "ClassMethod Check(ResourceName As %String, Permissions As %String = \"\") As %RawString" },
     { "header": "ClassMethod GetGlobalPermission(Namespace As %String = \"\", Global As %String = \"\", Subscript As %String = \"\", Mount As %Boolean = 1) As %String" },
     { "header": "ClassMethod Login(Username As %String, Password As %String = \"\") As %Boolean" }
+   ]
+  },
+  "%SYSTEM.Security.System": {
+   "header": "Class %SYSTEM.Security.System",
+   "members": [
+    { "header": "ClassMethod GetDBEncKeyID() As %String" },
+    { "header": "ClassMethod GetDBEncKeyIDList() As %String" },
+    { "header": "ClassMethod GetDBEncKeyLenList() As %String" },
+    { "header": "ClassMethod GetJrnEncKeyID(type As %Integer) As %String" },
+    { "header": "ClassMethod GetMKEncKeyIDList() As %String" },
+    { "header": "ClassMethod SetDBEncKeyDefault(keyID As %String) As %Status" },
+    { "header": "ClassMethod SetJrnEncKey(keyID As %String) As %Status" }
    ]
   },
   "%SYSTEM.Sharding": {
@@ -4793,6 +4821,7 @@
   "%Studio.SASchemaUtil": {
    "header": "Class %Studio.SASchemaUtil",
    "members": [
+    { "header": "ClassMethod getSchemaMoniker(pSchemaSpec As %String, Output pMonikerType, Output pMonikerName, Output pMonikerData, Output pRootClasses As %String) As %String" },
     { "header": "ClassMethod loadSchema(pSchemaNameSpace As %String, pForce As %Boolean = 0, pForeground As %Boolean = 0, Output pIsSpawned As %Boolean = 0) As %Status" },
     { "header": "ClassMethod returnCorrelated(xdata As %Dictionary.XDataDefinition, ByRef sc As %Status) As %Library.Any" }
    ]
@@ -7395,7 +7424,8 @@
   "SYS.Database": {
    "header": "Class SYS.Database",
    "members": [
-    { "header": "ClassMethod ModifyDatabase(Directory As %String, Size As %Integer, Resource As %String, GlobalJournalState As %Integer = \"\") As %Status" }
+    { "header": "ClassMethod ModifyDatabase(Directory As %String, Size As %Integer = \"\", Resource As %String = \"\", GlobalJournalState As %Integer = \"\") As %Status" },
+    { "header": "ClassMethod ReturnUnusedSpace(Directory As %String, TargetSize As %Integer = 0, Output ReturnSize As %Integer) As %Status" }
    ]
   },
   "SYS.History.PerfData": {
@@ -7425,11 +7455,27 @@
     { "header": "ClassMethod Sample() As This" }
    ]
   },
+  "SYS.Metrics": {
+   "header": "Class SYS.Metrics",
+   "members": [
+    { "header": "ClassMethod GetECPStatistics(pID As %String = \"\", pCount As %Integer = \"\", Output pValues, Output pStatus, Output pMsg) As %Status" },
+    { "header": "ClassMethod GetGlobalStatistics(pID As %String = \"\", pCount As %Integer = \"\", Output pValues, Output pStatus, Output pMsg) As %Status" },
+    { "header": "ClassMethod GetMainMetrics(pID As %String = \"\", pCount As %Integer = \"\", Output pValues, Output pStatus, Output pMsg) As %Status" }
+   ]
+  },
+  "SYS.Mirror": {
+   "header": "Class SYS.Mirror",
+   "members": [
+    { "header": "ClassMethod CreateNewMirrorSet(MirrorSetName As %String, SystemName As %String = \"\", ByRef MirrorInfo As %String, ByRef SSLInfo As %String = \"\") As %Status" },
+    { "header": "ClassMethod JoinMirrorAsFailoverMember(MirrorSetName As %String, SystemName As %String = \"\", InstanceName As %String, AgentAddress As %String, AgentPort As %Integer = 2188, ByRef LocalInfo As %String, ByRef SSLInfo As %String = \"\") As %Status" }
+   ]
+  },
   "SYS.MirrorConfiguration": {
    "header": "Class SYS.MirrorConfiguration",
    "members": [
     { "header": "ClassMethod DoSSLConfigurationsExist(ByRef DN As %String = \"\") As %Status" },
-    { "header": "ClassMethod RetrieveMirrorConfig(MirrorSetName As %String, AgentIPAddress As Config.Host, MirrorAgentPort As %Integer, InstanceName As %String, ByRef Status As %Status = \"\", ByRef Unicode As %Integer = 0, SaveNode As %String = \"\", ByRef EMSManaged As %Integer = \"\") As Config.Mirrors" }
+    { "header": "ClassMethod RetrieveMirrorConfig(MirrorSetName As %String, AgentIPAddress As Config.Host, MirrorAgentPort As %Integer, InstanceName As %String, ByRef Status As %Status = \"\", ByRef Unicode As %Integer = 0, SaveNode As %String = \"\", ByRef EMSManaged As %Integer = \"\") As Config.Mirrors" },
+    { "header": "ClassMethod RetrieveMirrorMemberConfig(MirrorSetName As %String, AgentIPAddress As Config.Host, MirrorAgentPort As %Integer, InstanceName As %String, ByRef Status As %Status = \"\", SaveNode As %String = \"\", AllNodes As %Boolean = 0, MirrorsNode As %String = \"\", Output MemberFull As %Boolean) As Config.MapMirrors" }
    ]
   },
   "SYS.Monitor.SAM.Config": {
@@ -7545,6 +7591,7 @@
   "Security.Resources": {
    "header": "Class Security.Resources",
    "members": [
+    { "header": "ClassMethod Create(Name As %String, Description As %String = \"\", PublicPermission As Security.Datatype.Permission = \"\", Type As %Integer = 0) As %Status" },
     { "header": "ClassMethod Exists(Name As %String, Output Resource As This, Output Status As %Status) As %Boolean" },
     { "header": "ClassMethod InUse(Name As %String, ByRef InUse As %Status, ByRef Roles As %List, ByRef Databases As %List, ByRef Applications As %List = \"\", Flags As %Integer = 0) As %Status" }
    ]
