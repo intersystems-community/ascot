@@ -62,26 +62,32 @@ for r, info in mask["routines"].items():
     d["routines"][r]["labels"] = sorted(known.values(), key=lambda l: l["name"])
 # A mask member replaces the base member of its name, or is added when IRIS reports none (the
 # `%Dispatch*` hooks of `%DynamicAbstractObject`). It may change only types, modes, defaults and
-# the return type: a member of another kind or arity than IRIS reports is a mistake.
+# the return type: a member of another kind or arity than IRIS reports is a mistake, except that a
+# release may have appended arguments, which the member then takes from IRIS.
 KINDS = "ClassMethod|Method|ClientMethod|Property|Parameter|Relationship|Index|Query|Trigger|XData|Projection|ForeignKey"
-def shape(header):
+def parts(header):
     kind, name, rest = re.match(rf'({KINDS}) ("[^"]*"|[^\s(]+)(.*)', header).groups()
-    args = []
-    if rest.startswith("("):
-        depth, quoted, arg = 0, False, ""
-        for ch in rest[1:]:
-            quoted ^= ch == '"'
-            if not quoted:
-                depth += (ch in "({") - (ch in ")}")
-                if depth < 0 or (ch == "," and depth == 0):
-                    if arg.strip():
-                        args.append(re.match(r"\s*(?:ByRef |Output )?(%?\w+)", arg).group(1))
-                    arg = ""
-                    if depth < 0:
-                        break
-                    continue
-            arg += ch
-    return kind, name.strip('"'), args
+    head, texts = f"{kind} {name}", []
+    if not rest.startswith("("):
+        return head, texts, rest
+    depth, quoted, arg = 0, False, ""
+    for i, ch in enumerate(rest[1:], 1):
+        quoted ^= ch == '"'
+        if not quoted:
+            depth += (ch in "({") - (ch in ")}")
+            if depth < 0 or (ch == "," and depth == 0):
+                if arg.strip():
+                    texts.append(arg.strip())
+                arg = ""
+                if depth < 0:
+                    return head, texts, rest[i + 1:]
+                continue
+        arg += ch
+    return head, texts, ""
+def shape(header):
+    head, texts, _ = parts(header)
+    kind, name = head.split(" ", 1)
+    return kind, name.strip('"'), [re.match(r"(?:ByRef |Output )?(%?\w+)", text).group(1) for text in texts]
 NS = {"ClassMethod": "Method", "ClientMethod": "Method", "Relationship": "Property"}
 def key(header):
     kind, name, _ = shape(header)
@@ -98,7 +104,7 @@ for doc, edits in mask.get("sources", {}).items():
             sys.exit(f"mask.json: {doc} has no line {before!r}")
         lines = [after if line == before else line for line in lines]
     include["text"] = "\n".join(lines)
-replaced = added = 0
+replaced = added = extended = 0
 missing = []
 for cls, masked in mask["classes"].items():
     base = d["classes"].get(cls)
@@ -116,9 +122,16 @@ for cls, masked in mask["classes"].items():
             base["members"].append(m)
             added += 1
             continue
-        if shape(target["header"])[::2] != (kind, args):
+        iris_kind, _, iris_args = shape(target["header"])
+        if iris_kind != kind or iris_args[:len(args)] != args:
             sys.exit(f"mask.json: {cls}.{mname} differs from IRIS in kind or arguments:\n  {target['header']}\n  {m['header']}")
-        target["header"] = m["header"]
+        header = m["header"]
+        if len(iris_args) > len(args):
+            head, texts, tail = parts(header)
+            texts += parts(target["header"])[1][len(texts):]
+            header = f"{head}({', '.join(texts)}){tail}"
+            extended += 1
+        target["header"] = header
         replaced += 1
     names = {shape(m["header"])[1].lower() for m in base["members"]}
     for name in masked.get("drop", []):
@@ -129,5 +142,6 @@ if missing:
     print(f"mask.json: {len(missing)} class(es) are not in {namespace}, e.g. {missing[0]}", file=sys.stderr)
 json.dump(d, open(out, "w"), separators=(",", ":"))
 print(f"{named} of {len(compiled)} compiled-only routines got their label names; "
-      f"{replaced} member(s) replaced, {added} added and {sum(len(c.get('drop', [])) for c in mask['classes'].values())} dropped by the mask")
+      f"{replaced} member(s) replaced ({extended} extended with arguments the release appended), {added} added and "
+      f"{sum(len(c.get('drop', [])) for c in mask['classes'].values())} dropped by the mask")
 PY
