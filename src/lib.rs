@@ -1860,6 +1860,30 @@ mod tests {
     }
 
     #[test]
+    fn type_hint_spells_the_type_as_the_style_says() {
+        let workspace = Workspace::new();
+        let uri = "Spelling.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Spelling {\nClassMethod Foo() As %Integer {\n set x = ..Bar()\n quit x\n}\nClassMethod Bar() As %Integer {\n quit 1\n}\n}\n".to_string(),
+        );
+        let type_hint = || {
+            workspace
+                .inlay_hint(uri.clone(), bindings::Range::default())
+                .into_iter()
+                .find(|h| h.label.contains("Integer"))
+                .map(|h| (h.label, h.padding_left, h.padding_right))
+        };
+        assert_eq!(type_hint(), Some(("As %Integer".to_string(), true, true)));
+        let colon = style::parse(r#"{"inlayHint": {"typeAnnotation": "colon"}}"#).unwrap();
+        workspace.set_style(Some(colon));
+        assert_eq!(type_hint(), Some((": %Integer".to_string(), false, true)));
+        let as_ = style::parse(r#"{"inlayHint": {"typeAnnotation": "as"}}"#).unwrap();
+        workspace.set_style(Some(as_));
+        assert_eq!(type_hint(), Some(("As %Integer".to_string(), true, true)));
+    }
+
+    #[test]
     fn creates_hint_shows_non_new_variable_written_in_subroutine() {
         let workspace = Workspace::new();
         let uri = "CreatesTest.mac".to_string();
