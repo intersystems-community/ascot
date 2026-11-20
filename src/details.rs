@@ -539,6 +539,14 @@ pub fn routine_element_kind(
     }
 }
 
+// Where the element's body ends: a procedure block's `}`, a subroutine's last command.
+pub(crate) fn routine_element_end(element: &cos::RoutineElement) -> usize {
+    match element {
+        cos::RoutineElement::Subroutine(subroutine) => subroutine.body.end,
+        cos::RoutineElement::Procedure(procedure) => procedure.body.end,
+    }
+}
+
 /// The routine's labels in order, each with its details, description included.
 pub fn routine_elements<'r>(
     pos: &impl Positions,

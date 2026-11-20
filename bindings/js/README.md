@@ -113,7 +113,7 @@ as in the Language Server Protocol.
 | `setDiagnostics(filter)`                        | every uri: a new filter may change every report                                             |
 | `diagnostics(uri)`                              | `Diagnostic[]`                                                                              |
 | `inlayHint(uri, range)`                         | `InlayHint[]`                                                                               |
-| `definition(uri, position)`                     | `Location \| undefined`                                                                     |
+| `definition(uri, position)`                     | `LocationLink \| undefined`: the whole declaration to reveal, the name to select            |
 | `references(uri, position, includeDeclaration)` | `Location[]`                                                                                |
 | `hover(uri, position)`                          | markdown `string \| undefined`                                                              |
 | `documentSymbol(uri)`                           | the class or routine and its members or labels                                              |

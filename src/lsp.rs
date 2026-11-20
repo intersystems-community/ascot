@@ -17,8 +17,8 @@ use lsp_types::{
     DidChangeTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbol as LspDocumentSymbol,
     DocumentSymbolParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
     HoverParams, HoverProviderCapability, InitializeParams, InlayHint as LspInlayHint,
-    InlayHintLabel as LspInlayHintLabel, InlayHintParams, Location as LspLocation, MarkupContent,
-    MarkupKind, MessageType, NumberOrString, OneOf, Position as LspPosition,
+    InlayHintLabel as LspInlayHintLabel, InlayHintParams, Location as LspLocation, LocationLink,
+    MarkupContent, MarkupKind, MessageType, NumberOrString, OneOf, Position as LspPosition,
     PublishDiagnosticsParams, Range as LspRange, ReferenceParams, ServerCapabilities,
     ShowMessageParams, SymbolInformation, SymbolKind as LspSymbolKind, SymbolTag,
     TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkspaceSymbolParams,
@@ -55,6 +55,8 @@ struct Server {
     // that stays a live instance.
     settings: RefCell<Settings>,
     shared_fs: bool,
+    // The client declared `textDocument.definition.linkSupport`: a definition is a `LocationLink`.
+    definition_links: bool,
 }
 
 fn serve(connection: &Connection, mut settings: Settings, shared_fs: bool) -> Fallible {
@@ -92,10 +94,14 @@ fn serve(connection: &Connection, mut settings: Settings, shared_fs: bool) -> Fa
             workspace.open_directory(&root);
         }
     }
+    let definition_links = (params.capabilities.text_document.as_ref())
+        .and_then(|text_document| text_document.definition.as_ref()?.link_support)
+        .unwrap_or(false);
     let server = Server {
         workspace,
         settings: RefCell::new(settings),
         shared_fs,
+        definition_links,
     };
     main_loop(connection, &server)
 }
@@ -156,7 +162,7 @@ fn main_loop(connection: &Connection, server: &Server) -> Fallible {
                 if connection.handle_shutdown(&req)? {
                     return Ok(());
                 }
-                let response = handle_request(&server.workspace, req);
+                let response = handle_request(server, req);
                 connection.sender.send(Message::Response(response))?;
             }
             Message::Notification(not) => handle_notification(connection, server, not)?,
@@ -166,7 +172,8 @@ fn main_loop(connection: &Connection, server: &Server) -> Fallible {
     Ok(())
 }
 
-fn handle_request(workspace: &Workspace, req: Request) -> Response {
+fn handle_request(server: &Server, req: Request) -> Response {
+    let workspace = &server.workspace;
     match req.method.as_str() {
         "textDocument/inlayHint" => respond(req.id, req.params, |params: InlayHintParams| {
             let uri = workspace_key(&params.text_document.uri);
@@ -181,12 +188,21 @@ fn handle_request(workspace: &Workspace, req: Request) -> Response {
             let text_document_position = params.text_document_position_params;
             let uri = workspace_key(&text_document_position.text_document.uri);
             let position = text_document_position.position.into();
-            let location = workspace.definition(uri, position)?;
-            let lsp_location = LspLocation {
-                uri: location.uri.parse().ok()?,
-                range: to_lsp_range(location.range),
-            };
-            Some(GotoDefinitionResponse::Scalar(lsp_location))
+            let link = workspace.definition(uri, position)?;
+            let target_uri = link.target_uri.parse().ok()?;
+            Some(if server.definition_links {
+                GotoDefinitionResponse::Link(vec![LocationLink {
+                    origin_selection_range: link.origin_selection_range.map(to_lsp_range),
+                    target_uri,
+                    target_range: to_lsp_range(link.target_range),
+                    target_selection_range: to_lsp_range(link.target_selection_range),
+                }])
+            } else {
+                GotoDefinitionResponse::Scalar(LspLocation {
+                    uri: target_uri,
+                    range: to_lsp_range(link.target_selection_range),
+                })
+            })
         }),
         "textDocument/references" => respond(req.id, req.params, |params: ReferenceParams| {
             let text_document_position = params.text_document_position;
@@ -512,13 +528,13 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
 
-    // Drives `serve` over an in-memory connection: `initialize` with `options`, then `messages`;
-    // returns what the server sent up to its `shutdown` answer.
-    fn session(options: Value, messages: Vec<Message>) -> Vec<Message> {
+    // Drives `serve` over an in-memory connection: `initialize` with `capabilities` and `options`,
+    // then `messages`; returns what the server sent up to its `shutdown` answer.
+    fn session(capabilities: Value, options: Value, messages: Vec<Message>) -> Vec<Message> {
         let (server, client) = Connection::memory();
         let served = std::thread::spawn(move || serve(&server, Settings::default(), false));
         let send = |message: Message| client.sender.send(message).unwrap();
-        let initialize = json!({"capabilities": {}, "initializationOptions": options});
+        let initialize = json!({"capabilities": capabilities, "initializationOptions": options});
         send(Request::new(1.into(), "initialize".into(), initialize).into());
         client.receiver.recv().unwrap();
         send(notification("initialized", json!({})));
@@ -557,6 +573,7 @@ mod tests {
         let document =
             json!({"uri": uri, "languageId": "objectscript", "version": 1, "text": text});
         let sent = session(
+            json!({}),
             json!({"iris": "none", "diagnostics": "off:A7095"}),
             vec![
                 notification("textDocument/didOpen", json!({"textDocument": document})),
@@ -588,6 +605,7 @@ mod tests {
         let document =
             json!({"uri": uri, "languageId": "objectscript", "version": 1, "text": text});
         let sent = session(
+            json!({}),
             json!({"iris": "none"}),
             vec![
                 notification("workspace/didChangeConfiguration", json!({})),
@@ -602,9 +620,59 @@ mod tests {
         assert_eq!(sent_as(&sent, "textDocument/publishDiagnostics").len(), 1);
     }
 
+    // A client that declared `linkSupport` is given the whole declaration to reveal and the name
+    // to select; any other, the name.
+    #[test]
+    fn a_definition_is_a_link_for_a_client_that_takes_one() {
+        let uri = "file:///t/T.cls";
+        let text = "Class T {\nClassMethod A() {\n Do ..B()\n}\nClassMethod B() {\n}\n}\n";
+        let definition = |capabilities: Value| {
+            let document =
+                json!({"uri": uri, "languageId": "objectscript", "version": 1, "text": text});
+            let request =
+                json!({"textDocument": {"uri": uri}, "position": {"line": 2, "character": 7}});
+            let sent = session(
+                capabilities,
+                json!({"iris": "none"}),
+                vec![
+                    notification("textDocument/didOpen", json!({"textDocument": document})),
+                    Request::new(3.into(), "textDocument/definition".into(), request).into(),
+                ],
+            );
+            sent.iter()
+                .find_map(|message| match message {
+                    Message::Response(response) if response.id == 3.into() => {
+                        response.response_result.clone().ok()
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let range = |start: (u32, u32), end: (u32, u32)| {
+            json!({
+                "start": {"line": start.0, "character": start.1},
+                "end": {"line": end.0, "character": end.1},
+            })
+        };
+        assert_eq!(
+            definition(json!({})),
+            json!({"uri": uri, "range": range((4, 12), (4, 13))})
+        );
+        assert_eq!(
+            definition(json!({"textDocument": {"definition": {"linkSupport": true}}})),
+            json!([{
+                "originSelectionRange": range((2, 6), (2, 7)),
+                "targetUri": uri,
+                "targetRange": range((4, 0), (5, 1)),
+                "targetSelectionRange": range((4, 12), (4, 13)),
+            }])
+        );
+    }
+
     #[test]
     fn a_style_path_is_refused_without_a_shared_file_system() {
         let sent = session(
+            json!({}),
             json!({"iris": "none", "style": "/no/such/style.json"}),
             vec![],
         );

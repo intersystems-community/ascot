@@ -498,6 +498,45 @@ impl WorkspaceStruct {
         Some(Location::new(uri, range))
     }
 
+    // The whole declaration whose name a definition points at: a class member from its keyword
+    // through its body, a routine's label through its body (a procedure block's `}`), a class or
+    // an include file entire. `None` for a document outside the workspace, or a name no
+    // declaration of the document's own carries (a nested label).
+    fn declaration_range(&self, location: &Location) -> Option<bindings::Range> {
+        let Location { uri, range } = location;
+        if !self.doc_cache.contains_key(uri) {
+            return None;
+        }
+        match DocKind::from_uri(uri)? {
+            DocKind::Cls => {
+                let details = self.cls_details(uri).ok()?;
+                if details.name.range == *range {
+                    return Some(full_range(&self.doc_text(uri)?));
+                }
+                (details.members.all())
+                    .find(|member| member.it.name.range == *range)
+                    .map(|member| member.range)
+            }
+            DocKind::Rtn => {
+                let rtn = self.rtn_details(uri).ok()?;
+                let olc = &rtn.map.expanded_olc;
+                let (name, element) = (rtn.routine.subroutines.iter())
+                    .flat_map(|subs| subs.items.iter())
+                    .filter_map(|element| {
+                        let details = details::routine_element_kind(olc, element)?;
+                        Some((details.name.range, element))
+                    })
+                    .find(|(name, _)| rtn.map.relocate_source_range(*name) == Some(*range))?;
+                let end = olc.position(details::routine_element_end(element));
+                rtn.map.relocate_source_range(bindings::Range {
+                    start: name.start,
+                    end,
+                })
+            }
+            DocKind::Inc => Some(full_range(&self.doc_text(uri)?)),
+        }
+    }
+
     fn doc_text(&self, uri: &str) -> Option<String> {
         let cell = self.doc_cache.get(uri)?.as_ref().ok()?;
         Some(cell.borrow().text.clone())
@@ -1080,20 +1119,31 @@ impl bindings::GuestWorkspace for Workspace {
     }
 
     // Where the reference at `position` is declared, if any — one of the go-to-definition
-    // edges discovered as a byproduct of the last check. Covers class references
+    // edges discovered as a byproduct of the last check, as a link: the name to select, and the
+    // whole declaration to reveal (see `declaration_range`). Covers class references
     // (`##class(Name)`, `x.Foo`, `x.Foo()`), instance members (`i%Foo`), self-references
     // (`..Method`), label calls/gotos, in the same or another open routine, and
     // `Include`/`#include` names. Doesn't cover anything the checker resolves to no location
     // (e.g. `%New`, unmapped IRIS system classes), computed/indirect `Goto`, or anything in SQL
     // (which isn't type-checked yet).
     #[allow(async_fn_in_trait)]
-    fn definition(&self, uri: String, position: bindings::Position) -> Option<bindings::Location> {
-        self.borrow()
+    fn definition(
+        &self,
+        uri: String,
+        position: bindings::Position,
+    ) -> Option<bindings::LocationLink> {
+        let this = self.borrow();
+        let (range, location) = this
             .ensure_checked(&uri)
             .references
             .into_iter()
-            .find(|(range, _)| position_in_range(position, *range))
-            .map(|(_, location)| location)
+            .find(|(range, _)| position_in_range(position, *range))?;
+        Some(bindings::LocationLink {
+            origin_selection_range: Some(range),
+            target_range: this.declaration_range(&location).unwrap_or(location.range),
+            target_uri: location.uri,
+            target_selection_range: location.range,
+        })
     }
 
     // Every location across the workspace that refers to whatever's at `position` — the reverse
@@ -1494,6 +1544,18 @@ mod tests {
                 .to_string(),
         );
         (workspace, base_uri, sub_uri)
+    }
+
+    fn span(range: bindings::Range) -> ((u32, u32), (u32, u32)) {
+        (
+            (range.start.line, range.start.character),
+            (range.end.line, range.end.character),
+        )
+    }
+
+    // A link's target as `references` lists it.
+    fn target(link: &bindings::LocationLink) -> bindings::Location {
+        bindings::Location::new(link.target_uri.clone(), link.target_selection_range)
     }
 
     #[test]
@@ -2310,7 +2372,7 @@ mod tests {
     fn definition_resolves_member_reference() {
         let (workspace, base_uri, sub_uri) = base_and_sub();
 
-        let location = workspace
+        let link = workspace
             .definition(
                 sub_uri,
                 bindings::Position {
@@ -2319,15 +2381,13 @@ mod tests {
                 },
             )
             .expect("expected a definition at that position");
-        assert_eq!(location.uri, base_uri);
-        // The name, `Foo` in `ClassMethod Foo() {`, not the whole member.
+        assert_eq!(link.target_uri, base_uri);
+        // The name, `Foo` in `ClassMethod Foo() {`, is selected; the whole member is revealed.
+        assert_eq!(span(link.target_selection_range), ((1, 12), (1, 15)));
+        assert_eq!(span(link.target_range), ((1, 0), (2, 1)));
         assert_eq!(
-            (location.range.start.line, location.range.start.character),
-            (1, 12)
-        );
-        assert_eq!(
-            (location.range.end.line, location.range.end.character),
-            (1, 15)
+            link.origin_selection_range.map(span),
+            Some(((2, 23), (2, 26)))
         );
     }
 
@@ -2354,7 +2414,7 @@ mod tests {
 
         // `r%P1` inside the instance method (line 3) should resolve like `..P1`/`i%P1` —
         // go-to-definition finds the property declaration.
-        let location = workspace
+        let link = workspace
             .definition(
                 uri,
                 bindings::Position {
@@ -2363,7 +2423,7 @@ mod tests {
                 },
             )
             .expect("expected a definition for `r%P1`");
-        assert_eq!(location.range.start.line, 1);
+        assert_eq!(link.target_selection_range.start.line, 1);
     }
 
     #[test]
@@ -2371,7 +2431,7 @@ mod tests {
         let (workspace, base_uri, sub_uri) = base_and_sub();
 
         // Position inside "Base", within the `##class(Test.Base)` literal itself.
-        let location = workspace
+        let link = workspace
             .definition(
                 sub_uri,
                 bindings::Position {
@@ -2380,8 +2440,10 @@ mod tests {
                 },
             )
             .expect("expected a definition at that position");
-        assert_eq!(location.uri, base_uri);
-        assert_eq!(location.range.start.line, 0);
+        assert_eq!(link.target_uri, base_uri);
+        assert_eq!(span(link.target_selection_range), ((0, 6), (0, 15)));
+        // The class as a whole: its document.
+        assert_eq!(span(link.target_range), ((0, 0), (4, 0)));
     }
 
     #[test]
@@ -2410,7 +2472,7 @@ mod tests {
             "Class Test.Sub {\nClassMethod Bar() {\n do ##class(Test.External).Foo()\n}\n}\n"
                 .to_string(),
         );
-        let location = workspace
+        let link = workspace
             .definition(
                 uri,
                 bindings::Position {
@@ -2419,7 +2481,9 @@ mod tests {
                 },
             )
             .expect("expected a definition at that position");
-        assert_eq!(location.uri, "mock:///External.cls");
+        assert_eq!(link.target_uri, "mock:///External.cls");
+        // Nothing of a document outside the workspace is known beyond the host's uri.
+        assert_eq!(link.target_range, link.target_selection_range);
     }
 
     #[test]
@@ -2431,7 +2495,7 @@ mod tests {
             "ROUTINE Test\n\n\tQuit\n\nMain()\n do Sub()\n\tQuit\n\nSub()\n\tQuit\n".to_string(),
         );
 
-        let location = workspace
+        let link = workspace
             .definition(
                 uri,
                 bindings::Position {
@@ -2440,7 +2504,33 @@ mod tests {
                 },
             )
             .expect("expected a definition at that position");
-        assert_eq!(location.range.start.line, 8);
+        assert_eq!(span(link.target_selection_range), ((8, 0), (8, 3)));
+        // The label through its last line.
+        assert_eq!(span(link.target_range), ((8, 0), (9, 5)));
+    }
+
+    #[test]
+    fn definition_resolves_procedure_block_label_call() {
+        let workspace = Workspace::new();
+        let uri = "Test.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE Test\n\tDo Sub()\n\tQuit\n\nSub() {\n\tQuit\n}\n\nOther()\n\tQuit\n"
+                .to_string(),
+        );
+
+        let link = workspace
+            .definition(
+                uri,
+                bindings::Position {
+                    line: 1,
+                    character: 5,
+                },
+            )
+            .expect("expected a definition at that position");
+        assert_eq!(span(link.target_selection_range), ((4, 0), (4, 3)));
+        // The label through its block's `}`.
+        assert_eq!(span(link.target_range), ((4, 0), (6, 1)));
     }
 
     #[test]
@@ -2651,7 +2741,7 @@ mod tests {
             "ROUTINE Main\n\n\tDo Foo^Callee()\n\tQuit\n".to_string(),
         );
 
-        let location = workspace
+        let link = workspace
             .definition(
                 uri,
                 bindings::Position {
@@ -2660,8 +2750,9 @@ mod tests {
                 },
             )
             .expect("expected a definition at that position");
-        assert_eq!(location.uri, callee_uri);
-        assert_eq!(location.range.start.line, 4);
+        assert_eq!(link.target_uri, callee_uri);
+        assert_eq!(span(link.target_selection_range), ((4, 0), (4, 3)));
+        assert_eq!(span(link.target_range), ((4, 0), (5, 5)));
     }
 
     #[test]
@@ -2680,7 +2771,7 @@ mod tests {
         let diagnostics = workspace.diagnostics(uri.clone());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
-        let location = workspace
+        let link = workspace
             .definition(
                 uri,
                 bindings::Position {
@@ -2689,7 +2780,8 @@ mod tests {
                 },
             )
             .expect("expected a definition at that position");
-        assert_eq!(location.range.start.line, 8);
+        assert_eq!(span(link.target_selection_range), ((8, 0), (8, 4)));
+        assert_eq!(span(link.target_range), ((8, 0), (9, 5)));
     }
 
     #[test]
@@ -2710,7 +2802,7 @@ mod tests {
         let diagnostics = workspace.diagnostics(mac_uri.clone());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
-        let location = workspace
+        let link = workspace
             .definition(
                 mac_uri.clone(),
                 bindings::Position {
@@ -2719,8 +2811,10 @@ mod tests {
                 },
             )
             .expect("expected a definition at that position");
-        assert_eq!(location.uri, mac_uri);
-        assert_eq!(location.range.start.line, 9);
+        assert_eq!(link.target_uri, mac_uri);
+        // In the routine's own lines, not the expansion's, which the include lengthens.
+        assert_eq!(span(link.target_selection_range), ((9, 0), (9, 3)));
+        assert_eq!(span(link.target_range), ((9, 0), (10, 5)));
     }
 
     #[test]
@@ -2742,9 +2836,11 @@ mod tests {
             line: 2,
             character: 24,
         };
-        let definition = workspace
-            .definition(sub_uri.clone(), call_site)
-            .expect("expected a definition at that position");
+        let definition = target(
+            &workspace
+                .definition(sub_uri.clone(), call_site)
+                .expect("expected a definition at that position"),
+        );
 
         let from_call_site = workspace.references(sub_uri.clone(), call_site, true);
         assert_eq!(from_call_site.len(), 3, "{from_call_site:?}");
@@ -2814,9 +2910,11 @@ mod tests {
         );
         let from_extends = workspace.references(sub_uri.clone(), at(0, 25), false);
         assert_eq!(spans(&from_extends), spans(&from_header));
-        let definition = workspace
-            .definition(sub_uri.clone(), at(0, 25))
-            .expect("the Extends clause names the class");
+        let definition = target(
+            &workspace
+                .definition(sub_uri.clone(), at(0, 25))
+                .expect("the Extends clause names the class"),
+        );
         assert_eq!(definition.uri, base_uri);
         let with_declaration = workspace.references(sub_uri, at(0, 25), true);
         assert!(with_declaration.contains(&definition));
@@ -2832,7 +2930,7 @@ mod tests {
                 .to_string(),
         );
 
-        let location = workspace
+        let link = workspace
             .definition(
                 uri,
                 bindings::Position {
@@ -2841,7 +2939,8 @@ mod tests {
                 },
             )
             .expect("expected a definition at that position");
-        assert_eq!(location.range.start.line, 4);
+        assert_eq!(link.target_selection_range.start.line, 4);
+        assert_eq!(span(link.target_range), ((4, 0), (6, 1)));
     }
 
     // The mock gives every class this one member, declared by `origin`.
@@ -3313,7 +3412,10 @@ mod tests {
             line: 2,
             character: 15,
         };
-        let definition = |ws: &Workspace| ws.definition("C.cls".to_string(), foo).map(|l| l.uri);
+        let definition = |ws: &Workspace| {
+            ws.definition("C.cls".to_string(), foo)
+                .map(|l| l.target_uri)
+        };
         workspace.open("A.cls".to_string(), "Class Test.Foo {\n}\n".to_string());
         assert_eq!(definition(&workspace), Some("A.cls".to_string()));
         // Unparseable for a while (mid-edit), then renamed: `Test.Foo` is nobody's.
@@ -3342,7 +3444,7 @@ mod tests {
         assert_eq!(
             workspace
                 .definition("C.cls".to_string(), foo)
-                .map(|l| l.uri),
+                .map(|l| l.target_uri),
             Some("B.cls".to_string())
         );
     }
@@ -3485,7 +3587,13 @@ mod tests {
             },
         );
         let at = |uri: &str, line, character| {
-            workspace.definition(uri.to_string(), bindings::Position { line, character })
+            workspace
+                .definition(uri.to_string(), bindings::Position { line, character })
+                .map(|link| {
+                    // The include file as a whole: its document.
+                    assert_eq!(span(link.target_range), ((0, 0), (2, 0)));
+                    target(&link)
+                })
         };
         assert_eq!(
             at("C.cls", 0, cls.find("Test.Shared").unwrap() as u32 + 3),
