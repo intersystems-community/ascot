@@ -1544,7 +1544,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6274"]
     #[severity = Warning]
-    #[message = "Assigning {source}, an abstract class, to '{name}' declared as {target}"]
+    #[message = "Assigning a {source} to '{name}' declared as {target}"]
     DowncastFromAbstract {
         name: String,
         source: Ty,
