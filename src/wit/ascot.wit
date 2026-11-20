@@ -649,14 +649,16 @@ interface exported {
     use imported.{env};
 
     resource workspace {
-        constructor(env: option<env>, style: option<style>);
+        constructor();
         // Open or edit (kind from `uri`'s extension); returns the uris now stale.
         open: func(uri: string, text: string) -> list<string>;
         // Returns the uris now stale.
         close: func(uri: string) -> list<string>;
-        // Replaces the server everything outside the workspace resolves through; returns every
-        // uri, since all analysis built on the old one is stale.
-        set-env: func(env: option<env>) -> list<string>;
+        // Replaces the sources everything outside the workspace resolves through, asked in order:
+        // the first that holds a document answers for it; none is no environment. Returns every
+        // uri, since all analysis built on the old sources is stale; a `declarations` entry that
+        // doesn't read is the error, and the old sources stay.
+        set-env: func(env: list<env>) -> result<list<string>, string>;
         // Replaces the keyword style; returns every uri, since every check applied the old one.
         set-style: func(style: option<style>) -> list<string>;
         // Replaces which codes `diagnostics` reports, and at what severity: `VERB:TARGETS` values

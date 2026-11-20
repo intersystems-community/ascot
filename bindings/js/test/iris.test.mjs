@@ -173,3 +173,23 @@ test("a request that fails leaves what it was for taken on trust, saying why", a
     information("routine '%SYS.API'"),
   ]);
 });
+
+// Sources are asked in order, the first that holds a document answering for it; a declaration file
+// that doesn't read is refused, and the sources in force stay.
+test("a list of sources is asked in order; a bad declaration file is refused", async () => {
+  const file = (method) =>
+    new TextEncoder().encode(
+      `{"version":"1.0.0","namespace":"%SYS","classes":{"Demo.Base":{"header":"Class Demo.Base","members":[{"header":"ClassMethod ${method}() As %String"}]}},"includes":{},"routines":{}}`,
+    );
+  const source =
+    "Class Demo.Use\n{\nClassMethod M() As %String\n{\n Quit ##class(Demo.Base).Hello()\n}\n}\n";
+  const codes = async (workspace) =>
+    (await workspace.diagnostics("Demo.Use.cls")).map((d) => d.code);
+  const workspace = await createWorkspace([file("Hello"), file("Hi")]);
+  await workspace.open("Demo.Use.cls", source);
+  assert.deepEqual(await codes(workspace), []);
+  await workspace.setEnv([file("Hi"), file("Hello")]);
+  assert.deepEqual(await codes(workspace), ["A3139"]);
+  await assert.rejects(workspace.setEnv(new TextEncoder().encode("{}")), /declarations/);
+  assert.deepEqual(await codes(workspace), ["A3139"]);
+});

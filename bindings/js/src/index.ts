@@ -25,14 +25,17 @@ export type Workspace = {
 		? (...args: A) => Promise<Awaited<R>>
 		: RawWorkspace[K];
 } & {
-	/** Replaces the server; every uri comes back stale. Takes what `createWorkspace` takes. */
-	setEnv(iris?: Env): Promise<string[]>;
+	/** Replaces the sources; every uri comes back stale. Takes what `createWorkspace` takes, and
+	 * rejects for a declaration file that doesn't read, the sources in force staying. */
+	setEnv(iris?: Env | Env[]): Promise<string[]>;
 };
 
 /** Where ascot resolves what the workspace doesn't contain: `"latest"` (the default), the
  * pre-built declarations of the newest IRIS release this package knows, bundled with it; the
  * host's own lookups; an Atelier connection; a declaration file's bytes, gzipped or not; or
- * `"none"`, no environment at all, so that everything outside the workspace is an error. */
+ * `"none"`, no environment at all, so that everything outside the workspace is an error. A list
+ * of these is asked in order, the first that holds a document answering for it: a declaration
+ * file before an `Atelier` reads the system classes from the file and your own from the server. */
 export type Env = "latest" | IrisContext | Atelier | Uint8Array | "none";
 
 let bundled: Uint8Array | undefined;
@@ -62,7 +65,7 @@ function serialize(instance: RawWorkspace): Workspace {
 			const value = Reflect.get(target, prop, receiver);
 			if (typeof value !== "function") return value;
 			return async (...args: unknown[]) => {
-				if (prop === "setEnv") args = [envOf((args[0] as Env | undefined) ?? "latest")];
+				if (prop === "setEnv") args = [envsOf((args[0] as Env | Env[] | undefined) ?? "latest")];
 				const prev = tail;
 				let release!: () => void;
 				tail = new Promise<void>((resolve) => (release = resolve));
@@ -79,23 +82,30 @@ function serialize(instance: RawWorkspace): Workspace {
 
 /** A workspace whose calls run one at a time, resolving what it doesn't contain through `iris`. */
 export async function createWorkspace(
-	iris: Env = "latest",
+	iris: Env | Env[] = "latest",
 	style?: Style,
 	diagnostics?: string[],
 ): Promise<Workspace> {
 	const root = await wasm;
-	const workspace = serialize(new root.exported.Workspace(envOf(iris), style));
+	const workspace = serialize(new root.exported.Workspace());
+	await workspace.setEnv(iris);
+	if (style) await workspace.setStyle(style);
 	if (diagnostics) await workspace.setDiagnostics(diagnostics);
 	return workspace;
 }
 
-function envOf(iris: Env) {
-	if (iris === "none") return undefined;
+function envsOf(iris: Env | Env[]) {
+	return (Array.isArray(iris) ? iris : [iris]).flatMap((env) =>
+		env === "none" ? [] : [envOf(env)],
+	);
+}
+
+function envOf(iris: Exclude<Env, "none">) {
 	if (iris === "latest") return { tag: "declarations" as const, val: bundledDeclarations() };
 	if (iris instanceof Uint8Array) return { tag: "declarations" as const, val: iris };
 	return iris instanceof Atelier
 		? { tag: "atelier" as const, val: new FailingAtelier(iris) }
-		: iris && { tag: "context" as const, val: new FailingContext(iris) };
+		: { tag: "context" as const, val: new FailingContext(iris) };
 }
 
 // jco rethrows a thrown `Error` to the caller, and hands ascot only a thrown `{ payload }` as the

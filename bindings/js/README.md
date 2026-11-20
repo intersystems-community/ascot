@@ -76,6 +76,11 @@ class MyAtelier extends Atelier {
 const connected = await createWorkspace(new MyAtelier());
 ```
 
+A list of these is asked in order, the first source that holds a document answering for it, so
+`createWorkspace([fs.readFileSync(".ascot/iris-community-2026.2.d.json.gz"), new MyAtelier()])`
+reads the system classes from the file and your own from the server. `setEnv` takes the same, and
+rejects a declaration file that doesn't read, the sources in force staying.
+
 `createWorkspace` takes an optional second argument, a `Style` applied to every document:
 
 ```ts
@@ -99,22 +104,22 @@ usually not a removal, so keep the on-disk text open instead.
 exports, all returning promises. Positions and ranges are zero-based line/character pairs,
 as in the Language Server Protocol.
 
-| Method                                          | Returns                                               |
-| ----------------------------------------------- | ----------------------------------------------------- |
-| `open(uri, text)`                               | uris whose analysis is now stale                      |
-| `close(uri)`                                    | uris whose analysis is now stale                      |
-| `setEnv(iris?)`                                 | every uri: a new server stales all analysis           |
-| `setStyle(style?)`                              | every uri: a new style stales every check             |
-| `setDiagnostics(filter)`                        | every uri: a new filter may change every report       |
-| `diagnostics(uri)`                              | `Diagnostic[]`                                        |
-| `inlayHint(uri, range)`                         | `InlayHint[]`                                         |
-| `definition(uri, position)`                     | `Location \| undefined`                               |
-| `references(uri, position, includeDeclaration)` | `Location[]`                                          |
-| `hover(uri, position)`                          | markdown `string \| undefined`                        |
-| `documentSymbol(uri)`                           | the class or routine and its members or labels        |
-| `workspaceSymbol(query)`                        | classes and members across the workspace by prefix    |
-| `queryCls(query)`                               | `[uri, ClassInfo][]` for classes by prefix            |
-| `queryMem(cls, query)`                          | `[uri, MemberInfo][]` for a class's members by prefix |
+| Method                                          | Returns                                                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `open(uri, text)`                               | uris whose analysis is now stale                                                            |
+| `close(uri)`                                    | uris whose analysis is now stale                                                            |
+| `setEnv(iris?)`                                 | every uri: new sources stale all analysis; rejects for a declaration file that doesn't read |
+| `setStyle(style?)`                              | every uri: a new style stales every check                                                   |
+| `setDiagnostics(filter)`                        | every uri: a new filter may change every report                                             |
+| `diagnostics(uri)`                              | `Diagnostic[]`                                                                              |
+| `inlayHint(uri, range)`                         | `InlayHint[]`                                                                               |
+| `definition(uri, position)`                     | `Location \| undefined`                                                                     |
+| `references(uri, position, includeDeclaration)` | `Location[]`                                                                                |
+| `hover(uri, position)`                          | markdown `string \| undefined`                                                              |
+| `documentSymbol(uri)`                           | the class or routine and its members or labels                                              |
+| `workspaceSymbol(query)`                        | classes and members across the workspace by prefix                                          |
+| `queryCls(query)`                               | `[uri, ClassInfo][]` for classes by prefix                                                  |
+| `queryMem(cls, query)`                          | `[uri, MemberInfo][]` for a class's members by prefix                                       |
 
 All result types (`Diagnostic`, `Location`, `ClassInfo`, `MemberInfo`, ...) are exported
 from the package.
