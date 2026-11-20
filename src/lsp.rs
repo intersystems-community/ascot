@@ -23,6 +23,7 @@ use lsp_types::{
     ShowMessageParams, SymbolInformation, SymbolKind as LspSymbolKind, SymbolTag,
     TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkspaceSymbolParams,
 };
+use lsp_types::{DocumentFormattingParams, TextEdit as LspTextEdit};
 
 use crate::{
     Workspace,
@@ -66,6 +67,7 @@ fn serve(connection: &Connection, mut settings: Settings, shared_fs: bool) -> Fa
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
+        document_formatting_provider: Some(OneOf::Left(true)),
         ..Default::default()
     };
     let initialize_params = connection.initialize(serde_json::to_value(capabilities)?)?;
@@ -217,6 +219,23 @@ fn handle_request(workspace: &Workspace, req: Request) -> Response {
                 range: None,
             })
         }),
+        "textDocument/formatting" => {
+            respond(req.id, req.params, |params: DocumentFormattingParams| {
+                let uri = workspace_key(&params.text_document.uri);
+                let (tab_size, insert_spaces) =
+                    (params.options.tab_size, params.options.insert_spaces);
+                let options = crate::bindings::FormattingOptions {
+                    tab_size,
+                    insert_spaces,
+                };
+                let edits = workspace.format(uri, options)?;
+                let to_lsp = |e: crate::bindings::TextEdit| LspTextEdit {
+                    range: to_lsp_range(e.range),
+                    new_text: e.new_text,
+                };
+                Some(edits.into_iter().map(to_lsp).collect::<Vec<_>>())
+            })
+        }
         "textDocument/documentSymbol" => {
             respond(req.id, req.params, |params: DocumentSymbolParams| {
                 let uri = workspace_key(&params.text_document.uri);
