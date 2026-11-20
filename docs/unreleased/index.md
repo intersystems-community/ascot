@@ -84,7 +84,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A5718](A5718.md) | Variable '{name}' is assigned but never read |
 | [A6194](A6194.md) | {what} is not documented, though IRIS compiles it |
 | [A6203](A6203.md) | '{entry}' is not a class keyword as written, though IRIS compiles it |
-| [A6274](A6274.md) | Assigning {source}, an abstract class, to '{name}' declared as {target} |
+| [A6274](A6274.md) | Assigning a {source} to '{name}' declared as {target} |
 | [A6613](A6613.md) | ZQUIT takes an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack |
 | [A6627](A6627.md) | Host variable ':{name}' is undefined here; embedded SQL reads it as NULL |
 | [A6705](A6705.md) | Too few arguments: '{next_arg}' is required |
