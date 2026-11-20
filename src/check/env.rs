@@ -1644,7 +1644,7 @@ impl<'a> WorkspaceEnv<'a> {
     pub(crate) fn resolve_rtn_labels(&self, name: &str) -> Result<Option<Labels>, QuasiTypeError> {
         if let Some(uri) = self.resolve_uri(DocKind::Rtn, name) {
             let rtn = self.workspace.rtn_details(&uri).ok();
-            return Ok(rtn.map(|rtn| labels_of(&rtn.map.expanded_olc, &rtn.routine, Some(&uri))));
+            return Ok(rtn.map(|rtn| labels_of(&rtn.map, &rtn.routine, Some(&uri))));
         }
         let Some(iris) = self.workspace.iris.as_ref() else {
             return Err(TypeErrorKind::CannotFindRoutine {
@@ -2180,18 +2180,23 @@ pub(crate) fn scoped_labels(uri: &str, labels: &[(&RoutineElementDetails, bool)]
         .collect()
 }
 
-/// Builds `routine`'s label map — shared by `check_rtn` (the current routine) and
-/// `WorkspaceEnv::resolve_rtn_labels` (some other routine already in the workspace).
-pub(crate) fn labels_of(olc: &OLC, routine: &cos::Routine, uri: Option<&str>) -> Labels {
+/// Builds `routine`'s label map, each declared in the routine's own lines, for whoever is not
+/// checking it: `WorkspaceEnv::resolve_rtn_labels` (another routine's `label^routine`),
+/// `include_labels` and `routine_info`; the routine's own check relocates its `ScopedLabels`.
+pub(crate) fn labels_of(map: &SourceMap, routine: &cos::Routine, uri: Option<&str>) -> Labels {
     routine
         .subroutines
         .iter()
         .flat_map(|subs| subs.items.iter())
-        .filter_map(|elem| crate::details::routine_element_kind(olc, elem))
+        .filter_map(|elem| crate::details::routine_element_kind(&map.expanded_olc, elem))
         .map(|details| {
+            let mut proc = details.to_ty_procedure(uri);
+            proc.declared_at = proc
+                .declared_at
+                .and_then(|range| map.relocate_source_range(range));
             (
                 details.name.it.clone(),
-                TyProcedureOrAny::Procedure(Arc::new(details.to_ty_procedure(uri))),
+                TyProcedureOrAny::Procedure(Arc::new(proc)),
             )
         })
         .collect()

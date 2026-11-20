@@ -1116,11 +1116,7 @@ impl WorkspaceStruct {
             if let Ok(Some(include)) = self.resolve_include(name) {
                 let (uri, text, _) = &*include;
                 if let Ok((routine, map, _)) = self.expand_rtn(uri, text) {
-                    labels.extend(crate::check::labels_of(
-                        &map.expanded_olc,
-                        &routine,
-                        Some(uri),
-                    ));
+                    labels.extend(crate::check::labels_of(&map, &routine, Some(uri)));
                 }
             }
         }

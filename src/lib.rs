@@ -895,7 +895,7 @@ pub(crate) fn routine_info(text: &str, uri: Option<String>) -> bindings::Routine
     let workspace = build_workspace_struct(None, None);
     let expanded = workspace.expand_rtn(uri.as_deref().unwrap_or_default(), text);
     let labels = expanded.ok().map(|(routine, map, _)| {
-        let mut labels: Vec<_> = check::labels_of(&map.expanded_olc, &routine, uri.as_deref())
+        let mut labels: Vec<_> = check::labels_of(&map, &routine, uri.as_deref())
             .iter()
             .filter_map(|(name, label)| Some(label.procedure()?.to_label(name.clone())))
             .collect();
@@ -2442,7 +2442,6 @@ mod tests {
             .expect("expected a definition at that position");
         assert_eq!(link.target_uri, base_uri);
         assert_eq!(span(link.target_selection_range), ((0, 6), (0, 15)));
-        // The class as a whole: its document.
         assert_eq!(span(link.target_range), ((0, 0), (4, 0)));
     }
 
@@ -2492,12 +2491,13 @@ mod tests {
         let uri = "Test.mac".to_string();
         workspace.open(
             uri.clone(),
-            "ROUTINE Test\n\n\tQuit\n\nMain()\n do Sub()\n\tQuit\n\nSub()\n\tQuit\n".to_string(),
+            "ROUTINE Test\n\tDo Main()\n\tQuit\n\nMain()\n do Sub()\n\tQuit\n\nSub()\n\tQuit\n"
+                .to_string(),
         );
 
         let link = workspace
             .definition(
-                uri,
+                uri.clone(),
                 bindings::Position {
                     line: 5,
                     character: 5,
@@ -2505,8 +2505,19 @@ mod tests {
             )
             .expect("expected a definition at that position");
         assert_eq!(span(link.target_selection_range), ((8, 0), (8, 3)));
-        // The label through its last line.
         assert_eq!(span(link.target_range), ((8, 0), (9, 5)));
+        // Not into the blank line before the next label.
+        let link = workspace
+            .definition(
+                uri,
+                bindings::Position {
+                    line: 1,
+                    character: 5,
+                },
+            )
+            .expect("expected a definition at that position");
+        assert_eq!(span(link.target_selection_range), ((4, 0), (4, 4)));
+        assert_eq!(span(link.target_range), ((4, 0), (6, 5)));
     }
 
     #[test]
@@ -2529,7 +2540,6 @@ mod tests {
             )
             .expect("expected a definition at that position");
         assert_eq!(span(link.target_selection_range), ((4, 0), (4, 3)));
-        // The label through its block's `}`.
         assert_eq!(span(link.target_range), ((4, 0), (6, 1)));
     }
 
@@ -2753,6 +2763,39 @@ mod tests {
         assert_eq!(link.target_uri, callee_uri);
         assert_eq!(span(link.target_selection_range), ((4, 0), (4, 3)));
         assert_eq!(span(link.target_range), ((4, 0), (5, 5)));
+    }
+
+    #[test]
+    fn definition_resolves_cross_routine_label_after_include() {
+        let workspace = Workspace::new();
+        workspace.open(
+            "Shared.inc".to_string(),
+            "ROUTINE Shared [Type=INC]\n// one\n// two\n// three\n".to_string(),
+        );
+        let callee_uri = "Callee.mac".to_string();
+        workspace.open(
+            callee_uri.clone(),
+            "ROUTINE Callee\n\n#include Shared\n\tQuit\n\nFoo()\n\tQuit\n".to_string(),
+        );
+        let uri = "Main.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE Main\n\n\tDo Foo^Callee()\n\tQuit\n".to_string(),
+        );
+
+        let link = workspace
+            .definition(
+                uri,
+                bindings::Position {
+                    line: 2,
+                    character: 5,
+                },
+            )
+            .expect("expected a definition at that position");
+        assert_eq!(link.target_uri, callee_uri);
+        // In the callee's own lines, not its expansion's, which the include lengthens.
+        assert_eq!(span(link.target_selection_range), ((5, 0), (5, 3)));
+        assert_eq!(span(link.target_range), ((5, 0), (6, 5)));
     }
 
     #[test]
@@ -3590,7 +3633,6 @@ mod tests {
             workspace
                 .definition(uri.to_string(), bindings::Position { line, character })
                 .map(|link| {
-                    // The include file as a whole: its document.
                     assert_eq!(span(link.target_range), ((0, 0), (2, 0)));
                     target(&link)
                 })

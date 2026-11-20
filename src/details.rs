@@ -539,7 +539,7 @@ pub fn routine_element_kind(
     }
 }
 
-// Where the element's body ends: a procedure block's `}`, a subroutine's last command.
+// A procedure's `Ranged<Brace<…>>` end lies past the `}`.
 pub(crate) fn routine_element_end(element: &cos::RoutineElement) -> usize {
     match element {
         cos::RoutineElement::Subroutine(subroutine) => subroutine.body.end,
