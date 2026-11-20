@@ -25,9 +25,11 @@ mod wit_bind {
             "iris:ascot/common/variable-style": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/brace-breaks": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/require-description": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/inlay-hint-style": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/keyword-form": [#[serde(rename_all = "kebab-case")]],
             "iris:ascot/common/keyword-case": [#[serde(rename_all = "kebab-case")]],
             "iris:ascot/common/and-operator": [#[serde(rename_all = "kebab-case")]],
+            "iris:ascot/common/type-annotation": [#[serde(rename_all = "kebab-case")]],
         },
     });
 

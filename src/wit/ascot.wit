@@ -272,6 +272,17 @@ interface common {
         min-body-lines: u32,
     }
 
+    // How a hint spells the type after a `Set` target of unclear type: `As %Integer`, as a
+    // declaration does, or `: %Integer`.
+    enum type-annotation {
+        %as,
+        colon,
+    }
+
+    record inlay-hint-style {
+        type-annotation: option<type-annotation>,
+    }
+
     // A field left out isn't checked. `command` applies to every command, and `command-<name>`
     // overrides it field by field for one; `function` and `function-<name>` do the same for
     // intrinsic functions, `variable` and `variable-<name>` for system variables.
@@ -293,6 +304,8 @@ interface common {
         close-brace: option<brace-breaks>,
         // One space after a comma and none before (`true`), or none on either side (`false`).
         space-after-comma: option<bool>,
+        // How inlay hints are spelled; nothing is reported.
+        inlay-hint: option<inlay-hint-style>,
         command: option<command-style>,
         command-do: option<command-style>,
         command-if: option<command-style>,
