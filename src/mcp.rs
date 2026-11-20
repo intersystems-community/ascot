@@ -25,7 +25,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     Workspace,
-    bindings::{GuestWorkspace, InlayHint, Location, Position, Range},
+    bindings::{GuestWorkspace, InlayHint, Location, LocationLink, Position, Range},
     settings::Settings,
 };
 
@@ -120,7 +120,7 @@ pub struct HoverResult {
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct DefinitionResult {
-    pub location: Option<Location>,
+    pub link: Option<LocationLink>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -343,8 +343,9 @@ impl Server {
 
     /// Go to definition: where the reference at a position is declared: a class in
     /// `##class(Name)`, a member (`x.Foo`, `x.Foo()`, `i%Foo`, `..Foo`) or a label of the same
-    /// routine. Returns no location for what resolves to none: `%New`, a class the environment
-    /// gives no uri for, a computed `Goto`, or anything in SQL.
+    /// routine, as a link: the whole declaration (`target_range`) and its name
+    /// (`target_selection_range`). Returns no link for what resolves to none: `%New`, a class the
+    /// environment gives no uri for, a computed `Goto`, or anything in SQL.
     #[tool]
     pub async fn definition(
         &self,
@@ -357,7 +358,7 @@ impl Server {
         let workspace = self.get_workspace(&workspace).await?;
         let workspace = workspace.lock().await;
         Ok(Json(DefinitionResult {
-            location: workspace.definition(uri, position),
+            link: workspace.definition(uri, position),
         }))
     }
 

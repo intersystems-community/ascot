@@ -539,6 +539,14 @@ pub fn routine_element_kind(
     }
 }
 
+// A procedure's `Ranged<Brace<…>>` end lies past the `}`.
+pub(crate) fn routine_element_end(element: &cos::RoutineElement) -> usize {
+    match element {
+        cos::RoutineElement::Subroutine(subroutine) => subroutine.body.end,
+        cos::RoutineElement::Procedure(procedure) => procedure.body.end,
+    }
+}
+
 /// The routine's labels in order, each with its details, description included.
 pub fn routine_elements<'r>(
     pos: &impl Positions,
