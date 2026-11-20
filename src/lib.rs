@@ -323,6 +323,21 @@ impl IrisContext for bindings::IrisContext {
 }
 
 impl WorkspaceStruct {
+    // A routine IRIS generated (`[Type=INT,Generated]`, a class's compiled code) is compiler
+    // output nobody edits: analyzed for navigation, reported on not at all.
+    fn generated(&self, uri: &str) -> bool {
+        DocKind::from_uri(uri) == Some(DocKind::Rtn)
+            && (self
+                .doc_cache
+                .get(uri)
+                .and_then(|entry| entry.as_ref().ok()))
+            .is_some_and(|cell| {
+                cos::RoutineHeader::parse_prefix(&cell.borrow().text).is_ok_and(|(header, _)| {
+                    (header.type_spec.as_ref()).is_some_and(|spec| spec.generated())
+                })
+            })
+    }
+
     // Doubles as both open and edit; kind is inferred from `uri`'s extension. Returns the uris
     // (including this one) whose cached analysis is now stale and should be rechecked.
     fn open(&mut self, uri: String, text: String) -> Vec<String> {
@@ -1066,6 +1081,9 @@ impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn diagnostics(&self, uri: String) -> Vec<bindings::Diagnostic> {
         let this = self.borrow();
+        if this.generated(&uri) {
+            return vec![];
+        }
         let filter = &this.diagnostic_filter;
         this.ensure_checked(&uri)
             .diagnostics
@@ -1076,7 +1094,11 @@ impl bindings::GuestWorkspace for Workspace {
 
     #[allow(async_fn_in_trait)]
     fn inlay_hint(&self, uri: String, _range: bindings::Range) -> Vec<InlayHint> {
-        self.borrow().ensure_checked(&uri).hints
+        let this = self.borrow();
+        if this.generated(&uri) {
+            return vec![];
+        }
+        this.ensure_checked(&uri).hints
     }
 
     // Where the reference at `position` is declared, if any — one of the go-to-definition
@@ -1824,6 +1846,32 @@ mod tests {
             "{range:?}"
         );
         assert!(diagnostics[1].message.contains("SomeInheritedMethod"));
+    }
+
+    #[test]
+    fn a_generated_routine_is_navigation_only() {
+        let workspace = Workspace::new();
+        let generated = "Pkg.Cls.1.int".to_string();
+        let text = "ROUTINE Pkg.Cls.1 [Type=INT,Generated]\n ;Pkg.Cls.1\nzFoo(a) methodimpl {\n Set unused = a\n Quit never }\nzBar() methodimpl {\n Do zFoo(1) }\n";
+        workspace.open(generated.clone(), text.to_string());
+        assert!(workspace.diagnostics(generated.clone()).is_empty());
+        assert!(
+            workspace
+                .inlay_hint(generated.clone(), bindings::Range::default())
+                .is_empty()
+        );
+        let call = bindings::Position {
+            line: 6,
+            character: 4,
+        };
+        assert!(workspace.definition(generated, call).is_some());
+        // The same code as a routine of its own is reported on.
+        let edited = "Plain.int".to_string();
+        let text = text
+            .replace(",Generated", "")
+            .replace("methodimpl", "public");
+        workspace.open(edited.clone(), text);
+        assert!(!workspace.diagnostics(edited).is_empty());
     }
 
     #[test]
