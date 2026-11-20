@@ -117,11 +117,33 @@ pub enum DocKind {
 // A header name qualified by kind: `#include X` and `$$^X` are different lookups.
 pub(crate) type Name = (DocKind, String);
 
+// The path of a uri reference, split as RFC 3986's appendix B does: the scheme and authority off
+// the front, the query and fragment off the back, nothing validated. A file path passes through
+// whole. VS Code's server folders give `isfs://host:namespace/Pkg/Cls.cls?generated=1`, whose
+// authority is no host and port, so both the WHATWG `url` crate and a strict RFC 3986 parser
+// refuse it.
+fn uri_path(uri: &str) -> &str {
+    let rest = match uri.split_once(':') {
+        Some((scheme, rest)) if !scheme.is_empty() && !scheme.contains(['/', '?', '#']) => rest,
+        _ => uri,
+    };
+    let rest = match rest.strip_prefix("//") {
+        Some(authority) => authority
+            .find(['/', '?', '#'])
+            .map_or("", |at| &authority[at..]),
+        None => rest,
+    };
+    rest.split(['?', '#']).next().unwrap_or(rest)
+}
+
 impl DocKind {
-    // Purely a function of `uri`'s extension -- known even for a uri that failed tier A (or
-    // was never opened at all), unlike anything actually stored in `doc_cache`.
+    // Purely a function of the extension of `uri`'s path -- known even for a uri that failed
+    // tier A (or was never opened at all), unlike anything actually stored in `doc_cache`.
     pub fn from_uri(uri: &str) -> Option<Self> {
-        let ext = uri.rsplit('.').next().map(str::to_ascii_lowercase);
+        let ext = uri_path(uri)
+            .rsplit('.')
+            .next()
+            .map(str::to_ascii_lowercase);
         match ext.as_deref() {
             Some("cls") => Some(DocKind::Cls),
             Some("inc") => Some(DocKind::Inc),
@@ -1523,6 +1545,24 @@ mod tests {
             .collect();
         assert!(affected.contains(&inc_uri));
         assert!(affected.contains(&mac_uri));
+    }
+
+    #[test]
+    fn a_server_folder_uri_keeps_its_kind_past_the_query() {
+        let workspace = Workspace::new();
+        let uri = "isfs://irishealth:ns/Pkg/Cls.cls?generated=1".to_string();
+        let text = "Class Pkg.Cls {\nClassMethod Foo() {\n Write undefinedVar\n}\n}\n".to_string();
+        assert_eq!(workspace.open(uri.clone(), text), vec![uri.clone()]);
+        assert!(!workspace.diagnostics(uri).is_empty());
+        for (uri, kind) in [
+            ("file:///x/Y.mac#frag", Some(DocKind::Rtn)),
+            ("isfs://srv:ns/?csp", None),
+            ("C:\\dir\\Z.inc", Some(DocKind::Inc)),
+            ("/Users/a:b/W.cls", Some(DocKind::Cls)),
+            ("Base.cls", Some(DocKind::Cls)),
+        ] {
+            assert_eq!(DocKind::from_uri(uri), kind, "{uri}");
+        }
     }
 
     #[test]
