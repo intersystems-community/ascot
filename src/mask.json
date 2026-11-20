@@ -4543,6 +4543,7 @@
     { "header": "ClassMethod Export(ByRef items As %String = \"\", ByRef filename As %String = \"\", qspec As %String = \"\", Output errorlog As %String, Charset As %String = \"\") As %Status" },
     { "header": "ClassMethod GetClassList(Output items As %String, qspec As %String = \"\") As %Status" },
     { "header": "ClassMethod GetPackageList(Output items As %String, package As %String, qspec As %String = \"\") As %Status" },
+    { "header": "ClassMethod Load(file As %String = \"\", qspec As %String = \"\", ByRef errorlog As %String = \"\", ByRef loadedlist As %String = \"\", listonly As %Boolean = 0, ByRef selecteditems As %String = \"\", displayname As %String = \"\", charset As %String = \"\", ByRef description As %String = \"\") As %Status [ Deprecated ]" },
     { "header": "ClassMethod LoadStream(stream As %AbstractStream, qspec As %String = \"\", ByRef errorlog As %String, Output loadedlist As %String, listonly As %Boolean = \"\", selecteditems As %String = \"\", displayname As %String = \"\", charset As %String = \"\") As %Status" },
     { "header": "ClassMethod SetConcurrencyMode(value As %Integer = 1, Output pStatus As %Status) As %Integer" },
     { "header": "ClassMethod SetTransactionMode(value As %Integer = 1, Output pStatus As %Status) As %Integer" }
@@ -4917,6 +4918,7 @@
     { "header": "Method LogAssert(success, action, description, extra = \"\", location)" },
     { "header": "Method LogStateBegin(testsuite, testcase = \"\", testmethod = \"\")" },
     { "header": "ClassMethod ReturnAllowedPublicVariables(Output prefix As %String) As %List" },
+    { "header": "ClassMethod RunTest(ByRef testspec As %String = \"\", qspec As %String = \"\", ByRef userparam = \"\") As %Status" },
     { "header": "ClassMethod setRecursiveStatus(pNamespace, pIndex, pSuite, pCase, pMethod = \"\") As %Integer" },
     { "header": "ClassMethod SubtractVariableSet(Output c, ByRef a, ByRef b)" },
     { "header": "Method WaitForAllSuitesForParallel(Output status) As %Status" }
