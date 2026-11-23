@@ -2330,6 +2330,14 @@ impl<'a> CodeEnv<'a> {
         }
     }
 
+    // The env of text re-parsed on its own, such as a macro argument, that sits `by` into this one.
+    pub(crate) fn shifted(&self, by: usize) -> CodeEnv<'a> {
+        CodeEnv {
+            offset: self.offset + by,
+            ..self.clone()
+        }
+    }
+
     pub(crate) fn record_label_writes(&self, label: &str, writes: HashSet<String>) {
         self.label_writes
             .borrow_mut()
@@ -2373,11 +2381,11 @@ impl<'a> CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
-    // Whether `node` is text a macro expanded to (or an include supplied), rather than text the
-    // document spells out.
-    pub(crate) fn is_expanded<T>(&self, node: &tygr::Ranged<T>) -> bool {
+    // Whether the text at `start` is text a macro expanded to (or an include supplied), rather
+    // than text the document spells out.
+    pub(crate) fn is_expanded(&self, start: usize) -> bool {
         self.base.source_map.is_some_and(|map| {
-            map.to_source_offset(node.start + self.offset)
+            map.to_source_offset(start + self.offset)
                 .is_none_or(|(_, precise)| !precise)
         })
     }

@@ -2062,7 +2062,7 @@ type_error_kinds! {
     /// style's `command`, `function` or `variable` rule, or a per-keyword `command<Name>`,
     /// `function<Name>` or `variable<Name>`, doesn't allow: `s` under `{"form":"long"}`, `SET`
     /// under `{"case":"pascal"}`. IRIS compiles every spelling alike; write the one the message
-    /// gives.
+    /// gives. A keyword a macro expands to is not reported.
     ///
     /// ```objectscript style={"command":{"form":"long","case":"pascal"},"function":{"form":"long","case":"pascal"},"variable":{"form":"long","case":"upper"}}
     /// Class Demo.KeywordStyle
@@ -2331,8 +2331,8 @@ type_error_kinds! {
     },
     /// Under `{"spaceAfterComma":true}`, a list's comma with no space after it or one before,
     /// `$ListBuild(a,b)`; under `false`, one with a space on either side. A comma whose whitespace holds
-    /// a line break, and the two around an omitted argument, are left alone. IRIS ignores the
-    /// spacing; respace the comma.
+    /// a line break, the two around an omitted argument, and one a macro expands to are left alone.
+    /// IRIS ignores the spacing; respace the comma.
     ///
     /// ```objectscript style={"spaceAfterComma":true}
     /// Class Demo.CommaSpacing

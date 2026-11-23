@@ -809,7 +809,7 @@ impl WorkspaceStruct {
                 };
             }
         };
-        let result = match details {
+        let mut result = match details {
             DocDetails::Cls(_, Some(check)) | DocDetails::Rtn(_, Some(check)) => return check,
             DocDetails::Cls(cls, None) => {
                 let env = self.workspace_env();
@@ -916,6 +916,16 @@ impl WorkspaceStruct {
             // An include that parses has nothing to check on its own -- see `DocDetails::Inc`.
             DocDetails::Inc(_) => return empty,
         };
+        // An argument a macro body pastes twice is checked twice at one place in the document;
+        // what that found twice over counts once.
+        let mut seen = HashSet::new();
+        result
+            .diagnostics
+            .retain(|diagnostic| seen.insert(diagnostic.clone()));
+        let mut seen = HashSet::new();
+        result
+            .references
+            .retain(|reference| seen.insert(reference.clone()));
         self.store_check(uri, result.clone());
         result
     }

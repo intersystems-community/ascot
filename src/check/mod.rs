@@ -1275,7 +1275,9 @@ fn report_keyword_style(
     keywords: impl IntoIterator<Item = KeywordUse>,
 ) {
     for kw in keywords {
-        if let Some(expected) = style.expected(&kw) {
+        if let Some(expected) = style.expected(&kw)
+            && !env.is_expanded(kw.start)
+        {
             let range = env.span(kw.start, kw.start + kw.text.len());
             let sigil = match kw.kind {
                 KeywordKind::Command => "",
@@ -1298,7 +1300,7 @@ fn report_keyword_style(
 fn report_comma_style(env: &CodeEnv, space_after: bool, commas: &[CommaAt]) {
     for comma in commas {
         let (start, end) = (comma.start - comma.before, comma.start + 1 + comma.after);
-        if env.position(start).line != env.position(end).line {
+        if env.position(start).line != env.position(end).line || env.is_expanded(comma.start) {
             continue;
         }
         if comma.before != 0 || comma.after != usize::from(space_after) {
@@ -4040,7 +4042,7 @@ impl MacroCallStructExt for MacroCallStruct {
 }
 
 // A macro argument is raw text (it is also substituted verbatim into a `#define` body), so it
-// is re-parsed as an expression here.
+// is re-parsed as an expression here, which the env shifted to its start places in the document.
 fn check_macro_arg_as_expr<'a>(
     arg: &Ranged<cos::MacroArg>,
     expected_ty: &Ty,
@@ -4052,47 +4054,9 @@ fn check_macro_arg_as_expr<'a>(
             reason: "expected an expression".into(),
         })
     })?;
-    let (diagnostics_mark, references_mark) = (env.soft_diagnostics_mark(), env.references_mark());
-    let ty = expr
-        .to_ty(env, flow)
-        .map_err(|err| relocate_macro_arg_error(env, arg.start, err))?;
-    // What the walk recorded is in the fresh text's coordinates too.
-    let at = |range: bindings::Range| range.map(|pos| env.position(env.offset(pos) + arg.start));
-    for mut diagnostic in env.soft_diagnostics_since(diagnostics_mark) {
-        diagnostic.range = at(diagnostic.range);
-        for info in &mut diagnostic.related_information {
-            if info.location.uri == env.uri() {
-                info.location.range = at(info.location.range);
-            }
-        }
-        env.add_soft_diagnostic(diagnostic);
-    }
-    for (range, location) in env.references_since(references_mark) {
-        env.reference(at(range), location);
-    }
+    let ty = expr.to_ty(&env.shifted(arg.start), flow)?;
     env.assert_compatible(ty, expected_ty)
         .map_err(Incompatible::general)
-}
-
-// `expr_from_macro_arg` re-prints `arg` and re-parses it as a standalone `Expr`, so a `WithRange`
-// error `to_ty` already resolved is relative to that fresh, zero-based text -- not `arg`'s real
-// position in the document. Recover the real position instead of discarding it (as a plain
-// `strip_range` would): undo `env`'s offset->position conversion to get back the original
-// zero-based offset, add where `arg` actually starts, and convert that back to a real position.
-// A `WithoutRange` error has no (wrong) position to fix -- leave it for the usual `into_error`
-// up the call stack to place, same as ever.
-fn relocate_macro_arg_error(
-    env: &CodeEnv<'_>,
-    arg_start: usize,
-    err: QuasiTypeError,
-) -> QuasiTypeError {
-    match err {
-        QuasiTypeError::WithRange(err) => QuasiTypeError::WithRange(TypeError {
-            range: (err.range).map(|pos| env.position(env.offset(pos) + arg_start)),
-            ..err
-        }),
-        without_range => without_range,
-    }
 }
 
 fn expr_from_macro_arg(value: &Vec<MacroArgUnit>) -> Result<Expr, ()> {
