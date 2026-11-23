@@ -811,14 +811,10 @@ impl CheckExprInner for cos::FunctionCall {
                     .chain(each_arg(rest))
                     .map(|b| (Taken::If(&b.e1), &b.e2));
                 let (ty, exhaustive) = check_branches(env, flow, branches)?;
-                // $SELECT throws <SELECT> at runtime if no condition matches;
-                // without a literal catch-all branch (`1:...`), that can't be ruled out.
-                Ok(if exhaustive {
-                    MaybeTy::Plain(ty)
-                } else {
-                    MaybeTy::Maybe(ty)
+                if !exhaustive {
+                    flow.add_soft_diagnostic(TypeErrorKind::SelectWithoutDefault.into());
                 }
-                .into())
+                Ok(ty.into())
             }
             FunctionCall::Sequence(c) => check_sequence_call(env, flow, c),
             FunctionCall::SortBegin {
@@ -1787,12 +1783,10 @@ fn check_case<'a>(
         .map(|(value, then)| (Taken::Equal(&target, value), *then))
         .chain(default.map(|then| (Taken::Always, then)));
     let (ty, exhaustive) = check_branches(env, flow, branches)?;
-    // $CASE raises <CASE> at runtime when nothing matches and there is no default.
-    Ok(if exhaustive {
-        MaybeTy::Plain(ty)
-    } else {
-        MaybeTy::Maybe(ty)
-    })
+    if !exhaustive {
+        flow.add_soft_diagnostic(TypeErrorKind::CaseWithoutDefault.into());
+    }
+    Ok(MaybeTy::Plain(ty))
 }
 
 // What takes a branch of `$SELECT` or `$CASE`.
@@ -1804,8 +1798,8 @@ enum Taken<'e> {
 
 // The type of the branches' values, each typed where its branch is taken, its condition true
 // and the earlier ones false, as `If` does, so a `$DATA(x)` guards the `x` of its branch; `flow`
-// goes on from the branches taken, as the path where none is ends in <SELECT> or <CASE>. Also
-// whether a condition always holds.
+// goes on from the branches taken, as the path where none is ends in <SELECT> or
+// <ILLEGAL VALUE>. Also whether a condition always holds.
 fn check_branches<'a, 'e>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
