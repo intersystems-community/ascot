@@ -53,7 +53,7 @@ mod tests {
     fn terms_take_their_core_shapes() {
         let shapes: Vec<&str> = selex(
             "SELECT CURRENT_DATE, USER, SYSDATE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP(3), USERNAME, \
-             SYSDATE(), -a, %SQLUPPER a, %TRUNCATE(a, 3), CAST(a AS INT), TIMESTAMPADD(SQL_TSI_DAY, 1, d), \
+             -a, %SQLUPPER a, %TRUNCATE(a, 3), CAST(a AS INT), TIMESTAMPADD(SQL_TSI_DAY, 1, d), \
              TIMESTAMPADD(:unit, 1, d), CONVERT(a, SQL_VARCHAR), CONVERT(VARCHAR, a), f(a) FROM t",
         )
         .node
@@ -89,7 +89,6 @@ mod tests {
                 "niladic",
                 "function",
                 "column",
-                "call",
                 "unary",
                 "percent",
                 "string operation",
@@ -633,6 +632,7 @@ mod tests {
             "TUNE TABLE t %SAMPLE_PERCENT 2",
             "TUNE TABLE t %SAMPLE_PERCENT 0",
             "TUNE TABLE t %SAMPLE_PERCENT 25%",
+            "SELECT SYSDATE() FROM t",
         ] {
             assert!(SQL::parse(rejected).is_err(), "{rejected}");
         }
