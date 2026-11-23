@@ -1054,8 +1054,11 @@ pub enum AndOperator {
     Ampersand(StringEq!("&")),
 }
 
-#[derive(Grammar)]
-#[tygr(name = "cond")]
+pub type NoIndex = Option<(StringEqCI!("%NOINDEX"), Space)>;
+
+// Parsed as `CondParse`, which reads a comparison's left operand once and then its tail, and
+// converted so that each predicate holds all of its operands.
+#[derive(Print)]
 pub enum Cond {
     Not {
         not_kw: (StringEqCI!("NOT"), Space),
@@ -1067,12 +1070,12 @@ pub enum Cond {
         close: (Space, StringEq!(")")),
     },
     Exists {
-        noindex: Option<(StringEqCI!("%NOINDEX"), Space)>,
+        noindex: NoIndex,
         exists_kw: (StringEqCI!("EXISTS"), Space),
         query: SQLSubquery,
     },
     ForSomeElement {
-        noindex: Option<(StringEqCI!("%NOINDEX"), Space)>,
+        noindex: NoIndex,
         for_kw: (StringEqCI!("FOR"), Space, StringEqCI!("SOME"), Space),
         percent_element: StringEqCI!("%ELEMENT"),
         open_paren1: (Space, StringEq!("("), Space),
@@ -1084,7 +1087,191 @@ pub enum Cond {
         close_paren2: (Space, StringEq!(")")),
     },
     ForSome {
-        noindex: Option<(StringEqCI!("%NOINDEX"), Space)>,
+        noindex: NoIndex,
+        for_kw: (StringEqCI!("FOR"), Space),
+        some_kw: (StringEqCI!("SOME"), Space),
+        open: (StringEq!("("), Space),
+        tables: Tables,
+        close: (Space, StringEq!(")")),
+        condition: Option<(Space, Box<ForCnd>)>,
+    },
+    Compare {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp1: Space,
+        op: CmpOp,
+        sp2: Space,
+        rhs: Scalx,
+    },
+    Quantified {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp1: Space,
+        op: CmpOp,
+        sp2: Space,
+        quantifier: Quantifier,
+        sp3: Space,
+        subquery: SQLSubquery,
+    },
+    IsNull {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        is_kw: (StringEqCI!("IS"), Space),
+        not: Option<(StringEqCI!("NOT"), Space)>,
+        null_kw: StringEqCI!("NULL"),
+    },
+    Between {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        not: Option<(StringEqCI!("NOT"), Space)>,
+        between_kw: (StringEqCI!("BETWEEN"), Space),
+        lower: Scalx,
+        upper: AndClause<Scalx>,
+    },
+    Like {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        not: Option<(StringEqCI!("NOT"), Space)>,
+        like_kw: (StringEqCI!("LIKE"), Space),
+        pattern: Scalx,
+        escape: Option<EscapeScalx>,
+    },
+    Matches {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        not: Option<(StringEqCI!("NOT"), Space)>,
+        matches_kw: (StringEqCI!("%MATCHES"), Space),
+        pattern: Scalx,
+        escape: Option<EscapeScalx>,
+    },
+    In {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        not: Option<(StringEqCI!("NOT"), Space)>,
+        in_kw: (StringEqCI!("IN"), Space),
+        spec: Parenthesized<InSpec>,
+    },
+    InList {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        not: Option<(StringEqCI!("NOT"), Space)>,
+        inlist_kw: (StringEqCI!("%INLIST"), Space),
+        list_expr: Scalx,
+        size_hint: Option<SizeHint>,
+    },
+    Find {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        find_kw: (StringEqCI!("%FIND"), Space),
+        expr: Scalx,
+        size_hint: Option<SizeHint>,
+    },
+    Pattern {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        pattern_kw: (StringEqCI!("%PATTERN"), Space),
+        pattern: Scalx,
+    },
+    IsJson {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        format: Option<JSONInputClause>,
+        is_kw: (StringEqCI!("IS"), Space),
+        not: Option<(StringEqCI!("NOT"), Space)>,
+        json_kw: StringEqCI!("JSON"),
+        constraint: Option<JSONPredicateTypeConstraint>,
+    },
+    Contains {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        kw: Either<StringEqCI!("%CONTAINSTERM"), StringEqCI!("%CONTAINS")>,
+        list: Args1Plus,
+    },
+    StarEq {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        op: (StringEqCI!("*="), Space),
+        rhs: Scalx,
+    },
+    EqStar {
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        op: (StringEqCI!("=*"), Space),
+        rhs: Scalx,
+    },
+}
+
+impl Parse for Cond {
+    type First = <CondParse as Parse>::First;
+
+    fn parse_at<S: Success, L: Level>(
+        input: &str,
+        pos: usize,
+        mut state: State<L>,
+    ) -> Option<(S::Output<Self>, usize)> {
+        let (parsed, end) = CondParse::parse_at::<S, L>(input, pos, state.node("cond", pos))?;
+        Some((
+            S::and_then(parsed, |parsed| S::output(|| parsed.into())),
+            end,
+        ))
+    }
+
+    fn to_bnf() -> bnf::Expr {
+        bnf::Expr::RuleRef("cond".to_string())
+    }
+
+    fn visit_rules(rules: &mut bnf::Rules) {
+        if rules.insert::<Self>("cond", CondParse::to_bnf) {
+            CondParse::visit_rules(rules);
+        }
+    }
+}
+
+// The parse side of `Cond`, which its conversion folds away.
+#[doc(hidden)]
+#[derive(Grammar)]
+#[tygr(inline)]
+pub enum CondParse {
+    Not {
+        not_kw: (StringEqCI!("NOT"), Space),
+        condition: Box<Src<Cond>>,
+    },
+    Paren {
+        open: (StringEq!("("), Space),
+        predicate: Box<Prdct>,
+        close: (Space, StringEq!(")")),
+    },
+    Exists {
+        noindex: NoIndex,
+        exists_kw: (StringEqCI!("EXISTS"), Space),
+        query: SQLSubquery,
+    },
+    ForSomeElement {
+        noindex: NoIndex,
+        for_kw: (StringEqCI!("FOR"), Space, StringEqCI!("SOME"), Space),
+        percent_element: StringEqCI!("%ELEMENT"),
+        open_paren1: (Space, StringEq!("("), Space),
+        column: Colmn,
+        close_paren1: (Space, StringEq!(")")),
+        label: Option<(Space, Option<(StringEqCI!("AS"), Space)>, Ident)>,
+        open_paren2: (Space, StringEq!("("), Space),
+        predicate: Box<Prdct>,
+        close_paren2: (Space, StringEq!(")")),
+    },
+    ForSome {
+        noindex: NoIndex,
         for_kw: (StringEqCI!("FOR"), Space),
         some_kw: (StringEqCI!("SOME"), Space),
         open: (StringEq!("("), Space),
@@ -1093,11 +1280,243 @@ pub enum Cond {
         condition: Option<(Space, Box<ForCnd>)>,
     },
     Comparison {
-        noindex: Option<(StringEqCI!("%NOINDEX"), Space)>,
-        scalx: Scalx,
-        space: Space,
-        comparison: Comparison,
+        noindex: NoIndex,
+        lhs: Scalx,
+        sp: Space,
+        tail: Comparison,
     },
+}
+
+impl From<CondParse> for Cond {
+    fn from(parsed: CondParse) -> Self {
+        match parsed {
+            CondParse::Not { not_kw, condition } => Cond::Not { not_kw, condition },
+            CondParse::Paren {
+                open,
+                predicate,
+                close,
+            } => Cond::Paren {
+                open,
+                predicate,
+                close,
+            },
+            CondParse::Exists {
+                noindex,
+                exists_kw,
+                query,
+            } => Cond::Exists {
+                noindex,
+                exists_kw,
+                query,
+            },
+            CondParse::ForSomeElement {
+                noindex,
+                for_kw,
+                percent_element,
+                open_paren1,
+                column,
+                close_paren1,
+                label,
+                open_paren2,
+                predicate,
+                close_paren2,
+            } => Cond::ForSomeElement {
+                noindex,
+                for_kw,
+                percent_element,
+                open_paren1,
+                column,
+                close_paren1,
+                label,
+                open_paren2,
+                predicate,
+                close_paren2,
+            },
+            CondParse::ForSome {
+                noindex,
+                for_kw,
+                some_kw,
+                open,
+                tables,
+                close,
+                condition,
+            } => Cond::ForSome {
+                noindex,
+                for_kw,
+                some_kw,
+                open,
+                tables,
+                close,
+                condition,
+            },
+            CondParse::Comparison {
+                noindex,
+                lhs,
+                sp,
+                tail,
+            } => match tail {
+                Comparison::StarEq { op, scalx } => Cond::StarEq {
+                    noindex,
+                    lhs,
+                    sp,
+                    op,
+                    rhs: scalx,
+                },
+                Comparison::EqStar { op, scalx } => Cond::EqStar {
+                    noindex,
+                    lhs,
+                    sp,
+                    op,
+                    rhs: scalx,
+                },
+                Comparison::IsNull {
+                    is_kw,
+                    not,
+                    null_kw,
+                } => Cond::IsNull {
+                    noindex,
+                    lhs,
+                    sp,
+                    is_kw,
+                    not,
+                    null_kw,
+                },
+                Comparison::Between {
+                    not,
+                    between_kw,
+                    lower,
+                    upper,
+                } => Cond::Between {
+                    noindex,
+                    lhs,
+                    sp,
+                    not,
+                    between_kw,
+                    lower,
+                    upper,
+                },
+                Comparison::Like {
+                    not,
+                    like_kw,
+                    pattern,
+                    escape,
+                } => Cond::Like {
+                    noindex,
+                    lhs,
+                    sp,
+                    not,
+                    like_kw,
+                    pattern,
+                    escape,
+                },
+                Comparison::Matches {
+                    not,
+                    matches_kw,
+                    pattern,
+                    escape,
+                } => Cond::Matches {
+                    noindex,
+                    lhs,
+                    sp,
+                    not,
+                    matches_kw,
+                    pattern,
+                    escape,
+                },
+                Comparison::In { not, in_kw, spec } => Cond::In {
+                    noindex,
+                    lhs,
+                    sp,
+                    not,
+                    in_kw,
+                    spec,
+                },
+                Comparison::InList {
+                    not,
+                    inlist_kw,
+                    list_expr,
+                    size_hint,
+                } => Cond::InList {
+                    noindex,
+                    lhs,
+                    sp,
+                    not,
+                    inlist_kw,
+                    list_expr,
+                    size_hint,
+                },
+                Comparison::Find {
+                    find_kw,
+                    expr,
+                    size_hint,
+                } => Cond::Find {
+                    noindex,
+                    lhs,
+                    sp,
+                    find_kw,
+                    expr,
+                    size_hint,
+                },
+                Comparison::Pattern {
+                    pattern_kw,
+                    pattern,
+                } => Cond::Pattern {
+                    noindex,
+                    lhs,
+                    sp,
+                    pattern_kw,
+                    pattern,
+                },
+                Comparison::IsJSON {
+                    format,
+                    is_kw,
+                    not,
+                    json_kw,
+                    constraint,
+                } => Cond::IsJson {
+                    noindex,
+                    lhs,
+                    sp,
+                    format,
+                    is_kw,
+                    not,
+                    json_kw,
+                    constraint,
+                },
+                Comparison::Contains { kw, list } => Cond::Contains {
+                    noindex,
+                    lhs,
+                    sp,
+                    kw,
+                    list,
+                },
+                Comparison::Query {
+                    op,
+                    sp1,
+                    quantifier,
+                    sp2,
+                    expr,
+                } => Cond::Quantified {
+                    noindex,
+                    lhs,
+                    sp1: sp,
+                    op,
+                    sp2: sp1,
+                    quantifier,
+                    sp3: sp2,
+                    subquery: expr,
+                },
+                Comparison::Scalx { op, space, expr } => Cond::Compare {
+                    noindex,
+                    lhs,
+                    sp1: sp,
+                    op,
+                    sp2: space,
+                    rhs: expr,
+                },
+            },
+        }
+    }
 }
 
 #[derive(Grammar)]
@@ -1116,6 +1535,7 @@ pub type AndClause<T> = Prefix<(Space, StringEqCI!("AND"), Space), T>;
 
 pub type Parenthesized<T> = Wrap<(StringEq!("("), Space), T, (Space, StringEq!(")"))>;
 
+#[doc(hidden)]
 #[derive(Grammar)]
 #[tygr(name = "comparison")]
 pub enum Comparison {

@@ -606,11 +606,59 @@ impl Walk for Cond {
                 }
                 w.pop_frame()
             }
-            Cond::Comparison {
-                scalx, comparison, ..
+            Cond::Compare { lhs, rhs, .. }
+            | Cond::StarEq { lhs, rhs, .. }
+            | Cond::EqStar { lhs, rhs, .. } => {
+                lhs.walk(w);
+                rhs.walk(w)
+            }
+            Cond::Quantified { lhs, subquery, .. } => {
+                lhs.walk(w);
+                subquery.walk(w)
+            }
+            Cond::IsNull { lhs, .. } | Cond::IsJson { lhs, .. } => lhs.walk(w),
+            Cond::Between {
+                lhs, lower, upper, ..
             } => {
-                scalx.walk(w);
-                comparison.walk(w)
+                lhs.walk(w);
+                lower.walk(w);
+                upper.walk(w)
+            }
+            Cond::Like {
+                lhs,
+                pattern,
+                escape,
+                ..
+            }
+            | Cond::Matches {
+                lhs,
+                pattern,
+                escape,
+                ..
+            } => {
+                lhs.walk(w);
+                pattern.walk(w);
+                escape.walk(w)
+            }
+            Cond::In { lhs, spec, .. } => {
+                lhs.walk(w);
+                spec.walk(w)
+            }
+            Cond::InList { lhs, list_expr, .. } => {
+                lhs.walk(w);
+                list_expr.walk(w)
+            }
+            Cond::Find { lhs, expr, .. } => {
+                lhs.walk(w);
+                expr.walk(w)
+            }
+            Cond::Pattern { lhs, pattern, .. } => {
+                lhs.walk(w);
+                pattern.walk(w)
+            }
+            Cond::Contains { lhs, list, .. } => {
+                lhs.walk(w);
+                list.walk(w)
             }
         }
     }
@@ -625,35 +673,6 @@ impl Walk for ForCnd {
                 having.walk(w)
             }
             ForCnd::GroupOnly(_, _, group, _, _) => group.walk(w),
-        }
-    }
-}
-
-impl Walk for Comparison {
-    fn walk(&self, w: &mut Walker) {
-        match self {
-            Comparison::StarEq { scalx, .. } | Comparison::EqStar { scalx, .. } => scalx.walk(w),
-            Comparison::Between { lower, upper, .. } => {
-                lower.walk(w);
-                upper.walk(w)
-            }
-            Comparison::Like {
-                pattern, escape, ..
-            }
-            | Comparison::Matches {
-                pattern, escape, ..
-            } => {
-                pattern.walk(w);
-                escape.walk(w)
-            }
-            Comparison::In { spec, .. } => spec.walk(w),
-            Comparison::InList { list_expr, .. } => list_expr.walk(w),
-            Comparison::Find { expr, .. } => expr.walk(w),
-            Comparison::Pattern { pattern, .. } => pattern.walk(w),
-            Comparison::Contains { list, .. } => list.walk(w),
-            Comparison::Query { expr, .. } => expr.walk(w),
-            Comparison::Scalx { expr, .. } => expr.walk(w),
-            Comparison::IsNull { .. } | Comparison::IsJSON { .. } => {}
         }
     }
 }
