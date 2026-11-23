@@ -710,11 +710,13 @@ interface exported {
         document-symbol: func(uri: string) -> option<document-symbol>;
         workspace-symbol: func(query: string) -> list<workspace-symbol>;
         // The edits that bring `uri`'s procedure blocks and method bodies to the style, as `ascot
-        // format` writes them. None when `uri` is not open or doesn't parse; empty with no style.
+        // format` writes them. None when `uri` is not open or doesn't parse; empty with no style or
+        // for a routine IRIS generated.
         format: func(uri: string, options: formatting-options) -> option<list<text-edit>>;
         // A quick fix for each style finding in `range` that `format` would fix (an empty range
-        // picks the finding at its position): the finding's diagnostic and its one edit, with a
-        // tab indenting a line it adds. Empty when `uri` is not open, doesn't parse or has no style.
+        // picks the finding at its position): the finding's diagnostic and its one edit, a line it
+        // adds indented as the document's lines are. Empty when `uri` is not open, doesn't parse,
+        // has no style or is a routine IRIS generated.
         code-actions: func(uri: string, range: range) -> list<code-action>;
     }
 }

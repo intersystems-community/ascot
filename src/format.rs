@@ -144,6 +144,18 @@ pub fn fixes(text: &str, uri: &str, style: &Styles, indent: &str) -> Option<Vec<
     Some(findings)
 }
 
+/// One level of indentation as `text` indents: the leading whitespace of its first indented line,
+/// a tab where that holds a tab or no line is indented.
+pub fn indent_of(text: &str) -> &str {
+    (text.lines())
+        .map(|line| (line, line.trim_start_matches([' ', '\t'])))
+        .find(|(line, rest)| !rest.is_empty() && rest.len() < line.len())
+        .map_or("\t", |(line, rest)| {
+            let indent = &line[..line.len() - rest.len()];
+            if indent.contains('\t') { "\t" } else { indent }
+        })
+}
+
 /// The edits that bring the procedure blocks and method bodies of `text`, the document at `uri`,
 /// to `style`: those of `fixes`. `None` when the document doesn't parse.
 pub fn edits(text: &str, uri: &str, style: &Styles, indent: &str) -> Option<Vec<Edit>> {

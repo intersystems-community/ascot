@@ -407,7 +407,8 @@ impl Server {
     /// a block's braces, its first command and an `Else`, `ElseIf` or `Catch` after it go on a line
     /// of their own or not, inside procedure blocks and method bodies only. Returns the formatted
     /// text, to write to the file and `insert` again, and the edits that produce it. Fails for a
-    /// workspace without a style and for a document that doesn't parse — call check() to see why.
+    /// workspace without a style, for a document that doesn't parse — call check() to see why —
+    /// and for a routine IRIS generated, which is compiler output.
     #[tool]
     pub async fn format(
         &self,
@@ -420,16 +421,23 @@ impl Server {
         let workspace = self.get_workspace(&workspace).await?;
         let workspace = workspace.lock().await;
         let workspace = workspace.borrow();
-        let text = workspace
-            .doc_text(&uri)
-            .ok_or_else(|| format!("no such document: {uri:?}"))?;
+        let unparsed = || format!("{uri}: does not parse as written, so nothing is formatted");
+        let text = workspace.doc_text(&uri).ok_or_else(|| {
+            if workspace.doc_cache.contains_key(&uri) {
+                unparsed()
+            } else {
+                format!("no such document: {uri:?}")
+            }
+        })?;
+        if workspace.generated(&uri) {
+            return Err(format!("{uri}: a routine IRIS generated is not formatted"));
+        }
         let style = workspace
             .style
             .as_ref()
             .ok_or("the workspace has no style: give create_workspace one to format to")?;
         let indent = indent.map_or("\t".to_string(), |n| " ".repeat(n as usize));
-        let edits = format::edits(&text, &uri, style, &indent)
-            .ok_or_else(|| format!("{uri}: does not parse as written, so nothing is formatted"))?;
+        let edits = format::edits(&text, &uri, style, &indent).ok_or_else(unparsed)?;
         let formatted = format::apply(&text, &edits);
         let olc = OLC::new(&text);
         Ok(Json(FormatResult {

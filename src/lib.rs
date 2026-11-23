@@ -326,7 +326,7 @@ impl IrisContext for bindings::IrisContext {
 impl WorkspaceStruct {
     // A routine IRIS generated (`[Type=INT,Generated]`, a class's compiled code) is compiler
     // output nobody edits: analyzed for navigation, reported on not at all.
-    fn generated(&self, uri: &str) -> bool {
+    pub(crate) fn generated(&self, uri: &str) -> bool {
         DocKind::from_uri(uri) == Some(DocKind::Rtn)
             && (self
                 .doc_cache
@@ -1172,6 +1172,9 @@ impl bindings::GuestWorkspace for Workspace {
     ) -> Option<Vec<bindings::TextEdit>> {
         let this = self.borrow();
         let text = this.doc_text(&uri)?;
+        if this.generated(&uri) {
+            return Some(vec![]);
+        }
         let Some(style) = &this.style else {
             return Some(vec![]);
         };
@@ -1189,11 +1192,14 @@ impl bindings::GuestWorkspace for Workspace {
     #[allow(async_fn_in_trait)]
     fn code_actions(&self, uri: String, range: bindings::Range) -> Vec<bindings::CodeAction> {
         let this = self.borrow();
+        if this.generated(&uri) {
+            return vec![];
+        }
         let Some((text, style)) = this.doc_text(&uri).zip(this.style.as_ref()) else {
             return vec![];
         };
-        // No formatting options come with a code action request: a tab, as `ascot format` defaults.
-        let fixes = format::fixes(&text, &uri, style, "\t").unwrap_or_default();
+        // No formatting options come with a code action request: the document's own indentation.
+        let fixes = format::fixes(&text, &uri, style, format::indent_of(&text)).unwrap_or_default();
         let olc = OLC::new(&text);
         let (start, end) = (olc.offset(range.start), olc.offset(range.end));
         let filter = &this.diagnostic_filter;
@@ -1988,6 +1994,9 @@ mod tests {
     #[test]
     fn a_generated_routine_is_navigation_only() {
         let workspace = Workspace::new();
+        workspace.set_style(Some(
+            style::parse(r#"{"command": {"case": "lower"}}"#).unwrap(),
+        ));
         let generated = "Pkg.Cls.1.int".to_string();
         let text = "ROUTINE Pkg.Cls.1 [Type=INT,Generated]\n ;Pkg.Cls.1\nzFoo(a) methodimpl {\n Set unused = a\n Quit never }\nzBar() methodimpl {\n Do zFoo(1) }\n";
         workspace.open(generated.clone(), text.to_string());
@@ -1997,6 +2006,13 @@ mod tests {
                 .inlay_hint(generated.clone(), bindings::Range::default())
                 .is_empty()
         );
+        let options = || bindings::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: true,
+        };
+        let set = || bindings::Range::point((3, 1).into());
+        assert_eq!(workspace.format(generated.clone(), options()), Some(vec![]));
+        assert!(workspace.code_actions(generated.clone(), set()).is_empty());
         let call = bindings::Position {
             line: 6,
             character: 4,
@@ -2008,7 +2024,14 @@ mod tests {
             .replace(",Generated", "")
             .replace("methodimpl", "public");
         workspace.open(edited.clone(), text);
-        assert!(!workspace.diagnostics(edited).is_empty());
+        assert!(!workspace.diagnostics(edited.clone()).is_empty());
+        assert!(
+            !workspace
+                .format(edited.clone(), options())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(workspace.code_actions(edited, set()).len(), 1);
     }
 
     #[test]
@@ -3301,6 +3324,26 @@ mod tests {
         };
         assert_eq!(workspace.format(uri.clone(), options).as_ref(), Some(edits));
         assert!(workspace.code_actions(uri, at(1, 0)).is_empty());
+    }
+
+    #[test]
+    fn a_quick_fix_indents_a_line_it_adds_as_the_document_does() {
+        let style = style::parse(r#"{"openBrace": {"newlineAfter": true}}"#).unwrap();
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
+        let uri = "Fix.cls".to_string();
+        let text = "Class Test.Fix {\nClassMethod Foo(x)\n{\n    If x { Set y = 1 }\n}\n}\n";
+        workspace.open(uri.clone(), text.to_string());
+        let actions = workspace.code_actions(uri.clone(), bindings::Range::point((3, 11).into()));
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        assert_eq!(actions[0].diagnostics[0].code, "S4933");
+        let edits = &actions[0].edit.as_ref().unwrap().changes[0].1;
+        assert_eq!(edits[0].new_text, "\n        ");
+        let options = bindings::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: true,
+        };
+        assert_eq!(workspace.format(uri, options).as_ref(), Some(edits));
     }
 
     #[test]
