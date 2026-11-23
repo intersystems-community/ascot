@@ -532,7 +532,8 @@ impl ProgressBars {
 }
 
 /// Rewrites, or with `check` lists, every file under `paths` whose procedure blocks and method
-/// bodies `style` would change. A file that doesn't parse is skipped with a warning.
+/// bodies `style` would change. A file that doesn't parse, or a routine IRIS generated, is skipped
+/// with a warning.
 #[cfg(feature = "format")]
 fn format_files(style: &Style, indent: Option<u8>, check: bool, paths: &[PathBuf]) {
     let styles = ascot::style::Styles::new(style);
@@ -556,6 +557,13 @@ fn format_files(style: &Style, indent: Option<u8>, check: bool, paths: &[PathBuf
         };
         let text = fs::read_to_string(file).unwrap_or_else(|err| fail("reading", err));
         let uri = file.display().to_string();
+        if ascot::generated(&uri, &text) {
+            eprintln!(
+                "Warning: {} is a routine IRIS generated; not formatted",
+                file.display()
+            );
+            continue;
+        }
         let Some(edits) = ascot::format::edits(&text, &uri, &styles, &indent) else {
             eprintln!(
                 "Warning: {} does not parse as written; skipped",

@@ -323,20 +323,23 @@ impl IrisContext for bindings::IrisContext {
     }
 }
 
+/// Whether `text`, the document at `uri`, is a routine IRIS generated (`[Type=INT,Generated]`, a
+/// class's compiled code): compiler output nobody edits, analyzed for navigation, neither reported
+/// on nor formatted.
+pub fn generated(uri: &str, text: &str) -> bool {
+    DocKind::from_uri(uri) == Some(DocKind::Rtn)
+        && cos::RoutineHeader::parse_prefix(text).is_ok_and(|(header, _)| {
+            (header.type_spec.as_ref()).is_some_and(|spec| spec.generated())
+        })
+}
+
 impl WorkspaceStruct {
-    // A routine IRIS generated (`[Type=INT,Generated]`, a class's compiled code) is compiler
-    // output nobody edits: analyzed for navigation, reported on not at all.
     pub(crate) fn generated(&self, uri: &str) -> bool {
-        DocKind::from_uri(uri) == Some(DocKind::Rtn)
-            && (self
-                .doc_cache
-                .get(uri)
-                .and_then(|entry| entry.as_ref().ok()))
-            .is_some_and(|cell| {
-                cos::RoutineHeader::parse_prefix(&cell.borrow().text).is_ok_and(|(header, _)| {
-                    (header.type_spec.as_ref()).is_some_and(|spec| spec.generated())
-                })
-            })
+        (self
+            .doc_cache
+            .get(uri)
+            .and_then(|entry| entry.as_ref().ok()))
+        .is_some_and(|cell| generated(uri, &cell.borrow().text))
     }
 
     // Doubles as both open and edit; kind is inferred from `uri`'s extension. Returns the uris
@@ -3360,6 +3363,32 @@ mod tests {
         let found = diagnostics.iter().find(|d| d.code == "S2839");
         let found = found.unwrap_or_else(|| panic!("{diagnostics:?}"));
         assert!(workspace.code_actions(uri, found.range).is_empty());
+    }
+
+    #[test]
+    fn a_brace_never_joins_a_line_ending_in_a_macro_call() {
+        let style = style::parse(r#"{"closeBrace": {"newlineBefore": false}}"#).unwrap();
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
+        let uri = "Macro.cls".to_string();
+        let text = "Class Test.Macro {\nClassMethod Foo(x)\n{\n If x {\n  Set y = 1\n }\n If x {\n  $$$Macro(1)\n }\n If x {\n  Set y = $$$Macro(1)\n }\n}\n}\n";
+        workspace.open(uri.clone(), text.to_string());
+        let diagnostics = workspace.diagnostics(uri.clone());
+        let braces: Vec<_> = (diagnostics.iter())
+            .filter(|d| d.code == "S3627")
+            .map(|d| d.range.start.line)
+            .collect();
+        assert_eq!(braces, [5, 8, 11], "{diagnostics:?}");
+        let options = bindings::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: true,
+        };
+        let edits = workspace.format(uri, options).unwrap();
+        assert_eq!(edits.len(), 1, "{edits:?}");
+        assert_eq!(
+            (span(edits[0].range), edits[0].new_text.as_str()),
+            (((4, 11), (5, 1)), " ")
+        );
     }
 
     #[test]

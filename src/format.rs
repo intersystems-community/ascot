@@ -588,7 +588,8 @@ impl<'a> Pass<'a> {
 
     // Whether a line break in `span` is as `wanted`; if not, the finding at `at`, with its edit when
     // `fix` gives an added line's indentation and the span is whitespace alone: a comment or `#`
-    // line in it stays where it is.
+    // line in it stays where it is, and nothing joins a line ending in a macro call, whose
+    // expansion may end in a comment that would swallow what follows.
     fn gap(
         &mut self,
         wanted: bool,
@@ -603,7 +604,7 @@ impl<'a> Pass<'a> {
             return;
         }
         let edit = fix
-            .filter(|_| between.trim().is_empty())
+            .filter(|_| between.trim().is_empty() && (wanted || !self.ends_in_macro(span.start)))
             .and_then(|indent| {
                 let text = if wanted {
                     format!("{}{indent}", self.newline)
@@ -613,6 +614,15 @@ impl<'a> Pass<'a> {
                 self.edit(ctx, span, text)
             });
         self.report(kind, at, edit);
+    }
+
+    // Whether the line `offset` is on ends, before `offset`, in `$$$Name` or `$$$Name(...)`.
+    fn ends_in_macro(&self, offset: usize) -> bool {
+        let line = &self.text[..self.base + offset];
+        let line = line[line.rfind('\n').map_or(0, |nl| nl + 1)..].trim_end();
+        line.match_indices("$$$").any(|(i, _)| {
+            <cos::MacroCall>::parse_prefix(&line[i..]).is_ok_and(|(_, end)| i + end == line.len())
+        })
     }
 }
 
