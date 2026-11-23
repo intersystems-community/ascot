@@ -459,12 +459,32 @@ impl Walk for HostList {
 mod tests {
     use super::*;
     use tygr::Parse;
+    use tygr_objectscript::sql::desugar::Desugar;
+
+    fn parse(text: &str) -> SQL {
+        SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"))
+    }
+
+    // `text` and the core text it desugars to, which the checker will move to: the walker, on the
+    // full grammar still, finds the same host variables in both and reports the same codes.
+    fn on_both(text: &str, mock: Option<&Mock>) -> (Hosts, Vec<String>) {
+        let run = |text: &str| {
+            let hosts = analyze(&parse(text), mock.map(|mock| mock as &dyn Resolver));
+            (hosts, mock.map_or_else(Vec::new, |mock| mock.0.take()))
+        };
+        fn codes(reports: &[String]) -> Vec<&str> {
+            reports.iter().map(|report| &report[..5]).collect()
+        }
+        let (hosts, reports) = run(text);
+        let (core_hosts, core_reports) = run(&parse(text).desugar().print());
+        assert_eq!(names(&hosts.reads), names(&core_hosts.reads), "{text}");
+        assert_eq!(names(&hosts.writes), names(&core_hosts.writes), "{text}");
+        assert_eq!(codes(&reports), codes(&core_reports), "{text}");
+        (hosts, reports)
+    }
 
     fn hosts_of(text: &str) -> Hosts {
-        analyze(
-            &SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")),
-            None,
-        )
+        on_both(text, None).0
     }
 
     // Two tables and a view, a method and a class query; what gets reported, as `CODE at offset`.
@@ -510,12 +530,7 @@ mod tests {
     }
 
     fn reports(text: &str) -> Vec<String> {
-        let mock = Mock(Default::default());
-        analyze(
-            &SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")),
-            Some(&mock),
-        );
-        mock.0.into_inner()
+        on_both(text, Some(&Mock(Default::default()))).1
     }
 
     #[test]
