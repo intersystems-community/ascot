@@ -71,6 +71,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A1368](A1368.md) | Not in a class context; this relies on `$this` being set when it runs |
 | [A1817](A1817.md) | Variable '{name}' is already NEW'd; this NEW discards its current value |
 | [A1841](A1841.md) | Method '{name}' overrides {cls}'s {difference} |
+| [A3236](A3236.md) | $CASE without a default raises <ILLEGAL VALUE> when no case matches |
 | [A3303](A3303.md) | Cannot find routine '{routine}' in the workspace; there is no IRIS environment to check against |
 | [A3372](A3372.md) | '{name}' is not a parameter of {class}, the type of {of}{hint} |
 | [A3717](A3717.md) | Class '{name}' is also declared in {other_uri} |
@@ -97,6 +98,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A8317](A8317.md) | '{meta_type}' is not a recognized parameter type; available: {available} |
 | [A8456](A8456.md) | This condition is always {value} |
 | [A8997](A8997.md) | Returns a '{actual}' where no return type is declared |
+| [A9241](A9241.md) | $SELECT without a default raises <SELECT> when no condition holds |
 | [A9421](A9421.md) | {value} is a number here, implicitly converted to the string "{value}" |
 | [S2839](S2839.md) | {kind} `{found}` should be written `{expected}` |
 | [S3627](S3627.md) | Put {wanted} before `}` |
