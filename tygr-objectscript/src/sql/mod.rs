@@ -6,9 +6,16 @@ pub mod grammar;
 pub mod leaf;
 pub mod src;
 
-pub use grammar::*;
+pub use grammar::full::*;
 pub use leaf::*;
 pub use src::*;
+
+/// The core grammar: the full one minus its syntactic sugar, which `desugar` rewrites into it.
+pub mod core {
+    pub use super::grammar::core::*;
+    pub use super::leaf::*;
+    pub use super::src::*;
+}
 
 #[cfg(test)]
 mod tests {
