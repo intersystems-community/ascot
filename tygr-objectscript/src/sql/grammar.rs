@@ -85,10 +85,14 @@ pub enum CmpOp {
 }
 
 #[derive(Grammar)]
-#[tygr(name = "unary op")]
-pub enum UnaryOp {
+pub enum Sign {
     Plus(StringEq!("+")),
     Minus(StringEq!("-")),
+}
+
+#[derive(Grammar)]
+#[tygr(name = "percent op")]
+pub enum PercentOp {
     AlphaUp(StringEqCI!("%ALPHAUP")),
     Exact(StringEqCI!("%EXACT")),
     External(StringEqCI!("%EXTERNAL")),
@@ -102,6 +106,7 @@ pub enum UnaryOp {
     RuntimeIn(StringEqCI!("%RUNTIMEIN")),
     RuntimeOut(StringEqCI!("%RUNTIMEOUT")),
     Upper(Either<StringEqCI!("%UPPER"), StringEqCI!("UPPER")>),
+    StringOperator(StringOperator),
 }
 
 #[derive(Grammar)]
@@ -116,7 +121,17 @@ pub enum Term {
     ScalarFunction(Box<ScalarFunction>),
     Window(Box<Window>),
     Agg(Box<Agg>),
-    Unary(Unary),
+    Unary {
+        op: Sign,
+        space: Space,
+        term: Box<Src<Term>>,
+    },
+    PercentUnary {
+        op: PercentOp,
+        space: Space,
+        term: Box<Src<Term>>,
+    },
+    StringOperation(Box<StringOperation>),
     XTFun(Box<XTFun>),
     ParameterMarker(ParameterMarker),
     Case(Box<Case>),
@@ -132,28 +147,16 @@ pub enum Term {
     User(StringEqCI!("USER")),
 }
 
-#[derive(Grammar)]
-pub enum Unary {
-    UnaryOp {
-        op: UnaryOp,
-        space: Space,
-        term: Box<Src<Term>>,
-    },
-    StringOperation(Box<StringOperation>),
-}
-
+// `%TRUNCATE(x, n)`: a %-string operator called with its truncation length.
 #[derive(Grammar)]
 #[tygr(name = "%string operation")]
-pub enum StringOperation {
-    Term(StringOperator, Space, Src<Term>),
-    ScalxColTrun {
-        op: StringOperator,
-        open: (Space, StringEq!("("), Space),
-        expr: Scalx,
-        comma: ArgSep,
-        truncation: ColTrun,
-        close: (Space, StringEq!(")")),
-    },
+pub struct StringOperation {
+    pub op: StringOperator,
+    open: (Space, StringEq!("("), Space),
+    pub expr: Scalx,
+    comma: ArgSep,
+    pub truncation: ColTrun,
+    close: (Space, StringEq!(")")),
 }
 
 #[derive(Grammar)]

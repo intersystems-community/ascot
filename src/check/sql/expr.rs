@@ -16,7 +16,11 @@ impl Walk for Term {
             Term::ScalarFunction(f) => f.walk(w),
             Term::Window(window) => window.walk(w),
             Term::Agg(agg) => agg.walk(w),
-            Term::Unary(unary) => unary.walk(w),
+            Term::Unary { term, .. } | Term::PercentUnary { term, .. } => term.walk(w),
+            Term::StringOperation(op) => {
+                op.expr.walk(w);
+                op.truncation.walk(w)
+            }
             Term::XTFun(f) => f.args.walk(w),
             Term::Case(case) => case.walk(w),
             Term::OdbcEscape(escape) => escape.walk(w),
@@ -36,29 +40,6 @@ impl Walk for Term {
             | Term::Null(_)
             | Term::CurrentDate(_)
             | Term::User(_) => {}
-        }
-    }
-}
-
-impl Walk for Unary {
-    fn walk(&self, w: &mut Walker) {
-        match self {
-            Unary::UnaryOp { term, .. } => term.walk(w),
-            Unary::StringOperation(op) => op.walk(w),
-        }
-    }
-}
-
-impl Walk for StringOperation {
-    fn walk(&self, w: &mut Walker) {
-        match self {
-            StringOperation::Term(_, _, term) => term.walk(w),
-            StringOperation::ScalxColTrun {
-                expr, truncation, ..
-            } => {
-                expr.walk(w);
-                truncation.walk(w)
-            }
         }
     }
 }
