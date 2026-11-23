@@ -1,5 +1,5 @@
 [workspace]
-members = ["tygr-objectscript"]
+members = ["tygr-objectscript", "tygr-objectscript-macros"]
 
 [package]
 name = "ascot"
