@@ -1881,6 +1881,48 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Only $CASE's last argument may omit the value before its colon"]
     CaseDefaultNotLast,
+    /// The `$CASE` has no `:default` arm, and its target can hold a value no arm lists. IRIS
+    /// compiles it and raises `<ILLEGAL VALUE>` when it runs with such a target. The value of a
+    /// `$CASE` is never undefined, so nothing is reported where it is used. Add a trailing
+    /// `:default` arm, unless the `$CASE` is meant to fail outside the listed values. A target
+    /// known to hold only the listed values, such as a `%Boolean` with arms for `0` and `1` or a
+    /// `VALUELIST` datatype with an arm per value, is not reported.
+    ///
+    /// ```objectscript raises=<ILLEGAL VALUE> write ##class(Demo.CaseWithoutDefault).Name(4)
+    /// Class Demo.CaseWithoutDefault
+    /// {
+    ///
+    /// ClassMethod Name(size As %Integer) As %String
+    /// {
+    ///     Quit $CASE(size, 1:"small", 2:"medium", 3:"large") //! A3236
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A3236"]
+    #[severity = Warning]
+    #[message = "$CASE without a default raises <ILLEGAL VALUE> when no case matches"]
+    CaseWithoutDefault,
+    /// No condition of the `$SELECT` is a constant true, so when every condition is false there
+    /// is no value to take: IRIS compiles it and raises `<SELECT>` when it runs. The value of a
+    /// `$SELECT` is never undefined, so nothing is reported where it is used. End the `$SELECT`
+    /// with a `1:value` pair, unless it is meant to fail outside its conditions.
+    ///
+    /// ```objectscript raises=<SELECT> write ##class(Demo.SelectWithoutDefault).Sign(0)
+    /// Class Demo.SelectWithoutDefault
+    /// {
+    ///
+    /// ClassMethod Sign(n As %Integer) As %String
+    /// {
+    ///     Quit $SELECT(n > 0:"positive", n < 0:"negative") //! A9241
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A9241"]
+    #[severity = Warning]
+    #[message = "$SELECT without a default raises <SELECT> when no condition holds"]
+    SelectWithoutDefault,
     /// A `$` function with a name ObjectScript has no function for, usually a misspelling; the
     /// nearest names follow as suggestions. IRIS refuses to compile the call.
     ///
