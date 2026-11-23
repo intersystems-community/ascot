@@ -145,10 +145,40 @@ const RULES: &[(&str, &str)] = &[
         "SELECT a FROM t WHERE a %INLIST :l SIZE 10",
         "SELECT a FROM t WHERE a %INLIST :l SIZE (10)",
     ),
+    (
+        "INSERT t SET a = :x, b = 2",
+        "INSERT INTO t (a, b) VALUES (:x, 2)",
+    ),
+    (
+        "INSERT INTO t SET a = 1 /* c */, b = 2",
+        "INSERT INTO t (a, b) VALUES (1 /* c */, 2)",
+    ),
+    (
+        "INSERT %NOLOCK t (a) VALUES (1)",
+        "INSERT %NOLOCK INTO t (a) VALUES (1)",
+    ),
+    (
+        "UPDATE t (a, b) VALUES (1, 2) WHERE c = 3",
+        "UPDATE t SET a = 1, b = 2 WHERE c = 3",
+    ),
+    (
+        "UPDATE t (a) SELECT b FROM u",
+        "UPDATE t (a) SELECT b FROM u",
+    ),
+    ("DELETE t WHERE a = 1", "DELETE FROM t WHERE a = 1"),
+    ("DELETE %NOLOCK t", "DELETE %NOLOCK FROM t"),
+    ("COMMIT WORK", "COMMIT"),
+    ("ROLLBACK WORK", "ROLLBACK"),
+    ("%INTRANS", "%INTRANSACTION"),
+    ("TRUNCATE TABLE %NOLOCK t", "TRUNCATE TABLE %NOLOCK t"),
 ];
 
-/// Sugar the core grammar admits, as the rewrite drops a node whose type the core keeps.
-const ADMITTED: &[&str] = &["SELECT a FROM t LIMIT ALL"];
+/// Sugar the core grammar admits, as the rewrite drops a node whose type the core keeps, or
+/// rewrites one form of a node whose other forms stay.
+const ADMITTED: &[&str] = &[
+    "SELECT a FROM t LIMIT ALL",
+    "UPDATE t (a, b) VALUES (1, 2) WHERE c = 3",
+];
 
 /// Statements mixing the rules, and the sugar-free rest of the grammar.
 const STATEMENTS: &[&str] = &[

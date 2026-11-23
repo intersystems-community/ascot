@@ -4,6 +4,7 @@
 //! containers get theirs here.
 
 pub mod query;
+pub mod stat;
 
 use either::Either;
 use tygr::{Hidden, NotFollowedBy, Prefix, Ranged, Raw, Suffix, Vec1, Wrap};

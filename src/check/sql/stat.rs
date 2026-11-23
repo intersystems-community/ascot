@@ -38,7 +38,7 @@ impl Walk for Insrt {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
         self.target.1.walk(w);
-        self.assignment.1.walk(w);
+        self.values.1.walk(w);
         w.pop_frame()
     }
 }
@@ -86,19 +86,34 @@ impl Walk for IUDTarget {
     }
 }
 
+impl Walk for InsertValues {
+    fn walk(&self, w: &mut Walker) {
+        match self {
+            InsertValues::SetList { assignments, .. } => assignments.1.walk(w),
+            InsertValues::ColumnList { columns, values } => column_list(w, columns, values),
+            InsertValues::DefaultValues(..) => {}
+        }
+    }
+}
+
 impl Walk for Asign {
     fn walk(&self, w: &mut Walker) {
         match self {
             Asign::SetList { assignments, .. } => assignments.1.walk(w),
-            Asign::ColumnList { columns, values } => {
-                for column in columns.iter().flat_map(|list| list.wrapped.items.iter()) {
-                    w.column(column)
-                }
-                w.outside(&values.1)
-            }
-            Asign::DefaultValues(..) => {}
+            Asign::ColumnList { columns, values } => column_list(w, columns, values),
         }
     }
+}
+
+fn column_list(
+    w: &mut Walker,
+    columns: &Option<SQLColumnListParen>,
+    values: &(Space, ValueSource),
+) {
+    for column in columns.iter().flat_map(|list| list.wrapped.items.iter()) {
+        w.column(column)
+    }
+    w.outside(&values.1)
 }
 
 impl Walk for SQLSetAssignment {

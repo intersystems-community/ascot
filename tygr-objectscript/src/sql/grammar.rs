@@ -14,7 +14,7 @@ pub mod leveled {
     use crate::convert::VecSep;
 
     #[sugar]
-    use super::super::desugar::query;
+    use super::super::desugar::{query, stat};
 
     #[derive(Grammar)]
     pub struct TName(pub Src<DottedIdent>);
@@ -2196,26 +2196,28 @@ pub mod leveled {
     pub struct Insrt {
         pub insert_kw: StringEqCI!("INSERT"),
         pub or_update: Option<(Space, StringEqCI!("OR"), Space, StringEqCI!("UPDATE"))>,
-        pub options: Vec<InsertOption>,
-        pub into_kw: Option<(Space, StringEqCI!("INTO"))>,
+        pub options: Vec<DmlOption>,
+        pub into_kw: Implied<StringEqCI!("INTO")>,
         pub target: (Space, IUDTarget),
-        pub assignment: (Space, Asign),
+        pub values: (Space, InsertValues),
     }
 
+    /// The options of INSERT, UPDATE, DELETE and TRUNCATE TABLE, one list for the four.
     #[derive(Grammar)]
-    #[tygr(name = "insert option")]
-    pub enum InsertOption {
+    #[tygr(name = "dml option")]
+    pub enum DmlOption {
         NoCheck((Space, StringEqCI!("%NOCHECK"))),
         NoFPlan((Space, StringEqCI!("%NOFPLAN"))),
         NoLock((Space, StringEqCI!("%NOLOCK"))),
         NoIndex((Space, StringEqCI!("%NOINDEX"))),
         NoTrigger((Space, StringEqCI!("%NOTRIGGER"))),
         NoStream((Space, StringEqCI!("%NOSTREAM"))),
-        ObjectFiler((Space, StringEqCI!("%OBJECTFILER"))),
-        Profile((Space, StringEqCI!("%PROFILE"))),
-        ProfileAll((Space, StringEqCI!("%PROFILE_ALL"))),
-        NoRuntime((Space, StringEqCI!("%NORUNTIME"))),
         NoJourn((Space, StringEqCI!("%NOJOURN"))),
+        ILock((Space, StringEqCI!("%ILOCK"))),
+        ObjectFiler((Space, StringEqCI!("%OBJECTFILER"))),
+        ProfileAll((Space, StringEqCI!("%PROFILE_ALL"))),
+        Profile((Space, StringEqCI!("%PROFILE"))),
+        NoRuntime((Space, StringEqCI!("%NORUNTIME"))),
         DoRuntime((Space, StringEqCI!("%DORUNTIME"))),
     }
 
@@ -2233,7 +2235,9 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum Asign {
+    #[tygr(name = "insert values")]
+    pub enum InsertValues {
+        #[sugar(into = stat::set_as_values)]
         SetList {
             set_kw: StringEqCI!("SET"),
             assignments: (Space, VecSep<Src<SQLSetAssignment>, ArgSep>),
@@ -2243,6 +2247,19 @@ pub mod leveled {
             values: (Space, ValueSource),
         },
         DefaultValues(StringEqCI!("DEFAULT"), Space, StringEqCI!("VALUES")),
+    }
+
+    #[derive(Grammar)]
+    #[sugar(into = stat::asign)]
+    pub enum Asign {
+        SetList {
+            set_kw: StringEqCI!("SET"),
+            assignments: (Space, VecSep<Src<SQLSetAssignment>, ArgSep>),
+        },
+        ColumnList {
+            columns: Option<SQLColumnListParen>,
+            values: (Space, ValueSource),
+        },
     }
 
     pub type FList1 = Parenthesized<VecSep<Ident, ArgSep>>;
@@ -2296,7 +2313,7 @@ pub mod leveled {
         },
         Update {
             update_kw: StringEqCI!("UPDATE"),
-            options: Vec<UpdateOption>,
+            options: Vec<DmlOption>,
             target: (Space, IUDTarget),
             assignment: (Space, Asign),
             from: Option<FromClause>,
@@ -2324,47 +2341,13 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "update option")]
-    pub enum UpdateOption {
-        NoCheck((Space, StringEqCI!("%NOCHECK"))),
-        NoFPlan((Space, StringEqCI!("%NOFPLAN"))),
-        NoLock((Space, StringEqCI!("%NOLOCK"))),
-        NoIndex((Space, StringEqCI!("%NOINDEX"))),
-        NoTrigger((Space, StringEqCI!("%NOTRIGGER"))),
-        NoStream((Space, StringEqCI!("%NOSTREAM"))),
-        NoJourn((Space, StringEqCI!("%NOJOURN"))),
-        ILock((Space, StringEqCI!("%ILOCK"))),
-        ObjectFiler((Space, StringEqCI!("%OBJECTFILER"))),
-        Profile((Space, StringEqCI!("%PROFILE"))),
-        ProfileAll((Space, StringEqCI!("%PROFILE_ALL"))),
-        NoRuntime((Space, StringEqCI!("%NORUNTIME"))),
-        DoRuntime((Space, StringEqCI!("%DORUNTIME"))),
-    }
-
-    #[derive(Grammar)]
     #[tygr(name = "delet")]
     pub struct Delet {
         pub delete_kw: StringEqCI!("DELETE"),
-        pub options: Vec<DeleteOption>,
-        pub from_kw: Option<(Space, StringEqCI!("FROM"))>,
+        pub options: Vec<DmlOption>,
+        pub from_kw: Implied<StringEqCI!("FROM")>,
         pub target: (Space, IUDTarget),
         pub where_clause: Option<WhereWerop>,
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "delete option")]
-    pub enum DeleteOption {
-        NoCheck((Space, StringEqCI!("%NOCHECK"))),
-        NoFPlan((Space, StringEqCI!("%NOFPLAN"))),
-        NoLock((Space, StringEqCI!("%NOLOCK"))),
-        NoIndex((Space, StringEqCI!("%NOINDEX"))),
-        NoTrigger((Space, StringEqCI!("%NOTRIGGER"))),
-        ObjectFiler((Space, StringEqCI!("%OBJECTFILER"))),
-        Profile((Space, StringEqCI!("%PROFILE"))),
-        ProfileAll((Space, StringEqCI!("%PROFILE_ALL"))),
-        NoRuntime((Space, StringEqCI!("%NORUNTIME"))),
-        NoJourn((Space, StringEqCI!("%NOJOURN"))),
-        DoRuntime((Space, StringEqCI!("%DORUNTIME"))),
     }
 
     #[derive(Grammar)]
@@ -2372,16 +2355,8 @@ pub mod leveled {
     pub struct Truncate {
         pub truncate_kw: StringEqCI!("TRUNCATE"),
         pub table_kw: (Space, StringEqCI!("TABLE"), Space),
-        pub options: Vec<TruncateOption>,
+        pub options: Vec<DmlOption>,
         pub table: (Space, TName),
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "truncate option")]
-    pub enum TruncateOption {
-        NoCheck((Space, StringEqCI!("%NOCHECK"))),
-        NoLock((Space, StringEqCI!("%NOLOCK"))),
-        NoJourn((Space, StringEqCI!("%NOJOURN"))),
     }
 
     #[derive(Grammar)]
@@ -2452,8 +2427,10 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "rollb")]
+    #[sugar(into = stat::rollback)]
     pub struct RollB {
         pub rollback_kw: StringEqCI!("ROLLBACK"),
+        #[sugar]
         pub work: Option<(Space, StringEqCI!("WORK"))>,
     }
 
@@ -2468,12 +2445,15 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "tp option")]
+    #[sugar(into = stat::tp_option)]
     pub enum TPOption {
         InTransaction(StringEqCI!("%INTRANSACTION")),
         BegTrans(StringEqCI!("%BEGTRANS")),
+        #[sugar]
         InTrans(StringEqCI!("%INTRANS")),
-        CommitWork {
+        Commit {
             commit_kw: StringEqCI!("COMMIT"),
+            #[sugar]
             work: Option<(Space, StringEqCI!("WORK"))>,
         },
     }
