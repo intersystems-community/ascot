@@ -262,6 +262,7 @@ fn main() {
                 diagnostics: Some(Diagnostics::List(
                     filter.filter().0.iter().map(Print::print).collect(),
                 )),
+                inlay_hints: None,
             };
             if let Err(err) = ascot::lsp::run(settings, shared_fs) {
                 eprintln!("LSP server error: {err}");

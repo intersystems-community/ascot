@@ -221,6 +221,7 @@ impl Server {
             Arc::new(Mutex::new({
                 let native = Workspace::native(iris, style);
                 native.set_diagnostic_filter(filter);
+                native.set_inlay_hints(settings.inlay_hints.unwrap_or_default());
                 native
             })),
         );

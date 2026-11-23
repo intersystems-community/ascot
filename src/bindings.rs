@@ -25,9 +25,11 @@ mod wit_bind {
             "iris:ascot/common/variable-style": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/brace-breaks": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/require-description": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/inlay-hint-options": [#[serde(rename_all = "camelCase", deny_unknown_fields)]],
             "iris:ascot/common/keyword-form": [#[serde(rename_all = "kebab-case")]],
             "iris:ascot/common/keyword-case": [#[serde(rename_all = "kebab-case")]],
             "iris:ascot/common/and-operator": [#[serde(rename_all = "kebab-case")]],
+            "iris:ascot/common/type-annotation": [#[serde(rename_all = "kebab-case")]],
         },
     });
 
@@ -396,6 +398,15 @@ impl Default for wit_bind::ClassInfo {
             property_class: vec![],
             sql_table_name: None,
             sql_row_id_name: None,
+        }
+    }
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for wit_bind::InlayHintOptions {
+    fn default() -> Self {
+        Self {
+            type_annotation: None,
         }
     }
 }
