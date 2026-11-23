@@ -13,6 +13,9 @@ pub mod leveled {
     use super::super::src::Src;
     use crate::convert::VecSep;
 
+    #[sugar]
+    use super::super::desugar::query;
+
     #[derive(Grammar)]
     pub struct TName(pub Src<DottedIdent>);
 
@@ -52,15 +55,21 @@ pub mod leveled {
     #[tygr(name = "not equals operation")]
     pub enum NotEqualsOperation {
         Diamond(StringEq!("<>")),
+        #[sugar(into = query::diamond)]
         BangEq(StringEq!("!=")),
+        #[sugar(into = query::diamond)]
         NotEq(StringEqCI!("NOT=")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "order predicate")]
     pub enum OrderPredicate {
-        Le(Either<StringEq!("<="), StringEqCI!("NOT>")>),
-        Ge(Either<StringEq!(">="), StringEqCI!("NOT<")>),
+        Le(StringEq!("<=")),
+        #[sugar(into = query::le)]
+        NotGt(StringEqCI!("NOT>")),
+        Ge(StringEq!(">=")),
+        #[sugar(into = query::ge)]
+        NotLt(StringEqCI!("NOT<")),
         Gt(StringEq!(">")),
         Lt(StringEq!("<")),
     }
@@ -69,6 +78,7 @@ pub mod leveled {
     #[tygr(name = "contains predicate")]
     pub enum ContainsPredicate {
         LB(StringEq!("[")),
+        #[sugar(into = query::contains)]
         NotLB(StringEqCI!("NOT[")),
     }
 
@@ -76,6 +86,7 @@ pub mod leveled {
     #[tygr(name = "follows predicate")]
     pub enum FollowsPredicate {
         Follows(StringEq!("]")),
+        #[sugar(into = query::follows)]
         NotFollows(StringEqCI!("NOT]")),
     }
 
@@ -1083,6 +1094,7 @@ pub mod leveled {
     #[tygr(name = "or operator")]
     pub enum OrOperator {
         Or(StringEqCI!("OR")),
+        #[sugar(into = query::or)]
         Exclamation(StringEq!("!")),
     }
 
@@ -1094,14 +1106,53 @@ pub mod leveled {
     #[tygr(name = "and operator")]
     pub enum AndOperator {
         And(StringEqCI!("AND")),
+        #[sugar(into = query::and)]
         Ampersand(StringEq!("&")),
     }
 
     pub type NoIndex = Option<(StringEqCI!("%NOINDEX"), Space)>;
 
+    pub type NotKw = StringEqCI!("NOT");
+
+    /// A predicate's keyword, or its negation, which reads as the keyword under the `NOT` the
+    /// condition's rule puts around the predicate.
+    #[derive(Grammar)]
+    #[tygr(inline)]
+    pub enum Negatable<K: Grammar> {
+        Plain(K),
+        #[sugar(into = query::plain)]
+        Negated(NotKw, Space, K),
+    }
+
+    #[sugar]
+    impl<K: Grammar> Negatable<K> {
+        /// The `NOT` of a negated keyword, with the blank after it.
+        pub fn negation(&self) -> Option<(&NotKw, &Space)> {
+            match self {
+                Negatable::Negated(not, sp, _) => Some((not, sp)),
+                Negatable::Plain(_) => None,
+            }
+        }
+    }
+
+    /// What compares a value with a subquery: an operator and a quantifier, or `IN`, which is
+    /// `= ANY`.
+    #[derive(Grammar)]
+    #[tygr(name = "quantified op")]
+    pub enum QuantifiedOp {
+        Op {
+            op: CmpOp,
+            sp: Space,
+            quantifier: Quantifier,
+        },
+        #[sugar(into = query::in_any)]
+        In(Negatable<StringEqCI!("IN")>),
+    }
+
     // Parsed as `CondParse`, which reads a comparison's left operand once and then its tail, and
     // converted so that each predicate holds all of its operands.
     #[derive(Print)]
+    #[sugar(into = query::cond)]
     pub enum Cond {
         Not {
             not_kw: (StringEqCI!("NOT"), Space),
@@ -1150,10 +1201,8 @@ pub mod leveled {
             noindex: NoIndex,
             lhs: Scalx,
             sp1: Space,
-            op: CmpOp,
+            op: QuantifiedOp,
             sp2: Space,
-            quantifier: Quantifier,
-            sp3: Space,
             subquery: SQLSubquery,
         },
         IsNull {
@@ -1161,15 +1210,13 @@ pub mod leveled {
             lhs: Scalx,
             sp: Space,
             is_kw: (StringEqCI!("IS"), Space),
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            null_kw: StringEqCI!("NULL"),
+            null_kw: Negatable<StringEqCI!("NULL")>,
         },
         Between {
             noindex: NoIndex,
             lhs: Scalx,
             sp: Space,
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            between_kw: (StringEqCI!("BETWEEN"), Space),
+            between_kw: Negatable<(StringEqCI!("BETWEEN"), Space)>,
             lower: Scalx,
             and_kw: (Space, StringEqCI!("AND"), Space),
             upper: Scalx,
@@ -1178,8 +1225,7 @@ pub mod leveled {
             noindex: NoIndex,
             lhs: Scalx,
             sp: Space,
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            like_kw: (StringEqCI!("LIKE"), Space),
+            like_kw: Negatable<(StringEqCI!("LIKE"), Space)>,
             pattern: Scalx,
             escape: Option<EscapeScalx>,
         },
@@ -1187,8 +1233,7 @@ pub mod leveled {
             noindex: NoIndex,
             lhs: Scalx,
             sp: Space,
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            matches_kw: (StringEqCI!("%MATCHES"), Space),
+            matches_kw: Negatable<(StringEqCI!("%MATCHES"), Space)>,
             pattern: Scalx,
             escape: Option<EscapeScalx>,
         },
@@ -1196,16 +1241,14 @@ pub mod leveled {
             noindex: NoIndex,
             lhs: Scalx,
             sp: Space,
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            in_kw: (StringEqCI!("IN"), Space),
-            spec: Parenthesized<InSpec>,
+            in_kw: Negatable<(StringEqCI!("IN"), Space)>,
+            list: Parenthesized<VecSep<Scalx, ArgSep>>,
         },
         InList {
             noindex: NoIndex,
             lhs: Scalx,
             sp: Space,
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            inlist_kw: (StringEqCI!("%INLIST"), Space),
+            inlist_kw: Negatable<(StringEqCI!("%INLIST"), Space)>,
             list_expr: Scalx,
             size_hint: Option<SizeHint>,
         },
@@ -1230,8 +1273,7 @@ pub mod leveled {
             sp: Space,
             format: Option<JSONInputClause>,
             is_kw: (StringEqCI!("IS"), Space),
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            json_kw: StringEqCI!("JSON"),
+            json_kw: Negatable<StringEqCI!("JSON")>,
             constraint: Option<JSONPredicateTypeConstraint>,
         },
         Contains {
@@ -1412,20 +1454,14 @@ pub mod leveled {
                         op,
                         rhs: scalx,
                     },
-                    Comparison::IsNull {
-                        is_kw,
-                        not,
-                        null_kw,
-                    } => Cond::IsNull {
+                    Comparison::IsNull { is_kw, null_kw } => Cond::IsNull {
                         noindex,
                         lhs,
                         sp,
                         is_kw,
-                        not,
                         null_kw,
                     },
                     Comparison::Between {
-                        not,
                         between_kw,
                         lower,
                         and_kw,
@@ -1434,14 +1470,12 @@ pub mod leveled {
                         noindex,
                         lhs,
                         sp,
-                        not,
                         between_kw,
                         lower,
                         and_kw,
                         upper,
                     },
                     Comparison::Like {
-                        not,
                         like_kw,
                         pattern,
                         escape,
@@ -1449,13 +1483,11 @@ pub mod leveled {
                         noindex,
                         lhs,
                         sp,
-                        not,
                         like_kw,
                         pattern,
                         escape,
                     },
                     Comparison::Matches {
-                        not,
                         matches_kw,
                         pattern,
                         escape,
@@ -1463,21 +1495,18 @@ pub mod leveled {
                         noindex,
                         lhs,
                         sp,
-                        not,
                         matches_kw,
                         pattern,
                         escape,
                     },
-                    Comparison::In { not, in_kw, spec } => Cond::In {
+                    Comparison::In { in_kw, list } => Cond::In {
                         noindex,
                         lhs,
                         sp,
-                        not,
                         in_kw,
-                        spec,
+                        list,
                     },
                     Comparison::InList {
-                        not,
                         inlist_kw,
                         list_expr,
                         size_hint,
@@ -1485,7 +1514,6 @@ pub mod leveled {
                         noindex,
                         lhs,
                         sp,
-                        not,
                         inlist_kw,
                         list_expr,
                         size_hint,
@@ -1515,7 +1543,6 @@ pub mod leveled {
                     Comparison::IsJSON {
                         format,
                         is_kw,
-                        not,
                         json_kw,
                         constraint,
                     } => Cond::IsJson {
@@ -1524,7 +1551,6 @@ pub mod leveled {
                         sp,
                         format,
                         is_kw,
-                        not,
                         json_kw,
                         constraint,
                     },
@@ -1535,20 +1561,12 @@ pub mod leveled {
                         kw,
                         list,
                     },
-                    Comparison::Query {
-                        op,
-                        sp1,
-                        quantifier,
-                        sp2,
-                        expr,
-                    } => Cond::Quantified {
+                    Comparison::Query { op, sp: sp2, expr } => Cond::Quantified {
                         noindex,
                         lhs,
                         sp1: sp,
                         op,
-                        sp2: sp1,
-                        quantifier,
-                        sp3: sp2,
+                        sp2,
                         subquery: expr,
                     },
                     Comparison::Scalx { op, space, expr } => Cond::Compare {
@@ -1594,36 +1612,35 @@ pub mod leveled {
         },
         IsNull {
             is_kw: (StringEqCI!("IS"), Space),
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            null_kw: StringEqCI!("NULL"),
+            null_kw: Negatable<StringEqCI!("NULL")>,
         },
         Between {
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            between_kw: (StringEqCI!("BETWEEN"), Space),
+            between_kw: Negatable<(StringEqCI!("BETWEEN"), Space)>,
             lower: Scalx,
             and_kw: (Space, StringEqCI!("AND"), Space),
             upper: Scalx,
         },
         Like {
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            like_kw: (StringEqCI!("LIKE"), Space),
+            like_kw: Negatable<(StringEqCI!("LIKE"), Space)>,
             pattern: Scalx,
             escape: Option<EscapeScalx>,
         },
         Matches {
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            matches_kw: (StringEqCI!("%MATCHES"), Space),
+            matches_kw: Negatable<(StringEqCI!("%MATCHES"), Space)>,
             pattern: Scalx,
             escape: Option<EscapeScalx>,
         },
+        Query {
+            op: QuantifiedOp,
+            sp: Space,
+            expr: SQLSubquery,
+        },
         In {
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            in_kw: (StringEqCI!("IN"), Space),
-            spec: Parenthesized<InSpec>,
+            in_kw: Negatable<(StringEqCI!("IN"), Space)>,
+            list: Parenthesized<VecSep<Scalx, ArgSep>>,
         },
         InList {
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            inlist_kw: (StringEqCI!("%INLIST"), Space),
+            inlist_kw: Negatable<(StringEqCI!("%INLIST"), Space)>,
             list_expr: Scalx,
             size_hint: Option<SizeHint>,
         },
@@ -1639,20 +1656,12 @@ pub mod leveled {
         IsJSON {
             format: Option<JSONInputClause>,
             is_kw: (StringEqCI!("IS"), Space),
-            not: Option<(StringEqCI!("NOT"), Space)>,
-            json_kw: StringEqCI!("JSON"),
+            json_kw: Negatable<StringEqCI!("JSON")>,
             constraint: Option<JSONPredicateTypeConstraint>,
         },
         Contains {
             kw: Either<StringEqCI!("%CONTAINSTERM"), StringEqCI!("%CONTAINS")>,
             list: Args1Plus,
-        },
-        Query {
-            op: CmpOp,
-            sp1: Space,
-            quantifier: Quantifier,
-            sp2: Space,
-            expr: SQLSubquery,
         },
         Scalx {
             op: CmpOp,
@@ -1663,13 +1672,6 @@ pub mod leveled {
 
     pub type EscapeScalx = Prefix<(Space, StringEqCI!("ESCAPE"), Space), Scalx>;
 
-    #[derive(Grammar)]
-    #[tygr(name = "in spec")]
-    pub enum InSpec {
-        Query(Box<Query>),
-        Scalxes(VecSep<Scalx, ArgSep>),
-    }
-
     pub type SQLSubquery = Parenthesized<Box<Query>>;
 
     #[derive(Grammar)]
@@ -1677,6 +1679,7 @@ pub mod leveled {
     pub enum Quantifier {
         All(StringEqCI!("ALL")),
         Any(StringEqCI!("ANY")),
+        #[sugar(into = query::any)]
         Some(StringEqCI!("SOME")),
     }
 

@@ -1,11 +1,93 @@
-//! The core level of the SQL grammar and the desugaring into it, over hand-written statements: the
-//! core text re-parses under the core grammar and prints the same, desugaring it again changes
-//! nothing, and every `Src` node maps a range of the core text to a range of the source.
+//! The core level of the SQL grammar and the desugaring into it, over hand-written statements: each
+//! rule rewrites its statement to the core text given, the core text re-parses under the core grammar
+//! and prints the same, desugaring it again changes nothing, and every `Src` node maps a range of
+//! the core text to a range of the source.
 
 use tygr::{Parse, Print};
 use tygr_objectscript::sql::desugar::Desugar;
 use tygr_objectscript::sql::{SQL, core, print_mapped};
 
+/// One statement per rule, with the exact core text.
+const RULES: &[(&str, &str)] = &[
+    (
+        "SELECT a FROM t WHERE a != 1",
+        "SELECT a FROM t WHERE a <> 1",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT= 1",
+        "SELECT a FROM t WHERE a <> 1",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT> 1",
+        "SELECT a FROM t WHERE a <= 1",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT< 1",
+        "SELECT a FROM t WHERE a >= 1",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT[ 'x'",
+        "SELECT a FROM t WHERE NOT (a [ 'x')",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT] 'x'",
+        "SELECT a FROM t WHERE NOT (a ] 'x')",
+    ),
+    (
+        "SELECT a FROM t WHERE a IS NOT NULL",
+        "SELECT a FROM t WHERE NOT (a IS NULL)",
+    ),
+    (
+        "SELECT a FROM t WHERE a not /* c */ BETWEEN 1 AND 2",
+        "SELECT a FROM t WHERE not /* c */ (a BETWEEN 1 AND 2)",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT IN (1, 2)",
+        "SELECT a FROM t WHERE NOT (a IN (1, 2))",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT LIKE 'x%'",
+        "SELECT a FROM t WHERE NOT (a LIKE 'x%')",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT %MATCHES 'p'",
+        "SELECT a FROM t WHERE NOT (a %MATCHES 'p')",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT %INLIST :l",
+        "SELECT a FROM t WHERE NOT (a %INLIST :l)",
+    ),
+    (
+        "SELECT a FROM t WHERE a IS NOT JSON",
+        "SELECT a FROM t WHERE NOT (a IS JSON)",
+    ),
+    (
+        "SELECT a FROM t WHERE NOT a IS NOT NULL",
+        "SELECT a FROM t WHERE NOT NOT (a IS NULL)",
+    ),
+    (
+        "SELECT a FROM t WHERE a IN (SELECT b FROM u)",
+        "SELECT a FROM t WHERE a = ANY (SELECT b FROM u)",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT IN (SELECT b FROM u)",
+        "SELECT a FROM t WHERE NOT (a = ANY (SELECT b FROM u))",
+    ),
+    (
+        "SELECT a FROM t WHERE a = SOME (SELECT b FROM u)",
+        "SELECT a FROM t WHERE a = ANY (SELECT b FROM u)",
+    ),
+    (
+        "SELECT a FROM t WHERE a = 1 ! b = 2",
+        "SELECT a FROM t WHERE a = 1 OR b = 2",
+    ),
+    (
+        "SELECT a FROM t WHERE a = 1 & b = 2",
+        "SELECT a FROM t WHERE a = 1 AND b = 2",
+    ),
+];
+
+/// Statements mixing the rules, and the sugar-free rest of the grammar.
 const STATEMENTS: &[&str] = &[
     "SELECT ALL a, b AS x, c y FROM t u, v WHERE a != 1 AND b NOT> 2 OR c IS NOT NULL",
     "SELECT %SQLUPPER a, %TRUNCATE(a, 3), POSITION(a IN b), SUBSTRING(a FROM 1 FOR 2) FROM t",
@@ -52,18 +134,30 @@ fn full(text: &str) -> SQL {
     SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"))
 }
 
-// Until the first `#[sugar]` mark: both levels parse the same text, and desugaring changes nothing.
+fn texts() -> impl Iterator<Item = &'static str> {
+    RULES
+        .iter()
+        .map(|(text, _)| *text)
+        .chain(STATEMENTS.iter().copied())
+}
+
 #[test]
-fn without_a_mark_the_levels_are_one_grammar() {
-    for text in STATEMENTS {
-        assert_eq!(full(text).desugar().print(), *text, "{text}");
-        core::SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+fn each_rule_rewrites_its_statement() {
+    for (text, core_text) in RULES {
+        assert_eq!(full(text).desugar().print(), *core_text, "{text}");
+    }
+}
+
+#[test]
+fn the_core_grammar_lacks_the_sugar() {
+    for (text, _) in RULES {
+        assert!(core::SQL::parse(text).is_err(), "{text}");
     }
 }
 
 #[test]
 fn the_core_text_reparses_under_the_core_grammar() {
-    for text in STATEMENTS {
+    for text in texts() {
         let core_text = full(text).desugar().print();
         let reparsed =
             core::SQL::parse(&core_text).unwrap_or_else(|e| panic!("{text}\n{core_text}: {e}"));
@@ -73,7 +167,7 @@ fn the_core_text_reparses_under_the_core_grammar() {
 
 #[test]
 fn desugaring_the_core_text_changes_nothing() {
-    for text in STATEMENTS {
+    for text in texts() {
         let core_text = full(text).desugar().print();
         assert_eq!(full(&core_text).desugar().print(), core_text, "{text}");
     }
@@ -81,7 +175,7 @@ fn desugaring_the_core_text_changes_nothing() {
 
 #[test]
 fn every_src_node_maps_the_core_text_to_the_source() {
-    for text in STATEMENTS {
+    for text in texts() {
         let desugared = full(text).desugar();
         let (core_text, mappings) = print_mapped(&desugared);
         for mapping in &mappings {

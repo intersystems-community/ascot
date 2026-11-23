@@ -60,9 +60,16 @@ pub enum SpaceUnit {
     MC(SQLMultiLineComment),
 }
 
-#[derive(Grammar, Clone)]
+#[derive(Grammar, Clone, Default)]
 #[tygr(hidden)]
 pub struct Space(Vec<SpaceUnit>);
+
+impl Space {
+    /// One blank.
+    pub fn blank() -> Space {
+        Space(vec![SpaceUnit::Raw(Hidden(Raw::new(" ")))])
+    }
+}
 
 #[derive(Grammar, Clone)]
 pub enum Ident {

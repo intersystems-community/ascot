@@ -130,12 +130,22 @@ mod tests {
                     );
                     "between"
                 }
-                Cond::IsNull { not: Some(_), .. } => "is not null",
+                Cond::IsNull {
+                    null_kw: Negatable::Negated(..),
+                    ..
+                } => "is not null",
                 Cond::Quantified {
-                    quantifier: Quantifier::Any(_),
+                    op:
+                        QuantifiedOp::Op {
+                            quantifier: Quantifier::Any(_),
+                            ..
+                        },
                     ..
                 } => "quantified",
-                Cond::In { not: Some(_), .. } => "not in",
+                Cond::In {
+                    in_kw: Negatable::Negated(..),
+                    ..
+                } => "not in",
                 Cond::Compare {
                     noindex: Some(_),
                     rhs,

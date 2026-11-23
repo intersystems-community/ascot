@@ -1,6 +1,9 @@
 //! `Desugar`: a node of the full SQL grammar into its copy in the core grammar, the sugar rewritten
-//! (see `grammar`). The grammar's own types get their impls from the `levels` attribute; the leaves
-//! both levels share and tygr's containers get theirs here.
+//! (see `grammar`). The grammar's own types get their impls from the `levels` attribute, each
+//! `#[sugar]` mark naming its rule in `query` or `stat`; the leaves both levels share and tygr's
+//! containers get theirs here.
+
+pub mod query;
 
 use either::Either;
 use tygr::{Hidden, NotFollowedBy, Prefix, Ranged, Raw, Suffix, Vec1, Wrap};
@@ -199,7 +202,7 @@ impl<T: Desugar> Desugar for Ranged<T> {
 impl<T: Desugar> Desugar for Src<T> {
     type Core = Src<T::Core>;
     fn desugar(&self) -> Self::Core {
-        Src::new(self.range(), self.node.desugar())
+        Src::new(self.range(), self.rewriting(|| self.node.desugar()))
     }
 }
 

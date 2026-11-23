@@ -13,6 +13,14 @@ pub struct VecSep<T, S> {
 }
 
 impl<T, S> VecSep<T, S> {
+    /// One item, no separator.
+    pub fn one(item: T) -> Self {
+        VecSep {
+            items: vec![item],
+            seps: Vec::new(),
+        }
+    }
+
     /// `(item, separator)` pairs, one per separator.
     pub fn into_item_sep(self) -> impl Iterator<Item = (T, S)> {
         self.items.into_iter().zip(self.seps)

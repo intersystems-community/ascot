@@ -1,7 +1,7 @@
 //! `Src<T>`: a node with the byte range of its source text, and the recorder that maps where
 //! each node prints to where it came from.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::{Deref, Range};
 
 use tygr::{Parse, Print, Ranged};
@@ -31,6 +31,21 @@ impl<T> Src<T> {
             node: f(self.node),
         }
     }
+
+    /// A node a rule synthesizes: it stands for the node being rewritten (see `rewriting`) and takes
+    /// its range.
+    pub fn synthesized(node: T) -> Self {
+        let (start, end) = REWRITING.get();
+        Src::new(start..end, node)
+    }
+
+    /// `f()`, during which `synthesized` nodes take `self`'s range.
+    pub fn rewriting<R>(&self, f: impl FnOnce() -> R) -> R {
+        let outer = REWRITING.replace((self.range.start, self.range.end));
+        let result = f();
+        REWRITING.set(outer);
+        result
+    }
 }
 
 impl<T> From<Ranged<T>> for Src<T> {
@@ -59,6 +74,7 @@ pub struct Mapping {
 
 thread_local! {
     static RECORDER: RefCell<Option<Vec<Mapping>>> = const { RefCell::new(None) };
+    static REWRITING: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
 }
 
 impl<T: Print> Print for Src<T> {

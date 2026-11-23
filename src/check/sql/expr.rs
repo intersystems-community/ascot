@@ -632,9 +632,9 @@ impl Walk for Cond {
                 pattern.walk(w);
                 escape.walk(w)
             }
-            Cond::In { lhs, spec, .. } => {
+            Cond::In { lhs, list, .. } => {
                 lhs.walk(w);
-                spec.walk(w)
+                list.walk(w)
             }
             Cond::InList { lhs, list_expr, .. } => {
                 lhs.walk(w);
@@ -665,15 +665,6 @@ impl Walk for ForCnd {
                 having.walk(w)
             }
             ForCnd::GroupOnly(_, _, group, _, _) => group.walk(w),
-        }
-    }
-}
-
-impl Walk for InSpec {
-    fn walk(&self, w: &mut Walker) {
-        match self {
-            InSpec::Query(query) => query.walk(w),
-            InSpec::Scalxes(scalxes) => scalxes.walk(w),
         }
     }
 }
