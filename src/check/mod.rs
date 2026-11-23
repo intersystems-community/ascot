@@ -2609,10 +2609,14 @@ impl CheckCommandInner for cos::SetArgument {
             }
         };
         if self.value.deref().type_unclear() {
+            let (label, padding_left) = match env.inlay_hints().type_annotation {
+                Some(bindings::TypeAnnotation::Colon) => (format!(": {}", ty), false),
+                _ => (format!("As {}", ty), true),
+            };
             env.hint(bindings::InlayHint {
                 position: env.position(self.target.end),
-                label: format!("As {}", ty),
-                padding_left: true,
+                label,
+                padding_left,
                 padding_right: true,
             });
         }

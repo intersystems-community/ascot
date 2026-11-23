@@ -236,6 +236,7 @@ pub struct WorkspaceStruct {
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
     pub(crate) style: Option<style::Styles>,
+    pub(crate) inlay_hints: bindings::InlayHintOptions,
     diagnostic_filter: diagnostic_filter::Filter,
     // %occErrors, resolved on first use: the error names a compile-time macro such as `$$$ERROR`
     // accepts in its arguments without any `Include`. Dropped whenever an include file changes.
@@ -1047,6 +1048,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         rtn_index: RefCell::new(HashMap::new()),
         iris,
         style: style.as_ref().map(style::Styles::new),
+        inlay_hints: bindings::InlayHintOptions::default(),
         diagnostic_filter: diagnostic_filter::Filter::default(),
         error_names: RefCell::new(None),
         iris_includes: RefCell::new(HashMap::new()),
@@ -1135,6 +1137,13 @@ impl bindings::GuestWorkspace for Workspace {
     fn set_style(&self, style: Option<Style>) -> Vec<String> {
         let mut this = self.borrow_mut();
         this.style = style.as_ref().map(style::Styles::new);
+        this.forget(false)
+    }
+
+    #[allow(async_fn_in_trait)]
+    fn set_inlay_hints(&self, options: bindings::InlayHintOptions) -> Vec<String> {
+        let mut this = self.borrow_mut();
+        this.inlay_hints = options;
         this.forget(false)
     }
 
@@ -2068,6 +2077,36 @@ mod tests {
         // Re-checking after an unrelated no-op read shouldn't change the result.
         assert_eq!(diagnostics_of(&uri), diagnostics);
         assert_eq!(workspace.inlay_hint(uri, bindings::Range::default()), hints);
+    }
+
+    #[test]
+    fn type_hint_spells_the_type_as_the_inlay_hint_options_say() {
+        let workspace = Workspace::new();
+        let uri = "Spelling.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Spelling {\nClassMethod Foo() As %Integer {\n set x = ..Bar()\n quit x\n}\nClassMethod Bar() As %Integer {\n quit 1\n}\n}\n".to_string(),
+        );
+        let type_hint = || {
+            workspace
+                .inlay_hint(uri.clone(), bindings::Range::default())
+                .into_iter()
+                .find(|h| h.label.contains("Integer"))
+                .map(|h| (h.label, h.padding_left, h.padding_right))
+        };
+        let spelled = |type_annotation| bindings::InlayHintOptions {
+            type_annotation: Some(type_annotation),
+        };
+        assert_eq!(type_hint(), Some(("As %Integer".to_string(), true, true)));
+        assert_eq!(
+            workspace.set_inlay_hints(spelled(bindings::TypeAnnotation::Colon)),
+            std::slice::from_ref(&uri)
+        );
+        assert_eq!(type_hint(), Some((": %Integer".to_string(), false, true)));
+        workspace.set_inlay_hints(spelled(bindings::TypeAnnotation::As));
+        assert_eq!(type_hint(), Some(("As %Integer".to_string(), true, true)));
+        workspace.set_inlay_hints(bindings::InlayHintOptions::default());
+        assert_eq!(type_hint(), Some(("As %Integer".to_string(), true, true)));
     }
 
     #[test]
