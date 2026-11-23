@@ -11,14 +11,45 @@ use crate::bindings::DiagnosticSeverity;
 use crate::check::TypeErrorKind;
 
 /// Every page by file name: `index.md`, then `<CODE>.md` per kind.
+// `<SELECT>` and `<ILLEGAL VALUE>` in code spans, any other `<` or `>` left as written.
+fn span_error_names(message: &str) -> String {
+    let mut out = String::with_capacity(message.len() + 4);
+    let mut rest = message;
+    while let Some(start) = rest.find('<') {
+        let after = &rest[start + 1..];
+        let name = after.find('>').map(|len| &after[..len]);
+        match name {
+            Some(name)
+                if !name.is_empty()
+                    && name.bytes().all(|b| {
+                        b.is_ascii_uppercase() || b.is_ascii_digit() || b == b' ' || b == b'_'
+                    }) =>
+            {
+                out.push_str(&rest[..start]);
+                out.push('`');
+                out.push_str(&rest[start..start + name.len() + 2]);
+                out.push('`');
+                rest = &after[name.len() + 1..];
+            }
+            _ => {
+                out.push_str(&rest[..=start]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 pub fn pages() -> Vec<(String, String)> {
-    // The message is a format string, which doubles a literal brace.
+    // The message is a format string, which doubles a literal brace. Markdown takes an IRIS
+    // error name such as `<SELECT>` for inline HTML and drops it, so it goes in a code span.
     let mut kinds: Vec<_> = (TypeErrorKind::REFERENCE.iter())
         .map(|(code, severity, message)| {
             (
                 *code,
                 severity,
-                message.replace("{{", "{").replace("}}", "}"),
+                span_error_names(&message.replace("{{", "{").replace("}}", "}")),
             )
         })
         .collect();

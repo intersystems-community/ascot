@@ -33,7 +33,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A5254](A5254.md) | Cannot inherit from final class '{cls}' |
 | [A5268](A5268.md) | {function} takes no by-reference argument |
 | [A5272](A5272.md) | Cannot change final {kind} '{name}' of {cls} |
-| [A5431](A5431.md) | A Caché Direct callback raises <_CALLBACK SYNTAX>: IRIS has no client to call |
+| [A5431](A5431.md) | A Caché Direct callback raises `<_CALLBACK SYNTAX>`: IRIS has no client to call |
 | [A5523](A5523.md) | Too many arguments: the callee takes {takes} |
 | [A5789](A5789.md) | CONTINUE is not within a loop |
 | [A5967](A5967.md) | {source} is incompatible with {target} |
@@ -46,11 +46,11 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A6866](A6866.md) | Cannot NEW the private variable '{name}' in a procedure block |
 | [A7095](A7095.md) | This value is undefined{expr} |
 | [A7139](A7139.md) | Only $CASE's last argument may omit the value before its colon |
-| [A7217](A7217.md) | An offset cannot enter the procedure block at label '{label}' (IRIS: <NOLINE>) |
+| [A7217](A7217.md) | An offset cannot enter the procedure block at label '{label}' (IRIS: `<NOLINE>`) |
 | [A7340](A7340.md) | Field '{field}' not found in the applicable tables ({tables}); the statement gets SQLCODE -29 when it runs |
 | [A7342](A7342.md) | Argument {position} of {function} can't be left empty |
 | [A7461](A7461.md) | No superclass of {cls} has a method '{method}' for ##super to call |
-| [A7604](A7604.md) | Label '{label}' has no formal argument list, so $$ cannot call it (IRIS: <PARAMETER>) |
+| [A7604](A7604.md) | Label '{label}' has no formal argument list, so $$ cannot call it (IRIS: `<PARAMETER>`) |
 | [A7831](A7831.md) | Cannot find include file '{name}' in the workspace or on the IRIS instance |
 | [A7895](A7895.md) | '{format}' is not a valid $FNUMBER format: {reason} |
 | [A8061](A8061.md) | Cannot find class '{cls}' in the workspace or on the IRIS instance |
@@ -71,7 +71,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A1368](A1368.md) | Not in a class context; this relies on `$this` being set when it runs |
 | [A1817](A1817.md) | Variable '{name}' is already NEW'd; this NEW discards its current value |
 | [A1841](A1841.md) | Method '{name}' overrides {cls}'s {difference} |
-| [A3236](A3236.md) | $CASE without a default raises <ILLEGAL VALUE> when no case matches |
+| [A3236](A3236.md) | $CASE without a default raises `<ILLEGAL VALUE>` when no case matches |
 | [A3303](A3303.md) | Cannot find routine '{routine}' in the workspace; there is no IRIS environment to check against |
 | [A3372](A3372.md) | '{name}' is not a parameter of {class}, the type of {of}{hint} |
 | [A3717](A3717.md) | Class '{name}' is also declared in {other_uri} |
@@ -98,7 +98,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A8317](A8317.md) | '{meta_type}' is not a recognized parameter type; available: {available} |
 | [A8456](A8456.md) | This condition is always {value} |
 | [A8997](A8997.md) | Returns a '{actual}' where no return type is declared |
-| [A9241](A9241.md) | $SELECT without a default raises <SELECT> when no condition holds |
+| [A9241](A9241.md) | $SELECT without a default raises `<SELECT>` when no condition holds |
 | [A9421](A9421.md) | {value} is a number here, implicitly converted to the string "{value}" |
 | [S2839](S2839.md) | {kind} `{found}` should be written `{expected}` |
 | [S3627](S3627.md) | Put {wanted} before `}` |
@@ -138,7 +138,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | Code | Message |
 | --- | --- |
 | [A1765](A1765.md) | A $ETRAP that only jumps to a label is what `Set $ZTrap = "{label}"` does; $ZTRAP is scoped to this frame, where $ETRAP is inherited by callees |
-| [A5780](A5780.md) | ZQUIT unwinds here only because this procedure block has no private variables; with any, it fails with <COMMAND> |
+| [A5780](A5780.md) | ZQUIT unwinds here only because this procedure block has no private variables; with any, it fails with `<COMMAND>` |
 | [A5847](A5847.md) | {call} is not documented for IRIS; $ZUTIL was superseded by class methods and special variables |
 | [A7762](A7762.md) | '{name}' is never read before it is assigned; `Output` fits better than `ByRef` |
 | [A7781](A7781.md) | '{name}' is read before it is assigned; `ByRef` fits better than `Output` |
