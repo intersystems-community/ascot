@@ -170,11 +170,11 @@ impl Walker<'_> {
         self.frames.push(frame);
     }
 
-    fn table(&mut self, name: Option<Name>, alias: Option<&SQLTableAlias>) {
+    fn table(&mut self, name: Option<Name>, alias: Option<&Alias>) {
         if self.unchecked {
             return;
         }
-        let alias = alias.map(|(_, _, ident)| text(&ident.0));
+        let alias = alias.map(|alias| text(&alias.name().0));
         let columns = match (&name, self.check) {
             (Some(name), Some(check)) => resolve::table(check, &self.frames, name),
             _ => None,

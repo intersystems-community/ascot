@@ -107,8 +107,8 @@ impl Walk for SelectItem {
     fn walk(&self, w: &mut Walker) {
         if let SelectItem::Expr { expr, alias } = self {
             expr.walk(w);
-            if let Some((_, _, alias)) = alias {
-                w.alias(alias)
+            if let Some(alias) = alias {
+                w.alias(alias.name())
             }
         }
     }
@@ -122,7 +122,9 @@ impl Walk for FromClause {
 
 impl Walk for Tables {
     fn walk(&self, w: &mut Walker) {
-        self.items.walk(w)
+        for tref in self.iter() {
+            tref.walk(w)
+        }
     }
 }
 

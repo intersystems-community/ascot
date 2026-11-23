@@ -1729,23 +1729,31 @@ pub struct SelectList(pub VecSep<Src<SelectItem>, ArgSep>);
 #[tygr(name = "select item")]
 pub enum SelectItem {
     Star(StringEq!("*")),
-    Expr {
-        expr: Scalx,
-        alias: Option<(
-            Space,
-            Option<(StringEqCI!("AS"), Space)>,
-            SQLIdentNonKeyword,
-        )>,
+    Expr { expr: Scalx, alias: Option<Alias> },
+}
+
+// The blank stays inside the alias, so that a reference without one consumes nothing after it.
+#[derive(Grammar)]
+pub enum Alias {
+    As {
+        sp: Space,
+        as_kw: StringEqCI!("AS"),
+        sp2: Space,
+        name: SQLIdentNonKeyword,
+    },
+    Bare {
+        sp: Space,
+        name: SQLIdentNonKeyword,
     },
 }
 
-// The Space must be inside the Option to prevent partial consumption
-
-pub type SQLTableAlias = (
-    Space,
-    Option<(StringEqCI!("AS"), Space)>,
-    SQLIdentNonKeyword,
-);
+impl Alias {
+    pub fn name(&self) -> &SQLIdentNonKeyword {
+        match self {
+            Alias::As { name, .. } | Alias::Bare { name, .. } => name,
+        }
+    }
+}
 
 pub type Into = Prefix<(StringEqCI!("INTO"), Space), HostList>;
 
@@ -1832,14 +1840,13 @@ pub enum IndexSpec {
 #[derive(Grammar)]
 #[tygr(name = "tables")]
 pub struct Tables {
-    content: VecSep<Tref, ArgSep>,
+    pub first: Tref,
+    pub rest: Vec<(ArgSep, Tref)>,
 }
 
-impl std::ops::Deref for Tables {
-    type Target = VecSep<Tref, ArgSep>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.content
+impl Tables {
+    pub fn iter(&self) -> impl Iterator<Item = &Tref> {
+        std::iter::once(&self.first).chain(self.rest.iter().map(|(_, tref)| tref))
     }
 }
 
@@ -1914,20 +1921,20 @@ pub enum JSpec {
 pub enum Frmit {
     JSONTable {
         json_table: JSONTable,
-        alias: Option<SQLTableAlias>,
+        alias: Option<Alias>,
     },
     TVF {
         function: TVF,
-        alias: Option<SQLTableAlias>,
+        alias: Option<Alias>,
     },
     Table {
         name: Table,
-        alias: Option<SQLTableAlias>,
+        alias: Option<Alias>,
     },
     Query {
         lateral: Option<(StringEqCI!("LATERAL"), Space)>,
         query: SQLSubquery,
-        alias: Option<SQLTableAlias>,
+        alias: Option<Alias>,
     },
     JTab {
         open: (StringEq!("("), Space),
@@ -2129,11 +2136,11 @@ pub enum InsertOption {
 pub enum IUDTarget {
     Table {
         name: Table,
-        alias: Option<SQLTableAlias>,
+        alias: Option<Alias>,
     },
     Subquery {
         query: SQLSubquery,
-        alias: Option<SQLTableAlias>,
+        alias: Option<Alias>,
     },
 }
 
