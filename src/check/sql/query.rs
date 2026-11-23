@@ -140,7 +140,9 @@ impl Walk for Tref {
 impl Walk for JTab {
     fn walk(&self, w: &mut Walker) {
         self.formit.walk(w);
-        self.joins.walk(w)
+        for (_, join) in &self.joins {
+            join.walk(w)
+        }
     }
 }
 

@@ -147,7 +147,6 @@ pub enum Term {
     Null(StringEqCI!("NULL")),
 }
 
-// `%TRUNCATE(x, n)`: a %-string operator called with its truncation length.
 #[derive(Grammar)]
 #[tygr(name = "%string operation")]
 pub struct StringOperation {
@@ -1157,7 +1156,8 @@ pub enum Cond {
         not: Option<(StringEqCI!("NOT"), Space)>,
         between_kw: (StringEqCI!("BETWEEN"), Space),
         lower: Scalx,
-        upper: AndClause<Scalx>,
+        and_kw: (Space, StringEqCI!("AND"), Space),
+        upper: Scalx,
     },
     Like {
         noindex: NoIndex,
@@ -1268,7 +1268,6 @@ impl Parse for Cond {
     }
 }
 
-// The parse side of `Cond`, which its conversion folds away.
 #[doc(hidden)]
 #[derive(Grammar)]
 #[tygr(inline)]
@@ -1414,6 +1413,7 @@ impl From<CondParse> for Cond {
                     not,
                     between_kw,
                     lower,
+                    and_kw,
                     upper,
                 } => Cond::Between {
                     noindex,
@@ -1422,6 +1422,7 @@ impl From<CondParse> for Cond {
                     not,
                     between_kw,
                     lower,
+                    and_kw,
                     upper,
                 },
                 Comparison::Like {
@@ -1585,7 +1586,8 @@ pub enum Comparison {
         not: Option<(StringEqCI!("NOT"), Space)>,
         between_kw: (StringEqCI!("BETWEEN"), Space),
         lower: Scalx,
-        upper: AndClause<Scalx>,
+        and_kw: (Space, StringEqCI!("AND"), Space),
+        upper: Scalx,
     },
     Like {
         not: Option<(StringEqCI!("NOT"), Space)>,
@@ -1892,29 +1894,23 @@ pub enum Tref {
 #[tygr(name = "jtab")]
 pub struct JTab {
     pub formit: Src<Frmit>,
-    pub joins: Vec<Src<Join>>,
+    pub joins: Vec<(Space, Src<Join>)>,
 }
 
 #[derive(Grammar)]
 pub enum Join {
     Cross {
-        cross_kw: (
-            Space,
-            StringEqCI!("CROSS"),
-            Space,
-            StringEqCI!("JOIN"),
-            Space,
-        ),
+        cross_kw: (StringEqCI!("CROSS"), Space, StringEqCI!("JOIN"), Space),
         table: Box<JTab>,
     },
     Natural {
-        natural_kw: (Space, StringEqCI!("NATURAL"), Space),
+        natural_kw: (StringEqCI!("NATURAL"), Space),
         join_type: JOp,
         space: Space,
         table: Box<JTab>,
     },
     Qualified {
-        join_type: (Space, JOp),
+        join_type: JOp,
         space: Space,
         table: Box<JTab>,
         spec: JSpec,

@@ -118,7 +118,7 @@ mod tests {
                 } => {
                     assert_eq!(
                         (lhs.print(), lower.print(), upper.print()),
-                        ("a".into(), "1".into(), " AND 2".into())
+                        ("a".into(), "1".into(), "2".into())
                     );
                     "between"
                 }
