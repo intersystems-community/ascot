@@ -26,9 +26,11 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
   hover.
 - **Inlay Hints**: inferred types, argument names, and parameter default
   values shown inline.
-- **Formatting**: `ascot format`, the LSP formatting request and the MCP
-  `format` tool bring procedure blocks and method bodies to the configured
-  style: keyword spelling and brace placement.
+- **Formatting**: procedure blocks and method bodies brought to the configured
+  style, keyword spelling and brace placement, from every host: `ascot format`
+  on the CLI, `ascot::format` in the library, the WIT `format` and
+  `code-actions` exports, LSP formatting and code actions (a quick fix per
+  diagnostic the formatter would rewrite), and the MCP `format` tool.
 
 ## Installation
 

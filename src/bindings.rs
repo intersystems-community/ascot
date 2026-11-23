@@ -30,6 +30,8 @@ mod wit_bind {
             "iris:ascot/common/keyword-case": [#[serde(rename_all = "kebab-case")]],
             "iris:ascot/common/and-operator": [#[serde(rename_all = "kebab-case")]],
             "iris:ascot/common/text-edit": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/workspace-edit": [#[serde(rename_all = "camelCase")]],
+            "iris:ascot/common/code-action": [#[serde(rename_all = "camelCase")]],
         },
     });
 

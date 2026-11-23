@@ -1125,6 +1125,35 @@ impl bindings::GuestWorkspace for Workspace {
         Some(edits.into_iter().map(|edit| edit.text_edit(&olc)).collect())
     }
 
+    #[allow(async_fn_in_trait)]
+    fn code_actions(&self, uri: String, range: bindings::Range) -> Vec<bindings::CodeAction> {
+        let this = self.borrow();
+        let Some((text, style)) = this.doc_text(&uri).zip(this.style.as_ref()) else {
+            return vec![];
+        };
+        // No formatting options come with a code action request: a tab, as `ascot format` defaults.
+        let fixes = format::fixes(&text, &uri, style, "\t").unwrap_or_default();
+        let olc = OLC::new(&text);
+        let (start, end) = (olc.offset(range.start), olc.offset(range.end));
+        let filter = &this.diagnostic_filter;
+        fixes
+            .into_iter()
+            .filter(|fix| fix.range.start <= end && start <= fix.range.end)
+            .filter_map(|mut fix| {
+                let edit = fix.edit.take()?.text_edit(&olc);
+                let diagnostic = filter.apply(fix.diagnostic(&olc))?;
+                Some(bindings::CodeAction {
+                    title: diagnostic.message.clone(),
+                    kind: Some("quickfix".to_string()),
+                    diagnostics: vec![diagnostic],
+                    edit: Some(bindings::WorkspaceEdit {
+                        changes: vec![(uri.clone(), vec![edit])],
+                    }),
+                })
+            })
+            .collect()
+    }
+
     // Where the reference at `position` is declared, if any — one of the go-to-definition
     // edges discovered as a byproduct of the last check. Covers class references
     // (`##class(Name)`, `x.Foo`, `x.Foo()`), instance members (`i%Foo`), self-references
@@ -3045,6 +3074,59 @@ mod tests {
                 "7:1 Command keyword `h` should be written `Halt`",
             ]
         );
+    }
+
+    #[test]
+    fn a_style_finding_in_a_method_body_is_a_quick_fix() {
+        let style = style::parse(r#"{"command": {"case": "pascal"}}"#).unwrap();
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
+        let uri = "Fix.cls".to_string();
+        let text = "Class Test.Fix {\nClassMethod Foo() {\n set x = 1\n}\n}\n";
+        workspace.open(uri.clone(), text.to_string());
+        let at = |line, character| bindings::Range::point((line, character).into());
+        let actions = workspace.code_actions(uri.clone(), at(2, 2));
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        let action = &actions[0];
+        assert_eq!(action.kind.as_deref(), Some("quickfix"));
+        assert_eq!(action.diagnostics.len(), 1);
+        assert_eq!(action.diagnostics[0].code, "S2839");
+        assert_eq!(action.title, action.diagnostics[0].message);
+        let changes = &action.edit.as_ref().unwrap().changes;
+        assert_eq!(changes.len(), 1);
+        let (edited, edits) = &changes[0];
+        assert_eq!((edited.as_str(), edits.len()), (uri.as_str(), 1));
+        let olc = OLC::new(text);
+        let (start, end) = (
+            olc.offset(edits[0].range.start),
+            olc.offset(edits[0].range.end),
+        );
+        assert_eq!(
+            (&text[start..end], edits[0].new_text.as_str()),
+            ("set", "Set")
+        );
+        let options = bindings::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: true,
+        };
+        assert_eq!(workspace.format(uri.clone(), options).as_ref(), Some(edits));
+        assert!(workspace.code_actions(uri, at(1, 0)).is_empty());
+    }
+
+    #[test]
+    fn a_style_finding_outside_a_procedure_block_has_no_quick_fix() {
+        let style = style::parse(r#"{"command": {"case": "pascal"}}"#).unwrap();
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
+        let uri = "Plain.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE Plain\nf\n set x = 1\n Quit\n".to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri.clone());
+        let found = diagnostics.iter().find(|d| d.code == "S2839");
+        let found = found.unwrap_or_else(|| panic!("{diagnostics:?}"));
+        assert!(workspace.code_actions(uri, found.range).is_empty());
     }
 
     #[test]

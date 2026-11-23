@@ -17,15 +17,29 @@ interface common {
         range: range,
     }
 
-    // LSP's TextEdit and FormattingOptions.
+    // LSP's TextEdit.
     record text-edit {
         range: range,
         new-text: string,
     }
 
+    // LSP's FormattingOptions.
     record formatting-options {
         tab-size: u32,
         insert-spaces: bool,
+    }
+
+    // LSP's WorkspaceEdit, its `changes` map as (uri, edits) pairs.
+    record workspace-edit {
+        changes: list<tuple<string, list<text-edit>>>,
+    }
+
+    // LSP's CodeAction.
+    record code-action {
+        title: string,
+        kind: option<string>,
+        diagnostics: list<diagnostic>,
+        edit: option<workspace-edit>,
     }
 
     record diagnostic-related-information {
@@ -656,7 +670,7 @@ interface exported {
         member-info, class-info, position,
         diagnostic, inlay-hint, range, location,
         document-symbol, workspace-symbol, style,
-        text-edit, formatting-options,
+        text-edit, formatting-options, workspace-edit, code-action,
     };
     use imported.{env};
 
@@ -689,6 +703,10 @@ interface exported {
         // The edits that bring `uri`'s procedure blocks and method bodies to the style, as `ascot
         // format` writes them. None when `uri` is not open or doesn't parse; empty with no style.
         format: func(uri: string, options: formatting-options) -> option<list<text-edit>>;
+        // A quick fix for each style finding in `range` that `format` would fix (an empty range
+        // picks the finding at its position): the finding's diagnostic and its one edit, with a
+        // tab indenting a line it adds. Empty when `uri` is not open, doesn't parse or has no style.
+        code-actions: func(uri: string, range: range) -> list<code-action>;
     }
 }
 

@@ -118,13 +118,13 @@ pub(crate) fn findings_cls(
     findings
 }
 
-/// The edits that bring the procedure blocks and method bodies of `text`, the document at `uri`,
-/// to `style`: in order and disjoint. `indent` is one level of indentation, for a line an edit
-/// adds. `None` when the document doesn't parse.
-pub fn edits(text: &str, uri: &str, style: &Styles, indent: &str) -> Option<Vec<Edit>> {
+/// The findings of `text`, the document at `uri`, that the formatter fixes: those with an edit,
+/// inside a procedure block or method body, in order and disjoint. `indent` is one level of
+/// indentation, for a line an edit adds. `None` when the document doesn't parse.
+pub fn fixes(text: &str, uri: &str, style: &Styles, indent: &str) -> Option<Vec<Finding>> {
     // A line at column 0 is a label: an added line is always indented.
     let indent = Some(indent).filter(|i| !i.is_empty()).unwrap_or("\t");
-    let findings = match DocKind::from_uri(uri)? {
+    let mut findings = match DocKind::from_uri(uri)? {
         DocKind::Cls => {
             let cls = ClassDetails::try_from(text).ok()?;
             findings_cls(&cls, text, &OLC::new(text), style, Some(indent))
@@ -135,10 +135,20 @@ pub fn edits(text: &str, uri: &str, style: &Styles, indent: &str) -> Option<Vec<
         }
         DocKind::Inc => vec![],
     };
-    let mut edits: Vec<Edit> = findings.into_iter().filter_map(|f| f.edit).collect();
-    edits.sort_by_key(|edit| (edit.start, edit.end));
-    edits.dedup_by(|next, kept| next.start < kept.end);
-    Some(edits)
+    findings.retain(|f| f.edit.is_some());
+    findings.sort_by_key(|f| f.edit.as_ref().map(|e| (e.start, e.end)));
+    findings.dedup_by(|next, kept| match (&next.edit, &kept.edit) {
+        (Some(next), Some(kept)) => next.start < kept.end,
+        _ => false,
+    });
+    Some(findings)
+}
+
+/// The edits that bring the procedure blocks and method bodies of `text`, the document at `uri`,
+/// to `style`: those of `fixes`. `None` when the document doesn't parse.
+pub fn edits(text: &str, uri: &str, style: &Styles, indent: &str) -> Option<Vec<Edit>> {
+    let fixes = fixes(text, uri, style, indent)?;
+    Some(fixes.into_iter().filter_map(|f| f.edit).collect())
 }
 
 /// `text` with `edits`, as `edits` returns them, applied.
