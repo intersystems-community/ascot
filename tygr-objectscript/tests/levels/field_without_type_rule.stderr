@@ -2,4 +2,4 @@ error: a sugar field needs a rule on the type: `#[sugar(into = EXPR)]`
   --> tests/levels/field_without_type_rule.rs:16:9
    |
 16 |         #[sugar]
-   |         ^
+   |         ^^^^^^^^

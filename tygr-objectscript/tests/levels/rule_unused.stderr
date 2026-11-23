@@ -2,4 +2,4 @@ error: unused rule: the type's own `into` converts the whole value
   --> tests/levels/rule_unused.rs:16:9
    |
 16 |         #[sugar(into = |kw, expr| expr.desugar())]
-   |         ^
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

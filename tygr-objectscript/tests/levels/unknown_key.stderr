@@ -1,5 +1,5 @@
 error: unknown key: `#[sugar]` takes `into = EXPR` or nothing
-  --> tests/levels/unknown_key.rs:15:17
+  --> tests/levels/unknown_key.rs:15:9
    |
 15 |         #[sugar(from = |kw, expr| expr.desugar())]
-   |                 ^^^^
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

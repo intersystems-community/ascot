@@ -54,7 +54,8 @@
 //! the module's own items do: `super::` is the module's parent, `super::core::T` a core type. An
 //! unmarked struct or enum converts field by field and variant by variant through `.desugar()`,
 //! a unit variant into the same unit variant. A generic type's impl bounds each type parameter
-//! `T` by the trait, repeats `T`'s bounds for `T::Core`, and has `Core = core::Foo<T::Core>`.
+//! `T` by the trait, repeats `T`'s bounds for `T::Core` (a `?Sized` one excepted, which a where
+//! clause cannot hold), and has `Core = core::Foo<T::Core>`.
 //!
 //! Types from outside the module need impls of their own: blanket ones for tygr's containers,
 //! identity ones for the leaves both levels share. A literal (`StringEq!`, `StringEqCI!`) cannot
@@ -81,11 +82,10 @@
 use std::collections::BTreeSet;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::spanned::Spanned;
 use syn::visit::Visit;
 use syn::visit_mut::{self, VisitMut};
 use syn::{
@@ -178,7 +178,7 @@ enum Mark {
 
 struct Marked {
     mark: Mark,
-    span: Span,
+    attr: Attribute,
 }
 
 fn take_mark(attrs: &mut Vec<Attribute>) -> syn::Result<Option<Marked>> {
@@ -191,13 +191,12 @@ fn take_mark(attrs: &mut Vec<Attribute>) -> syn::Result<Option<Marked>> {
         if marked.is_some() {
             return Err(Error::new_spanned(attr, "one `#[sugar]` per item"));
         }
-        marked = Some(parse_mark(&attr)?);
+        marked = Some(parse_mark(attr)?);
     }
     Ok(marked)
 }
 
-fn parse_mark(attr: &Attribute) -> syn::Result<Marked> {
-    let span = attr.span();
+fn parse_mark(attr: Attribute) -> syn::Result<Marked> {
     let mark = match &attr.meta {
         Meta::Path(_) => Mark::Bare,
         Meta::List(_) => {
@@ -205,20 +204,20 @@ fn parse_mark(attr: &Attribute) -> syn::Result<Marked> {
             attr.parse_nested_meta(|meta| {
                 if !meta.path.is_ident("into") {
                     let message = "unknown key: `#[sugar]` takes `into = EXPR` or nothing";
-                    return Err(meta.error(message));
+                    return Err(Error::new_spanned(&attr, message));
                 }
                 if into.is_some() {
-                    return Err(meta.error("`into` given twice"));
+                    return Err(Error::new_spanned(&attr, "`into` given twice"));
                 }
                 into = Some(meta.value()?.parse()?);
                 Ok(())
             })?;
             into.map(Mark::Into)
-                .ok_or_else(|| Error::new(span, FORMS))?
+                .ok_or_else(|| Error::new_spanned(&attr, FORMS))?
         }
-        Meta::NameValue(_) => return Err(Error::new(span, FORMS)),
+        Meta::NameValue(_) => return Err(Error::new_spanned(&attr, FORMS)),
     };
-    Ok(Marked { mark, span })
+    Ok(Marked { mark, attr })
 }
 
 fn ensure_clone(attrs: &mut Vec<Attribute>) {
@@ -382,10 +381,10 @@ impl Output<'_> {
                     }) => {}
                     Some(Marked {
                         mark: Mark::Into(_),
-                        span,
+                        attr,
                     }) => {
                         let message = "`into` goes on a struct, an enum or a variant";
-                        return Err(Error::new(span, message));
+                        return Err(Error::new_spanned(attr, message));
                     }
                 }
                 Ok(())
@@ -447,20 +446,20 @@ impl Output<'_> {
                     }
                 }
                 (
-                    Some(Marked { span, .. }),
+                    Some(Marked { attr, .. }),
                     Some(Marked {
                         mark: Mark::Bare, ..
                     }),
-                ) => return Err(Error::new(span, ABSENT)),
+                ) => return Err(Error::new_spanned(attr, ABSENT)),
                 (
                     Some(Marked {
                         mark: Mark::Bare,
-                        span,
+                        attr,
                     }),
                     None,
                 ) => {
                     let message = "a sugar variant needs a rule: `#[sugar(into = EXPR)]` on the variant, or on the type";
-                    return Err(Error::new(span, message));
+                    return Err(Error::new_spanned(attr, message));
                 }
                 (
                     Some(Marked {
@@ -471,12 +470,12 @@ impl Output<'_> {
                 (
                     Some(Marked {
                         mark: Mark::Into(_),
-                        span,
+                        attr,
                     }),
                     Some(_),
                 ) => {
                     let message = "unused rule: the type's own `into` converts the whole value";
-                    return Err(Error::new(span, message));
+                    return Err(Error::new_spanned(attr, message));
                 }
                 (
                     Some(Marked {
@@ -529,24 +528,24 @@ impl Output<'_> {
                 None => {}
                 Some(Marked {
                     mark: Mark::Into(_),
-                    span,
+                    attr,
                 }) => {
                     let message = "`into` goes on a variant or on the type, not on a field";
-                    return Err(Error::new(span, message));
+                    return Err(Error::new_spanned(attr, message));
                 }
                 Some(Marked {
                     mark: Mark::Bare,
-                    span,
+                    attr,
                 }) => match type_mark {
                     Some(Marked {
                         mark: Mark::Into(_),
                         ..
                     }) => dropped.push(i),
-                    Some(_) => return Err(Error::new(span, ABSENT)),
+                    Some(_) => return Err(Error::new_spanned(attr, ABSENT)),
                     None => {
                         let message =
                             "a sugar field needs a rule on the type: `#[sugar(into = EXPR)]`";
-                        return Err(Error::new(span, message));
+                        return Err(Error::new_spanned(attr, message));
                     }
                 },
             }

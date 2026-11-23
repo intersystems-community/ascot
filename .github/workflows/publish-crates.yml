@@ -16,8 +16,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # `tygr-objectscript` is a path dependency of `ascot`; `--workspace` publishes
-      # it first and waits for the index before publishing `ascot`.
+      # `tygr-objectscript-macros` is a path dependency of `tygr-objectscript`, which is one of
+      # `ascot`; `--workspace` publishes them in that order and waits for the index between each.
       - name: Publish
         run: cargo publish --workspace
         env:
