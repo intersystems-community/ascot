@@ -691,7 +691,6 @@ interface exported {
         member-info, class-info, position,
         diagnostic, inlay-hint, range, location, location-link,
         document-symbol, workspace-symbol, style, inlay-hint-options,
-        document-symbol, workspace-symbol, style,
         text-edit, formatting-options, workspace-edit, code-action,
     };
     use imported.{env};
