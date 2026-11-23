@@ -1881,6 +1881,26 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Only $CASE's last argument may omit the value before its colon"]
     CaseDefaultNotLast,
+    /// The `$CASE` has only its target, with no `case:value` arm to match it against and no
+    /// `:default`. IRIS refuses to compile it (`#1009 Expected comma`), so its value never exists
+    /// and nothing is reported where it is used. Add the `case:value` arms, with a `:default` for
+    /// the values they leave out.
+    ///
+    /// ```objectscript
+    /// Class Demo.CaseWithoutArms
+    /// {
+    ///
+    /// ClassMethod Name(size As %Integer) As %String
+    /// {
+    ///     Quit $CASE(size) //! A2733
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A2733"]
+    #[severity = Error]
+    #[message = "$CASE needs a case:value arm or a :default after its target"]
+    CaseWithoutArms,
     /// The `$CASE` has no `:default` arm, and its target can hold a value no arm lists. IRIS
     /// compiles it and raises `<ILLEGAL VALUE>` when it runs with such a target. The value of a
     /// `$CASE` is never undefined, so nothing is reported where it is used. Add a trailing
