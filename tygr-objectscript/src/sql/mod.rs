@@ -12,7 +12,7 @@ pub use src::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tygr::Parse;
+    use tygr::{Parse, Print};
 
     fn all_ok(cases: &[&str]) {
         let failed: Vec<_> = cases.iter().filter(|c| SQL::parse(c).is_err()).collect();
@@ -35,6 +35,115 @@ mod tests {
         ] {
             assert!(origins.contains(&node), "{node} is not among {origins:?}");
         }
+    }
+
+    // The first query of `text`, for the shape tests.
+    fn selex(text: &str) -> Src<Selex> {
+        let sql = SQL::parse(text).unwrap();
+        let Stat::Selct(stat) = sql.stat.node else {
+            panic!("{text}")
+        };
+        let Some(QTerm::Selex(selex)) = stat.body.query.0.items.into_iter().next() else {
+            panic!("{text}")
+        };
+        selex
+    }
+
+    #[test]
+    fn terms_take_their_core_shapes() {
+        let shapes: Vec<&str> = selex(
+            "SELECT CURRENT_DATE, USER, SYSDATE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP(3), USERNAME, \
+             SYSDATE(), -a, %SQLUPPER a, %TRUNCATE(a, 3), CAST(a AS INT), TIMESTAMPADD(SQL_TSI_DAY, 1, d), \
+             TIMESTAMPADD(:unit, 1, d), CONVERT(a, SQL_VARCHAR), CONVERT(VARCHAR, a), f(a) FROM t",
+        )
+        .node
+        .selst
+        .select_list
+        .0
+        .items
+        .iter()
+        .map(|item| match &item.node {
+            SelectItem::Expr {
+                expr: Scalx::Legacy(terms),
+                ..
+            } => match &terms.items[0].node {
+                Term::Builtin(_) => "builtin",
+                Term::ScalarFunction(_) => "function",
+                Term::Call(_) => "call",
+                Term::Niladic(..) => "niladic",
+                Term::Column(_) => "column",
+                Term::Unary { .. } => "unary",
+                Term::PercentUnary { .. } => "percent",
+                Term::StringOperation(_) => "string operation",
+                _ => "other",
+            },
+            SelectItem::Star(_) => "*",
+        })
+        .collect();
+        assert_eq!(
+            shapes,
+            [
+                "niladic",
+                "niladic",
+                "niladic",
+                "niladic",
+                "function",
+                "column",
+                "call",
+                "unary",
+                "percent",
+                "string operation",
+                "builtin",
+                "builtin",
+                "call",
+                "builtin",
+                "function",
+                "call",
+            ]
+        );
+    }
+
+    #[test]
+    fn conditions_hold_their_operands() {
+        let selex = selex(
+            "SELECT a FROM t WHERE a BETWEEN 1 AND 2 AND b IS NOT NULL AND c = ANY (SELECT c FROM u) \
+             AND d NOT IN (1, 2) AND %NOINDEX e > 3",
+        );
+        let shapes: Vec<&str> = selex.node.where_clause.as_ref().unwrap().prefixed.0.items[0]
+            .0
+            .items
+            .iter()
+            .map(|cond| match &cond.node {
+                Cond::Between {
+                    lhs, lower, upper, ..
+                } => {
+                    assert_eq!(
+                        (lhs.print(), lower.print(), upper.print()),
+                        ("a".into(), "1".into(), " AND 2".into())
+                    );
+                    "between"
+                }
+                Cond::IsNull { not: Some(_), .. } => "is not null",
+                Cond::Quantified {
+                    quantifier: Quantifier::Any(_),
+                    ..
+                } => "quantified",
+                Cond::In { not: Some(_), .. } => "not in",
+                Cond::Compare {
+                    noindex: Some(_),
+                    rhs,
+                    ..
+                } => {
+                    assert_eq!(rhs.print(), "3");
+                    "compare"
+                }
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            ["between", "is not null", "quantified", "not in", "compare"]
+        );
     }
 
     #[test]

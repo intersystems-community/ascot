@@ -118,6 +118,7 @@ pub enum Term {
         Option<crate::cos::MacroArgList>,
     ),
     Literal(Literal),
+    Builtin(Box<Builtin>),
     ScalarFunction(Box<ScalarFunction>),
     Window(Box<Window>),
     Agg(Box<Agg>),
@@ -138,13 +139,12 @@ pub enum Term {
     OdbcEscape(Box<ODBCEscape>),
     Scalx(Parenthesized<Box<Scalx>>),
     Query(SQLSubquery),
-    UserDefinedFunction(UserDefinedFunction),
+    Call(Call),
+    Niladic(Niladic, NotFollowedBy<IdentifierPart>),
     Column(Colmn),
     SpecialSystemVariable(SpecialSystemVariable),
     HostVar(HostVar),
     Null(StringEqCI!("NULL")),
-    CurrentDate(StringEqCI!("CURRENT_DATE")),
-    User(StringEqCI!("USER")),
 }
 
 // `%TRUNCATE(x, n)`: a %-string operator called with its truncation length.
@@ -199,11 +199,23 @@ pub enum SpecialSystemVariable {
     ZV(StringEqCI!("$ZV")),
 }
 
+/// A function called by name, built-in or user-defined.
 #[derive(Grammar)]
-#[tygr(name = "user defined function")]
-pub struct UserDefinedFunction {
+#[tygr(name = "call")]
+pub struct Call {
     pub name: SQLFunctionName,
     pub args: ArgsN,
+}
+
+/// A niladic function, which stands without parentheses.
+#[derive(Grammar)]
+#[tygr(name = "niladic")]
+pub enum Niladic {
+    CurrentDate(StringEqCI!("CURRENT_DATE")),
+    CurrentTimestamp(StringEqCI!("CURRENT_TIMESTAMP")),
+    CurrentTime(StringEqCI!("CURRENT_TIME")),
+    SysDate(StringEqCI!("SYSDATE")),
+    User(StringEqCI!("USER")),
 }
 
 #[derive(Grammar)]
@@ -387,6 +399,35 @@ pub type ArgsN =
 pub type Args1Plus =
     Wrap<(Space, StringEq!("("), Space), VecSep<Scalx, ArgSep>, (Space, StringEq!(")"))>;
 
+/// The functions with a syntax of their own, which a call by name cannot spell.
+#[derive(Grammar)]
+#[tygr(name = "builtin")]
+pub enum Builtin {
+    XmlConcat(XMLConcat),
+    XmlElement(XMLElement),
+    XmlForest(XMLForest),
+    Cast(StringEqCI!("CAST"), Box<SQLCastExpression>),
+    Convert(StringEqCI!("CONVERT"), ArgsRR<Scalx, SQLConvertFunc>),
+    JSONArray(StringEqCI!("JSON_ARRAY"), SQLJSONArrayArgs),
+    JSONObject(StringEqCI!("JSON_OBJECT"), SQLJSONObjectArgs),
+    Predict(StringEqCI!("PREDICT"), SQLPredictArgs),
+    Probability(StringEqCI!("PROBABILITY"), SQLProbabilityArgs),
+    SearchIndex(StringEqCI!("SEARCH_INDEX"), SQLSearchIndexArgs),
+    TimestampAdd(
+        StringEqCI!("TIMESTAMPADD"),
+        ArgsRRR<OptionallyQuoted<TSAddInterval>>,
+    ),
+    TimestampDiff(
+        StringEqCI!("TIMESTAMPDIFF"),
+        ArgsRRR<OptionallyQuoted<TSDiffInterval>>,
+    ),
+    ToVector(
+        StringEqCI!("TO_VECTOR"),
+        ArgsROO<Scalx, VectorDatyp, Integer>,
+    ),
+    Trim(StringEqCI!("TRIM"), Space, Parenthesized<TrimArgs>),
+}
+
 #[derive(Grammar)]
 #[tygr(name = "scalar function")]
 pub enum ScalarFunction {
@@ -427,20 +468,16 @@ pub enum ScalarFunction {
     PercentObject(StringEqCI!("%OBJECT"), ArgsR),
     PercentOid(StringEqCI!("%OID"), ArgsR),
     Similarity(StringEqCI!("%SIMILARITY"), ArgsRR),
-    XmlConcat(XMLConcat),
-    XmlElement(XMLElement),
-    XmlForest(XMLForest),
     Abs(StringEqCI!("ABS"), ArgsR),
     Ascii(StringEqCI!("ASCII"), ArgsR),
-    Cast(StringEqCI!("CAST"), Box<SQLCastExpression>),
     Ceiling(StringEqCI!("CEILING"), ArgsR),
     CharacterLength(StringEqCI!("CHARACTER_LENGTH"), ArgsR),
     CharIndex(StringEqCI!("CHARINDEX"), ArgsRRO),
     CharLength(StringEqCI!("CHAR_LENGTH"), ArgsR),
     Coalesce(StringEqCI!("COALESCE"), Args1Plus),
     Convert(StringEqCI!("CONVERT"), ArgsRRO),
-    CurrentTimestamp(StringEqCI!("CURRENT_TIMESTAMP"), Option<ArgsR>),
-    CurrentTime(StringEqCI!("CURRENT_TIME"), Option<ArgsR>),
+    CurrentTimestamp(StringEqCI!("CURRENT_TIMESTAMP"), ArgsR),
+    CurrentTime(StringEqCI!("CURRENT_TIME"), ArgsR),
     DataLength(StringEqCI!("DATALENGTH"), ArgsR),
     Date(StringEqCI!("DATE"), ArgsR),
     DateAdd(StringEqCI!("DATEADD"), ArgsRRR<DatePart>),
@@ -460,8 +497,6 @@ pub enum ScalarFunction {
     Instr(StringEqCI!("INSTR"), ArgsRROO),
     IsNull(StringEqCI!("ISNULL"), ArgsRR),
     IsNumeric(StringEqCI!("ISNUMERIC"), ArgsR),
-    JSONArray(StringEqCI!("JSON_ARRAY"), SQLJSONArrayArgs),
-    JSONObject(StringEqCI!("JSON_OBJECT"), SQLJSONObjectArgs),
     LastDay(StringEqCI!("LAST_DAY"), ArgsR),
     LastIdentity(StringEqCI!("LAST_IDENTITY"), Args0),
     LCase(StringEqCI!("LCASE"), ArgsR),
@@ -479,8 +514,6 @@ pub enum ScalarFunction {
     PatIndex(StringEqCI!("PATINDEX"), ArgsRR),
     Position(StringEqCI!("POSITION"), SQLPositionArgs),
     Power(StringEqCI!("POWER"), ArgsRR),
-    Predict(StringEqCI!("PREDICT"), SQLPredictArgs),
-    Probability(StringEqCI!("PROBABILITY"), SQLProbabilityArgs),
     Repeat(StringEqCI!("REPEAT"), ArgsRR),
     Replace(StringEqCI!("REPLACE"), ArgsRRR),
     Replicate(StringEqCI!("REPLICATE"), ArgsRR),
@@ -489,7 +522,6 @@ pub enum ScalarFunction {
     Round(StringEqCI!("ROUND"), ArgsRR),
     RPad(StringEqCI!("RPAD"), ArgsRRO),
     RTrim(StringEqCI!("RTRIM"), ArgsR),
-    SearchIndex(StringEqCI!("SEARCH_INDEX"), SQLSearchIndexArgs),
     Sign(StringEqCI!("SIGN"), ArgsR),
     Space(StringEqCI!("SPACE"), ArgsR),
     Str(StringEqCI!("STR"), ArgsROO),
@@ -497,18 +529,12 @@ pub enum ScalarFunction {
     Stuff(StringEqCI!("STUFF"), ArgsRRRR),
     Substr(StringEqCI!("SUBSTR"), ArgsRRO),
     Substring(StringEqCI!("SUBSTRING"), SubstringArgs),
-    SysDate(StringEqCI!("SYSDATE")),
     ToChar(StringEqCI!("TOCHAR"), ArgsRO),
     ToDate(StringEqCI!("TODATE"), ArgsRO),
     ToUSChar(StringEqCI!("TO_CHAR"), ArgsRO),
     ToUSDate(StringEqCI!("TO_DATE"), ArgsRO),
     ToNumber(StringEqCI!("TO_NUMBER"), ArgsR<Src<Term>>),
     ToTimestamp(StringEqCI!("TO_TIMESTAMP"), ArgsRO),
-    ToVector(
-        StringEqCI!("TO_VECTOR"),
-        ArgsROO<Scalx, VectorDatyp, Integer>,
-    ),
-    Trim(StringEqCI!("TRIM"), Space, Parenthesized<TrimArgs>),
     UCase(StringEqCI!("UCASE"), ArgsR),
     UnixTimestamp(StringEqCI!("UNIX_TIMESTAMP"), ArgsO),
     VectorCosine(StringEqCI!("VECTOR_COSINE"), ArgsRR),
@@ -2469,8 +2495,8 @@ pub struct Get {
 }
 
 #[derive(Grammar)]
-#[tygr(name = "call")]
-pub struct Call {
+#[tygr(name = "call statement")]
+pub struct CallStatement {
     pub output: Option<(StringEq!(":"), HostIdentifier, Space, StringEq!("="), Space)>,
     pub call_kw: StringEqCI!("CALL"),
     pub routine: (Space, RoutineName),
@@ -4171,7 +4197,7 @@ pub enum Stat {
     Revok(Revok),
     TpRelated(TpRelated),
     Get(Get),
-    Call(Call),
+    Call(CallStatement),
     Explain(Explain),
     Setml(Setml),
     ChkPrv(ChkPrv),

@@ -13,6 +13,7 @@ impl Walk for Scalx {
 impl Walk for Term {
     fn walk(&self, w: &mut Walker) {
         match self {
+            Term::Builtin(f) => f.walk(w),
             Term::ScalarFunction(f) => f.walk(w),
             Term::Window(window) => window.walk(w),
             Term::Agg(agg) => agg.walk(w),
@@ -26,7 +27,7 @@ impl Walk for Term {
             Term::OdbcEscape(escape) => escape.walk(w),
             Term::Scalx(scalx) => scalx.walk(w),
             Term::Query(query) => query.walk(w),
-            Term::UserDefinedFunction(f) => {
+            Term::Call(f) => {
                 let args = f.args.wrapped.as_ref().map_or(0, |args| args.items.len());
                 w.call(&f.name.0, args, SqlProcedureUse::Function);
                 f.args.walk(w)
@@ -37,9 +38,8 @@ impl Walk for Term {
             | Term::Literal(_)
             | Term::ParameterMarker(_)
             | Term::SpecialSystemVariable(_)
-            | Term::Null(_)
-            | Term::CurrentDate(_)
-            | Term::User(_) => {}
+            | Term::Niladic(..)
+            | Term::Null(_) => {}
         }
     }
 }
@@ -219,11 +219,28 @@ impl Walk for ScalarFunction {
             DateName(_, a) | DateTrunc(_, a) => a.walk(w),
             DatePart(_, a) => a.walk(w),
             ToNumber(_, a) => a.walk(w),
-            ToVector(_, a) => a.walk(w),
+            Position(_, a) => {
+                a.needle.walk(w);
+                a.haystack.walk(w)
+            }
+            Substring(_, a) => a.walk(w),
+            TSqlDbName(..) | TSqlError(..) | TSqlFetchStatus(..) | TSqlGetUtcDate(..)
+            | TSqlHostName(..) | TSqlLockTimeout(..) | TSqlNestLevel(..) | TSqlServerName(..)
+            | TSqlSpid(..) | TSqlSqlStatus(..) | TSqlTranCount(..) | TSqlVersion(..)
+            | LastIdentity(..) | Now(..) => {}
+        }
+    }
+}
+
+impl Walk for Builtin {
+    fn walk(&self, w: &mut Walker) {
+        use Builtin::*;
+        match self {
             XmlConcat(x) => x.walk(w),
             XmlElement(x) => x.walk(w),
             XmlForest(x) => x.walk(w),
             Cast(_, cast) => cast.walk(w),
+            Convert(_, a) => a.walk(w),
             JSONArray(_, a) => {
                 if let Some((items, _)) = &a.wrapped {
                     items.walk(w)
@@ -233,10 +250,6 @@ impl Walk for ScalarFunction {
                 if let Some((pairs, _)) = &a.wrapped {
                     pairs.walk(w)
                 }
-            }
-            Position(_, a) => {
-                a.needle.walk(w);
-                a.haystack.walk(w)
             }
             Predict(_, a) => a.with_clause.walk(w),
             Probability(_, a) => {
@@ -248,12 +261,10 @@ impl Walk for ScalarFunction {
                     scalx.walk(w)
                 }
             }
-            Substring(_, a) => a.walk(w),
+            TimestampAdd(_, a) => a.walk(w),
+            TimestampDiff(_, a) => a.walk(w),
+            ToVector(_, a) => a.walk(w),
             Trim(_, _, a) => a.walk(w),
-            TSqlDbName(..) | TSqlError(..) | TSqlFetchStatus(..) | TSqlGetUtcDate(..)
-            | TSqlHostName(..) | TSqlLockTimeout(..) | TSqlNestLevel(..) | TSqlServerName(..)
-            | TSqlSpid(..) | TSqlSqlStatus(..) | TSqlTranCount(..) | TSqlVersion(..)
-            | LastIdentity(..) | Now(..) | SysDate(_) => {}
         }
     }
 }

@@ -161,7 +161,7 @@ impl Walk for OFC {
     }
 }
 
-impl Walk for Call {
+impl Walk for CallStatement {
     fn walk(&self, w: &mut Walker) {
         let args = self
             .args
