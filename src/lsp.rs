@@ -11,6 +11,11 @@ use std::{cell::RefCell, path::PathBuf};
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
+    CodeAction as LspCodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand,
+    CodeActionParams, CodeActionProviderCapability, DocumentFormattingParams,
+    TextEdit as LspTextEdit, WorkspaceEdit as LspWorkspaceEdit,
+};
+use lsp_types::{
     CodeDescription, Diagnostic as LspDiagnostic,
     DiagnosticRelatedInformation as LspDiagnosticRelatedInformation,
     DiagnosticSeverity as LspDiagnosticSeverity, DidChangeConfigurationParams,
@@ -28,7 +33,7 @@ use crate::{
     Workspace,
     bindings::{
         Diagnostic, DiagnosticSeverity, GuestWorkspace, InlayHint, Position, Range, SymbolInfo,
-        SymbolKind,
+        SymbolKind, TextEdit,
     },
     settings::Settings,
 };
@@ -68,6 +73,11 @@ fn serve(connection: &Connection, mut settings: Settings, shared_fs: bool) -> Fa
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
+        document_formatting_provider: Some(OneOf::Left(true)),
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+            ..Default::default()
+        })),
         ..Default::default()
     };
     let initialize_params = connection.initialize(serde_json::to_value(capabilities)?)?;
@@ -233,6 +243,54 @@ fn handle_request(server: &Server, req: Request) -> Response {
                 }),
                 range: None,
             })
+        }),
+        "textDocument/formatting" => {
+            respond(req.id, req.params, |params: DocumentFormattingParams| {
+                let uri = workspace_key(&params.text_document.uri);
+                let (tab_size, insert_spaces) =
+                    (params.options.tab_size, params.options.insert_spaces);
+                let options = crate::bindings::FormattingOptions {
+                    tab_size,
+                    insert_spaces,
+                };
+                let edits = workspace.format(uri, options)?;
+                Some(edits.into_iter().map(to_lsp_text_edit).collect::<Vec<_>>())
+            })
+        }
+        "textDocument/codeAction" => respond(req.id, req.params, |params: CodeActionParams| {
+            let uri = workspace_key(&params.text_document.uri);
+            let actions = workspace
+                .code_actions(uri, params.range.into())
+                .into_iter()
+                .map(|action| {
+                    let changes = action.edit.map(|edit| {
+                        edit.changes
+                            .into_iter()
+                            .filter_map(|(uri, edits)| {
+                                let edits = edits.into_iter().map(to_lsp_text_edit).collect();
+                                Some((uri.parse::<Uri>().ok()?, edits))
+                            })
+                            .collect()
+                    });
+                    CodeActionOrCommand::CodeAction(LspCodeAction {
+                        title: action.title,
+                        kind: action.kind.map(CodeActionKind::from),
+                        diagnostics: Some(
+                            action
+                                .diagnostics
+                                .into_iter()
+                                .map(to_lsp_diagnostic)
+                                .collect(),
+                        ),
+                        edit: changes.map(|changes| LspWorkspaceEdit {
+                            changes: Some(changes),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
+                })
+                .collect::<Vec<_>>();
+            Some(actions)
         }),
         "textDocument/documentSymbol" => {
             respond(req.id, req.params, |params: DocumentSymbolParams| {
@@ -427,6 +485,13 @@ fn to_lsp_range(range: Range) -> LspRange {
     LspRange {
         start: to_lsp_position(range.start),
         end: to_lsp_position(range.end),
+    }
+}
+
+fn to_lsp_text_edit(edit: TextEdit) -> LspTextEdit {
+    LspTextEdit {
+        range: to_lsp_range(edit.range),
+        new_text: edit.new_text,
     }
 }
 
