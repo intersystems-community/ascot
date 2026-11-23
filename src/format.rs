@@ -18,7 +18,7 @@ use tygr_objectscript::cos::{
 
 use crate::{
     DocKind,
-    bindings::{AndOperator, Diagnostic, Language},
+    bindings::{AndOperator, Diagnostic, Language, TextEdit},
     check::{Break, TypeError, TypeErrorKind},
     details::{ClassDetails, MemberKindSpecificDetails, Positions},
     style::Styles,
@@ -50,6 +50,16 @@ impl Finding {
             related_information,
         }
         .into()
+    }
+}
+
+impl Edit {
+    pub(crate) fn text_edit(self, olc: &OLC) -> TextEdit {
+        let range = olc.span(self.start, self.end);
+        TextEdit {
+            range,
+            new_text: self.text,
+        }
     }
 }
 

@@ -1122,11 +1122,7 @@ impl bindings::GuestWorkspace for Workspace {
         };
         let edits = format::edits(&text, &uri, style, indent)?;
         let olc = OLC::new(&text);
-        let to_text_edit = |edit: format::Edit| bindings::TextEdit {
-            range: olc.span(edit.start, edit.end),
-            new_text: edit.text,
-        };
-        Some(edits.into_iter().map(to_text_edit).collect())
+        Some(edits.into_iter().map(|edit| edit.text_edit(&olc)).collect())
     }
 
     // Where the reference at `position` is declared, if any — one of the go-to-definition

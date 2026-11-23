@@ -17,7 +17,8 @@ mod wit_bind {
         additional_derives: [serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq, Hash],
         additional_derives_ignore: ["env"],
         // The style record's JSON spelling is the JS binding's, camelCase keys and kebab-case values,
-        // so one style file serves every binding; serde would spell the Rust names otherwise.
+        // so one style file serves every binding; serde would spell the Rust names otherwise. The
+        // LSP-shaped records keep LSP's spelling (`newText`).
         additional_type_attributes: {
             "iris:ascot/common/style": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/command-style": [#[serde(rename_all = "camelCase")]],
@@ -28,6 +29,7 @@ mod wit_bind {
             "iris:ascot/common/keyword-form": [#[serde(rename_all = "kebab-case")]],
             "iris:ascot/common/keyword-case": [#[serde(rename_all = "kebab-case")]],
             "iris:ascot/common/and-operator": [#[serde(rename_all = "kebab-case")]],
+            "iris:ascot/common/text-edit": [#[serde(rename_all = "camelCase")]],
         },
     });
 

@@ -26,9 +26,9 @@ Use it as a [**CLI** tool](#ascot-as-a-cli-tool), from **AI agents** via
   hover.
 - **Inlay Hints**: inferred types, argument names, and parameter default
   values shown inline.
-- **Formatting**: `ascot format`, and the LSP formatting request, bring
-  procedure blocks and method bodies to the configured style: keyword spelling
-  and brace placement.
+- **Formatting**: `ascot format`, the LSP formatting request and the MCP
+  `format` tool bring procedure blocks and method bodies to the configured
+  style: keyword spelling and brace placement.
 
 ## Installation
 
@@ -169,8 +169,10 @@ ascot mcp
 Starts the MCP server (stdio), exposing workspace analysis as tools an AI agent
 calls on demand: `create_workspace` takes the [settings](#settings), `insert`
 each document's text (or, with a [shared file system](#shared-file-system), its
-`file://` uri). Any MCP client that can launch a stdio server works: the command
-is `ascot` (or its full path) and the single argument is `mcp`.
+`file://` uri); `format` returns a document's text brought to the
+[style](#style), as `ascot format` writes it, with the edits that get there. Any
+MCP client that can launch a stdio server works: the command is `ascot` (or its
+full path) and the single argument is `mcp`.
 
 Claude Code:
 
