@@ -1776,7 +1776,8 @@ fn check_case<'a>(
 ) -> Result<MaybeTy, QuasiTypeError> {
     let target = target.to_power_ty(env, flow)?;
     if branches.is_empty() && default.is_none() {
-        return Ok(MaybeTy::Undefined);
+        flow.add_soft_diagnostic(TypeErrorKind::CaseWithoutArms.into());
+        return Ok(MaybeTy::Plain(Ty::Any));
     }
     let branches = branches
         .iter()
