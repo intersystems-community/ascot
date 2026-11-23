@@ -293,6 +293,19 @@ fn every_src_node_maps_the_core_text_to_the_source() {
     }
 }
 
+/// Both EBNFs, with their rule counts, under `--nocapture`.
+#[test]
+fn the_core_grammar_has_fewer_rules() {
+    let (full, core) = (SQL::bnf_rules(), core::SQL::bnf_rules());
+    for (level, rules) in [("full", &full), ("core", &core)] {
+        println!("{level}: {} rules", rules.len());
+        for rule in rules {
+            println!("{rule}");
+        }
+    }
+    assert!(core.len() < full.len());
+}
+
 /// The local parity inputs, when present:
 /// `cargo test -p tygr-objectscript --test sql_core -- --ignored --nocapture`.
 #[test]
