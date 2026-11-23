@@ -3,9 +3,11 @@
 
 pub mod grammar;
 pub mod leaf;
+pub mod src;
 
 pub use grammar::*;
 pub use leaf::*;
+pub use src::*;
 
 #[cfg(test)]
 mod tests {
@@ -15,6 +17,24 @@ mod tests {
     fn all_ok(cases: &[&str]) {
         let failed: Vec<_> = cases.iter().filter(|c| SQL::parse(c).is_err()).collect();
         assert!(failed.is_empty(), "failed to parse: {failed:#?}");
+    }
+
+    #[test]
+    fn src_nodes_map_their_print_to_their_source() {
+        let text = "SELECT a, b FROM t WHERE a = 1 ORDER BY b";
+        let (printed, mappings) = print_mapped(&SQL::parse(text).unwrap());
+        assert_eq!(printed, text);
+        assert!(mappings.iter().all(|m| m.printed == m.origin));
+        let origins: Vec<&str> = mappings.iter().map(|m| &text[m.origin.clone()]).collect();
+        for node in [
+            "a",
+            "b",
+            "t",
+            "a = 1",
+            "SELECT a, b FROM t WHERE a = 1 ORDER BY b",
+        ] {
+            assert!(origins.contains(&node), "{node} is not among {origins:?}");
+        }
     }
 
     #[test]

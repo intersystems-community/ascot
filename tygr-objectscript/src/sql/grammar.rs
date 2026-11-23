@@ -4,22 +4,23 @@ use either::Either;
 use tygr::*;
 
 use super::leaf::*;
+use super::src::Src;
 use crate::convert::VecSep;
 
 #[derive(Grammar)]
-pub struct TName(pub Ranged<DottedIdent>);
+pub struct TName(pub Src<DottedIdent>);
 
 pub type Table = TName;
 
 #[derive(Grammar)]
 #[tygr(name = "SQL function name")]
-pub struct SQLFunctionName(pub Ranged<DottedIdent>);
+pub struct SQLFunctionName(pub Src<DottedIdent>);
 
 #[derive(Grammar)]
 #[tygr(name = "colmn")]
 pub enum Colmn {
-    Str(Ranged<Ident>, Space, StringEq!("."), Space, StringEq!("*")),
-    Arr(Ranged<DottedIdent>, Vec<ArrowRef>),
+    Str(Src<Ident>, Space, StringEq!("."), Space, StringEq!("*")),
+    Arr(Src<DottedIdent>, Vec<ArrowRef>),
 }
 
 /// Arrow reference for object property access (Cache/IRIS extension)
@@ -136,7 +137,7 @@ pub enum Unary {
     UnaryOp {
         op: UnaryOp,
         space: Space,
-        term: Box<Term>,
+        term: Box<Src<Term>>,
     },
     StringOperation(Box<StringOperation>),
 }
@@ -144,7 +145,7 @@ pub enum Unary {
 #[derive(Grammar)]
 #[tygr(name = "%string operation")]
 pub enum StringOperation {
-    Term(StringOperator, Space, Term),
+    Term(StringOperator, Space, Src<Term>),
     ScalxColTrun {
         op: StringOperator,
         open: (Space, StringEq!("("), Space),
@@ -216,7 +217,7 @@ pub enum Scalop {
 
 #[derive(Grammar)]
 pub enum Scalx {
-    Legacy(VecSep<Term, Wrap<Space, Scalop, Space>>),
+    Legacy(VecSep<Src<Term>, Wrap<Space, Scalop, Space>>),
 }
 #[derive(Grammar)]
 #[tygr(name = "case")]
@@ -498,7 +499,7 @@ pub enum ScalarFunction {
     ToDate(StringEqCI!("TODATE"), ArgsRO),
     ToUSChar(StringEqCI!("TO_CHAR"), ArgsRO),
     ToUSDate(StringEqCI!("TO_DATE"), ArgsRO),
-    ToNumber(StringEqCI!("TO_NUMBER"), ArgsR<Term>),
+    ToNumber(StringEqCI!("TO_NUMBER"), ArgsR<Src<Term>>),
     ToTimestamp(StringEqCI!("TO_TIMESTAMP"), ArgsRO),
     ToVector(
         StringEqCI!("TO_VECTOR"),
@@ -1044,7 +1045,7 @@ pub enum OrOperator {
 
 #[derive(Grammar)]
 #[tygr(name = "and")]
-pub struct And(pub VecSep<Cond, (Space, AndOperator, Space)>);
+pub struct And(pub VecSep<Src<Cond>, (Space, AndOperator, Space)>);
 
 #[derive(Grammar)]
 #[tygr(name = "and operator")]
@@ -1058,7 +1059,7 @@ pub enum AndOperator {
 pub enum Cond {
     Not {
         not_kw: (StringEqCI!("NOT"), Space),
-        condition: Box<Cond>,
+        condition: Box<Src<Cond>>,
     },
     Paren {
         open: (StringEq!("("), Space),
@@ -1238,7 +1239,7 @@ pub enum JSONPredicateTypeConstraint {
 
 #[derive(Grammar)]
 #[tygr(name = "with list")]
-pub struct WithList(pub VecSep<WithListElement, ArgSep>);
+pub struct WithList(pub VecSep<Src<WithListElement>, ArgSep>);
 
 pub type WithClause = Prefix<(StringEqCI!("WITH"), Space), WithList>;
 
@@ -1299,7 +1300,7 @@ pub struct Selst {
 
 #[derive(Grammar)]
 #[tygr(name = "select list")]
-pub struct SelectList(pub VecSep<SelectItem, ArgSep>);
+pub struct SelectList(pub VecSep<Src<SelectItem>, ArgSep>);
 
 #[derive(Grammar)]
 #[tygr(name = "select item")]
@@ -1434,8 +1435,8 @@ pub enum Tref {
 #[derive(Grammar)]
 #[tygr(name = "jtab")]
 pub struct JTab {
-    pub formit: Frmit,
-    pub joins: Vec<Join>,
+    pub formit: Src<Frmit>,
+    pub joins: Vec<Src<Join>>,
 }
 
 #[derive(Grammar)]
@@ -1587,8 +1588,10 @@ pub type Group =
 
 pub type Having = Prefix<(Space, StringEqCI!("HAVING"), Space), Prdct>;
 
-pub type Order =
-    Prefix<(Space, StringEqCI!("ORDER"), Space, StringEqCI!("BY"), Space), VecSep<Ordir, ArgSep>>;
+pub type Order = Prefix<
+    (Space, StringEqCI!("ORDER"), Space, StringEqCI!("BY"), Space),
+    VecSep<Src<Ordir>, ArgSep>,
+>;
 
 #[derive(Grammar)]
 pub struct Ordir {
@@ -1669,7 +1672,7 @@ pub enum QueryOp {
 #[derive(Grammar)]
 pub enum QTerm {
     Query(SQLSubquery),
-    Selex(Selex),
+    Selex(Src<Selex>),
 }
 #[derive(Grammar)]
 pub struct Insrt {
@@ -1715,7 +1718,7 @@ pub enum IUDTarget {
 pub enum Asign {
     SetList {
         set_kw: StringEqCI!("SET"),
-        assignments: (Space, VecSep<SQLSetAssignment, ArgSep>),
+        assignments: (Space, VecSep<Src<SQLSetAssignment>, ArgSep>),
     },
     ColumnList {
         columns: Option<SQLColumnListParen>,
@@ -1916,7 +1919,7 @@ pub enum TRMode {
     DiagnosticsSize {
         diagnostics_kw: StringEqCI!("DIAGNOSTICS"),
         size_kw: (Space, StringEqCI!("SIZE"), Space),
-        size: Term,
+        size: Src<Term>,
     },
 }
 
@@ -3367,7 +3370,7 @@ pub type WithClauseCreate = Prefix<(StringEqCI!("WITH"), Space), Parenthesized<C
 pub enum ModelSource {
     Subquery {
         open: (StringEqCI!("FROM"), Space, StringEq!("("), Space),
-        selex: Selex,
+        selex: Src<Selex>,
         close: (Space, StringEq!(")")),
     },
     Inline {
@@ -3614,7 +3617,7 @@ pub enum TriggerBody {
     Code(CodeBody),
     Stat {
         lang: Option<(StringEqCI!("LANGUAGE"), Space, StringEqCI!("SQL"), Space)>,
-        stat: Box<Stat>,
+        stat: Box<Src<Stat>>,
     },
 }
 
@@ -3697,7 +3700,7 @@ pub enum LevelsClause {
 pub struct SQL {
     pub space_before: Space,
     pub view_column_list: Option<(ViewColumnList, Space)>,
-    pub stat: Stat,
+    pub stat: Src<Stat>,
     pub space_after: Space,
 }
 
@@ -3890,7 +3893,12 @@ pub enum CodeBody {
 
 pub type SqlMethodBody = Wrap<
     StringEqCI!("BEGIN"),
-    Vec<(Space, Either<ReturnStatement, Stat>, Space, StringEq!(";"))>,
+    Vec<(
+        Space,
+        Either<ReturnStatement, Src<Stat>>,
+        Space,
+        StringEq!(";"),
+    )>,
     (Space, StringEqCI!("END")),
 >;
 

@@ -5,7 +5,7 @@
 use std::ops::Range;
 
 use either::Either;
-use tygr::{Prefix, Print, Ranged, Suffix, Vec1, Wrap};
+use tygr::{Prefix, Print, Suffix, Vec1, Wrap};
 
 use crate::bindings::{ClassInfo, MemberKind, SqlProjection};
 use crate::check::errors::{SqlProcedureUse, TypeErrorKind};
@@ -74,7 +74,7 @@ fn text(ident: &Ident) -> String {
     }
 }
 
-fn name_of(dotted: &Ranged<DottedIdent>) -> Name {
+fn name_of(dotted: &Src<DottedIdent>) -> Name {
     Name {
         parts: dotted.parts().map(text).collect(),
         range: dotted.range(),
@@ -214,7 +214,7 @@ impl Walker<'_> {
         }
     }
 
-    fn call(&mut self, name: &Ranged<DottedIdent>, args: usize, used: SqlProcedureUse) {
+    fn call(&mut self, name: &Src<DottedIdent>, args: usize, used: SqlProcedureUse) {
         if let Some(check) = self.check.filter(|_| !self.unchecked) {
             resolve::call(check, &name_of(name), args, used);
         }
@@ -298,6 +298,12 @@ impl<T: Walk> Walk for Vec1<T> {
 impl<T: Walk> Walk for Box<T> {
     fn walk(&self, w: &mut Walker) {
         (**self).walk(w)
+    }
+}
+
+impl<T: Walk> Walk for Src<T> {
+    fn walk(&self, w: &mut Walker) {
+        self.node.walk(w)
     }
 }
 
