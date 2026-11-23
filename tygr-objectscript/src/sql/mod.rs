@@ -1,6 +1,7 @@
 //! The IRIS SQL grammar for `&sql(...)` blocks embedded in ObjectScript, reached from `cos.rs`.
 //! Syntax only: `ascot` reports parse errors here but does not type-check SQL yet.
 
+pub mod desugar;
 pub mod grammar;
 pub mod leaf;
 pub mod src;

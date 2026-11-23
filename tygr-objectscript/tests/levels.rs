@@ -1,16 +1,10 @@
 //! The `#[levels]` attribute on a toy grammar: the full level parses the sugar, the core level
 //! lacks it, and desugaring one into the other prints the core text and round-trips through it.
-//! The trait and the container impls are the test's own until the SQL grammar brings the real ones.
 
-use either::Either;
 use tygr::*;
 use tygr_objectscript::convert::VecSep;
+use tygr_objectscript::sql::desugar::Desugar;
 use tygr_objectscript_macros::levels;
-
-pub trait Desugar {
-    type Core;
-    fn desugar(&self) -> Self::Core;
-}
 
 macro_rules! identity {
     ($($ty:ty),* $(,)?) => {
@@ -23,124 +17,16 @@ macro_rules! identity {
     };
 }
 
-macro_rules! tuples {
-    ($(($($t:ident $i:tt),+))*) => {
-        $(impl<$($t: Desugar),+> Desugar for ($($t,)+) {
-            type Core = ($($t::Core,)+);
-            fn desugar(&self) -> Self::Core {
-                ($(self.$i.desugar(),)+)
-            }
-        })*
+// The literals as leaves of the toy's own: the identity impl the attribute emits for a literal
+// spelled in the module would be an orphan here, the trait and tygr's literal types both foreign.
+macro_rules! literals {
+    ($($name:ident = $text:literal),* $(,)?) => {
+        $(
+            #[derive(Grammar, Clone, Debug, PartialEq, Default)]
+            pub struct $name(StringEqCI!($text));
+        )*
+        identity!($($name),*);
     };
-}
-
-tuples! {
-    (A 0)
-    (A 0, B 1)
-    (A 0, B 1, C 2)
-    (A 0, B 1, C 2, D 3)
-    (A 0, B 1, C 2, D 3, E 4)
-    (A 0, B 1, C 2, D 3, E 4, F 5)
-    (A 0, B 1, C 2, D 3, E 4, F 5, G 6)
-    (A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7)
-}
-
-impl<T: Desugar> Desugar for Option<T> {
-    type Core = Option<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        self.as_ref().map(Desugar::desugar)
-    }
-}
-
-impl<T: Desugar> Desugar for Vec<T> {
-    type Core = Vec<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        self.iter().map(Desugar::desugar).collect()
-    }
-}
-
-impl<T: Desugar> Desugar for Vec1<T> {
-    type Core = Vec1<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        Vec1::try_from((**self).desugar())
-            .ok()
-            .expect("one item or more")
-    }
-}
-
-impl<T: Desugar> Desugar for Box<T> {
-    type Core = Box<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        Box::new((**self).desugar())
-    }
-}
-
-impl<L: Desugar, R: Desugar> Desugar for Either<L, R> {
-    type Core = Either<L::Core, R::Core>;
-    fn desugar(&self) -> Self::Core {
-        match self {
-            Either::Left(left) => Either::Left(left.desugar()),
-            Either::Right(right) => Either::Right(right.desugar()),
-        }
-    }
-}
-
-impl<T: Desugar, S: Desugar> Desugar for VecSep<T, S> {
-    type Core = VecSep<T::Core, S::Core>;
-    fn desugar(&self) -> Self::Core {
-        VecSep {
-            items: self.items.desugar(),
-            seps: self.seps.desugar(),
-        }
-    }
-}
-
-impl<P: Desugar, T: Desugar, S: Desugar> Desugar for Wrap<P, T, S> {
-    type Core = Wrap<P::Core, T::Core, S::Core>;
-    fn desugar(&self) -> Self::Core {
-        Wrap::new(
-            self.prefix.desugar(),
-            self.wrapped.desugar(),
-            self.suffix.desugar(),
-        )
-    }
-}
-
-impl<P: Desugar, T: Desugar> Desugar for Prefix<P, T> {
-    type Core = Prefix<P::Core, T::Core>;
-    fn desugar(&self) -> Self::Core {
-        Prefix::new(self.prefix.desugar(), self.prefixed.desugar())
-    }
-}
-
-impl<T: Desugar, S: Desugar> Desugar for Suffix<T, S> {
-    type Core = Suffix<T::Core, S::Core>;
-    fn desugar(&self) -> Self::Core {
-        Suffix::new(self.suffixed.desugar(), self.suffix.desugar())
-    }
-}
-
-/// Covers `StringOf` and `StringOf1`, aliases of `Raw`.
-impl<T: Desugar> Desugar for Raw<T> {
-    type Core = Raw<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        Raw::new(self.as_str())
-    }
-}
-
-impl<T: Desugar> Desugar for Hidden<T> {
-    type Core = Hidden<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        Hidden(self.0.desugar())
-    }
-}
-
-/// The range stays the origin's in the full text.
-impl<T: Desugar> Desugar for Ranged<T> {
-    type Core = Ranged<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        Ranged::new(self.start, self.ranged.desugar(), self.end)
-    }
 }
 
 char_class!(pub Digit, "digit", |ch| ch.is_ascii_digit());
@@ -152,19 +38,28 @@ char_class!(pub Blank, "blank", |ch| ch == ' ');
 pub struct Sp(StringOf1<Blank>);
 
 identity!(Digit, Blank, Sp);
+literals!(
+    Comma = ",",
+    Open = "(",
+    Close = ")",
+    Semi = ";",
+    SelectKw = "select",
+    AllKw = "all",
+    Plus = "+",
+    Minus = "-",
+    TwiceKw = "twice",
+);
 
 #[levels(full, core, desugar = super::Desugar)]
 pub mod grammar {
     use super::*;
 
-    type Comma = (Option<Sp>, StringEq!(","), Option<Sp>);
-    type Open = StringEq!("(");
-    type Close = StringEq!(")");
+    type Sep = (Option<Sp>, Comma, Option<Sp>);
 
     #[derive(Grammar, Debug, PartialEq)]
     pub struct Query {
         pub select: Ranged<Select>,
-        pub semicolon: Option<StringEq!(";")>,
+        pub semicolon: Option<Semi>,
     }
 
     /// `select all` reads as `select`: the field goes, the type's rule rebuilds the rest.
@@ -175,23 +70,23 @@ pub mod grammar {
         items: select.items.desugar(),
     })]
     pub struct Select {
-        pub kw: StringEqCI!("select"),
+        pub kw: SelectKw,
         pub sp: Sp,
         #[sugar]
-        pub all: Option<Suffix<StringEqCI!("all"), Sp>>,
-        pub items: VecSep<Expr, Comma>,
+        pub all: Option<Suffix<AllKw, Sp>>,
+        pub items: VecSep<Expr, Sep>,
     }
 
     #[derive(Grammar, Debug, PartialEq)]
     pub enum Expr {
         Add {
-            plus: StringEq!("+"),
+            plus: Plus,
             sp: Sp,
             lhs: Box<Expr>,
             sp2: Sp,
             rhs: Box<Expr>,
         },
-        Neg(Prefix<StringEq!("-"), Box<Expr>>),
+        Neg(Prefix<Minus, Box<Expr>>),
         Paren(Parened<Box<Expr>>),
         /// `twice x` is `+ x x`.
         #[sugar(into = |twice, expr| {
@@ -212,7 +107,7 @@ pub mod grammar {
     #[sugar]
     #[derive(Grammar, Debug, PartialEq)]
     pub struct Twice {
-        pub kw: StringEqCI!("twice"),
+        pub kw: TwiceKw,
         pub sp: Sp,
     }
 
@@ -231,7 +126,7 @@ pub mod grammar {
     }
 
     #[derive(Grammar, Debug, PartialEq)]
-    pub struct Num(pub Raw<(Option<StringEq!("-")>, StringOf1<Digit>)>);
+    pub struct Num(pub Raw<(Option<Minus>, StringOf1<Digit>)>);
 }
 
 #[test]

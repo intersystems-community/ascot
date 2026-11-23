@@ -52,7 +52,7 @@ char_class!(pub IsNotParen, "any tokens except \"(\" and \")\"", |ch| ch
     != '('
     && ch != ')');
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(hidden)]
 pub enum SpaceUnit {
     Raw(Space1),
@@ -60,17 +60,17 @@ pub enum SpaceUnit {
     MC(SQLMultiLineComment),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(hidden)]
 pub struct Space(Vec<SpaceUnit>);
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 pub enum Ident {
     Simple(Identifier),
     Delimited(DelimitedIdentifier),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(validated, inline)]
 pub struct SQLIdentNonKeyword(pub Ident);
 
@@ -381,7 +381,7 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
     )
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "identifier start")]
 pub enum IdentifierStart {
     SimpleLatin(IsSimpleLatinLetter),
@@ -389,7 +389,7 @@ pub enum IdentifierStart {
     U(StringEq!("_")),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "identifier part")]
 pub enum IdentifierPart {
     Digit(IsDigit),
@@ -399,17 +399,17 @@ pub enum IdentifierPart {
     U(StringEq!("_")),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(inline)]
 pub struct IdentifierStruct {
     first: IdentifierStart,
     rest: Vec<IdentifierPart>,
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 pub struct Identifier(Raw<IdentifierStruct>);
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(inline)]
 pub struct SQLDelimitedIdentStruct {
     open: StringEq!("\""),
@@ -418,18 +418,18 @@ pub struct SQLDelimitedIdentStruct {
     close: StringEq!("\""),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "delimited identifier part")]
 pub enum DelimitedIdentifierPart {
     DDQ(StringEq!("\"\"")),
     Char(IsNotDQ),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "delimited identifier")]
 pub struct DelimitedIdentifier(Raw<SQLDelimitedIdentStruct>);
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(inline)]
 pub struct DottedIdent {
     pub head: Ident,
@@ -444,14 +444,14 @@ impl DottedIdent {
 
 pub type StdStringLiteral = Wrap<StringEq!("'"), Vec<StdCharacterRepresentation>, StringEq!("'")>;
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "std character representation")]
 pub enum StdCharacterRepresentation {
     DSQ(StringEq!("''")),
     Char(IsNotSQ),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "string literal")]
 pub enum StringLiteral {
     SQLEmpty(StringEq!("''")),
@@ -459,13 +459,13 @@ pub enum StringLiteral {
     Std(Raw<StdStringLiteral>),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 pub struct Integer {
     sign: Option<Either<StringEq!("+"), StringEq!("-")>>,
     integer: StringOf1<IsDigit>,
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(inline)]
 pub struct SQLExponent {
     e: ExpoSymbol,
@@ -473,20 +473,20 @@ pub struct SQLExponent {
     digits: StringOf1<IsDigit>,
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "expo symbol")]
 pub enum ExpoSymbol {
     U(StringEq!("E")),
     L(StringEq!("e")),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 pub struct Number {
     base: NumberBase,
     exponent: Option<SQLExponent>,
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 pub enum NumberBase {
     Int {
         digits: StringOf1<IsDigit>,
@@ -498,17 +498,17 @@ pub enum NumberBase {
     },
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 pub enum Literal {
     String(StringLiteral),
     Numeric(Number),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "parameter marker")]
 pub struct ParameterMarker(pub StringEq!("?"));
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "host var")]
 pub struct HostVar {
     pub host_ref: HostRef,
@@ -518,7 +518,7 @@ pub struct HostVar {
 pub type SubList =
     Wrap<(StringEq!("("), Space), Option<VecSep<Sub, ArgSep>>, (Space, StringEq!(")"))>;
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "instance variable host ref")]
 pub enum InstanceVariableHostRef {
     I {
@@ -531,7 +531,7 @@ pub enum InstanceVariableHostRef {
     },
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "property host ref")]
 pub struct PropertyHostRef {
     colon: Option<StringEq!(":")>,
@@ -539,13 +539,13 @@ pub struct PropertyHostRef {
     pub parts: Vec1<(StringEq!("."), Either<HostIdentifier, DelimitedIdentifier>)>,
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 pub enum Var {
     HostRef(HostRef),
     Ident(Ident),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "host ref")]
 pub enum HostRef {
     InstanceVariableHostRef(InstanceVariableHostRef),
@@ -553,11 +553,11 @@ pub enum HostRef {
     Plain(Option<StringEq!(":")>, HostIdentifier),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "host identifier")]
 pub struct HostIdentifier(Raw<(IdentifierStart, Vec<HostIdentifierPart>)>);
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "host identifier part")]
 pub enum HostIdentifierPart {
     Digit(IsDigit),
@@ -565,13 +565,13 @@ pub enum HostIdentifierPart {
     Unicode(IsNonAsciiLetter),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 pub enum Param {
     HostVar(HostVar),
     Ident(Ident, Option<SubList>),
 }
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 pub enum Sub {
     Literal(Literal),
     Var(Var),
