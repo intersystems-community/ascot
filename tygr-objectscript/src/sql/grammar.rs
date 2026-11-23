@@ -962,8 +962,17 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "agg")]
+    #[sugar(into = query::agg)]
     pub enum Agg {
-        AggFuncArgs(AggFunc, Space, Parenthesized<AggArg>),
+        AggFuncArgs {
+            fun: AggFunc,
+            sp: Space,
+            open: (StringEq!("("), Space),
+            #[sugar]
+            all: Option<AllKw>,
+            arg: AggArg,
+            close: (Space, StringEq!(")")),
+        },
         CountStar(StringEqCI!("COUNT"), Space, Parenthesized<StringEq!("*")>),
     }
 
@@ -999,12 +1008,9 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "dist")]
-    pub enum Dist {
-        Distinct {
-            keyword: (StringEqCI!("DISTINCT"), Space),
-            by: Option<SQLDistinctBy>,
-        },
-        All((StringEqCI!("ALL"), Space)),
+    pub struct Dist {
+        pub keyword: (StringEqCI!("DISTINCT"), Space),
+        pub by: Option<SQLDistinctBy>,
     }
 
     pub type SQLDistinctBy = Wrap<(StringEqCI!("BY"), Space), List, Space>;
@@ -1057,13 +1063,6 @@ pub mod leveled {
         ),
         VecSep<Scalx, ArgSep>,
     >;
-
-    #[derive(Grammar)]
-    #[tygr(inline)]
-    pub enum SQLOrderDirection {
-        Asc(StringEqCI!("ASC")),
-        Desc(StringEqCI!("DESC")),
-    }
 
     #[derive(Grammar)]
     #[tygr(name = "window rows")]
@@ -1133,6 +1132,15 @@ pub mod leveled {
                 Negatable::Plain(_) => None,
             }
         }
+    }
+
+    /// A keyword a statement reads the same without: spelled, or omitted and read as spelled.
+    #[derive(Grammar)]
+    #[tygr(inline)]
+    pub enum Implied<K: Grammar + Default> {
+        Spelled(Space, K),
+        #[sugar(into = query::spelled)]
+        Omitted(()),
     }
 
     /// What compares a value with a subquery: an operator and a quantifier, or `IN`, which is
@@ -1683,11 +1691,26 @@ pub mod leveled {
         Some(StringEqCI!("SOME")),
     }
 
-    pub type SizeHint = Prefix<(Space, StringEqCI!("SIZE"), Space), PConst>;
+    #[derive(Grammar)]
+    #[tygr(name = "size hint")]
+    pub enum SizeHint {
+        Paren {
+            kw: (Space, StringEqCI!("SIZE"), Space),
+            open: StringEq!("("),
+            size: PConst,
+            close: StringEq!(")"),
+        },
+        #[sugar(into = query::size_in_parens)]
+        Bare {
+            kw: (Space, StringEqCI!("SIZE"), Space),
+            size: Literal,
+        },
+    }
 
     #[derive(Grammar)]
     pub enum PConst {
-        Paren(StringEq!("("), Box<PConst>, StringEq!(")")),
+        #[sugar(into = query::unnested)]
+        Nested(StringEq!("("), Box<PConst>, StringEq!(")")),
         Literal(Literal),
     }
 
@@ -1726,8 +1749,12 @@ pub mod leveled {
     pub struct ColumnName(pub Ident);
 
     #[derive(Grammar)]
+    #[sugar(into = query::selex)]
     pub struct Selex {
         pub kw: (StringEqCI!("SELECT"), Space),
+        pub options: Vec<SelectOption>,
+        #[sugar]
+        pub all: Option<AllKw>,
         pub selst: Selst,
         pub from: Option<FromClause>,
         pub where_clause: Option<WhereClause>,
@@ -1749,6 +1776,9 @@ pub mod leveled {
         RowOffset((StringEqCI!("%ROWOFFSET"), Space), ValSpec, Space),
     }
 
+    /// `ALL` where `DISTINCT` could stand: what a SELECT or an aggregate does without it.
+    pub type AllKw = (StringEqCI!("ALL"), NotFollowedBy<IdentifierPart>, Space);
+
     pub type SQLTopClause = Wrap<(StringEqCI!("TOP"), Space1), TopSpec, Space>;
 
     #[derive(Grammar)]
@@ -1760,7 +1790,6 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "selst")]
     pub struct Selst {
-        pub options: Vec<SelectOption>,
         pub distinct: Option<Dist>,
         pub top: Option<SQLTopClause>,
         pub select_list: SelectList,
@@ -1780,25 +1809,10 @@ pub mod leveled {
 
     // The blank stays inside the alias, so that a reference without one consumes nothing after it.
     #[derive(Grammar)]
-    pub enum Alias {
-        As {
-            sp: Space,
-            as_kw: StringEqCI!("AS"),
-            sp2: Space,
-            name: SQLIdentNonKeyword,
-        },
-        Bare {
-            sp: Space,
-            name: SQLIdentNonKeyword,
-        },
-    }
-
-    impl Alias {
-        pub fn name(&self) -> &SQLIdentNonKeyword {
-            match self {
-                Alias::As { name, .. } | Alias::Bare { name, .. } => name,
-            }
-        }
+    pub struct Alias {
+        pub as_kw: Implied<StringEqCI!("AS")>,
+        pub sp: Space,
+        pub name: SQLIdentNonKeyword,
     }
 
     pub type Into = Prefix<(StringEqCI!("INTO"), Space), HostList>;
@@ -1885,11 +1899,14 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "tables")]
+    #[sugar(into = query::tables)]
     pub struct Tables {
         pub first: Tref,
+        #[sugar]
         pub rest: Vec<(ArgSep, Tref)>,
     }
 
+    #[sugar]
     impl Tables {
         pub fn iter(&self) -> impl Iterator<Item = &Tref> {
             std::iter::once(&self.first).chain(self.rest.iter().map(|(_, tref)| tref))
@@ -1900,10 +1917,11 @@ pub mod leveled {
     #[tygr(name = "tref")]
     pub enum Tref {
         Join(JTab),
+        #[sugar(into = query::oj)]
         OJSyntax {
             open: StringEq!("{"),
             oj: (Ident, Space),
-            table: Box<JTab>,
+            table: JTab,
             close: (Space, StringEq!("}")),
         },
     }
@@ -1935,14 +1953,29 @@ pub mod leveled {
         },
     }
 
-    pub type JOp = Suffix<Option<(JType, Space)>, StringEqCI!("JOIN")>;
+    #[derive(Grammar)]
+    #[tygr(name = "jop")]
+    pub enum JOp {
+        Typed {
+            jtype: JType,
+            sp: Space,
+            join_kw: StringEqCI!("JOIN"),
+        },
+        #[sugar(into = query::inner)]
+        Bare(StringEqCI!("JOIN")),
+    }
 
     #[derive(Grammar)]
     pub enum JType {
         Inner(StringEqCI!("INNER")),
-        Left(StringEqCI!("LEFT"), Option<(Space, StringEqCI!("OUTER"))>),
-        Right(StringEqCI!("RIGHT"), Option<(Space, StringEqCI!("OUTER"))>),
-        Full(StringEqCI!("FULL"), Option<(Space, StringEqCI!("OUTER"))>),
+        Outer(Side, Implied<StringEqCI!("OUTER")>),
+    }
+
+    #[derive(Grammar)]
+    pub enum Side {
+        Left(StringEqCI!("LEFT")),
+        Right(StringEqCI!("RIGHT")),
+        Full(StringEqCI!("FULL")),
     }
 
     #[derive(Grammar)]
@@ -2066,9 +2099,12 @@ pub mod leveled {
     >;
 
     #[derive(Grammar)]
+    #[sugar(into = query::ordir)]
     pub struct Ordir {
         pub expr: Ordit,
-        pub direction: Option<(Space, SQLOrderDirection)>,
+        #[sugar]
+        pub asc: Option<(Space, StringEqCI!("ASC"))>,
+        pub desc: Option<(Space, StringEqCI!("DESC"))>,
     }
 
     #[derive(Grammar)]
@@ -2084,10 +2120,12 @@ pub mod leveled {
             limit: Limit,
             offset: Option<Offset>,
         },
+        #[sugar(into = query::offset_fetch)]
         OffsetFetch {
             offset: Offset,
             fetch: Option<Fetch>,
         },
+        #[sugar(into = query::fetch_only)]
         FetchOnly(Fetch),
     }
 
@@ -2096,8 +2134,8 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "limit spec")]
     pub enum LimitSpec {
+        All(StringEqCI!("ALL"), NotFollowedBy<IdentifierPart>),
         Val(RowCount),
-        All(StringEqCI!("ALL")),
     }
 
     #[derive(Grammar)]
@@ -2107,9 +2145,16 @@ pub mod leveled {
         Scalx(Scalx),
     }
 
-    pub type Offset =
-        Wrap<(Space, StringEqCI!("OFFSET"), Space), RowCount, Option<(Space, RowRowsInline)>>;
+    #[derive(Grammar)]
+    #[sugar(into = query::offset)]
+    pub struct Offset {
+        pub kw: (Space, StringEqCI!("OFFSET"), Space),
+        pub count: RowCount,
+        #[sugar]
+        pub rows: Option<(Space, RowRowsInline)>,
+    }
 
+    #[sugar]
     #[derive(Grammar)]
     pub struct Fetch {
         pub keyword: (Space, StringEqCI!("FETCH"), Space),
@@ -2119,6 +2164,7 @@ pub mod leveled {
         pub only: Option<(Space, StringEqCI!("ONLY"))>,
     }
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum RowRowsInline {
@@ -2572,6 +2618,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "selct")]
+    #[sugar(into = query::selct)]
     pub struct Selct {
         pub query: Query,
         pub order: Option<Order>,

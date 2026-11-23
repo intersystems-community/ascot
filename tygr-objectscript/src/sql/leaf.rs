@@ -69,6 +69,20 @@ impl Space {
     pub fn blank() -> Space {
         Space(vec![SpaceUnit::Raw(Hidden(Raw::new(" ")))])
     }
+
+    pub fn has_comment(&self) -> bool {
+        self.0.iter().any(|unit| !matches!(unit, SpaceUnit::Raw(_)))
+    }
+
+    /// `self` with the blank of a piece of removed sugar after it: the comments of the latter stay,
+    /// its blanks alone add nothing.
+    pub fn join(&self, removed: &Space) -> Space {
+        match (self.has_comment(), removed.has_comment()) {
+            (_, false) => self.clone(),
+            (false, true) => removed.clone(),
+            (true, true) => Space(self.0.iter().chain(&removed.0).cloned().collect()),
+        }
+    }
 }
 
 #[derive(Grammar, Clone)]

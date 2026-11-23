@@ -488,7 +488,7 @@ impl Walk for ODBCFunc {
 impl Walk for Agg {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Agg::AggFuncArgs(_, _, arg) => arg.walk(w),
+            Agg::AggFuncArgs { arg, .. } => arg.walk(w),
             Agg::CountStar(..) => {}
         }
     }
@@ -504,9 +504,7 @@ impl Walk for AggArg {
 
 impl Walk for Dist {
     fn walk(&self, w: &mut Walker) {
-        if let Dist::Distinct { by, .. } = self {
-            by.walk(w)
-        }
+        self.by.walk(w)
     }
 }
 

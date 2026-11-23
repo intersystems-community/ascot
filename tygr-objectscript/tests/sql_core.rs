@@ -85,7 +85,70 @@ const RULES: &[(&str, &str)] = &[
         "SELECT a FROM t WHERE a = 1 & b = 2",
         "SELECT a FROM t WHERE a = 1 AND b = 2",
     ),
+    ("SELECT ALL a FROM t", "SELECT a FROM t"),
+    (
+        "SELECT %NOLOCK ALL /* c */ a FROM t",
+        "SELECT %NOLOCK /* c */ a FROM t",
+    ),
+    ("SELECT ALLOWED FROM t", "SELECT ALLOWED FROM t"),
+    (
+        "SELECT COUNT(ALL a), COUNT(ALL /* c */ b), COUNT(ALLOWED) FROM t",
+        "SELECT COUNT(a), COUNT( /* c */ b), COUNT(ALLOWED) FROM t",
+    ),
+    (
+        "SELECT a FROM t ORDER BY a ASC, b DESC",
+        "SELECT a FROM t ORDER BY a, b DESC",
+    ),
+    ("SELECT a x FROM t u", "SELECT a AS x FROM t AS u"),
+    (
+        "SELECT a FROM t, u v, w",
+        "SELECT a FROM t CROSS JOIN u AS v CROSS JOIN w",
+    ),
+    (
+        "SELECT a FROM {oj t LEFT OUTER JOIN u ON t.a = u.a}",
+        "SELECT a FROM t LEFT OUTER JOIN u ON t.a = u.a",
+    ),
+    (
+        "SELECT a FROM t JOIN u ON t.a = u.a",
+        "SELECT a FROM t INNER JOIN u ON t.a = u.a",
+    ),
+    (
+        "SELECT a FROM t LEFT JOIN u ON t.a = u.a FULL JOIN v USING (a)",
+        "SELECT a FROM t LEFT OUTER JOIN u ON t.a = u.a FULL OUTER JOIN v USING (a)",
+    ),
+    (
+        "SELECT a FROM t NATURAL RIGHT JOIN u",
+        "SELECT a FROM t NATURAL RIGHT OUTER JOIN u",
+    ),
+    (
+        "SELECT a FROM t OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY",
+        "SELECT a FROM t LIMIT 10 OFFSET 5",
+    ),
+    (
+        "SELECT a FROM t FETCH FIRST 10 ROWS ONLY",
+        "SELECT a FROM t LIMIT 10",
+    ),
+    (
+        "SELECT a FROM t OFFSET 5 ROWS",
+        "SELECT a FROM t LIMIT ALL OFFSET 5",
+    ),
+    ("SELECT a FROM t LIMIT ALL", "SELECT a FROM t"),
+    (
+        "SELECT a FROM t LIMIT ALL OFFSET 3",
+        "SELECT a FROM t LIMIT ALL OFFSET 3",
+    ),
+    (
+        "SELECT a FROM t WHERE a %INLIST :l SIZE ((10))",
+        "SELECT a FROM t WHERE a %INLIST :l SIZE (10)",
+    ),
+    (
+        "SELECT a FROM t WHERE a %INLIST :l SIZE 10",
+        "SELECT a FROM t WHERE a %INLIST :l SIZE (10)",
+    ),
 ];
+
+/// Sugar the core grammar admits, as the rewrite drops a node whose type the core keeps.
+const ADMITTED: &[&str] = &["SELECT a FROM t LIMIT ALL"];
 
 /// Statements mixing the rules, and the sugar-free rest of the grammar.
 const STATEMENTS: &[&str] = &[
@@ -150,8 +213,10 @@ fn each_rule_rewrites_its_statement() {
 
 #[test]
 fn the_core_grammar_lacks_the_sugar() {
-    for (text, _) in RULES {
-        assert!(core::SQL::parse(text).is_err(), "{text}");
+    for (text, core_text) in RULES {
+        if text != core_text && !ADMITTED.contains(text) {
+            assert!(core::SQL::parse(text).is_err(), "{text}");
+        }
     }
 }
 

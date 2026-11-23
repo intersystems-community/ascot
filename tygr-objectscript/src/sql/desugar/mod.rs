@@ -31,6 +31,7 @@ macro_rules! identity {
 }
 
 identity!(
+    (),
     IsSpace,
     IsSimpleLatinLetter,
     IsNonAsciiLetter,

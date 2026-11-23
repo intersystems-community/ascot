@@ -63,6 +63,7 @@ impl Walk for Selex {
         self.where_clause.walk(w);
         self.group.walk(w);
         self.having.walk(w);
+        self.options.walk(w);
         self.selst.walk(w);
         // A statement's trailing `ORDER BY` parses as its last branch's; it names the first
         // branch's columns and aliases, which the statement's frame holds.
@@ -78,7 +79,6 @@ impl Walk for Selex {
 
 impl Walk for Selst {
     fn walk(&self, w: &mut Walker) {
-        self.options.walk(w);
         self.distinct.walk(w);
         self.top.walk(w);
         self.select_list.0.walk(w);
@@ -108,7 +108,7 @@ impl Walk for SelectItem {
         if let SelectItem::Expr { expr, alias } = self {
             expr.walk(w);
             if let Some(alias) = alias {
-                w.alias(alias.name())
+                w.alias(&alias.name)
             }
         }
     }
@@ -210,6 +210,12 @@ impl Walk for RowCount {
             RowCount::Val(val) => val.walk(w),
             RowCount::Scalx(scalx) => scalx.walk(w),
         }
+    }
+}
+
+impl Walk for Offset {
+    fn walk(&self, w: &mut Walker) {
+        self.count.walk(w)
     }
 }
 

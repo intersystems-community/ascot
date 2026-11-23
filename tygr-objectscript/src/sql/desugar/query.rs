@@ -1,12 +1,14 @@
 //! The predicate and query rules of the desugaring (see `grammar`): each the `into` of a `#[sugar]`
 //! mark, given the sugar node's fields, or the whole node, by reference.
 
-use tygr::{Grammar, StringEqCI};
+use std::ops::Deref;
+
+use tygr::{Grammar, Prefix, StringEq, StringEqCI};
 
 use super::Desugar;
 use crate::convert::VecSep;
 use crate::sql::grammar::{core, full};
-use crate::sql::leaf::Space;
+use crate::sql::leaf::{Ident, Literal, Space};
 use crate::sql::src::Src;
 
 /// `!=` and `NOT=` are `<>`.
@@ -143,4 +145,227 @@ fn predicate(cond: &full::Cond) -> core::Cond {
         StarEq { noindex, lhs, sp, op, rhs }
         EqStar { noindex, lhs, sp, op, rhs }
     )
+}
+
+/// `SELECT ALL` is `SELECT`: the blank after ALL joins the one before it.
+pub fn selex(s: &full::Selex) -> core::Selex {
+    let (mut kw, mut options) = (s.kw.desugar(), s.options.desugar());
+    if let Some((_, _, after)) = &s.all {
+        let before = options.last_mut().map_or(&mut kw.1, trailing);
+        *before = before.join(after);
+    }
+    core::Selex {
+        kw,
+        options,
+        selst: s.selst.desugar(),
+        from: s.from.desugar(),
+        where_clause: s.where_clause.desugar(),
+        group: s.group.desugar(),
+        having: s.having.desugar(),
+        order: s.order.desugar(),
+    }
+}
+
+fn trailing(option: &mut core::SelectOption) -> &mut Space {
+    use core::SelectOption::*;
+    match option {
+        NoFPlan((_, sp))
+        | NoLock((_, sp))
+        | Profile((_, sp))
+        | ProfileAll((_, sp))
+        | NoRuntime((_, sp))
+        | DoRuntime((_, sp))
+        | RowLimit(_, _, sp)
+        | RowOffset(_, _, sp) => sp,
+    }
+}
+
+/// `COUNT(ALL x)` is `COUNT(x)`, in every aggregate.
+pub fn agg(agg: &full::Agg) -> core::Agg {
+    match agg {
+        full::Agg::AggFuncArgs {
+            fun,
+            sp,
+            open,
+            all,
+            arg,
+            close,
+        } => {
+            let mut open = open.desugar();
+            if let Some((_, _, after)) = all {
+                open.1 = open.1.join(after);
+            }
+            core::Agg::AggFuncArgs {
+                fun: fun.desugar(),
+                sp: sp.desugar(),
+                open,
+                arg: arg.desugar(),
+                close: close.desugar(),
+            }
+        }
+        full::Agg::CountStar(count, sp, star) => {
+            core::Agg::CountStar(count.desugar(), sp.desugar(), star.desugar())
+        }
+    }
+}
+
+/// `ASC`, the order by default, goes.
+pub fn ordir(o: &full::Ordir) -> core::Ordir {
+    core::Ordir {
+        expr: o.expr.desugar(),
+        desc: o.desc.desugar(),
+    }
+}
+
+/// An omitted keyword stands as spelled, after a blank.
+pub fn spelled<K: Grammar + Default>(_: &()) -> core::Implied<K> {
+    core::Implied::Spelled(Space::blank(), K::default())
+}
+
+/// `FROM a, b` is `FROM a CROSS JOIN b`: each reference after the first a CROSS JOIN on it, with
+/// the range of the reference it comes from.
+pub fn tables(t: &full::Tables) -> core::Tables {
+    let core::Tref::Join(mut first) = t.first.desugar();
+    for ((before, _, after), tref) in &t.rest {
+        let (full::Tref::Join(jtab) | full::Tref::OJSyntax { table: jtab, .. }) = tref;
+        let core::Tref::Join(table) = tref.desugar();
+        let start = jtab.formit.range().start;
+        let end = jtab
+            .joins
+            .last()
+            .map_or(jtab.formit.range().end, |(_, join)| join.range().end);
+        let cross = core::Join::Cross {
+            cross_kw: (
+                Default::default(),
+                Space::blank(),
+                Default::default(),
+                Space::blank(),
+            ),
+            table: Box::new(table),
+        };
+        let sp = Space::blank().join(before).join(after);
+        first.joins.push((sp, Src::new(start..end, cross)));
+    }
+    core::Tables {
+        first: core::Tref::Join(first),
+    }
+}
+
+/// `{oj ...}` is the join inside it.
+pub fn oj(
+    _: &StringEq!("{"),
+    _: &(Ident, Space),
+    table: &full::JTab,
+    _: &(Space, StringEq!("}")),
+) -> core::Tref {
+    core::Tref::Join(table.desugar())
+}
+
+/// `JOIN` is `INNER JOIN`.
+pub fn inner(join_kw: &StringEqCI!("JOIN")) -> core::JOp {
+    core::JOp::Typed {
+        jtype: core::JType::Inner(Default::default()),
+        sp: Space::blank(),
+        join_kw: *join_kw,
+    }
+}
+
+/// `OFFSET m [ROWS] [FETCH [FIRST|NEXT] n [ROWS] [ONLY]]` is `LIMIT n OFFSET m`, `LIMIT ALL
+/// OFFSET m` without the FETCH.
+pub fn offset_fetch(offset: &full::Offset, fetch: &Option<full::Fetch>) -> core::RowLimitingClause {
+    let mut before_offset = Space::blank().join(&space_before(&offset.rows));
+    let (after_limit, spec) = match fetch {
+        None => (
+            Space::blank(),
+            core::LimitSpec::All(Default::default(), Default::default()),
+        ),
+        Some(fetch) => {
+            let (before_count, after_count) = fetch_blanks(fetch);
+            before_offset = before_offset.join(&fetch.keyword.0).join(&after_count);
+            (before_count, core::LimitSpec::Val(fetch.valspec.desugar()))
+        }
+    };
+    core::RowLimitingClause::LimitOffset {
+        limit: Prefix::new(
+            (offset.kw.0.desugar(), Default::default(), after_limit),
+            spec,
+        ),
+        offset: Some(core::Offset {
+            kw: (before_offset, Default::default(), offset.kw.2.desugar()),
+            count: offset.count.desugar(),
+        }),
+    }
+}
+
+/// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` is `LIMIT n`.
+pub fn fetch_only(fetch: &full::Fetch) -> core::RowLimitingClause {
+    let (before_count, _) = fetch_blanks(fetch);
+    core::RowLimitingClause::LimitOffset {
+        limit: Prefix::new(
+            (fetch.keyword.0.desugar(), Default::default(), before_count),
+            core::LimitSpec::Val(fetch.valspec.desugar()),
+        ),
+        offset: None,
+    }
+}
+
+/// The blanks of a FETCH around its count: within `FETCH [FIRST|NEXT]` and within `[ROWS] [ONLY]`.
+fn fetch_blanks(fetch: &full::Fetch) -> (Space, Space) {
+    let direction = fetch
+        .direction
+        .as_ref()
+        .map_or_else(Space::default, |(_, sp)| sp.clone());
+    (
+        fetch.keyword.2.join(&direction),
+        space_before(&fetch.row_keyword).join(&space_before(&fetch.only)),
+    )
+}
+
+fn space_before<T>(option: &Option<(Space, T)>) -> Space {
+    option
+        .as_ref()
+        .map_or_else(Space::default, |(sp, _)| sp.clone())
+}
+
+/// `ROWS` after the offset goes.
+pub fn offset(o: &full::Offset) -> core::Offset {
+    core::Offset {
+        kw: o.kw.desugar(),
+        count: o.count.desugar(),
+    }
+}
+
+/// `LIMIT ALL` alone, which limits nothing, goes.
+pub fn selct(s: &full::Selct) -> core::Selct {
+    let unlimited = |clause: &core::RowLimitingClause| {
+        matches!(clause, core::RowLimitingClause::LimitOffset { limit, offset: None }
+            if matches!(limit.prefixed, core::LimitSpec::All(..)))
+    };
+    core::Selct {
+        query: s.query.desugar(),
+        order: s.order.desugar(),
+        row_limiting_clause: s
+            .row_limiting_clause
+            .desugar()
+            .filter(|clause| !unlimited(clause)),
+    }
+}
+
+/// `SIZE n` is `SIZE (n)`.
+pub fn size_in_parens(kw: &(Space, StringEqCI!("SIZE"), Space), size: &Literal) -> core::SizeHint {
+    core::SizeHint::Paren {
+        kw: kw.desugar(),
+        open: Default::default(),
+        size: core::PConst::Literal(size.desugar()),
+        close: Default::default(),
+    }
+}
+
+/// `SIZE ((n))` keeps one pair of parentheses: the ones within go.
+pub fn unnested<P: Deref<Target = full::PConst>>(
+    _: &StringEq!("("),
+    inner: &P,
+    _: &StringEq!(")"),
+) -> core::PConst {
+    inner.desugar()
 }

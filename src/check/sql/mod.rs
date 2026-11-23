@@ -174,7 +174,7 @@ impl Walker<'_> {
         if self.unchecked {
             return;
         }
-        let alias = alias.map(|alias| text(&alias.name().0));
+        let alias = alias.map(|alias| text(&alias.name.0));
         let columns = match (&name, self.check) {
             (Some(name), Some(check)) => resolve::table(check, &self.frames, name),
             _ => None,
