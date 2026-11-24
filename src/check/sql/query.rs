@@ -1,4 +1,4 @@
-use tygr_objectscript::sql::*;
+use tygr_objectscript::sql::grammar::core::*;
 
 use super::{SqlProcedureUse, Walk, Walker, name_of};
 
@@ -122,18 +122,14 @@ impl Walk for FromClause {
 
 impl Walk for Tables {
     fn walk(&self, w: &mut Walker) {
-        for tref in self.iter() {
-            tref.walk(w)
-        }
+        self.first.walk(w)
     }
 }
 
 impl Walk for Tref {
     fn walk(&self, w: &mut Walker) {
-        match self {
-            Tref::Join(table) => table.walk(w),
-            Tref::OJSyntax { table, .. } => table.walk(w),
-        }
+        let Tref::Join(table) = self;
+        table.walk(w)
     }
 }
 
@@ -182,17 +178,9 @@ impl Walk for Frmit {
 
 impl Walk for RowLimitingClause {
     fn walk(&self, w: &mut Walker) {
-        match self {
-            RowLimitingClause::LimitOffset { limit, offset } => {
-                limit.walk(w);
-                offset.walk(w)
-            }
-            RowLimitingClause::OffsetFetch { offset, fetch } => {
-                offset.walk(w);
-                fetch.walk(w)
-            }
-            RowLimitingClause::FetchOnly(fetch) => fetch.walk(w),
-        }
+        let RowLimitingClause::LimitOffset { limit, offset } = self;
+        limit.walk(w);
+        offset.walk(w)
     }
 }
 
@@ -216,11 +204,5 @@ impl Walk for RowCount {
 impl Walk for Offset {
     fn walk(&self, w: &mut Walker) {
         self.count.walk(w)
-    }
-}
-
-impl Walk for Fetch {
-    fn walk(&self, w: &mut Walker) {
-        self.valspec.walk(w)
     }
 }

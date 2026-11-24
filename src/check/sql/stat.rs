@@ -1,6 +1,6 @@
 use either::Either;
 use tygr::Print;
-use tygr_objectscript::sql::*;
+use tygr_objectscript::sql::{Space, grammar::core::*};
 
 use super::{SqlProcedureUse, Walk, Walker, name_of};
 
@@ -89,7 +89,6 @@ impl Walk for IUDTarget {
 impl Walk for InsertValues {
     fn walk(&self, w: &mut Walker) {
         match self {
-            InsertValues::SetList { assignments, .. } => assignments.1.walk(w),
             InsertValues::ColumnList { columns, values } => column_list(w, columns, values),
             InsertValues::DefaultValues(..) => {}
         }

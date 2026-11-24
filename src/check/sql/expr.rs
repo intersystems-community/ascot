@@ -1,5 +1,5 @@
 use either::Either;
-use tygr_objectscript::sql::*;
+use tygr_objectscript::sql::grammar::core::*;
 
 use super::{SqlProcedureUse, Walk, Walker};
 
@@ -14,17 +14,11 @@ impl Walk for Term {
     fn walk(&self, w: &mut Walker) {
         match self {
             Term::Builtin(f) => f.walk(w),
-            Term::ScalarFunction(f) => f.walk(w),
             Term::Window(window) => window.walk(w),
             Term::Agg(agg) => agg.walk(w),
-            Term::Unary { term, .. } | Term::PercentUnary { term, .. } => term.walk(w),
-            Term::StringOperation(op) => {
-                op.expr.walk(w);
-                op.truncation.walk(w)
-            }
+            Term::Unary { term, .. } => term.walk(w),
             Term::XTFun(f) => f.args.walk(w),
             Term::Case(case) => case.walk(w),
-            Term::OdbcEscape(escape) => escape.walk(w),
             Term::Scalx(scalx) => scalx.walk(w),
             Term::Query(query) => query.walk(w),
             Term::Call(f) => {
@@ -58,21 +52,6 @@ impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar, T3: Walk + tygr::Gramma
         self.arg1.walk(w);
         self.arg2.walk(w);
         self.arg3.walk(w)
-    }
-}
-
-impl<
-    T1: Walk + tygr::Grammar,
-    T2: Walk + tygr::Grammar,
-    T3: Walk + tygr::Grammar,
-    T4: Walk + tygr::Grammar,
-> Walk for ArgsRRRR<T1, T2, T3, T4>
-{
-    fn walk(&self, w: &mut Walker) {
-        self.arg1.walk(w);
-        self.arg2.walk(w);
-        self.arg3.walk(w);
-        self.arg4.walk(w)
     }
 }
 
@@ -126,83 +105,6 @@ impl<
             if let Some((_, arg4)) = arg4 {
                 arg4.walk(w)
             }
-        }
-    }
-}
-
-impl Walk for ScalarFunction {
-    fn walk(&self, w: &mut Walker) {
-        use ScalarFunction::*;
-        match self {
-            Str(_, a) => a.walk(w),
-            CharIndex(_, a)
-            | Convert(_, a)
-            | IfNull(_, a)
-            | LPad(_, a)
-            | RPad(_, a)
-            | Substr(_, a) => a.walk(w),
-            Embedding(_, a)
-            | ToChar(_, a)
-            | ToDate(_, a)
-            | ToUSChar(_, a)
-            | ToUSDate(_, a)
-            | ToTimestamp(_, a) => a.walk(w),
-            PercentObject(_, a)
-            | PercentOid(_, a)
-            | Abs(_, a)
-            | Ascii(_, a)
-            | Ceiling(_, a)
-            | CharacterLength(_, a)
-            | CharLength(_, a)
-            | DataLength(_, a)
-            | Date(_, a)
-            | Day(_, a)
-            | Floor(_, a)
-            | IsNumeric(_, a)
-            | LastDay(_, a)
-            | LCase(_, a)
-            | Len(_, a)
-            | Length(_, a)
-            | Lower(_, a)
-            | LTrim(_, a)
-            | Month(_, a)
-            | Reverse(_, a)
-            | RTrim(_, a)
-            | Sign(_, a)
-            | Space(_, a)
-            | UCase(_, a)
-            | Year(_, a) => a.walk(w),
-            Similarity(_, a)
-            | HashBytes(_, a)
-            | IsNull(_, a)
-            | Left(_, a)
-            | NullIf(_, a)
-            | Nvl(_, a)
-            | PatIndex(_, a)
-            | Power(_, a)
-            | Repeat(_, a)
-            | Replicate(_, a)
-            | Right(_, a)
-            | Round(_, a)
-            | VectorCosine(_, a)
-            | VectorDotProduct(_, a) => a.walk(w),
-            Instr(_, a) => a.walk(w),
-            Coalesce(_, a) | Decode(_, a) | Greatest(_, a) | Least(_, a) | String(_, a) => {
-                a.walk(w)
-            }
-            GetDate(_, a) | GetUtcDate(_, a) | UnixTimestamp(_, a) => a.walk(w),
-            Replace(_, a) => a.walk(w),
-            Stuff(_, a) => a.walk(w),
-            DateAdd(_, a) | DateDiff(_, a) => a.walk(w),
-            DateName(_, a) | DateTrunc(_, a) => a.walk(w),
-            DatePart(_, a) => a.walk(w),
-            ToNumber(_, a) => a.walk(w),
-            Position(_, a) => {
-                a.needle.walk(w);
-                a.haystack.walk(w)
-            }
-            Substring(_, a) => a.walk(w),
-            LastIdentity(..) | Now(..) => {}
         }
     }
 }
@@ -303,52 +205,11 @@ impl Walk for PredictAssign {
     }
 }
 
-impl Walk for SubstringArgsInternal {
-    fn walk(&self, w: &mut Walker) {
-        match self {
-            SubstringArgsInternal::Keyword {
-                expr,
-                start,
-                for_clause,
-                ..
-            } => {
-                expr.walk(w);
-                start.walk(w);
-                if let Some((_, length)) = for_clause {
-                    length.walk(w)
-                }
-            }
-            SubstringArgsInternal::Position {
-                expr,
-                start,
-                length,
-                ..
-            } => {
-                expr.walk(w);
-                start.walk(w);
-                if let Some((_, length)) = length {
-                    length.walk(w)
-                }
-            }
-        }
-    }
-}
-
 impl Walk for TrimArgs {
     fn walk(&self, w: &mut Walker) {
-        match self {
-            TrimArgs::SpecScalxScalx(_, _, chars, _, _, _, scalx) => {
-                chars.walk(w);
-                scalx.walk(w)
-            }
-            TrimArgs::SpecScalx(_, _, _, scalx) => scalx.walk(w),
-            TrimArgs::ScalxScalx(chars, scalx) => {
-                if let Some((chars, ..)) = chars {
-                    chars.walk(w)
-                }
-                scalx.walk(w)
-            }
-        }
+        let TrimArgs::SpecScalxScalx(_, _, chars, _, _, _, scalx) = self;
+        chars.walk(w);
+        scalx.walk(w)
     }
 }
 
@@ -427,70 +288,6 @@ impl Walk for XMLConcat {
     }
 }
 
-impl Walk for DTS {
-    fn walk(&self, w: &mut Walker) {
-        match self {
-            DTS::Function(f) => f.walk(w),
-            DTS::DateTime(val) => val.val_spec.walk(w),
-        }
-    }
-}
-
-impl Walk for ODBCFunc {
-    fn walk(&self, w: &mut Walker) {
-        use ODBCFunc::*;
-        match self {
-            Abs(_, a)
-            | Acos(_, a)
-            | Asin(_, a)
-            | Atan(_, a)
-            | Ceiling(_, a)
-            | Cos(_, a)
-            | Cot(_, a)
-            | Exp(_, a)
-            | Floor(_, a)
-            | Log(_, a)
-            | Log10(_, a)
-            | Sin(_, a)
-            | Sqrt(_, a)
-            | Tan(_, a)
-            | Ascii(_, a)
-            | Char(_, a)
-            | DayName(_, a)
-            | DayOfMonth(_, a)
-            | DayOfWeek(_, a)
-            | DayOfYear(_, a)
-            | Hour(_, a)
-            | LCase(_, a)
-            | Length(_, a)
-            | LTrim(_, a)
-            | Minute(_, a)
-            | Month(_, a)
-            | MonthName(_, a)
-            | Quarter(_, a)
-            | RTrim(_, a)
-            | Second(_, a)
-            | Sign(_, a)
-            | Space(_, a)
-            | UCase(_, a)
-            | Week(_, a)
-            | Year(_, a) => a.walk(w),
-            Mod(_, a)
-            | Power(_, a)
-            | Concat(_, a)
-            | Left(_, a)
-            | Repeat(_, a)
-            | Right(_, a)
-            | Round(_, a)
-            | Truncate(_, a) => a.walk(w),
-            Substring(_, a) => a.walk(w),
-            TimestampAdd(_, a) => a.walk(w),
-            TimestampDiff(_, a) => a.walk(w),
-            Pi(..) | CurDate(..) | CurTime(..) | Database(..) | Now(..) => {}
-        }
-    }
-}
-
 impl Walk for Agg {
     fn walk(&self, w: &mut Walker) {
         match self {
@@ -564,9 +361,8 @@ impl Walk for SQLSimpleCaseWhen {
 
 impl Walk for Implied<SQLElseClause> {
     fn walk(&self, w: &mut Walker) {
-        if let Implied::Spelled(_, else_clause) = self {
-            else_clause.result.walk(w)
-        }
+        let Implied::Spelled(_, else_clause) = self;
+        else_clause.result.walk(w)
     }
 }
 

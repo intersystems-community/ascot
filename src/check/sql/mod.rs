@@ -1,6 +1,7 @@
-//! The checker of embedded SQL. It walks the parsed statement node by node, the way the
-//! ObjectScript checker does, and records what the flow needs -- every host variable as a read or
-//! a write, and the cursor the statement declares or fetches -- and the names `resolve` checks.
+//! The checker of embedded SQL. It walks the parsed statement, desugared into the core grammar,
+//! node by node, the way the ObjectScript checker does, and records what the flow needs -- every
+//! host variable as a read or a write, and the cursor the statement declares or fetches -- and the
+//! names `resolve` checks.
 
 use std::ops::Range;
 
@@ -11,7 +12,8 @@ use crate::bindings::{ClassInfo, MemberKind, SqlProjection};
 use crate::check::errors::{SqlProcedureUse, TypeErrorKind};
 use resolve::{Columns, Lookup, ProcInfo};
 use tygr_objectscript::cos::VecSep;
-use tygr_objectscript::sql::*;
+use tygr_objectscript::sql::grammar::core::*;
+use tygr_objectscript::sql::{Src, leaf::*};
 
 mod expr;
 mod query;
@@ -340,15 +342,6 @@ impl<A: Walk, B: Walk> Walk for Either<A, B> {
     }
 }
 
-impl<T: Walk + tygr::Grammar> Walk for OptionallyWrapped<T> {
-    fn walk(&self, w: &mut Walker) {
-        match self {
-            OptionallyWrapped::Wrapped(t) => t.walk(w),
-            OptionallyWrapped::Scalar(t) => t.walk(w),
-        }
-    }
-}
-
 impl Walk for HostVar {
     fn walk(&self, w: &mut Walker) {
         w.host(&self.host_ref, self.subs.is_some());
@@ -407,37 +400,6 @@ impl Walk for DTSValSpec {
     }
 }
 
-impl Walk for ColTrun {
-    fn walk(&self, w: &mut Walker) {
-        match self {
-            ColTrun::Const(_) => {}
-            ColTrun::HostVar(host_var) => host_var.walk(w),
-        }
-    }
-}
-
-impl Walk for DatePartCommon {
-    fn walk(&self, w: &mut Walker) {
-        if let DatePartCommon::HostVar(host_var) = self {
-            host_var.walk(w)
-        }
-    }
-}
-
-impl Walk for DatePartPartRaw {
-    fn walk(&self, w: &mut Walker) {
-        if let DatePartPartRaw::Common(common) = self {
-            common.walk(w)
-        }
-    }
-}
-
-impl Walk for DatePartPart {
-    fn walk(&self, w: &mut Walker) {
-        self.0.walk(w)
-    }
-}
-
 impl Walk for Targt {
     fn walk(&self, w: &mut Walker) {
         if let Some((_, targt)) = &self.0 {
@@ -461,12 +423,14 @@ mod tests {
     use tygr::Parse;
     use tygr_objectscript::sql::desugar::Desugar;
 
+    // Parsed by the full grammar and desugared, as the checker sees a statement.
     fn parse(text: &str) -> SQL {
-        SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"))
+        let full = tygr_objectscript::sql::SQL::parse(text);
+        full.unwrap_or_else(|e| panic!("{text}: {e}")).desugar()
     }
 
-    // `text` and the core text it desugars to, which the checker will move to: the walker, on the
-    // full grammar still, finds the same host variables in both and reports the same codes.
+    // `text` and the core text it desugars to: the walker finds the same host variables in both
+    // and reports the same codes.
     fn on_both(text: &str, mock: Option<&Mock>) -> (Hosts, Vec<String>) {
         let run = |text: &str| {
             let hosts = analyze(&parse(text), mock.map(|mock| mock as &dyn Resolver));
@@ -476,7 +440,7 @@ mod tests {
             reports.iter().map(|report| &report[..5]).collect()
         }
         let (hosts, reports) = run(text);
-        let (core_hosts, core_reports) = run(&parse(text).desugar().print());
+        let (core_hosts, core_reports) = run(&parse(text).print());
         assert_eq!(names(&hosts.reads), names(&core_hosts.reads), "{text}");
         assert_eq!(names(&hosts.writes), names(&core_hosts.writes), "{text}");
         assert_eq!(codes(&reports), codes(&core_reports), "{text}");
@@ -663,11 +627,11 @@ mod tests {
         let statements: Vec<String> = serde_json::from_str(&text).unwrap();
         let (mut parsed, mut missing) = (0, vec![]);
         for (i, statement) in statements.iter().enumerate() {
-            let Ok(sql) = SQL::parse(statement) else {
+            let Ok(sql) = tygr_objectscript::sql::SQL::parse(statement) else {
                 continue;
             };
             parsed += 1;
-            let h = analyze(&sql, None);
+            let h = analyze(&sql.desugar(), None);
             let found: Vec<&str> = h
                 .reads
                 .iter()

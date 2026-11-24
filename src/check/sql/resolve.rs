@@ -16,6 +16,7 @@ use crate::{DocKind, sql_schema};
 
 use super::{ColumnRef, Frame, Hosts, Name, Resolver, TableRef};
 use tygr_objectscript::sql::SQL;
+use tygr_objectscript::sql::desugar::Desugar;
 
 #[derive(Clone)]
 pub(crate) enum Lookup<T> {
@@ -608,9 +609,10 @@ impl Resolver for Checker<'_, '_> {
     }
 }
 
-// Walks the statement, checking its names as they come, and returns its host variables.
+// Desugars the statement into the core grammar and walks it, checking its names as they come, and
+// returns its host variables.
 pub(in crate::check) fn check(code: &CodeEnv<'_>, flow: &mut Flow<'_>, statement: &SQL) -> Hosts {
-    super::analyze(statement, Some(&Checker { code, flow }))
+    super::analyze(&statement.desugar(), Some(&Checker { code, flow }))
 }
 
 // A table's columns when they are known: not a CTE's, a view's, or a table nobody has, which is
