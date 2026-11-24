@@ -1151,12 +1151,12 @@ fn method_kind(
             let at = olc.range(&default);
             let value = match default.into_inner() {
                 cos::FormalDefaultValue::Brace { expr, .. } => Left(expr),
-                cos::FormalDefaultValue::Other(cos::OSExpr::Brace { content, .. }) => {
+                cos::FormalDefaultValue::Braces { content, .. } => {
                     let range = olc.range(&content);
                     Right(WithRange::new(content.print(), range))
                 }
                 cos::FormalDefaultValue::Elided(_) => Right(WithRange::new("…".to_string(), at)),
-                cos::FormalDefaultValue::Other(_) => return None,
+                cos::FormalDefaultValue::Literal(_) => return None,
             };
             Some(BraceDefault { name, value })
         })
