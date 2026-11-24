@@ -154,7 +154,10 @@ use crate::{
     SourceMap,
     bindings::{self, Diagnostic, DiagnosticRelatedInformation, InlayHint, Location, RefMode},
     cos::{self, *},
-    details::{self, MemberDetails, MemberKindSpecificDetails, MemberNs, MethodDetails, WithRange},
+    details::{
+        self, DefaultValue, MemberDetails, MemberKindSpecificDetails, MemberNs, MethodDetails,
+        WithRange,
+    },
 };
 
 pub(crate) trait CheckMember {
@@ -459,18 +462,19 @@ impl MethodDetails {
                 );
                 for default in &self.brace_defaults {
                     let range = match &default.value {
-                        Left(expr) => default_env.range(expr),
-                        Right(text) => text.range,
+                        DefaultValue::Expr(expr) => default_env.range(expr),
+                        DefaultValue::Braces(text) => text.range,
+                        DefaultValue::Unbraced(range) => *range,
                     };
                     flow.with_range(range, |flow| {
                         let ty = match &default.value {
-                            Left(expr) => {
+                            DefaultValue::Expr(expr) => {
                                 expr.to_power_ty(&default_env, flow).unwrap_or_else(|err| {
                                     default_env.soft_diagnostic(err);
                                     Ty::Any.into()
                                 })
                             }
-                            Right(text) => {
+                            DefaultValue::Braces(text) => {
                                 if let Err(err) = Expr::parse(&text.it) {
                                     default_env.soft_diagnostic(TypeError::syntax_error(
                                         range,
@@ -479,6 +483,18 @@ impl MethodDetails {
                                         SyntaxScope::ArgumentDefault,
                                     ));
                                 }
+                                Ty::Any.into()
+                            }
+                            DefaultValue::Unbraced(_) => {
+                                default_env.soft_diagnostic(
+                                    TypeErrorKind::InvalidSyntax {
+                                        scope: SyntaxScope::ArgumentDefault,
+                                        detail: SyntaxErrorText(
+                                            "expected a literal or an expression in braces".into(),
+                                        ),
+                                    }
+                                    .at(range),
+                                );
                                 Ty::Any.into()
                             }
                         };
@@ -751,6 +767,9 @@ fn check_block_body<'a>(
     // "never read"/"never assigned" reports for the main body can't be trusted.
     flow.mark_incomplete();
     for (elem, details) in &subroutines {
+        for diagnostic in check_label_defaults(env, elem) {
+            env.add_soft_diagnostic(diagnostic);
+        }
         // Each label is checked on its own: one's hard error doesn't hide the next one's.
         if let Err(err) = check_element_body(env, details, elem) {
             env.add_soft_diagnostic(err.into());
@@ -770,6 +789,36 @@ fn check_element_body<'a>(
             check_procedure(procedure, details, env).map(|()| vec![])
         }
     }
+}
+
+// A label's default must begin with a literal (IRIS: "Expected literal").
+fn check_label_defaults(
+    env: &CodeEnv<'_>,
+    elem: &cos::RoutineElement,
+) -> Vec<bindings::Diagnostic> {
+    let params = match elem {
+        cos::RoutineElement::Procedure(procedure) => match procedure.header.deref() {
+            AllowMacro::Plain(header) => Some(&header.params),
+            AllowMacro::Macro(..) => None,
+        },
+        cos::RoutineElement::Subroutine(subroutine) => match &subroutine.header {
+            AllowMacro::Plain(header) => header.params.as_ref(),
+            AllowMacro::Macro(..) => None,
+        },
+    };
+    (params.into_iter().flat_map(|params| &***params))
+        .flat_map(|params| params.items.iter())
+        .filter_map(|entry| entry.default.as_deref())
+        .filter(|default| details::literal_prefix(&default.print()).is_none())
+        .map(|default| {
+            TypeErrorKind::InvalidSyntax {
+                scope: SyntaxScope::ArgumentDefault,
+                detail: SyntaxErrorText("expected a literal".into()),
+            }
+            .at(env.range(default))
+            .into()
+        })
+        .collect()
 }
 
 // The labels inside the blocks of `body`, at any depth.
@@ -4774,6 +4823,7 @@ pub(crate) fn check_rtn(
             }
         }
         check_argument_order(env.style(), &details.normal_args, &mut diagnostics);
+        diagnostics.extend(check_label_defaults(&env, elem));
         let result = match elem {
             cos::RoutineElement::Procedure(procedure) => {
                 if let Some(trailer) = &procedure.trailer {

@@ -7306,7 +7306,7 @@ pub struct ParameterEntry {
     pub by_ref: Option<StringEq!("&")>,
     pub param: Ranged<LocalVariableName>,
     pub expand: Option<StringEq!("...")>,
-    pub default: Option<Prefix<Raw<Wrap<MGap, StringEq!("="), MGap>>, Value>>,
+    pub default: Option<Prefix<Raw<Wrap<MGap, StringEq!("="), MGap>>, Ranged<Value>>>,
 }
 
 pub type ParameterList = Wrap<
