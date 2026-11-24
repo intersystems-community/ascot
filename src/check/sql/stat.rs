@@ -33,7 +33,8 @@ impl Walk for Stat {
     }
 }
 
-// The target table is the frame of the column list, the `SET` and the `WHERE`.
+// The target table is the frame of the column list, the values, the `SET` and the `WHERE`: IRIS
+// resolves a name in a VALUES list against it as in a SET (measured on 2026.2).
 impl Walk for Insrt {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
@@ -112,7 +113,10 @@ fn column_list(
     for column in columns.iter().flat_map(|list| list.wrapped.items.iter()) {
         w.column(column)
     }
-    w.outside(&values.1)
+    match &values.1 {
+        query @ ValueSource::Query { .. } => w.outside(query),
+        values => values.walk(w),
+    }
 }
 
 impl Walk for SQLSetAssignment {
