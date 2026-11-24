@@ -91,6 +91,13 @@ pub enum Ident {
     Delimited(DelimitedIdentifier),
 }
 
+impl Ident {
+    /// A plain identifier, as a rule spells a name.
+    pub fn simple(name: &str) -> Ident {
+        Ident::Simple(Identifier(Raw::new(name)))
+    }
+}
+
 #[derive(Grammar, Clone)]
 #[tygr(validated, inline)]
 pub struct SQLIdentNonKeyword(pub Ident);

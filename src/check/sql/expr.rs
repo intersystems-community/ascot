@@ -134,34 +134,20 @@ impl Walk for ScalarFunction {
     fn walk(&self, w: &mut Walker) {
         use ScalarFunction::*;
         match self {
-            DollarExtract(_, a)
-            | DollarFind(_, a)
-            | DollarFNumber(_, a)
-            | DollarList(_, a)
-            | DollarListGet(_, a)
-            | Str(_, a) => a.walk(w),
-            DollarJustify(_, a)
-            | DollarListFind(_, a)
-            | DollarTranslate(_, a)
-            | CharIndex(_, a)
+            Str(_, a) => a.walk(w),
+            CharIndex(_, a)
             | Convert(_, a)
             | IfNull(_, a)
             | LPad(_, a)
             | RPad(_, a)
             | Substr(_, a) => a.walk(w),
-            DollarLength(_, a)
-            | DollarListData(_, a)
-            | DollarListFromString(_, a)
-            | DollarListToString(_, a)
-            | Embedding(_, a)
+            Embedding(_, a)
             | ToChar(_, a)
             | ToDate(_, a)
             | ToUSChar(_, a)
             | ToUSDate(_, a)
             | ToTimestamp(_, a) => a.walk(w),
-            DollarListBuild(_, a) => a.walk(w),
-            DollarListLength(_, a)
-            | PercentObject(_, a)
+            PercentObject(_, a)
             | PercentOid(_, a)
             | Abs(_, a)
             | Ascii(_, a)
@@ -186,14 +172,7 @@ impl Walk for ScalarFunction {
             | Space(_, a)
             | UCase(_, a)
             | Year(_, a) => a.walk(w),
-            DollarListSame(_, a)
-            | DollarMvFmt(_, a)
-            | DollarMvFmts(_, a)
-            | DollarMvIconv(_, a)
-            | DollarMvIconvs(_, a)
-            | DollarMvOconv(_, a)
-            | DollarMvOconvs(_, a)
-            | Similarity(_, a)
+            Similarity(_, a)
             | HashBytes(_, a)
             | IsNull(_, a)
             | Left(_, a)
@@ -207,11 +186,10 @@ impl Walk for ScalarFunction {
             | Round(_, a)
             | VectorCosine(_, a)
             | VectorDotProduct(_, a) => a.walk(w),
-            DollarPiece(_, a) | Instr(_, a) => a.walk(w),
+            Instr(_, a) => a.walk(w),
             Coalesce(_, a) | Decode(_, a) | Greatest(_, a) | Least(_, a) | String(_, a) => {
                 a.walk(w)
             }
-            CurrentTimestamp(_, a) | CurrentTime(_, a) => a.walk(w),
             GetDate(_, a) | GetUtcDate(_, a) | UnixTimestamp(_, a) => a.walk(w),
             Replace(_, a) => a.walk(w),
             Stuff(_, a) => a.walk(w),
@@ -224,10 +202,7 @@ impl Walk for ScalarFunction {
                 a.haystack.walk(w)
             }
             Substring(_, a) => a.walk(w),
-            TSqlDbName(..) | TSqlError(..) | TSqlFetchStatus(..) | TSqlGetUtcDate(..)
-            | TSqlHostName(..) | TSqlLockTimeout(..) | TSqlNestLevel(..) | TSqlServerName(..)
-            | TSqlSpid(..) | TSqlSqlStatus(..) | TSqlTranCount(..) | TSqlVersion(..)
-            | LastIdentity(..) | Now(..) => {}
+            LastIdentity(..) | Now(..) => {}
         }
     }
 }
@@ -265,6 +240,40 @@ impl Walk for Builtin {
             TimestampDiff(_, a) => a.walk(w),
             ToVector(_, a) => a.walk(w),
             Trim(_, _, a) => a.walk(w),
+            Odbc(a) => a.walk(w),
+            CurrentTimestamp(_, a) | CurrentTime(_, a) => a.walk(w),
+            DollarExtract(_, a)
+            | DollarFind(_, a)
+            | DollarFNumber(_, a)
+            | DollarList(_, a)
+            | DollarListGet(_, a) => a.walk(w),
+            DollarJustify(_, a) | DollarListFind(_, a) | DollarTranslate(_, a) => a.walk(w),
+            DollarLength(_, a)
+            | DollarListData(_, a)
+            | DollarListFromString(_, a)
+            | DollarListToString(_, a) => a.walk(w),
+            DollarListBuild(_, a) => a.walk(w),
+            DollarListLength(_, a) => a.walk(w),
+            DollarListSame(_, a)
+            | DollarMvFmt(_, a)
+            | DollarMvFmts(_, a)
+            | DollarMvIconv(_, a)
+            | DollarMvIconvs(_, a)
+            | DollarMvOconv(_, a)
+            | DollarMvOconvs(_, a) => a.walk(w),
+            DollarPiece(_, a) => a.walk(w),
+            TSqlDbName(..) | TSqlError(..) | TSqlFetchStatus(..) | TSqlGetUtcDate(..)
+            | TSqlHostName(..) | TSqlLockTimeout(..) | TSqlNestLevel(..) | TSqlServerName(..)
+            | TSqlSpid(..) | TSqlSqlStatus(..) | TSqlTranCount(..) | TSqlVersion(..) => {}
+        }
+    }
+}
+
+impl Walk for ODBCOnlyFunc {
+    fn walk(&self, w: &mut Walker) {
+        match self {
+            ODBCOnlyFunc::Convert(_, a) => a.walk(w),
+            ODBCOnlyFunc::IfNull(_, a) => a.walk(w),
         }
     }
 }
@@ -470,7 +479,6 @@ impl Walk for ODBCFunc {
             Mod(_, a)
             | Power(_, a)
             | Concat(_, a)
-            | IfNull(_, a)
             | Left(_, a)
             | Repeat(_, a)
             | Right(_, a)
@@ -479,7 +487,6 @@ impl Walk for ODBCFunc {
             Substring(_, a) => a.walk(w),
             TimestampAdd(_, a) => a.walk(w),
             TimestampDiff(_, a) => a.walk(w),
-            Convert(_, a) => a.walk(w),
             Pi(..) | CurDate(..) | CurTime(..) | Database(..) | Now(..) | User(..) => {}
         }
     }

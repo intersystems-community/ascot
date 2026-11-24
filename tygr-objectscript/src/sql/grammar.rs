@@ -14,7 +14,7 @@ pub mod leveled {
     use crate::convert::VecSep;
 
     #[sugar]
-    use super::super::desugar::{query, stat};
+    use super::super::desugar::{expr, query, stat};
 
     #[derive(Grammar)]
     pub struct TName(pub Src<DottedIdent>);
@@ -107,6 +107,7 @@ pub mod leveled {
         Minus(StringEq!("-")),
     }
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(name = "percent op")]
     pub enum PercentOp {
@@ -136,6 +137,7 @@ pub mod leveled {
         ),
         Literal(Literal),
         Builtin(Box<Builtin>),
+        #[sugar(into = expr::function)]
         ScalarFunction(Box<ScalarFunction>),
         Window(Box<Window>),
         Agg(Box<Agg>),
@@ -144,15 +146,18 @@ pub mod leveled {
             space: Space,
             term: Box<Src<Term>>,
         },
+        #[sugar(into = expr::percent_call)]
         PercentUnary {
             op: PercentOp,
             space: Space,
             term: Box<Src<Term>>,
         },
+        #[sugar(into = expr::string_operation)]
         StringOperation(Box<StringOperation>),
         XTFun(Box<XTFun>),
         ParameterMarker(ParameterMarker),
         Case(Box<Case>),
+        #[sugar(into = expr::odbc_escape)]
         OdbcEscape(Box<ODBCEscape>),
         Scalx(Parenthesized<Box<Scalx>>),
         Query(SQLSubquery),
@@ -164,6 +169,7 @@ pub mod leveled {
         Null(StringEqCI!("NULL")),
     }
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(name = "%string operation")]
     pub struct StringOperation {
@@ -175,6 +181,7 @@ pub mod leveled {
         pub close: (Space, StringEq!(")")),
     }
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(name = "%string operator")]
     pub enum StringOperator {
@@ -184,6 +191,7 @@ pub mod leveled {
         Truncate(StringEqCI!("%TRUNCATE")),
     }
 
+    #[sugar]
     #[derive(Grammar)]
     pub enum ColTrun {
         Const(PConst),
@@ -422,7 +430,9 @@ pub mod leveled {
     pub type Args1Plus =
         Wrap<(Space, StringEq!("("), Space), VecSep<Scalx, ArgSep>, (Space, StringEq!(")"))>;
 
-    /// The functions with a syntax of their own, which a call by name cannot spell.
+    /// The functions with a syntax of their own, which a call by name cannot spell: the `$`
+    /// functions, whose names no identifier spells, CURRENT_TIMESTAMP and CURRENT_TIME with a
+    /// precision, which the niladic would shadow, and the ODBC functions the escape alone spells.
     #[derive(Grammar)]
     #[tygr(name = "builtin")]
     pub enum Builtin {
@@ -449,11 +459,9 @@ pub mod leveled {
             ArgsROO<Scalx, VectorDatyp, Integer>,
         ),
         Trim(StringEqCI!("TRIM"), Space, Parenthesized<TrimArgs>),
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "scalar function")]
-    pub enum ScalarFunction {
+        Odbc(ODBCOnly),
+        CurrentTimestamp(StringEqCI!("CURRENT_TIMESTAMP"), ArgsR),
+        CurrentTime(StringEqCI!("CURRENT_TIME"), ArgsR),
         DollarExtract(StringEqCI!("$EXTRACT"), ArgsROO),
         DollarFind(StringEqCI!("$FIND"), ArgsROO),
         DollarFNumber(StringEqCI!("$FNUMBER"), ArgsROO),
@@ -488,6 +496,13 @@ pub mod leveled {
         TSqlSqlStatus(StringEqCI!("$TSQL_SQLSTATUS"), Args0),
         TSqlTranCount(StringEqCI!("$TSQL_TRANCOUNT"), Args0),
         TSqlVersion(StringEqCI!("$TSQL_VERSION"), Args0),
+    }
+
+    /// The functions a call by name spells, which the core reads as calls.
+    #[sugar]
+    #[derive(Grammar)]
+    #[tygr(name = "scalar function")]
+    pub enum ScalarFunction {
         PercentObject(StringEqCI!("%OBJECT"), ArgsR),
         PercentOid(StringEqCI!("%OID"), ArgsR),
         Similarity(StringEqCI!("%SIMILARITY"), ArgsRR),
@@ -499,8 +514,6 @@ pub mod leveled {
         CharLength(StringEqCI!("CHAR_LENGTH"), ArgsR),
         Coalesce(StringEqCI!("COALESCE"), Args1Plus),
         Convert(StringEqCI!("CONVERT"), ArgsRRO),
-        CurrentTimestamp(StringEqCI!("CURRENT_TIMESTAMP"), ArgsR),
-        CurrentTime(StringEqCI!("CURRENT_TIME"), ArgsR),
         DataLength(StringEqCI!("DATALENGTH"), ArgsR),
         Date(StringEqCI!("DATE"), ArgsR),
         DateAdd(StringEqCI!("DATEADD"), ArgsRRR<DatePart>),
@@ -565,8 +578,10 @@ pub mod leveled {
         Year(StringEqCI!("YEAR"), ArgsR),
     }
 
+    #[sugar]
     pub type DatePart = OptionallyWrapped<DatePartCommon>;
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(name = "datepart_part")]
     pub struct DatePartPart(pub OptionallyWrapped<DatePartPartRaw>);
@@ -578,6 +593,7 @@ pub mod leveled {
         Scalar(T),
     }
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum DatePartCommon {
@@ -598,6 +614,7 @@ pub mod leveled {
         HostVar(HostVar),
     }
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(name = "datepart_part_raw")]
     pub enum DatePartPartRaw {
@@ -605,6 +622,7 @@ pub mod leveled {
         Common(DatePartCommon),
     }
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct SQLPositionArgs {
@@ -615,9 +633,11 @@ pub mod leveled {
         pub close: (Space, StringEq!(")")),
     }
 
+    #[sugar]
     pub type SubstringArgs =
         Wrap<(Space, StringEq!("("), Space), SubstringArgsInternal, (Space, StringEq!(")"))>;
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(name = "substring args")]
     pub enum SubstringArgsInternal {
@@ -819,16 +839,20 @@ pub mod leveled {
 
     pub type XTFunArgs = Parenthesized<Option<VecSep<Scalx, ArgSep>>>;
 
+    #[sugar]
     pub type ODBCEscape = Wrap<(StringEq!("{"), Space), DTS, (Space, StringEq!("}"))>;
 
+    #[sugar]
     #[derive(Grammar)]
     pub enum DTS {
         Function(FunExt),
         DateTime(DTSVal),
     }
 
+    #[sugar]
     pub type FunExt = Prefix<(StringEqCI!("FN"), Space), ODBCFunc>;
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(name = "odbc func")]
     pub enum ODBCFunc {
@@ -861,7 +885,6 @@ pub mod leveled {
         DayOfWeek(StringEqCI!("DAYOFWEEK"), ArgsR),
         DayOfYear(StringEqCI!("DAYOFYEAR"), ArgsR),
         Hour(StringEqCI!("HOUR"), ArgsR),
-        IfNull(StringEqCI!("IFNULL"), ArgsRR),
         LCase(StringEqCI!("LCASE"), ArgsR),
         Left(StringEqCI!("LEFT"), ArgsRR),
         Length(StringEqCI!("LENGTH"), ArgsR),
@@ -892,7 +915,22 @@ pub mod leveled {
         User(StringEqCI!("USER"), Option<StringEq!("()")>),
         Week(StringEqCI!("WEEK"), ArgsR),
         Year(StringEqCI!("YEAR"), ArgsR),
+    }
+
+    /// `{fn CONVERT(x, SQL_TYPE)}` and `{fn IFNULL(x, y)}`, the ODBC functions the escape alone
+    /// spells: IRIS reads a bare `CONVERT(x, SQL_TYPE)` as the plain CONVERT with a column named
+    /// `SQL_TYPE`, and a bare `IFNULL(x, y)` as NULL when `x` is not (measured on 2026.2).
+    pub type ODBCOnly = Wrap<
+        (StringEq!("{"), Space, StringEqCI!("FN"), Space),
+        ODBCOnlyFunc,
+        (Space, StringEq!("}")),
+    >;
+
+    #[derive(Grammar)]
+    #[tygr(name = "odbc-only func")]
+    pub enum ODBCOnlyFunc {
         Convert(StringEqCI!("CONVERT"), ArgsRR<Scalx, SQLConvertFunc>),
+        IfNull(StringEqCI!("IFNULL"), ArgsRR),
     }
 
     pub type OptionallyQuoted<T> = Either<Wrap<StringEq!("\""), T, StringEq!("\"")>, T>;
@@ -937,6 +975,7 @@ pub mod leveled {
         SqlDouble(StringEqCI!("SQL_DOUBLE")),
     }
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(name = "dts val")]
     pub struct DTSVal {
@@ -945,6 +984,7 @@ pub mod leveled {
         pub val_spec: DTSValSpec,
     }
 
+    #[sugar]
     #[derive(Grammar)]
     #[tygr(name = "dts type")]
     pub enum DTSType {

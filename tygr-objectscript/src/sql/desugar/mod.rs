@@ -1,8 +1,9 @@
 //! `Desugar`: a node of the full SQL grammar into its copy in the core grammar, the sugar rewritten
 //! (see `grammar`). The grammar's own types get their impls from the `levels` attribute, each
-//! `#[sugar]` mark naming its rule in `query` or `stat`; the leaves both levels share and tygr's
-//! containers get theirs here.
+//! `#[sugar]` mark naming its rule in `expr`, `query` or `stat`; the leaves both levels share and
+//! tygr's containers get theirs here.
 
+pub mod expr;
 pub mod query;
 pub mod stat;
 

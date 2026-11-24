@@ -91,7 +91,7 @@ mod tests {
                 "niladic",
                 "niladic",
                 "niladic",
-                "function",
+                "builtin",
                 "column",
                 "unary",
                 "percent",

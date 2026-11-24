@@ -192,13 +192,59 @@ const RULES: &[(&str, &str)] = &[
     ("ROLLBACK WORK", "ROLLBACK"),
     ("%INTRANS", "%INTRANSACTION"),
     ("TRUNCATE TABLE %NOLOCK t", "TRUNCATE TABLE %NOLOCK t"),
+    (
+        "SELECT ABS(a), COALESCE(a, b), $LISTBUILD(a, b), CURRENT_TIMESTAMP(3) FROM t",
+        "SELECT ABS(a), COALESCE(a, b), $LISTBUILD(a, b), CURRENT_TIMESTAMP(3) FROM t",
+    ),
+    (
+        "SELECT {fn ABS(a)}, {fn PI}, {fn NOW}, {fn USER}, {fn CURDATE()} FROM t",
+        "SELECT ABS(a), PI(), NOW(), USER, CURDATE() FROM t",
+    ),
+    (
+        "SELECT {fn CONVERT(a, SQL_VARCHAR)}, {fn IFNULL(a, b)} FROM t",
+        "SELECT {fn CONVERT(a, SQL_VARCHAR)}, {fn IFNULL(a, b)} FROM t",
+    ),
+    (
+        "SELECT {fn TIMESTAMPADD(SQL_TSI_DAY, 1, d)}, {fn SUBSTRING(a FROM 1 FOR 2)} FROM t",
+        "SELECT TIMESTAMPADD(SQL_TSI_DAY, 1, d), SUBSTRING(a, 1, 2) FROM t",
+    ),
+    (
+        "SELECT {d '2020-01-01'}, {t '10:00:00'}, {ts :x} FROM t",
+        "SELECT CAST('2020-01-01' AS DATE), CAST('10:00:00' AS TIME), CAST(:x AS TIMESTAMP) FROM t",
+    ),
+    (
+        "SELECT {fn /* c */ NOW() /* d */} FROM t",
+        "SELECT NOW /* c */ ( /* d */) FROM t",
+    ),
+    (
+        "SELECT %SQLUPPER a, UPPER a, %EXACT (a), %TRUNCATE(a, 3), %SQLSTRING(a, (3)) FROM t",
+        "SELECT %SQLUPPER(a), UPPER(a), %EXACT(a), %TRUNCATE(a, 3), %SQLSTRING(a, 3) FROM t",
+    ),
+    (
+        "SELECT %SQLUPPER /* c */ a FROM t",
+        "SELECT %SQLUPPER /* c */ (a) FROM t",
+    ),
+    (
+        "SELECT POSITION(a IN b), SUBSTRING(a FROM 1 FOR 2), SUBSTRING(a FROM 1) FROM t",
+        "SELECT CHARINDEX(a, b), SUBSTRING(a, 1, 2), SUBSTRING(a, 1) FROM t",
+    ),
+    (
+        "SELECT POSITION(a /* c */ IN /* d */ b) FROM t",
+        "SELECT CHARINDEX(a /* c */ , /* d */ b) FROM t",
+    ),
+    (
+        "SELECT DATEADD(dd, 1, d), DATEDIFF((yyyy), d, e), DATEPART(sts, d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
+        "SELECT DATEADD('day', 1, d), DATEDIFF('year', d, e), DATEPART('sqltimestamp', d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
+    ),
 ];
 
-/// Sugar the core grammar admits, as the rewrite drops a node whose type the core keeps, or
-/// rewrites one form of a node whose other forms stay.
+/// Sugar the core grammar admits, as the rewrite drops a node whose type the core keeps, rewrites
+/// one form of a node whose other forms stay, or spells a call by name, whose arguments the core
+/// reads as columns.
 const ADMITTED: &[&str] = &[
     "SELECT a FROM t LIMIT ALL",
     "UPDATE t (a, b) VALUES (1, 2) WHERE c = 3",
+    "SELECT DATEADD(dd, 1, d), DATEDIFF((yyyy), d, e), DATEPART(sts, d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
 ];
 
 /// Statements mixing the rules, and the sugar-free rest of the grammar.
@@ -209,6 +255,7 @@ const STATEMENTS: &[&str] = &[
     "SELECT TRIM(LEADING ' ' FROM a), TRIM(a), CASE WHEN a = 1 THEN 'x' END, CASE a WHEN 1 THEN 'x' ELSE 'y' END FROM t",
     "SELECT $H, $J, $ZTS, a _ b, COUNT(ALL a), COUNT(*), SUM(a) OVER (ORDER BY b ROWS 1 PRECEDING) FROM t",
     "SELECT DATEADD(dd, 1, d), DATEDIFF(yyyy, d, e), DATEPART(sts, d), TIMESTAMPADD(SQL_TSI_DAY, 1, d) FROM t",
+    "SELECT {fn IFNULL(a, b)}, {fn CONVERT(:x, SQL_INTEGER)}, $LISTBUILD(a, b), $TSQL_SPID(), CURRENT_TIMESTAMP(3), %INTEXT a, %RUNTIMEOUT (a) FROM t",
     "SELECT a FROM t WHERE a NOT BETWEEN 1 AND 2 AND b NOT IN (1, 2) AND c NOT LIKE 'x%' AND d IN (SELECT d FROM u) AND e = SOME (SELECT e FROM u)",
     "SELECT a FROM t WHERE a NOT[ 'x' ! b NOT] 'y' & c %INLIST :list SIZE ((10)) AND d NOT %MATCHES 'p' AND e IS NOT JSON",
     "SELECT a FROM t JOIN u ON t.a = u.a LEFT JOIN v ON v.b = u.b, w ORDER BY a ASC, b DESC",
