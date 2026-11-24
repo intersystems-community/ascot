@@ -197,12 +197,12 @@ const RULES: &[(&str, &str)] = &[
         "SELECT ABS(a), COALESCE(a, b), $LISTBUILD(a, b), CURRENT_TIMESTAMP(3) FROM t",
     ),
     (
-        "SELECT {fn ABS(a)}, {fn PI}, {fn NOW}, {fn USER}, {fn CURDATE()} FROM t",
-        "SELECT ABS(a), PI(), NOW(), USER, CURDATE() FROM t",
+        "SELECT {fn ABS(a)}, {fn PI}, {fn NOW}, {fn CURDATE()} FROM t",
+        "SELECT ABS(a), PI(), NOW(), CURDATE() FROM t",
     ),
     (
-        "SELECT {fn CONVERT(a, SQL_VARCHAR)}, {fn IFNULL(a, b)} FROM t",
-        "SELECT {fn CONVERT(a, SQL_VARCHAR)}, {fn IFNULL(a, b)} FROM t",
+        "SELECT {fn CONVERT(a, SQL_VARCHAR)}, {fn IFNULL(a, b)}, {fn USER} FROM t",
+        "SELECT {fn CONVERT(a, SQL_VARCHAR)}, {fn IFNULL(a, b)}, {fn USER} FROM t",
     ),
     (
         "SELECT {fn TIMESTAMPADD(SQL_TSI_DAY, 1, d)}, {fn SUBSTRING(a FROM 1 FOR 2)} FROM t",

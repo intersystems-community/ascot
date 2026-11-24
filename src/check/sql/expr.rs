@@ -274,6 +274,7 @@ impl Walk for ODBCOnlyFunc {
         match self {
             ODBCOnlyFunc::Convert(_, a) => a.walk(w),
             ODBCOnlyFunc::IfNull(_, a) => a.walk(w),
+            ODBCOnlyFunc::User(..) => {}
         }
     }
 }
@@ -485,7 +486,7 @@ impl Walk for ODBCFunc {
             Substring(_, a) => a.walk(w),
             TimestampAdd(_, a) => a.walk(w),
             TimestampDiff(_, a) => a.walk(w),
-            Pi(..) | CurDate(..) | CurTime(..) | Database(..) | Now(..) | User(..) => {}
+            Pi(..) | CurDate(..) | CurTime(..) | Database(..) | Now(..) => {}
         }
     }
 }

@@ -941,14 +941,14 @@ pub mod leveled {
         ),
         Truncate(StringEqCI!("TRUNCATE"), ArgsRR),
         UCase(StringEqCI!("UCASE"), ArgsR),
-        User(StringEqCI!("USER"), Option<StringEq!("()")>),
         Week(StringEqCI!("WEEK"), ArgsR),
         Year(StringEqCI!("YEAR"), ArgsR),
     }
 
     /// `{fn CONVERT(x, SQL_TYPE)}` and `{fn IFNULL(x, y)}`, the ODBC functions the escape alone
     /// spells: IRIS reads a bare `CONVERT(x, SQL_TYPE)` as the plain CONVERT with a column named
-    /// `SQL_TYPE`, and a bare `IFNULL(x, y)` as NULL when `x` is not (measured on 2026.2).
+    /// `SQL_TYPE`, and a bare `IFNULL(x, y)` as NULL when `x` is not (measured on 2026.2); and
+    /// `{fn USER}`, whose niladic `USER` has no parentheses to hold the comments within the braces.
     pub type ODBCOnly = Wrap<
         (StringEq!("{"), Space, StringEqCI!("FN"), Space),
         ODBCOnlyFunc,
@@ -960,6 +960,7 @@ pub mod leveled {
     pub enum ODBCOnlyFunc {
         Convert(StringEqCI!("CONVERT"), ArgsRR<Scalx, SQLConvertFunc>),
         IfNull(StringEqCI!("IFNULL"), ArgsRR),
+        User(StringEqCI!("USER"), Option<StringEq!("()")>),
     }
 
     pub type OptionallyQuoted<T> = Either<Wrap<StringEq!("\""), T, StringEq!("\"")>, T>;

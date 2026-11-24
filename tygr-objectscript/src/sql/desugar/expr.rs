@@ -359,8 +359,8 @@ pub fn function<F: Deref<Target = full::ScalarFunction>>(function: &F) -> core::
     )
 }
 
-/// `{fn NAME(args)}` is the call `NAME(args)`, `{fn PI}` and the like `PI()`, `{fn USER}` the niladic
-/// `USER`, TIMESTAMPADD and TIMESTAMPDIFF their builtins.
+/// `{fn NAME(args)}` is the call `NAME(args)`, `{fn PI}` and the like `PI()`, TIMESTAMPADD and
+/// TIMESTAMPDIFF their builtins.
 fn odbc_function(function: &full::ODBCFunc) -> core::Term {
     calls!(ODBCFunc: function;
         Abs Acos Asin Atan Ceiling Cos Cot Exp Floor Log Log10 Mod Power Sin Sqrt Tan Ascii Char
@@ -368,9 +368,6 @@ fn odbc_function(function: &full::ODBCFunc) -> core::Term {
         MonthName Quarter Repeat Right Round RTrim Second Sign Space Substring Truncate UCase Week
         Year;
         Pi CurDate CurTime Database Now;
-        full::ODBCFunc::User(kw, _) => {
-            core::Term::Niladic(core::Niladic::User(*kw), Default::default())
-        }
         full::ODBCFunc::TimestampAdd(kw, args) => {
             core::Term::Builtin(Box::new(core::Builtin::TimestampAdd(*kw, args.desugar())))
         }
