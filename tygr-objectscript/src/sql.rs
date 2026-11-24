@@ -823,7 +823,7 @@ pub mod leveled {
         ),
         Literal(Literal),
         Builtin(Box<Builtin>),
-        #[sugar(into = desugar::function)]
+        #[sugar(into = function)]
         ScalarFunction(Box<ScalarFunction>),
         Window(Box<Window>),
         Agg(Box<Agg>),
@@ -832,18 +832,18 @@ pub mod leveled {
             space: Space,
             term: Box<Src<Term>>,
         },
-        #[sugar(into = desugar::percent_call)]
+        #[sugar(into = percent_call)]
         PercentUnary {
             op: PercentOp,
             space: Space,
             term: Box<Src<Term>>,
         },
-        #[sugar(into = desugar::string_operation)]
+        #[sugar(into = string_operation)]
         StringOperation(Box<StringOperation>),
         XTFun(Box<XTFun>),
         ParameterMarker(ParameterMarker),
         Case(Box<Case>),
-        #[sugar(into = desugar::odbc_escape)]
+        #[sugar(into = odbc_escape)]
         OdbcEscape(Box<ODBCEscape>),
         Scalx(Parenthesized<Box<Scalx>>),
         Query(SQLSubquery),
@@ -853,6 +853,106 @@ pub mod leveled {
         SpecialSystemVariable(SpecialSystemVariable),
         HostVar(HostVar),
         Null(StringEqCI!("NULL")),
+    }
+
+    /// The call a function's keyword and argument list spell; a niladic-looking one gets `()`.
+    macro_rules! calls {
+        ($Enum:ident: $value:expr; $($Variant:ident)*; $($Niladic:ident)*; $($arm:tt)*) => {
+            match $value {
+                $($Enum::$Variant(kw, a) => call(&kw.print(), args(a)),)*
+                $($Enum::$Niladic(kw, _) => call(&kw.print(), Vec::new()),)*
+                $($arm)*
+            }
+        };
+    }
+
+    /// A scalar function is the call by its name, `POSITION(a IN b)` the call `CHARINDEX(a, b)`.
+    fn function(function: &impl std::ops::Deref<Target = ScalarFunction>) -> core::Term {
+        calls!(ScalarFunction: &**function;
+            PercentObject PercentOid Similarity Abs Ascii Ceiling CharacterLength CharIndex CharLength
+            Coalesce Convert DataLength Date DateAdd DateDiff DateName DatePart DateTrunc Day Decode
+            Embedding Floor GetDate GetUtcDate Greatest HashBytes IfNull Instr IsNull IsNumeric LastDay
+            LastIdentity LCase Least Left Len Length Lower LPad LTrim Month Now NullIf Nvl PatIndex Power
+            Repeat Replace Replicate Reverse Right Round RPad RTrim Sign Space Str String Stuff Substr
+            Substring ToChar ToDate ToUSChar ToUSDate ToNumber ToTimestamp UCase UnixTimestamp
+            VectorCosine VectorDotProduct Year;;
+            ScalarFunction::Position(_, a) => call("CHARINDEX", args(a)),
+        )
+    }
+
+    /// `{fn NAME(args)}` is `NAME(args)`, `{fn PI}` and its kin `PI()`, TIMESTAMPADD and TIMESTAMPDIFF builtins.
+    fn odbc_function(function: &ODBCFunc) -> core::Term {
+        calls!(ODBCFunc: function;
+            Abs Acos Asin Atan Ceiling Cos Cot Exp Floor Log Log10 Mod Power Sin Sqrt Tan Ascii Char
+            Concat DayName DayOfMonth DayOfWeek DayOfYear Hour LCase Left Length LTrim Minute Month
+            MonthName Quarter Repeat Right Round RTrim Second Sign Space Substring Truncate UCase Week
+            Year;
+            Pi CurDate CurTime Database Now;
+            ODBCFunc::TimestampAdd(kw, a) => {
+                core::Term::Builtin(Box::new(core::Builtin::TimestampAdd(*kw, a.desugar())))
+            }
+            ODBCFunc::TimestampDiff(kw, a) => {
+                core::Term::Builtin(Box::new(core::Builtin::TimestampDiff(*kw, a.desugar())))
+            }
+        )
+    }
+
+    /// `{d x}`, `{t x}` and `{ts x}` are `CAST(x AS DATE)`, `CAST(x AS TIME)` and `CAST(x AS TIMESTAMP)`.
+    fn cast(value: &DTSVal) -> core::Term {
+        let cast_type = match &value.dts_type {
+            DTSType::Date(_) => core::CastType::Date(Default::default()),
+            DTSType::Time(_) => core::CastType::Time(Default::default()),
+            DTSType::Timestamp(_) => core::CastType::Timestamp(Default::default()),
+        };
+        let expr = term(match &value.val_spec {
+            DTSValSpec::Literal(literal) => core::Term::Literal(literal.clone()),
+            DTSValSpec::HostVar(host_var) => core::Term::HostVar(host_var.clone()),
+        });
+        let cast = core::SQLCastExpression {
+            open: (Space::default(), Default::default(), Space::default()),
+            expr,
+            as_kw: (Space::blank(), Default::default(), Space::blank()),
+            cast_type,
+            close: (Space::default(), Default::default()),
+        };
+        core::Term::Builtin(Box::new(core::Builtin::Cast(
+            Default::default(),
+            Box::new(cast),
+        )))
+    }
+
+    /// An ODBC escape is what it stands for: see `odbc_function` and `cast`.
+    fn odbc_escape(escape: &impl std::ops::Deref<Target = ODBCEscape>) -> core::Term {
+        match &escape.wrapped {
+            DTS::DateTime(value) => cast(value),
+            DTS::Function(function) => odbc_function(&function.prefixed),
+        }
+    }
+
+    /// `%SQLUPPER x` is the call `%SQLUPPER(x)`; an `x` in parentheses gives the call its own.
+    fn percent_call(
+        op: &PercentOp,
+        _: &Space,
+        term: &impl std::ops::Deref<Target = Src<Term>>,
+    ) -> core::Term {
+        let arg = match &term.node {
+            Term::Scalx(parens) => (*parens.wrapped).desugar(),
+            _ => core::Scalx::Legacy(VecSep::one((**term).desugar())),
+        };
+        call(&op.print(), vec![arg])
+    }
+
+    /// `%TRUNCATE(x, n)` is the call, as `%STRING`, `%SQLSTRING` and `%SQLUPPER` with a truncation are.
+    fn string_operation(operation: &impl std::ops::Deref<Target = StringOperation>) -> core::Term {
+        let truncation = match &operation.truncation {
+            ColTrun::Const(constant) => {
+                let core::PConst::Literal(literal) = constant.desugar();
+                core::Term::Literal(literal)
+            }
+            ColTrun::HostVar(host_var) => core::Term::HostVar(host_var.clone()),
+        };
+        let args = vec![operation.expr.desugar(), term(truncation)];
+        call(&operation.op.print(), args)
     }
 
     #[sugar]
@@ -1374,10 +1474,44 @@ pub mod leveled {
             Space,
             Scalx,
         ),
-        #[sugar(into = desugar::trim_blank)]
+        #[sugar(into = trim_blank)]
         SpecScalx(TrimSpec, Space, Option<(StringEqCI!("FROM"), Space)>, Scalx),
-        #[sugar(into = desugar::trim_both)]
+        #[sugar(into = trim_both)]
         ScalxScalx(Option<(Scalx, Space, StringEqCI!("FROM"), Space)>, Scalx),
+    }
+
+    /// `TRIM(LEADING FROM x)` and `TRIM(LEADING x)` are `TRIM(LEADING ' ' FROM x)`.
+    fn trim_blank(
+        spec: &TrimSpec,
+        _: &Space,
+        _: &Option<(StringEqCI!("FROM"), Space)>,
+        expr: &Scalx,
+    ) -> core::TrimArgs {
+        trim(spec.desugar(), string(" "), expr)
+    }
+
+    /// `TRIM(c FROM x)` is `TRIM(BOTH c FROM x)`, `TRIM(x)` `TRIM(BOTH ' ' FROM x)`.
+    fn trim_both(
+        chars: &Option<(Scalx, Space, StringEqCI!("FROM"), Space)>,
+        expr: &Scalx,
+    ) -> core::TrimArgs {
+        let chars = chars
+            .as_ref()
+            .map_or_else(|| string(" "), |(chars, ..)| chars.desugar());
+        trim(core::TrimSpec::Both(Default::default()), chars, expr)
+    }
+
+    /// `SPEC chars FROM x`.
+    fn trim(spec: core::TrimSpec, chars: core::Scalx, expr: &Scalx) -> core::TrimArgs {
+        core::TrimArgs::SpecScalxScalx(
+            spec,
+            Space::blank(),
+            chars,
+            Space::blank(),
+            Default::default(),
+            Space::blank(),
+            expr.desugar(),
+        )
     }
 
     #[derive(Grammar)]
@@ -1819,7 +1953,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "window rows")]
     pub enum WindowRows {
-        #[sugar(into = desugar::rows_between)]
+        #[sugar(into = rows_between)]
         Single((Space, StringEqCI!("ROWS"), Space), WindowRowsBound),
         Between {
             rows_kw: (Space, StringEqCI!("ROWS"), Space),
@@ -1827,6 +1961,27 @@ pub mod leveled {
             start: (Space, WindowRowsBound),
             end: AndClause<WindowRowsBound>,
         },
+    }
+
+    /// `ROWS n PRECEDING` is `ROWS BETWEEN n PRECEDING AND CURRENT ROW`, the standard's lone-bound reading.
+    fn rows_between(
+        rows_kw: &(Space, StringEqCI!("ROWS"), Space),
+        bound: &WindowRowsBound,
+    ) -> core::WindowRows {
+        let current_row = core::WindowRowsBound::CurrentRow(
+            Default::default(),
+            Space::blank(),
+            Default::default(),
+        );
+        core::WindowRows::Between {
+            rows_kw: rows_kw.clone(),
+            between_kw: Default::default(),
+            start: (Space::blank(), bound.desugar()),
+            end: Prefix::new(
+                (Space::blank(), Default::default(), Space::blank()),
+                current_row,
+            ),
+        }
     }
 
     #[derive(Grammar)]
@@ -1871,7 +2026,7 @@ pub mod leveled {
     #[tygr(inline)]
     pub enum Negatable<K: Grammar> {
         Plain(K),
-        #[sugar(into = desugar::plain)]
+        #[sugar(into = plain)]
         Negated(NotKw, Space, K),
     }
 
@@ -1886,13 +2041,26 @@ pub mod leveled {
         }
     }
 
+    /// A negated keyword reads as the keyword, under the `NOT` that `cond` adds.
+    fn plain<K: Desugar>(_: &NotKw, _: &Space, keyword: &K) -> core::Negatable<K::Core>
+    where
+        K::Core: Grammar,
+    {
+        core::Negatable::Plain(keyword.desugar())
+    }
+
     /// A keyword or clause read the same when omitted: spelled, or omitted and read as its default.
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum Implied<K: Grammar + Default> {
         Spelled(Space, K),
-        #[sugar(into = desugar::spelled)]
+        #[sugar(into = spelled)]
         Omitted(()),
+    }
+
+    /// An omitted keyword stands as spelled, after a blank.
+    fn spelled<K: Grammar + Default>(_: &()) -> core::Implied<K> {
+        core::Implied::Spelled(Space::blank(), K::default())
     }
 
     /// What compares a value with a subquery: an operator and a quantifier, or `IN`, which is `= ANY`.
@@ -1904,13 +2072,22 @@ pub mod leveled {
             sp: Space,
             quantifier: Quantifier,
         },
-        #[sugar(into = desugar::in_any)]
+        #[sugar(into = in_any)]
         In(Negatable<StringEqCI!("IN")>),
+    }
+
+    /// `IN (subquery)` is `= ANY (subquery)`.
+    fn in_any(_: &Negatable<StringEqCI!("IN")>) -> core::QuantifiedOp {
+        core::QuantifiedOp::Op {
+            op: core::CmpOp::Eq(Default::default()),
+            sp: Space::blank(),
+            quantifier: core::Quantifier::Any(Default::default()),
+        }
     }
 
     #[derive(Grammar)]
     #[tygr(name = "cond")]
-    #[sugar(into = desugar::cond)]
+    #[sugar(into = cond)]
     pub enum Cond {
         Not {
             not_kw: (StringEqCI!("NOT"), Space),
@@ -1953,6 +2130,85 @@ pub mod leveled {
             sp: Space,
             tail: Comparison,
         },
+    }
+
+    /// A condition: its predicate, in `NOT (...)` when the predicate is negated. IRIS applies a
+    /// quantified `NOT[` or `NOT]` to each row (measured on 2026.2), so under the `NOT` its quantifier
+    /// flips: `x NOT[ ANY (q)` is `NOT (x [ ALL (q))`.
+    fn cond(cond: &Cond, mut plain: core::Cond) -> core::Cond {
+        let Some(not_kw) = negation(cond) else {
+            return plain;
+        };
+        if let core::Cond::Comparison {
+            tail:
+                core::Comparison::Query {
+                    op: core::QuantifiedOp::Op { quantifier, .. },
+                    ..
+                },
+            ..
+        } = &mut plain
+            && let Cond::Comparison {
+                tail:
+                    Comparison::Query {
+                        op: QuantifiedOp::Op { op, .. },
+                        ..
+                    },
+                ..
+            } = cond
+            && negated(op)
+        {
+            *quantifier = match quantifier {
+                core::Quantifier::All(_) => core::Quantifier::Any(Default::default()),
+                core::Quantifier::Any(_) => core::Quantifier::All(Default::default()),
+            };
+        }
+        core::Cond::Not {
+            not_kw: (not_kw, Space::blank()),
+            condition: Box::new(Src::synthesized(core::Cond::Paren {
+                open: (Default::default(), Space::default()),
+                predicate: Box::new(core::Prdct(VecSep::one(core::And(VecSep::one(
+                    Src::synthesized(plain),
+                ))))),
+                close: (Space::default(), Default::default()),
+            })),
+        }
+    }
+
+    /// The `NOT` of a negated predicate: the keyword's own, or one made for `NOT[` and `NOT]`.
+    fn negation(cond: &Cond) -> Option<NotKw> {
+        use {Comparison::*, QuantifiedOp};
+        let Cond::Comparison { tail, .. } = cond else {
+            return None;
+        };
+        match tail {
+            IsNull { null_kw, .. } => null_kw.negation(),
+            Between { between_kw, .. } => between_kw.negation(),
+            Like { like_kw, .. } => like_kw.negation(),
+            Matches { matches_kw, .. } => matches_kw.negation(),
+            In { in_kw, .. } => in_kw.negation(),
+            InList { inlist_kw, .. } => inlist_kw.negation(),
+            IsJSON { json_kw, .. } => json_kw.negation(),
+            Query {
+                op: QuantifiedOp::In(in_kw),
+                ..
+            } => in_kw.negation(),
+            Scalx { op, .. }
+            | Query {
+                op: QuantifiedOp::Op { op, .. },
+                ..
+            } if negated(op) => Some(Default::default()),
+            _ => None,
+        }
+    }
+
+    /// `NOT[` or `NOT]`, which read as `[` and `]` under the `NOT` that `cond` adds.
+    fn negated(op: &CmpOp) -> bool {
+        use {CmpOp, ContainsPredicate, FollowsPredicate};
+        matches!(
+            op,
+            CmpOp::Contains(ContainsPredicate::NotLB(_))
+                | CmpOp::Follows(FollowsPredicate::NotFollows(_))
+        )
     }
 
     #[derive(Grammar)]
@@ -2065,11 +2321,21 @@ pub mod leveled {
             size: PConst,
             close: StringEq!(")"),
         },
-        #[sugar(into = desugar::size_in_parens)]
+        #[sugar(into = size_in_parens)]
         Bare {
             kw: (Space, StringEqCI!("SIZE"), Space),
             size: Literal,
         },
+    }
+
+    /// `SIZE n` is `SIZE (n)`.
+    fn size_in_parens(kw: &(Space, StringEqCI!("SIZE"), Space), size: &Literal) -> core::SizeHint {
+        core::SizeHint::Paren {
+            kw: kw.desugar(),
+            open: Default::default(),
+            size: core::PConst::Literal(size.desugar()),
+            close: Default::default(),
+        }
     }
 
     #[derive(Grammar)]
@@ -2263,11 +2529,53 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "tables")]
-    #[sugar(into = desugar::tables)]
+    #[sugar(into = tables)]
     pub struct Tables {
         pub first: Tref,
         #[sugar]
         pub rest: Vec<(ArgSep, Tref)>,
+    }
+
+    /// `FROM a, b` is `FROM a CROSS JOIN b`, each join at its reference's range, in parentheses when it has joins.
+    fn tables(t: &Tables, plain: core::Tables) -> core::Tables {
+        let core::Tref::Join(mut first) = plain.first;
+        for (_, tref) in &t.rest {
+            let (Tref::Join(jtab) | Tref::OJSyntax { table: jtab, .. }) = tref;
+            let core::Tref::Join(mut table) = tref.desugar();
+            let start = jtab.formit.range().start;
+            let end = jtab
+                .joins
+                .last()
+                .map_or(jtab.formit.range().end, |(_, join)| join.range().end);
+            if !table.joins.is_empty() {
+                table = core::JTab {
+                    formit: Src::new(
+                        start..end,
+                        core::Frmit::JTab {
+                            open: (Default::default(), Space::default()),
+                            joined: Box::new(table),
+                            close: (Space::default(), Default::default()),
+                        },
+                    ),
+                    joins: Vec::new(),
+                };
+            }
+            let cross = core::Join::Cross {
+                cross_kw: (
+                    Default::default(),
+                    Space::blank(),
+                    Default::default(),
+                    Space::blank(),
+                ),
+                table: Box::new(table),
+            };
+            first
+                .joins
+                .push((Space::blank(), Src::new(start..end, cross)));
+        }
+        core::Tables {
+            first: core::Tref::Join(first),
+        }
     }
 
     #[sugar]
@@ -2325,8 +2633,17 @@ pub mod leveled {
             sp: Space,
             join_kw: StringEqCI!("JOIN"),
         },
-        #[sugar(into = desugar::inner)]
+        #[sugar(into = inner)]
         Bare(StringEqCI!("JOIN")),
+    }
+
+    /// `JOIN` is `INNER JOIN`.
+    fn inner(join_kw: &StringEqCI!("JOIN")) -> core::JOp {
+        core::JOp::Typed {
+            jtype: core::JType::Inner(Default::default()),
+            sp: Space::blank(),
+            join_kw: *join_kw,
+        }
     }
 
     #[derive(Grammar)]
@@ -2487,13 +2804,41 @@ pub mod leveled {
             limit: Limit,
             offset: Option<Offset>,
         },
-        #[sugar(into = desugar::offset_fetch)]
+        #[sugar(into = offset_fetch)]
         OffsetFetch {
             offset: Offset,
             fetch: Option<Fetch>,
         },
-        #[sugar(into = desugar::fetch_only)]
+        #[sugar(into = fetch_only)]
         FetchOnly(Fetch),
+    }
+
+    /// `OFFSET m [ROWS] [FETCH … n …]` is `LIMIT n OFFSET m`, `LIMIT ALL OFFSET m` without the FETCH.
+    fn offset_fetch(offset: &Offset, fetch: &Option<Fetch>) -> core::RowLimitingClause {
+        let spec = match fetch {
+            None => core::LimitSpec::All(Default::default(), Default::default()),
+            Some(fetch) => core::LimitSpec::Val(fetch.valspec.desugar()),
+        };
+        core::RowLimitingClause::LimitOffset {
+            limit: limit(spec),
+            offset: Some(core::Offset {
+                kw: (Space::blank(), Default::default(), Space::blank()),
+                count: offset.count.desugar(),
+            }),
+        }
+    }
+
+    /// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` is `LIMIT n`.
+    fn fetch_only(fetch: &Fetch) -> core::RowLimitingClause {
+        core::RowLimitingClause::LimitOffset {
+            limit: limit(core::LimitSpec::Val(fetch.valspec.desugar())),
+            offset: None,
+        }
+    }
+
+    /// ` LIMIT spec`.
+    fn limit(spec: core::LimitSpec) -> core::Limit {
+        Prefix::new((Space::blank(), Default::default(), Space::blank()), spec)
     }
 
     pub type Limit = Prefix<(Space, StringEqCI!("LIMIT"), Space), LimitSpec>;
@@ -2614,7 +2959,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "insert values")]
     pub enum InsertValues {
-        #[sugar(into = desugar::set_as_values)]
+        #[sugar(into = set_as_values)]
         SetList {
             set_kw: StringEqCI!("SET"),
             assignments: (Space, VecSep<Src<SQLSetAssignment>, ArgSep>),
@@ -2626,8 +2971,36 @@ pub mod leveled {
         DefaultValues(StringEqCI!("DEFAULT"), Space, StringEqCI!("VALUES")),
     }
 
+    /// `INSERT ... SET a = x, b = y` is `INSERT ... (a, b) VALUES (x, y)`.
+    fn set_as_values(
+        _: &StringEqCI!("SET"),
+        (_, list): &(Space, VecSep<Src<SQLSetAssignment>, ArgSep>),
+    ) -> core::InsertValues {
+        let columns = list.items.iter().map(|a| a.column.desugar()).collect();
+        let values = list.items.iter().map(|a| a.value.desugar()).collect();
+        core::InsertValues::ColumnList {
+            columns: Some(Wrap::new(
+                (Space::default(), Default::default(), Space::default()),
+                commas(columns),
+                (Space::default(), Default::default()),
+            )),
+            values: (
+                Space::blank(),
+                core::ValueSource::ValSpec {
+                    values_kw: Default::default(),
+                    sp: Space::blank(),
+                    spec: core::ValSpec::Scalx {
+                        open: (Default::default(), Space::default()),
+                        exprs: commas(values),
+                        close: (Space::default(), Default::default()),
+                    },
+                },
+            ),
+        }
+    }
+
     #[derive(Grammar)]
-    #[sugar(into = desugar::asign)]
+    #[sugar(into = asign)]
     pub enum Asign {
         SetList {
             set_kw: StringEqCI!("SET"),
@@ -2637,6 +3010,48 @@ pub mod leveled {
             columns: Option<SQLColumnListParen>,
             values: (Space, ValueSource),
         },
+    }
+
+    /// `UPDATE t (a, b) VALUES (x, y)` is `UPDATE t SET a = x, b = y`; a query or host array as values stays.
+    fn asign(asign: &Asign, plain: core::Asign) -> core::Asign {
+        match asign {
+            Asign::ColumnList {
+                columns: Some(columns),
+                values:
+                    (
+                        _,
+                        ValueSource::ValSpec {
+                            spec: ValSpec::Scalx { exprs, .. },
+                            ..
+                        },
+                    ),
+            } if columns.wrapped.items.len() == exprs.items.len() => {
+                let items = columns
+                    .wrapped
+                    .items
+                    .iter()
+                    .zip(&exprs.items)
+                    .map(|(column, value)| {
+                        let Scalx::Legacy(terms) = value;
+                        let last = terms.items.len() - 1;
+                        let range = terms.items[0].range().start..terms.items[last].range().end;
+                        Src::new(
+                            range,
+                            core::SQLSetAssignment {
+                                column: column.desugar(),
+                                eq: (Space::blank(), Default::default(), Space::blank()),
+                                value: value.desugar(),
+                            },
+                        )
+                    })
+                    .collect();
+                core::Asign::SetList {
+                    set_kw: Default::default(),
+                    assignments: (Space::blank(), commas(items)),
+                }
+            }
+            _ => plain,
+        }
     }
 
     pub type FList1 = Parenthesized<VecSep<Ident, ArgSep>>;
@@ -2995,11 +3410,22 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "selct")]
-    #[sugar(into = desugar::selct)]
+    #[sugar(into = selct)]
     pub struct Selct {
         pub query: Query,
         pub order: Option<Order>,
         pub row_limiting_clause: Option<RowLimitingClause>,
+    }
+
+    /// `LIMIT ALL` alone, which limits nothing, goes.
+    fn selct(_: &Selct, mut plain: core::Selct) -> core::Selct {
+        let unlimited = |clause: &core::RowLimitingClause| {
+            matches!(clause, core::RowLimitingClause::LimitOffset { limit, offset: None }
+                if matches!(limit.prefixed, core::LimitSpec::All(..)))
+        };
+        let clause = plain.row_limiting_clause.take();
+        plain.row_limiting_clause = clause.filter(|clause| !unlimited(clause));
+        plain
     }
 
     #[derive(Grammar)]

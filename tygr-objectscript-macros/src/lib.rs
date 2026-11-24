@@ -1,6 +1,6 @@
 //! `#[levels]` on the inline module of the SQL grammar emits it twice: `full`, every spelling IRIS
 //! accepts, and `core`, the same minus its syntactic sugar, with an impl of `Desugar` per full
-//! struct and enum converting it into its core copy; `full` sees `core` and `super::desugar::*`.
+//! struct and enum; `full` alone gets the module's fns, traits and macros, and sees `core`.
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
@@ -17,10 +17,9 @@ use syn::{
 
 const FORMS: &str = "expected `#[sugar]` or `#[sugar(into = RULE)]`";
 
-/// The marks: `#[sugar(into = RULE)]` on a variant leaves it out of the core, RULE converting it
-/// from its fields by reference; on a type, RULE converts the whole value, given `&self` and its
-/// field-by-field conversion; `#[sugar]` on a field
-/// leaves it out of the core and of the conversion, on a type, alias, impl or `use` leaves it out.
+/// `#[sugar(into = RULE)]` on a variant leaves it out of the core, RULE converting its fields by
+/// reference; on a type, RULE converts `&self` given its field-by-field conversion. `#[sugar]` on a
+/// field drops it from the core and the conversion; on a type, alias, impl or `use`, from the core.
 #[proc_macro_attribute]
 pub fn levels(_: TokenStream, item: TokenStream) -> TokenStream {
     let module = syn::parse_macro_input!(item as ItemMod);
@@ -204,6 +203,12 @@ impl Output {
             Item::Enum(item) => return self.enumeration(item),
             item => item,
         };
+        if let Item::Fn(_) | Item::Const(_) | Item::Static(_) | Item::Trait(_) | Item::Macro(_) =
+            item
+        {
+            self.full.push(item.to_token_stream());
+            return Ok(());
+        }
         let attrs = match &mut item {
             Item::Type(alias) => {
                 self.literals(&alias.ty);
