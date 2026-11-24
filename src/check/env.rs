@@ -29,6 +29,7 @@ pub use crate::details::Positions;
 use crate::details::{
     MemberDetails, MemberKindSpecificDetails, MemberNs, RoutineElementDetails, WithRange,
 };
+use crate::diagnostic_filter::Filter;
 use crate::{
     Definitions, DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos,
     macro_expand::Fidelity,
@@ -2055,6 +2056,8 @@ pub struct DocumentEnv<'a> {
     uri: &'a str,
     pub inlay_hints: RefCell<Vec<bindings::InlayHint>>,
     pub hover_types: RefCell<Vec<(bindings::Range, String)>>,
+    // What `@ascot:` directives state for the statements they govern, in `olc`'s coordinates.
+    pub line_filters: RefCell<Vec<(bindings::Range, Filter)>>,
     suppress_hints: Cell<bool>,
     // How the text `olc` indexes was expanded from the document, when it was.
     source_map: Option<&'a SourceMap>,
@@ -2068,6 +2071,7 @@ impl<'a> DocumentEnv<'a> {
             uri,
             inlay_hints: RefCell::new(vec![]),
             hover_types: RefCell::new(vec![]),
+            line_filters: RefCell::new(vec![]),
             suppress_hints: Cell::new(false),
             source_map: None,
         }
@@ -2515,6 +2519,13 @@ impl<'a> CodeEnv<'a> {
     pub fn hover_type(&self, range: bindings::Range, ty: String) {
         if !self.base.suppress_hints.get() {
             self.base.hover_types.borrow_mut().push((range, ty))
+        }
+    }
+
+    // A priming pass records nothing, as for hints.
+    pub fn line_filter(&self, range: bindings::Range, filter: Filter) {
+        if !self.base.suppress_hints.get() {
+            self.base.line_filters.borrow_mut().push((range, filter))
         }
     }
 

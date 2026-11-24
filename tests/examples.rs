@@ -39,12 +39,14 @@ fn examples(code: &'static str, doc: &str) -> Option<Example> {
         let Some(info) = line.trim().strip_prefix("```objectscript") else {
             continue;
         };
-        for word in info.split_whitespace() {
-            if let Some(json) = word.strip_prefix("style=") {
-                style = Some(json.to_string());
-            }
-            no_environment |= word == "env=none";
+        // `style=` ends the info string: its JSON may hold spaces.
+        let (info, json) = info
+            .split_once("style=")
+            .map_or((info, None), |(i, j)| (i, Some(j)));
+        if let Some(json) = json {
+            style = Some(json.trim().to_string());
         }
+        no_environment |= info.split_whitespace().any(|word| word == "env=none");
         let mut text = Vec::new();
         let mut expected = BTreeSet::new();
         for line in lines.by_ref() {

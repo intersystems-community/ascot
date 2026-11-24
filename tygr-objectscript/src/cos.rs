@@ -101,6 +101,36 @@ pub struct NL {
     newline: StringEq!("\n"),
 }
 
+/// The comments on lines of their own in `gap`, the newlines and comment lines a `Raw<Vec1<NL>>`
+/// holds between two command lines, each as its text after `//`, `;` or `#;`, or inside a `/* */`
+/// that is the whole line.
+pub fn line_comments(gap: &str) -> Vec<String> {
+    let Ok(lines) = Vec1::<NL>::parse(gap) else {
+        return vec![];
+    };
+    // The first newline ends the code line before the gap.
+    (lines.iter().skip(1))
+        .filter_map(|nl| match &nl.comment {
+            Some(comment) => Some(comment.content.print()),
+            None => nl.gap.range_comment(),
+        })
+        .collect()
+}
+
+impl SGap {
+    // The text inside a one-line range comment that is all this gap holds beside spaces.
+    fn range_comment(&self) -> Option<String> {
+        let units = Vec::<SGapUnit>::parse(&self.0).ok()?;
+        let mut comments = (units.iter()).filter(|unit| !matches!(unit, SGapUnit::Space(_)));
+        let (Some(SGapUnit::RangeComment(comment)), None) = (comments.next(), comments.next())
+        else {
+            return None;
+        };
+        let text = comment.0.strip_prefix("/*")?.strip_suffix("*/")?;
+        (!text.contains('\n')).then(|| text.to_string())
+    }
+}
+
 #[derive(Grammar)]
 #[tygr(inline)]
 pub struct MGap(Raw<Vec<MGapUnit>>);

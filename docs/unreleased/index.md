@@ -112,6 +112,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [S5583](S5583.md) | This comma wants {wanted} |
 | [S6174](S6174.md) | Argument '{name}' has no default but follows one that has |
 | [S6307](S6307.md) | Put the postconditional on the command keyword, not on its argument |
+| [S6829](S6829.md) | Indent this line {wanted}, not {found} |
 | [S7126](S7126.md) | Describe this {kind}: its body is {lines} line(s) |
 | [S7442](S7442.md) | Join these conditions with `{wanted}` |
 | [S8215](S8215.md) | Put {wanted} before `{` |

@@ -1,6 +1,6 @@
 # Style rules
 
-A style is a JSON file passed with `--style <file>` to `analyze`, `format` and `lsp`; the MCP `create_workspace` call and the JavaScript `createWorkspace` take the same record directly. Its schema is the `style` record in [ascot.wit](src/wit/ascot.wit). Every key is optional, and only what's set is checked; what's written otherwise is reported as a warning whose code starts with `S`, so `-d off:S2839` or a severity filter sets style apart from the checker's own diagnostics. `ascot format`, and the LSP formatting request, rewrite what the `command` keyword rules and the `open_brace`/`close_brace` rules report, inside procedure blocks and method bodies; the other rules are reported alone.
+A style is a JSON file passed with `--style <file>` to `analyze`, `format` and `lsp`; the MCP `create_workspace` call and the JavaScript `createWorkspace` take the same record directly. Its schema is the `style` record in [ascot.wit](src/wit/ascot.wit). Every key is optional, and only what's set is checked; what's written otherwise is reported as a warning whose code starts with `S`, so `-d off:S2839` or a severity filter sets style apart from the checker's own diagnostics. `ascot format`, and the LSP formatting request, rewrite what the `command` keyword rules and the `openBrace`/`closeBrace` rules report, inside procedure blocks and method bodies, and what `indent` reports anywhere; the other rules are reported alone.
 
 ```json
 {
@@ -17,7 +17,8 @@ A style is a JSON file passed with `--style <file>` to `analyze`, `format` and `
   "requireDescription": { "minBodyLines": 5 },
   "openBrace": { "newlineBefore": false, "newlineAfter": true },
   "closeBrace": { "newlineBefore": true, "newlineAfter": false },
-  "spaceAfterComma": true
+  "spaceAfterComma": true,
+  "indent": { "unit": "    " }
 }
 ```
 
@@ -48,3 +49,4 @@ With `form` alone, any casing passes; with `case` alone, the form written is kep
 | `closeBrace.newlineBefore` | `true`, `false` | Likewise between a block's last command and its `}`: `true` wants the `}` on its own line. |
 | `closeBrace.newlineAfter` | `true`, `false` | Likewise between a block's `}` and an `Else`, `ElseIf` or `Catch` that follows: `false` wants `} Else {`, `true` wants the keyword on the next line. |
 | `spaceAfterComma` | `true`, `false` | A list's comma spaced the other way: `true` wants one space after and none before (`$lb(1, 2)`, `If a, b`), `false` none on either side (`$lb(1,2)`). Two commas touching omit an argument and are left alone. |
+| `indent.unit` | one level of indentation: spaces or a tab | A line whose first command, or whose `{` or `}`, isn't at its depth: a method body's or a label's commands sit one level in, each `{ }` block adds one, and a brace on a line of its own sits at its block's depth. Lines inside `&sql(...)`, `&html<...>` and other embedded languages, comments and a command's continuation lines are left alone. |

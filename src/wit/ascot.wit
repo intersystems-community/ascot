@@ -306,6 +306,11 @@ interface common {
         min-body-lines: u32,
     }
 
+    // One level of indentation, the text itself: spaces or a tab.
+    record indentation {
+        unit: string,
+    }
+
     // How a hint spells the type after a `Set` target of unclear type: `As %Integer`, as a
     // declaration does, or `: %Integer`.
     enum type-annotation {
@@ -339,6 +344,9 @@ interface common {
         close-brace: option<brace-breaks>,
         // One space after a comma and none before (`true`), or none on either side (`false`).
         space-after-comma: option<bool>,
+        // A method body's or a label's commands sit one level in, each `{ }` block adds one, and
+        // a brace on a line of its own sits at its block's depth.
+        indent: option<indentation>,
         command: option<command-style>,
         command-do: option<command-style>,
         command-if: option<command-style>,
