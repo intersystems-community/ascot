@@ -3304,6 +3304,12 @@ fn check_infix<'a, X>(
             {
                 return Ok(PowerTy::union(cs));
             }
+            if matches!(op, cos::Operator::Concat(_))
+                && *lhs == PowerTy::NullFreeList
+                && *rhs == PowerTy::NullFreeList
+            {
+                return Ok(PowerTy::NullFreeList);
+            }
             let lhs = ranged_quasi_ty_to_ty(env, flow, &lhs, lhs_text)?;
             let rhs = ranged_quasi_ty_to_ty(env, flow, &rhs, Some(&|| rhs_node.print()))?;
             Ok(match op {
@@ -3312,6 +3318,10 @@ fn check_infix<'a, X>(
                     PowerTy::from("%DataType")
                 }
                 cos::Operator::IntDiv(_) | cos::Operator::Mod(..) => PowerTy::from("%Integer"),
+                // Two lists concatenated are a list, holding a null element if either may.
+                cos::Operator::Concat(_) if lhs.is_list() && rhs.is_list() => {
+                    env.merge_ty(lhs, rhs).into()
+                }
                 cos::Operator::Concat(_) => PowerTy::from("%String"),
                 // Every comparison and logical operator.
                 _ => PowerTy::from("%Boolean"),
