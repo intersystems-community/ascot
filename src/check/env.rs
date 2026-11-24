@@ -1799,7 +1799,6 @@ impl<'a> WorkspaceEnv<'a> {
             return ClassTy {
                 name: x.name.clone(),
                 params,
-                null_free: x.null_free && y.null_free,
             };
         }
         let y_ancestors: HashSet<String> = self.ancestors(&y.name).into_iter().collect();

@@ -331,6 +331,8 @@ pub enum PowerTy {
     Plain(MaybeTy),
     Const(Const),
     Union(Const, Const, Vec<Const>),
+    // A `%List` with no null element, as `$LISTBUILD(1, 2)` builds; a declared one never is.
+    NullFreeList,
     Never,
     Term {
         target: u32,
@@ -420,6 +422,7 @@ impl PowerTy {
             }
             PowerTy::Const(Const::Integer(_)) => MaybeTy::Plain(Ty::from("%Integer")),
             PowerTy::Const(Const::String(..)) => MaybeTy::Plain(Ty::from("%String")),
+            PowerTy::NullFreeList => MaybeTy::Plain(Ty::from("%List")),
             PowerTy::Never => MaybeTy::Plain(Ty::Any),
         }
     }
@@ -493,6 +496,7 @@ impl std::fmt::Display for PowerTy {
                 }
                 write!(f, ")")
             }
+            PowerTy::NullFreeList => write!(f, "%List"),
             PowerTy::Never => write!(f, "<NEVER>"),
         }
     }
@@ -562,22 +566,9 @@ pub struct ClassTy {
     // The type's parameters as written, `%String(MAXLEN = 50)`: each value's text by name, a
     // string literal with its quotes.
     pub params: BTreeMap<String, String>,
-    // A `%List` with no null element, as `$LISTBUILD(1, 2)` builds; unset for a declared `%List`.
-    pub null_free: bool,
 }
 
 impl Ty {
-    pub(crate) fn list(null_free: bool) -> Self {
-        Self::ins(ClassTy {
-            null_free,
-            ..ClassTy::from("%List".to_string())
-        })
-    }
-
-    pub(crate) fn null_free(&self) -> bool {
-        matches!(self, Ty::OREF(ClsOrIns::Ins(cls)) if cls.null_free)
-    }
-
     pub(crate) fn is_list(&self) -> bool {
         matches!(self, Ty::OREF(ClsOrIns::Ins(cls)) if cls.name == "%Library.List")
     }
@@ -600,11 +591,7 @@ impl From<String> for ClassTy {
             name.truncate(name[..i].trim_end().len());
         }
         normalize_class_name(&mut name);
-        ClassTy {
-            name,
-            params,
-            null_free: false,
-        }
+        ClassTy { name, params }
     }
 }
 

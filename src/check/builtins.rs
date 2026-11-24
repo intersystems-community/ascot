@@ -640,7 +640,11 @@ impl CheckExprInner for cos::FunctionCall {
                         None => false,
                     };
                 }
-                Ok(Ty::list(null_free).into())
+                Ok(if null_free {
+                    PowerTy::NullFreeList
+                } else {
+                    Ty::from("%List").into()
+                })
             }
             FunctionCall::ListData {
                 args:
@@ -1323,12 +1327,14 @@ fn check_list_plain_call<'a>(
     flow: &mut Flow<'a>,
     c: &ListPlainCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    let list = c.list.deref().to_ty(env, flow)?;
+    let list = c.list.deref().to_ranged_power_ty(env, flow)?;
+    let _ = ranged_quasi_ty_to_ty(env, flow, &list, Some(&|| c.list.print()))?;
     let element = check_read_args(env, flow, [arg(&c.position), arg(&c.end)], "%String")?;
     // `$LIST(list, position)` raises <NULL VALUE> on a null element: never an undefined value.
-    Ok(match c.end {
-        Some(_) => Ty::list(list.null_free()).into(),
-        None => element,
+    Ok(match (&c.end, &*list) {
+        (Some(_), PowerTy::NullFreeList) => PowerTy::NullFreeList,
+        (Some(_), _) => Ty::from("%List").into(),
+        (None, _) => element,
     })
 }
 
@@ -1478,7 +1484,7 @@ fn check_simple_function<'a>(
     }
     // `$LISTFROMSTRING("a,,b")` makes an empty-string element of the empty piece, not a null one.
     if function.names[0] == "ListFromString" {
-        return Ok(Ty::list(true).into());
+        return Ok(PowerTy::NullFreeList);
     }
     Ok(Ty::from(function.ret).into())
 }
@@ -1544,12 +1550,13 @@ fn check_listnext<'a>(
     ptr: &Ranged<Variable>,
     value: &Ranged<Variable>,
 ) -> Result<PowerTy, QuasiTypeError> {
-    let list = list.to_ty(env, flow)?;
+    let list_ty = list.to_ranged_power_ty(env, flow)?;
+    let _ = ranged_quasi_ty_to_ty(env, flow, &list_ty, Some(&|| list.print()))?;
     let _ = ptr.to_ty(env, flow)?;
     check_out_var(env, flow, Some(ptr), "%Integer")?;
     if let Left(local) = value.as_local(env, flow)? {
         let range = env.range(value);
-        if list.null_free() {
+        if *list_ty == PowerTy::NullFreeList {
             let cases = |old_ty| vec![("0", old_ty)];
             let value = Some(Some(Ty::from("%String")));
             return bind_out_var(env, flow, local, range, cases, value);

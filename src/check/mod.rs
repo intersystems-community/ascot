@@ -3254,6 +3254,12 @@ fn check_infix<'a, X>(
             {
                 return Ok(PowerTy::union(cs));
             }
+            if matches!(op, cos::Operator::Concat(_))
+                && *lhs == PowerTy::NullFreeList
+                && *rhs == PowerTy::NullFreeList
+            {
+                return Ok(PowerTy::NullFreeList);
+            }
             let lhs = ranged_quasi_ty_to_ty(env, flow, &lhs, lhs_text)?;
             let rhs = ranged_quasi_ty_to_ty(env, flow, &rhs, Some(&|| rhs_node.print()))?;
             Ok(match op {
