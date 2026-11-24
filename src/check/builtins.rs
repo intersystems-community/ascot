@@ -631,12 +631,20 @@ impl CheckExprInner for cos::FunctionCall {
                 args: ListBuildArgs { first, rest, .. },
                 ..
             }) => {
+                let mut null_free = true;
                 for arg in once(first.deref()).chain(each_arg(rest)) {
-                    if let Some(element) = arg.deref() {
-                        check_lenient_arg(env, flow, Ranged::new(arg.start, element, arg.end))?;
-                    }
+                    null_free &= match arg.deref() {
+                        Some(element) => {
+                            check_lenient_arg(env, flow, Ranged::new(arg.start, element, arg.end))?
+                        }
+                        None => false,
+                    };
                 }
-                Ok(Ty::from("%List").into())
+                Ok(if null_free {
+                    PowerTy::NullFreeList
+                } else {
+                    Ty::from("%List").into()
+                })
             }
             FunctionCall::ListData {
                 args:
@@ -997,23 +1005,25 @@ fn check_set_fun<'a, C>(
 }
 
 // A variable named alone is read leniently, an undefined one as absent; any other expression
-// must have a value.
+// must have a value. Whether the argument surely has one.
 fn check_lenient_arg<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     arg: Ranged<&cos::VarOrExpr>,
-) -> Result<(), QuasiTypeError> {
+) -> Result<bool, QuasiTypeError> {
     match arg.ranged {
         cos::VarOrExpr::Var(var) => {
-            if let Left(local) = var.as_local(env, flow)? {
-                flow.handle_get(local)?;
-            }
+            let ty = match var.as_local(env, flow)? {
+                Left(local) => flow.handle_get(local)?,
+                Right(ty) => ty,
+            };
+            Ok(!ty.to_maybe_ty(env).maybe_undefined())
         }
         cos::VarOrExpr::Expr(expr) => {
             let _ = Ranged::new(arg.start, expr, arg.end).to_ty(env, flow)?;
+            Ok(true)
         }
     }
-    Ok(())
 }
 
 // A vector is a variable or a literal; a property is one only when MultiDimensional.
@@ -1027,7 +1037,8 @@ fn check_vector_arg<'a>(
     {
         super::require_multidimensional(env, flow, member.deref())?;
     }
-    check_lenient_arg(env, flow, arg)
+    check_lenient_arg(env, flow, arg)?;
+    Ok(())
 }
 
 /// Check a [`SetTargetFun`] -- the settable functions on the left of `SET`.
@@ -1316,8 +1327,15 @@ fn check_list_plain_call<'a>(
     flow: &mut Flow<'a>,
     c: &ListPlainCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    let _ = c.list.deref().to_ty(env, flow)?;
-    check_read_args(env, flow, [arg(&c.position), arg(&c.end)], "%String")
+    let list = c.list.deref().to_ranged_power_ty(env, flow)?;
+    let _ = ranged_quasi_ty_to_ty(env, flow, &list, Some(&|| c.list.print()))?;
+    let element = check_read_args(env, flow, [arg(&c.position), arg(&c.end)], "%String")?;
+    // `$LIST(list, position)` raises <NULL VALUE> on a null element: never an undefined value.
+    Ok(match (&c.end, &*list) {
+        (Some(_), PowerTy::NullFreeList) => PowerTy::NullFreeList,
+        (Some(_), _) => Ty::from("%List").into(),
+        (None, _) => element,
+    })
 }
 
 fn check_listget_call<'a>(
@@ -1464,6 +1482,10 @@ fn check_simple_function<'a>(
             .into(),
         );
     }
+    // `$LISTFROMSTRING("a,,b")` makes an empty-string element of the empty piece, not a null one.
+    if function.names[0] == "ListFromString" {
+        return Ok(PowerTy::NullFreeList);
+    }
     Ok(Ty::from(function.ret).into())
 }
 
@@ -1519,8 +1541,8 @@ fn check_out_var<'a>(
 }
 
 /// `$LISTNEXT(list, ptr, value)` iterates a list. `ptr` is read (IRIS raises `<FUNCTION>` on an
-/// undefined or empty pointer), then becomes a defined integer unconditionally, but `value` may be
-/// undefined even when the call returns true: a null element leaves it so.
+/// undefined or empty pointer), then becomes a defined integer. A false call leaves `value` as it
+/// was; a true one defines it, unless the element is null, which kills it.
 fn check_listnext<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1528,11 +1550,17 @@ fn check_listnext<'a>(
     ptr: &Ranged<Variable>,
     value: &Ranged<Variable>,
 ) -> Result<PowerTy, QuasiTypeError> {
-    let _ = list.to_ty(env, flow)?;
+    let list_ty = list.to_ranged_power_ty(env, flow)?;
+    let _ = ranged_quasi_ty_to_ty(env, flow, &list_ty, Some(&|| list.print()))?;
     let _ = ptr.to_ty(env, flow)?;
     check_out_var(env, flow, Some(ptr), "%Integer")?;
     if let Left(local) = value.as_local(env, flow)? {
         let range = env.range(value);
+        if *list_ty == PowerTy::NullFreeList {
+            let cases = |old_ty| vec![("0", old_ty)];
+            let value = Some(Some(Ty::from("%String")));
+            return bind_out_var(env, flow, local, range, cases, value);
+        }
         flow.handle_get(local.clone())?;
         flow.handle_set(local, MaybeTy::Maybe(Ty::from("%String")).into(), range)?;
     }

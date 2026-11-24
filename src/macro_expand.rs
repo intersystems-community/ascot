@@ -712,6 +712,9 @@ impl WorkspaceStruct {
                     MacroRedex::DDD(ddd) => {
                         dones.note_invocation(&origin);
                         let MacroCallStruct { name, args } = ddd.deref();
+                        // The unit's own offsets, counted from its `$$$`, mapped into `origin`.
+                        let unit_start = name.0.start - 3;
+                        let at = |offset: usize| origin.range.start + (offset - unit_start);
                         let compile_time = definitions
                             .get(&name.print())
                             .is_some_and(|def| def.is_compile_time());
@@ -757,11 +760,23 @@ impl WorkspaceStruct {
                             Some(MacroDefinition {
                                 params: None, body, ..
                             }) => {
-                                let mut units = <Vec<MacroedUnit>>::parse(body)?;
+                                let deeper = origin.deeper();
+                                let mut items: Vec<TodoItem> = <Vec<MacroedUnit>>::parse(body)?
+                                    .into_iter()
+                                    .map(|unit| (Cow::Owned(unit), deeper.clone(), false))
+                                    .collect();
                                 if let Some(args) = args.as_ref() {
-                                    units.extend(<Vec<MacroedUnit>>::parse(&args.print())?);
+                                    let start = at(name.0.end);
+                                    for unit in <Vec<Ranged<MacroedUnit>>>::parse(&args.print())? {
+                                        let piece = if precise {
+                                            origin.with_range(start + unit.start..start + unit.end)
+                                        } else {
+                                            origin.clone()
+                                        };
+                                        items.push((Cow::Owned(unit.into_inner()), piece, precise));
+                                    }
                                 }
-                                todos.push(units, origin.deeper());
+                                todos.push_items(items);
                                 true
                             }
                             Some(MacroDefinition {
@@ -778,7 +793,7 @@ impl WorkspaceStruct {
                                     .join(",");
                                 let arg_origin = match (args.items.first(), args.items.last()) {
                                     (Some(first), Some(last)) if precise => {
-                                        origin.with_range(first.start..last.end)
+                                        origin.with_range(at(first.start)..at(last.end))
                                     }
                                     _ => origin.clone(),
                                 };
@@ -826,7 +841,7 @@ impl WorkspaceStruct {
                                     .zip(args.items.iter())
                                     .map(|(par, arg)| {
                                         let arg_origin = if precise {
-                                            origin.with_range(arg.start..arg.end)
+                                            origin.with_range(at(arg.start)..at(arg.end))
                                         } else {
                                             origin.clone()
                                         };
@@ -851,35 +866,31 @@ impl WorkspaceStruct {
                                     let text = unit.print();
                                     let base = origin.range.start;
                                     let arg_span = |arg: &Ranged<MacroArg>| {
-                                        Some(
-                                            arg.start.checked_sub(base)?
-                                                ..arg.end.checked_sub(base)?,
-                                        )
+                                        arg.start - unit_start..arg.end - unit_start
                                     };
                                     // Precise means `text` sits at `origin.range`, so it's pushed
-                                    // piecewise: an argument whose expansion changed its length
-                                    // maps to the argument's own span, the rest stays exact.
+                                    // piecewise: an argument is expanded at its own span, so what
+                                    // stays literal in it keeps its place, and the rest is exact.
                                     let piecewise = precise
                                         && args.items.iter().all(|arg| {
-                                            arg_span(arg).and_then(|span| text.get(span))
-                                                == Some(arg.print().as_str())
+                                            text.get(arg_span(arg)) == Some(arg.print().as_str())
                                         });
                                     if piecewise {
                                         let mut done = 0;
                                         for arg in args.items.iter() {
-                                            let span = arg_span(arg).unwrap();
+                                            let span = arg_span(arg);
                                             let piece =
                                                 origin.with_range(base + done..base + span.start);
                                             dones.push(&text[done..span.start], &piece, true);
+                                            let piece = origin
+                                                .with_range(base + span.start..base + span.end);
                                             let expanded = self.expand_arg(
                                                 definitions,
                                                 &text[span.clone()],
                                                 compile_time,
+                                                Some(&piece),
                                             )?;
-                                            let exact = expanded == text[span.clone()];
-                                            let piece = origin
-                                                .with_range(base + span.start..base + span.end);
-                                            dones.push(&expanded, &piece, exact);
+                                            dones.push_expanded(expanded);
                                             done = span.end;
                                         }
                                         let piece =
@@ -888,11 +899,15 @@ impl WorkspaceStruct {
                                     } else {
                                         let mut arg_texts = Vec::with_capacity(args.items.len());
                                         for arg in args.items.iter() {
-                                            arg_texts.push(self.expand_arg(
-                                                definitions,
-                                                &arg.print(),
-                                                compile_time,
-                                            )?);
+                                            arg_texts.push(
+                                                self.expand_arg(
+                                                    definitions,
+                                                    &arg.print(),
+                                                    compile_time,
+                                                    None,
+                                                )?
+                                                .text,
+                                            );
                                         }
                                         dones.push(
                                             &format!(
@@ -938,8 +953,9 @@ impl WorkspaceStruct {
     }
 
     // Expands `text` in isolation -- e.g. one `#if` condition, or one argument to a call that
-    // otherwise didn't resolve as a `#define`d macro (see `MacroRedex::DDD`). Always terminates:
-    // it only ever recurses on strictly smaller, nested argument text.
+    // otherwise didn't resolve as a `#define`d macro (see `MacroRedex::DDD`); given the `origin`
+    // `text` sits at, what stays literal is mapped to its place. Always terminates: it only ever
+    // recurses on strictly smaller, nested argument text.
     // An argument of a compile-time macro (`$$$ERROR(...)`): IRIS resolves the error names in it
     // against %occErrors whether or not the file includes it, so those count as defined here.
     fn expand_arg(
@@ -947,9 +963,10 @@ impl WorkspaceStruct {
         definitions: &mut Definitions<'_>,
         text: &str,
         compile_time: bool,
-    ) -> Result<String, tygr::Error> {
+        origin: Option<&Origin>,
+    ) -> Result<DoneList, tygr::Error> {
         if !compile_time || !text.contains("$$$") {
-            return self.expand_text(definitions, text);
+            return self.expand_text(definitions, text, origin);
         }
         if self.error_names.borrow().is_none() {
             let (names, _, _) = self.resolve_class_includes(&["%occErrors".to_string()]);
@@ -970,7 +987,7 @@ impl WorkspaceStruct {
                 added.push(name);
             }
         }
-        let expanded = self.expand_text(definitions, text);
+        let expanded = self.expand_text(definitions, text, origin);
         for name in added {
             definitions.remove(&name);
         }
@@ -981,12 +998,21 @@ impl WorkspaceStruct {
         &self,
         definitions: &mut Definitions<'_>,
         text: &str,
-    ) -> Result<String, tygr::Error> {
+        origin: Option<&Origin>,
+    ) -> Result<DoneList, tygr::Error> {
         let mut dones = DoneList::new();
-        let mut todos = TodoList::new(Vec::new());
-        todos.push(<Vec<MacroedUnit>>::parse(text)?, Origin::top_level(0..0));
+        let units = <Vec<Ranged<MacroedUnit>>>::parse(text)?;
+        let mut todos = TodoList::new(match origin {
+            Some(origin) => precise_items(&units, |range| {
+                origin.with_range(origin.range.start + range.start..origin.range.start + range.end)
+            }),
+            None => units
+                .iter()
+                .map(|unit| (Cow::Borrowed(unit.deref()), Origin::top_level(0..0), false))
+                .collect(),
+        });
         self.expand_units(definitions, &mut todos, &mut dones)?;
-        Ok(dones.text)
+        Ok(dones)
     }
 
     // Resolves the `#if`/`#elseif` `item` by its condition: "1" keeps its branch, "0" drops it,
@@ -1016,7 +1042,7 @@ impl WorkspaceStruct {
             text[..end].trim()
         }
         let written = import_macro_input(input);
-        let expanded = self.expand_text(definitions, &written)?;
+        let expanded = self.expand_text(definitions, &written, None)?.text;
         let (written, expanded) = (condition(&written), condition(&expanded));
         let decided = match expanded {
             "1" => true,
@@ -1307,15 +1333,18 @@ fn substitute_macro_body<'a>(
                     }
                 }
             }
-            // Never precise: a redex's own argument offsets are relative to this re-tokenized
-            // text, not to the source, so `MacroRedex::DDD` couldn't map them back.
+            // Inside one precise span, as precise as a part of it; across spans, the call's.
             MacroedUnit::Redex(_) => {
                 let mut overlapping = overlapping;
-                let origin = match (overlapping.next(), overlapping.next()) {
-                    (Some((_, _, span)), None) => span.origin.clone(),
-                    _ => call_origin.clone(),
+                let (origin, precise) = match (overlapping.next(), overlapping.next()) {
+                    (Some((start, _, span)), None) if span.precise => {
+                        let at = span.origin.range.start + (unit.start - start);
+                        (span.origin.with_range(at..at + unit.end - unit.start), true)
+                    }
+                    (Some((_, _, span)), None) => (span.origin.clone(), false),
+                    _ => (call_origin.clone(), false),
                 };
-                items.push((Cow::Owned(unit.into_inner()), origin, false));
+                items.push((Cow::Owned(unit.into_inner()), origin, precise));
             }
         }
     }
@@ -1408,6 +1437,16 @@ impl DoneList {
         self.text.push_str(text);
         self.map
             .push((start..self.text.len(), origin.clone(), precise));
+    }
+
+    // Appends an expansion made apart (see `expand_arg`), its pieces mapped as they were.
+    fn push_expanded(&mut self, expanded: DoneList) {
+        let start = self.text.len();
+        self.text.push_str(&expanded.text);
+        self.map
+            .extend(expanded.map.into_iter().map(|(range, origin, precise)| {
+                (start + range.start..start + range.end, origin, precise)
+            }));
     }
 
     // Like `push`, but a `#dim` at column 0 (legal in a routine, where the plain grammar keeps

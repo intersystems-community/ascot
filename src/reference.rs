@@ -157,6 +157,8 @@ fn rendered(doc: &str, error: bool) -> String {
 // What IRIS does with the example, from the fence's words `scripts/verify-examples.py` checks: an
 // error's example is rejected unless it says `compiles` or `raises=<ERROR> statement`.
 fn iris(info: &str, error: bool) -> String {
+    // `style=` ends the info string: its JSON may hold spaces.
+    let (info, style) = (info.split_once("style=")).map_or((info, None), |(i, s)| (i, Some(s)));
     let words: Vec<&str> = info.split_whitespace().collect();
     let mut sentence = match info
         .strip_prefix("raises=")
@@ -176,8 +178,8 @@ fn iris(info: &str, error: bool) -> String {
     if words.contains(&"env=none") {
         sentence += " Checked without an environment, as `--iris none`.";
     }
-    if let Some(style) = words.iter().find_map(|word| word.strip_prefix("style=")) {
-        sentence += &format!(" Checked with the style `{style}`.");
+    if let Some(style) = style {
+        sentence += &format!(" Checked with the style `{}`.", style.trim());
     }
     sentence
 }

@@ -101,6 +101,36 @@ pub struct NL {
     newline: StringEq!("\n"),
 }
 
+/// The comments on lines of their own in `gap`, the newlines and comment lines a `Raw<Vec1<NL>>`
+/// holds between two command lines, each as its text after `//`, `;` or `#;`, or inside a `/* */`
+/// that is the whole line.
+pub fn line_comments(gap: &str) -> Vec<String> {
+    let Ok(lines) = Vec1::<NL>::parse(gap) else {
+        return vec![];
+    };
+    // The first newline ends the code line before the gap.
+    (lines.iter().skip(1))
+        .filter_map(|nl| match &nl.comment {
+            Some(comment) => Some(comment.content.print()),
+            None => nl.gap.range_comment(),
+        })
+        .collect()
+}
+
+impl SGap {
+    // The text inside a one-line range comment that is all this gap holds beside spaces.
+    fn range_comment(&self) -> Option<String> {
+        let units = Vec::<SGapUnit>::parse(&self.0).ok()?;
+        let mut comments = (units.iter()).filter(|unit| !matches!(unit, SGapUnit::Space(_)));
+        let (Some(SGapUnit::RangeComment(comment)), None) = (comments.next(), comments.next())
+        else {
+            return None;
+        };
+        let text = comment.0.strip_prefix("/*")?.strip_suffix("*/")?;
+        (!text.contains('\n')).then(|| text.to_string())
+    }
+}
+
 #[derive(Grammar)]
 #[tygr(inline)]
 pub struct MGap(Raw<Vec<MGapUnit>>);
@@ -2151,7 +2181,7 @@ char_class!(pub IsLetterOrNumberIncludingUnicode, "letter or number", |c| is_let
 /*
 There are two entry points for ObjectScript:
 
-- OSExpr: ObjectScript as class parameter, keyword value, method parameter default values, etc.
+- OSExpr: ObjectScript as class parameter, keyword value, etc.
 - OSText: ObjectScript in {...}
 
 The key differences are:
@@ -3314,10 +3344,36 @@ pub enum FormalDefaultValue {
         expr: Ranged<Expr>,
         close: Raw<(Space, StringEq!("}"))>,
     },
+    // Braces whose text is no expression, for the checker to report.
+    Braces {
+        open: StringEq!("{"),
+        content: Ranged<OSText>,
+        close: StringEq!("}"),
+    },
     // `= …`: a declaration's optional argument without a default; IRIS compiles no such source.
     Elided(StringEq!("…")),
-    // Including braces whose text is no expression, for the checker to report.
-    Other(OSExpr),
+    Literal(Literal<FormalNumber>, NotFollowedBy<IsOSExprSafe>),
+    // IRIS's own classes carry these, as exported, though its class loader refuses them in source.
+    Expression(Expr),
+}
+
+#[derive(Grammar)]
+#[tygr(name = "literal")]
+pub enum Literal<N: Grammar = Number> {
+    String(OSString),
+    Number(Option<PlusMinus>, N),
+}
+
+// IRIS refuses `1.` and `1.E3` as a formal default, though not in an expression (2026.2).
+#[derive(Grammar)]
+#[tygr(inline)]
+pub enum FormalNumber {
+    FromDigit(
+        Digits,
+        Option<(StringEq!("."), Digits)>,
+        Option<Exponential>,
+    ),
+    FromDot(StringEq!("."), Digits, Option<Exponential>),
 }
 
 #[derive(Grammar)]
@@ -7244,8 +7300,30 @@ pub struct MacroName(pub Ranged<MacroNameText>);
 #[derive(Grammar, Clone)]
 pub struct MacroNameText(StringOf1<IsMacroNameChar>);
 
+// A literal, then `+`, `-` or `_` and a literal or a parenthesized such sum, which IRIS folds when
+// compiling: `a=1+(2+3)` is 6, while `a=2*3`, `a=1+x` and `a=(1)` are refused (2026.2).
 #[derive(Grammar)]
-pub struct Value(Expr);
+pub struct LabelDefault {
+    pub literal: Literal,
+    pub ops: ConstOps,
+}
+
+pub type ConstOps = Vec<(
+    Wrap<MGap, Either<PlusMinus, StringEq!("_")>, MGap>,
+    ConstOperand,
+)>;
+
+#[derive(Grammar)]
+#[tygr(name = "constant")]
+pub enum ConstOperand {
+    Literal(Literal),
+    Paren {
+        open: Raw<(StringEq!("("), MGap)>,
+        first: Box<ConstOperand>,
+        ops: ConstOps,
+        close: Raw<(MGap, StringEq!(")"))>,
+    },
+}
 
 /// `methodimpl` is how IRIS marks a method's compiled code in a class's `.int` routine.
 #[derive(Grammar)]
@@ -7308,7 +7386,7 @@ pub struct ParameterEntry {
     pub by_ref: Option<StringEq!("&")>,
     pub param: Ranged<LocalVariableName>,
     pub expand: Option<StringEq!("...")>,
-    pub default: Option<Prefix<Raw<Wrap<MGap, StringEq!("="), MGap>>, Value>>,
+    pub default: Option<Prefix<Raw<Wrap<MGap, StringEq!("="), MGap>>, LabelDefault>>,
 }
 
 pub type ParameterList = Wrap<

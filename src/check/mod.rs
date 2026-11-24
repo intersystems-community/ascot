@@ -32,10 +32,12 @@ use env::*;
 use flow::*;
 use std::collections::HashSet;
 use std::{iter::once, ops::Deref};
-use tygr::{IntoInner, OLC, Parse, Print, Ranged};
+use tygr::{IntoInner, OLC, Parse, Prefix, Print, Ranged, Raw, Vec1};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::cos::{KeywordKind, KeywordUse, Spelled};
 use types::*;
+
+use crate::diagnostic_filter::Filter;
 
 pub(crate) use env::{DocumentEnv, Labels, WorkspaceEnv, labels_of};
 pub use errors::{
@@ -155,7 +157,10 @@ use crate::{
     SourceMap,
     bindings::{self, Diagnostic, DiagnosticRelatedInformation, InlayHint, Location, RefMode},
     cos::{self, *},
-    details::{self, MemberDetails, MemberKindSpecificDetails, MemberNs, MethodDetails, WithRange},
+    details::{
+        self, DefaultValue, MemberDetails, MemberKindSpecificDetails, MemberNs, MethodDetails,
+        WithRange,
+    },
     macro_expand::Fidelity,
 };
 
@@ -379,8 +384,6 @@ impl MethodDetails {
         }
         let body_text = expanded[header_len..].to_string();
         let body_range = expanded_olc.span(header_len, expanded.len());
-        let diagnostics_mark = env.base.soft_diagnostics_mark();
-        let references_mark = env.base.references_mark();
         // The signature's types are written relative to the class: its package and `Import`s.
         let qualified = |mut ty: Option<Ty>| {
             if let Some(ty) = &mut ty {
@@ -403,6 +406,9 @@ impl MethodDetails {
             let out = local_out.it.clone().flatten();
             check_override(env, cls, name, origin, sup, self, &local_args, out);
         }
+        // The override check reports against the document; only what follows is relocated.
+        let diagnostics_mark = env.base.soft_diagnostics_mark();
+        let references_mark = env.base.references_mark();
         // An override's formal arguments are the superclass's, read or not (A4269).
         let inherited: Vec<(String, bindings::Range)> = match overridden {
             Some(_) => (local_args.iter())
@@ -450,18 +456,19 @@ impl MethodDetails {
                 );
                 for default in &self.brace_defaults {
                     let range = match &default.value {
-                        Left(expr) => default_env.range(expr),
-                        Right(text) => text.range,
+                        DefaultValue::Expr(expr) => default_env.range(expr),
+                        DefaultValue::Braces(text) => text.range,
+                        DefaultValue::Unbraced(text) => text.range,
                     };
                     flow.with_range(range, |flow| {
                         let ty = match &default.value {
-                            Left(expr) => {
+                            DefaultValue::Expr(expr) => {
                                 expr.to_power_ty(&default_env, flow).unwrap_or_else(|err| {
                                     default_env.soft_diagnostic(err);
                                     Ty::Any.into()
                                 })
                             }
-                            Right(text) => {
+                            DefaultValue::Braces(text) => {
                                 if let Err(err) = Expr::parse(&text.it) {
                                     default_env.soft_diagnostic(TypeError::syntax_error(
                                         range,
@@ -470,6 +477,15 @@ impl MethodDetails {
                                         SyntaxScope::ArgumentDefault,
                                     ));
                                 }
+                                Ty::Any.into()
+                            }
+                            DefaultValue::Unbraced(text) => {
+                                default_env.soft_diagnostic(
+                                    TypeErrorKind::UnbracedDefaultExpression {
+                                        default: text.it.clone(),
+                                    }
+                                    .at(range),
+                                );
                                 Ty::Any.into()
                             }
                         };
@@ -526,6 +542,12 @@ impl MethodDetails {
             &source_map,
             &shifter,
         ));
+        // A statement a macro wrote maps to the invocation's lines, so its directive still holds.
+        let line_filters = method_env.line_filters.into_inner().into_iter();
+        let relocated = line_filters.filter_map(|(range, filter)| {
+            Some((shifter.range(source_map.map_lsp_range(range)?.0), filter))
+        });
+        env.line_filters.borrow_mut().extend(relocated);
         let (diagnostics, references) = in_doc_coordinates.into_inner();
         for diagnostic in diagnostics {
             env.base.add_soft_diagnostic(diagnostic);
@@ -583,6 +605,10 @@ impl<'b> CheckCommand for MethodBody<'b> {
             ) => {
                 let body = <cos::ProcedureBody>::parse(body)
                     .map_err(|err| syntax_error(env, err, body))?;
+                if flow.is_procedure_block() {
+                    flow.make_public(sql_publics(&body))
+                        .map_err(|err| err.into_error(|| self.body.range))?;
+                }
                 check_block_body(&body, env, flow, true)
             }
             (
@@ -769,6 +795,35 @@ fn check_element_body<'a>(
 
 // The labels inside the blocks of `body`, at any depth.
 fn labels_in_blocks<'b>(body: &'b ProcedureBody, out: &mut Vec<&'b cos::RoutineElement>) {
+    walk_blocks(body, &mut |it| {
+        if let Right(body) = it {
+            out.extend(body.subroutines.iter().flat_map(|subs| subs.items.iter()));
+        }
+    });
+}
+
+// IRIS makes SQLCODE and a class method's SQL host variables public, not a routine's (2026.2).
+fn sql_publics(body: &ProcedureBody) -> HashSet<String> {
+    let mut names = HashSet::new();
+    walk_blocks(body, &mut |it| {
+        if let Left(Command::ESQL(_, statement, _)) = it {
+            let hosts = sql::analyze(statement, None);
+            names.insert("SQLCODE".to_string());
+            names.extend(
+                (hosts.reads.into_iter().chain(hosts.writes))
+                    .map(|(name, _)| name)
+                    .filter(|name| !flow::is_percent_variable(name)),
+            );
+        }
+    });
+    names
+}
+
+// Every command of `body`, its labels' and its blocks' included, and every body a block nests.
+fn walk_blocks<'b>(
+    body: &'b ProcedureBody,
+    visit: &mut dyn FnMut(Either<&'b Command, &'b ProcedureBody>),
+) {
     let labels = body.subroutines.iter().flat_map(|subs| subs.items.iter());
     let in_labels = labels.filter_map(|elem| match elem {
         cos::RoutineElement::Subroutine(sub) => Some(sub.body.as_command_lines()),
@@ -777,11 +832,15 @@ fn labels_in_blocks<'b>(body: &'b ProcedureBody, out: &mut Vec<&'b cos::RoutineE
     let commands =
         (procedure_commands(&body.main)).chain(in_labels.flatten().flat_map(commands_of));
     for command in commands {
-        labels_in_command(command, out);
+        walk_command(command, visit);
     }
 }
 
-fn labels_in_command<'b>(command: &'b Command, out: &mut Vec<&'b cos::RoutineElement>) {
+fn walk_command<'b>(
+    command: &'b Command,
+    visit: &mut dyn FnMut(Either<&'b Command, &'b ProcedureBody>),
+) {
+    visit(Left(command));
     let mut blocks: Vec<&'b cos::Block> = vec![];
     let mut bodies: Vec<&'b ProcedureBody> = vec![];
     match command {
@@ -814,14 +873,14 @@ fn labels_in_command<'b>(command: &'b Command, out: &mut Vec<&'b cos::RoutineEle
             cos::Block::Curry(block) => bodies.push(&block.block.wrapped),
             cos::Block::Command(commands) => {
                 for command in &commands.items {
-                    labels_in_command(command, out);
+                    walk_command(command, visit);
                 }
             }
         }
     }
     for body in bodies {
-        out.extend(body.subroutines.iter().flat_map(|subs| subs.items.iter()));
-        labels_in_blocks(body, out);
+        visit(Right(body));
+        walk_blocks(body, visit);
     }
 }
 
@@ -863,11 +922,45 @@ impl CheckCommand for cos::ProcedureMain {
         if let Some(line) = &self.line_1 {
             line.check(env, flow)?;
         }
-        for line in self.line_n.iter().flat_map(|lines| lines.items.iter()) {
-            line.check(env, flow)?;
-        }
-        Ok(())
+        check_lines(&self.line_n, env, flow)
     }
+}
+
+type LineN<S> = Prefix<Raw<Vec1<cos::NL>>, VecSep<CommandLine<S>, Raw<Vec1<cos::NL>>>>;
+
+// A directive among the comment lines before a line with commands governs the lines it covers.
+fn check_lines<'a, S>(
+    line_n: &Option<LineN<S>>,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+) -> Result<(), TypeError> {
+    let Some(lines) = line_n else {
+        return Ok(());
+    };
+    let gaps = once(&lines.prefix).chain(&lines.prefixed.seps);
+    let mut pending = Filter::default();
+    for (gap, line) in gaps.zip(&lines.prefixed.items) {
+        for comment in cos::line_comments(gap) {
+            if let Some(filter) = Filter::directive(&comment) {
+                pending.0.extend(filter.0);
+            }
+        }
+        if let Some(range) = line_range(env, line)
+            && !pending.0.is_empty()
+        {
+            env.line_filter(range, std::mem::take(&mut pending));
+        }
+        line.check(env, flow)?;
+    }
+    Ok(())
+}
+
+// The span of a line's commands, if it has any.
+fn line_range<S>(env: &CodeEnv<'_>, line: &CommandLine<S>) -> Option<bindings::Range> {
+    let mut commands = commands_of(line);
+    let first = commands.next()?;
+    let end = commands.last().map_or(first.end, |last| last.end);
+    Some(env.span(first.start, end))
 }
 
 impl CheckCommand for cos::ProcedureBody {
@@ -3254,6 +3347,12 @@ fn check_infix<'a, X>(
             {
                 return Ok(PowerTy::union(cs));
             }
+            if matches!(op, cos::Operator::Concat(_))
+                && *lhs == PowerTy::NullFreeList
+                && *rhs == PowerTy::NullFreeList
+            {
+                return Ok(PowerTy::NullFreeList);
+            }
             let lhs = ranged_quasi_ty_to_ty(env, flow, &lhs, lhs_text)?;
             let rhs = ranged_quasi_ty_to_ty(env, flow, &rhs, Some(&|| rhs_node.print()))?;
             Ok(match op {
@@ -3262,6 +3361,10 @@ fn check_infix<'a, X>(
                     PowerTy::from("%DataType")
                 }
                 cos::Operator::IntDiv(_) | cos::Operator::Mod(..) => PowerTy::from("%Integer"),
+                // Two lists concatenated are a list, holding a null element if either may.
+                cos::Operator::Concat(_) if lhs.is_list() && rhs.is_list() => {
+                    env.merge_ty(lhs, rhs).into()
+                }
                 cos::Operator::Concat(_) => PowerTy::from("%String"),
                 // Every comparison and logical operator.
                 _ => PowerTy::from("%Boolean"),
@@ -4048,7 +4151,7 @@ impl MacroCallStructExt for MacroCallStruct {
 }
 
 // A macro argument is raw text (it is also substituted verbatim into a `#define` body), so it
-// is re-parsed as an expression here.
+// is re-parsed as an expression here, which the env shifted to its start places in the document.
 fn check_macro_arg_as_expr<'a>(
     arg: &Ranged<cos::MacroArg>,
     expected_ty: &Ty,
@@ -4060,47 +4163,9 @@ fn check_macro_arg_as_expr<'a>(
             reason: "expected an expression".into(),
         })
     })?;
-    let (diagnostics_mark, references_mark) = (env.soft_diagnostics_mark(), env.references_mark());
-    let ty = expr
-        .to_ty(env, flow)
-        .map_err(|err| relocate_macro_arg_error(env, arg.start, err))?;
-    // What the walk recorded is in the fresh text's coordinates too.
-    let at = |range: bindings::Range| range.map(|pos| env.position(env.offset(pos) + arg.start));
-    for mut diagnostic in env.soft_diagnostics_since(diagnostics_mark) {
-        diagnostic.range = at(diagnostic.range);
-        for info in &mut diagnostic.related_information {
-            if info.location.uri == env.uri() {
-                info.location.range = at(info.location.range);
-            }
-        }
-        env.add_soft_diagnostic(diagnostic);
-    }
-    for (range, location) in env.references_since(references_mark) {
-        env.reference(at(range), location);
-    }
+    let ty = expr.to_ty(&env.shifted(arg.start), flow)?;
     env.assert_compatible(ty, expected_ty)
         .map_err(Incompatible::general)
-}
-
-// `expr_from_macro_arg` re-prints `arg` and re-parses it as a standalone `Expr`, so a `WithRange`
-// error `to_ty` already resolved is relative to that fresh, zero-based text -- not `arg`'s real
-// position in the document. Recover the real position instead of discarding it (as a plain
-// `strip_range` would): undo `env`'s offset->position conversion to get back the original
-// zero-based offset, add where `arg` actually starts, and convert that back to a real position.
-// A `WithoutRange` error has no (wrong) position to fix -- leave it for the usual `into_error`
-// up the call stack to place, same as ever.
-fn relocate_macro_arg_error(
-    env: &CodeEnv<'_>,
-    arg_start: usize,
-    err: QuasiTypeError,
-) -> QuasiTypeError {
-    match err {
-        QuasiTypeError::WithRange(err) => QuasiTypeError::WithRange(TypeError {
-            range: (err.range).map(|pos| env.position(env.offset(pos) + arg_start)),
-            ..err
-        }),
-        without_range => without_range,
-    }
 }
 
 fn expr_from_macro_arg(value: &Vec<MacroArgUnit>) -> Result<Expr, ()> {
@@ -4657,10 +4722,10 @@ fn body_end_range(env: &CodeEnv<'_>, main: &RoutineMain) -> Option<bindings::Ran
 
 impl CheckCommand for RoutineMain {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        for line in self.as_command_lines() {
+        if let Some(line) = &self.line_1 {
             line.check(env, flow)?;
         }
-        Ok(())
+        check_lines(&self.line_n, env, flow)
     }
 }
 

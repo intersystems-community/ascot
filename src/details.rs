@@ -349,8 +349,15 @@ pub struct MethodDetails {
 // class document, like `normal_args`.
 pub struct BraceDefault {
     pub name: String,
-    // The expression, or the braces' text when it isn't one, or `…`, a default that is no value.
-    pub value: Either<Ranged<cos::Expr>, WithRange<String>>,
+    pub value: DefaultValue,
+}
+
+pub enum DefaultValue {
+    Expr(Ranged<cos::Expr>),
+    // The braces' text when it isn't an expression, or `…`, a default that is no value.
+    Braces(WithRange<String>),
+    // No literal and no braces: the expression's text, for the checker to report.
+    Unbraced(WithRange<String>),
 }
 
 pub enum RoutineElementKind {
@@ -1150,13 +1157,18 @@ fn method_kind(
             let default = formal.default?.prefixed;
             let at = olc.range(&default);
             let value = match default.into_inner() {
-                cos::FormalDefaultValue::Brace { expr, .. } => Left(expr),
-                cos::FormalDefaultValue::Other(cos::OSExpr::Brace { content, .. }) => {
+                cos::FormalDefaultValue::Brace { expr, .. } => DefaultValue::Expr(expr),
+                cos::FormalDefaultValue::Braces { content, .. } => {
                     let range = olc.range(&content);
-                    Right(WithRange::new(content.print(), range))
+                    DefaultValue::Braces(WithRange::new(content.print(), range))
                 }
-                cos::FormalDefaultValue::Elided(_) => Right(WithRange::new("…".to_string(), at)),
-                cos::FormalDefaultValue::Other(_) => return None,
+                cos::FormalDefaultValue::Elided(_) => {
+                    DefaultValue::Braces(WithRange::new("…".to_string(), at))
+                }
+                cos::FormalDefaultValue::Literal(..) => return None,
+                cos::FormalDefaultValue::Expression(expr) => {
+                    DefaultValue::Unbraced(WithRange::new(expr.print(), at))
+                }
             };
             Some(BraceDefault { name, value })
         })

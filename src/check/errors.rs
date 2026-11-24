@@ -893,7 +893,8 @@ type_error_kinds! {
     /// `New` names a variable private to the procedure block: a parameter, or a local the body
     /// creates, which the block already scopes to itself on entry. IRIS refuses to compile it:
     /// `#1038 Private variable not allowed`. Delete the `New`, or `Kill` the variable if its value
-    /// is to go; only a variable of the block's public list can be `New`'d.
+    /// is to go; only a variable of the block's public list can be `New`'d, and `SQLCODE` or a
+    /// host variable in a method with embedded SQL, which IRIS adds to that list.
     ///
     /// ```objectscript
     /// Class Demo.NewInProcedureBlock
@@ -2082,7 +2083,7 @@ type_error_kinds! {
     /// style's `command`, `function` or `variable` rule, or a per-keyword `command<Name>`,
     /// `function<Name>` or `variable<Name>`, doesn't allow: `s` under `{"form":"long"}`, `SET`
     /// under `{"case":"pascal"}`. IRIS compiles every spelling alike; write the one the message
-    /// gives.
+    /// gives. A keyword a macro expands to is not reported.
     ///
     /// ```objectscript style={"command":{"form":"long","case":"pascal"},"function":{"form":"long","case":"pascal"},"variable":{"form":"long","case":"upper"}}
     /// Class Demo.KeywordStyle
@@ -2349,10 +2350,34 @@ type_error_kinds! {
         keyword: &'static str,
         wanted: Break,
     },
+    /// Under `{"indent":{"unit":"    "}}`, a line whose first command, or whose `{` or `}`, isn't
+    /// indented to its depth: a method body's or a label's commands sit one level in, each `{ }`
+    /// block adds a level, and a brace on a line of its own sits at its block's depth. `unit` is
+    /// one level, spaces or a tab. IRIS reads any indentation alike, a label at column 0 apart;
+    /// indent the line as the message says.
+    ///
+    /// ```objectscript style={"indent":{"unit":"    "}}
+    /// Class Demo.Indentation
+    /// {
+    ///
+    /// ClassMethod Sign(n As %Integer) As %Integer
+    /// {
+    ///     If n < 0 {
+    ///       Quit -1 //! S6829
+    ///     }
+    ///     Quit 1
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "S6829"]
+    #[severity = Warning]
+    #[message = "Indent this line {wanted}, not {found}"]
+    Indentation { wanted: String, found: String },
     /// Under `{"spaceAfterComma":true}`, a list's comma with no space after it or one before,
     /// `$ListBuild(a,b)`; under `false`, one with a space on either side. A comma whose whitespace holds
-    /// a line break, and the two around an omitted argument, are left alone. IRIS ignores the
-    /// spacing; respace the comma.
+    /// a line break, the two around an omitted argument, and one a macro expands to are left alone.
+    /// IRIS ignores the spacing; respace the comma.
     ///
     /// ```objectscript style={"spaceAfterComma":true}
     /// Class Demo.CommaSpacing
@@ -2778,6 +2803,25 @@ type_error_kinds! {
         scope: SyntaxScope,
         detail: SyntaxErrorText,
     },
+    /// An argument default outside braces that is neither a literal nor an expression in
+    /// `{braces}`. IRIS refuses to load the class (`ERROR #5559`), though its own classes, as
+    /// exported, carry such defaults. Write a literal, or put the expression in braces.
+    ///
+    /// ```objectscript rejected
+    /// Class Demo.UnbracedDefault
+    /// {
+    ///
+    /// ClassMethod Greet(name As %String = $Username) As %String //! A7415
+    /// {
+    ///     Quit "Hello, " _ name
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A7415"]
+    #[severity = Error]
+    #[message = "Argument default '{default}' is neither a literal nor an expression in braces, which IRIS refuses (ERROR #5559)"]
+    UnbracedDefaultExpression { default: String },
     /// A class header or member declaration, or a line of a routine or include file, that doesn't
     /// parse; a method body that doesn't is A8073 instead, and the message reads the same way.
     /// Nothing else in the document is checked, and IRIS refuses to compile it. Correct the marked

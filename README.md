@@ -156,12 +156,14 @@ ascot format --style <FILE> [--indent N] [--check] <PATH>...
 Rewrites every `.cls`/`.mac`/`.int` file under each `PATH` to the [style](#style):
 command keywords take the form and case the `command` rules give them, and a
 block's braces, its first command and an `Else`, `ElseIf` or `Catch` after it go
-on a line of their own or not as `open_brace` and `close_brace` say. Only
-procedure blocks and method bodies change, since no `Label+offset` reaches a
-line inside them; a routine with such an offset keeps every line count, and the
-rest stays as written. A line the formatter adds is indented like its block, one
-tab (or `--indent N` spaces) deeper for a body's first command. `--check` writes
-nothing and exits non-zero listing the files that would change.
+on a line of their own or not as `open_brace` and `close_brace` say, and each
+line sits at the depth `indent` gives it. Lines are added or joined only in
+procedure blocks and method bodies, since no `Label+offset` reaches a line
+inside them; a routine with such an offset keeps every line count, and the rest
+stays as written but for its indentation, a line's leading whitespace alone. A
+line the formatter adds is indented like its block, one tab (or `--indent N`
+spaces, or the `indent` rule's unit) deeper for a body's first command.
+`--check` writes nothing and exits non-zero listing the files that would change.
 
 ### `ascot` as an MCP server
 
@@ -321,6 +323,13 @@ warning: R.mac:3:2-3 - Command keyword `s` should be written `Set` [S2839]
 warning: R.mac:4:2-8 - Use `Return` to leave a method or procedure; `Quit` is for loops and `Try` blocks [S4151]
 ```
 
+`indent` sets the one level of indentation code is written with,
+`{ "indent": { "unit": "    " } }` for four spaces or `"\t"` for a tab: a
+method body's or a label's commands sit one level in, each `{ }` block adds
+one, and a brace on a line of its own sits at its block's depth. Lines of
+embedded SQL, HTML or Python, comments and a command's continuation lines are
+left as written.
+
 Every rule is described in [STYLE.md](STYLE.md). [`style.json`](style.json) is
 the recommended style, commands long and lowercase, functions and system
 variables long and uppercase; copy it into a folder as `.ascot/style.json` and
@@ -346,6 +355,15 @@ ascot analyze -d hint:A4471 src/                 # report one as a hint
 
 The exit code follows what is reported, so a dropped or downgraded warning no
 longer fails a build.
+
+A comment line of its own reading `// @ascot: VERB:TARGETS …` (or `;` or `#;`
+in place of `//`, or `/* @ascot: … */`), in the same syntax and nothing else in
+the comment, applies to the statement that follows it, over the lines that
+statement covers; blank lines and other comment lines between are skipped, and
+several such lines add up. Its values come after the `-d` ones, so
+`// @ascot: off:A5579` above a call drops that one report, and
+`// @ascot: on:A4471` reports that code there even when the workspace turned it
+off. A comment beside code is not a directive.
 
 ### Inlay Hints
 

@@ -1,12 +1,13 @@
 //! `--diagnostics` and `create_workspace`'s `diagnostics`: which codes are reported, and at what
-//! severity.
+//! severity; and the `@ascot: …` comment lines that say the same for single statements.
 
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use tygr::{Grammar, Parse, Print, StringEq, StringOf1, Suffix, char_class};
 use tygr_objectscript::cos::VecSep;
 
-use crate::bindings::{Diagnostic, DiagnosticSeverity};
+use crate::bindings::{Diagnostic, DiagnosticSeverity, Range};
 use crate::check::TypeErrorKind;
 
 /// The `VERB:TARGETS` values, applied in order; each later one overrides the earlier.
@@ -69,11 +70,19 @@ pub fn bnf() -> String {
 }
 
 impl Filter {
-    /// `diagnostic` arrives at its code's own severity.
-    pub fn apply(&self, mut diagnostic: Diagnostic) -> Option<Diagnostic> {
+    /// What a comment line states when all of it is `@ascot: VERB:TARGETS …`; an invalid value
+    /// states nothing.
+    pub fn directive(comment: &str) -> Option<Self> {
+        comment.trim().strip_prefix("@ascot:")?.parse().ok()
+    }
+
+    /// `diagnostic` arrives at its code's own severity; what `@ascot:` directives say for its line
+    /// comes after this filter's values.
+    pub fn apply(&self, lines: &LineFilters, mut diagnostic: Diagnostic) -> Option<Diagnostic> {
         let own = diagnostic.severity;
+        let line = lines.0.get(&diagnostic.range.start.line).into_iter();
         let mut on = true;
-        for batch in &self.0 {
+        for batch in self.0.iter().chain(line.flat_map(|filter| &filter.0)) {
             if !batch.names(&diagnostic) {
                 continue;
             }
@@ -84,6 +93,23 @@ impl Filter {
             }
         }
         on.then_some(diagnostic)
+    }
+}
+
+/// The filters `@ascot:` directives state for the lines of the statements they govern, by line.
+#[derive(Clone, Default)]
+pub struct LineFilters(HashMap<u32, Filter>);
+
+impl FromIterator<(Range, Filter)> for LineFilters {
+    /// A line under several ranges gets their filters in order.
+    fn from_iter<I: IntoIterator<Item = (Range, Filter)>>(ranges: I) -> Self {
+        let mut lines: HashMap<u32, Filter> = HashMap::new();
+        for (range, filter) in ranges {
+            for line in range.start.line..=range.end.line {
+                lines.entry(line).or_default().0.extend(filter.0.clone());
+            }
+        }
+        Self(lines)
     }
 }
 

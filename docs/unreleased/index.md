@@ -51,6 +51,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A7217](A7217.md) | An offset cannot enter the procedure block at label '{label}' (IRIS: `<NOLINE>`) |
 | [A7340](A7340.md) | Field '{field}' not found in the applicable tables ({tables}); the statement gets SQLCODE -29 when it runs |
 | [A7342](A7342.md) | Argument {position} of {function} can't be left empty |
+| [A7415](A7415.md) | Argument default '{default}' is neither a literal nor an expression in braces, which IRIS refuses (ERROR #5559) |
 | [A7461](A7461.md) | No superclass of {cls} has a method '{method}' for ##super to call |
 | [A7604](A7604.md) | Label '{label}' has no formal argument list, so $$ cannot call it (IRIS: `<PARAMETER>`) |
 | [A7831](A7831.md) | Cannot find include file '{name}' in the workspace or on the IRIS instance |
@@ -111,6 +112,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [S5583](S5583.md) | This comma wants {wanted} |
 | [S6174](S6174.md) | Argument '{name}' has no default but follows one that has |
 | [S6307](S6307.md) | Put the postconditional on the command keyword, not on its argument |
+| [S6829](S6829.md) | Indent this line {wanted}, not {found} |
 | [S7126](S7126.md) | Describe this {kind}: its body is {lines} line(s) |
 | [S7442](S7442.md) | Join these conditions with `{wanted}` |
 | [S8215](S8215.md) | Put {wanted} before `{` |
