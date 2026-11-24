@@ -32,10 +32,12 @@ use env::*;
 use flow::*;
 use std::collections::HashSet;
 use std::{iter::once, ops::Deref};
-use tygr::{IntoInner, OLC, Parse, Print, Ranged};
+use tygr::{IntoInner, OLC, Parse, Prefix, Print, Ranged, Raw, Vec1};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::cos::{KeywordKind, KeywordUse, Spelled};
 use types::*;
+
+use crate::diagnostic_filter::Filter;
 
 pub(crate) use env::{DocumentEnv, Labels, WorkspaceEnv, labels_of};
 pub use errors::{
@@ -540,6 +542,12 @@ impl MethodDetails {
             &source_map,
             &shifter,
         ));
+        // A statement a macro wrote maps to the invocation's lines, so its directive still holds.
+        let line_filters = method_env.line_filters.into_inner().into_iter();
+        let relocated = line_filters.filter_map(|(range, filter)| {
+            Some((shifter.range(source_map.map_lsp_range(range)?.0), filter))
+        });
+        env.line_filters.borrow_mut().extend(relocated);
         let (diagnostics, references) = in_doc_coordinates.into_inner();
         for diagnostic in diagnostics {
             env.base.add_soft_diagnostic(diagnostic);
@@ -914,11 +922,45 @@ impl CheckCommand for cos::ProcedureMain {
         if let Some(line) = &self.line_1 {
             line.check(env, flow)?;
         }
-        for line in self.line_n.iter().flat_map(|lines| lines.items.iter()) {
-            line.check(env, flow)?;
-        }
-        Ok(())
+        check_lines(&self.line_n, env, flow)
     }
+}
+
+type LineN<S> = Prefix<Raw<Vec1<cos::NL>>, VecSep<CommandLine<S>, Raw<Vec1<cos::NL>>>>;
+
+// A directive among the comment lines before a line with commands governs the lines it covers.
+fn check_lines<'a, S>(
+    line_n: &Option<LineN<S>>,
+    env: &CodeEnv<'a>,
+    flow: &mut Flow<'a>,
+) -> Result<(), TypeError> {
+    let Some(lines) = line_n else {
+        return Ok(());
+    };
+    let gaps = once(&lines.prefix).chain(&lines.prefixed.seps);
+    let mut pending = Filter::default();
+    for (gap, line) in gaps.zip(&lines.prefixed.items) {
+        for comment in cos::line_comments(gap) {
+            if let Some(filter) = Filter::directive(&comment) {
+                pending.0.extend(filter.0);
+            }
+        }
+        if let Some(range) = line_range(env, line)
+            && !pending.0.is_empty()
+        {
+            env.line_filter(range, std::mem::take(&mut pending));
+        }
+        line.check(env, flow)?;
+    }
+    Ok(())
+}
+
+// The span of a line's commands, if it has any.
+fn line_range<S>(env: &CodeEnv<'_>, line: &CommandLine<S>) -> Option<bindings::Range> {
+    let mut commands = commands_of(line);
+    let first = commands.next()?;
+    let end = commands.last().map_or(first.end, |last| last.end);
+    Some(env.span(first.start, end))
 }
 
 impl CheckCommand for cos::ProcedureBody {
@@ -4680,10 +4722,10 @@ fn body_end_range(env: &CodeEnv<'_>, main: &RoutineMain) -> Option<bindings::Ran
 
 impl CheckCommand for RoutineMain {
     fn check<'a>(&self, env: &CodeEnv<'a>, flow: &mut Flow<'a>) -> Result<(), TypeError> {
-        for line in self.as_command_lines() {
+        if let Some(line) = &self.line_1 {
             line.check(env, flow)?;
         }
-        Ok(())
+        check_lines(&self.line_n, env, flow)
     }
 }
 
