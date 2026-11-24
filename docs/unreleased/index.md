@@ -41,6 +41,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A6127](A6127.md) | Not enough arguments to the macro '{name}', which takes {expected} |
 | [A6319](A6319.md) | Parameter '{name}' is a constant: it takes no arguments and can't be assigned |
 | [A6418](A6418.md) | '{name}' is a {actual}, which cannot serve as a {used}; the statement fails when it runs |
+| [A6442](A6442.md) | Method '{name}' has the name of a label in include file '{include}', which IRIS refuses (`<LABELREDEF>`) |
 | [A6587](A6587.md) | Invalid macro argument: {reason} |
 | [A6781](A6781.md) | Returns nothing where '{wanted}' is declared |
 | [A6851](A6851.md) | Cannot find label '{label}' in {routine} |

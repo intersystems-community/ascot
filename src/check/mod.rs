@@ -30,6 +30,7 @@ pub(crate) use similar::top_similar;
 use either::Either::{self, Left, Right};
 use env::*;
 use flow::*;
+use std::collections::HashSet;
 use std::{iter::once, ops::Deref};
 use tygr::{IntoInner, OLC, Parse, Print, Ranged};
 use tygr_objectscript::cos::VecSep;
@@ -4908,10 +4909,38 @@ pub(crate) fn check_cls(
         };
         diagnostics.push(err.into());
     }
-    let mut include_labels = env
-        .base
-        .include_labels(&env.base.inherited_include_names(cls));
-    include_labels.extend(env.base.include_labels(&include_names));
+    // In name order, as IRIS compiles them: a method body's `#define` reaches the methods after it.
+    let mut members = cls.members.in_order();
+    members.sort_by(|a, b| a.name.it.cmp(&b.name.it));
+    let mut include_labels = Labels::new();
+    let mut seen = HashSet::new();
+    for include in (env.base.inherited_include_names(cls).iter())
+        .chain(&include_names)
+        .filter(|include| seen.insert(include.as_str()))
+    {
+        let labels = env.base.include_labels(std::slice::from_ref(include));
+        for member in &members {
+            if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
+                && !method.is_abstract
+                && matches!(
+                    method.language.or(cls.keywords.language),
+                    None | Some(bindings::Language::Objectscript | bindings::Language::Tsql)
+                )
+                && let Some(label) = labels.get(&member.name.it)
+            {
+                diagnostics.push(
+                    TypeError::method_named_like_included_label(
+                        member.name.range,
+                        member.name.it.clone(),
+                        include.clone(),
+                        label.procedure().and_then(|label| label.location()),
+                    )
+                    .into(),
+                );
+            }
+        }
+        include_labels.extend(labels);
+    }
     let doc = ClassDocument::new(
         cls.name.it.to_string().into(),
         cls.keywords.language,
@@ -4930,9 +4959,6 @@ pub(crate) fn check_cls(
         )));
     }
     let min_description_lines = min_description_lines(env);
-    // In name order, as IRIS compiles them: a method body's `#define` reaches the methods after it.
-    let mut members = cls.members.in_order();
-    members.sort_by(|a, b| a.name.it.cmp(&b.name.it));
     for member in members {
         if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
             && let Some(min) = min_description_lines

@@ -70,7 +70,7 @@ def example(docs):
         while i < len(docs) and docs[i].strip() != '```':
             lines.append(MARKER.sub('', docs[i])); i += 1
         i += 1
-        header = next(l for l in lines if l.strip()).split()
+        header = next(l for l in lines if l.startswith(('Class ', 'ROUTINE '))).split()
         ext = {'Class': 'cls', 'ROUTINE': 'mac'}[header[0]]
         if header[0] == 'ROUTINE' and '[Type=INC]' in lines[0]: ext = 'inc'
         if header[0] == 'ROUTINE' and '[Type=INT]' in lines[0]: ext = 'int'

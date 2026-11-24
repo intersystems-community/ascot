@@ -2709,6 +2709,44 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Member '{name}' is defined twice"]
     DuplicatedMemberName { name: String },
+    /// A class's ObjectScript methods are compiled into one routine, each as a label, together
+    /// with the lines of every include file the class or a superclass `Include`s and of what those
+    /// files `#include`. A method named like a label of an include file redefines that label, and
+    /// IRIS refuses to compile the class (`<LABELREDEF>`). Names are case-sensitive; an abstract
+    /// method, or one in Python or MVBasic (`Language = python`), has no label in the routine.
+    /// Rename the method, or the label.
+    ///
+    /// ```objectscript
+    /// ROUTINE Demo.Formatting [Type=INC]
+    /// Pad(text, width) {
+    ///     Quit $Justify(text, width)
+    /// }
+    /// Version
+    ///     Quit "1.0"
+    /// ```
+    ///
+    /// ```objectscript
+    /// Include Demo.Formatting
+    ///
+    /// Class Demo.Report Extends %RegisteredObject
+    /// {
+    ///
+    /// ClassMethod Pad(text As %String) As %String //! A6442
+    /// {
+    ///     Quit $Justify(text, 10)
+    /// }
+    ///
+    /// ClassMethod Version() As %String //! A6442
+    /// {
+    ///     Quit "2.0"
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A6442"]
+    #[severity = Error]
+    #[message = "Method '{name}' has the name of a label in include file '{include}', which IRIS refuses (<LABELREDEF>)"]
+    MethodNamedLikeIncludedLabel { name: String, include: String },
     /// Another open document declares a class of this name, so the workspace holds two definitions
     /// and whichever claimed the name last answers for it wherever the class is looked up. IRIS
     /// keeps one definition per class name, so loading both makes the second overwrite the first.
@@ -3543,6 +3581,21 @@ impl TypeError {
             TypeErrorKind::DuplicatedMemberName { name },
             range,
             related(previous, "Previous definition"),
+        )
+    }
+
+    pub fn method_named_like_included_label(
+        range: Range,
+        name: String,
+        include: String,
+        label: Option<Location>,
+    ) -> Self {
+        Self::new(
+            TypeErrorKind::MethodNamedLikeIncludedLabel { name, include },
+            range,
+            label
+                .map(|location| related(location, "Label declared here"))
+                .unwrap_or_default(),
         )
     }
 

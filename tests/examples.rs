@@ -91,7 +91,7 @@ fn split_marker(line: &str) -> (String, Vec<String>) {
 }
 
 fn document_uri(text: &[String]) -> Option<String> {
-    let header = text.iter().find(|l| !l.trim().is_empty())?;
+    let header = (text.iter()).find(|l| l.starts_with("Class ") || l.starts_with("ROUTINE "))?;
     let mut words = header.split_whitespace();
     let (kind, name) = (words.next()?, words.next()?);
     let extension = match kind {
