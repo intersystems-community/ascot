@@ -216,6 +216,7 @@ struct CachedCheck {
     hints: Vec<InlayHint>,
     references: Vec<(bindings::Range, bindings::Location)>,
     hover_types: Vec<(bindings::Range, String)>,
+    line_filters: diagnostic_filter::LineFilters,
 }
 
 pub struct WorkspaceStruct {
@@ -804,6 +805,7 @@ impl WorkspaceStruct {
             hints: vec![],
             references: vec![],
             hover_types: vec![],
+            line_filters: Default::default(),
         };
         if !self.doc_cache.contains_key(uri) {
             return empty;
@@ -839,6 +841,7 @@ impl WorkspaceStruct {
                 }
                 let hints = doc_env.inlay_hints.into_inner();
                 let hover_types = doc_env.hover_types.into_inner();
+                let line_filters = doc_env.line_filters.into_inner().into_iter().collect();
                 let references = env.references();
                 self.record_deps(uri, env.touched_names());
                 CachedCheck {
@@ -846,6 +849,7 @@ impl WorkspaceStruct {
                     hints,
                     references,
                     hover_types,
+                    line_filters,
                 }
             }
             DocDetails::Rtn(rtn, None) => {
@@ -914,6 +918,9 @@ impl WorkspaceStruct {
                         .include_directives()
                         .filter_map(|(range, name)| Some((range, self.inc_definition(name)?))),
                 );
+                let line_filters = (doc_env.line_filters.into_inner().into_iter())
+                    .filter_map(|(range, filter)| Some((rtn.map.map_lsp_range(range)?.0, filter)))
+                    .collect();
                 let mut deps = env.touched_names();
                 deps.extend(include_names(&rtn.map));
                 self.record_deps(uri, deps);
@@ -922,6 +929,7 @@ impl WorkspaceStruct {
                     hints,
                     references,
                     hover_types,
+                    line_filters,
                 }
             }
             // An include that parses has nothing to check on its own -- see `DocDetails::Inc`.
@@ -1185,11 +1193,9 @@ impl bindings::GuestWorkspace for Workspace {
             return vec![];
         }
         let filter = &this.diagnostic_filter;
-        let lines = diagnostic_filter::LineFilters::new(&this.doc_text(&uri).unwrap_or_default());
-        this.ensure_checked(&uri)
-            .diagnostics
-            .into_iter()
-            .filter_map(|diagnostic| filter.apply(&lines, diagnostic))
+        let checked = this.ensure_checked(&uri);
+        (checked.diagnostics.into_iter())
+            .filter_map(|diagnostic| filter.apply(&checked.line_filters, diagnostic))
             .collect()
     }
 
@@ -1241,7 +1247,7 @@ impl bindings::GuestWorkspace for Workspace {
         let olc = OLC::new(&text);
         let (start, end) = (olc.offset(range.start), olc.offset(range.end));
         let filter = &this.diagnostic_filter;
-        let lines = diagnostic_filter::LineFilters::new(&text);
+        let lines = this.ensure_checked(&uri).line_filters;
         fixes
             .into_iter()
             .filter(|fix| fix.range.start <= end && start <= fix.range.end)

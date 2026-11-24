@@ -347,12 +347,13 @@ ascot analyze -d hint:A4471 src/                 # report one as a hint
 The exit code follows what is reported, so a dropped or downgraded warning no
 longer fails a build.
 
-A code comment `ascot: VERB:TARGETS …`, in the same syntax, applies to one
-line: the line it shares with code, or, alone on its line, the next line of
-code. Its values come after the `-d` ones, so `Do SHOW(.X) ; ascot: off:A5579`
-drops that one report, and `// ascot: on:A4471` alone above a line reports that
-code there even when the workspace turned it off. Any `;`, `//`, `#;` or
-`/* */` comment counts; a `///` description does not.
+A comment line of its own reading `// @ascot: VERB:TARGETS …` (or `;` or `#;`
+in place of `//`), in the same syntax and nothing else in the comment, applies to
+the statement that follows it, over the lines that statement covers; blank lines
+and other comment lines between are skipped, and several such lines add up. Its
+values come after the `-d` ones, so `// @ascot: off:A5579` above a call drops
+that one report, and `// @ascot: on:A4471` reports that code there even when the
+workspace turned it off. A comment beside code is not a directive.
 
 ### Inlay Hints
 

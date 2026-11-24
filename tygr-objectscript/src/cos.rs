@@ -101,6 +101,17 @@ pub struct NL {
     newline: StringEq!("\n"),
 }
 
+/// The comments among `gap`, the newlines and comment lines a `Raw<Vec1<NL>>` holds between two
+/// command lines, each as its text after `//`, `;` or `#;`.
+pub fn line_comments(gap: &str) -> Vec<String> {
+    let Ok(lines) = Vec1::<NL>::parse(gap) else {
+        return vec![];
+    };
+    (lines.iter())
+        .filter_map(|nl| Some(nl.comment.as_ref()?.content.print()))
+        .collect()
+}
+
 #[derive(Grammar)]
 #[tygr(inline)]
 pub struct MGap(Raw<Vec<MGapUnit>>);

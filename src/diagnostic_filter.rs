@@ -1,14 +1,13 @@
 //! `--diagnostics` and `create_workspace`'s `diagnostics`: which codes are reported, and at what
-//! severity; and the `ascot: …` comments that say the same for single lines.
+//! severity; and the `@ascot: …` comment lines that say the same for single statements.
 
 use std::collections::HashMap;
-use std::mem;
 use std::str::FromStr;
 
 use tygr::{Grammar, Parse, Print, StringEq, StringOf1, Suffix, char_class};
 use tygr_objectscript::cos::VecSep;
 
-use crate::bindings::{Diagnostic, DiagnosticSeverity};
+use crate::bindings::{Diagnostic, DiagnosticSeverity, Range};
 use crate::check::TypeErrorKind;
 
 /// The `VERB:TARGETS` values, applied in order; each later one overrides the earlier.
@@ -71,7 +70,13 @@ pub fn bnf() -> String {
 }
 
 impl Filter {
-    /// `diagnostic` arrives at its code's own severity; what an `ascot:` comment says for its line
+    /// What a comment line states when all of it is `@ascot: VERB:TARGETS …`; an invalid value
+    /// states nothing.
+    pub fn directive(comment: &str) -> Option<Self> {
+        comment.trim().strip_prefix("@ascot:")?.parse().ok()
+    }
+
+    /// `diagnostic` arrives at its code's own severity; what `@ascot:` directives say for its line
     /// comes after this filter's values.
     pub fn apply(&self, lines: &LineFilters, mut diagnostic: Diagnostic) -> Option<Diagnostic> {
         let own = diagnostic.severity;
@@ -91,55 +96,21 @@ impl Filter {
     }
 }
 
-/// The filters `ascot: VERB:TARGETS …` comments apply to single lines, by line: a comment beside
-/// code to its own line, one alone on its line to the next line of code.
+/// The filters `@ascot:` directives state for the lines of the statements they govern, by line.
+#[derive(Clone, Default)]
 pub struct LineFilters(HashMap<u32, Filter>);
 
-impl LineFilters {
-    pub fn new(text: &str) -> Self {
-        let mut lines = HashMap::new();
-        let mut pending = Filter::default();
-        for (line, text) in text.lines().enumerate() {
-            let (code, comment, after) = split_comment(text);
-            if let Some(values) = comment.trim_start().strip_prefix("ascot:") {
-                let own: Filter = values.parse().unwrap_or_default();
-                pending.0.extend(own.0);
-            }
-            if code.trim().is_empty() && after.trim().is_empty() {
-                continue;
-            }
-            let filter = mem::take(&mut pending);
-            if !filter.0.is_empty() {
-                lines.insert(line as u32, filter);
+impl FromIterator<(Range, Filter)> for LineFilters {
+    /// A line under several ranges gets their filters in order.
+    fn from_iter<I: IntoIterator<Item = (Range, Filter)>>(ranges: I) -> Self {
+        let mut lines: HashMap<u32, Filter> = HashMap::new();
+        for (range, filter) in ranges {
+            for line in range.start.line..=range.end.line {
+                lines.entry(line).or_default().0.extend(filter.0.clone());
             }
         }
         Self(lines)
     }
-}
-
-/// `line` as the code before its first comment, the comment's text, and what follows a `/* */`.
-fn split_comment(line: &str) -> (&str, &str, &str) {
-    let mut quoted = false;
-    for (at, c) in line.char_indices() {
-        if c == '"' {
-            quoted = !quoted;
-        }
-        if quoted {
-            continue;
-        }
-        let rest = &line[at..];
-        if let Some(comment) = (rest.strip_prefix(';'))
-            .or_else(|| rest.strip_prefix("//"))
-            .or_else(|| rest.strip_prefix("#;"))
-        {
-            return (&line[..at], comment, "");
-        }
-        if let Some(comment) = rest.strip_prefix("/*") {
-            let (comment, after) = comment.split_once("*/").unwrap_or((comment, ""));
-            return (&line[..at], comment, after);
-        }
-    }
-    (line, "", "")
 }
 
 impl From<&Severity> for DiagnosticSeverity {
