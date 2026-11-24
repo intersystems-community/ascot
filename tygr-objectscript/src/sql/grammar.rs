@@ -2103,7 +2103,11 @@ pub mod leveled {
     pub struct Ordir {
         pub expr: Ordit,
         #[sugar]
-        pub asc: Option<(Space, StringEqCI!("ASC"))>,
+        pub asc: Option<(
+            Space,
+            StringEqCI!("ASC"),
+            NotFollowedBy<(Space, StringEqCI!("DESC"))>,
+        )>,
         pub desc: Option<(Space, StringEqCI!("DESC"))>,
     }
 
@@ -2193,6 +2197,7 @@ pub mod leveled {
         Selex(Src<Selex>),
     }
     #[derive(Grammar)]
+    #[tygr(validated)]
     pub struct Insrt {
         pub insert_kw: StringEqCI!("INSERT"),
         pub or_update: Option<(Space, StringEqCI!("OR"), Space, StringEqCI!("UPDATE"))>,
@@ -2202,7 +2207,18 @@ pub mod leveled {
         pub values: (Space, InsertValues),
     }
 
-    /// The options of INSERT, UPDATE, DELETE and TRUNCATE TABLE, one list for the four.
+    impl Validate for Insrt {
+        const REQUIREMENT: &'static str = "not take %ILOCK";
+        fn validate(&self) -> bool {
+            !self
+                .options
+                .iter()
+                .any(|option| matches!(option, DmlOption::ILock(_)))
+        }
+    }
+
+    /// The options of INSERT, UPDATE, DELETE and TRUNCATE TABLE, one list for the four, each
+    /// statement validated against its own set.
     #[derive(Grammar)]
     #[tygr(name = "dml option")]
     pub enum DmlOption {
@@ -2341,7 +2357,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "delet")]
+    #[tygr(name = "delet", validated)]
     pub struct Delet {
         pub delete_kw: StringEqCI!("DELETE"),
         pub options: Vec<DmlOption>,
@@ -2350,13 +2366,35 @@ pub mod leveled {
         pub where_clause: Option<WhereWerop>,
     }
 
+    impl Validate for Delet {
+        const REQUIREMENT: &'static str = "not take %NOSTREAM or %ILOCK";
+        fn validate(&self) -> bool {
+            !self
+                .options
+                .iter()
+                .any(|option| matches!(option, DmlOption::NoStream(_) | DmlOption::ILock(_)))
+        }
+    }
+
     #[derive(Grammar)]
-    #[tygr(name = "truncate")]
+    #[tygr(name = "truncate", validated)]
     pub struct Truncate {
         pub truncate_kw: StringEqCI!("TRUNCATE"),
         pub table_kw: (Space, StringEqCI!("TABLE"), Space),
         pub options: Vec<DmlOption>,
         pub table: (Space, TName),
+    }
+
+    impl Validate for Truncate {
+        const REQUIREMENT: &'static str = "take only %NOCHECK, %NOLOCK and %NOJOURN";
+        fn validate(&self) -> bool {
+            self.options.iter().all(|option| {
+                matches!(
+                    option,
+                    DmlOption::NoCheck(_) | DmlOption::NoLock(_) | DmlOption::NoJourn(_)
+                )
+            })
+        }
     }
 
     #[derive(Grammar)]

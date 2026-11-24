@@ -5,7 +5,8 @@
 
 use tygr::{Parse, Print};
 use tygr_objectscript::sql::desugar::Desugar;
-use tygr_objectscript::sql::{SQL, core, print_mapped};
+use tygr_objectscript::sql::grammar::core;
+use tygr_objectscript::sql::{SQL, print_mapped};
 
 /// One statement per rule, with the exact core text.
 const RULES: &[(&str, &str)] = &[
@@ -78,6 +79,14 @@ const RULES: &[(&str, &str)] = &[
         "SELECT a FROM t WHERE a = ANY (SELECT b FROM u)",
     ),
     (
+        "SELECT a FROM t WHERE a NOT[ ANY (SELECT b FROM u)",
+        "SELECT a FROM t WHERE NOT (a [ ALL (SELECT b FROM u))",
+    ),
+    (
+        "SELECT a FROM t WHERE a NOT] ALL (SELECT b FROM u)",
+        "SELECT a FROM t WHERE NOT (a ] ANY (SELECT b FROM u))",
+    ),
+    (
         "SELECT a FROM t WHERE a = 1 ! b = 2",
         "SELECT a FROM t WHERE a = 1 OR b = 2",
     ),
@@ -105,6 +114,10 @@ const RULES: &[(&str, &str)] = &[
         "SELECT a FROM t CROSS JOIN u AS v CROSS JOIN w",
     ),
     (
+        "SELECT a FROM t, u RIGHT JOIN v ON u.a = v.a",
+        "SELECT a FROM t CROSS JOIN (u RIGHT OUTER JOIN v ON u.a = v.a)",
+    ),
+    (
         "SELECT a FROM {oj t LEFT OUTER JOIN u ON t.a = u.a}",
         "SELECT a FROM t LEFT OUTER JOIN u ON t.a = u.a",
     ),
@@ -129,6 +142,10 @@ const RULES: &[(&str, &str)] = &[
         "SELECT a FROM t LIMIT 10",
     ),
     (
+        "SELECT a FROM t FETCH FIRST 10 /* c */ ROWS /* d */ ONLY",
+        "SELECT a FROM t LIMIT /* c */  /* d */ 10",
+    ),
+    (
         "SELECT a FROM t OFFSET 5 ROWS",
         "SELECT a FROM t LIMIT ALL OFFSET 5",
     ),
@@ -136,6 +153,10 @@ const RULES: &[(&str, &str)] = &[
     (
         "SELECT a FROM t LIMIT ALL OFFSET 3",
         "SELECT a FROM t LIMIT ALL OFFSET 3",
+    ),
+    (
+        "SELECT a FROM t LIMIT 5 OFFSET 3 /* c */ ROWS",
+        "SELECT a FROM t LIMIT 5 /* c */ OFFSET 3",
     ),
     (
         "SELECT a FROM t WHERE a %INLIST :l SIZE ((10))",

@@ -89,7 +89,7 @@ pub fn cond(cond: &full::Cond) -> core::Cond {
 /// The `NOT` of a negated predicate with the blank after it: the keyword's own, or one made for
 /// `NOT[` and `NOT]`.
 fn negation(cond: &full::Cond) -> Option<(full::NotKw, Space)> {
-    use full::{CmpOp, Cond::*, ContainsPredicate, FollowsPredicate, QuantifiedOp};
+    use full::{Cond::*, QuantifiedOp};
     let keyword = match cond {
         IsNull { null_kw, .. } => null_kw.negation(),
         Between { between_kw, .. } => between_kw.negation(),
@@ -102,15 +102,24 @@ fn negation(cond: &full::Cond) -> Option<(full::NotKw, Space)> {
             op: QuantifiedOp::In(in_kw),
             ..
         } => in_kw.negation(),
-        Compare {
-            op:
-                CmpOp::Contains(ContainsPredicate::NotLB(_))
-                | CmpOp::Follows(FollowsPredicate::NotFollows(_)),
+        Compare { op, .. }
+        | Quantified {
+            op: QuantifiedOp::Op { op, .. },
             ..
-        } => return Some((Default::default(), Space::blank())),
+        } if negated(op) => return Some((Default::default(), Space::blank())),
         _ => None,
     };
     keyword.map(|(not, sp)| (*not, sp.clone()))
+}
+
+/// `NOT[` or `NOT]`, which read as `[` and `]` under the `NOT` that `cond` adds.
+fn negated(op: &full::CmpOp) -> bool {
+    use full::{CmpOp, ContainsPredicate, FollowsPredicate};
+    matches!(
+        op,
+        CmpOp::Contains(ContainsPredicate::NotLB(_))
+            | CmpOp::Follows(FollowsPredicate::NotFollows(_))
+    )
 }
 
 /// Field by field, as an unmarked type converts.
@@ -122,9 +131,11 @@ macro_rules! variants {
     };
 }
 
-/// The predicate, its negation read as its keyword (see `Negatable`).
+/// The predicate, its negation read as its keyword (see `Negatable`). IRIS applies a quantified
+/// `NOT[` or `NOT]` to each row (measured on 2026.2), so under the `NOT` its quantifier flips:
+/// `x NOT[ ANY (q)` is `NOT (x [ ALL (q))`.
 fn predicate(cond: &full::Cond) -> core::Cond {
-    variants!(cond;
+    let mut predicate = variants!(cond;
         Not { not_kw, condition }
         Paren { open, predicate, close }
         Exists { noindex, exists_kw, query }
@@ -144,7 +155,23 @@ fn predicate(cond: &full::Cond) -> core::Cond {
         Contains { noindex, lhs, sp, kw, list }
         StarEq { noindex, lhs, sp, op, rhs }
         EqStar { noindex, lhs, sp, op, rhs }
-    )
+    );
+    if let full::Cond::Quantified {
+        op: full::QuantifiedOp::Op { op, .. },
+        ..
+    } = cond
+        && negated(op)
+        && let core::Cond::Quantified {
+            op: core::QuantifiedOp::Op { quantifier, .. },
+            ..
+        } = &mut predicate
+    {
+        *quantifier = match quantifier {
+            core::Quantifier::All(_) => core::Quantifier::Any(Default::default()),
+            core::Quantifier::Any(_) => core::Quantifier::All(Default::default()),
+        };
+    }
+    predicate
 }
 
 /// `SELECT ALL` is `SELECT`: the blank after ALL joins the one before it.
@@ -223,17 +250,30 @@ pub fn spelled<K: Grammar + Default>(_: &()) -> core::Implied<K> {
 }
 
 /// `FROM a, b` is `FROM a CROSS JOIN b`: each reference after the first a CROSS JOIN on it, with
-/// the range of the reference it comes from.
+/// the range of the reference it comes from, in parentheses when it has joins of its own.
 pub fn tables(t: &full::Tables) -> core::Tables {
     let core::Tref::Join(mut first) = t.first.desugar();
     for ((before, _, after), tref) in &t.rest {
         let (full::Tref::Join(jtab) | full::Tref::OJSyntax { table: jtab, .. }) = tref;
-        let core::Tref::Join(table) = tref.desugar();
+        let core::Tref::Join(mut table) = tref.desugar();
         let start = jtab.formit.range().start;
         let end = jtab
             .joins
             .last()
             .map_or(jtab.formit.range().end, |(_, join)| join.range().end);
+        if !table.joins.is_empty() {
+            table = core::JTab {
+                formit: Src::new(
+                    start..end,
+                    core::Frmit::JTab {
+                        open: (Default::default(), Space::default()),
+                        joined: Box::new(table),
+                        close: (Space::default(), Default::default()),
+                    },
+                ),
+                joins: Vec::new(),
+            };
+        }
         let cross = core::Join::Cross {
             cross_kw: (
                 Default::default(),
@@ -297,12 +337,17 @@ pub fn offset_fetch(offset: &full::Offset, fetch: &Option<full::Fetch>) -> core:
     }
 }
 
-/// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` is `LIMIT n`.
+/// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` is `LIMIT n`, the blanks of the removed keywords between
+/// LIMIT and n.
 pub fn fetch_only(fetch: &full::Fetch) -> core::RowLimitingClause {
-    let (before_count, _) = fetch_blanks(fetch);
+    let (before_count, after_count) = fetch_blanks(fetch);
     core::RowLimitingClause::LimitOffset {
         limit: Prefix::new(
-            (fetch.keyword.0.desugar(), Default::default(), before_count),
+            (
+                fetch.keyword.0.desugar(),
+                Default::default(),
+                before_count.join(&after_count),
+            ),
             core::LimitSpec::Val(fetch.valspec.desugar()),
         ),
         offset: None,
@@ -327,10 +372,14 @@ fn space_before<T>(option: &Option<(Space, T)>) -> Space {
         .map_or_else(Space::default, |(sp, _)| sp.clone())
 }
 
-/// `ROWS` after the offset goes.
+/// `ROWS` after the offset goes: the blank before it joins the one before OFFSET.
 pub fn offset(o: &full::Offset) -> core::Offset {
     core::Offset {
-        kw: o.kw.desugar(),
+        kw: (
+            o.kw.0.join(&space_before(&o.rows)),
+            o.kw.1,
+            o.kw.2.desugar(),
+        ),
         count: o.count.desugar(),
     }
 }

@@ -1,5 +1,8 @@
 //! The IRIS SQL grammar for `&sql(...)` blocks embedded in ObjectScript, reached from `cos.rs`.
 //! Syntax only: `ascot` reports parse errors here but does not type-check SQL yet.
+//!
+//! `grammar::core` is the grammar minus its syntactic sugar, which `desugar` rewrites into it. It
+//! is not re-exported here: a glob import of a module named `core` shadows the `core` crate.
 
 pub mod desugar;
 pub mod grammar;
@@ -9,13 +12,6 @@ pub mod src;
 pub use grammar::full::*;
 pub use leaf::*;
 pub use src::*;
-
-/// The core grammar: the full one minus its syntactic sugar, which `desugar` rewrites into it.
-pub mod core {
-    pub use super::grammar::core::*;
-    pub use super::leaf::*;
-    pub use super::src::*;
-}
 
 #[cfg(test)]
 mod tests {
@@ -358,6 +354,30 @@ mod tests {
             "SELECT * FROM t1 LEFT JOIN t2 ON t1.a = t2.a",
             "SELECT * FROM t1 CROSS JOIN t2",
         ]);
+    }
+
+    #[test]
+    fn one_order_direction() {
+        assert!(SQL::parse("SELECT a FROM t ORDER BY a ASC DESC").is_err());
+    }
+
+    #[test]
+    fn dml_options_of_each_statement() {
+        all_ok(&[
+            "INSERT %NOSTREAM INTO t (a) VALUES (1)",
+            "UPDATE %ILOCK %NOSTREAM t SET a = 1",
+            "DELETE %NOJOURN FROM t",
+            "TRUNCATE TABLE %NOCHECK %NOLOCK %NOJOURN t",
+        ]);
+        for rejected in [
+            "INSERT %ILOCK INTO t (a) VALUES (1)",
+            "DELETE %NOSTREAM FROM t",
+            "DELETE %ILOCK FROM t",
+            "TRUNCATE TABLE %NOINDEX t",
+            "TRUNCATE TABLE %PROFILE t",
+        ] {
+            assert!(SQL::parse(rejected).is_err(), "{rejected}");
+        }
     }
 
     #[test]
