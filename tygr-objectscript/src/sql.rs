@@ -1,9 +1,8 @@
 //! The IRIS SQL grammar for `&sql(...)` blocks embedded in ObjectScript, reached from `cos.rs`.
 //! Syntax only: `ascot` reports parse errors here but does not type-check SQL yet.
 //!
-//! The grammar is written once, under `#[levels]`, which makes it twice: `full`, every spelling
-//! IRIS accepts, re-exported here, and `core`, the same minus its syntactic sugar, which `desugar`
-//! rewrites into it.
+//! Written once under `#[levels]`, which makes it twice: `full`, every spelling IRIS accepts, is
+//! re-exported here; `core` lacks the syntactic sugar, which `desugar` rewrites into it.
 
 use std::cell::{Cell, RefCell};
 use std::ops::{Deref, Range};
@@ -617,8 +616,7 @@ pub enum Sub {
 
 pub type ArgSep = (Space, StringEq!(","), Space);
 
-/// `T` with the range of the text it comes from: a parsed node's own range, or, after a rewrite,
-/// the range of the text it stands for.
+/// `T` with the range of the source text it comes from or, after a rewrite, stands for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Parse)]
 #[tygr(inline, try_from_infallible = Ranged<T>)]
 pub struct Src<T> {
@@ -643,8 +641,7 @@ impl<T> Src<T> {
         }
     }
 
-    /// A node a rule synthesizes: it stands for the node being rewritten (see `rewriting`) and takes
-    /// its range.
+    /// A node a rule synthesizes takes the range of the node being rewritten (see `rewriting`).
     pub fn synthesized(node: T) -> Self {
         let (start, end) = REWRITING.get();
         Src::new(start..end, node)
@@ -1155,9 +1152,8 @@ pub mod leveled {
     pub type Args1Plus =
         Wrap<(Space, StringEq!("("), Space), VecSep<Scalx, ArgSep>, (Space, StringEq!(")"))>;
 
-    /// The functions with a syntax of their own, which a call by name cannot spell: the `$`
-    /// functions, whose names no identifier spells, CURRENT_TIMESTAMP and CURRENT_TIME with a
-    /// precision, which the niladic would shadow, and the ODBC functions the escape alone spells.
+    /// The functions a call by name cannot spell: the `$` functions, CURRENT_TIMESTAMP and
+    /// CURRENT_TIME with a precision, which the niladic would shadow, and the ODBC-only functions.
     #[derive(Grammar)]
     #[tygr(name = "builtin")]
     pub enum Builtin {
@@ -1380,8 +1376,7 @@ pub mod leveled {
         },
     }
 
-    /// The arguments of TRIM, `BOTH ' ' FROM x` in the core: a spec alone trims blanks, characters
-    /// alone trim both ends.
+    /// TRIM's arguments, `BOTH ' ' FROM x` in the core: a lone spec trims blanks, lone chars both ends.
     #[derive(Grammar)]
     pub enum TrimArgs {
         SpecScalxScalx(
@@ -1648,10 +1643,9 @@ pub mod leveled {
         Year(StringEqCI!("YEAR"), ArgsR),
     }
 
-    /// `{fn CONVERT(x, SQL_TYPE)}` and `{fn IFNULL(x, y)}`, the ODBC functions the escape alone
-    /// spells: IRIS reads a bare `CONVERT(x, SQL_TYPE)` as the plain CONVERT with a column named
-    /// `SQL_TYPE`, and a bare `IFNULL(x, y)` as NULL when `x` is not (measured on 2026.2); and
-    /// `{fn USER}`, whose niladic `USER` has no parentheses to hold the comments within the braces.
+    /// `{fn CONVERT(x, SQL_TYPE)}` and `{fn IFNULL(x, y)}`, which IRIS reads otherwise without the
+    /// escape (CONVERT takes `SQL_TYPE` for a column, IFNULL(x, y) is NULL when x is not; measured on
+    /// 2026.2), and `{fn USER}`, whose niladic `USER` has no parentheses for the braces' comments.
     pub type ODBCOnly = Wrap<
         (StringEq!("{"), Space, StringEqCI!("FN"), Space),
         ODBCOnlyFunc,
@@ -1887,8 +1881,7 @@ pub mod leveled {
 
     pub type NotKw = StringEqCI!("NOT");
 
-    /// A predicate's keyword, or its negation, which reads as the keyword under the `NOT` the
-    /// condition's rule puts around the predicate.
+    /// A predicate's keyword or its negation, the keyword under the `NOT` the condition's rule adds.
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum Negatable<K: Grammar> {
@@ -1908,8 +1901,7 @@ pub mod leveled {
         }
     }
 
-    /// A keyword or clause a statement reads the same without: spelled, or omitted and read as its
-    /// default.
+    /// A keyword or clause read the same when omitted: spelled, or omitted and read as its default.
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum Implied<K: Grammar + Default> {
@@ -1918,8 +1910,7 @@ pub mod leveled {
         Omitted(()),
     }
 
-    /// What compares a value with a subquery: an operator and a quantifier, or `IN`, which is
-    /// `= ANY`.
+    /// What compares a value with a subquery: an operator and a quantifier, or `IN`, which is `= ANY`.
     #[derive(Grammar)]
     #[tygr(name = "quantified op")]
     pub enum QuantifiedOp {
@@ -1932,8 +1923,7 @@ pub mod leveled {
         In(Negatable<StringEqCI!("IN")>),
     }
 
-    // Parsed as `CondParse`, which reads a comparison's left operand once and then its tail, and
-    // converted so that each predicate holds all of its operands.
+    // Parsed as `CondParse`, lhs then tail, and converted so that each predicate holds all its operands.
     #[derive(Print)]
     #[sugar(into = desugar::cond)]
     pub enum Cond {
@@ -2992,8 +2982,7 @@ pub mod leveled {
         }
     }
 
-    /// The options of INSERT, UPDATE, DELETE and TRUNCATE TABLE, one list for the four, each
-    /// statement validated against its own set.
+    /// One option list for INSERT, UPDATE, DELETE and TRUNCATE TABLE, each validated against its own set.
     #[derive(Grammar)]
     #[tygr(name = "dml option")]
     pub enum DmlOption {
@@ -6715,7 +6704,6 @@ mod tests {
         }
     }
 
-    // The first query of `text`, for the shape tests.
     fn selex(text: &str) -> Src<Selex> {
         let sql = SQL::parse(text).unwrap();
         let Stat::Selct(stat) = sql.stat.node else {

@@ -1,7 +1,6 @@
-//! `Desugar`: a node of the full SQL grammar into its copy in the core grammar, the sugar rewritten
-//! (see `sql`). The grammar's own types get their impls from the `levels` attribute, each `#[sugar]`
-//! mark naming its rule here; the leaves both levels share and tygr's containers get theirs below.
-//! Each rule's spelling was measured against its core spelling on IRIS 2026.2.
+//! `Desugar`: a full SQL node into its core copy, the sugar rewritten (see `sql`). The grammar's
+//! types get their impls from `levels`, each `#[sugar]` mark naming its rule here; the shared leaves
+//! and tygr's containers get theirs below. Each rule was measured on IRIS 2026.2.
 
 use std::ops::Deref;
 
@@ -331,8 +330,7 @@ impl Arg for full::DatePartPart {
     }
 }
 
-/// The argument list of a call; the comments an argument loses go after the opening parenthesis or
-/// the comma before it.
+/// A call's argument list; what an argument loses goes after the parenthesis or comma before it.
 fn list(open: &Open, args: &[&dyn Arg], seps: &[ArgSep], close: &Close) -> core::ArgsN {
     let (mut open, mut seps) = (open.clone(), seps.to_vec());
     let items: Vec<core::Scalx> = args
@@ -564,8 +562,7 @@ pub fn function<F: Deref<Target = full::ScalarFunction>>(function: &F) -> core::
     )
 }
 
-/// `{fn NAME(args)}` is the call `NAME(args)`, `{fn PI}` and the like `PI()`, TIMESTAMPADD and
-/// TIMESTAMPDIFF their builtins.
+/// `{fn NAME(args)}` is `NAME(args)`, `{fn PI}` and its kin `PI()`, TIMESTAMPADD and TIMESTAMPDIFF builtins.
 fn odbc_function(function: &full::ODBCFunc) -> core::Term {
     calls!(ODBCFunc: function;
         Abs Acos Asin Atan Ceiling Cos Cot Exp Floor Log Log10 Mod Power Sin Sqrt Tan Ascii Char
@@ -610,8 +607,7 @@ fn cast(after_brace: &Space, value: &full::DTSVal, before_brace: &Space) -> core
     )))
 }
 
-/// An ODBC escape is what it stands for (see `odbc_function` and `cast`); the comments within its
-/// braces go before the parentheses of the call.
+/// An ODBC escape is what it stands for, the comments within its braces before the call's parentheses.
 pub fn odbc_escape<E: Deref<Target = full::ODBCEscape>>(escape: &E) -> core::Term {
     let Wrap {
         prefix: (_, after_brace),
@@ -714,8 +710,7 @@ pub fn concat(_: &StringEq!("_")) -> core::Scalop {
     core::Scalop::Concat(Default::default())
 }
 
-/// `ROWS n PRECEDING` is `ROWS BETWEEN n PRECEDING AND CURRENT ROW`, the standard's reading of a
-/// lone bound.
+/// `ROWS n PRECEDING` is `ROWS BETWEEN n PRECEDING AND CURRENT ROW`, the standard's lone-bound reading.
 pub fn rows_between(
     rows_kw: &(Space, StringEqCI!("ROWS"), Space),
     bound: &full::WindowRowsBound,
@@ -855,8 +850,7 @@ pub fn cond(cond: &full::Cond) -> core::Cond {
     }
 }
 
-/// The `NOT` of a negated predicate with the blank after it: the keyword's own, or one made for
-/// `NOT[` and `NOT]`.
+/// The `NOT` of a negated predicate with its blank: the keyword's own, or one made for `NOT[` and `NOT]`.
 fn negation(cond: &full::Cond) -> Option<(full::NotKw, Space)> {
     use full::{Cond::*, QuantifiedOp};
     let keyword = match cond {
@@ -1018,8 +1012,7 @@ pub fn spelled<K: Grammar + Default>(_: &()) -> core::Implied<K> {
     core::Implied::Spelled(Space::blank(), K::default())
 }
 
-/// `FROM a, b` is `FROM a CROSS JOIN b`: each reference after the first a CROSS JOIN on it, with
-/// the range of the reference it comes from, in parentheses when it has joins of its own.
+/// `FROM a, b` is `FROM a CROSS JOIN b`, each join at its reference's range, in parentheses when it has joins.
 pub fn tables(t: &full::Tables) -> core::Tables {
     let core::Tref::Join(mut first) = t.first.desugar();
     for ((before, _, after), tref) in &t.rest {
@@ -1079,8 +1072,7 @@ pub fn inner(join_kw: &StringEqCI!("JOIN")) -> core::JOp {
     }
 }
 
-/// `OFFSET m [ROWS] [FETCH [FIRST|NEXT] n [ROWS] [ONLY]]` is `LIMIT n OFFSET m`, `LIMIT ALL
-/// OFFSET m` without the FETCH.
+/// `OFFSET m [ROWS] [FETCH … n …]` is `LIMIT n OFFSET m`, `LIMIT ALL OFFSET m` without the FETCH.
 pub fn offset_fetch(offset: &full::Offset, fetch: &Option<full::Fetch>) -> core::RowLimitingClause {
     let mut before_offset = Space::blank().join(&space_before(&offset.rows));
     let (after_limit, spec) = match fetch {
@@ -1106,8 +1098,7 @@ pub fn offset_fetch(offset: &full::Offset, fetch: &Option<full::Fetch>) -> core:
     }
 }
 
-/// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` is `LIMIT n`, the blanks of the removed keywords between
-/// LIMIT and n.
+/// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` is `LIMIT n`, the removed keywords' blanks between LIMIT and n.
 pub fn fetch_only(fetch: &full::Fetch) -> core::RowLimitingClause {
     let (before_count, after_count) = fetch_blanks(fetch);
     core::RowLimitingClause::LimitOffset {
@@ -1240,8 +1231,7 @@ pub fn set_as_values(
     }
 }
 
-/// `UPDATE t (a, b) VALUES (x, y)` is `UPDATE t SET a = x, b = y`; a column list with a query or a
-/// host array for its values has no SET form and stays.
+/// `UPDATE t (a, b) VALUES (x, y)` is `UPDATE t SET a = x, b = y`; a query or host array as values stays.
 pub fn asign(asign: &full::Asign) -> core::Asign {
     match asign {
         full::Asign::SetList {

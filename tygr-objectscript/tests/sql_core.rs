@@ -1,7 +1,6 @@
 //! The core level of the SQL grammar and the desugaring into it, over hand-written statements: each
-//! rule rewrites its statement to the core text given, the core text re-parses under the core grammar
-//! and prints the same, desugaring it again changes nothing, and every `Src` node maps a range of
-//! the core text to a range of the source.
+//! rule rewrites its statement to the core text given, the core text re-parses under the core
+//! grammar and desugars to itself, and every `Src` node maps a range of it to a range of the source.
 
 use tygr::{Parse, Print};
 use tygr_objectscript::sql::core;
@@ -393,8 +392,7 @@ fn the_core_grammar_has_fewer_rules() {
     assert!(core.len() < full.len());
 }
 
-/// The local parity inputs, when present:
-/// `cargo test -p tygr-objectscript --test sql_core -- --ignored --nocapture`.
+/// The local parity inputs when present, `--test sql_core -- --ignored --nocapture`.
 #[test]
 #[ignore]
 fn the_local_statements_round_trip_through_the_core() {

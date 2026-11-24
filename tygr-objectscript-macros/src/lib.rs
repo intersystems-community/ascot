@@ -142,8 +142,7 @@ fn rule_arm(variant: &Variant, rule: &Expr) -> TokenStream2 {
     quote!(#pattern => #rule(#(#binds),*),)
 }
 
-/// `impl<T: Desugar, …> Desugar for Name<T, …> where T::Core: <T's bounds>`, `Core` the type
-/// `super::core::Name<T::Core, …>` and `body` the conversion.
+/// `impl<T: Desugar> Desugar for Name<T>`, `T`'s bounds carried to `T::Core`, converting by `body`.
 fn impl_of(name: &Ident, generics: &Generics, body: TokenStream2) -> TokenStream2 {
     let desugar = desugar();
     let mut generics = generics.clone();

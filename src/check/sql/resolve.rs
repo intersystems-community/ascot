@@ -609,7 +609,6 @@ impl Resolver for Checker<'_, '_> {
     }
 }
 
-// Checks the statement on its core form and returns its host variables.
 pub(in crate::check) fn check(code: &CodeEnv<'_>, flow: &mut Flow<'_>, statement: &SQL) -> Hosts {
     super::analyze(&statement.desugar(), Some(&Checker { code, flow }))
 }

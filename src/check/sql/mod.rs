@@ -1,7 +1,6 @@
-//! The checker of embedded SQL. It walks the parsed statement, desugared into the core grammar,
-//! node by node, the way the ObjectScript checker does, and records what the flow needs -- every
-//! host variable as a read or a write, and the cursor the statement declares or fetches -- and the
-//! names `resolve` checks.
+//! The checker of embedded SQL. It walks the statement, desugared into the core grammar, node by
+//! node, as the ObjectScript checker does, recording what the flow needs -- every host variable read
+//! or written, and the cursor declared or fetched -- and the names `resolve` checks.
 
 use std::ops::Range;
 
@@ -425,13 +424,11 @@ mod tests {
     use tygr::Parse;
     use tygr_objectscript::sql::desugar::Desugar;
 
-    // Parsed by the full grammar and desugared, as the checker sees a statement.
     fn parse(text: &str) -> SQL {
         let full = tygr_objectscript::sql::SQL::parse(text);
         full.unwrap_or_else(|e| panic!("{text}: {e}")).desugar()
     }
 
-    // The walker finds the same host variables and codes on `text` and on its core text.
     fn on_both(text: &str, mock: Option<&Mock>) -> (Hosts, Vec<String>) {
         let run = |text: &str| {
             let hosts = analyze(&parse(text), mock.map(|mock| mock as &dyn Resolver));
