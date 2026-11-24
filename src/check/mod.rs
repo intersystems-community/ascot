@@ -455,7 +455,7 @@ impl MethodDetails {
                     let range = match &default.value {
                         DefaultValue::Expr(expr) => default_env.range(expr),
                         DefaultValue::Braces(text) => text.range,
-                        DefaultValue::Unbraced(range) => *range,
+                        DefaultValue::Unbraced(text) => text.range,
                     };
                     flow.with_range(range, |flow| {
                         let ty = match &default.value {
@@ -476,13 +476,10 @@ impl MethodDetails {
                                 }
                                 Ty::Any.into()
                             }
-                            DefaultValue::Unbraced(_) => {
+                            DefaultValue::Unbraced(text) => {
                                 default_env.soft_diagnostic(
-                                    TypeErrorKind::InvalidSyntax {
-                                        scope: SyntaxScope::ArgumentDefault,
-                                        detail: SyntaxErrorText(
-                                            "expected a literal or an expression in braces".into(),
-                                        ),
+                                    TypeErrorKind::UnbracedDefaultExpression {
+                                        default: text.it.clone(),
                                     }
                                     .at(range),
                                 );

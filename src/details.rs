@@ -356,8 +356,8 @@ pub enum DefaultValue {
     Expr(Ranged<cos::Expr>),
     // The braces' text when it isn't an expression, or `…`, a default that is no value.
     Braces(WithRange<String>),
-    // No literal and no braces; kept for the checker to report.
-    Unbraced(bindings::Range),
+    // No literal and no braces: the expression's text, for the checker to report.
+    Unbraced(WithRange<String>),
 }
 
 pub enum RoutineElementKind {
@@ -1166,7 +1166,9 @@ fn method_kind(
                     DefaultValue::Braces(WithRange::new("…".to_string(), at))
                 }
                 cos::FormalDefaultValue::Literal(..) => return None,
-                cos::FormalDefaultValue::Expression(..) => DefaultValue::Unbraced(at),
+                cos::FormalDefaultValue::Expression(expr) => {
+                    DefaultValue::Unbraced(WithRange::new(expr.print(), at))
+                }
             };
             Some(BraceDefault { name, value })
         })
