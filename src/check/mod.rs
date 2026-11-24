@@ -382,8 +382,6 @@ impl MethodDetails {
         }
         let body_text = expanded[header_len..].to_string();
         let body_range = expanded_olc.span(header_len, expanded.len());
-        let diagnostics_mark = env.base.soft_diagnostics_mark();
-        let references_mark = env.base.references_mark();
         // The signature's types are written relative to the class: its package and `Import`s.
         let qualified = |mut ty: Option<Ty>| {
             if let Some(ty) = &mut ty {
@@ -406,6 +404,9 @@ impl MethodDetails {
             let out = local_out.it.clone().flatten();
             check_override(env, cls, name, origin, sup, self, &local_args, out);
         }
+        // The override check reports against the document; only what follows is relocated.
+        let diagnostics_mark = env.base.soft_diagnostics_mark();
+        let references_mark = env.base.references_mark();
         // An override's formal arguments are the superclass's, read or not (A4269).
         let inherited: Vec<(String, bindings::Range)> = match overridden {
             Some(_) => (local_args.iter())
