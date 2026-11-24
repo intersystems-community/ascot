@@ -78,20 +78,6 @@ impl Space {
     pub fn blank() -> Space {
         Space(vec![SpaceUnit::Raw(Hidden(Raw::new(" ")))])
     }
-
-    pub fn has_comment(&self) -> bool {
-        self.0.iter().any(|unit| !matches!(unit, SpaceUnit::Raw(_)))
-    }
-
-    /// `self` with the blank of a piece of removed sugar after it: the comments of the latter stay,
-    /// its blanks alone add nothing.
-    pub fn join(&self, removed: &Space) -> Space {
-        match (self.has_comment(), removed.has_comment()) {
-            (_, false) => self.clone(),
-            (false, true) => removed.clone(),
-            (true, true) => Space(self.0.iter().chain(&removed.0).cloned().collect()),
-        }
-    }
 }
 
 #[derive(Grammar, Clone)]
@@ -1729,7 +1715,6 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "agg")]
-    #[sugar(into = desugar::agg)]
     pub enum Agg {
         AggFuncArgs {
             fun: AggFunc,
@@ -1892,10 +1877,10 @@ pub mod leveled {
 
     #[sugar]
     impl<K: Grammar> Negatable<K> {
-        /// The `NOT` of a negated keyword, with the blank after it.
-        pub fn negation(&self) -> Option<(&NotKw, &Space)> {
+        /// The `NOT` of a negated keyword.
+        pub fn negation(&self) -> Option<NotKw> {
             match self {
-                Negatable::Negated(not, sp, _) => Some((not, sp)),
+                Negatable::Negated(not, ..) => Some(*not),
                 Negatable::Plain(_) => None,
             }
         }
@@ -2514,7 +2499,6 @@ pub mod leveled {
     pub struct ColumnName(pub Ident);
 
     #[derive(Grammar)]
-    #[sugar(into = desugar::selex)]
     pub struct Selex {
         pub kw: (StringEqCI!("SELECT"), Space),
         pub options: Vec<SelectOption>,
@@ -2864,7 +2848,6 @@ pub mod leveled {
     >;
 
     #[derive(Grammar)]
-    #[sugar(into = desugar::ordir)]
     pub struct Ordir {
         pub expr: Ordit,
         #[sugar]
@@ -2915,7 +2898,6 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[sugar(into = desugar::offset)]
     pub struct Offset {
         pub kw: (Space, StringEqCI!("OFFSET"), Space),
         pub count: RowCount,
@@ -3229,7 +3211,6 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "rollb")]
-    #[sugar(into = desugar::rollback)]
     pub struct RollB {
         pub rollback_kw: StringEqCI!("ROLLBACK"),
         #[sugar]
@@ -3247,11 +3228,10 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "tp option")]
-    #[sugar(into = desugar::tp_option)]
     pub enum TPOption {
         InTransaction(StringEqCI!("%INTRANSACTION")),
         BegTrans(StringEqCI!("%BEGTRANS")),
-        #[sugar]
+        #[sugar(into = desugar::intransaction)]
         InTrans(StringEqCI!("%INTRANS")),
         Commit {
             commit_kw: StringEqCI!("COMMIT"),

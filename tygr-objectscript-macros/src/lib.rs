@@ -18,8 +18,8 @@ use syn::{
 const FORMS: &str = "expected `#[sugar]` or `#[sugar(into = RULE)]`";
 
 /// The marks: `#[sugar(into = RULE)]` on a variant leaves it out of the core, RULE converting it
-/// from its fields by reference; on a type, RULE converts the whole value and the type's `#[sugar]`
-/// fields and variants go; `#[sugar]` on a type, an alias, an impl or a `use` leaves it out.
+/// from its fields by reference; on a type, RULE converts the whole value; `#[sugar]` on a field
+/// leaves it out of the core and of the conversion, on a type, alias, impl or `use` leaves it out.
 #[proc_macro_attribute]
 pub fn levels(_: TokenStream, item: TokenStream) -> TokenStream {
     let module = syn::parse_macro_input!(item as ItemMod);
@@ -87,58 +87,66 @@ fn remove_fields(fields: &mut Fields, dropped: &[usize]) {
     }
 }
 
-/// `{ f: desugar(value), … }`, `(desugar(value), …)` or nothing, `value` the full field.
-fn fields_desugar(fields: &Fields, value: impl Fn(usize, &Field) -> TokenStream2) -> TokenStream2 {
+/// `{ f: desugar(value), … }`, `(desugar(value), …)` or nothing over the fields kept, `value` the
+/// full field.
+fn fields_desugar(
+    fields: &Fields,
+    dropped: &[usize],
+    value: impl Fn(usize, &Field) -> TokenStream2,
+) -> TokenStream2 {
     let desugar = desugar();
+    let kept = (fields.iter().enumerate()).filter(|(i, _)| !dropped.contains(i));
+    let parts = kept.map(|(i, field)| {
+        let value = value(i, field);
+        match &field.ident {
+            Some(name) => quote!(#name: #desugar::desugar(#value)),
+            None => quote!(#desugar::desugar(#value)),
+        }
+    });
     match fields {
-        Fields::Named(named) => {
-            let parts = named.named.iter().enumerate().map(|(i, field)| {
-                let (name, value) = (&field.ident, value(i, field));
-                quote!(#name: #desugar::desugar(#value))
-            });
-            quote!({ #(#parts,)* })
-        }
-        Fields::Unnamed(unnamed) => {
-            let parts = unnamed.unnamed.iter().enumerate().map(|(i, field)| {
-                let value = value(i, field);
-                quote!(#desugar::desugar(#value))
-            });
-            quote!(( #(#parts,)* ))
-        }
+        Fields::Named(_) => quote!({ #(#parts,)* }),
+        Fields::Unnamed(_) => quote!(( #(#parts,)* )),
         Fields::Unit => quote!(),
     }
 }
 
-fn variant_pattern(variant: &Variant) -> (TokenStream2, Vec<Ident>) {
+/// `Self::Name { a, b: _ }` or `Self::Name(__f0, _)`, a `_` for a dropped field, and the names bound.
+fn variant_pattern(variant: &Variant, dropped: &[usize]) -> (TokenStream2, Vec<Ident>) {
     let name = &variant.ident;
-    match &variant.fields {
-        Fields::Named(named) => {
-            let binds: Vec<Ident> = named
-                .named
-                .iter()
-                .map(|field| field.ident.clone().expect("named"))
-                .collect();
-            (quote!(Self::#name { #(#binds),* }), binds)
-        }
-        Fields::Unnamed(unnamed) => {
-            let binds: Vec<Ident> = (0..unnamed.unnamed.len())
-                .map(|i| format_ident!("__f{i}"))
-                .collect();
-            (quote!(Self::#name(#(#binds),*)), binds)
-        }
-        Fields::Unit => (quote!(Self::#name), Vec::new()),
-    }
+    let binds: Vec<Ident> = (variant.fields.iter().enumerate())
+        .map(|(i, field)| {
+            field
+                .ident
+                .clone()
+                .unwrap_or_else(|| format_ident!("__f{i}"))
+        })
+        .collect();
+    let fields =
+        binds
+            .iter()
+            .enumerate()
+            .map(|(i, bind)| match (dropped.contains(&i), &variant.fields) {
+                (true, Fields::Named(_)) => quote!(#bind: _),
+                (true, _) => quote!(_),
+                (false, _) => quote!(#bind),
+            });
+    let pattern = match &variant.fields {
+        Fields::Named(_) => quote!(Self::#name { #(#fields),* }),
+        Fields::Unnamed(_) => quote!(Self::#name(#(#fields),*)),
+        Fields::Unit => quote!(Self::#name),
+    };
+    (pattern, binds)
 }
 
-fn plain_arm(enum_name: &Ident, variant: &Variant) -> TokenStream2 {
+fn plain_arm(enum_name: &Ident, variant: &Variant, dropped: &[usize]) -> TokenStream2 {
     let name = &variant.ident;
-    let (pattern, binds) = variant_pattern(variant);
-    let body = fields_desugar(&variant.fields, |i, _| binds[i].to_token_stream());
+    let (pattern, binds) = variant_pattern(variant, dropped);
+    let body = fields_desugar(&variant.fields, dropped, |i, _| binds[i].to_token_stream());
     quote!(#pattern => super::core::#enum_name::#name #body,)
 }
 
 fn rule_arm(variant: &Variant, rule: &Expr) -> TokenStream2 {
-    let (pattern, binds) = variant_pattern(variant);
+    let (pattern, binds) = variant_pattern(variant, &[]);
     quote!(#pattern => #rule(#(#binds),*),)
 }
 
@@ -207,6 +215,13 @@ impl Output {
             .push(parse_quote!(#[derive(::core::clone::Clone)]));
         let dropped = self.fields(&mut item.fields)?;
         self.full.push(item.to_token_stream());
+        let body = fields_desugar(&item.fields, &dropped, |i, field| match &field.ident {
+            Some(name) => quote!(&self.#name),
+            None => {
+                let index = Index::from(i);
+                quote!(&self.#index)
+            }
+        });
         remove_fields(&mut item.fields, &dropped);
         let (name, generics) = (&item.ident, &item.generics);
         match mark {
@@ -218,13 +233,6 @@ impl Output {
             }
             None => {
                 self.core.push(item.to_token_stream());
-                let body = fields_desugar(&item.fields, |i, field| match &field.ident {
-                    Some(name) => quote!(&self.#name),
-                    None => {
-                        let index = Index::from(i);
-                        quote!(&self.#index)
-                    }
-                });
                 let body = quote!(super::core::#name #body);
                 self.impls.push(impl_of(name, generics, body));
             }
@@ -245,7 +253,7 @@ impl Output {
                     let mut core_variant = variant.clone();
                     remove_fields(&mut core_variant.fields, &dropped);
                     core_variants.push(core_variant);
-                    arms.push(plain_arm(&item.ident, variant));
+                    arms.push(plain_arm(&item.ident, variant, &dropped));
                 }
                 Some(Mark::Into(rule)) => arms.push(rule_arm(variant, &rule)),
                 Some(Mark::Bare) => {}

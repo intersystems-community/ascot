@@ -218,6 +218,20 @@ impl<G: Desugar> Desugar for NotFollowedBy<G> {
 type Open = (Space, StringEq!("("), Space);
 type Close = (Space, StringEq!(")"));
 
+/// `a, b`.
+fn commas<T>(items: Vec<T>) -> VecSep<T, ArgSep> {
+    let sep = (Space::default(), Default::default(), Space::blank());
+    let seps = vec![sep; items.len().saturating_sub(1)];
+    VecSep { items, seps }
+}
+
+/// `(a, b)`.
+fn list(args: Vec<core::Scalx>) -> core::ArgsN {
+    let open = (Space::default(), Default::default(), Space::default());
+    let items = (!args.is_empty()).then(|| commas(args));
+    Wrap::new(open, items, (Space::default(), Default::default()))
+}
+
 /// A term as an expression of its own, standing for the node being rewritten.
 fn term(term: core::Term) -> core::Scalx {
     core::Scalx::Legacy(VecSep::one(Src::synthesized(term)))
@@ -230,45 +244,131 @@ fn string(text: &str) -> core::Scalx {
 }
 
 /// `name(args)`, the call by name.
-fn call(name: &str, args: core::ArgsN) -> core::Term {
+fn call(name: &str, args: Vec<core::Scalx>) -> core::Term {
     let name = DottedIdent {
         head: Ident::simple(name),
         rest: Vec::new(),
     };
     core::Term::Call(core::Call {
         name: core::SQLFunctionName(Src::synthesized(name)),
-        args,
+        args: list(args),
     })
 }
 
-/// `()`.
-fn empty() -> core::ArgsN {
-    Wrap::new(
-        (Space::default(), Default::default(), Space::default()),
-        None,
-        (Space::default(), Default::default()),
-    )
+/// The arguments a function's argument list gives the call, in order.
+trait Arg {
+    fn args(&self, out: &mut Vec<core::Scalx>);
 }
 
-/// An argument of a call.
-trait Arg {
-    fn arg(&self) -> core::Scalx;
-
-    /// The comments of the tokens the argument loses, which go before it.
-    fn before(&self) -> Space {
-        Space::default()
-    }
+fn args(shape: &impl Arg) -> Vec<core::Scalx> {
+    let mut out = Vec::new();
+    shape.args(&mut out);
+    out
 }
 
 impl Arg for full::Scalx {
-    fn arg(&self) -> core::Scalx {
-        self.desugar()
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        out.push(self.desugar())
     }
 }
 
 impl Arg for Src<full::Term> {
-    fn arg(&self) -> core::Scalx {
-        core::Scalx::Legacy(VecSep::one(self.desugar()))
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        out.push(core::Scalx::Legacy(VecSep::one(self.desugar())))
+    }
+}
+
+impl Arg for VecSep<full::Scalx, ArgSep> {
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        out.extend(self.items.iter().map(Desugar::desugar))
+    }
+}
+
+impl Arg for full::Args0 {
+    fn args(&self, _: &mut Vec<core::Scalx>) {}
+}
+
+impl<T: Arg> Arg for Option<T> {
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        if let Some(arg) = self {
+            arg.args(out)
+        }
+    }
+}
+
+impl<K, T: Arg> Arg for (K, T) {
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        self.1.args(out)
+    }
+}
+
+impl<K, T: Arg, U: Arg> Arg for (K, T, U) {
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        self.1.args(out);
+        self.2.args(out)
+    }
+}
+
+impl<T: Arg> Arg for Wrap<Open, T, Close> {
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        self.wrapped.args(out)
+    }
+}
+
+/// The argument shapes of the functions called by name, each its arguments in order.
+macro_rules! shapes {
+    ($($Shape:ident<$($T:ident),*> { $($field:ident)* })*) => {$(
+        impl<$($T: Arg + Grammar),*> Arg for full::$Shape<$($T),*> {
+            fn args(&self, out: &mut Vec<core::Scalx>) {
+                $(self.$field.args(out);)*
+            }
+        }
+    )*};
+}
+
+shapes! {
+    ArgsRR<T1, T2> { arg1 arg2 }
+    ArgsRRR<T1, T2, T3> { arg1 arg2 arg3 }
+    ArgsRRRR<T1, T2, T3, T4> { arg1 arg2 arg3 arg4 }
+    ArgsRO<T1, T2> { arg1 arg2 }
+    ArgsROO<T1, T2, T3> { arg1 rest }
+    ArgsRRO<T1, T2, T3> { arg1 arg2 arg3 }
+    ArgsRROO<T1, T2, T3, T4> { arg1 arg2 rest }
+}
+
+/// `POSITION(a IN b)` has the arguments of `CHARINDEX(a, b)`.
+impl Arg for full::SQLPositionArgs {
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        self.needle.args(out);
+        self.haystack.args(out)
+    }
+}
+
+/// `SUBSTRING(x FROM s FOR l)` has the arguments of `SUBSTRING(x, s, l)`.
+impl Arg for full::SubstringArgsInternal {
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        match self {
+            Self::Keyword {
+                expr,
+                start,
+                for_clause,
+                ..
+            } => {
+                expr.args(out);
+                start.args(out);
+                for_clause.args(out)
+            }
+            Self::Position {
+                expr,
+                start,
+                length,
+                ..
+            } => {
+                expr.args(out);
+                start.args(out);
+                length.args(out)
+            }
+        }
     }
 }
 
@@ -294,246 +394,26 @@ fn datepart(part: &full::DatePartCommon) -> core::Scalx {
     })
 }
 
-/// A parenthesized datepart loses its parentheses: the part, and the comments the parentheses held.
-fn unwrapped<T: Grammar>(part: &full::OptionallyWrapped<T>) -> (&T, Space) {
+/// A parenthesized datepart loses its parentheses.
+fn unwrapped<T: Grammar>(part: &full::OptionallyWrapped<T>) -> &T {
     match part {
-        full::OptionallyWrapped::Wrapped(parens) => {
-            let comments = Space::default()
-                .join(&parens.prefix.1)
-                .join(&parens.suffix.0);
-            (&parens.wrapped, comments)
-        }
-        full::OptionallyWrapped::Scalar(part) => (part, Space::default()),
+        full::OptionallyWrapped::Wrapped(parens) => &parens.wrapped,
+        full::OptionallyWrapped::Scalar(part) => part,
     }
 }
 
 impl Arg for full::DatePart {
-    fn arg(&self) -> core::Scalx {
-        datepart(unwrapped(self).0)
-    }
-
-    fn before(&self) -> Space {
-        unwrapped(self).1
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        out.push(datepart(unwrapped(self)))
     }
 }
 
 impl Arg for full::DatePartPart {
-    fn arg(&self) -> core::Scalx {
-        match unwrapped(&self.0).0 {
+    fn args(&self, out: &mut Vec<core::Scalx>) {
+        out.push(match unwrapped(&self.0) {
             full::DatePartPartRaw::SqlTimestamp(_) => string("sqltimestamp"),
             full::DatePartPartRaw::Common(common) => datepart(common),
-        }
-    }
-
-    fn before(&self) -> Space {
-        unwrapped(&self.0).1
-    }
-}
-
-/// A call's argument list; what an argument loses goes after the parenthesis or comma before it.
-fn list(open: &Open, args: &[&dyn Arg], seps: &[ArgSep], close: &Close) -> core::ArgsN {
-    let (mut open, mut seps) = (open.clone(), seps.to_vec());
-    let items: Vec<core::Scalx> = args
-        .iter()
-        .enumerate()
-        .map(|(i, arg)| {
-            let before = match i.checked_sub(1) {
-                None => &mut open.2,
-                Some(previous) => &mut seps[previous].2,
-            };
-            *before = before.join(&arg.before());
-            arg.arg()
         })
-        .collect();
-    let list = (!items.is_empty()).then_some(VecSep { items, seps });
-    Wrap::new(open, list, close.clone())
-}
-
-/// A comma in a dropped keyword's place, with the keyword's comments.
-fn comma<K>((before, _, after): &(Space, K, Space)) -> ArgSep {
-    (
-        Space::default().join(before),
-        Default::default(),
-        Space::blank().join(after),
-    )
-}
-
-/// A function's argument list as a call's.
-trait Args {
-    fn args(&self) -> core::ArgsN;
-}
-
-impl<T: Arg> Args for Wrap<Open, T, Close> {
-    fn args(&self) -> core::ArgsN {
-        list(&self.prefix, &[&self.wrapped], &[], &self.suffix)
-    }
-}
-
-impl<T: Arg> Args for Wrap<Open, Option<T>, Close> {
-    fn args(&self) -> core::ArgsN {
-        let args: Vec<&dyn Arg> = self.wrapped.iter().map(|arg| arg as &dyn Arg).collect();
-        list(&self.prefix, &args, &[], &self.suffix)
-    }
-}
-
-impl Args for Wrap<Open, VecSep<full::Scalx, ArgSep>, Close> {
-    fn args(&self) -> core::ArgsN {
-        Wrap::new(
-            self.prefix.clone(),
-            Some(self.wrapped.desugar()),
-            self.suffix.clone(),
-        )
-    }
-}
-
-impl Args for Wrap<Open, Option<VecSep<full::Scalx, ArgSep>>, Close> {
-    fn args(&self) -> core::ArgsN {
-        self.desugar()
-    }
-}
-
-impl Args for full::Args0 {
-    fn args(&self) -> core::ArgsN {
-        list(&self.open, &[], &[], &self.close)
-    }
-}
-
-impl<T1: Arg + Grammar, T2: Arg + Grammar> Args for full::ArgsRR<T1, T2> {
-    fn args(&self) -> core::ArgsN {
-        list(
-            &self.open,
-            &[&self.arg1, &self.arg2],
-            std::slice::from_ref(&self.sep1),
-            &self.close,
-        )
-    }
-}
-
-impl<T1: Arg + Grammar, T2: Arg + Grammar, T3: Arg + Grammar> Args for full::ArgsRRR<T1, T2, T3> {
-    fn args(&self) -> core::ArgsN {
-        list(
-            &self.open,
-            &[&self.arg1, &self.arg2, &self.arg3],
-            &[self.sep1.clone(), self.sep2.clone()],
-            &self.close,
-        )
-    }
-}
-
-impl<T1: Arg + Grammar, T2: Arg + Grammar, T3: Arg + Grammar, T4: Arg + Grammar> Args
-    for full::ArgsRRRR<T1, T2, T3, T4>
-{
-    fn args(&self) -> core::ArgsN {
-        list(
-            &self.open,
-            &[&self.arg1, &self.arg2, &self.arg3, &self.arg4],
-            &[self.sep1.clone(), self.sep2.clone(), self.sep3.clone()],
-            &self.close,
-        )
-    }
-}
-
-impl<T1: Arg + Grammar, T2: Arg + Grammar> Args for full::ArgsRO<T1, T2> {
-    fn args(&self) -> core::ArgsN {
-        let (mut args, mut seps): (Vec<&dyn Arg>, Vec<ArgSep>) = (vec![&self.arg1], Vec::new());
-        if let Some((sep, arg2)) = &self.arg2 {
-            seps.push(sep.clone());
-            args.push(arg2);
-        }
-        list(&self.open, &args, &seps, &self.close)
-    }
-}
-
-impl<T1: Arg + Grammar, T2: Arg + Grammar, T3: Arg + Grammar> Args for full::ArgsROO<T1, T2, T3> {
-    fn args(&self) -> core::ArgsN {
-        let (mut args, mut seps): (Vec<&dyn Arg>, Vec<ArgSep>) = (vec![&self.arg1], Vec::new());
-        if let Some((sep, arg2, arg3)) = &self.rest {
-            seps.push(sep.clone());
-            args.push(arg2);
-            if let Some((sep, arg3)) = arg3 {
-                seps.push(sep.clone());
-                args.push(arg3);
-            }
-        }
-        list(&self.open, &args, &seps, &self.close)
-    }
-}
-
-impl<T1: Arg + Grammar, T2: Arg + Grammar, T3: Arg + Grammar> Args for full::ArgsRRO<T1, T2, T3> {
-    fn args(&self) -> core::ArgsN {
-        let (mut args, mut seps): (Vec<&dyn Arg>, Vec<ArgSep>) =
-            (vec![&self.arg1, &self.arg2], vec![self.sep1.clone()]);
-        if let Some((sep, arg3)) = &self.arg3 {
-            seps.push(sep.clone());
-            args.push(arg3);
-        }
-        list(&self.open, &args, &seps, &self.close)
-    }
-}
-
-impl<T1: Arg + Grammar, T2: Arg + Grammar, T3: Arg + Grammar, T4: Arg + Grammar> Args
-    for full::ArgsRROO<T1, T2, T3, T4>
-{
-    fn args(&self) -> core::ArgsN {
-        let (mut args, mut seps): (Vec<&dyn Arg>, Vec<ArgSep>) =
-            (vec![&self.arg1, &self.arg2], vec![self.sep1.clone()]);
-        if let Some((sep, arg3, arg4)) = &self.rest {
-            seps.push(sep.clone());
-            args.push(arg3);
-            if let Some((sep, arg4)) = arg4 {
-                seps.push(sep.clone());
-                args.push(arg4);
-            }
-        }
-        list(&self.open, &args, &seps, &self.close)
-    }
-}
-
-/// `POSITION(a IN b)` has the arguments of `CHARINDEX(a, b)`.
-impl Args for full::SQLPositionArgs {
-    fn args(&self) -> core::ArgsN {
-        list(
-            &self.open,
-            &[&self.needle, &self.haystack],
-            &[comma(&self.in_kw)],
-            &self.close,
-        )
-    }
-}
-
-/// `SUBSTRING(x FROM s FOR l)` has the arguments of `SUBSTRING(x, s, l)`.
-impl Args for full::SubstringArgs {
-    fn args(&self) -> core::ArgsN {
-        use full::SubstringArgsInternal::*;
-        let (mut args, mut seps): (Vec<&dyn Arg>, Vec<ArgSep>) = match &self.wrapped {
-            Keyword {
-                expr,
-                from_kw,
-                start,
-                ..
-            } => (vec![expr, start], vec![comma(from_kw)]),
-            Position {
-                expr, comma, start, ..
-            } => (vec![expr, start], vec![comma.clone()]),
-        };
-        match &self.wrapped {
-            Keyword {
-                for_clause: Some((for_kw, length)),
-                ..
-            } => {
-                seps.push(comma(for_kw));
-                args.push(length);
-            }
-            Position {
-                length: Some((sep, length)),
-                ..
-            } => {
-                seps.push(sep.clone());
-                args.push(length);
-            }
-            _ => {}
-        }
-        list(&self.prefix, &args, &seps, &self.suffix)
     }
 }
 
@@ -541,8 +421,8 @@ impl Args for full::SubstringArgs {
 macro_rules! calls {
     ($Enum:ident: $value:expr; $($Variant:ident)*; $($Niladic:ident)*; $($arm:tt)*) => {
         match $value {
-            $(full::$Enum::$Variant(kw, args) => call(&kw.print(), args.args()),)*
-            $(full::$Enum::$Niladic(kw, _) => call(&kw.print(), empty()),)*
+            $(full::$Enum::$Variant(kw, a) => call(&kw.print(), args(a)),)*
+            $(full::$Enum::$Niladic(kw, _) => call(&kw.print(), Vec::new()),)*
             $($arm)*
         }
     };
@@ -558,7 +438,7 @@ pub fn function<F: Deref<Target = full::ScalarFunction>>(function: &F) -> core::
         Repeat Replace Replicate Reverse Right Round RPad RTrim Sign Space Str String Stuff Substr
         Substring ToChar ToDate ToUSChar ToUSDate ToNumber ToTimestamp UCase UnixTimestamp
         VectorCosine VectorDotProduct Year;;
-        full::ScalarFunction::Position(_, args) => call("CHARINDEX", args.args()),
+        full::ScalarFunction::Position(_, a) => call("CHARINDEX", args(a)),
     )
 }
 
@@ -570,17 +450,17 @@ fn odbc_function(function: &full::ODBCFunc) -> core::Term {
         MonthName Quarter Repeat Right Round RTrim Second Sign Space Substring Truncate UCase Week
         Year;
         Pi CurDate CurTime Database Now;
-        full::ODBCFunc::TimestampAdd(kw, args) => {
-            core::Term::Builtin(Box::new(core::Builtin::TimestampAdd(*kw, args.desugar())))
+        full::ODBCFunc::TimestampAdd(kw, a) => {
+            core::Term::Builtin(Box::new(core::Builtin::TimestampAdd(*kw, a.desugar())))
         }
-        full::ODBCFunc::TimestampDiff(kw, args) => {
-            core::Term::Builtin(Box::new(core::Builtin::TimestampDiff(*kw, args.desugar())))
+        full::ODBCFunc::TimestampDiff(kw, a) => {
+            core::Term::Builtin(Box::new(core::Builtin::TimestampDiff(*kw, a.desugar())))
         }
     )
 }
 
 /// `{d x}`, `{t x}` and `{ts x}` are `CAST(x AS DATE)`, `CAST(x AS TIME)` and `CAST(x AS TIMESTAMP)`.
-fn cast(after_brace: &Space, value: &full::DTSVal, before_brace: &Space) -> core::Term {
+fn cast(value: &full::DTSVal) -> core::Term {
     let cast_type = match &value.dts_type {
         full::DTSType::Date(_) => core::CastType::Date(Default::default()),
         full::DTSType::Time(_) => core::CastType::Time(Default::default()),
@@ -591,15 +471,11 @@ fn cast(after_brace: &Space, value: &full::DTSVal, before_brace: &Space) -> core
         full::DTSValSpec::HostVar(host_var) => core::Term::HostVar(host_var.clone()),
     });
     let cast = core::SQLCastExpression {
-        open: (
-            Space::default(),
-            Default::default(),
-            Space::default().join(after_brace).join(&value.sp),
-        ),
+        open: (Space::default(), Default::default(), Space::default()),
         expr,
         as_kw: (Space::blank(), Default::default(), Space::blank()),
         cast_type,
-        close: (Space::default().join(before_brace), Default::default()),
+        close: (Space::default(), Default::default()),
     };
     core::Term::Builtin(Box::new(core::Builtin::Cast(
         Default::default(),
@@ -607,81 +483,38 @@ fn cast(after_brace: &Space, value: &full::DTSVal, before_brace: &Space) -> core
     )))
 }
 
-/// An ODBC escape is what it stands for, the comments within its braces before the call's parentheses.
+/// An ODBC escape is what it stands for: see `odbc_function` and `cast`.
 pub fn odbc_escape<E: Deref<Target = full::ODBCEscape>>(escape: &E) -> core::Term {
-    let Wrap {
-        prefix: (_, after_brace),
-        wrapped,
-        suffix: (before_brace, _),
-    } = &**escape;
-    let (after_fn, function) = match wrapped {
-        full::DTS::DateTime(value) => return cast(after_brace, value, before_brace),
-        full::DTS::Function(function) => (&function.prefix.1, &function.prefixed),
-    };
-    let mut term = odbc_function(function);
-    let parens = match &mut term {
-        core::Term::Call(call) => Some((&mut call.args.prefix.0, &mut call.args.suffix.0)),
-        core::Term::Builtin(builtin) => match &mut **builtin {
-            core::Builtin::TimestampAdd(_, args) => Some((&mut args.open.0, &mut args.close.0)),
-            core::Builtin::TimestampDiff(_, args) => Some((&mut args.open.0, &mut args.close.0)),
-            _ => None,
-        },
-        _ => None,
-    };
-    if let Some((before_open, before_close)) = parens {
-        *before_open = before_open.join(after_brace).join(after_fn);
-        *before_close = before_close.join(before_brace);
+    match &escape.wrapped {
+        full::DTS::DateTime(value) => cast(value),
+        full::DTS::Function(function) => odbc_function(&function.prefixed),
     }
-    term
 }
 
 /// `%SQLUPPER x` is the call `%SQLUPPER(x)`; an `x` in parentheses gives the call its own.
 pub fn percent_call<T: Deref<Target = Src<full::Term>>>(
     op: &full::PercentOp,
-    space: &Space,
+    _: &Space,
     term: &T,
 ) -> core::Term {
-    let (open, arg, close) = match &term.node {
-        full::Term::Scalx(parens) => (
-            parens.prefix.1.clone(),
-            (*parens.wrapped).desugar(),
-            parens.suffix.0.clone(),
-        ),
-        _ => (Space::default(), (**term).arg(), Space::default()),
+    let arg = match &term.node {
+        full::Term::Scalx(parens) => (*parens.wrapped).desugar(),
+        _ => core::Scalx::Legacy(VecSep::one((**term).desugar())),
     };
-    let args = Wrap::new(
-        (Space::default().join(space), Default::default(), open),
-        Some(VecSep::one(arg)),
-        (close, Default::default()),
-    );
-    call(&op.print(), args)
+    call(&op.print(), vec![arg])
 }
 
 /// `%TRUNCATE(x, n)` is the call, as `%STRING`, `%SQLSTRING` and `%SQLUPPER` with a truncation are.
 pub fn string_operation<O: Deref<Target = full::StringOperation>>(operation: &O) -> core::Term {
-    let full::StringOperation {
-        op,
-        open,
-        expr,
-        comma,
-        truncation,
-        close,
-    } = &**operation;
-    let truncation = match truncation {
+    let truncation = match &operation.truncation {
         full::ColTrun::Const(constant) => {
             let core::PConst::Literal(literal) = constant.desugar();
             core::Term::Literal(literal)
         }
         full::ColTrun::HostVar(host_var) => core::Term::HostVar(host_var.clone()),
     };
-    let args = VecSep {
-        items: vec![expr.desugar(), term(truncation)],
-        seps: vec![comma.clone()],
-    };
-    call(
-        &op.print(),
-        Wrap::new(open.clone(), Some(args), close.clone()),
-    )
+    let args = vec![operation.expr.desugar(), term(truncation)];
+    call(&operation.op.print(), args)
 }
 
 /// `$H` is `$HOROLOG`, and so on: an alias is its full name.
@@ -731,23 +564,11 @@ pub fn rows_between(
 /// `TRIM(LEADING FROM x)` and `TRIM(LEADING x)` are `TRIM(LEADING ' ' FROM x)`.
 pub fn trim_blank(
     spec: &full::TrimSpec,
-    sp: &Space,
-    from: &Option<(StringEqCI!("FROM"), Space)>,
+    _: &Space,
+    _: &Option<(StringEqCI!("FROM"), Space)>,
     expr: &full::Scalx,
 ) -> core::TrimArgs {
-    let (from_kw, after) = match from {
-        Some((from_kw, after)) => (*from_kw, after.clone()),
-        None => (Default::default(), Space::blank()),
-    };
-    core::TrimArgs::SpecScalxScalx(
-        spec.desugar(),
-        sp.clone(),
-        string(" "),
-        Space::blank(),
-        from_kw,
-        after,
-        expr.desugar(),
-    )
+    trim(spec.desugar(), string(" "), expr)
 }
 
 /// `TRIM(c FROM x)` is `TRIM(BOTH c FROM x)`, `TRIM(x)` `TRIM(BOTH ' ' FROM x)`.
@@ -755,22 +576,21 @@ pub fn trim_both(
     chars: &Option<(full::Scalx, Space, StringEqCI!("FROM"), Space)>,
     expr: &full::Scalx,
 ) -> core::TrimArgs {
-    let (chars, sp, from_kw, after) = match chars {
-        Some((chars, sp, from_kw, after)) => (chars.desugar(), sp.clone(), *from_kw, after.clone()),
-        None => (
-            string(" "),
-            Space::blank(),
-            Default::default(),
-            Space::blank(),
-        ),
-    };
+    let chars = chars
+        .as_ref()
+        .map_or_else(|| string(" "), |(chars, ..)| chars.desugar());
+    trim(core::TrimSpec::Both(Default::default()), chars, expr)
+}
+
+/// `SPEC chars FROM x`.
+fn trim(spec: core::TrimSpec, chars: core::Scalx, expr: &full::Scalx) -> core::TrimArgs {
     core::TrimArgs::SpecScalxScalx(
-        core::TrimSpec::Both(Default::default()),
+        spec,
         Space::blank(),
         chars,
-        sp,
-        from_kw,
-        after,
+        Space::blank(),
+        Default::default(),
+        Space::blank(),
         expr.desugar(),
     )
 }
@@ -838,7 +658,7 @@ pub fn cond(cond: &full::Cond) -> core::Cond {
     match negation(cond) {
         None => predicate,
         Some(not_kw) => core::Cond::Not {
-            not_kw,
+            not_kw: (not_kw, Space::blank()),
             condition: Box::new(Src::synthesized(core::Cond::Paren {
                 open: (Default::default(), Space::default()),
                 predicate: Box::new(core::Prdct(VecSep::one(core::And(VecSep::one(
@@ -850,10 +670,10 @@ pub fn cond(cond: &full::Cond) -> core::Cond {
     }
 }
 
-/// The `NOT` of a negated predicate with its blank: the keyword's own, or one made for `NOT[` and `NOT]`.
-fn negation(cond: &full::Cond) -> Option<(full::NotKw, Space)> {
+/// The `NOT` of a negated predicate: the keyword's own, or one made for `NOT[` and `NOT]`.
+fn negation(cond: &full::Cond) -> Option<full::NotKw> {
     use full::{Cond::*, QuantifiedOp};
-    let keyword = match cond {
+    match cond {
         IsNull { null_kw, .. } => null_kw.negation(),
         Between { between_kw, .. } => between_kw.negation(),
         Like { like_kw, .. } => like_kw.negation(),
@@ -869,10 +689,9 @@ fn negation(cond: &full::Cond) -> Option<(full::NotKw, Space)> {
         | Quantified {
             op: QuantifiedOp::Op { op, .. },
             ..
-        } if negated(op) => return Some((Default::default(), Space::blank())),
+        } if negated(op) => Some(Default::default()),
         _ => None,
-    };
-    keyword.map(|(not, sp)| (*not, sp.clone()))
+    }
 }
 
 /// `NOT[` or `NOT]`, which read as `[` and `]` under the `NOT` that `cond` adds.
@@ -937,76 +756,6 @@ fn predicate(cond: &full::Cond) -> core::Cond {
     predicate
 }
 
-/// `SELECT ALL` is `SELECT`: the blank after ALL joins the one before it.
-pub fn selex(s: &full::Selex) -> core::Selex {
-    let (mut kw, mut options) = (s.kw.desugar(), s.options.desugar());
-    if let Some((_, _, after)) = &s.all {
-        let before = options.last_mut().map_or(&mut kw.1, trailing);
-        *before = before.join(after);
-    }
-    core::Selex {
-        kw,
-        options,
-        selst: s.selst.desugar(),
-        from: s.from.desugar(),
-        where_clause: s.where_clause.desugar(),
-        group: s.group.desugar(),
-        having: s.having.desugar(),
-        order: s.order.desugar(),
-    }
-}
-
-fn trailing(option: &mut core::SelectOption) -> &mut Space {
-    use core::SelectOption::*;
-    match option {
-        NoFPlan((_, sp))
-        | NoLock((_, sp))
-        | Profile((_, sp))
-        | ProfileAll((_, sp))
-        | NoRuntime((_, sp))
-        | DoRuntime((_, sp))
-        | RowLimit(_, _, sp)
-        | RowOffset(_, _, sp) => sp,
-    }
-}
-
-/// `COUNT(ALL x)` is `COUNT(x)`, in every aggregate.
-pub fn agg(agg: &full::Agg) -> core::Agg {
-    match agg {
-        full::Agg::AggFuncArgs {
-            fun,
-            sp,
-            open,
-            all,
-            arg,
-            close,
-        } => {
-            let mut open = open.desugar();
-            if let Some((_, _, after)) = all {
-                open.1 = open.1.join(after);
-            }
-            core::Agg::AggFuncArgs {
-                fun: fun.desugar(),
-                sp: sp.desugar(),
-                open,
-                arg: arg.desugar(),
-                close: close.desugar(),
-            }
-        }
-        full::Agg::CountStar(count, sp, star) => {
-            core::Agg::CountStar(count.desugar(), sp.desugar(), star.desugar())
-        }
-    }
-}
-
-/// `ASC`, the order by default, goes.
-pub fn ordir(o: &full::Ordir) -> core::Ordir {
-    core::Ordir {
-        expr: o.expr.desugar(),
-        desc: o.desc.desugar(),
-    }
-}
-
 /// An omitted keyword stands as spelled, after a blank.
 pub fn spelled<K: Grammar + Default>(_: &()) -> core::Implied<K> {
     core::Implied::Spelled(Space::blank(), K::default())
@@ -1015,7 +764,7 @@ pub fn spelled<K: Grammar + Default>(_: &()) -> core::Implied<K> {
 /// `FROM a, b` is `FROM a CROSS JOIN b`, each join at its reference's range, in parentheses when it has joins.
 pub fn tables(t: &full::Tables) -> core::Tables {
     let core::Tref::Join(mut first) = t.first.desugar();
-    for ((before, _, after), tref) in &t.rest {
+    for (_, tref) in &t.rest {
         let (full::Tref::Join(jtab) | full::Tref::OJSyntax { table: jtab, .. }) = tref;
         let core::Tref::Join(mut table) = tref.desugar();
         let start = jtab.formit.range().start;
@@ -1045,8 +794,9 @@ pub fn tables(t: &full::Tables) -> core::Tables {
             ),
             table: Box::new(table),
         };
-        let sp = Space::blank().join(before).join(after);
-        first.joins.push((sp, Src::new(start..end, cross)));
+        first
+            .joins
+            .push((Space::blank(), Src::new(start..end, cross)));
     }
     core::Tables {
         first: core::Tref::Join(first),
@@ -1074,74 +824,30 @@ pub fn inner(join_kw: &StringEqCI!("JOIN")) -> core::JOp {
 
 /// `OFFSET m [ROWS] [FETCH … n …]` is `LIMIT n OFFSET m`, `LIMIT ALL OFFSET m` without the FETCH.
 pub fn offset_fetch(offset: &full::Offset, fetch: &Option<full::Fetch>) -> core::RowLimitingClause {
-    let mut before_offset = Space::blank().join(&space_before(&offset.rows));
-    let (after_limit, spec) = match fetch {
-        None => (
-            Space::blank(),
-            core::LimitSpec::All(Default::default(), Default::default()),
-        ),
-        Some(fetch) => {
-            let (before_count, after_count) = fetch_blanks(fetch);
-            before_offset = before_offset.join(&fetch.keyword.0).join(&after_count);
-            (before_count, core::LimitSpec::Val(fetch.valspec.desugar()))
-        }
+    let spec = match fetch {
+        None => core::LimitSpec::All(Default::default(), Default::default()),
+        Some(fetch) => core::LimitSpec::Val(fetch.valspec.desugar()),
     };
     core::RowLimitingClause::LimitOffset {
-        limit: Prefix::new(
-            (offset.kw.0.desugar(), Default::default(), after_limit),
-            spec,
-        ),
+        limit: limit(spec),
         offset: Some(core::Offset {
-            kw: (before_offset, Default::default(), offset.kw.2.desugar()),
+            kw: (Space::blank(), Default::default(), Space::blank()),
             count: offset.count.desugar(),
         }),
     }
 }
 
-/// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` is `LIMIT n`, the removed keywords' blanks between LIMIT and n.
+/// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` is `LIMIT n`.
 pub fn fetch_only(fetch: &full::Fetch) -> core::RowLimitingClause {
-    let (before_count, after_count) = fetch_blanks(fetch);
     core::RowLimitingClause::LimitOffset {
-        limit: Prefix::new(
-            (
-                fetch.keyword.0.desugar(),
-                Default::default(),
-                before_count.join(&after_count),
-            ),
-            core::LimitSpec::Val(fetch.valspec.desugar()),
-        ),
+        limit: limit(core::LimitSpec::Val(fetch.valspec.desugar())),
         offset: None,
     }
 }
 
-/// The blanks of a FETCH around its count: within `FETCH [FIRST|NEXT]` and within `[ROWS] [ONLY]`.
-fn fetch_blanks(fetch: &full::Fetch) -> (Space, Space) {
-    let direction = fetch
-        .direction
-        .as_ref()
-        .map_or_else(Space::default, |(_, sp)| sp.clone());
-    (
-        fetch.keyword.2.join(&direction),
-        space_before(&fetch.row_keyword).join(&space_before(&fetch.only)),
-    )
-}
-
-fn space_before<T>(option: &Option<(Space, T)>) -> Space {
-    option
-        .as_ref()
-        .map_or_else(Space::default, |(sp, _)| sp.clone())
-}
-
-/// `ROWS` after the offset goes: the blank before it joins the one before OFFSET.
-pub fn offset(o: &full::Offset) -> core::Offset {
-    core::Offset {
-        kw: (
-            o.kw.0.join(&space_before(&o.rows)),
-            o.kw.1,
-            o.kw.2.desugar(),
-        ),
-        count: o.count.desugar(),
-    }
+/// ` LIMIT spec`.
+fn limit(spec: core::LimitSpec) -> core::Limit {
+    Prefix::new((Space::blank(), Default::default(), Space::blank()), spec)
 }
 
 /// `LIMIT ALL` alone, which limits nothing, goes.
@@ -1182,38 +888,14 @@ pub fn unnested<P: Deref<Target = full::PConst>>(
 /// `INSERT ... SET a = x, b = y` is `INSERT ... (a, b) VALUES (x, y)`.
 pub fn set_as_values(
     _: &StringEqCI!("SET"),
-    assignments: &(Space, VecSep<Src<full::SQLSetAssignment>, ArgSep>),
+    (_, list): &(Space, VecSep<Src<full::SQLSetAssignment>, ArgSep>),
 ) -> core::InsertValues {
-    let (after_set, list) = assignments;
-    let mut open_sp = Space::default();
-    let mut exprs = VecSep {
-        items: Vec::new(),
-        seps: list.seps.desugar(),
-    };
-    for (i, assignment) in list.items.iter().enumerate() {
-        let eq = assignment.eq.0.join(&assignment.eq.2);
-        match i.checked_sub(1) {
-            None => open_sp = open_sp.join(&eq),
-            Some(before) => exprs.seps[before].2 = exprs.seps[before].2.join(&eq),
-        }
-        exprs.items.push(assignment.value.desugar());
-    }
-    let columns = VecSep {
-        items: list
-            .items
-            .iter()
-            .map(|assignment| assignment.column.desugar())
-            .collect(),
-        seps: vec![(Space::default(), Default::default(), Space::blank()); list.seps.len()],
-    };
+    let columns = list.items.iter().map(|a| a.column.desugar()).collect();
+    let values = list.items.iter().map(|a| a.value.desugar()).collect();
     core::InsertValues::ColumnList {
         columns: Some(Wrap::new(
-            (
-                Space::default(),
-                Default::default(),
-                Space::default().join(after_set),
-            ),
-            columns,
+            (Space::default(), Default::default(), Space::default()),
+            commas(columns),
             (Space::default(), Default::default()),
         )),
         values: (
@@ -1222,8 +904,8 @@ pub fn set_as_values(
                 values_kw: Default::default(),
                 sp: Space::blank(),
                 spec: core::ValSpec::Scalx {
-                    open: (Default::default(), open_sp),
-                    exprs,
+                    open: (Default::default(), Space::default()),
+                    exprs: commas(values),
                     close: (Space::default(), Default::default()),
                 },
             },
@@ -1245,10 +927,9 @@ pub fn asign(asign: &full::Asign) -> core::Asign {
             columns: Some(columns),
             values:
                 (
-                    before_values,
+                    _,
                     full::ValueSource::ValSpec {
-                        sp,
-                        spec: full::ValSpec::Scalx { open, exprs, close },
+                        spec: full::ValSpec::Scalx { exprs, .. },
                         ..
                     },
                 ),
@@ -1272,29 +953,9 @@ pub fn asign(asign: &full::Asign) -> core::Asign {
                     )
                 })
                 .collect();
-            let seps = exprs
-                .seps
-                .iter()
-                .zip(&columns.wrapped.seps)
-                .map(|((before, comma, after), (col_before, _, col_after))| {
-                    (before.join(col_before), *comma, after.join(col_after))
-                })
-                .collect();
-            let removed = [
-                &columns.prefix.0,
-                &columns.prefix.2,
-                &columns.suffix.0,
-                before_values,
-                sp,
-                &open.1,
-                &close.0,
-            ];
-            let sp = removed
-                .into_iter()
-                .fold(Space::blank(), |sp, removed| sp.join(removed));
             core::Asign::SetList {
                 set_kw: Default::default(),
-                assignments: (sp, VecSep { items, seps }),
+                assignments: (Space::blank(), commas(items)),
             }
         }
         full::Asign::ColumnList { columns, values } => core::Asign::ColumnList {
@@ -1304,22 +965,7 @@ pub fn asign(asign: &full::Asign) -> core::Asign {
     }
 }
 
-/// `%INTRANS` is `%INTRANSACTION`, `COMMIT WORK` is `COMMIT`.
-pub fn tp_option(option: &full::TPOption) -> core::TPOption {
-    use full::TPOption::*;
-    match option {
-        InTransaction(kw) => core::TPOption::InTransaction(*kw),
-        BegTrans(kw) => core::TPOption::BegTrans(*kw),
-        InTrans(_) => core::TPOption::InTransaction(Default::default()),
-        Commit { commit_kw, .. } => core::TPOption::Commit {
-            commit_kw: *commit_kw,
-        },
-    }
-}
-
-/// `ROLLBACK WORK` is `ROLLBACK`.
-pub fn rollback(rollback: &full::RollB) -> core::RollB {
-    core::RollB {
-        rollback_kw: rollback.rollback_kw,
-    }
+/// `%INTRANS` is `%INTRANSACTION`.
+pub fn intransaction<T>(_: &T) -> core::TPOption {
+    core::TPOption::InTransaction(Default::default())
 }

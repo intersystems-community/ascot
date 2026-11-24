@@ -39,7 +39,7 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "SELECT a FROM t WHERE a not /* c */ BETWEEN 1 AND 2",
-        "SELECT a FROM t WHERE not /* c */ (a BETWEEN 1 AND 2)",
+        "SELECT a FROM t WHERE not (a BETWEEN 1 AND 2)",
     ),
     (
         "SELECT a FROM t WHERE a NOT IN (1, 2)",
@@ -96,12 +96,12 @@ const RULES: &[(&str, &str)] = &[
     ("SELECT ALL a FROM t", "SELECT a FROM t"),
     (
         "SELECT %NOLOCK ALL /* c */ a FROM t",
-        "SELECT %NOLOCK /* c */ a FROM t",
+        "SELECT %NOLOCK a FROM t",
     ),
     ("SELECT ALLOWED FROM t", "SELECT ALLOWED FROM t"),
     (
         "SELECT COUNT(ALL a), COUNT(ALL /* c */ b), COUNT(ALLOWED) FROM t",
-        "SELECT COUNT(a), COUNT( /* c */ b), COUNT(ALLOWED) FROM t",
+        "SELECT COUNT(a), COUNT(b), COUNT(ALLOWED) FROM t",
     ),
     (
         "SELECT a FROM t ORDER BY a ASC, b DESC",
@@ -142,7 +142,7 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "SELECT a FROM t FETCH FIRST 10 /* c */ ROWS /* d */ ONLY",
-        "SELECT a FROM t LIMIT /* c */  /* d */ 10",
+        "SELECT a FROM t LIMIT 10",
     ),
     (
         "SELECT a FROM t OFFSET 5 ROWS",
@@ -155,7 +155,7 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "SELECT a FROM t LIMIT 5 OFFSET 3 /* c */ ROWS",
-        "SELECT a FROM t LIMIT 5 /* c */ OFFSET 3",
+        "SELECT a FROM t LIMIT 5 OFFSET 3",
     ),
     (
         "SELECT a FROM t WHERE a %INLIST :l SIZE ((10))",
@@ -171,7 +171,7 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "INSERT INTO t SET a = 1 /* c */, b = 2",
-        "INSERT INTO t (a, b) VALUES (1 /* c */, 2)",
+        "INSERT INTO t (a, b) VALUES (1, 2)",
     ),
     (
         "INSERT %NOLOCK t (a) VALUES (1)",
@@ -213,7 +213,7 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "SELECT {fn /* c */ NOW() /* d */} FROM t",
-        "SELECT NOW /* c */ ( /* d */) FROM t",
+        "SELECT NOW() FROM t",
     ),
     (
         "SELECT %SQLUPPER a, UPPER a, %EXACT (a), %TRUNCATE(a, 3), %SQLSTRING(a, (3)) FROM t",
@@ -221,7 +221,7 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "SELECT %SQLUPPER /* c */ a FROM t",
-        "SELECT %SQLUPPER /* c */ (a) FROM t",
+        "SELECT %SQLUPPER(a) FROM t",
     ),
     (
         "SELECT POSITION(a IN b), SUBSTRING(a FROM 1 FOR 2), SUBSTRING(a FROM 1) FROM t",
@@ -229,7 +229,7 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "SELECT POSITION(a /* c */ IN /* d */ b) FROM t",
-        "SELECT CHARINDEX(a /* c */ , /* d */ b) FROM t",
+        "SELECT CHARINDEX(a, b) FROM t",
     ),
     (
         "SELECT DATEADD(dd, 1, d), DATEDIFF((yyyy), d, e), DATEPART(sts, d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
