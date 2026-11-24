@@ -6,7 +6,12 @@
 
 use serde::Deserialize;
 
-use crate::{IrisContext, bindings::Style, diagnostic_filter::Filter, iris, style};
+use crate::{
+    IrisContext,
+    bindings::{InlayHintOptions, Style},
+    diagnostic_filter::Filter,
+    iris, style,
+};
 
 #[derive(Clone, Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct Settings {
@@ -35,6 +40,10 @@ pub struct Settings {
     /// of them separated by spaces. For example `["off:A5579,A4043"]`, `"off:hint,information"`,
     /// or `["off:all", "on:A7095,A6851"]`.
     pub diagnostics: Option<Diagnostics>,
+    /// How inlay hints are spelled: with `{"typeAnnotation": "colon"}`, the type hinted after a
+    /// `Set` target reads `tId: %Integer` rather than `tId As %Integer`, the default. Nothing is
+    /// reported.
+    pub inlay_hints: Option<InlayHintOptions>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -92,6 +101,7 @@ impl Settings {
             } else {
                 self.diagnostics
             },
+            inlay_hints: over.inlay_hints.or(self.inlay_hints),
         }
     }
 
@@ -228,5 +238,28 @@ mod tests {
         let object = parse(r#"{"style": {"command": {"form": "long"}}}"#);
         assert!(object.style(false).unwrap().is_some());
         assert!(parse(r#"{"style": {"commnad": {}}}"#).style(false).is_err());
+    }
+
+    #[test]
+    fn inlay_hints_are_the_record_as_the_binding_spells_it() {
+        let colon = parse(r#"{"inlay_hints": {"typeAnnotation": "colon"}}"#);
+        assert_eq!(
+            colon.inlay_hints,
+            Some(InlayHintOptions {
+                type_annotation: Some(crate::bindings::TypeAnnotation::Colon)
+            })
+        );
+        assert_eq!(
+            parse("{}").overlay(colon.clone()).inlay_hints,
+            colon.inlay_hints
+        );
+        assert_eq!(
+            colon.clone().overlay(parse("{}")).inlay_hints,
+            colon.inlay_hints
+        );
+        let misspelled = r#"{"inlay_hints": {"typeAnotation": "colon"}}"#;
+        assert!(serde_json::from_str::<Settings>(misspelled).is_err());
+        let unknown = r#"{"inlay_hints": {"typeAnnotation": "semicolon"}}"#;
+        assert!(serde_json::from_str::<Settings>(unknown).is_err());
     }
 }

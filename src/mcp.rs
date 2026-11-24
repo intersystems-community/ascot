@@ -4,7 +4,7 @@
 //! Unlike the LSP server it holds many `Workspace`s, keyed by an id the agent chooses:
 //! `create_workspace` (optionally with IRIS connection details, see `iris.rs`) and
 //! `delete_workspace`; `insert`/`remove` documents; then `check`, `inlay_hint`, `hover`,
-//! `definition` and `references`. Each tool is a method of [`Server`], whose doc
+//! `definition`, `references` and `format`. Each tool is a method of [`Server`], whose doc
 //! comment is also the description agents get from `tools/list`; parameter and result schemas
 //! derive from these types and the `bindings.rs` ones via `schemars`, field docs included. Built
 //! on the `rmcp` crate; native builds only.
@@ -22,10 +22,12 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
+use tygr::OLC;
 
 use crate::{
     Workspace,
-    bindings::{GuestWorkspace, InlayHint, Location, LocationLink, Position, Range},
+    bindings::{GuestWorkspace, InlayHint, Location, LocationLink, Position, Range, TextEdit},
+    format,
     settings::Settings,
 };
 
@@ -98,6 +100,16 @@ pub struct PositionRequest {
     pub position: Position,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FormatRequest {
+    /// The id given to `create_workspace`.
+    pub workspace: String,
+    /// A document's uri, as given to `insert`.
+    pub uri: String,
+    /// Indent a line the formatter adds by this many spaces instead of a tab.
+    pub indent: Option<u8>,
+}
+
 // MCP requires `outputSchema` to describe an object at the top level, so results that are
 // naturally an array or an enum get wrapped in a single-field struct rather than returned bare.
 
@@ -126,6 +138,14 @@ pub struct DefinitionResult {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct ReferencesResult {
     pub locations: Vec<Location>,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct FormatResult {
+    /// The document's text with `edits` applied.
+    pub text: String,
+    /// The edits that bring the text inserted to the style, as LSP text edits.
+    pub edits: Vec<TextEdit>,
 }
 
 #[derive(Clone)]
@@ -221,6 +241,7 @@ impl Server {
             Arc::new(Mutex::new({
                 let native = Workspace::native(iris, style);
                 native.set_diagnostic_filter(filter);
+                native.set_inlay_hints(settings.inlay_hints.unwrap_or_default());
                 native
             })),
         );
@@ -381,6 +402,50 @@ impl Server {
             locations: workspace.references(uri, position, true),
         }))
     }
+
+    /// Format a previously-inserted document to the workspace's style (the `style` given to
+    /// `create_workspace`), as `ascot format` does: command keywords take the style's spelling, and
+    /// a block's braces, its first command and an `Else`, `ElseIf` or `Catch` after it go on a line
+    /// of their own or not, inside procedure blocks and method bodies only. Returns the formatted
+    /// text, to write to the file and `insert` again, and the edits that produce it. Fails for a
+    /// workspace without a style, for a document that doesn't parse — call check() to see why —
+    /// and for a routine IRIS generated, which is compiler output.
+    #[tool]
+    pub async fn format(
+        &self,
+        Parameters(FormatRequest {
+            workspace,
+            uri,
+            indent,
+        }): Parameters<FormatRequest>,
+    ) -> Result<Json<FormatResult>, String> {
+        let workspace = self.get_workspace(&workspace).await?;
+        let workspace = workspace.lock().await;
+        let workspace = workspace.borrow();
+        let unparsed = || format!("{uri}: does not parse as written, so nothing is formatted");
+        let text = workspace.doc_text(&uri).ok_or_else(|| {
+            if workspace.doc_cache.contains_key(&uri) {
+                unparsed()
+            } else {
+                format!("no such document: {uri:?}")
+            }
+        })?;
+        if workspace.generated(&uri) {
+            return Err(format!("{uri}: a routine IRIS generated is not formatted"));
+        }
+        let style = workspace
+            .style
+            .as_ref()
+            .ok_or("the workspace has no style: give create_workspace one to format to")?;
+        let indent = indent.map_or("\t".to_string(), |n| " ".repeat(n as usize));
+        let edits = format::edits(&text, &uri, style, &indent).ok_or_else(unparsed)?;
+        let formatted = format::apply(&text, &edits);
+        let olc = OLC::new(&text);
+        Ok(Json(FormatResult {
+            text: formatted,
+            edits: edits.into_iter().map(|edit| edit.text_edit(&olc)).collect(),
+        }))
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -397,7 +462,8 @@ impl ServerHandler for Server {
              type errors depend on the whole workspace), then call check(uris) after every edit \
              to catch syntax errors, undefined variables, class-context violations, and type \
              mismatches before treating the code as correct. Use hover instead of grepping to \
-             look up a class member's definition. Call delete_workspace when done.",
+             look up a class member's definition. With a `style`, format(uri) returns a document \
+             rewritten to it. Call delete_workspace when done.",
         );
         if self.shared_fs {
             instructions.push_str(

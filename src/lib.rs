@@ -52,6 +52,7 @@ mod details;
 pub mod diagnostic_filter;
 #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
 mod download;
+pub mod format;
 #[cfg(not(target_arch = "wasm32"))]
 mod iris;
 #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
@@ -235,6 +236,7 @@ pub struct WorkspaceStruct {
     rtn_index: RefCell<HashMap<String, String>>,
     pub(crate) iris: Option<IrisHandle>,
     pub(crate) style: Option<style::Styles>,
+    pub(crate) inlay_hints: bindings::InlayHintOptions,
     diagnostic_filter: diagnostic_filter::Filter,
     // %occErrors, resolved on first use: the error names a compile-time macro such as `$$$ERROR`
     // accepts in its arguments without any `Include`. Dropped whenever an include file changes.
@@ -322,20 +324,23 @@ impl IrisContext for bindings::IrisContext {
     }
 }
 
+/// Whether `text`, the document at `uri`, is a routine IRIS generated (`[Type=INT,Generated]`, a
+/// class's compiled code): compiler output nobody edits, analyzed for navigation, neither reported
+/// on nor formatted.
+pub fn generated(uri: &str, text: &str) -> bool {
+    DocKind::from_uri(uri) == Some(DocKind::Rtn)
+        && cos::RoutineHeader::parse_prefix(text).is_ok_and(|(header, _)| {
+            (header.type_spec.as_ref()).is_some_and(|spec| spec.generated())
+        })
+}
+
 impl WorkspaceStruct {
-    // A routine IRIS generated (`[Type=INT,Generated]`, a class's compiled code) is compiler
-    // output nobody edits: analyzed for navigation, reported on not at all.
-    fn generated(&self, uri: &str) -> bool {
-        DocKind::from_uri(uri) == Some(DocKind::Rtn)
-            && (self
-                .doc_cache
-                .get(uri)
-                .and_then(|entry| entry.as_ref().ok()))
-            .is_some_and(|cell| {
-                cos::RoutineHeader::parse_prefix(&cell.borrow().text).is_ok_and(|(header, _)| {
-                    (header.type_spec.as_ref()).is_some_and(|spec| spec.generated())
-                })
-            })
+    pub(crate) fn generated(&self, uri: &str) -> bool {
+        (self
+            .doc_cache
+            .get(uri)
+            .and_then(|entry| entry.as_ref().ok()))
+        .is_some_and(|cell| generated(uri, &cell.borrow().text))
     }
 
     // Doubles as both open and edit; kind is inferred from `uri`'s extension. Returns the uris
@@ -820,6 +825,10 @@ impl WorkspaceStruct {
                     diagnostics.push(diagnostic);
                 }
                 diagnostics.extend(env.soft_diagnostics());
+                if let Some(style) = &self.style {
+                    let findings = format::findings_cls(&cls, &text, &olc, style, None);
+                    diagnostics.extend(findings.into_iter().map(|f| f.diagnostic(&olc)));
+                }
                 let hints = doc_env.inlay_hints.into_inner();
                 let hover_types = doc_env.hover_types.into_inner();
                 let references = env.references();
@@ -839,6 +848,25 @@ impl WorkspaceStruct {
                 diagnostics.extend(env.soft_diagnostics());
                 let mut diagnostics = rtn.map.relocate_diagnostics(diagnostics, uri);
                 diagnostics.extend(rtn.map.unresolved.iter().cloned());
+                // The style reads the routine as written, its macros unexpanded; when those hide
+                // the syntax, the expanded routine, reported in the source's terms.
+                if let Some(style) = &self.style {
+                    let text = self.doc_text(uri).unwrap_or_default();
+                    let map = &rtn.map;
+                    diagnostics.extend(match cos::Routine::parse(&text) {
+                        Ok(raw) => {
+                            let olc = OLC::new(&text);
+                            let found = format::findings_rtn(&raw, &text, style, None);
+                            found.into_iter().map(|f| f.diagnostic(&olc)).collect()
+                        }
+                        Err(_) => {
+                            let expanded = map.expanded_text();
+                            let found = format::findings_rtn(&rtn.routine, expanded, style, None);
+                            let found = found.into_iter().map(|f| f.diagnostic(&map.expanded_olc));
+                            map.relocate_diagnostics(found.collect(), uri)
+                        }
+                    });
+                }
                 let hints = doc_env
                     .inlay_hints
                     .into_inner()
@@ -1020,6 +1048,7 @@ fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> Wor
         rtn_index: RefCell::new(HashMap::new()),
         iris,
         style: style.as_ref().map(style::Styles::new),
+        inlay_hints: bindings::InlayHintOptions::default(),
         diagnostic_filter: diagnostic_filter::Filter::default(),
         error_names: RefCell::new(None),
         iris_includes: RefCell::new(HashMap::new()),
@@ -1112,6 +1141,13 @@ impl bindings::GuestWorkspace for Workspace {
     }
 
     #[allow(async_fn_in_trait)]
+    fn set_inlay_hints(&self, options: bindings::InlayHintOptions) -> Vec<String> {
+        let mut this = self.borrow_mut();
+        this.inlay_hints = options;
+        this.forget(false)
+    }
+
+    #[allow(async_fn_in_trait)]
     fn set_diagnostics(&self, diagnostics: Vec<String>) -> Result<Vec<String>, String> {
         self.set_diagnostic_filter(diagnostics.join(" ").parse()?);
         Ok(self.uris())
@@ -1138,6 +1174,63 @@ impl bindings::GuestWorkspace for Workspace {
             return vec![];
         }
         this.ensure_checked(&uri).hints
+    }
+
+    #[allow(async_fn_in_trait)]
+    fn format(
+        &self,
+        uri: String,
+        options: bindings::FormattingOptions,
+    ) -> Option<Vec<bindings::TextEdit>> {
+        let this = self.borrow();
+        let text = this.doc_text(&uri)?;
+        if this.generated(&uri) {
+            return Some(vec![]);
+        }
+        let Some(style) = &this.style else {
+            return Some(vec![]);
+        };
+        let spaces = " ".repeat(options.tab_size as usize);
+        let indent = if options.insert_spaces {
+            spaces.as_str()
+        } else {
+            "\t"
+        };
+        let edits = format::edits(&text, &uri, style, indent)?;
+        let olc = OLC::new(&text);
+        Some(edits.into_iter().map(|edit| edit.text_edit(&olc)).collect())
+    }
+
+    #[allow(async_fn_in_trait)]
+    fn code_actions(&self, uri: String, range: bindings::Range) -> Vec<bindings::CodeAction> {
+        let this = self.borrow();
+        if this.generated(&uri) {
+            return vec![];
+        }
+        let Some((text, style)) = this.doc_text(&uri).zip(this.style.as_ref()) else {
+            return vec![];
+        };
+        // No formatting options come with a code action request: the document's own indentation.
+        let fixes = format::fixes(&text, &uri, style, format::indent_of(&text)).unwrap_or_default();
+        let olc = OLC::new(&text);
+        let (start, end) = (olc.offset(range.start), olc.offset(range.end));
+        let filter = &this.diagnostic_filter;
+        fixes
+            .into_iter()
+            .filter(|fix| fix.range.start <= end && start <= fix.range.end)
+            .filter_map(|mut fix| {
+                let edit = fix.edit.take()?.text_edit(&olc);
+                let diagnostic = filter.apply(fix.diagnostic(&olc))?;
+                Some(bindings::CodeAction {
+                    title: diagnostic.message.clone(),
+                    kind: Some("quickfix".to_string()),
+                    diagnostics: vec![diagnostic],
+                    edit: Some(bindings::WorkspaceEdit {
+                        changes: vec![(uri.clone(), vec![edit])],
+                    }),
+                })
+            })
+            .collect()
     }
 
     // Where the reference at `position` is declared, if any — one of the go-to-definition
@@ -1913,6 +2006,9 @@ mod tests {
     #[test]
     fn a_generated_routine_is_navigation_only() {
         let workspace = Workspace::new();
+        workspace.set_style(Some(
+            style::parse(r#"{"command": {"case": "lower"}}"#).unwrap(),
+        ));
         let generated = "Pkg.Cls.1.int".to_string();
         let text = "ROUTINE Pkg.Cls.1 [Type=INT,Generated]\n ;Pkg.Cls.1\nzFoo(a) methodimpl {\n Set unused = a\n Quit never }\nzBar() methodimpl {\n Do zFoo(1) }\n";
         workspace.open(generated.clone(), text.to_string());
@@ -1922,6 +2018,13 @@ mod tests {
                 .inlay_hint(generated.clone(), bindings::Range::default())
                 .is_empty()
         );
+        let options = || bindings::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: true,
+        };
+        let set = || bindings::Range::point((3, 1).into());
+        assert_eq!(workspace.format(generated.clone(), options()), Some(vec![]));
+        assert!(workspace.code_actions(generated.clone(), set()).is_empty());
         let call = bindings::Position {
             line: 6,
             character: 4,
@@ -1933,7 +2036,14 @@ mod tests {
             .replace(",Generated", "")
             .replace("methodimpl", "public");
         workspace.open(edited.clone(), text);
-        assert!(!workspace.diagnostics(edited).is_empty());
+        assert!(!workspace.diagnostics(edited.clone()).is_empty());
+        assert!(
+            !workspace
+                .format(edited.clone(), options())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(workspace.code_actions(edited, set()).len(), 1);
     }
 
     #[test]
@@ -1967,6 +2077,36 @@ mod tests {
         // Re-checking after an unrelated no-op read shouldn't change the result.
         assert_eq!(diagnostics_of(&uri), diagnostics);
         assert_eq!(workspace.inlay_hint(uri, bindings::Range::default()), hints);
+    }
+
+    #[test]
+    fn type_hint_spells_the_type_as_the_inlay_hint_options_say() {
+        let workspace = Workspace::new();
+        let uri = "Spelling.cls".to_string();
+        workspace.open(
+            uri.clone(),
+            "Class Test.Spelling {\nClassMethod Foo() As %Integer {\n set x = ..Bar()\n quit x\n}\nClassMethod Bar() As %Integer {\n quit 1\n}\n}\n".to_string(),
+        );
+        let type_hint = || {
+            workspace
+                .inlay_hint(uri.clone(), bindings::Range::default())
+                .into_iter()
+                .find(|h| h.label.contains("Integer"))
+                .map(|h| (h.label, h.padding_left, h.padding_right))
+        };
+        let spelled = |type_annotation| bindings::InlayHintOptions {
+            type_annotation: Some(type_annotation),
+        };
+        assert_eq!(type_hint(), Some(("As %Integer".to_string(), true, true)));
+        assert_eq!(
+            workspace.set_inlay_hints(spelled(bindings::TypeAnnotation::Colon)),
+            std::slice::from_ref(&uri)
+        );
+        assert_eq!(type_hint(), Some((": %Integer".to_string(), false, true)));
+        workspace.set_inlay_hints(spelled(bindings::TypeAnnotation::As));
+        assert_eq!(type_hint(), Some(("As %Integer".to_string(), true, true)));
+        workspace.set_inlay_hints(bindings::InlayHintOptions::default());
+        assert_eq!(type_hint(), Some(("As %Integer".to_string(), true, true)));
     }
 
     #[test]
@@ -3188,6 +3328,105 @@ mod tests {
                 "6:7 Command keyword `do` should be written `Do`",
                 "7:1 Command keyword `h` should be written `Halt`",
             ]
+        );
+    }
+
+    #[test]
+    fn a_style_finding_in_a_method_body_is_a_quick_fix() {
+        let style = style::parse(r#"{"command": {"case": "pascal"}}"#).unwrap();
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
+        let uri = "Fix.cls".to_string();
+        let text = "Class Test.Fix {\nClassMethod Foo() {\n set x = 1\n}\n}\n";
+        workspace.open(uri.clone(), text.to_string());
+        let at = |line, character| bindings::Range::point((line, character).into());
+        let actions = workspace.code_actions(uri.clone(), at(2, 2));
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        let action = &actions[0];
+        assert_eq!(action.kind.as_deref(), Some("quickfix"));
+        assert_eq!(action.diagnostics.len(), 1);
+        assert_eq!(action.diagnostics[0].code, "S2839");
+        assert_eq!(action.title, action.diagnostics[0].message);
+        let changes = &action.edit.as_ref().unwrap().changes;
+        assert_eq!(changes.len(), 1);
+        let (edited, edits) = &changes[0];
+        assert_eq!((edited.as_str(), edits.len()), (uri.as_str(), 1));
+        let olc = OLC::new(text);
+        let (start, end) = (
+            olc.offset(edits[0].range.start),
+            olc.offset(edits[0].range.end),
+        );
+        assert_eq!(
+            (&text[start..end], edits[0].new_text.as_str()),
+            ("set", "Set")
+        );
+        let options = bindings::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: true,
+        };
+        assert_eq!(workspace.format(uri.clone(), options).as_ref(), Some(edits));
+        assert!(workspace.code_actions(uri, at(1, 0)).is_empty());
+    }
+
+    #[test]
+    fn a_quick_fix_indents_a_line_it_adds_as_the_document_does() {
+        let style = style::parse(r#"{"openBrace": {"newlineAfter": true}}"#).unwrap();
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
+        let uri = "Fix.cls".to_string();
+        let text = "Class Test.Fix {\nClassMethod Foo(x)\n{\n    If x { Set y = 1 }\n}\n}\n";
+        workspace.open(uri.clone(), text.to_string());
+        let actions = workspace.code_actions(uri.clone(), bindings::Range::point((3, 11).into()));
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        assert_eq!(actions[0].diagnostics[0].code, "S4933");
+        let edits = &actions[0].edit.as_ref().unwrap().changes[0].1;
+        assert_eq!(edits[0].new_text, "\n        ");
+        let options = bindings::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: true,
+        };
+        assert_eq!(workspace.format(uri, options).as_ref(), Some(edits));
+    }
+
+    #[test]
+    fn a_style_finding_outside_a_procedure_block_has_no_quick_fix() {
+        let style = style::parse(r#"{"command": {"case": "pascal"}}"#).unwrap();
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
+        let uri = "Plain.mac".to_string();
+        workspace.open(
+            uri.clone(),
+            "ROUTINE Plain\nf\n set x = 1\n Quit\n".to_string(),
+        );
+        let diagnostics = workspace.diagnostics(uri.clone());
+        let found = diagnostics.iter().find(|d| d.code == "S2839");
+        let found = found.unwrap_or_else(|| panic!("{diagnostics:?}"));
+        assert!(workspace.code_actions(uri, found.range).is_empty());
+    }
+
+    #[test]
+    fn a_brace_never_joins_a_line_ending_in_a_macro_call() {
+        let style = style::parse(r#"{"closeBrace": {"newlineBefore": false}}"#).unwrap();
+        let workspace = Workspace::new();
+        workspace.set_style(Some(style));
+        let uri = "Macro.cls".to_string();
+        let text = "Class Test.Macro {\nClassMethod Foo(x)\n{\n If x {\n  Set y = 1\n }\n If x {\n  $$$Macro(1)\n }\n If x {\n  Set y = $$$Macro(1)\n }\n}\n}\n";
+        workspace.open(uri.clone(), text.to_string());
+        let diagnostics = workspace.diagnostics(uri.clone());
+        let braces: Vec<_> = (diagnostics.iter())
+            .filter(|d| d.code == "S3627")
+            .map(|d| d.range.start.line)
+            .collect();
+        assert_eq!(braces, [5, 8, 11], "{diagnostics:?}");
+        let options = bindings::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: true,
+        };
+        let edits = workspace.format(uri, options).unwrap();
+        assert_eq!(edits.len(), 1, "{edits:?}");
+        assert_eq!(
+            (span(edits[0].range), edits[0].new_text.as_str()),
+            (((4, 11), (5, 1)), " ")
         );
     }
 

@@ -110,6 +110,7 @@ as in the Language Server Protocol.
 | `close(uri)`                                    | uris whose analysis is now stale                                                            |
 | `setEnv(iris?)`                                 | every uri: new sources stale all analysis; rejects for a declaration file that doesn't read |
 | `setStyle(style?)`                              | every uri: a new style stales every check                                                   |
+| `setInlayHints(options)`                        | every uri: a new spelling of the hints stales every check                                   |
 | `setDiagnostics(filter)`                        | every uri: a new filter may change every report                                             |
 | `diagnostics(uri)`                              | `Diagnostic[]`                                                                              |
 | `inlayHint(uri, range)`                         | `InlayHint[]`                                                                               |
@@ -118,6 +119,8 @@ as in the Language Server Protocol.
 | `hover(uri, position)`                          | markdown `string \| undefined`                                                              |
 | `documentSymbol(uri)`                           | the class or routine and its members or labels                                              |
 | `workspaceSymbol(query)`                        | classes and members across the workspace by prefix                                          |
+| `format(uri, options)`                          | `TextEdit[] \| undefined`                                                                   |
+| `codeActions(uri, range)`                       | `CodeAction[]`: a quick fix per style finding in the range the formatter would fix          |
 | `queryCls(query)`                               | `[uri, ClassInfo][]` for classes by prefix                                                  |
 | `queryMem(cls, query)`                          | `[uri, MemberInfo][]` for a class's members by prefix                                       |
 

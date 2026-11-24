@@ -26,6 +26,31 @@ interface common {
         target-selection-range: range,
     }
 
+    // LSP's TextEdit.
+    record text-edit {
+        range: range,
+        new-text: string,
+    }
+
+    // LSP's FormattingOptions.
+    record formatting-options {
+        tab-size: u32,
+        insert-spaces: bool,
+    }
+
+    // LSP's WorkspaceEdit, its `changes` map as (uri, edits) pairs.
+    record workspace-edit {
+        changes: list<tuple<string, list<text-edit>>>,
+    }
+
+    // LSP's CodeAction.
+    record code-action {
+        title: string,
+        kind: option<string>,
+        diagnostics: list<diagnostic>,
+        edit: option<workspace-edit>,
+    }
+
     record diagnostic-related-information {
         location: location,
         message: string,
@@ -279,6 +304,18 @@ interface common {
         // lines must carry a description: `///` lines right above the method, comment lines right
         // above the label. `0` means every one. Private methods are exempt.
         min-body-lines: u32,
+    }
+
+    // How a hint spells the type after a `Set` target of unclear type: `As %Integer`, as a
+    // declaration does, or `: %Integer`.
+    enum type-annotation {
+        %as,
+        colon,
+    }
+
+    // How inlay hints are spelled; nothing is reported.
+    record inlay-hint-options {
+        type-annotation: option<type-annotation>,
     }
 
     // A field left out isn't checked. `command` applies to every command, and `command-<name>`
@@ -653,7 +690,8 @@ interface exported {
     use common.{
         member-info, class-info, position,
         diagnostic, inlay-hint, range, location, location-link,
-        document-symbol, workspace-symbol, style,
+        document-symbol, workspace-symbol, style, inlay-hint-options,
+        text-edit, formatting-options, workspace-edit, code-action,
     };
     use imported.{env};
 
@@ -670,6 +708,9 @@ interface exported {
         set-env: func(env: list<env>) -> result<list<string>, string>;
         // Replaces the keyword style; returns every uri, since every check applied the old one.
         set-style: func(style: option<style>) -> list<string>;
+        // Replaces how inlay hints are spelled; returns every uri, since every check keeps its
+        // hints.
+        set-inlay-hints: func(options: inlay-hint-options) -> list<string>;
         // Replaces which codes `diagnostics` reports, and at what severity: `VERB:TARGETS` values
         // applied in order, as `ascot analyze -d` takes them; returns every uri, since every
         // report may change. An invalid value is the error, and the filter stays as it was.
@@ -683,6 +724,15 @@ interface exported {
         query-mem: func(cls: string, query: string) -> list<tuple<string, member-info>>;
         document-symbol: func(uri: string) -> option<document-symbol>;
         workspace-symbol: func(query: string) -> list<workspace-symbol>;
+        // The edits that bring `uri`'s procedure blocks and method bodies to the style, as `ascot
+        // format` writes them. None when `uri` is not open or doesn't parse; empty with no style or
+        // for a routine IRIS generated.
+        format: func(uri: string, options: formatting-options) -> option<list<text-edit>>;
+        // A quick fix for each style finding in `range` that `format` would fix (an empty range
+        // picks the finding at its position): the finding's diagnostic and its one edit, a line it
+        // adds indented as the document's lines are. Empty when `uri` is not open, doesn't parse,
+        // has no style or is a routine IRIS generated.
+        code-actions: func(uri: string, range: range) -> list<code-action>;
     }
 }
 

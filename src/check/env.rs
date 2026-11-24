@@ -2233,6 +2233,10 @@ impl<'a> CodeEnv<'a> {
         self.base.style()
     }
 
+    pub(crate) fn inlay_hints(&self) -> &bindings::InlayHintOptions {
+        &self.base.base.workspace.inlay_hints
+    }
+
     pub(crate) fn soft_diagnostic(&self, err: TypeError) {
         self.base.base.add_soft_diagnostic(err.into())
     }

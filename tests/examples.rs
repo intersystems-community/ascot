@@ -91,7 +91,7 @@ fn split_marker(line: &str) -> (String, Vec<String>) {
 }
 
 fn document_uri(text: &[String]) -> Option<String> {
-    let header = text.iter().find(|l| !l.trim().is_empty())?;
+    let header = (text.iter()).find(|l| l.starts_with("Class ") || l.starts_with("ROUTINE "))?;
     let mut words = header.split_whitespace();
     let (kind, name) = (words.next()?, words.next()?);
     let extension = match kind {
@@ -231,11 +231,20 @@ fn the_reference_has_a_page_per_kind() {
         .chain(["index.md".to_string()])
         .collect();
     assert_eq!(pages, wanted);
-    // GitHub Pages runs the pages through Liquid, which reads these as template syntax.
+    // GitHub Pages runs the pages through Liquid, which reads these as template syntax, and
+    // Markdown drops a `<SELECT>` outside a code span as inline HTML.
     for (name, text) in ascot::reference::pages() {
         assert!(
             !text.contains("{{") && !text.contains("{%"),
             "{name} has Liquid syntax"
         );
+        let prose: String = text.split("```").step_by(2).collect();
+        assert_eq!(
+            prose.matches('`').count() % 2,
+            0,
+            "{name} has an unmatched backtick"
+        );
+        let raw = prose.split('`').step_by(2).find(|out| out.contains('<'));
+        assert_eq!(raw, None, "{name} has a `<` outside a code span");
     }
 }
