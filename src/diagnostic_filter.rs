@@ -1,6 +1,8 @@
 //! `--diagnostics` and `create_workspace`'s `diagnostics`: which codes are reported, and at what
-//! severity.
+//! severity; and the `ascot: …` comments that say the same for single lines.
 
+use std::collections::HashMap;
+use std::mem;
 use std::str::FromStr;
 
 use tygr::{Grammar, Parse, Print, StringEq, StringOf1, Suffix, char_class};
@@ -69,11 +71,13 @@ pub fn bnf() -> String {
 }
 
 impl Filter {
-    /// `diagnostic` arrives at its code's own severity.
-    pub fn apply(&self, mut diagnostic: Diagnostic) -> Option<Diagnostic> {
+    /// `diagnostic` arrives at its code's own severity; what an `ascot:` comment says for its line
+    /// comes after this filter's values.
+    pub fn apply(&self, lines: &LineFilters, mut diagnostic: Diagnostic) -> Option<Diagnostic> {
         let own = diagnostic.severity;
+        let line = lines.0.get(&diagnostic.range.start.line).into_iter();
         let mut on = true;
-        for batch in &self.0 {
+        for batch in self.0.iter().chain(line.flat_map(|filter| &filter.0)) {
             if !batch.names(&diagnostic) {
                 continue;
             }
@@ -85,6 +89,57 @@ impl Filter {
         }
         on.then_some(diagnostic)
     }
+}
+
+/// The filters `ascot: VERB:TARGETS …` comments apply to single lines, by line: a comment beside
+/// code to its own line, one alone on its line to the next line of code.
+pub struct LineFilters(HashMap<u32, Filter>);
+
+impl LineFilters {
+    pub fn new(text: &str) -> Self {
+        let mut lines = HashMap::new();
+        let mut pending = Filter::default();
+        for (line, text) in text.lines().enumerate() {
+            let (code, comment, after) = split_comment(text);
+            if let Some(values) = comment.trim_start().strip_prefix("ascot:") {
+                let own: Filter = values.parse().unwrap_or_default();
+                pending.0.extend(own.0);
+            }
+            if code.trim().is_empty() && after.trim().is_empty() {
+                continue;
+            }
+            let filter = mem::take(&mut pending);
+            if !filter.0.is_empty() {
+                lines.insert(line as u32, filter);
+            }
+        }
+        Self(lines)
+    }
+}
+
+/// `line` as the code before its first comment, the comment's text, and what follows a `/* */`.
+fn split_comment(line: &str) -> (&str, &str, &str) {
+    let mut quoted = false;
+    for (at, c) in line.char_indices() {
+        if c == '"' {
+            quoted = !quoted;
+        }
+        if quoted {
+            continue;
+        }
+        let rest = &line[at..];
+        if let Some(comment) = (rest.strip_prefix(';'))
+            .or_else(|| rest.strip_prefix("//"))
+            .or_else(|| rest.strip_prefix("#;"))
+        {
+            return (&line[..at], comment, "");
+        }
+        if let Some(comment) = rest.strip_prefix("/*") {
+            let (comment, after) = comment.split_once("*/").unwrap_or((comment, ""));
+            return (&line[..at], comment, after);
+        }
+    }
+    (line, "", "")
 }
 
 impl From<&Severity> for DiagnosticSeverity {

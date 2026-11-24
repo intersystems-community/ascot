@@ -1185,10 +1185,11 @@ impl bindings::GuestWorkspace for Workspace {
             return vec![];
         }
         let filter = &this.diagnostic_filter;
+        let lines = diagnostic_filter::LineFilters::new(&this.doc_text(&uri).unwrap_or_default());
         this.ensure_checked(&uri)
             .diagnostics
             .into_iter()
-            .filter_map(|diagnostic| filter.apply(diagnostic))
+            .filter_map(|diagnostic| filter.apply(&lines, diagnostic))
             .collect()
     }
 
@@ -1240,12 +1241,13 @@ impl bindings::GuestWorkspace for Workspace {
         let olc = OLC::new(&text);
         let (start, end) = (olc.offset(range.start), olc.offset(range.end));
         let filter = &this.diagnostic_filter;
+        let lines = diagnostic_filter::LineFilters::new(&text);
         fixes
             .into_iter()
             .filter(|fix| fix.range.start <= end && start <= fix.range.end)
             .filter_map(|mut fix| {
                 let edit = fix.edit.take()?.text_edit(&olc);
-                let diagnostic = filter.apply(fix.diagnostic(&olc))?;
+                let diagnostic = filter.apply(&lines, fix.diagnostic(&olc))?;
                 Some(bindings::CodeAction {
                     title: diagnostic.message.clone(),
                     kind: Some("quickfix".to_string()),
