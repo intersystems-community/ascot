@@ -626,7 +626,7 @@ pub mod leveled {
         Weekday(Either<StringEqCI!("WEEKDAY"), Either<StringEqCI!("DW"), StringEqCI!("W")>>),
         DayOfYear(Either<StringEqCI!("DAYOFYEAR"), Either<StringEqCI!("DY"), StringEqCI!("Y")>>),
         Day(Either<StringEqCI!("DAY"), Either<StringEqCI!("DD"), StringEqCI!("D")>>),
-        Hour(Either<StringEqCI!("HOUR"), Either<StringEqCI!("HH"), StringEqCI!("H")>>),
+        Hour(Either<StringEqCI!("HOUR"), StringEqCI!("HH")>),
         Minute(Either<StringEqCI!("MINUTE"), Either<StringEqCI!("MI"), StringEqCI!("N")>>),
         Second(Either<StringEqCI!("SECOND"), Either<StringEqCI!("SS"), StringEqCI!("S")>>),
         Millisecond(Either<StringEqCI!("MILLISECOND"), StringEqCI!("MS")>),
