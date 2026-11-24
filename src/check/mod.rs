@@ -155,7 +155,10 @@ use crate::{
     SourceMap,
     bindings::{self, Diagnostic, DiagnosticRelatedInformation, InlayHint, Location, RefMode},
     cos::{self, *},
-    details::{self, MemberDetails, MemberKindSpecificDetails, MemberNs, MethodDetails, WithRange},
+    details::{
+        self, DefaultValue, MemberDetails, MemberKindSpecificDetails, MemberNs, MethodDetails,
+        WithRange,
+    },
     macro_expand::Fidelity,
 };
 
@@ -450,18 +453,19 @@ impl MethodDetails {
                 );
                 for default in &self.brace_defaults {
                     let range = match &default.value {
-                        Left(expr) => default_env.range(expr),
-                        Right(text) => text.range,
+                        DefaultValue::Expr(expr) => default_env.range(expr),
+                        DefaultValue::Braces(text) => text.range,
+                        DefaultValue::Unbraced(text) => text.range,
                     };
                     flow.with_range(range, |flow| {
                         let ty = match &default.value {
-                            Left(expr) => {
+                            DefaultValue::Expr(expr) => {
                                 expr.to_power_ty(&default_env, flow).unwrap_or_else(|err| {
                                     default_env.soft_diagnostic(err);
                                     Ty::Any.into()
                                 })
                             }
-                            Right(text) => {
+                            DefaultValue::Braces(text) => {
                                 if let Err(err) = Expr::parse(&text.it) {
                                     default_env.soft_diagnostic(TypeError::syntax_error(
                                         range,
@@ -470,6 +474,15 @@ impl MethodDetails {
                                         SyntaxScope::ArgumentDefault,
                                     ));
                                 }
+                                Ty::Any.into()
+                            }
+                            DefaultValue::Unbraced(text) => {
+                                default_env.soft_diagnostic(
+                                    TypeErrorKind::UnbracedDefaultExpression {
+                                        default: text.it.clone(),
+                                    }
+                                    .at(range),
+                                );
                                 Ty::Any.into()
                             }
                         };

@@ -2778,6 +2778,25 @@ type_error_kinds! {
         scope: SyntaxScope,
         detail: SyntaxErrorText,
     },
+    /// An argument default outside braces that is neither a literal nor an expression in
+    /// `{braces}`. IRIS refuses to load the class (`ERROR #5559`), though its own classes, as
+    /// exported, carry such defaults. Write a literal, or put the expression in braces.
+    ///
+    /// ```objectscript rejected
+    /// Class Demo.UnbracedDefault
+    /// {
+    ///
+    /// ClassMethod Greet(name As %String = $Username) As %String //! A7415
+    /// {
+    ///     Quit "Hello, " _ name
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A7415"]
+    #[severity = Error]
+    #[message = "Argument default '{default}' is neither a literal nor an expression in braces, which IRIS refuses (ERROR #5559)"]
+    UnbracedDefaultExpression { default: String },
     /// A class header or member declaration, or a line of a routine or include file, that doesn't
     /// parse; a method body that doesn't is A8073 instead, and the message reads the same way.
     /// Nothing else in the document is checked, and IRIS refuses to compile it. Correct the marked

@@ -51,6 +51,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A7217](A7217.md) | An offset cannot enter the procedure block at label '{label}' (IRIS: `<NOLINE>`) |
 | [A7340](A7340.md) | Field '{field}' not found in the applicable tables ({tables}); the statement gets SQLCODE -29 when it runs |
 | [A7342](A7342.md) | Argument {position} of {function} can't be left empty |
+| [A7415](A7415.md) | Argument default '{default}' is neither a literal nor an expression in braces, which IRIS refuses (ERROR #5559) |
 | [A7461](A7461.md) | No superclass of {cls} has a method '{method}' for ##super to call |
 | [A7604](A7604.md) | Label '{label}' has no formal argument list, so $$ cannot call it (IRIS: `<PARAMETER>`) |
 | [A7831](A7831.md) | Cannot find include file '{name}' in the workspace or on the IRIS instance |
