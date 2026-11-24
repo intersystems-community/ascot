@@ -793,8 +793,7 @@ fn check_element_body<'a>(
 
 // The labels inside the blocks of `body`, at any depth.
 fn labels_in_blocks(body: &ProcedureBody) -> impl Iterator<Item = &cos::RoutineElement> {
-    (walk_blocks(body).filter_map(Either::right))
-        .flat_map(|body| body.subroutines.iter().flat_map(|subs| subs.items.iter()))
+    walk_blocks(body).filter_map(Either::right)
 }
 
 // IRIS makes SQLCODE and a class method's SQL host variables public, not a routine's (2026.2).
@@ -816,34 +815,48 @@ fn sql_publics(body: &ProcedureBody) -> HashSet<String> {
     names
 }
 
-// Every command of `body`, its labels' and its blocks' included, and every body a block nests,
-// each before its contents.
+// Every command of `body` at any depth, and every label a nested block declares, before its lines.
 fn walk_blocks<'b>(
     body: &'b ProcedureBody,
-) -> impl Iterator<Item = Either<&'b Command, &'b ProcedureBody>> + 'b {
-    let mut stack: Vec<_> = body_commands(body).map(Left).collect();
-    stack.reverse();
+) -> impl Iterator<Item = Either<&'b Command, &'b cos::RoutineElement>> + 'b {
+    let mut stack = vec![];
+    push_body(&mut stack, body, false);
     std::iter::from_fn(move || {
         let item = stack.pop()?;
-        let (bodies, commands) = match item {
-            Right(body) => (vec![], body_commands(body).collect()),
-            Left(command) => nested(command),
-        };
-        stack.extend(bodies.into_iter().rev().map(Right));
-        stack.extend(commands.into_iter().rev().map(Left));
+        if let Left(command) = item {
+            let (bodies, commands) = nested(command);
+            for body in bodies.into_iter().rev() {
+                push_body(&mut stack, body, true);
+            }
+            stack.extend(commands.into_iter().rev().map(Left));
+        }
         Some(item)
     })
 }
 
-fn body_commands(body: &ProcedureBody) -> impl Iterator<Item = &Command> {
-    let labels = body.subroutines.iter().flat_map(|subs| subs.items.iter());
-    let in_labels = labels.filter_map(|elem| match elem {
-        cos::RoutineElement::Subroutine(sub) => Some(sub.body.as_command_lines()),
-        cos::RoutineElement::Procedure(p) => Some(p.trailer.as_ref()?.lines.as_command_lines()),
-    });
-    (procedure_commands(&body.main))
-        .chain(in_labels.flatten().flat_map(commands_of))
-        .map(|command| &**command)
+// Pushed in reverse, so they pop in order: the labels when wanted, the main commands, the labels'.
+fn push_body<'b>(
+    stack: &mut Vec<Either<&'b Command, &'b cos::RoutineElement>>,
+    body: &'b ProcedureBody,
+    with_labels: bool,
+) {
+    let labels: Vec<_> = (body.subroutines.iter())
+        .flat_map(|subs| subs.items.iter())
+        .collect();
+    let in_labels: Vec<_> = (labels.iter())
+        .filter_map(|elem| match elem {
+            cos::RoutineElement::Subroutine(sub) => Some(sub.body.as_command_lines()),
+            cos::RoutineElement::Procedure(p) => Some(p.trailer.as_ref()?.lines.as_command_lines()),
+        })
+        .flatten()
+        .flat_map(commands_of)
+        .collect();
+    stack.extend(in_labels.into_iter().rev().map(|c| Left(&**c)));
+    let main: Vec<_> = procedure_commands(&body.main).collect();
+    stack.extend(main.into_iter().rev().map(|c| Left(&**c)));
+    if with_labels {
+        stack.extend(labels.into_iter().rev().map(Right));
+    }
 }
 
 // The bodies a command's blocks nest, and the commands of its same-line blocks.
