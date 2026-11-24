@@ -1082,8 +1082,10 @@ type_error_kinds! {
     /// A `Set` whose value no path reads before the variable is assigned again, killed or out of
     /// scope; a formal argument the body never reads is reported the same way, its value being
     /// the caller's assignment. IRIS compiles and runs the code; the assignment is dead. Delete it,
-    /// or read the variable where it was meant to be read. A `Catch` variable, or a formal argument
-    /// of a method that overrides one, is A4269 instead: neither can go.
+    /// or read the variable where it was meant to be read. A `Catch` variable and the control
+    /// variable of a ranged `For` are not reported: the handler often needs nothing from the one,
+    /// and the increment reads the other. A formal argument of a method that overrides one is
+    /// A4269 instead: it cannot go.
     ///
     /// ```objectscript compiles
     /// Class Demo.UnreadAssignment
@@ -1305,11 +1307,9 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Host variable ':{name}' is undefined here; embedded SQL reads it as NULL"]
     UndefinedHostVariable { name: String },
-    /// An assignment the body never reads that it cannot drop: the variable a `Catch` names,
-    /// which the documentation prefers to a bare `Catch {`, or a formal argument of a method that
-    /// overrides one, whose signature it keeps (A1841). IRIS compiles and runs the code; IRIS's own
-    /// classes leave a `Catch` variable unread in most of their handlers. Nothing needs changing;
-    /// the information says the value goes unused.
+    /// An assignment the body never reads that it cannot drop: a formal argument of a method that
+    /// overrides one, whose signature it keeps (A1841). IRIS compiles and runs the code. Nothing
+    /// needs changing; the information says the value goes unused.
     ///
     /// ```objectscript compiles
     /// Class Demo.UnreadRequired Extends %Persistent
@@ -1317,7 +1317,7 @@ type_error_kinds! {
     ///
     /// Method %OnBeforeSave(insert As %Boolean) As %Status //! A4269
     /// {
-    ///     Try { Set ^Demo("saved") = $Horolog } Catch ex { Return $$$OK } //! A4269
+    ///     Set ^Demo("saved") = $Horolog
     ///     Return $$$OK
     /// }
     ///
@@ -3081,14 +3081,12 @@ impl std::fmt::Display for TypeParamHint {
 /// What makes an unread assignment one the body cannot drop (A4269).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnreadRole {
-    Catch,
     Inherited,
 }
 
 impl std::fmt::Display for UnreadRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            UnreadRole::Catch => "Catch variable",
             UnreadRole::Inherited => "Inherited formal argument",
         })
     }

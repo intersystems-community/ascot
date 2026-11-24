@@ -2162,7 +2162,6 @@ fn check_try<'a>(
     {
         // `CatchTarget` carries no range of its own; anchor on the catch block instead.
         let range = env.range(catch_block);
-        catch_flow.note_unread_role(local.name.clone(), range, UnreadRole::Catch);
         // What is caught is an exception whatever was thrown: IRIS raises <ILLEGAL VALUE> for a
         // value and <METHOD DOES NOT EXIST> for an object of another class, both
         // %Exception.SystemException (measured on 2026.3). A `#dim` naming a subclass stands.
@@ -2173,7 +2172,11 @@ fn check_try<'a>(
             }
             _ => exception,
         };
-        catch_flow.handle_set(local, ty.into(), range)?
+        let name = local.name.clone();
+        catch_flow.handle_set(local, ty.into(), range)?;
+        // A handler that needs nothing from the exception still names it, as the documentation
+        // prefers to a bare `Catch {`, so the variable counts as read.
+        catch_flow.read(&name)?
     }
     catch_flow.with_block(env.range(catch_block), |flow| catch_block.check(env, flow))?;
     flow.merge(catch_flow)
@@ -2241,11 +2244,16 @@ fn check_for<'a>(
                 declared,
                 infinite,
                 optional,
+                ranged,
             } = check_for_specs(env, flow, specs)?;
             // `var` carries no range of its own; anchor on the loop body instead.
             let range = block.map(|b| env.range(b)).unwrap_or_default();
             if let Left(local) = var.as_local(env, flow)? {
-                flow.handle_set(local, declared.into(), range)?
+                let name = local.name.clone();
+                flow.handle_set(local, declared.into(), range)?;
+                if ranged {
+                    flow.read(&name)?;
+                }
             }
             flow.with_loop(range, optional, infinite, env, |flow| {
                 block.map_or(Ok(()), |block| block.check(env, flow))
@@ -2267,6 +2275,8 @@ struct CheckForSpecs {
     infinite: bool,
     // true if the for loop can be empty
     optional: bool,
+    // true if a spec is a range, whose increment reads the variable whether or not the body does
+    ranged: bool,
 }
 
 fn check_for_specs<'a, T>(
@@ -2277,6 +2287,7 @@ fn check_for_specs<'a, T>(
     let mut declared = None;
     let mut infinite = false;
     let mut optional = true;
+    let mut ranged = false;
     for spec in specs.items.iter() {
         let spec_ty = match spec {
             cos::ForSpec::Range {
@@ -2284,6 +2295,7 @@ fn check_for_specs<'a, T>(
                 increment,
                 end,
             } => {
+                ranged = true;
                 let start = start.to_ty(env, flow)?;
                 increment.to_ty(env, flow)?;
                 if let Some(end) = end.as_deref() {
@@ -2307,6 +2319,7 @@ fn check_for_specs<'a, T>(
         declared: declared.unwrap(),
         infinite,
         optional,
+        ranged,
     })
 }
 
