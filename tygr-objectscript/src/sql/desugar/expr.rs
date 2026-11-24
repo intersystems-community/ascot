@@ -3,7 +3,7 @@
 
 use std::ops::Deref;
 
-use tygr::{Grammar, Print, Raw, StringEq, StringEqCI, Wrap};
+use tygr::{Grammar, Prefix, Print, Raw, StringEq, StringEqCI, Wrap};
 
 use super::Desugar;
 use crate::convert::VecSep;
@@ -484,6 +484,51 @@ pub fn string_operation<O: Deref<Target = full::StringOperation>>(operation: &O)
         &op.print(),
         Wrap::new(open.clone(), Some(args), close.clone()),
     )
+}
+
+/// `$H` is `$HOROLOG`, and so on: an alias is its full name.
+macro_rules! aliases {
+    ($($rule:ident => $Variant:ident),* $(,)?) => {
+        $(pub fn $rule<T>(_: &T) -> core::SpecialSystemVariable {
+            core::SpecialSystemVariable::$Variant(Default::default())
+        })*
+    };
+}
+
+aliases!(
+    horolog => Horolog,
+    job => Job,
+    tlevel => TLevel,
+    zhorolog => ZHorolog,
+    zjob => ZJob,
+    namespace => Namespace,
+    ztimestamp => ZTimestamp,
+    ztimezone => ZTimezone,
+    zversion => ZVersion,
+);
+
+/// `_` is `||`.
+pub fn concat(_: &StringEq!("_")) -> core::Scalop {
+    core::Scalop::Concat(Default::default())
+}
+
+/// `ROWS n PRECEDING` is `ROWS BETWEEN n PRECEDING AND CURRENT ROW`, the standard's reading of a
+/// lone bound.
+pub fn rows_between(
+    rows_kw: &(Space, StringEqCI!("ROWS"), Space),
+    bound: &full::WindowRowsBound,
+) -> core::WindowRows {
+    let current_row =
+        core::WindowRowsBound::CurrentRow(Default::default(), Space::blank(), Default::default());
+    core::WindowRows::Between {
+        rows_kw: rows_kw.clone(),
+        between_kw: Default::default(),
+        start: (Space::blank(), bound.desugar()),
+        end: Prefix::new(
+            (Space::blank(), Default::default(), Space::blank()),
+            current_row,
+        ),
+    }
 }
 
 /// `TRIM(LEADING FROM x)` and `TRIM(LEADING x)` are `TRIM(LEADING ' ' FROM x)`.

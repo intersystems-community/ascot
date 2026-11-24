@@ -244,6 +244,15 @@ const RULES: &[(&str, &str)] = &[
         "SELECT CASE WHEN a = 1 THEN 'x' END, CASE a WHEN 1 THEN 'x' END FROM t",
         "SELECT CASE WHEN a = 1 THEN 'x' ELSE NULL END, CASE a WHEN 1 THEN 'x' ELSE NULL END FROM t",
     ),
+    (
+        "SELECT $H, $J, $TL, $ZH, $ZJ, $ZTS, $ZTZ, $ZV, $ZNSPACE FROM t",
+        "SELECT $HOROLOG, $JOB, $TLEVEL, $ZHOROLOG, $ZJOB, $ZTIMESTAMP, $ZTIMEZONE, $ZVERSION, $NAMESPACE FROM t",
+    ),
+    ("SELECT a _ b FROM t", "SELECT a || b FROM t"),
+    (
+        "SELECT SUM(a) OVER (ORDER BY b ROWS 1 PRECEDING) FROM t",
+        "SELECT SUM(a) OVER (ORDER BY b ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t",
+    ),
 ];
 
 /// Sugar the core grammar admits, as the rewrite drops a node whose type the core keeps, rewrites

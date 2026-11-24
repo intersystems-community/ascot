@@ -202,24 +202,33 @@ pub mod leveled {
     #[tygr(name = "special system variable")]
     pub enum SpecialSystemVariable {
         Horolog(StringEqCI!("$HOROLOG")),
+        #[sugar(into = expr::horolog)]
         H(StringEqCI!("$H")),
         Job(StringEqCI!("$JOB")),
+        #[sugar(into = expr::job)]
         J(StringEqCI!("$J")),
         Namespace(StringEqCI!("$NAMESPACE")),
         TLevel(StringEqCI!("$TLEVEL")),
+        #[sugar(into = expr::tlevel)]
         TL(StringEqCI!("$TL")),
         Username(StringEqCI!("$USERNAME")),
         ZHorolog(StringEqCI!("$ZHOROLOG")),
+        #[sugar(into = expr::zhorolog)]
         ZH(StringEqCI!("$ZH")),
         ZJob(StringEqCI!("$ZJOB")),
+        #[sugar(into = expr::zjob)]
         ZJ(StringEqCI!("$ZJ")),
+        #[sugar(into = expr::namespace)]
         ZNspace(StringEqCI!("$ZNSPACE")),
         ZPi(StringEqCI!("$ZPI")),
         ZTimestamp(StringEqCI!("$ZTIMESTAMP")),
         ZTimezone(StringEqCI!("$ZTIMEZONE")),
+        #[sugar(into = expr::ztimestamp)]
         ZTS(StringEqCI!("$ZTS")),
+        #[sugar(into = expr::ztimezone)]
         ZTZ(StringEqCI!("$ZTZ")),
         ZVersion(StringEqCI!("$ZVERSION")),
+        #[sugar(into = expr::zversion)]
         ZV(StringEqCI!("$ZV")),
     }
 
@@ -251,6 +260,7 @@ pub mod leveled {
         Sub(StringEq!("-")),
         Div(StringEq!("/")),
         IntDiv(StringEq!("\\")),
+        #[sugar(into = expr::concat)]
         Underscore(StringEq!("_")),
     }
 
@@ -1126,6 +1136,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "window rows")]
     pub enum WindowRows {
+        #[sugar(into = expr::rows_between)]
         Single((Space, StringEqCI!("ROWS"), Space), WindowRowsBound),
         Between {
             rows_kw: (Space, StringEqCI!("ROWS"), Space),
