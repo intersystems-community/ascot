@@ -202,6 +202,18 @@ impl Origin {
     }
 }
 
+/// How faithfully a source range stands for a range of expanded text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Fidelity {
+    /// Strictly inside one unbroken run of source text.
+    Exact,
+    /// Inside one run, but starting or ending at a macro's edge: an invocation's or a pasted argument's.
+    AtBoundary,
+    /// In text a macro body generated, or across an edge: the range covers the text, an endpoint
+    /// inside an expansion standing for its whole invocation.
+    Inexact,
+}
+
 // (expanded range, origin, exact?), sorted by expanded start so `locate` can bsearch.
 type SourceMapVec = Vec<(std::ops::Range<usize>, Origin, bool)>;
 
@@ -237,49 +249,24 @@ impl SourceMap {
         self.include_names.iter()
     }
 
-    // False means `position` definitely isn't part of this expansion (e.g. it's really a
-    // different member's declaration, which happens to share this document's uri): past the last
-    // line, or past its line's end.
-    pub(crate) fn is_in_expanded_bounds(&self, position: Position) -> bool {
+    // `None` past the expanded text, e.g. another member's declaration sharing this uri.
+    fn offset(&self, position: Position) -> Option<usize> {
         let line_character = (position.line as usize, position.character as usize);
-        OLC::line_character_to_offset(&self.expanded_olc, line_character).is_ok()
+        OLC::line_character_to_offset(&self.expanded_olc, line_character).ok()
     }
 
-    // Relocates a single expanded-text position back to the top-level source, or `None` if it
-    // came from an `#include`d file (there's no sane point in the top-level file to collapse
-    // it onto, so callers should drop it instead) or isn't part of this expansion at all.
-    pub(crate) fn relocate_position(&self, position: Position) -> Option<Position> {
-        if !self.is_in_expanded_bounds(position) {
-            return None;
-        }
-        let (source_offset, _) = self.to_source_offset(self.expanded_olc.offset(position))?;
-        Some(self.source_olc.position(source_offset))
+    pub(crate) fn map_position(&self, position: Position) -> Option<(Position, Fidelity)> {
+        let (offset, fidelity) = self.map_point(self.offset(position)?)?;
+        Some((self.source_olc.position(offset), fidelity))
     }
 
-    // The end is exclusive, so it is relocated through the last character it covers; otherwise
-    // a range ending exactly where a macro's substituted argument ends would take the position
-    // of whatever the macro body puts next.
-    pub(crate) fn relocate_source_range(&self, range: bindings::Range) -> Option<bindings::Range> {
-        if !self.is_in_expanded_bounds(range.end) {
-            return None;
-        }
-        let Some(last) = self.expanded_olc.offset(range.end).checked_sub(1) else {
-            let start = self.relocate_position(range.start)?;
-            return Some(bindings::Range { start, end: start });
-        };
-        let (span, origin, precise) = self.locate(last)?;
-        if origin.uri.is_some() {
-            return None;
-        }
-        let end = if *precise {
-            origin.range.start + (last - span.start) + 1
-        } else {
-            origin.range.end
-        };
-        Some(bindings::Range {
-            start: self.relocate_position(range.start)?,
-            end: self.source_olc.position(end),
-        })
+    pub(crate) fn map_lsp_range(
+        &self,
+        range: bindings::Range,
+    ) -> Option<(bindings::Range, Fidelity)> {
+        let expanded = self.offset(range.start)?..self.offset(range.end)?;
+        let (source, fidelity) = self.map_range(expanded)?;
+        Some((self.source_olc.span(source.start, source.end), fidelity))
     }
 
     // What the macro invocation at `position` (in the routine's original, unexpanded text)
@@ -332,70 +319,78 @@ impl SourceMap {
         (pos <= self.vec.get(idx)?.0.end).then_some(idx)
     }
 
-    fn locate(&self, pos: usize) -> Option<&(std::ops::Range<usize>, Origin, bool)> {
-        self.vec.get(self.locate_idx(pos)?)
+    // Pieces `i..=j` as one run of source text: precise, one file, contiguous.
+    fn unbroken(&self, i: usize, j: usize) -> bool {
+        let pieces = &self.vec[i..=j];
+        (pieces.iter()).all(|(_, origin, precise)| *precise && origin.uri == pieces[0].1.uri)
+            && (pieces.windows(2)).all(|pair| pair[0].1.range.end == pair[1].1.range.start)
     }
 
-    // The full chain of provenance for `expanded`, from the top-level file (always first) down
-    // to the deepest known position — one link per `#include` boundary crossed to get there.
-    // Every range is in its own paired uri's coordinate space (`None` = the top-level file).
-    fn relocation_chain(
+    // The end is exclusive, so it is located through the last character covered: a range ending
+    // where a pasted argument ends must not take the position of what the body puts next.
+    fn locate_range(
         &self,
         expanded: std::ops::Range<usize>,
-    ) -> Vec<(Option<String>, std::ops::Range<usize>)> {
-        let Some(last) = expanded.end.max(expanded.start + 1).checked_sub(1) else {
-            return vec![];
-        };
-        let (Some(start_idx), Some(end_idx)) =
-            (self.locate_idx(expanded.start), self.locate_idx(last))
-        else {
-            return vec![];
-        };
-        let (start_expanded, start_origin, start_precise) = &self.vec[start_idx];
-        let (end_expanded, end_origin, end_precise) = &self.vec[end_idx];
-        // A wide range (e.g. a whole subroutine body) can start or end inside a macro's
-        // expansion while the other endpoint is literal source — collapsing the whole thing to
-        // `start_origin`'s span alone (as if both ends were imprecise) would badly undershoot.
-        // Only fall back per-endpoint: an imprecise endpoint maps to its macro call's own
-        // source span, a precise one to its exact position.
-        let leaf = if start_origin.uri == end_origin.uri {
-            let start = if *start_precise {
-                start_origin.range.start + (expanded.start - start_expanded.start)
-            } else {
-                start_origin.range.start
-            };
-            let end = if *end_precise {
-                end_origin.range.start + (last - end_expanded.start) + 1
-            } else {
-                end_origin.range.end
-            };
-            (start_origin.uri.clone(), start..end)
+    ) -> Option<(&Origin, std::ops::Range<usize>, Fidelity)> {
+        let std::ops::Range { start, end } = expanded;
+        let mut i = self.locate_idx(start)?;
+        let mut j = if end > start {
+            self.locate_idx(end - 1)?
         } else {
-            (start_origin.uri.clone(), start_origin.range.clone())
+            i
         };
-        let mut chain = vec![leaf];
-        let mut ancestor = start_origin.parent.as_deref();
-        while let Some(origin) = ancestor {
-            chain.push((origin.uri.clone(), origin.range.clone()));
-            ancestor = origin.parent.as_deref();
+        // A point where an expansion begins is the end of the source text before it.
+        if end == start
+            && i > 0
+            && self.vec[i].0.start == start
+            && !self.unbroken(i, i)
+            && self.unbroken(i - 1, i - 1)
+        {
+            (i, j) = (i - 1, i - 1);
         }
-        chain.reverse();
-        chain
+        let (first, last) = (&self.vec[i], &self.vec[j]);
+        let at = |(expanded, origin, _): &(std::ops::Range<usize>, Origin, bool), offset| {
+            origin.range.start + (offset - expanded.start)
+        };
+        if first.1.uri != last.1.uri {
+            return Some((&first.1, first.1.range.clone(), Fidelity::Inexact));
+        }
+        if !self.unbroken(i, j) {
+            let start = if first.2 {
+                at(first, start)
+            } else {
+                first.1.range.start
+            };
+            let end = if last.2 {
+                at(last, end)
+            } else {
+                last.1.range.end
+            };
+            return Some((&first.1, start..end, Fidelity::Inexact));
+        }
+        // The document's own edges are no macro's.
+        let at_boundary = (start == first.0.start && i > 0 && !self.unbroken(i - 1, i))
+            || (end == last.0.end && j + 1 < self.vec.len() && !self.unbroken(j, j + 1));
+        let fidelity = if at_boundary {
+            Fidelity::AtBoundary
+        } else {
+            Fidelity::Exact
+        };
+        Some((&first.1, at(first, start)..at(last, end), fidelity))
     }
 
-    // Like `relocation_chain`'s top-level entry, but for a single offset. `None` if `expanded`
-    // came from an `#include`d file rather than the top-level source.
-    pub fn to_source_offset(&self, expanded: usize) -> Option<(usize, bool)> {
-        let (start_expanded, start_origin, start_precise) = self.locate(expanded)?;
-        if start_origin.uri.is_some() {
-            return None;
-        }
-        if *start_precise {
-            let start = start_origin.range.start + (expanded - start_expanded.start);
-            Some((start, true))
-        } else {
-            Some((start_origin.range.start, false))
-        }
+    // `None` for text an included file supplied, or outside this expansion.
+    pub(crate) fn map_range(
+        &self,
+        expanded: std::ops::Range<usize>,
+    ) -> Option<(std::ops::Range<usize>, Fidelity)> {
+        let (origin, range, fidelity) = self.locate_range(expanded)?;
+        origin.uri.is_none().then_some((range, fidelity))
+    }
+
+    pub(crate) fn map_point(&self, offset: usize) -> Option<(usize, Fidelity)> {
+        let (range, fidelity) = self.map_range(offset..offset)?;
+        Some((range.start, fidelity))
     }
 
     fn range_in(
@@ -450,48 +445,44 @@ impl SourceMap {
         position: Position,
         uri: &str,
     ) -> Option<bindings::DiagnosticRelatedInformation> {
-        if !self.is_in_expanded_bounds(position) {
-            return None;
-        }
-        let offset = self.expanded_olc.offset(position);
-        let idx = self.locate_idx(offset)?;
-        if self.vec[idx].2 {
+        let offset = self.offset(position)?;
+        if self.vec[self.locate_idx(offset)?].2 {
             return None;
         }
         let (span, text) = self.expanded_line_text(offset)?;
-        let (line_uri, line) = self.relocation_chain(span).pop()?;
-        let range = self.range_in(&line_uri, &line)?;
+        let (origin, line, _) = self.locate_range(span)?;
+        let range = self.range_in(&origin.uri, &line)?;
+        let line_uri = origin.uri.clone().unwrap_or_else(|| uri.to_string());
         Some(bindings::DiagnosticRelatedInformation {
-            location: Location::new(line_uri.unwrap_or_else(|| uri.to_string()), range),
+            location: Location::new(line_uri, range),
             message: format!("↳ Expands to: {text}"),
         })
     }
 
-    // The primary (top-level-file) range, plus one `related_information` entry per further
-    // `#include` hop in the chain, outer-to-inner, plus (if the primary range only exists
-    // because of a macro substitution) what that macro actually expanded to.
+    // `range` in the top-level file, or at the `#include` that pulled its text in, with one
+    // related-information entry per further hop and, when `Inexact`, the expansion.
     fn relocate_range(
         &self,
         range: &bindings::Range,
         uri: &str,
-    ) -> (bindings::Range, Vec<bindings::DiagnosticRelatedInformation>) {
-        if !self.is_in_expanded_bounds(range.start) || !self.is_in_expanded_bounds(range.end) {
-            return (*range, vec![]);
+    ) -> Option<(
+        bindings::Range,
+        Fidelity,
+        Vec<bindings::DiagnosticRelatedInformation>,
+    )> {
+        let expanded = self.offset(range.start)?..self.offset(range.end)?;
+        let (origin, leaf, fidelity) = self.locate_range(expanded)?;
+        let mut chain = vec![(&origin.uri, leaf)];
+        let mut ancestor = origin.parent.as_deref();
+        while let Some(origin) = ancestor {
+            chain.push((&origin.uri, origin.range.clone()));
+            ancestor = origin.parent.as_deref();
         }
-        let start = self.expanded_olc.offset(range.start);
-        let end = self.expanded_olc.offset(range.end);
-        let chain = self.relocation_chain(start..end);
-        let Some((top_uri, top_range)) = chain.first() else {
-            return (*range, vec![]);
-        };
+        let (top_uri, top) = chain.pop()?;
         debug_assert!(top_uri.is_none());
-        let Some(primary) = self.range_in(top_uri, top_range) else {
-            return (*range, vec![]);
-        };
-        let mut hops: Vec<_> = chain[1..]
-            .iter()
+        let mut hops: Vec<_> = (chain.iter().rev())
             .filter_map(|(uri, range)| {
-                let uri = uri.clone()?;
+                let uri = (*uri).clone()?;
                 let range = self.range_in(&Some(uri.clone()), range)?;
                 Some(bindings::DiagnosticRelatedInformation {
                     location: Location::new(uri, range),
@@ -499,8 +490,10 @@ impl SourceMap {
                 })
             })
             .collect();
-        hops.extend(self.expansion_info(range.start, uri));
-        (primary, hops)
+        if fidelity == Fidelity::Inexact {
+            hops.extend(self.expansion_info(range.start, uri));
+        }
+        Some((self.source_olc.span(top.start, top.end), fidelity, hops))
     }
 
     fn relocate_related(
@@ -511,20 +504,24 @@ impl SourceMap {
         if info.location.uri != uri {
             return vec![info];
         }
-        let (range, hops) = self.relocate_range(&info.location.range, uri);
-        info.location.range = range;
+        let hops = match self.relocate_range(&info.location.range, uri) {
+            Some((range, _, hops)) => {
+                info.location.range = range;
+                hops
+            }
+            None => vec![],
+        };
         let mut result = vec![info];
         result.extend(hops);
         result
     }
 
-    // Relocates every diagnostic's range and related-information back to source, expanding each
-    // into its own chain: the main range's chain first, then each original related-information
-    // entry followed immediately by its own chain.
     pub(crate) fn expanded_text(&self) -> &str {
         &self.expanded_text
     }
 
+    // An `Inexact` range goes to the invocation holding it; an `S` finding there is the macro's
+    // spelling, not the document's, and is dropped.
     pub(crate) fn relocate_diagnostics(
         &self,
         diagnostics: Vec<bindings::Diagnostic>,
@@ -532,14 +529,22 @@ impl SourceMap {
     ) -> Vec<bindings::Diagnostic> {
         diagnostics
             .into_iter()
-            .map(|mut diagnostic| {
-                let (range, mut related_information) = self.relocate_range(&diagnostic.range, uri);
-                diagnostic.range = range;
+            .filter_map(|mut diagnostic| {
+                let mut related_information = match self.relocate_range(&diagnostic.range, uri) {
+                    Some((_, Fidelity::Inexact, _)) if diagnostic.code.starts_with('S') => {
+                        return None;
+                    }
+                    Some((range, _, hops)) => {
+                        diagnostic.range = range;
+                        hops
+                    }
+                    None => vec![],
+                };
                 for info in std::mem::take(&mut diagnostic.related_information) {
                     related_information.extend(self.relocate_related(info, uri));
                 }
                 diagnostic.related_information = related_information;
-                diagnostic
+                Some(diagnostic)
             })
             .collect()
     }
@@ -1396,6 +1401,9 @@ impl DoneList {
     }
 
     fn push(&mut self, text: &str, origin: &Origin, precise: bool) {
+        if text.is_empty() {
+            return;
+        }
         let start = self.text.len();
         self.text.push_str(text);
         self.map
@@ -1619,4 +1627,84 @@ fn import_macro_input(cos::MacroInput { line_i, line_z }: &cos::MacroInput) -> S
 
 fn without_comment(line: &str) -> &str {
     line[..line.find("##;").unwrap_or(line.len())].trim_end()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SRC: &str = "ROUTINE X\n#define SETIT(%a) Set %a = $$Bar()\n#define CALLFOO Do Foo(1)\n $$$SETIT(yy)\n $$$CALLFOO\nFoo(a)\n Quit\nBar()\n Quit 1\n";
+
+    fn map() -> SourceMap {
+        let workspace = crate::build_workspace_struct(None, None);
+        workspace.expand_rtn("X.mac", SRC).unwrap().1
+    }
+
+    // Where `text` is in the expanded text and in the source.
+    fn find(map: &SourceMap, text: &str) -> (usize, usize) {
+        let expanded = map.expanded_text().find(text).unwrap();
+        (expanded, SRC.find(text).unwrap())
+    }
+
+    fn invocation(text: &str) -> std::ops::Range<usize> {
+        let start = SRC.find(text).unwrap();
+        start..start + text.len()
+    }
+
+    #[test]
+    fn a_pasted_argument_is_exact_inside_and_at_boundary_at_its_edges() {
+        let map = map();
+        let (e, s) = find(&map, "yy");
+        assert_eq!(map.map_point(e + 1), Some((s + 1, Fidelity::Exact)));
+        assert_eq!(map.map_point(e), Some((s, Fidelity::AtBoundary)));
+        assert_eq!(map.map_point(e + 2), Some((s + 2, Fidelity::AtBoundary)));
+        assert_eq!(
+            map.map_range(e..e + 2),
+            Some((s..s + 2, Fidelity::AtBoundary))
+        );
+    }
+
+    #[test]
+    fn a_macro_body_is_inexact_and_stands_for_its_invocation() {
+        let map = map();
+        let set = map.expanded_text().find("Set yy").unwrap();
+        let setit = invocation("$$$SETIT(yy)");
+        assert_eq!(
+            map.map_point(set + 1),
+            Some((setit.start, Fidelity::Inexact))
+        );
+        assert_eq!(
+            map.map_range(set..set + 3),
+            Some((setit.clone(), Fidelity::Inexact))
+        );
+        // From the source text before the invocation into its expansion: the covering range.
+        let covering = setit.start - 1..setit.end;
+        assert_eq!(
+            map.map_range(set - 1..set + 3),
+            Some((covering, Fidelity::Inexact))
+        );
+        let foo = map.expanded_text().find("Foo(1)").unwrap();
+        let callfoo = invocation("$$$CALLFOO");
+        assert_eq!(
+            map.map_range(foo + 1..foo + 1),
+            Some((callfoo, Fidelity::Inexact))
+        );
+    }
+
+    #[test]
+    fn source_text_is_exact_up_to_the_document_edges() {
+        let map = map();
+        assert_eq!(map.map_point(0), Some((0, Fidelity::Exact)));
+        let (e, s) = find(&map, "Quit 1");
+        assert_eq!(map.map_range(e..e + 6), Some((s..s + 6, Fidelity::Exact)));
+        let end = map.expanded_text().len();
+        assert_eq!(map.map_point(end), Some((SRC.len(), Fidelity::Exact)));
+        // A dropped `#define` line is a macro's edge, not the document's.
+        let line = map.expanded_text().find("\n Set yy").unwrap();
+        let invocation = invocation("\n $$$SETIT(yy)");
+        assert_eq!(
+            map.map_point(line),
+            Some((invocation.start, Fidelity::AtBoundary))
+        );
+    }
 }
