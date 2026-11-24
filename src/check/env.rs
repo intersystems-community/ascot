@@ -2332,6 +2332,14 @@ impl<'a> CodeEnv<'a> {
         }
     }
 
+    // The env of text re-parsed on its own, such as a macro argument, that sits `by` into this one.
+    pub(crate) fn shifted(&self, by: usize) -> CodeEnv<'a> {
+        CodeEnv {
+            offset: self.offset + by,
+            ..self.clone()
+        }
+    }
+
     pub(crate) fn record_label_writes(&self, label: &str, writes: HashSet<String>) {
         self.label_writes
             .borrow_mut()
