@@ -1908,185 +1908,10 @@ pub mod leveled {
         In(Negatable<StringEqCI!("IN")>),
     }
 
-    // Parsed as `CondParse`, lhs then tail, and converted so that each predicate holds all its operands.
-    #[derive(Print)]
+    #[derive(Grammar)]
+    #[tygr(name = "cond")]
     #[sugar(into = desugar::cond)]
     pub enum Cond {
-        Not {
-            not_kw: (StringEqCI!("NOT"), Space),
-            condition: Box<Src<Cond>>,
-        },
-        Paren {
-            open: (StringEq!("("), Space),
-            predicate: Box<Prdct>,
-            close: (Space, StringEq!(")")),
-        },
-        Exists {
-            noindex: NoIndex,
-            exists_kw: (StringEqCI!("EXISTS"), Space),
-            query: SQLSubquery,
-        },
-        ForSomeElement {
-            noindex: NoIndex,
-            for_kw: (StringEqCI!("FOR"), Space, StringEqCI!("SOME"), Space),
-            percent_element: StringEqCI!("%ELEMENT"),
-            open_paren1: (Space, StringEq!("("), Space),
-            column: Colmn,
-            close_paren1: (Space, StringEq!(")")),
-            label: Option<(Space, Option<(StringEqCI!("AS"), Space)>, Ident)>,
-            open_paren2: (Space, StringEq!("("), Space),
-            predicate: Box<Prdct>,
-            close_paren2: (Space, StringEq!(")")),
-        },
-        ForSome {
-            noindex: NoIndex,
-            for_kw: (StringEqCI!("FOR"), Space),
-            some_kw: (StringEqCI!("SOME"), Space),
-            open: (StringEq!("("), Space),
-            tables: Tables,
-            close: (Space, StringEq!(")")),
-            condition: Option<(Space, Box<ForCnd>)>,
-        },
-        Compare {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp1: Space,
-            op: CmpOp,
-            sp2: Space,
-            rhs: Scalx,
-        },
-        Quantified {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp1: Space,
-            op: QuantifiedOp,
-            sp2: Space,
-            subquery: SQLSubquery,
-        },
-        IsNull {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            is_kw: (StringEqCI!("IS"), Space),
-            null_kw: Negatable<StringEqCI!("NULL")>,
-        },
-        Between {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            between_kw: Negatable<(StringEqCI!("BETWEEN"), Space)>,
-            lower: Scalx,
-            and_kw: (Space, StringEqCI!("AND"), Space),
-            upper: Scalx,
-        },
-        Like {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            like_kw: Negatable<(StringEqCI!("LIKE"), Space)>,
-            pattern: Scalx,
-            escape: Option<EscapeScalx>,
-        },
-        Matches {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            matches_kw: Negatable<(StringEqCI!("%MATCHES"), Space)>,
-            pattern: Scalx,
-            escape: Option<EscapeScalx>,
-        },
-        In {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            in_kw: Negatable<(StringEqCI!("IN"), Space)>,
-            list: Parenthesized<VecSep<Scalx, ArgSep>>,
-        },
-        InList {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            inlist_kw: Negatable<(StringEqCI!("%INLIST"), Space)>,
-            list_expr: Scalx,
-            size_hint: Option<SizeHint>,
-        },
-        Find {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            find_kw: (StringEqCI!("%FIND"), Space),
-            expr: Scalx,
-            size_hint: Option<SizeHint>,
-        },
-        Pattern {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            pattern_kw: (StringEqCI!("%PATTERN"), Space),
-            pattern: Scalx,
-        },
-        IsJson {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            format: Option<JSONInputClause>,
-            is_kw: (StringEqCI!("IS"), Space),
-            json_kw: Negatable<StringEqCI!("JSON")>,
-            constraint: Option<JSONPredicateTypeConstraint>,
-        },
-        Contains {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            kw: Either<StringEqCI!("%CONTAINSTERM"), StringEqCI!("%CONTAINS")>,
-            list: Args1Plus,
-        },
-        StarEq {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            op: (StringEqCI!("*="), Space),
-            rhs: Scalx,
-        },
-        EqStar {
-            noindex: NoIndex,
-            lhs: Scalx,
-            sp: Space,
-            op: (StringEqCI!("=*"), Space),
-            rhs: Scalx,
-        },
-    }
-
-    impl Parse for Cond {
-        type First = <CondParse as Parse>::First;
-
-        fn parse_at<S: Success, L: Level>(
-            input: &str,
-            pos: usize,
-            mut state: State<L>,
-        ) -> Option<(S::Output<Self>, usize)> {
-            let (parsed, end) = CondParse::parse_at::<S, L>(input, pos, state.node("cond", pos))?;
-            Some((
-                S::and_then(parsed, |parsed| S::output(|| parsed.into())),
-                end,
-            ))
-        }
-
-        fn to_bnf() -> bnf::Expr {
-            bnf::Expr::RuleRef("cond".to_string())
-        }
-
-        fn visit_rules(rules: &mut bnf::Rules) {
-            if rules.insert::<Self>("cond", CondParse::to_bnf) {
-                CondParse::visit_rules(rules);
-            }
-        }
-    }
-
-    #[doc(hidden)]
-    #[derive(Grammar)]
-    #[tygr(inline)]
-    pub enum CondParse {
         Not {
             not_kw: (StringEqCI!("NOT"), Space),
             condition: Box<Src<Cond>>,
@@ -2128,216 +1953,6 @@ pub mod leveled {
             sp: Space,
             tail: Comparison,
         },
-    }
-
-    impl From<CondParse> for Cond {
-        fn from(parsed: CondParse) -> Self {
-            match parsed {
-                CondParse::Not { not_kw, condition } => Cond::Not { not_kw, condition },
-                CondParse::Paren {
-                    open,
-                    predicate,
-                    close,
-                } => Cond::Paren {
-                    open,
-                    predicate,
-                    close,
-                },
-                CondParse::Exists {
-                    noindex,
-                    exists_kw,
-                    query,
-                } => Cond::Exists {
-                    noindex,
-                    exists_kw,
-                    query,
-                },
-                CondParse::ForSomeElement {
-                    noindex,
-                    for_kw,
-                    percent_element,
-                    open_paren1,
-                    column,
-                    close_paren1,
-                    label,
-                    open_paren2,
-                    predicate,
-                    close_paren2,
-                } => Cond::ForSomeElement {
-                    noindex,
-                    for_kw,
-                    percent_element,
-                    open_paren1,
-                    column,
-                    close_paren1,
-                    label,
-                    open_paren2,
-                    predicate,
-                    close_paren2,
-                },
-                CondParse::ForSome {
-                    noindex,
-                    for_kw,
-                    some_kw,
-                    open,
-                    tables,
-                    close,
-                    condition,
-                } => Cond::ForSome {
-                    noindex,
-                    for_kw,
-                    some_kw,
-                    open,
-                    tables,
-                    close,
-                    condition,
-                },
-                CondParse::Comparison {
-                    noindex,
-                    lhs,
-                    sp,
-                    tail,
-                } => match tail {
-                    Comparison::StarEq { op, scalx } => Cond::StarEq {
-                        noindex,
-                        lhs,
-                        sp,
-                        op,
-                        rhs: scalx,
-                    },
-                    Comparison::EqStar { op, scalx } => Cond::EqStar {
-                        noindex,
-                        lhs,
-                        sp,
-                        op,
-                        rhs: scalx,
-                    },
-                    Comparison::IsNull { is_kw, null_kw } => Cond::IsNull {
-                        noindex,
-                        lhs,
-                        sp,
-                        is_kw,
-                        null_kw,
-                    },
-                    Comparison::Between {
-                        between_kw,
-                        lower,
-                        and_kw,
-                        upper,
-                    } => Cond::Between {
-                        noindex,
-                        lhs,
-                        sp,
-                        between_kw,
-                        lower,
-                        and_kw,
-                        upper,
-                    },
-                    Comparison::Like {
-                        like_kw,
-                        pattern,
-                        escape,
-                    } => Cond::Like {
-                        noindex,
-                        lhs,
-                        sp,
-                        like_kw,
-                        pattern,
-                        escape,
-                    },
-                    Comparison::Matches {
-                        matches_kw,
-                        pattern,
-                        escape,
-                    } => Cond::Matches {
-                        noindex,
-                        lhs,
-                        sp,
-                        matches_kw,
-                        pattern,
-                        escape,
-                    },
-                    Comparison::In { in_kw, list } => Cond::In {
-                        noindex,
-                        lhs,
-                        sp,
-                        in_kw,
-                        list,
-                    },
-                    Comparison::InList {
-                        inlist_kw,
-                        list_expr,
-                        size_hint,
-                    } => Cond::InList {
-                        noindex,
-                        lhs,
-                        sp,
-                        inlist_kw,
-                        list_expr,
-                        size_hint,
-                    },
-                    Comparison::Find {
-                        find_kw,
-                        expr,
-                        size_hint,
-                    } => Cond::Find {
-                        noindex,
-                        lhs,
-                        sp,
-                        find_kw,
-                        expr,
-                        size_hint,
-                    },
-                    Comparison::Pattern {
-                        pattern_kw,
-                        pattern,
-                    } => Cond::Pattern {
-                        noindex,
-                        lhs,
-                        sp,
-                        pattern_kw,
-                        pattern,
-                    },
-                    Comparison::IsJSON {
-                        format,
-                        is_kw,
-                        json_kw,
-                        constraint,
-                    } => Cond::IsJson {
-                        noindex,
-                        lhs,
-                        sp,
-                        format,
-                        is_kw,
-                        json_kw,
-                        constraint,
-                    },
-                    Comparison::Contains { kw, list } => Cond::Contains {
-                        noindex,
-                        lhs,
-                        sp,
-                        kw,
-                        list,
-                    },
-                    Comparison::Query { op, sp: sp2, expr } => Cond::Quantified {
-                        noindex,
-                        lhs,
-                        sp1: sp,
-                        op,
-                        sp2,
-                        subquery: expr,
-                    },
-                    Comparison::Scalx { op, space, expr } => Cond::Compare {
-                        noindex,
-                        lhs,
-                        sp1: sp,
-                        op,
-                        sp2: space,
-                        rhs: expr,
-                    },
-                },
-            }
-        }
     }
 
     #[derive(Grammar)]
@@ -6759,8 +6374,10 @@ mod tests {
             .items
             .iter()
             .map(|cond| match &cond.node {
-                Cond::Between {
-                    lhs, lower, upper, ..
+                Cond::Comparison {
+                    lhs,
+                    tail: Comparison::Between { lower, upper, .. },
+                    ..
                 } => {
                     assert_eq!(
                         (lhs.print(), lower.print(), upper.print()),
@@ -6768,28 +6385,40 @@ mod tests {
                     );
                     "between"
                 }
-                Cond::IsNull {
-                    null_kw: Negatable::Negated(..),
+                Cond::Comparison {
+                    tail:
+                        Comparison::IsNull {
+                            null_kw: Negatable::Negated(..),
+                            ..
+                        },
                     ..
                 } => "is not null",
-                Cond::Quantified {
-                    op:
-                        QuantifiedOp::Op {
-                            quantifier: Quantifier::Any(_),
+                Cond::Comparison {
+                    tail:
+                        Comparison::Query {
+                            op:
+                                QuantifiedOp::Op {
+                                    quantifier: Quantifier::Any(_),
+                                    ..
+                                },
                             ..
                         },
                     ..
                 } => "quantified",
-                Cond::In {
-                    in_kw: Negatable::Negated(..),
+                Cond::Comparison {
+                    tail:
+                        Comparison::In {
+                            in_kw: Negatable::Negated(..),
+                            ..
+                        },
                     ..
                 } => "not in",
-                Cond::Compare {
+                Cond::Comparison {
                     noindex: Some(_),
-                    rhs,
+                    tail: Comparison::Scalx { expr, .. },
                     ..
                 } => {
-                    assert_eq!(rhs.print(), "3");
+                    assert_eq!(expr.print(), "3");
                     "compare"
                 }
                 _ => "other",

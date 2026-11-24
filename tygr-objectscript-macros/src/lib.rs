@@ -18,7 +18,8 @@ use syn::{
 const FORMS: &str = "expected `#[sugar]` or `#[sugar(into = RULE)]`";
 
 /// The marks: `#[sugar(into = RULE)]` on a variant leaves it out of the core, RULE converting it
-/// from its fields by reference; on a type, RULE converts the whole value; `#[sugar]` on a field
+/// from its fields by reference; on a type, RULE converts the whole value, given `&self` and its
+/// field-by-field conversion; `#[sugar]` on a field
 /// leaves it out of the core and of the conversion, on a type, alias, impl or `use` leaves it out.
 #[proc_macro_attribute]
 pub fn levels(_: TokenStream, item: TokenStream) -> TokenStream {
@@ -228,8 +229,9 @@ impl Output {
             Some(Mark::Bare) => {}
             Some(Mark::Into(rule)) => {
                 self.core.push(item.to_token_stream());
+                let plain = quote!(super::core::#name #body);
                 self.impls
-                    .push(impl_of(name, generics, quote!(#rule(self))));
+                    .push(impl_of(name, generics, quote!(#rule(self, #plain))));
             }
             None => {
                 self.core.push(item.to_token_stream());
@@ -266,8 +268,9 @@ impl Output {
             Some(Mark::Bare) => {}
             Some(Mark::Into(rule)) => {
                 self.core.push(item.to_token_stream());
+                let plain = quote!(match self { #(#arms)* });
                 self.impls
-                    .push(impl_of(name, generics, quote!(#rule(self))));
+                    .push(impl_of(name, generics, quote!(#rule(self, #plain))));
             }
             None => {
                 self.core.push(item.to_token_stream());

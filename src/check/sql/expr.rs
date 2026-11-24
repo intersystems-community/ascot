@@ -400,60 +400,40 @@ impl Walk for Cond {
                 }
                 w.pop_frame()
             }
-            Cond::Compare { lhs, rhs, .. }
-            | Cond::StarEq { lhs, rhs, .. }
-            | Cond::EqStar { lhs, rhs, .. } => {
+            Cond::Comparison { lhs, tail, .. } => {
                 lhs.walk(w);
-                rhs.walk(w)
+                tail.walk(w)
             }
-            Cond::Quantified { lhs, subquery, .. } => {
-                lhs.walk(w);
-                subquery.walk(w)
-            }
-            Cond::IsNull { lhs, .. } | Cond::IsJson { lhs, .. } => lhs.walk(w),
-            Cond::Between {
-                lhs, lower, upper, ..
-            } => {
-                lhs.walk(w);
+        }
+    }
+}
+
+impl Walk for Comparison {
+    fn walk(&self, w: &mut Walker) {
+        match self {
+            Comparison::Scalx { expr, .. }
+            | Comparison::StarEq { scalx: expr, .. }
+            | Comparison::EqStar { scalx: expr, .. } => expr.walk(w),
+            Comparison::Query { expr, .. } => expr.walk(w),
+            Comparison::IsNull { .. } | Comparison::IsJSON { .. } => {}
+            Comparison::Between { lower, upper, .. } => {
                 lower.walk(w);
                 upper.walk(w)
             }
-            Cond::Like {
-                lhs,
-                pattern,
-                escape,
-                ..
+            Comparison::Like {
+                pattern, escape, ..
             }
-            | Cond::Matches {
-                lhs,
-                pattern,
-                escape,
-                ..
+            | Comparison::Matches {
+                pattern, escape, ..
             } => {
-                lhs.walk(w);
                 pattern.walk(w);
                 escape.walk(w)
             }
-            Cond::In { lhs, list, .. } => {
-                lhs.walk(w);
-                list.walk(w)
-            }
-            Cond::InList { lhs, list_expr, .. } => {
-                lhs.walk(w);
-                list_expr.walk(w)
-            }
-            Cond::Find { lhs, expr, .. } => {
-                lhs.walk(w);
-                expr.walk(w)
-            }
-            Cond::Pattern { lhs, pattern, .. } => {
-                lhs.walk(w);
-                pattern.walk(w)
-            }
-            Cond::Contains { lhs, list, .. } => {
-                lhs.walk(w);
-                list.walk(w)
-            }
+            Comparison::In { list, .. } => list.walk(w),
+            Comparison::InList { list_expr, .. } => list_expr.walk(w),
+            Comparison::Find { expr, .. } => expr.walk(w),
+            Comparison::Pattern { pattern, .. } => pattern.walk(w),
+            Comparison::Contains { list, .. } => list.walk(w),
         }
     }
 }

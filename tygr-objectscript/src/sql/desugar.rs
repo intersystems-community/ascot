@@ -652,41 +652,68 @@ pub fn and<T>(_: &T) -> core::AndOperator {
     core::AndOperator::And(Default::default())
 }
 
-/// A condition: its predicate, in `NOT (...)` when the predicate is negated.
-pub fn cond(cond: &full::Cond) -> core::Cond {
-    let predicate = predicate(cond);
-    match negation(cond) {
-        None => predicate,
-        Some(not_kw) => core::Cond::Not {
-            not_kw: (not_kw, Space::blank()),
-            condition: Box::new(Src::synthesized(core::Cond::Paren {
-                open: (Default::default(), Space::default()),
-                predicate: Box::new(core::Prdct(VecSep::one(core::And(VecSep::one(
-                    Src::synthesized(predicate),
-                ))))),
-                close: (Space::default(), Default::default()),
-            })),
-        },
+/// A condition: its predicate, in `NOT (...)` when the predicate is negated. IRIS applies a
+/// quantified `NOT[` or `NOT]` to each row (measured on 2026.2), so under the `NOT` its quantifier
+/// flips: `x NOT[ ANY (q)` is `NOT (x [ ALL (q))`.
+pub fn cond(cond: &full::Cond, mut plain: core::Cond) -> core::Cond {
+    let Some(not_kw) = negation(cond) else {
+        return plain;
+    };
+    if let core::Cond::Comparison {
+        tail:
+            core::Comparison::Query {
+                op: core::QuantifiedOp::Op { quantifier, .. },
+                ..
+            },
+        ..
+    } = &mut plain
+        && let full::Cond::Comparison {
+            tail:
+                full::Comparison::Query {
+                    op: full::QuantifiedOp::Op { op, .. },
+                    ..
+                },
+            ..
+        } = cond
+        && negated(op)
+    {
+        *quantifier = match quantifier {
+            core::Quantifier::All(_) => core::Quantifier::Any(Default::default()),
+            core::Quantifier::Any(_) => core::Quantifier::All(Default::default()),
+        };
+    }
+    core::Cond::Not {
+        not_kw: (not_kw, Space::blank()),
+        condition: Box::new(Src::synthesized(core::Cond::Paren {
+            open: (Default::default(), Space::default()),
+            predicate: Box::new(core::Prdct(VecSep::one(core::And(VecSep::one(
+                Src::synthesized(plain),
+            ))))),
+            close: (Space::default(), Default::default()),
+        })),
     }
 }
 
 /// The `NOT` of a negated predicate: the keyword's own, or one made for `NOT[` and `NOT]`.
 fn negation(cond: &full::Cond) -> Option<full::NotKw> {
-    use full::{Cond::*, QuantifiedOp};
-    match cond {
+    use full::{Comparison::*, QuantifiedOp};
+    let full::Cond::Comparison { tail, .. } = cond else {
+        return None;
+    };
+    match tail {
         IsNull { null_kw, .. } => null_kw.negation(),
         Between { between_kw, .. } => between_kw.negation(),
         Like { like_kw, .. } => like_kw.negation(),
         Matches { matches_kw, .. } => matches_kw.negation(),
         In { in_kw, .. } => in_kw.negation(),
         InList { inlist_kw, .. } => inlist_kw.negation(),
-        IsJson { json_kw, .. } => json_kw.negation(),
-        Quantified {
+        IsJSON { json_kw, .. } => json_kw.negation(),
+        Query {
             op: QuantifiedOp::In(in_kw),
             ..
         } => in_kw.negation(),
-        Compare { op, .. }
-        | Quantified {
+        Scalx { op, .. }
+        | Query {
             op: QuantifiedOp::Op { op, .. },
             ..
         } if negated(op) => Some(Default::default()),
@@ -704,66 +731,14 @@ fn negated(op: &full::CmpOp) -> bool {
     )
 }
 
-/// Field by field, as an unmarked type converts.
-macro_rules! variants {
-    ($value:expr; $($Variant:ident { $($field:ident),* })*) => {
-        match $value {
-            $(full::Cond::$Variant { $($field),* } => core::Cond::$Variant { $($field: $field.desugar()),* },)*
-        }
-    };
-}
-
-/// The predicate, its negation read as its keyword (see `Negatable`). IRIS applies a quantified
-/// `NOT[` or `NOT]` to each row (measured on 2026.2), so under the `NOT` its quantifier flips:
-/// `x NOT[ ANY (q)` is `NOT (x [ ALL (q))`.
-fn predicate(cond: &full::Cond) -> core::Cond {
-    let mut predicate = variants!(cond;
-        Not { not_kw, condition }
-        Paren { open, predicate, close }
-        Exists { noindex, exists_kw, query }
-        ForSomeElement { noindex, for_kw, percent_element, open_paren1, column, close_paren1, label, open_paren2, predicate, close_paren2 }
-        ForSome { noindex, for_kw, some_kw, open, tables, close, condition }
-        Compare { noindex, lhs, sp1, op, sp2, rhs }
-        Quantified { noindex, lhs, sp1, op, sp2, subquery }
-        IsNull { noindex, lhs, sp, is_kw, null_kw }
-        Between { noindex, lhs, sp, between_kw, lower, and_kw, upper }
-        Like { noindex, lhs, sp, like_kw, pattern, escape }
-        Matches { noindex, lhs, sp, matches_kw, pattern, escape }
-        In { noindex, lhs, sp, in_kw, list }
-        InList { noindex, lhs, sp, inlist_kw, list_expr, size_hint }
-        Find { noindex, lhs, sp, find_kw, expr, size_hint }
-        Pattern { noindex, lhs, sp, pattern_kw, pattern }
-        IsJson { noindex, lhs, sp, format, is_kw, json_kw, constraint }
-        Contains { noindex, lhs, sp, kw, list }
-        StarEq { noindex, lhs, sp, op, rhs }
-        EqStar { noindex, lhs, sp, op, rhs }
-    );
-    if let full::Cond::Quantified {
-        op: full::QuantifiedOp::Op { op, .. },
-        ..
-    } = cond
-        && negated(op)
-        && let core::Cond::Quantified {
-            op: core::QuantifiedOp::Op { quantifier, .. },
-            ..
-        } = &mut predicate
-    {
-        *quantifier = match quantifier {
-            core::Quantifier::All(_) => core::Quantifier::Any(Default::default()),
-            core::Quantifier::Any(_) => core::Quantifier::All(Default::default()),
-        };
-    }
-    predicate
-}
-
 /// An omitted keyword stands as spelled, after a blank.
 pub fn spelled<K: Grammar + Default>(_: &()) -> core::Implied<K> {
     core::Implied::Spelled(Space::blank(), K::default())
 }
 
 /// `FROM a, b` is `FROM a CROSS JOIN b`, each join at its reference's range, in parentheses when it has joins.
-pub fn tables(t: &full::Tables) -> core::Tables {
-    let core::Tref::Join(mut first) = t.first.desugar();
+pub fn tables(t: &full::Tables, plain: core::Tables) -> core::Tables {
+    let core::Tref::Join(mut first) = plain.first;
     for (_, tref) in &t.rest {
         let (full::Tref::Join(jtab) | full::Tref::OJSyntax { table: jtab, .. }) = tref;
         let core::Tref::Join(mut table) = tref.desugar();
@@ -851,19 +826,14 @@ fn limit(spec: core::LimitSpec) -> core::Limit {
 }
 
 /// `LIMIT ALL` alone, which limits nothing, goes.
-pub fn selct(s: &full::Selct) -> core::Selct {
+pub fn selct(_: &full::Selct, mut plain: core::Selct) -> core::Selct {
     let unlimited = |clause: &core::RowLimitingClause| {
         matches!(clause, core::RowLimitingClause::LimitOffset { limit, offset: None }
             if matches!(limit.prefixed, core::LimitSpec::All(..)))
     };
-    core::Selct {
-        query: s.query.desugar(),
-        order: s.order.desugar(),
-        row_limiting_clause: s
-            .row_limiting_clause
-            .desugar()
-            .filter(|clause| !unlimited(clause)),
-    }
+    let clause = plain.row_limiting_clause.take();
+    plain.row_limiting_clause = clause.filter(|clause| !unlimited(clause));
+    plain
 }
 
 /// `SIZE n` is `SIZE (n)`.
@@ -914,15 +884,8 @@ pub fn set_as_values(
 }
 
 /// `UPDATE t (a, b) VALUES (x, y)` is `UPDATE t SET a = x, b = y`; a query or host array as values stays.
-pub fn asign(asign: &full::Asign) -> core::Asign {
+pub fn asign(asign: &full::Asign, plain: core::Asign) -> core::Asign {
     match asign {
-        full::Asign::SetList {
-            set_kw,
-            assignments,
-        } => core::Asign::SetList {
-            set_kw: *set_kw,
-            assignments: assignments.desugar(),
-        },
         full::Asign::ColumnList {
             columns: Some(columns),
             values:
@@ -958,10 +921,7 @@ pub fn asign(asign: &full::Asign) -> core::Asign {
                 assignments: (Space::blank(), commas(items)),
             }
         }
-        full::Asign::ColumnList { columns, values } => core::Asign::ColumnList {
-            columns: columns.desugar(),
-            values: values.desugar(),
-        },
+        _ => plain,
     }
 }
 
