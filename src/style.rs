@@ -19,7 +19,7 @@ pub struct Styles {
 impl Styles {
     pub fn new(style: &Style) -> Self {
         Styles {
-            rules: *style,
+            rules: style.clone(),
             keywords: KeywordStyles::new(style),
         }
     }
@@ -148,11 +148,19 @@ pub fn from_value(input: Value) -> Result<Style, String> {
     let style: Style = serde_json::from_value(input.clone()).map_err(|err| err.to_string())?;
     // The generated types ignore keys they don't know; a misspelled one must not silently do
     // nothing, so compare against what was actually understood.
-    let known = serde_json::to_value(style).map_err(|err| err.to_string())?;
-    match unknown_key(&input, &known, "") {
-        Some(key) => Err(format!("unknown field `{key}`")),
-        None => Ok(style),
+    let known = serde_json::to_value(&style).map_err(|err| err.to_string())?;
+    if let Some(key) = unknown_key(&input, &known, "") {
+        return Err(format!("unknown field `{key}`"));
     }
+    if style.indent.as_ref().is_some_and(|i| !is_indent(&i.unit)) {
+        return Err("`indent.unit` must be spaces or a tab".to_string());
+    }
+    Ok(style)
+}
+
+/// Whether `unit` can indent a line: spaces or a tab, not nothing, which would make commands labels.
+pub fn is_indent(unit: &str) -> bool {
+    !unit.is_empty() && unit.chars().all(|ch| ch == ' ' || ch == '\t')
 }
 
 fn unknown_key(input: &Value, known: &Value, path: &str) -> Option<String> {

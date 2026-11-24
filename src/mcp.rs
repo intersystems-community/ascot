@@ -406,7 +406,8 @@ impl Server {
     /// Format a previously-inserted document to the workspace's style (the `style` given to
     /// `create_workspace`), as `ascot format` does: command keywords take the style's spelling, and
     /// a block's braces, its first command and an `Else`, `ElseIf` or `Catch` after it go on a line
-    /// of their own or not, inside procedure blocks and method bodies only. Returns the formatted
+    /// of their own or not, inside procedure blocks and method bodies only, and every line is
+    /// indented to its depth. Returns the formatted
     /// text, to write to the file and `insert` again, and the edits that produce it. Fails for a
     /// workspace without a style, for a document that doesn't parse — call check() to see why —
     /// and for a routine IRIS generated, which is compiler output.

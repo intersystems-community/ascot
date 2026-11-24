@@ -196,6 +196,8 @@ struct Ctx {
     in_loop: bool,
     // Where the command owning the current block starts: its line's indentation is the block's.
     anchor: usize,
+    // How many levels in the body's commands sit: one for a method body's or a label's.
+    depth: usize,
 }
 
 impl Ctx {
@@ -204,6 +206,7 @@ impl Ctx {
             block,
             in_loop: false,
             anchor: 0,
+            depth: 1,
         }
     }
 }
@@ -259,6 +262,47 @@ impl<'a> Pass<'a> {
         }
     }
 
+    // The style's one level of indentation, when it has one.
+    fn unit(&self) -> Option<&'a str> {
+        let unit = self.style.rules.indent.as_ref()?.unit.as_str();
+        crate::style::is_indent(unit).then_some(unit)
+    }
+
+    // `depth` levels of indentation: the style's unit, else as the line owning the block is indented.
+    fn level(&self, ctx: Ctx, depth: usize) -> String {
+        match self.unit() {
+            Some(unit) => unit.repeat(depth),
+            None => self.line_indent(ctx.anchor).to_string(),
+        }
+    }
+
+    // The `indent` rule at `at` when it starts its line: the finding, and the edit that fixes it.
+    fn indentation(&mut self, at: Span, depth: usize) {
+        let Some(unit) = self.unit() else {
+            return;
+        };
+        let start = self.base + at.start;
+        let line = self.text[..start].rfind('\n').map_or(0, |nl| nl + 1);
+        let found = &self.text[line..start];
+        if line < self.base || !found.chars().all(|ch| ch == ' ' || ch == '\t') {
+            return;
+        }
+        let wanted = unit.repeat(depth);
+        if found == wanted {
+            return;
+        }
+        let kind = TypeErrorKind::Indentation {
+            wanted: described(&wanted, unit, false),
+            found: described(found, unit, true),
+        };
+        let edit = self.indent.is_some().then(|| Edit {
+            start: line - self.base,
+            end: at.start,
+            text: wanted,
+        });
+        self.report(kind, at, edit);
+    }
+
     fn routine_main(&mut self, main: &RoutineMain, ctx: Ctx) {
         let lines = || (main.line_1.iter()).chain(main.line_n.iter().flat_map(|l| l.items.iter()));
         self.new_per_block(lines().flat_map(commands_of));
@@ -291,6 +335,9 @@ impl<'a> Pass<'a> {
         for element in elements {
             match element {
                 cos::RoutineElement::Procedure(procedure) => {
+                    let (open, close) = (procedure.body.start, procedure.body.end - 1);
+                    self.indentation(open..open + 1, 0);
+                    self.indentation(close..close + 1, 0);
                     self.procedure_body(&procedure.body.wrapped, Ctx { block: true, ..ctx });
                     if let Some(trailer) = &procedure.trailer {
                         self.routine_main(&trailer.lines, ctx);
@@ -322,6 +369,11 @@ impl<'a> Pass<'a> {
                 let at = command.start..command.end;
                 self.report(TypeErrorKind::CommandsPerLine { max }, at, None);
             }
+        }
+        if let Some(first) = commands_of(line).next() {
+            let kw = first.keywords(first.start).into_iter().next();
+            let end = kw.map_or(first.end, |kw| kw.start + kw.text.len());
+            self.indentation(first.start..end, ctx.depth);
         }
         for command in commands_of(line) {
             self.command(command, ctx);
@@ -503,7 +555,8 @@ impl<'a> Pass<'a> {
 
     fn curry<G>(&mut self, curry: &CurryBlock<G>, ctx: Ctx) {
         self.braces(curry, ctx);
-        self.procedure_body(&curry.block.wrapped, ctx);
+        let depth = ctx.depth + 1;
+        self.procedure_body(&curry.block.wrapped, Ctx { depth, ..ctx });
     }
 
     // A block's braces against the style: whether a line break sits between each pair of
@@ -511,13 +564,15 @@ impl<'a> Pass<'a> {
     // neither joins a brace.
     fn braces<G>(&mut self, curry: &CurryBlock<G>, ctx: Ctx) {
         let (open, close) = (curry.block.start, curry.block.end - 1);
+        self.indentation(open..open + 1, ctx.depth);
+        self.indentation(close..close + 1, ctx.depth);
         let commands: Vec<_> = body_commands(&curry.block.wrapped.main).collect();
         let (first, last) = (commands.first().copied(), commands.last().copied());
-        let rules = self.style.rules;
+        let rules = &self.style.rules;
         let (before, after) = rules
             .open_brace
             .map_or((None, None), |b| (b.newline_before, b.newline_after));
-        let indent = self.line_indent(ctx.anchor);
+        let indent = self.level(ctx, ctx.depth);
         if let Some(wanted) = before {
             let kind = TypeErrorKind::OpenBraceBreak {
                 wanted: Break(wanted),
@@ -527,7 +582,7 @@ impl<'a> Pass<'a> {
                 curry.gap.start..open,
                 open..open + 1,
                 kind,
-                Some(indent),
+                Some(&indent),
                 ctx,
             );
         }
@@ -535,10 +590,10 @@ impl<'a> Pass<'a> {
             // The body's own indentation when a line of it stands alone, else one level in.
             let own_line = (commands.windows(2))
                 .any(|pair| self.slice(pair[0].0.end..pair[1].0.start).contains('\n'));
-            let body_indent = if own_line {
-                self.line_indent(last.start).to_string()
-            } else {
-                format!("{indent}{}", self.indent.unwrap_or("\t"))
+            let body_indent = match self.unit() {
+                Some(unit) => unit.repeat(ctx.depth + 1),
+                None if own_line => self.line_indent(last.start).to_string(),
+                None => format!("{indent}{}", self.indent.unwrap_or("\t")),
             };
             let kind = TypeErrorKind::BodyBreak {
                 wanted: Break(wanted),
@@ -560,13 +615,14 @@ impl<'a> Pass<'a> {
             let kind = TypeErrorKind::CloseBraceBreak {
                 wanted: Break(wanted),
             };
-            let fix = (!dotted && !matches!(**last, Command::Dim(_))).then_some(indent);
+            let fix = (!dotted && !matches!(**last, Command::Dim(_))).then_some(indent.as_str());
             self.gap(wanted, last.end..close, close..close + 1, kind, fix, ctx);
         }
     }
 
     // `Else`, `ElseIf` or `Catch` (`keyword`, at `kw`) after the block whose `}` is at `close`.
     fn chain<K>(&mut self, close: Option<usize>, kw: &Ranged<K>, keyword: &'static str, ctx: Ctx) {
+        self.indentation(kw.start..kw.end, ctx.depth);
         let newline_after = self.style.rules.close_brace.and_then(|b| b.newline_after);
         let (Some(close), Some(wanted)) = (close, newline_after) else {
             return;
@@ -575,13 +631,13 @@ impl<'a> Pass<'a> {
             keyword,
             wanted: Break(wanted),
         };
-        let indent = Some(self.line_indent(ctx.anchor));
+        let indent = self.level(ctx, ctx.depth);
         self.gap(
             wanted,
             close + 1..kw.start,
             kw.start..kw.end,
             kind,
-            indent,
+            Some(&indent),
             ctx,
         );
     }
@@ -623,6 +679,24 @@ impl<'a> Pass<'a> {
         line.match_indices("$$$").any(|(i, _)| {
             <cos::MacroCall>::parse_prefix(&line[i..]).is_ok_and(|(_, end)| i + end == line.len())
         })
+    }
+}
+
+// `ws` as the message counts it, in `unit`'s kind of whitespace: `8 spaces`, `1 tab`, `spaces and
+// tabs`; the indentation `found` is a bare `6` when it is of that kind.
+fn described(ws: &str, unit: &str, found: bool) -> String {
+    let tab = unit.contains('\t');
+    let own = ws.chars().filter(|&ch| (ch == '\t') == tab).count();
+    let other = ws.len() - own;
+    let name = |n: usize, tab: bool| {
+        let s = if n == 1 { "" } else { "s" };
+        format!("{n} {}{s}", if tab { "tab" } else { "space" })
+    };
+    match (own, other) {
+        (n, 0) if found => n.to_string(),
+        (n, 0) => name(n, tab),
+        (0, n) => name(n, !tab),
+        _ => "spaces and tabs".to_string(),
     }
 }
 

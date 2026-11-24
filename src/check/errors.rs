@@ -2349,6 +2349,30 @@ type_error_kinds! {
         keyword: &'static str,
         wanted: Break,
     },
+    /// Under `{"indent":{"unit":"    "}}`, a line whose first command, or whose `{` or `}`, isn't
+    /// indented to its depth: a method body's or a label's commands sit one level in, each `{ }`
+    /// block adds a level, and a brace on a line of its own sits at its block's depth. `unit` is
+    /// one level, spaces or a tab. IRIS reads any indentation alike, a label at column 0 apart;
+    /// indent the line as the message says.
+    ///
+    /// ```objectscript style={"indent":{"unit":"    "}}
+    /// Class Demo.Indentation
+    /// {
+    ///
+    /// ClassMethod Sign(n As %Integer) As %Integer
+    /// {
+    ///     If n < 0 {
+    ///       Quit -1 //! S6829
+    ///     }
+    ///     Quit 1
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "S6829"]
+    #[severity = Warning]
+    #[message = "Indent this line {wanted}, not {found}"]
+    Indentation { wanted: String, found: String },
     /// Under `{"spaceAfterComma":true}`, a list's comma with no space after it or one before,
     /// `$ListBuild(a,b)`; under `false`, one with a space on either side. A comma whose whitespace holds
     /// a line break, and the two around an omitted argument, are left alone. IRIS ignores the
