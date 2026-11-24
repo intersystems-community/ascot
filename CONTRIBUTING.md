@@ -95,7 +95,9 @@ declaration format: for each class, the headers of the members to replace, writt
 syntax, plus `drop` (members the compiler doesn't accept), `type` (what the class stands for), `abstract`
 (a hierarchy's root that nothing instantiates, though IRIS doesn't mark it) and `generics` (the
 parameters that type members as `..#NAME`). A header may say `As This` for the
-receiver's class. The script checks that each override keeps the member's kind and argument
+receiver's class, and a formal `= …` where callers may leave it out though it has no default to
+state, as with `%ToJSON(outstrm As %Stream.Object = …)`: passing a stream means something else
+than passing nothing. The script checks that each override keeps the member's kind and argument
 names, so an override can only change types, modes, defaults and the return type. The same file
 is embedded in ascot and applied over a live instance. Its `sources` name lines of include files
 the script replaces in the file by their decided form, for what IRIS decides at compile time and
