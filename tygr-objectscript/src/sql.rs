@@ -741,9 +741,9 @@ pub mod leveled {
     #[tygr(name = "not equals operation")]
     pub enum NotEqualsOperation {
         Diamond(StringEq!("<>")),
-        #[sugar(into = desugar::diamond)]
+        #[sugar(into = |_| core::NotEqualsOperation::Diamond(Default::default()))]
         BangEq(StringEq!("!=")),
-        #[sugar(into = desugar::diamond)]
+        #[sugar(into = |_| core::NotEqualsOperation::Diamond(Default::default()))]
         NotEq(StringEqCI!("NOT=")),
     }
 
@@ -751,10 +751,10 @@ pub mod leveled {
     #[tygr(name = "order predicate")]
     pub enum OrderPredicate {
         Le(StringEq!("<=")),
-        #[sugar(into = desugar::le)]
+        #[sugar(into = |_| core::OrderPredicate::Le(Default::default()))]
         NotGt(StringEqCI!("NOT>")),
         Ge(StringEq!(">=")),
-        #[sugar(into = desugar::ge)]
+        #[sugar(into = |_| core::OrderPredicate::Ge(Default::default()))]
         NotLt(StringEqCI!("NOT<")),
         Gt(StringEq!(">")),
         Lt(StringEq!("<")),
@@ -764,7 +764,7 @@ pub mod leveled {
     #[tygr(name = "contains predicate")]
     pub enum ContainsPredicate {
         LB(StringEq!("[")),
-        #[sugar(into = desugar::contains)]
+        #[sugar(into = |_| core::ContainsPredicate::LB(Default::default()))]
         NotLB(StringEqCI!("NOT[")),
     }
 
@@ -772,7 +772,7 @@ pub mod leveled {
     #[tygr(name = "follows predicate")]
     pub enum FollowsPredicate {
         Follows(StringEq!("]")),
-        #[sugar(into = desugar::follows)]
+        #[sugar(into = |_| core::FollowsPredicate::Follows(Default::default()))]
         NotFollows(StringEqCI!("NOT]")),
     }
 
@@ -888,33 +888,33 @@ pub mod leveled {
     #[tygr(name = "special system variable")]
     pub enum SpecialSystemVariable {
         Horolog(StringEqCI!("$HOROLOG")),
-        #[sugar(into = desugar::horolog)]
+        #[sugar(into = |_| core::SpecialSystemVariable::Horolog(Default::default()))]
         H(StringEqCI!("$H")),
         Job(StringEqCI!("$JOB")),
-        #[sugar(into = desugar::job)]
+        #[sugar(into = |_| core::SpecialSystemVariable::Job(Default::default()))]
         J(StringEqCI!("$J")),
         Namespace(StringEqCI!("$NAMESPACE")),
         TLevel(StringEqCI!("$TLEVEL")),
-        #[sugar(into = desugar::tlevel)]
+        #[sugar(into = |_| core::SpecialSystemVariable::TLevel(Default::default()))]
         TL(StringEqCI!("$TL")),
         Username(StringEqCI!("$USERNAME")),
         ZHorolog(StringEqCI!("$ZHOROLOG")),
-        #[sugar(into = desugar::zhorolog)]
+        #[sugar(into = |_| core::SpecialSystemVariable::ZHorolog(Default::default()))]
         ZH(StringEqCI!("$ZH")),
         ZJob(StringEqCI!("$ZJOB")),
-        #[sugar(into = desugar::zjob)]
+        #[sugar(into = |_| core::SpecialSystemVariable::ZJob(Default::default()))]
         ZJ(StringEqCI!("$ZJ")),
-        #[sugar(into = desugar::namespace)]
+        #[sugar(into = |_| core::SpecialSystemVariable::Namespace(Default::default()))]
         ZNspace(StringEqCI!("$ZNSPACE")),
         ZPi(StringEqCI!("$ZPI")),
         ZTimestamp(StringEqCI!("$ZTIMESTAMP")),
         ZTimezone(StringEqCI!("$ZTIMEZONE")),
-        #[sugar(into = desugar::ztimestamp)]
+        #[sugar(into = |_| core::SpecialSystemVariable::ZTimestamp(Default::default()))]
         ZTS(StringEqCI!("$ZTS")),
-        #[sugar(into = desugar::ztimezone)]
+        #[sugar(into = |_| core::SpecialSystemVariable::ZTimezone(Default::default()))]
         ZTZ(StringEqCI!("$ZTZ")),
         ZVersion(StringEqCI!("$ZVERSION")),
-        #[sugar(into = desugar::zversion)]
+        #[sugar(into = |_| core::SpecialSystemVariable::ZVersion(Default::default()))]
         ZV(StringEqCI!("$ZV")),
     }
 
@@ -946,7 +946,7 @@ pub mod leveled {
         Sub(StringEq!("-")),
         Div(StringEq!("/")),
         IntDiv(StringEq!("\\")),
-        #[sugar(into = desugar::concat)]
+        #[sugar(into = |_| core::Scalop::Concat(Default::default()))]
         Underscore(StringEq!("_")),
     }
 
@@ -1846,7 +1846,7 @@ pub mod leveled {
     #[tygr(name = "or operator")]
     pub enum OrOperator {
         Or(StringEqCI!("OR")),
-        #[sugar(into = desugar::or)]
+        #[sugar(into = |_| core::OrOperator::Or(Default::default()))]
         Exclamation(StringEq!("!")),
     }
 
@@ -1858,7 +1858,7 @@ pub mod leveled {
     #[tygr(name = "and operator")]
     pub enum AndOperator {
         And(StringEqCI!("AND")),
-        #[sugar(into = desugar::and)]
+        #[sugar(into = |_| core::AndOperator::And(Default::default()))]
         Ampersand(StringEq!("&")),
     }
 
@@ -2052,7 +2052,7 @@ pub mod leveled {
     pub enum Quantifier {
         All(StringEqCI!("ALL")),
         Any(StringEqCI!("ANY")),
-        #[sugar(into = desugar::any)]
+        #[sugar(into = |_| core::Quantifier::Any(Default::default()))]
         Some(StringEqCI!("SOME")),
     }
 
@@ -2074,7 +2074,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum PConst {
-        #[sugar(into = desugar::unnested)]
+        #[sugar(into = |_, inner, _| (**inner).desugar())]
         Nested(StringEq!("("), Box<PConst>, StringEq!(")")),
         Literal(Literal),
     }
@@ -2281,7 +2281,7 @@ pub mod leveled {
     #[tygr(name = "tref")]
     pub enum Tref {
         Join(JTab),
-        #[sugar(into = desugar::oj)]
+        #[sugar(into = |_, _, table, _| core::Tref::Join(table.desugar()))]
         OJSyntax {
             open: StringEq!("{"),
             oj: (Ident, Space),
@@ -2846,7 +2846,7 @@ pub mod leveled {
     pub enum TPOption {
         InTransaction(StringEqCI!("%INTRANSACTION")),
         BegTrans(StringEqCI!("%BEGTRANS")),
-        #[sugar(into = desugar::intransaction)]
+        #[sugar(into = |_| core::TPOption::InTransaction(Default::default()))]
         InTrans(StringEqCI!("%INTRANS")),
         Commit {
             commit_kw: StringEqCI!("COMMIT"),

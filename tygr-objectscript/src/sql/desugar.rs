@@ -517,32 +517,6 @@ pub fn string_operation<O: Deref<Target = full::StringOperation>>(operation: &O)
     call(&operation.op.print(), args)
 }
 
-/// `$H` is `$HOROLOG`, and so on: an alias is its full name.
-macro_rules! aliases {
-    ($($rule:ident => $Variant:ident),* $(,)?) => {
-        $(pub fn $rule<T>(_: &T) -> core::SpecialSystemVariable {
-            core::SpecialSystemVariable::$Variant(Default::default())
-        })*
-    };
-}
-
-aliases!(
-    horolog => Horolog,
-    job => Job,
-    tlevel => TLevel,
-    zhorolog => ZHorolog,
-    zjob => ZJob,
-    namespace => Namespace,
-    ztimestamp => ZTimestamp,
-    ztimezone => ZTimezone,
-    zversion => ZVersion,
-);
-
-/// `_` is `||`.
-pub fn concat(_: &StringEq!("_")) -> core::Scalop {
-    core::Scalop::Concat(Default::default())
-}
-
 /// `ROWS n PRECEDING` is `ROWS BETWEEN n PRECEDING AND CURRENT ROW`, the standard's lone-bound reading.
 pub fn rows_between(
     rows_kw: &(Space, StringEqCI!("ROWS"), Space),
@@ -595,31 +569,6 @@ fn trim(spec: core::TrimSpec, chars: core::Scalx, expr: &full::Scalx) -> core::T
     )
 }
 
-/// `!=` and `NOT=` are `<>`.
-pub fn diamond<T>(_: &T) -> core::NotEqualsOperation {
-    core::NotEqualsOperation::Diamond(Default::default())
-}
-
-/// `NOT>` is `<=`.
-pub fn le<T>(_: &T) -> core::OrderPredicate {
-    core::OrderPredicate::Le(Default::default())
-}
-
-/// `NOT<` is `>=`.
-pub fn ge<T>(_: &T) -> core::OrderPredicate {
-    core::OrderPredicate::Ge(Default::default())
-}
-
-/// `NOT[` reads as `[` under the `NOT` that `cond` adds.
-pub fn contains<T>(_: &T) -> core::ContainsPredicate {
-    core::ContainsPredicate::LB(Default::default())
-}
-
-/// `NOT]` reads as `]` under the `NOT` that `cond` adds.
-pub fn follows<T>(_: &T) -> core::FollowsPredicate {
-    core::FollowsPredicate::Follows(Default::default())
-}
-
 /// A negated keyword reads as the keyword, under the `NOT` that `cond` adds.
 pub fn plain<K: Desugar>(_: &full::NotKw, _: &Space, keyword: &K) -> core::Negatable<K::Core>
 where
@@ -635,21 +584,6 @@ pub fn in_any(_: &full::Negatable<StringEqCI!("IN")>) -> core::QuantifiedOp {
         sp: Space::blank(),
         quantifier: core::Quantifier::Any(Default::default()),
     }
-}
-
-/// `SOME` is `ANY`.
-pub fn any<T>(_: &T) -> core::Quantifier {
-    core::Quantifier::Any(Default::default())
-}
-
-/// `!` is `OR`.
-pub fn or<T>(_: &T) -> core::OrOperator {
-    core::OrOperator::Or(Default::default())
-}
-
-/// `&` is `AND`.
-pub fn and<T>(_: &T) -> core::AndOperator {
-    core::AndOperator::And(Default::default())
 }
 
 /// A condition: its predicate, in `NOT (...)` when the predicate is negated. IRIS applies a
@@ -778,16 +712,6 @@ pub fn tables(t: &full::Tables, plain: core::Tables) -> core::Tables {
     }
 }
 
-/// `{oj ...}` is the join inside it.
-pub fn oj(
-    _: &StringEq!("{"),
-    _: &(Ident, Space),
-    table: &full::JTab,
-    _: &(Space, StringEq!("}")),
-) -> core::Tref {
-    core::Tref::Join(table.desugar())
-}
-
 /// `JOIN` is `INNER JOIN`.
 pub fn inner(join_kw: &StringEqCI!("JOIN")) -> core::JOp {
     core::JOp::Typed {
@@ -844,15 +768,6 @@ pub fn size_in_parens(kw: &(Space, StringEqCI!("SIZE"), Space), size: &Literal) 
         size: core::PConst::Literal(size.desugar()),
         close: Default::default(),
     }
-}
-
-/// `SIZE ((n))` keeps one pair of parentheses: the ones within go.
-pub fn unnested<P: Deref<Target = full::PConst>>(
-    _: &StringEq!("("),
-    inner: &P,
-    _: &StringEq!(")"),
-) -> core::PConst {
-    inner.desugar()
 }
 
 /// `INSERT ... SET a = x, b = y` is `INSERT ... (a, b) VALUES (x, y)`.
@@ -923,9 +838,4 @@ pub fn asign(asign: &full::Asign, plain: core::Asign) -> core::Asign {
         }
         _ => plain,
     }
-}
-
-/// `%INTRANS` is `%INTRANSACTION`.
-pub fn intransaction<T>(_: &T) -> core::TPOption {
-    core::TPOption::InTransaction(Default::default())
 }

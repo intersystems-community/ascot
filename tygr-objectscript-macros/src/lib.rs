@@ -1,6 +1,6 @@
 //! `#[levels]` on the inline module of the SQL grammar emits it twice: `full`, every spelling IRIS
-//! accepts, and `core`, the same minus its syntactic sugar, with an impl of
-//! `crate::sql::desugar::Desugar` per full struct and enum converting it into its core copy.
+//! accepts, and `core`, the same minus its syntactic sugar, with an impl of `Desugar` per full
+//! struct and enum converting it into its core copy; `full` sees `core` and `super::desugar::*`.
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
@@ -43,7 +43,11 @@ fn expand(module: ItemMod) -> syn::Result<TokenStream2> {
         full, core, impls, ..
     } = out;
     Ok(quote! {
-        #vis mod full { #(#full)* #(#impls)* }
+        #vis mod full {
+            use super::core;
+            use super::desugar::*;
+            #(#full)* #(#impls)*
+        }
         #vis mod core { #(#core)* }
     })
 }
@@ -146,9 +150,16 @@ fn plain_arm(enum_name: &Ident, variant: &Variant, dropped: &[usize]) -> TokenSt
     quote!(#pattern => super::core::#enum_name::#name #body,)
 }
 
+/// The rule is bound to a `fn` pointer first, which types a closure's parameters.
 fn rule_arm(variant: &Variant, rule: &Expr) -> TokenStream2 {
     let (pattern, binds) = variant_pattern(variant, &[]);
-    quote!(#pattern => #rule(#(#binds),*),)
+    let types = variant.fields.iter().map(|field| &field.ty);
+    quote! {
+        #pattern => {
+            let __rule: fn(#(&#types),*) -> Self::Core = #rule;
+            __rule(#(#binds),*)
+        }
+    }
 }
 
 /// `impl<T: Desugar> Desugar for Name<T>`, `T`'s bounds carried to `T::Core`, converting by `body`.
@@ -231,7 +242,7 @@ impl Output {
                 self.core.push(item.to_token_stream());
                 let plain = quote!(super::core::#name #body);
                 self.impls
-                    .push(impl_of(name, generics, quote!(#rule(self, #plain))));
+                    .push(impl_of(name, generics, quote!((#rule)(self, #plain))));
             }
             None => {
                 self.core.push(item.to_token_stream());
@@ -270,7 +281,7 @@ impl Output {
                 self.core.push(item.to_token_stream());
                 let plain = quote!(match self { #(#arms)* });
                 self.impls
-                    .push(impl_of(name, generics, quote!(#rule(self, #plain))));
+                    .push(impl_of(name, generics, quote!((#rule)(self, #plain))));
             }
             None => {
                 self.core.push(item.to_token_stream());
