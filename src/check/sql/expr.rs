@@ -336,13 +336,11 @@ impl Walk for SubstringArgsInternal {
 impl Walk for TrimArgs {
     fn walk(&self, w: &mut Walker) {
         match self {
-            TrimArgs::SpecScalx(_, _, _, _, scalx) => scalx.walk(w),
-            TrimArgs::SpecScalxScalx(_, _, chars, from) => {
+            TrimArgs::SpecScalxScalx(_, _, chars, _, _, _, scalx) => {
                 chars.walk(w);
-                if let Some((_, _, _, scalx)) = from {
-                    scalx.walk(w)
-                }
+                scalx.walk(w)
             }
+            TrimArgs::SpecScalx(_, _, _, scalx) => scalx.walk(w),
             TrimArgs::ScalxScalx(chars, scalx) => {
                 if let Some((chars, ..)) = chars {
                     chars.walk(w)
@@ -563,9 +561,11 @@ impl Walk for SQLSimpleCaseWhen {
     }
 }
 
-impl Walk for SQLElseClause {
+impl Walk for Implied<SQLElseClause> {
     fn walk(&self, w: &mut Walker) {
-        self.result.walk(w)
+        if let Implied::Spelled(_, else_clause) = self {
+            else_clause.result.walk(w)
+        }
     }
 }
 

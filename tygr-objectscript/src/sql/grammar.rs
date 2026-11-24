@@ -270,7 +270,7 @@ pub mod leveled {
     pub struct SearchedCase {
         pub case_kw: (StringEqCI!("CASE"), Space),
         pub when_clauses: Vec<SQLWhenClause>,
-        pub else_clause: Option<SQLElseClause>,
+        pub else_clause: Implied<SQLElseClause>,
         pub end_kw: (Space, StringEqCI!("END")),
     }
 
@@ -280,7 +280,7 @@ pub mod leveled {
         pub case_kw: (StringEqCI!("CASE"), Space),
         pub expr: Scalx,
         pub when_clauses: Vec<SQLSimpleCaseWhen>,
-        pub else_clause: Option<SQLElseClause>,
+        pub else_clause: Implied<SQLElseClause>,
         pub end_kw: (Space, StringEqCI!("END")),
     }
 
@@ -302,11 +302,23 @@ pub mod leveled {
         pub result: Scalx,
     }
 
+    /// `ELSE result`; omitted, a CASE reads `ELSE NULL`, what it returns when no WHEN matches.
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct SQLElseClause {
-        pub else_kw: (Space, StringEqCI!("ELSE"), Space),
+        pub else_kw: (StringEqCI!("ELSE"), Space),
         pub result: Scalx,
+    }
+
+    impl Default for SQLElseClause {
+        fn default() -> Self {
+            SQLElseClause {
+                else_kw: (Default::default(), Space::blank()),
+                result: Scalx::Legacy(VecSep::one(Src::synthesized(
+                    Term::Null(Default::default()),
+                ))),
+            }
+        }
     }
 
     #[derive(Grammar)]
@@ -655,15 +667,22 @@ pub mod leveled {
         },
     }
 
+    /// The arguments of TRIM, `BOTH ' ' FROM x` in the core: a spec alone trims blanks, characters
+    /// alone trim both ends.
     #[derive(Grammar)]
     pub enum TrimArgs {
-        SpecScalx(TrimSpec, Space, StringEqCI!("FROM"), Space, Scalx),
         SpecScalxScalx(
             TrimSpec,
             Space,
             Scalx,
-            Option<(Space, StringEqCI!("FROM"), Space, Scalx)>,
+            Space,
+            StringEqCI!("FROM"),
+            Space,
+            Scalx,
         ),
+        #[sugar(into = expr::trim_blank)]
+        SpecScalx(TrimSpec, Space, Option<(StringEqCI!("FROM"), Space)>, Scalx),
+        #[sugar(into = expr::trim_both)]
         ScalxScalx(Option<(Scalx, Space, StringEqCI!("FROM"), Space)>, Scalx),
     }
 
@@ -1174,7 +1193,8 @@ pub mod leveled {
         }
     }
 
-    /// A keyword a statement reads the same without: spelled, or omitted and read as spelled.
+    /// A keyword or clause a statement reads the same without: spelled, or omitted and read as its
+    /// default.
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum Implied<K: Grammar + Default> {

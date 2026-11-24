@@ -236,6 +236,14 @@ const RULES: &[(&str, &str)] = &[
         "SELECT DATEADD(dd, 1, d), DATEDIFF((yyyy), d, e), DATEPART(sts, d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
         "SELECT DATEADD('day', 1, d), DATEDIFF('year', d, e), DATEPART('sqltimestamp', d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
     ),
+    (
+        "SELECT TRIM(a), TRIM(x FROM a), TRIM(LEADING FROM a), TRIM(TRAILING a), TRIM(BOTH x FROM a) FROM t",
+        "SELECT TRIM(BOTH ' ' FROM a), TRIM(BOTH x FROM a), TRIM(LEADING ' ' FROM a), TRIM(TRAILING ' ' FROM a), TRIM(BOTH x FROM a) FROM t",
+    ),
+    (
+        "SELECT CASE WHEN a = 1 THEN 'x' END, CASE a WHEN 1 THEN 'x' END FROM t",
+        "SELECT CASE WHEN a = 1 THEN 'x' ELSE NULL END, CASE a WHEN 1 THEN 'x' ELSE NULL END FROM t",
+    ),
 ];
 
 /// Sugar the core grammar admits, as the rewrite drops a node whose type the core keeps, rewrites
@@ -256,6 +264,8 @@ const STATEMENTS: &[&str] = &[
     "SELECT $H, $J, $ZTS, a _ b, COUNT(ALL a), COUNT(*), SUM(a) OVER (ORDER BY b ROWS 1 PRECEDING) FROM t",
     "SELECT DATEADD(dd, 1, d), DATEDIFF(yyyy, d, e), DATEPART(sts, d), TIMESTAMPADD(SQL_TSI_DAY, 1, d) FROM t",
     "SELECT {fn IFNULL(a, b)}, {fn CONVERT(:x, SQL_INTEGER)}, $LISTBUILD(a, b), $TSQL_SPID(), CURRENT_TIMESTAMP(3), %INTEXT a, %RUNTIMEOUT (a) FROM t",
+    "SELECT DATEADD(( /* c */ MM /* d */ ), 1, d), TRIM(both /* c */ from a), %exact /* d */ ((a)), { /* e */ fn /* f */ USER } FROM t",
+    "SELECT %SQLUPPER :x, {fn ABS(:y)}, DATEADD(:p, 1, :d), TRIM(:c FROM :s), {ts :when} INTO :a, :b, :c, :d, :e FROM t",
     "SELECT a FROM t WHERE a NOT BETWEEN 1 AND 2 AND b NOT IN (1, 2) AND c NOT LIKE 'x%' AND d IN (SELECT d FROM u) AND e = SOME (SELECT e FROM u)",
     "SELECT a FROM t WHERE a NOT[ 'x' ! b NOT] 'y' & c %INLIST :list SIZE ((10)) AND d NOT %MATCHES 'p' AND e IS NOT JSON",
     "SELECT a FROM t JOIN u ON t.a = u.a LEFT JOIN v ON v.b = u.b, w ORDER BY a ASC, b DESC",

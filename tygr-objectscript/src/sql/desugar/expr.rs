@@ -3,7 +3,7 @@
 
 use std::ops::Deref;
 
-use tygr::{Grammar, Print, Raw, StringEq, Wrap};
+use tygr::{Grammar, Print, Raw, StringEq, StringEqCI, Wrap};
 
 use super::Desugar;
 use crate::convert::VecSep;
@@ -483,5 +483,52 @@ pub fn string_operation<O: Deref<Target = full::StringOperation>>(operation: &O)
     call(
         &op.print(),
         Wrap::new(open.clone(), Some(args), close.clone()),
+    )
+}
+
+/// `TRIM(LEADING FROM x)` and `TRIM(LEADING x)` are `TRIM(LEADING ' ' FROM x)`.
+pub fn trim_blank(
+    spec: &full::TrimSpec,
+    sp: &Space,
+    from: &Option<(StringEqCI!("FROM"), Space)>,
+    expr: &full::Scalx,
+) -> core::TrimArgs {
+    let (from_kw, after) = match from {
+        Some((from_kw, after)) => (*from_kw, after.clone()),
+        None => (Default::default(), Space::blank()),
+    };
+    core::TrimArgs::SpecScalxScalx(
+        spec.desugar(),
+        sp.clone(),
+        string(" "),
+        Space::blank(),
+        from_kw,
+        after,
+        expr.desugar(),
+    )
+}
+
+/// `TRIM(c FROM x)` is `TRIM(BOTH c FROM x)`, `TRIM(x)` `TRIM(BOTH ' ' FROM x)`.
+pub fn trim_both(
+    chars: &Option<(full::Scalx, Space, StringEqCI!("FROM"), Space)>,
+    expr: &full::Scalx,
+) -> core::TrimArgs {
+    let (chars, sp, from_kw, after) = match chars {
+        Some((chars, sp, from_kw, after)) => (chars.desugar(), sp.clone(), *from_kw, after.clone()),
+        None => (
+            string(" "),
+            Space::blank(),
+            Default::default(),
+            Space::blank(),
+        ),
+    };
+    core::TrimArgs::SpecScalxScalx(
+        core::TrimSpec::Both(Default::default()),
+        Space::blank(),
+        chars,
+        sp,
+        from_kw,
+        after,
+        expr.desugar(),
     )
 }
