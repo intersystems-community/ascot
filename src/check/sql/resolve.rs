@@ -609,8 +609,7 @@ impl Resolver for Checker<'_, '_> {
     }
 }
 
-// Desugars the statement into the core grammar and walks it, checking its names as they come, and
-// returns its host variables.
+// Checks the statement on its core form and returns its host variables.
 pub(in crate::check) fn check(code: &CodeEnv<'_>, flow: &mut Flow<'_>, statement: &SQL) -> Hosts {
     super::analyze(&statement.desugar(), Some(&Checker { code, flow }))
 }

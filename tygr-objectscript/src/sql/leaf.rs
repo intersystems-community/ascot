@@ -28,8 +28,7 @@ char_class!(pub IsNotNL, "not_newline", |ch| ch != '\n');
 char_class!(pub IsNotStar, "not_star", |ch| ch != '*');
 char_class!(pub IsAnyChar, "any_char", |_ch| true);
 
-// tygr 0.2.0 dropped its own version of this (previously public) helper;
-// reimplemented locally against tygr's still-public building blocks.
+// tygr 0.2.0 dropped this helper; rebuilt from tygr's public building blocks.
 pub type StringEndsWith<T> = Raw<(Vec<(NotFollowedBy<T>, IsAnyChar)>, T)>;
 
 pub type SQLLineComment = Wrap<StringEq!("--"), StringOf<IsNotNL>, Option<StringEq!("\n")>>;

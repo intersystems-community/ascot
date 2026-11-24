@@ -429,8 +429,7 @@ mod tests {
         full.unwrap_or_else(|e| panic!("{text}: {e}")).desugar()
     }
 
-    // `text` and the core text it desugars to: the walker finds the same host variables in both
-    // and reports the same codes.
+    // The walker finds the same host variables and codes on `text` and on its core text.
     fn on_both(text: &str, mock: Option<&Mock>) -> (Hosts, Vec<String>) {
         let run = |text: &str| {
             let hosts = analyze(&parse(text), mock.map(|mock| mock as &dyn Resolver));
