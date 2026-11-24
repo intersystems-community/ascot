@@ -31,6 +31,7 @@ use crate::details::{
 };
 use crate::{
     Definitions, DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos,
+    macro_expand::Fidelity,
 };
 use std::marker::PhantomData;
 
@@ -2191,9 +2192,10 @@ pub(crate) fn labels_of(map: &SourceMap, routine: &cos::Routine, uri: Option<&st
         .filter_map(|elem| crate::details::routine_element_kind(&map.expanded_olc, elem))
         .map(|details| {
             let mut proc = details.to_ty_procedure(uri);
-            proc.declared_at = proc
-                .declared_at
-                .and_then(|range| map.relocate_source_range(range));
+            proc.declared_at = proc.declared_at.and_then(|range| {
+                let (range, fidelity) = map.map_lsp_range(range)?;
+                (fidelity != Fidelity::Inexact).then_some(range)
+            });
             (
                 details.name.it.clone(),
                 TyProcedureOrAny::Procedure(Arc::new(proc)),
@@ -2381,13 +2383,13 @@ impl<'a> CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
-    // Whether the text at `start` is text a macro expanded to (or an include supplied), rather
-    // than text the document spells out.
-    pub(crate) fn is_expanded(&self, start: usize) -> bool {
-        self.base.source_map.is_some_and(|map| {
-            map.to_source_offset(start + self.offset)
-                .is_none_or(|(_, precise)| !precise)
-        })
+    // `None` for text an include supplied; `Exact` when nothing was expanded.
+    pub(crate) fn fidelity<T>(&self, node: &tygr::Ranged<T>) -> Option<Fidelity> {
+        let Some(map) = self.base.source_map else {
+            return Some(Fidelity::Exact);
+        };
+        let (_, fidelity) = map.map_range(node.start + self.offset..node.end + self.offset)?;
+        Some(fidelity)
     }
 }
 

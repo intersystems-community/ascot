@@ -1674,7 +1674,10 @@ fn check_zu_args<'a>(
         .collect();
     // Not for a `$ZU` a macro expanded to, such as the system macros IRIS itself defines over it.
     if let Some(&first) = literals.first()
-        && !env.is_expanded(kw.start)
+        && matches!(
+            env.fidelity(kw),
+            Some(Fidelity::Exact | Fidelity::AtBoundary)
+        )
     {
         let count = args.items.len();
         let err = match super::zutil::lookup(&literals, count) {
@@ -1776,7 +1779,8 @@ fn check_case<'a>(
 ) -> Result<MaybeTy, QuasiTypeError> {
     let target = target.to_power_ty(env, flow)?;
     if branches.is_empty() && default.is_none() {
-        return Ok(MaybeTy::Undefined);
+        flow.add_soft_diagnostic(TypeErrorKind::CaseWithoutArms.into());
+        return Ok(MaybeTy::Plain(Ty::Any));
     }
     let branches = branches
         .iter()

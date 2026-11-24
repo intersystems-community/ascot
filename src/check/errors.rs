@@ -1082,8 +1082,10 @@ type_error_kinds! {
     /// A `Set` whose value no path reads before the variable is assigned again, killed or out of
     /// scope; a formal argument the body never reads is reported the same way, its value being
     /// the caller's assignment. IRIS compiles and runs the code; the assignment is dead. Delete it,
-    /// or read the variable where it was meant to be read. A `Catch` variable, or a formal argument
-    /// of a method that overrides one, is A4269 instead: neither can go.
+    /// or read the variable where it was meant to be read. A `Catch` variable and the control
+    /// variable of a ranged `For` are not reported: the handler often needs nothing from the one,
+    /// and the increment reads the other. A formal argument of a method that overrides one is
+    /// A4269 instead: it cannot go.
     ///
     /// ```objectscript compiles
     /// Class Demo.UnreadAssignment
@@ -1305,11 +1307,9 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Host variable ':{name}' is undefined here; embedded SQL reads it as NULL"]
     UndefinedHostVariable { name: String },
-    /// An assignment the body never reads that it cannot drop: the variable a `Catch` names,
-    /// which the documentation prefers to a bare `Catch {`, or a formal argument of a method that
-    /// overrides one, whose signature it keeps (A1841). IRIS compiles and runs the code; IRIS's own
-    /// classes leave a `Catch` variable unread in most of their handlers. Nothing needs changing;
-    /// the information says the value goes unused.
+    /// An assignment the body never reads that it cannot drop: a formal argument of a method that
+    /// overrides one, whose signature it keeps (A1841). IRIS compiles and runs the code. Nothing
+    /// needs changing; the information says the value goes unused.
     ///
     /// ```objectscript compiles
     /// Class Demo.UnreadRequired Extends %Persistent
@@ -1317,7 +1317,7 @@ type_error_kinds! {
     ///
     /// Method %OnBeforeSave(insert As %Boolean) As %Status //! A4269
     /// {
-    ///     Try { Set ^Demo("saved") = $Horolog } Catch ex { Return $$$OK } //! A4269
+    ///     Set ^Demo("saved") = $Horolog
     ///     Return $$$OK
     /// }
     ///
@@ -1836,7 +1836,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6705"]
     #[severity = Warning]
-    #[message = "Too few arguments: '{next_arg}' is required"]
+    #[message = "Too few arguments: '{next_arg}' may be required"]
     TooFewArguments { next_arg: String },
     /// The call passes more arguments than the callee declares, and the callee has no `args...`
     /// to take the rest. IRIS compiles the call and raises `<PARAMETER>` when it runs. The first
@@ -1881,6 +1881,26 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Only $CASE's last argument may omit the value before its colon"]
     CaseDefaultNotLast,
+    /// The `$CASE` has only its target, with no `case:value` arm to match it against and no
+    /// `:default`. IRIS refuses to compile it (`#1009 Expected comma`), so its value never exists
+    /// and nothing is reported where it is used. Add the `case:value` arms, with a `:default` for
+    /// the values they leave out.
+    ///
+    /// ```objectscript
+    /// Class Demo.CaseWithoutArms
+    /// {
+    ///
+    /// ClassMethod Name(size As %Integer) As %String
+    /// {
+    ///     Quit $CASE(size) //! A2733
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A2733"]
+    #[severity = Error]
+    #[message = "$CASE needs a case:value arm or a :default after its target"]
+    CaseWithoutArms,
     /// The `$CASE` has no `:default` arm, and its target can hold a value no arm lists. IRIS
     /// compiles it and raises `<ILLEGAL VALUE>` when it runs with such a target. The value of a
     /// `$CASE` is never undefined, so nothing is reported where it is used. Add a trailing
@@ -2689,6 +2709,44 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Member '{name}' is defined twice"]
     DuplicatedMemberName { name: String },
+    /// A class's ObjectScript methods are compiled into one routine, each as a label, together
+    /// with the lines of every include file the class or a superclass `Include`s and of what those
+    /// files `#include`. A method named like a label of an include file redefines that label, and
+    /// IRIS refuses to compile the class (`<LABELREDEF>`). Names are case-sensitive; an abstract
+    /// method, or one in Python or MVBasic (`Language = python`), has no label in the routine.
+    /// Rename the method, or the label.
+    ///
+    /// ```objectscript
+    /// ROUTINE Demo.Formatting [Type=INC]
+    /// Pad(text, width) {
+    ///     Quit $Justify(text, width)
+    /// }
+    /// Version
+    ///     Quit "1.0"
+    /// ```
+    ///
+    /// ```objectscript
+    /// Include Demo.Formatting
+    ///
+    /// Class Demo.Report Extends %RegisteredObject
+    /// {
+    ///
+    /// ClassMethod Pad(text As %String) As %String //! A6442
+    /// {
+    ///     Quit $Justify(text, 10)
+    /// }
+    ///
+    /// ClassMethod Version() As %String //! A6442
+    /// {
+    ///     Quit "2.0"
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A6442"]
+    #[severity = Error]
+    #[message = "Method '{name}' has the name of a label in include file '{include}', which IRIS refuses (<LABELREDEF>)"]
+    MethodNamedLikeIncludedLabel { name: String, include: String },
     /// Another open document declares a class of this name, so the workspace holds two definitions
     /// and whichever claimed the name last answers for it wherever the class is looked up. IRIS
     /// keeps one definition per class name, so loading both makes the second overwrite the first.
@@ -3061,14 +3119,12 @@ impl std::fmt::Display for TypeParamHint {
 /// What makes an unread assignment one the body cannot drop (A4269).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnreadRole {
-    Catch,
     Inherited,
 }
 
 impl std::fmt::Display for UnreadRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            UnreadRole::Catch => "Catch variable",
             UnreadRole::Inherited => "Inherited formal argument",
         })
     }
@@ -3525,6 +3581,21 @@ impl TypeError {
             TypeErrorKind::DuplicatedMemberName { name },
             range,
             related(previous, "Previous definition"),
+        )
+    }
+
+    pub fn method_named_like_included_label(
+        range: Range,
+        name: String,
+        include: String,
+        label: Option<Location>,
+    ) -> Self {
+        Self::new(
+            TypeErrorKind::MethodNamedLikeIncludedLabel { name, include },
+            range,
+            label
+                .map(|location| related(location, "Label declared here"))
+                .unwrap_or_default(),
         )
     }
 

@@ -349,7 +349,7 @@ pub struct MethodDetails {
 // class document, like `normal_args`.
 pub struct BraceDefault {
     pub name: String,
-    // The expression, or the braces' text when it isn't one.
+    // The expression, or the braces' text when it isn't one, or `…`, a default that is no value.
     pub value: Either<Ranged<cos::Expr>, WithRange<String>>,
 }
 
@@ -1147,12 +1147,15 @@ fn method_kind(
         .filter_map(|formal| {
             let formal = formal.into_inner();
             let name = formal.name.print();
-            let value = match formal.default?.prefixed.into_inner() {
+            let default = formal.default?.prefixed;
+            let at = olc.range(&default);
+            let value = match default.into_inner() {
                 cos::FormalDefaultValue::Brace { expr, .. } => Left(expr),
                 cos::FormalDefaultValue::Other(cos::OSExpr::Brace { content, .. }) => {
                     let range = olc.range(&content);
                     Right(WithRange::new(content.print(), range))
                 }
+                cos::FormalDefaultValue::Elided(_) => Right(WithRange::new("…".to_string(), at)),
                 cos::FormalDefaultValue::Other(_) => return None,
             };
             Some(BraceDefault { name, value })
