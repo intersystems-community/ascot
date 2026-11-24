@@ -156,6 +156,7 @@ use crate::{
     bindings::{self, Diagnostic, DiagnosticRelatedInformation, InlayHint, Location, RefMode},
     cos::{self, *},
     details::{self, MemberDetails, MemberKindSpecificDetails, MemberNs, MethodDetails, WithRange},
+    macro_expand::Fidelity,
 };
 
 pub(crate) trait CheckMember {
@@ -201,49 +202,33 @@ impl Shifter<'_> {
     }
 }
 
-fn try_relocate_range(
-    range: bindings::Range,
-    source_map: &SourceMap,
-    shifter: &Shifter,
-) -> Option<bindings::Range> {
-    Some(shifter.range(source_map.relocate_source_range(range)?))
-}
-
-fn try_relocate_position(
-    position: bindings::Position,
-    source_map: &SourceMap,
-    shifter: &Shifter,
-) -> Option<bindings::Position> {
-    Some(shifter.position(source_map.relocate_position(position)?))
-}
-
-// Shared by a method's own diagnostics and the one hard `TypeError` (if any) `with_procedure`
-// returns -- both carry a `range` plus `related_information` in the same shape.
-// Each relocated range is followed by what its macro expanded to, as `relocate_diagnostics` does
-// for a routine. A range is left untouched if `source_map` doesn't recognize it as part of this
-// method's own expansion -- e.g. `related_information` pointing at a different member's
-// declaration, which happens to share this document's uri without being part of this expansion.
+// Ranges relocated as `relocate_diagnostics` does; one the map doesn't know, another member's
+// declaration sharing this document's uri, is left as is.
 fn relocate_local(
     range: &mut bindings::Range,
     related_information: &mut Vec<DiagnosticRelatedInformation>,
     source_map: &SourceMap,
     uri: &str,
     shifter: &Shifter,
-) {
+) -> Option<Fidelity> {
     let expand = |range: &mut bindings::Range| {
-        let mut info = source_map.expansion_info(range.start, uri);
-        *range = try_relocate_range(*range, source_map, shifter)?;
+        let (relocated, fidelity) = source_map.map_lsp_range(*range)?;
+        let mut info = (fidelity == Fidelity::Inexact)
+            .then(|| source_map.expansion_info(range.start, uri))
+            .flatten();
+        *range = shifter.range(relocated);
         if let Some(info) = &mut info
             && info.location.uri == uri
         {
             info.location.range = shifter.range(info.location.range);
         }
-        info
+        Some((fidelity, info))
     };
-    let mut relocated: Vec<_> = expand(range).into_iter().collect();
+    let (fidelity, info) = expand(range).unzip();
+    let mut relocated: Vec<_> = info.flatten().into_iter().collect();
     for mut info in std::mem::take(related_information) {
         let hop = if info.location.uri == uri {
-            expand(&mut info.location.range)
+            expand(&mut info.location.range).and_then(|(_, hop)| hop)
         } else {
             None
         };
@@ -251,10 +236,10 @@ fn relocate_local(
         relocated.extend(hop);
     }
     *related_information = relocated;
+    fidelity
 }
 
-// Only the range (this method's own call site or expression) is relocated -- a reference's
-// target is always an already resolved, final declaration location.
+// A reference in text a macro body generated is dropped.
 fn relocate_method_ranged<T>(
     entries: Vec<(bindings::Range, T)>,
     source_map: &SourceMap,
@@ -262,10 +247,14 @@ fn relocate_method_ranged<T>(
 ) -> Vec<(bindings::Range, T)> {
     entries
         .into_iter()
-        .filter_map(|(range, it)| Some((try_relocate_range(range, source_map, shifter)?, it)))
+        .filter_map(|(range, it)| {
+            let (range, fidelity) = source_map.map_lsp_range(range)?;
+            (fidelity != Fidelity::Inexact).then(|| (shifter.range(range), it))
+        })
         .collect()
 }
 
+// A hint at an expansion's edge would sit beside the macro's text, not the document's.
 fn relocate_method_hints(
     hints: Vec<InlayHint>,
     source_map: &SourceMap,
@@ -273,11 +262,12 @@ fn relocate_method_hints(
 ) -> Vec<InlayHint> {
     hints
         .into_iter()
-        .filter_map(|hint| {
-            Some(InlayHint {
-                position: try_relocate_position(hint.position, source_map, shifter)?,
+        .filter_map(|hint| match source_map.map_position(hint.position)? {
+            (position, Fidelity::Exact) => Some(InlayHint {
+                position: shifter.position(position),
                 ..hint
-            })
+            }),
+            _ => None,
         })
         .collect()
 }
@@ -506,13 +496,17 @@ impl MethodDetails {
             true,
         );
         for mut diagnostic in env.base.soft_diagnostics_since(diagnostics_mark) {
-            relocate_local(
+            let fidelity = relocate_local(
                 &mut diagnostic.range,
                 &mut diagnostic.related_information,
                 &source_map,
                 env.uri(),
                 &shifter,
             );
+            // A style finding in a macro's own text is its spelling, not the document's.
+            if fidelity == Some(Fidelity::Inexact) && diagnostic.code.starts_with('S') {
+                continue;
+            }
             env.base.add_soft_diagnostic(diagnostic);
         }
         for (source, target) in relocate_method_ranged(

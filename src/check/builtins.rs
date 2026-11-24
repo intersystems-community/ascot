@@ -1674,7 +1674,10 @@ fn check_zu_args<'a>(
         .collect();
     // Not for a `$ZU` a macro expanded to, such as the system macros IRIS itself defines over it.
     if let Some(&first) = literals.first()
-        && !env.is_expanded(kw)
+        && matches!(
+            env.fidelity(kw),
+            Some(Fidelity::Exact | Fidelity::AtBoundary)
+        )
     {
         let count = args.items.len();
         let err = match super::zutil::lookup(&literals, count) {
