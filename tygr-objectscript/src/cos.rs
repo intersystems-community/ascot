@@ -7268,15 +7268,18 @@ pub struct MacroName(pub Ranged<MacroNameText>);
 #[derive(Grammar, Clone)]
 pub struct MacroNameText(StringOf1<IsMacroNameChar>);
 
-// A literal, then a constant expression IRIS evaluates when compiling: `a=1+(2)` is 3, while
-// `a=1+x` and `a=(1)` are refused (2026.2).
+// A literal, then `+`, `-` or `_` and a literal or a parenthesized such sum, which IRIS folds when
+// compiling: `a=1+(2+3)` is 6, while `a=2*3`, `a=1+x` and `a=(1)` are refused (2026.2).
 #[derive(Grammar)]
 pub struct LabelDefault {
     pub literal: Literal,
     pub ops: ConstOps,
 }
 
-pub type ConstOps = Vec<(Wrap<MGap, Operator, MGap>, ConstOperand)>;
+pub type ConstOps = Vec<(
+    Wrap<MGap, Either<PlusMinus, StringEq!("_")>, MGap>,
+    ConstOperand,
+)>;
 
 #[derive(Grammar)]
 #[tygr(name = "constant")]
