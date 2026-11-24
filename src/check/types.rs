@@ -562,6 +562,25 @@ pub struct ClassTy {
     // The type's parameters as written, `%String(MAXLEN = 50)`: each value's text by name, a
     // string literal with its quotes.
     pub params: BTreeMap<String, String>,
+    // A `%List` with no null element, as `$LISTBUILD(1, 2)` builds; unset for a declared `%List`.
+    pub null_free: bool,
+}
+
+impl Ty {
+    pub(crate) fn list(null_free: bool) -> Self {
+        Self::ins(ClassTy {
+            null_free,
+            ..ClassTy::from("%List".to_string())
+        })
+    }
+
+    pub(crate) fn null_free(&self) -> bool {
+        matches!(self, Ty::OREF(ClsOrIns::Ins(cls)) if cls.null_free)
+    }
+
+    pub(crate) fn is_list(&self) -> bool {
+        matches!(self, Ty::OREF(ClsOrIns::Ins(cls)) if cls.name == "%Library.List")
+    }
 }
 
 pub fn normalize_class_name(name: &mut String) {
@@ -581,7 +600,11 @@ impl From<String> for ClassTy {
             name.truncate(name[..i].trim_end().len());
         }
         normalize_class_name(&mut name);
-        ClassTy { name, params }
+        ClassTy {
+            name,
+            params,
+            null_free: false,
+        }
     }
 }
 
