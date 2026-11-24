@@ -893,7 +893,8 @@ type_error_kinds! {
     /// `New` names a variable private to the procedure block: a parameter, or a local the body
     /// creates, which the block already scopes to itself on entry. IRIS refuses to compile it:
     /// `#1038 Private variable not allowed`. Delete the `New`, or `Kill` the variable if its value
-    /// is to go; only a variable of the block's public list can be `New`'d.
+    /// is to go; only a variable of the block's public list can be `New`'d, and `SQLCODE` or a
+    /// host variable in a method with embedded SQL, which IRIS adds to that list.
     ///
     /// ```objectscript
     /// Class Demo.NewInProcedureBlock

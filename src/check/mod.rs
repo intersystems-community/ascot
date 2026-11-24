@@ -596,6 +596,10 @@ impl<'b> CheckCommand for MethodBody<'b> {
             ) => {
                 let body = <cos::ProcedureBody>::parse(body)
                     .map_err(|err| syntax_error(env, err, body))?;
+                if flow.is_procedure_block() {
+                    flow.make_public(sql_publics(&body))
+                        .map_err(|err| err.into_error(|| self.body.range))?;
+                }
                 check_block_body(&body, env, flow, true)
             }
             (
@@ -782,6 +786,35 @@ fn check_element_body<'a>(
 
 // The labels inside the blocks of `body`, at any depth.
 fn labels_in_blocks<'b>(body: &'b ProcedureBody, out: &mut Vec<&'b cos::RoutineElement>) {
+    walk_blocks(body, &mut |it| {
+        if let Right(body) = it {
+            out.extend(body.subroutines.iter().flat_map(|subs| subs.items.iter()));
+        }
+    });
+}
+
+// IRIS makes SQLCODE and a class method's SQL host variables public, not a routine's (2026.2).
+fn sql_publics(body: &ProcedureBody) -> HashSet<String> {
+    let mut names = HashSet::new();
+    walk_blocks(body, &mut |it| {
+        if let Left(Command::ESQL(_, statement, _)) = it {
+            let hosts = sql::analyze(statement, None);
+            names.insert("SQLCODE".to_string());
+            names.extend(
+                (hosts.reads.into_iter().chain(hosts.writes))
+                    .map(|(name, _)| name)
+                    .filter(|name| !flow::is_percent_variable(name)),
+            );
+        }
+    });
+    names
+}
+
+// Every command of `body`, its labels' and its blocks' included, and every body a block nests.
+fn walk_blocks<'b>(
+    body: &'b ProcedureBody,
+    visit: &mut dyn FnMut(Either<&'b Command, &'b ProcedureBody>),
+) {
     let labels = body.subroutines.iter().flat_map(|subs| subs.items.iter());
     let in_labels = labels.filter_map(|elem| match elem {
         cos::RoutineElement::Subroutine(sub) => Some(sub.body.as_command_lines()),
@@ -790,11 +823,15 @@ fn labels_in_blocks<'b>(body: &'b ProcedureBody, out: &mut Vec<&'b cos::RoutineE
     let commands =
         (procedure_commands(&body.main)).chain(in_labels.flatten().flat_map(commands_of));
     for command in commands {
-        labels_in_command(command, out);
+        walk_command(command, visit);
     }
 }
 
-fn labels_in_command<'b>(command: &'b Command, out: &mut Vec<&'b cos::RoutineElement>) {
+fn walk_command<'b>(
+    command: &'b Command,
+    visit: &mut dyn FnMut(Either<&'b Command, &'b ProcedureBody>),
+) {
+    visit(Left(command));
     let mut blocks: Vec<&'b cos::Block> = vec![];
     let mut bodies: Vec<&'b ProcedureBody> = vec![];
     match command {
@@ -827,14 +864,14 @@ fn labels_in_command<'b>(command: &'b Command, out: &mut Vec<&'b cos::RoutineEle
             cos::Block::Curry(block) => bodies.push(&block.block.wrapped),
             cos::Block::Command(commands) => {
                 for command in &commands.items {
-                    labels_in_command(command, out);
+                    walk_command(command, visit);
                 }
             }
         }
     }
     for body in bodies {
-        out.extend(body.subroutines.iter().flat_map(|subs| subs.items.iter()));
-        labels_in_blocks(body, out);
+        visit(Right(body));
+        walk_blocks(body, visit);
     }
 }
 

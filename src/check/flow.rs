@@ -958,6 +958,17 @@ impl<'a> Flow<'a> {
         )
     }
 
+    // Made public by embedded SQL; unlike a `PublicList` entry, holding no value on entry.
+    pub(crate) fn make_public(
+        &mut self,
+        names: impl IntoIterator<Item = String>,
+    ) -> Result<(), QuasiTypeError> {
+        for name in names {
+            self.lookup(name)?.private = false;
+        }
+        Ok(())
+    }
+
     // Unconditionally (re-)declares `name`, overwriting any existing binding — must be able to
     // re-scope an existing parameter or public variable, not just a fresh name. `New` carries no
     // type, so there's nothing to take but the range.
