@@ -12,8 +12,10 @@ use crate::bindings::{ClassInfo, MemberKind, SqlProjection};
 use crate::check::errors::{SqlProcedureUse, TypeErrorKind};
 use resolve::{Columns, Lookup, ProcInfo};
 use tygr_objectscript::cos::VecSep;
-use tygr_objectscript::sql::grammar::core::*;
-use tygr_objectscript::sql::{Src, leaf::*};
+use tygr_objectscript::sql::core::*;
+use tygr_objectscript::sql::{
+    DottedIdent, HostRef, HostVar, Ident, Integer, Param, SQLIdentNonKeyword, Src, Sub, Var,
+};
 
 mod expr;
 mod query;

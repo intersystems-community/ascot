@@ -4,8 +4,8 @@
 //! the core text to a range of the source.
 
 use tygr::{Parse, Print};
+use tygr_objectscript::sql::core;
 use tygr_objectscript::sql::desugar::Desugar;
-use tygr_objectscript::sql::grammar::core;
 use tygr_objectscript::sql::{SQL, print_mapped};
 
 /// One statement per rule, with the exact core text.

@@ -1,20 +1,723 @@
-//! The IRIS SQL grammar above its leaves: expressions, conditions, queries, the statements and DDL.
+//! The IRIS SQL grammar for `&sql(...)` blocks embedded in ObjectScript, reached from `cos.rs`.
+//! Syntax only: `ascot` reports parse errors here but does not type-check SQL yet.
 //!
-//! Written once, under `#[levels]`, which makes it twice: `full`, every spelling IRIS accepts, and
-//! `core`, the same minus its syntactic sugar, each `#[sugar]` mark carrying its rewrite into the
-//! core (see `desugar`).
+//! The grammar is written once, under `#[levels]`, which makes it twice: `full`, every spelling
+//! IRIS accepts, re-exported here, and `core`, the same minus its syntactic sugar, which `desugar`
+//! rewrites into it.
+
+use std::cell::{Cell, RefCell};
+use std::ops::{Deref, Range};
+
+use either::Either;
+use tygr::*;
+
+use crate::convert::VecSep;
+use crate::cos;
+
+pub mod desugar;
+
+pub use full::*;
+
+char_class!(pub IsSpace, "simple_space", |ch| matches!(
+    ch,
+    ' ' | '\t' | '\n' | '\r'
+));
+pub type Space1 = Hidden<StringOf1<IsSpace>>;
+
+char_class!(pub IsSimpleLatinLetter, "simple latin letter", |ch| {
+    ch.is_ascii_alphabetic()
+});
+
+char_class!(pub IsNonAsciiLetter, "non-ASCII letter", |ch| {
+    !ch.is_ascii() && cos::is_letter(ch)
+});
+
+char_class!(pub IsNotDQ, "non double-quote character", |ch| ch != '"');
+char_class!(pub IsNotSQ, "non single-quote character", |ch| ch != '\'');
+char_class!(pub IsDigit, "digit", |ch| ch.is_ascii_digit());
+char_class!(pub IsNotNL, "not_newline", |ch| ch != '\n');
+char_class!(pub IsNotStar, "not_star", |ch| ch != '*');
+char_class!(pub IsAnyChar, "any_char", |_ch| true);
+
+// tygr 0.2.0 dropped this helper; rebuilt from tygr's public building blocks.
+pub type StringEndsWith<T> = Raw<(Vec<(NotFollowedBy<T>, IsAnyChar)>, T)>;
+
+pub type SQLLineComment = Wrap<StringEq!("--"), StringOf<IsNotNL>, Option<StringEq!("\n")>>;
+
+pub type SQLMultiLineComment = Prefix<StringEq!("/*"), StringEndsWith<StringEq!("*/")>>;
+
+char_class!(pub IsExtFuncChar, "non left paren character", |ch| {
+    !matches!(ch, '(' | '$')
+});
+
+char_class!(pub IsDbIdentStart, "db_identifier start", |ch| {
+    ch.is_ascii_alphabetic() || ch == '_'
+});
+
+char_class!(pub IsDbIdentPart, "db_identifier part", |ch| {
+    ch.is_ascii_alphabetic() || ch.is_ascii_digit() || ch == '_' || ch == '-'
+});
+
+char_class!(pub IsNotParen, "any tokens except \"(\" and \")\"", |ch| ch
+    != '('
+    && ch != ')');
+
+#[derive(Grammar, Clone)]
+#[tygr(hidden)]
+pub enum SpaceUnit {
+    Raw(Space1),
+    LC(SQLLineComment),
+    MC(SQLMultiLineComment),
+}
+
+#[derive(Grammar, Clone, Default)]
+#[tygr(hidden)]
+pub struct Space(Vec<SpaceUnit>);
+
+impl Space {
+    /// One blank.
+    pub fn blank() -> Space {
+        Space(vec![SpaceUnit::Raw(Hidden(Raw::new(" ")))])
+    }
+
+    pub fn has_comment(&self) -> bool {
+        self.0.iter().any(|unit| !matches!(unit, SpaceUnit::Raw(_)))
+    }
+
+    /// `self` with the blank of a piece of removed sugar after it: the comments of the latter stay,
+    /// its blanks alone add nothing.
+    pub fn join(&self, removed: &Space) -> Space {
+        match (self.has_comment(), removed.has_comment()) {
+            (_, false) => self.clone(),
+            (false, true) => removed.clone(),
+            (true, true) => Space(self.0.iter().chain(&removed.0).cloned().collect()),
+        }
+    }
+}
+
+#[derive(Grammar, Clone)]
+pub enum Ident {
+    Simple(Identifier),
+    Delimited(DelimitedIdentifier),
+}
+
+impl Ident {
+    /// A plain identifier, as a rule spells a name.
+    pub fn simple(name: &str) -> Ident {
+        Ident::Simple(Identifier(Raw::new(name)))
+    }
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(validated, inline)]
+pub struct SQLIdentNonKeyword(pub Ident);
+
+impl Validate for SQLIdentNonKeyword {
+    const REQUIREMENT: &'static str = "not be a reserved keyword";
+    fn validate(&self) -> bool {
+        match &self.0 {
+            Ident::Delimited(_) => true, // Delimited identifiers can be anything
+            Ident::Simple(s) => {
+                let text = s.0.to_string().to_uppercase();
+                !is_sql_reserved_keyword(&text)
+            }
+        }
+    }
+}
+
+// The words an alias cannot be: IRIS's reserved words, per
+// https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_reservedwords,
+// plus the clause starters LIMIT, OFFSET and ORDER, which IRIS does not reserve.
+fn is_sql_reserved_keyword(word: &str) -> bool {
+    matches!(
+        word,
+        "SELECT"
+            | "FROM"
+            | "WHERE"
+            | "INSERT"
+            | "UPDATE"
+            | "DELETE"
+            | "CREATE"
+            | "DROP"
+            | "ALTER"
+            | "TABLE"
+            | "SCHEMA"
+            | "GRANT"
+            | "REVOKE"
+            | "AS"
+            | "ON"
+            | "IN"
+            | "INTO"
+            | "VALUES"
+            | "SET"
+            | "AND"
+            | "OR"
+            | "NOT"
+            | "NULL"
+            | "IS"
+            | "LIKE"
+            | "BETWEEN"
+            | "EXISTS"
+            | "ALL"
+            | "ANY"
+            | "SOME"
+            | "UNION"
+            | "INTERSECT"
+            | "EXCEPT"
+            | "JOIN"
+            | "INNER"
+            | "LEFT"
+            | "RIGHT"
+            | "FULL"
+            | "OUTER"
+            | "CROSS"
+            | "NATURAL"
+            | "GROUP"
+            | "BY"
+            | "HAVING"
+            | "ORDER"
+            | "ASC"
+            | "DESC"
+            | "DISTINCT"
+            | "UNIQUE"
+            | "CONSTRAINT"
+            | "PRIMARY"
+            | "FOREIGN"
+            | "REFERENCES"
+            | "CHECK"
+            | "DEFAULT"
+            | "CASE"
+            | "WHEN"
+            | "THEN"
+            | "ELSE"
+            | "END"
+            | "WITH"
+            | "FOR"
+            | "TO"
+            | "OF"
+            | "INTEGER"
+            | "INT"
+            | "SMALLINT"
+            | "NUMERIC"
+            | "DECIMAL"
+            | "DEC"
+            | "FLOAT"
+            | "REAL"
+            | "DOUBLE"
+            | "CHAR"
+            | "CHARACTER"
+            | "VARCHAR"
+            | "NCHAR"
+            | "VARYING"
+            | "DATE"
+            | "TIME"
+            | "BIT"
+            | "BEGIN"
+            | "COMMIT"
+            | "ROLLBACK"
+            | "TRANSACTION"
+            | "WORK"
+            | "ISOLATION"
+            | "LEVEL"
+            | "READ"
+            | "WRITE"
+            | "ONLY"
+            | "CASCADE"
+            | "RESTRICT"
+            | "USER"
+            | "CURRENT_USER"
+            | "SESSION_USER"
+            | "SYSTEM_USER"
+            | "CURRENT_DATE"
+            | "CURRENT_TIME"
+            | "CURRENT_TIMESTAMP"
+            | "TRUE"
+            | "FALSE"
+            | "LIMIT"
+            | "OFFSET"
+            | "FETCH"
+            | "FIRST"
+            | "NEXT"
+            | "ROWS"
+            | "CURRENT"
+            | "CAST"
+            | "CONVERT"
+            | "EXTRACT"
+            | "SUBSTRING"
+            | "TRIM"
+            | "UPPER"
+            | "LOWER"
+            | "COALESCE"
+            | "NULLIF"
+            | "SUM"
+            | "AVG"
+            | "COUNT"
+            | "MIN"
+            | "MAX"
+            | "USING"
+            | "OPTION"
+            | "PROCEDURE"
+            | "DECLARE"
+            | "CURSOR"
+            | "OPEN"
+            | "CLOSE"
+            | "CONTINUE"
+            | "GOTO"
+            | "PUBLIC"
+            | "TEMPORARY"
+            | "GLOBAL"
+            | "LOCAL"
+            | "COLLATE"
+            | "NATIONAL"
+            | "EXECUTE"
+            | "EXEC"
+            | "PREPARE"
+            | "DEALLOCATE"
+            | "GET"
+            | "DIAGNOSTICS"
+            | "FOUND"
+            | "SQLSTATE"
+            | "SQLERROR"
+            | "ABSOLUTE"
+            | "RELATIVE"
+            | "SCROLL"
+            | "PRESERVE"
+            | "DEFERRABLE"
+            | "DEFERRED"
+            | "IMMEDIATE"
+            | "AUTHORIZATION"
+            | "PRIVILEGES"
+            | "DESCRIPTOR"
+            | "ALLOCATE"
+            | "MATCH"
+            | "PARTIAL"
+            | "CONNECT"
+            | "CONNECTION"
+            | "DISCONNECT"
+            | "SECTION"
+            | "DOMAIN"
+            | "MODULE"
+            | "LANGUAGE"
+            | "EXTERNAL"
+            | "INPUT"
+            | "OUTPUT"
+            | "ESCAPE"
+            | "INDICATOR"
+            | "ASSERTION"
+            | "CORRESPONDING"
+            | "OVERLAPS"
+            | "PAD"
+            | "SPACE"
+            | "PRIOR"
+            | "ROLE"
+            | "TIMEZONE_HOUR"
+            | "TIMEZONE_MINUTE"
+            | "BIT_LENGTH"
+            | "CHAR_LENGTH"
+            | "CHARACTER_LENGTH"
+            | "OCTET_LENGTH"
+            | "SYSDATE"
+            | "ADD"
+            | "BOTH"
+            | "DESCRIBE"
+            | "EXCEPTION"
+            | "GO"
+            | "HOUR"
+            | "IDENTITY"
+            | "INITIALLY"
+            | "INSENSITIVE"
+            | "INTERVAL"
+            | "LAST"
+            | "MINUTE"
+            | "NAMES"
+            | "NO"
+            | "SECOND"
+            | "STATISTICS"
+            | "TOP"
+            | "TRAILING"
+            | "WHENEVER"
+            | "%AFTERHAVING"
+            | "%ALLINDEX"
+            | "%ALPHAUP"
+            | "%ALTER"
+            | "%BEGTRANS"
+            | "%CHECKPRIV"
+            | "%CLASSNAME"
+            | "%CLASSPARAMETER"
+            | "%DBUGFULL"
+            | "%DELDATA"
+            | "%DESCRIPTION"
+            | "%EXACT"
+            | "%EXTERNAL"
+            | "%FILE"
+            | "%FIRSTTABLE"
+            | "%FLATTEN"
+            | "%FOREACH"
+            | "%FULL"
+            | "%ID"
+            | "%IDADDED"
+            | "%IGNOREINDEX"
+            | "%IGNOREINDICES"
+            | "%INLIST"
+            | "%INORDER"
+            | "%INTERNAL"
+            | "%INTEXT"
+            | "%INTOLIST"
+            | "%INTRANS"
+            | "%INTRANSACTION"
+            | "%KEY"
+            | "%MATCHES"
+            | "%MCODE"
+            | "%MERGE"
+            | "%MINUS"
+            | "%MVR"
+            | "%NOBSL"
+            | "%NOCHECK"
+            | "%NODELDATA"
+            | "%NOFIXEDSTATS"
+            | "%NOFLATTEN"
+            | "%NOFPLAN"
+            | "%NOINDEX"
+            | "%NOLOCK"
+            | "%NOMERGE"
+            | "%NOPARALLEL"
+            | "%NOREDUCE"
+            | "%NORUNTIME"
+            | "%NOSVSO"
+            | "%NOTOPOPT"
+            | "%NOTRIGGER"
+            | "%NOUNIONOROPT"
+            | "%NUMROWS"
+            | "%ODBCIN"
+            | "%ODBCOUT"
+            | "%PARALLEL"
+            | "%PLUS"
+            | "%PROFILE"
+            | "%PROFILE_ALL"
+            | "%PUBLICROWID"
+            | "%ROUTINE"
+            | "%ROWCOUNT"
+            | "%RUNTIMEIN"
+            | "%RUNTIMEOUT"
+            | "%SQLSTRING"
+            | "%SQLUPPER"
+            | "%STARTSWITH"
+            | "%STARTTABLE"
+            | "%STRING"
+            | "%TABLENAME"
+            | "%TRUNCATE"
+            | "%UPPER"
+            | "%VALUE"
+            | "%VID"
+            | "ARE"
+            | "AT"
+            | "CONSTRAINTS"
+            | "ENDEXEC"
+            | "LEADING"
+            | "PARTITION"
+            | "SHARD"
+    )
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "identifier start")]
+pub enum IdentifierStart {
+    SimpleLatin(IsSimpleLatinLetter),
+    P(StringEq!("%")),
+    U(StringEq!("_")),
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "identifier part")]
+pub enum IdentifierPart {
+    Digit(IsDigit),
+    SimpleLatin(IsSimpleLatinLetter),
+    H(StringEq!("#")),
+    A(StringEq!("@")),
+    U(StringEq!("_")),
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(inline)]
+pub struct IdentifierStruct {
+    first: IdentifierStart,
+    rest: Vec<IdentifierPart>,
+}
+
+#[derive(Grammar, Clone)]
+pub struct Identifier(Raw<IdentifierStruct>);
+
+#[derive(Grammar, Clone)]
+#[tygr(inline)]
+pub struct SQLDelimitedIdentStruct {
+    open: StringEq!("\""),
+    head: DelimitedIdentifierPart,
+    tail: Vec<DelimitedIdentifierPart>,
+    close: StringEq!("\""),
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "delimited identifier part")]
+pub enum DelimitedIdentifierPart {
+    DDQ(StringEq!("\"\"")),
+    Char(IsNotDQ),
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "delimited identifier")]
+pub struct DelimitedIdentifier(Raw<SQLDelimitedIdentStruct>);
+
+#[derive(Grammar, Clone)]
+#[tygr(inline)]
+pub struct DottedIdent {
+    pub head: Ident,
+    pub rest: Vec<(StringEq!("."), Ident)>,
+}
+
+impl DottedIdent {
+    pub fn parts(&self) -> impl Iterator<Item = &Ident> {
+        std::iter::once(&self.head).chain(self.rest.iter().map(|(_, ident)| ident))
+    }
+}
+
+pub type StdStringLiteral = Wrap<StringEq!("'"), Vec<StdCharacterRepresentation>, StringEq!("'")>;
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "std character representation")]
+pub enum StdCharacterRepresentation {
+    DSQ(StringEq!("''")),
+    Char(IsNotSQ),
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "string literal")]
+pub enum StringLiteral {
+    SQLEmpty(StringEq!("''")),
+    COSEmpty(StringEq!("\"\"")),
+    Std(Raw<StdStringLiteral>),
+}
+
+#[derive(Grammar, Clone)]
+pub struct Integer {
+    sign: Option<Either<StringEq!("+"), StringEq!("-")>>,
+    integer: StringOf1<IsDigit>,
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(inline)]
+pub struct SQLExponent {
+    e: ExpoSymbol,
+    sign: Option<Either<StringEq!("+"), StringEq!("-")>>,
+    digits: StringOf1<IsDigit>,
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "expo symbol")]
+pub enum ExpoSymbol {
+    U(StringEq!("E")),
+    L(StringEq!("e")),
+}
+
+#[derive(Grammar, Clone)]
+pub struct Number {
+    base: NumberBase,
+    exponent: Option<SQLExponent>,
+}
+
+#[derive(Grammar, Clone)]
+pub enum NumberBase {
+    Int {
+        digits: StringOf1<IsDigit>,
+        fraction: Option<(StringEq!("."), StringOf<IsDigit>)>,
+    },
+    Dot {
+        dot: StringEq!("."),
+        digits: StringOf1<IsDigit>,
+    },
+}
+
+#[derive(Grammar, Clone)]
+pub enum Literal {
+    String(StringLiteral),
+    Numeric(Number),
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "parameter marker")]
+pub struct ParameterMarker(pub StringEq!("?"));
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "host var")]
+pub struct HostVar {
+    pub host_ref: HostRef,
+    pub subs: Option<SubList>,
+}
+
+pub type SubList =
+    Wrap<(StringEq!("("), Space), Option<VecSep<Sub, ArgSep>>, (Space, StringEq!(")"))>;
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "instance variable host ref")]
+pub enum InstanceVariableHostRef {
+    I {
+        preifx: (Option<StringEq!(":")>, StringEq!("i%")),
+        name: HostIdentifier,
+    },
+    R {
+        preifx: (Option<StringEq!(":")>, StringEq!("r%")),
+        name: HostIdentifier,
+    },
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "property host ref")]
+pub struct PropertyHostRef {
+    colon: Option<StringEq!(":")>,
+    pub part1: HostIdentifier,
+    pub parts: Vec1<(StringEq!("."), Either<HostIdentifier, DelimitedIdentifier>)>,
+}
+
+#[derive(Grammar, Clone)]
+pub enum Var {
+    HostRef(HostRef),
+    Ident(Ident),
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "host ref")]
+pub enum HostRef {
+    InstanceVariableHostRef(InstanceVariableHostRef),
+    PropertyHostRef(PropertyHostRef),
+    Plain(Option<StringEq!(":")>, HostIdentifier),
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "host identifier")]
+pub struct HostIdentifier(Raw<(IdentifierStart, Vec<HostIdentifierPart>)>);
+
+#[derive(Grammar, Clone)]
+#[tygr(name = "host identifier part")]
+pub enum HostIdentifierPart {
+    Digit(IsDigit),
+    SimpleLatin(IsSimpleLatinLetter),
+    Unicode(IsNonAsciiLetter),
+}
+
+#[derive(Grammar, Clone)]
+pub enum Param {
+    HostVar(HostVar),
+    Ident(Ident, Option<SubList>),
+}
+
+#[derive(Grammar, Clone)]
+pub enum Sub {
+    Literal(Literal),
+    Var(Var),
+}
+
+pub type ArgSep = (Space, StringEq!(","), Space);
+
+/// `T` with the range of the text it comes from: a parsed node's own range, or, after a rewrite,
+/// the range of the text it stands for.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Parse)]
+#[tygr(inline, try_from_infallible = Ranged<T>)]
+pub struct Src<T> {
+    pub range: Range<usize>,
+    pub node: T,
+}
+
+impl<T> Src<T> {
+    pub fn new(range: Range<usize>, node: T) -> Self {
+        Src { range, node }
+    }
+
+    pub fn range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+
+    /// Apply `f` to the node, keeping the same range.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Src<U> {
+        Src {
+            range: self.range,
+            node: f(self.node),
+        }
+    }
+
+    /// A node a rule synthesizes: it stands for the node being rewritten (see `rewriting`) and takes
+    /// its range.
+    pub fn synthesized(node: T) -> Self {
+        let (start, end) = REWRITING.get();
+        Src::new(start..end, node)
+    }
+
+    /// `f()`, during which `synthesized` nodes take `self`'s range.
+    pub fn rewriting<R>(&self, f: impl FnOnce() -> R) -> R {
+        let outer = REWRITING.replace((self.range.start, self.range.end));
+        let result = f();
+        REWRITING.set(outer);
+        result
+    }
+}
+
+impl<T> From<Ranged<T>> for Src<T> {
+    fn from(ranged: Ranged<T>) -> Self {
+        Src {
+            range: ranged.range(),
+            node: ranged.ranged,
+        }
+    }
+}
+
+impl<T> Deref for Src<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.node
+    }
+}
+
+/// Where a node printed, and the range of the text it comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mapping {
+    pub printed: Range<usize>,
+    pub origin: Range<usize>,
+}
+
+thread_local! {
+    static RECORDER: RefCell<Option<Vec<Mapping>>> = const { RefCell::new(None) };
+    static REWRITING: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+
+impl<T: Print> Print for Src<T> {
+    fn print_to(&self, buf: &mut String) {
+        let start = buf.len();
+        self.node.print_to(buf);
+        RECORDER.with_borrow_mut(|recorder| {
+            if let Some(mappings) = recorder {
+                mappings.push(Mapping {
+                    printed: start..buf.len(),
+                    origin: self.range.clone(),
+                });
+            }
+        });
+    }
+}
+
+/// `t`'s text, with where each `Src` node in it printed, innermost first.
+pub fn print_mapped<T: Print>(t: &T) -> (String, Vec<Mapping>) {
+    let outer = RECORDER.replace(Some(Vec::new()));
+    let text = t.print();
+    let mappings = RECORDER.replace(outer).unwrap_or_default();
+    (text, mappings)
+}
 
 #[tygr_objectscript_macros::levels]
 pub mod leveled {
     use either::Either;
     use tygr::*;
 
-    use super::super::leaf::*;
-    use super::super::src::Src;
+    use super::*;
     use crate::convert::VecSep;
-
-    #[sugar]
-    use super::super::desugar::{expr, query, stat};
 
     #[derive(Grammar)]
     pub struct TName(pub Src<DottedIdent>);
@@ -55,9 +758,9 @@ pub mod leveled {
     #[tygr(name = "not equals operation")]
     pub enum NotEqualsOperation {
         Diamond(StringEq!("<>")),
-        #[sugar(into = query::diamond)]
+        #[sugar(into = desugar::diamond)]
         BangEq(StringEq!("!=")),
-        #[sugar(into = query::diamond)]
+        #[sugar(into = desugar::diamond)]
         NotEq(StringEqCI!("NOT=")),
     }
 
@@ -65,10 +768,10 @@ pub mod leveled {
     #[tygr(name = "order predicate")]
     pub enum OrderPredicate {
         Le(StringEq!("<=")),
-        #[sugar(into = query::le)]
+        #[sugar(into = desugar::le)]
         NotGt(StringEqCI!("NOT>")),
         Ge(StringEq!(">=")),
-        #[sugar(into = query::ge)]
+        #[sugar(into = desugar::ge)]
         NotLt(StringEqCI!("NOT<")),
         Gt(StringEq!(">")),
         Lt(StringEq!("<")),
@@ -78,7 +781,7 @@ pub mod leveled {
     #[tygr(name = "contains predicate")]
     pub enum ContainsPredicate {
         LB(StringEq!("[")),
-        #[sugar(into = query::contains)]
+        #[sugar(into = desugar::contains)]
         NotLB(StringEqCI!("NOT[")),
     }
 
@@ -86,7 +789,7 @@ pub mod leveled {
     #[tygr(name = "follows predicate")]
     pub enum FollowsPredicate {
         Follows(StringEq!("]")),
-        #[sugar(into = query::follows)]
+        #[sugar(into = desugar::follows)]
         NotFollows(StringEqCI!("NOT]")),
     }
 
@@ -137,7 +840,7 @@ pub mod leveled {
         ),
         Literal(Literal),
         Builtin(Box<Builtin>),
-        #[sugar(into = expr::function)]
+        #[sugar(into = desugar::function)]
         ScalarFunction(Box<ScalarFunction>),
         Window(Box<Window>),
         Agg(Box<Agg>),
@@ -146,18 +849,18 @@ pub mod leveled {
             space: Space,
             term: Box<Src<Term>>,
         },
-        #[sugar(into = expr::percent_call)]
+        #[sugar(into = desugar::percent_call)]
         PercentUnary {
             op: PercentOp,
             space: Space,
             term: Box<Src<Term>>,
         },
-        #[sugar(into = expr::string_operation)]
+        #[sugar(into = desugar::string_operation)]
         StringOperation(Box<StringOperation>),
         XTFun(Box<XTFun>),
         ParameterMarker(ParameterMarker),
         Case(Box<Case>),
-        #[sugar(into = expr::odbc_escape)]
+        #[sugar(into = desugar::odbc_escape)]
         OdbcEscape(Box<ODBCEscape>),
         Scalx(Parenthesized<Box<Scalx>>),
         Query(SQLSubquery),
@@ -202,33 +905,33 @@ pub mod leveled {
     #[tygr(name = "special system variable")]
     pub enum SpecialSystemVariable {
         Horolog(StringEqCI!("$HOROLOG")),
-        #[sugar(into = expr::horolog)]
+        #[sugar(into = desugar::horolog)]
         H(StringEqCI!("$H")),
         Job(StringEqCI!("$JOB")),
-        #[sugar(into = expr::job)]
+        #[sugar(into = desugar::job)]
         J(StringEqCI!("$J")),
         Namespace(StringEqCI!("$NAMESPACE")),
         TLevel(StringEqCI!("$TLEVEL")),
-        #[sugar(into = expr::tlevel)]
+        #[sugar(into = desugar::tlevel)]
         TL(StringEqCI!("$TL")),
         Username(StringEqCI!("$USERNAME")),
         ZHorolog(StringEqCI!("$ZHOROLOG")),
-        #[sugar(into = expr::zhorolog)]
+        #[sugar(into = desugar::zhorolog)]
         ZH(StringEqCI!("$ZH")),
         ZJob(StringEqCI!("$ZJOB")),
-        #[sugar(into = expr::zjob)]
+        #[sugar(into = desugar::zjob)]
         ZJ(StringEqCI!("$ZJ")),
-        #[sugar(into = expr::namespace)]
+        #[sugar(into = desugar::namespace)]
         ZNspace(StringEqCI!("$ZNSPACE")),
         ZPi(StringEqCI!("$ZPI")),
         ZTimestamp(StringEqCI!("$ZTIMESTAMP")),
         ZTimezone(StringEqCI!("$ZTIMEZONE")),
-        #[sugar(into = expr::ztimestamp)]
+        #[sugar(into = desugar::ztimestamp)]
         ZTS(StringEqCI!("$ZTS")),
-        #[sugar(into = expr::ztimezone)]
+        #[sugar(into = desugar::ztimezone)]
         ZTZ(StringEqCI!("$ZTZ")),
         ZVersion(StringEqCI!("$ZVERSION")),
-        #[sugar(into = expr::zversion)]
+        #[sugar(into = desugar::zversion)]
         ZV(StringEqCI!("$ZV")),
     }
 
@@ -260,7 +963,7 @@ pub mod leveled {
         Sub(StringEq!("-")),
         Div(StringEq!("/")),
         IntDiv(StringEq!("\\")),
-        #[sugar(into = expr::concat)]
+        #[sugar(into = desugar::concat)]
         Underscore(StringEq!("_")),
     }
 
@@ -690,9 +1393,9 @@ pub mod leveled {
             Space,
             Scalx,
         ),
-        #[sugar(into = expr::trim_blank)]
+        #[sugar(into = desugar::trim_blank)]
         SpecScalx(TrimSpec, Space, Option<(StringEqCI!("FROM"), Space)>, Scalx),
-        #[sugar(into = expr::trim_both)]
+        #[sugar(into = desugar::trim_both)]
         ScalxScalx(Option<(Scalx, Space, StringEqCI!("FROM"), Space)>, Scalx),
     }
 
@@ -1032,7 +1735,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "agg")]
-    #[sugar(into = query::agg)]
+    #[sugar(into = desugar::agg)]
     pub enum Agg {
         AggFuncArgs {
             fun: AggFunc,
@@ -1137,7 +1840,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "window rows")]
     pub enum WindowRows {
-        #[sugar(into = expr::rows_between)]
+        #[sugar(into = desugar::rows_between)]
         Single((Space, StringEqCI!("ROWS"), Space), WindowRowsBound),
         Between {
             rows_kw: (Space, StringEqCI!("ROWS"), Space),
@@ -1164,7 +1867,7 @@ pub mod leveled {
     #[tygr(name = "or operator")]
     pub enum OrOperator {
         Or(StringEqCI!("OR")),
-        #[sugar(into = query::or)]
+        #[sugar(into = desugar::or)]
         Exclamation(StringEq!("!")),
     }
 
@@ -1176,7 +1879,7 @@ pub mod leveled {
     #[tygr(name = "and operator")]
     pub enum AndOperator {
         And(StringEqCI!("AND")),
-        #[sugar(into = query::and)]
+        #[sugar(into = desugar::and)]
         Ampersand(StringEq!("&")),
     }
 
@@ -1190,7 +1893,7 @@ pub mod leveled {
     #[tygr(inline)]
     pub enum Negatable<K: Grammar> {
         Plain(K),
-        #[sugar(into = query::plain)]
+        #[sugar(into = desugar::plain)]
         Negated(NotKw, Space, K),
     }
 
@@ -1211,7 +1914,7 @@ pub mod leveled {
     #[tygr(inline)]
     pub enum Implied<K: Grammar + Default> {
         Spelled(Space, K),
-        #[sugar(into = query::spelled)]
+        #[sugar(into = desugar::spelled)]
         Omitted(()),
     }
 
@@ -1225,14 +1928,14 @@ pub mod leveled {
             sp: Space,
             quantifier: Quantifier,
         },
-        #[sugar(into = query::in_any)]
+        #[sugar(into = desugar::in_any)]
         In(Negatable<StringEqCI!("IN")>),
     }
 
     // Parsed as `CondParse`, which reads a comparison's left operand once and then its tail, and
     // converted so that each predicate holds all of its operands.
     #[derive(Print)]
-    #[sugar(into = query::cond)]
+    #[sugar(into = desugar::cond)]
     pub enum Cond {
         Not {
             not_kw: (StringEqCI!("NOT"), Space),
@@ -1759,7 +2462,7 @@ pub mod leveled {
     pub enum Quantifier {
         All(StringEqCI!("ALL")),
         Any(StringEqCI!("ANY")),
-        #[sugar(into = query::any)]
+        #[sugar(into = desugar::any)]
         Some(StringEqCI!("SOME")),
     }
 
@@ -1772,7 +2475,7 @@ pub mod leveled {
             size: PConst,
             close: StringEq!(")"),
         },
-        #[sugar(into = query::size_in_parens)]
+        #[sugar(into = desugar::size_in_parens)]
         Bare {
             kw: (Space, StringEqCI!("SIZE"), Space),
             size: Literal,
@@ -1781,7 +2484,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum PConst {
-        #[sugar(into = query::unnested)]
+        #[sugar(into = desugar::unnested)]
         Nested(StringEq!("("), Box<PConst>, StringEq!(")")),
         Literal(Literal),
     }
@@ -1821,7 +2524,7 @@ pub mod leveled {
     pub struct ColumnName(pub Ident);
 
     #[derive(Grammar)]
-    #[sugar(into = query::selex)]
+    #[sugar(into = desugar::selex)]
     pub struct Selex {
         pub kw: (StringEqCI!("SELECT"), Space),
         pub options: Vec<SelectOption>,
@@ -1971,7 +2674,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "tables")]
-    #[sugar(into = query::tables)]
+    #[sugar(into = desugar::tables)]
     pub struct Tables {
         pub first: Tref,
         #[sugar]
@@ -1989,7 +2692,7 @@ pub mod leveled {
     #[tygr(name = "tref")]
     pub enum Tref {
         Join(JTab),
-        #[sugar(into = query::oj)]
+        #[sugar(into = desugar::oj)]
         OJSyntax {
             open: StringEq!("{"),
             oj: (Ident, Space),
@@ -2033,7 +2736,7 @@ pub mod leveled {
             sp: Space,
             join_kw: StringEqCI!("JOIN"),
         },
-        #[sugar(into = query::inner)]
+        #[sugar(into = desugar::inner)]
         Bare(StringEqCI!("JOIN")),
     }
 
@@ -2171,7 +2874,7 @@ pub mod leveled {
     >;
 
     #[derive(Grammar)]
-    #[sugar(into = query::ordir)]
+    #[sugar(into = desugar::ordir)]
     pub struct Ordir {
         pub expr: Ordit,
         #[sugar]
@@ -2196,12 +2899,12 @@ pub mod leveled {
             limit: Limit,
             offset: Option<Offset>,
         },
-        #[sugar(into = query::offset_fetch)]
+        #[sugar(into = desugar::offset_fetch)]
         OffsetFetch {
             offset: Offset,
             fetch: Option<Fetch>,
         },
-        #[sugar(into = query::fetch_only)]
+        #[sugar(into = desugar::fetch_only)]
         FetchOnly(Fetch),
     }
 
@@ -2222,7 +2925,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[sugar(into = query::offset)]
+    #[sugar(into = desugar::offset)]
     pub struct Offset {
         pub kw: (Space, StringEqCI!("OFFSET"), Space),
         pub count: RowCount,
@@ -2325,7 +3028,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "insert values")]
     pub enum InsertValues {
-        #[sugar(into = stat::set_as_values)]
+        #[sugar(into = desugar::set_as_values)]
         SetList {
             set_kw: StringEqCI!("SET"),
             assignments: (Space, VecSep<Src<SQLSetAssignment>, ArgSep>),
@@ -2338,7 +3041,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[sugar(into = stat::asign)]
+    #[sugar(into = desugar::asign)]
     pub enum Asign {
         SetList {
             set_kw: StringEqCI!("SET"),
@@ -2537,7 +3240,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "rollb")]
-    #[sugar(into = stat::rollback)]
+    #[sugar(into = desugar::rollback)]
     pub struct RollB {
         pub rollback_kw: StringEqCI!("ROLLBACK"),
         #[sugar]
@@ -2555,7 +3258,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "tp option")]
-    #[sugar(into = stat::tp_option)]
+    #[sugar(into = desugar::tp_option)]
     pub enum TPOption {
         InTransaction(StringEqCI!("%INTRANSACTION")),
         BegTrans(StringEqCI!("%BEGTRANS")),
@@ -2708,7 +3411,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "selct")]
-    #[sugar(into = query::selct)]
+    #[sugar(into = desugar::selct)]
     pub struct Selct {
         pub query: Query,
         pub order: Option<Order>,
@@ -5981,5 +6684,669 @@ pub mod leveled {
     pub enum StatsProperty {
         IgnoreFixedStats(StringEqCI!("IGNOREFIXEDSTATS")),
         SkipAutomaticStatsCollection(StringEqCI!("SKIPAUTOMATICSTATSCOLLECTION")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tygr::{Parse, Print};
+
+    fn all_ok(cases: &[&str]) {
+        let failed: Vec<_> = cases.iter().filter(|c| SQL::parse(c).is_err()).collect();
+        assert!(failed.is_empty(), "failed to parse: {failed:#?}");
+    }
+
+    #[test]
+    fn src_nodes_map_their_print_to_their_source() {
+        let text = "SELECT a, b FROM t WHERE a = 1 ORDER BY b";
+        let (printed, mappings) = print_mapped(&SQL::parse(text).unwrap());
+        assert_eq!(printed, text);
+        assert!(mappings.iter().all(|m| m.printed == m.origin));
+        let origins: Vec<&str> = mappings.iter().map(|m| &text[m.origin.clone()]).collect();
+        for node in [
+            "a",
+            "b",
+            "t",
+            "a = 1",
+            "SELECT a, b FROM t WHERE a = 1 ORDER BY b",
+        ] {
+            assert!(origins.contains(&node), "{node} is not among {origins:?}");
+        }
+    }
+
+    // The first query of `text`, for the shape tests.
+    fn selex(text: &str) -> Src<Selex> {
+        let sql = SQL::parse(text).unwrap();
+        let Stat::Selct(stat) = sql.stat.node else {
+            panic!("{text}")
+        };
+        let Some(QTerm::Selex(selex)) = stat.body.query.0.items.into_iter().next() else {
+            panic!("{text}")
+        };
+        selex
+    }
+
+    #[test]
+    fn terms_take_their_core_shapes() {
+        let shapes: Vec<&str> = selex(
+            "SELECT CURRENT_DATE, USER, SYSDATE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP(3), USERNAME, \
+             -a, %SQLUPPER a, %TRUNCATE(a, 3), CAST(a AS INT), TIMESTAMPADD(SQL_TSI_DAY, 1, d), \
+             TIMESTAMPADD(:unit, 1, d), CONVERT(a, SQL_VARCHAR), CONVERT(VARCHAR, a), f(a) FROM t",
+        )
+        .node
+        .selst
+        .select_list
+        .0
+        .items
+        .iter()
+        .map(|item| match &item.node {
+            SelectItem::Expr {
+                expr: Scalx::Legacy(terms),
+                ..
+            } => match &terms.items[0].node {
+                Term::Builtin(_) => "builtin",
+                Term::ScalarFunction(_) => "function",
+                Term::Call(_) => "call",
+                Term::Niladic(..) => "niladic",
+                Term::Column(_) => "column",
+                Term::Unary { .. } => "unary",
+                Term::PercentUnary { .. } => "percent",
+                Term::StringOperation(_) => "string operation",
+                _ => "other",
+            },
+            SelectItem::Star(_) => "*",
+        })
+        .collect();
+        assert_eq!(
+            shapes,
+            [
+                "niladic",
+                "niladic",
+                "niladic",
+                "niladic",
+                "builtin",
+                "column",
+                "unary",
+                "percent",
+                "string operation",
+                "builtin",
+                "builtin",
+                "call",
+                "builtin",
+                "function",
+                "call",
+            ]
+        );
+    }
+
+    #[test]
+    fn conditions_hold_their_operands() {
+        let selex = selex(
+            "SELECT a FROM t WHERE a BETWEEN 1 AND 2 AND b IS NOT NULL AND c = ANY (SELECT c FROM u) \
+             AND d NOT IN (1, 2) AND %NOINDEX e > 3",
+        );
+        let shapes: Vec<&str> = selex.node.where_clause.as_ref().unwrap().prefixed.0.items[0]
+            .0
+            .items
+            .iter()
+            .map(|cond| match &cond.node {
+                Cond::Between {
+                    lhs, lower, upper, ..
+                } => {
+                    assert_eq!(
+                        (lhs.print(), lower.print(), upper.print()),
+                        ("a".into(), "1".into(), "2".into())
+                    );
+                    "between"
+                }
+                Cond::IsNull {
+                    null_kw: Negatable::Negated(..),
+                    ..
+                } => "is not null",
+                Cond::Quantified {
+                    op:
+                        QuantifiedOp::Op {
+                            quantifier: Quantifier::Any(_),
+                            ..
+                        },
+                    ..
+                } => "quantified",
+                Cond::In {
+                    in_kw: Negatable::Negated(..),
+                    ..
+                } => "not in",
+                Cond::Compare {
+                    noindex: Some(_),
+                    rhs,
+                    ..
+                } => {
+                    assert_eq!(rhs.print(), "3");
+                    "compare"
+                }
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            ["between", "is not null", "quantified", "not in", "compare"]
+        );
+    }
+
+    #[test]
+    fn malformed_nested_parens_fail_fast() {
+        let sql = format!(
+            "SELECT a FROM t WHERE {}a = = 1{}",
+            "(".repeat(20),
+            ")".repeat(20)
+        );
+        let start = std::time::Instant::now();
+        let _ = SQL::parse(&sql);
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn in_subquery() {
+        all_ok(&[
+            "SELECT a FROM t WHERE x IN (SELECT y FROM u)",
+            "SELECT a FROM t WHERE x IN (1,2,3)",
+            "SELECT a FROM t WHERE x IN (:a,:b)",
+            "SELECT a FROM t WHERE x IN ((SELECT y FROM u))",
+            "SELECT a FROM t WHERE x NOT IN (SELECT y FROM u WHERE z = 1)",
+        ]);
+    }
+
+    #[test]
+    fn window_functions() {
+        all_ok(&[
+            "SELECT ROW_NUMBER() OVER (ORDER BY Name) FROM t",
+            "SELECT SUM(x) OVER (PARTITION BY d) FROM t",
+            "SELECT COUNT(*) OVER () FROM t",
+            "SELECT COUNT(*), COUNT( * ), SUM(x), MyFunc(1, 2) FROM t",
+            "SELECT COUNT(DISTINCT a), MAX(b), LIST(c) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn cast_types() {
+        all_ok(&[
+            "SELECT CAST(a AS INTEGER) FROM t",
+            "SELECT CAST(a AS INT) FROM t",
+            "SELECT CAST(a AS DECIMAL(10,2)) FROM t",
+            "SELECT CAST(a AS DEC) FROM t",
+            "SELECT CAST(a AS NUMERIC(10, 2)) FROM t",
+            "SELECT CAST(a AS TIMESTAMP) FROM t",
+            "SELECT CAST(a AS TIME) FROM t",
+            "SELECT CAST(a AS DATETIME) FROM t",
+            "SELECT CAST(a AS DATE) FROM t",
+            "SELECT CAST(a AS SMALLDATETIME) FROM t",
+            "SELECT CAST(a AS CHARACTER(10)) FROM t",
+            "SELECT CAST(a AS CHARACTER VARYING(10)) FROM t",
+            "SELECT CAST(a AS CHAR VARYING) FROM t",
+            "SELECT CAST(a AS CHAR(5)) FROM t",
+            "SELECT CAST(a AS MONEY) FROM t",
+            "SELECT CAST(a AS SMALLMONEY) FROM t",
+            "SELECT CAST(a AS POSIXTIME) FROM t",
+            "SELECT CAST(a AS VARCHAR(50)) FROM t",
+            "SELECT CAST(a AS BINARY VARYING(10)) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn non_reserved_aliases() {
+        all_ok(&[
+            "SELECT p.Name AS Name FROM Sample.Person p",
+            "SELECT a AS Value, b AS Text, c AS Number, d Version FROM t",
+            "SELECT a AS State, b AS Year, c AS Month, d AS Day FROM t",
+            "SELECT a AS Comment, b AS Result, c AS Path, d AS Size FROM t",
+            "SELECT a AS Source, b AS Mode, c AS Owner FROM t",
+            "SELECT * FROM Sample.Person Path WHERE Path.Age > 1",
+            "SELECT a FROM t GROUP BY a HAVING COUNT(*) > 1",
+            "SELECT a FROM t ORDER BY a, b DESC",
+            "SELECT a FROM t WHERE a = 1 ORDER BY a",
+            "SELECT a FROM t UNION SELECT b FROM u",
+            "SELECT a, b INTO :x, :y FROM t",
+            "UPDATE t SET a = 1 WHERE b = 2",
+            "DELETE FROM t WHERE b = 2",
+        ]);
+    }
+
+    #[test]
+    fn datatype_specs() {
+        all_ok(&[
+            "CREATE TABLE t (a INTEGER)",
+            "CREATE TABLE t (a INT)",
+            "CREATE TABLE t (a TIMESTAMP)",
+            "CREATE TABLE t (a TIME)",
+            "CREATE TABLE t (a DATETIME)",
+            "CREATE TABLE t (a DATE)",
+            "CREATE TABLE t (a DECIMAL(10,2))",
+            "CREATE TABLE t (a DEC)",
+            "CREATE TABLE t (a CHARACTER(10))",
+            "CREATE TABLE t (a CHAR(10))",
+            "CREATE TABLE t (a LONGVARCHAR)",
+            "CREATE TABLE t (a LONG VARCHAR)",
+            "CREATE TABLE t (a LONGVARBINARY)",
+            "CREATE TABLE t (a LONG)",
+            "CREATE TABLE t (a VARCHAR2(10))",
+            "CREATE TABLE t (a VARCHAR(10))",
+            "CREATE TABLE t (a NATIONAL CHARACTER VARYING(10))",
+            "CREATE TABLE t (a NATIONAL VARCHAR(10))",
+            "CREATE TABLE t (a %Library.String(MAXLEN=50))",
+            "CREATE FUNCTION F(x INT) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { QUIT x }",
+        ]);
+    }
+
+    #[test]
+    fn procedure_names_and_bodies() {
+        all_ok(&[
+            "CREATE PROCEDURE Sample.MyProc(IN a INT) LANGUAGE OBJECTSCRIPT { QUIT }",
+            "DROP PROCEDURE Sample.MyProc",
+            "CREATE PROCEDURE P() LANGUAGE OBJECTSCRIPT { IF a { SET b = \"}\" } QUIT }",
+            "CREATE TABLE t (a INT, b INT COMPUTECODE { SET {b} = 1 })",
+        ]);
+    }
+
+    #[test]
+    fn alter_table_inside_esql_parens() {
+        all_ok(&[
+            "ALTER TABLE t ADD COLUMN x INT",
+            "ALTER TABLE t ADD (x INT, y INT)",
+            "ALTER TABLE t MODIFY x VARCHAR(10)",
+            "ALTER TABLE t MODIFY (x VARCHAR(10), y INT)",
+            "ALTER TABLE t ADD x INT, y INT",
+            "ALTER TABLE t ADD CONSTRAINT c UNIQUE (a)",
+        ]);
+        assert!(crate::cos::Command::parse("&sql(ALTER TABLE t ADD COLUMN x INT)").is_ok());
+    }
+
+    #[test]
+    fn nullable_first_variants() {
+        all_ok(&[
+            "CREATE UNIQUE INDEX i ON t (a)",
+            "CREATE BITMAP INDEX i ON t (a)",
+            "CREATE BITSLICE INDEX i ON t (a)",
+            "CREATE COLUMNAR INDEX i ON t (a)",
+            "CREATE INDEX i ON t (a)",
+            "CREATE TABLE t (a INT) WITH %CLASSPARAMETER DEFAULTGLOBAL = '^x'",
+        ]);
+    }
+
+    #[test]
+    fn table_valued_functions() {
+        all_ok(&[
+            "SELECT * FROM Sample.SP_Sample_By_Name('A')",
+            "SELECT * FROM JSON_TABLE('[1]', '$' COLUMNS (a INT PATH '$'))",
+            "SELECT * FROM Sample.Person",
+            "SELECT * FROM Sample.Person p, Sample.Company c",
+            "SELECT * FROM (SELECT a FROM t) x",
+            "SELECT * FROM (t1 JOIN t2 ON t1.a = t2.a)",
+        ]);
+    }
+
+    #[test]
+    fn host_variables() {
+        all_ok(&[
+            "SELECT a INTO :row() FROM t",
+            "SELECT a, b INTO :arr() FROM t",
+            "SELECT a FROM t WHERE b = :obj.Prop.Sub",
+            "SELECT a FROM t WHERE b = :obj.Prop.Sub.Deep",
+            "SELECT a FROM t WHERE b = :i%Prop()",
+            "SELECT a FROM t WHERE b = :i%%Data",
+            "SELECT a FROM t WHERE b = :Person.\"Home City\"",
+            "SELECT a FROM t WHERE b = :naïve",
+            "SELECT a FROM t WHERE b = :x",
+            "SELECT a FROM t WHERE b = :%x",
+            "SELECT a FROM t WHERE b = :arr(1,2)",
+            "SELECT a FROM t WHERE b = :arr(\"k\")",
+            "SELECT a FROM t WHERE b = :arr(:i)",
+            "SELECT a FROM t WHERE b = :obj.Prop",
+            "SELECT a FROM t WHERE b = :oref.%Prop",
+            "SELECT a FROM t WHERE b = :i%Name",
+            "SELECT a FROM t WHERE b = :request.GetValueAt(\"PID:SetIDPID\")",
+        ]);
+    }
+
+    #[test]
+    fn row_limiting() {
+        all_ok(&[
+            "SELECT a FROM t LIMIT 10",
+            "SELECT a FROM t ORDER BY a LIMIT 10 OFFSET 5",
+            "SELECT a FROM t OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY",
+            "SELECT a FROM t LIMIT :n",
+            "SELECT a FROM t LIMIT (10)",
+            "SELECT a FROM t x ORDER BY a LIMIT 10 OFFSET 5",
+        ]);
+    }
+
+    #[test]
+    fn joins() {
+        all_ok(&[
+            "SELECT * FROM t1 NATURAL JOIN t2",
+            "SELECT * FROM t1 NATURAL INNER JOIN t2",
+            "SELECT * FROM t1 NATURAL LEFT OUTER JOIN t2",
+            "SELECT * FROM t1 LEFT JOIN t2 ON t1.a = t2.a",
+            "SELECT * FROM t1 CROSS JOIN t2",
+        ]);
+    }
+
+    #[test]
+    fn one_order_direction() {
+        assert!(SQL::parse("SELECT a FROM t ORDER BY a ASC DESC").is_err());
+    }
+
+    #[test]
+    fn dml_options_of_each_statement() {
+        all_ok(&[
+            "INSERT %NOSTREAM INTO t (a) VALUES (1)",
+            "UPDATE %ILOCK %NOSTREAM t SET a = 1",
+            "DELETE %NOJOURN FROM t",
+            "TRUNCATE TABLE %NOCHECK %NOLOCK %NOJOURN t",
+        ]);
+        for rejected in [
+            "INSERT %ILOCK INTO t (a) VALUES (1)",
+            "DELETE %NOSTREAM FROM t",
+            "DELETE %ILOCK FROM t",
+            "TRUNCATE TABLE %NOINDEX t",
+            "TRUNCATE TABLE %PROFILE t",
+        ] {
+            assert!(SQL::parse(rejected).is_err(), "{rejected}");
+        }
+    }
+
+    #[test]
+    fn distinct_by() {
+        all_ok(&[
+            "SELECT DISTINCT BY (Name) Name, Age FROM t",
+            "SELECT DISTINCT Name FROM t",
+            "SELECT COUNT(DISTINCT BY (a) b) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn column_primary_key() {
+        all_ok(&[
+            "CREATE TABLE t (a INT PRIMARY KEY)",
+            "CREATE TABLE t (a INT PRIMARY KEY, b INT NOT NULL)",
+            "CREATE TABLE t (a INT, PRIMARY KEY (a))",
+        ]);
+    }
+
+    #[test]
+    fn odbc_escapes() {
+        all_ok(&[
+            "SELECT a FROM t WHERE d = {ts '2020-01-01 00:00:00'}",
+            "SELECT a FROM t WHERE d = {d '2020-01-01'}",
+            "SELECT a FROM t WHERE d = {t '00:00:00'}",
+        ]);
+    }
+
+    #[test]
+    fn misc_low() {
+        all_ok(&[
+            "SELECT TRIM(LEADING ' ' FROM Name) FROM t",
+            "SELECT TRIM(BOTH FROM Name) FROM t",
+            "SELECT TRIM(' ' FROM Name) FROM t",
+            "SELECT TRIM(Name) FROM t",
+            "SELECT TRIM(BOTH ' ' FROM Name) FROM t",
+            "SELECT COUNT( * ) FROM t",
+            "DROP INDEX t.i",
+            "DROP INDEX Sample.Person.NameIdx",
+            "DROP INDEX i ON t",
+            "DROP INDEX i",
+            "CREATE QUERY Q(a INT) LANGUAGE OBJECTSCRIPT EXECUTE (INOUT QHandle BINARY(255)) { QUIT } FETCH (INOUT QHandle BINARY(255), INOUT Row %List, INOUT AtEnd INT) { QUIT } CLOSE (INOUT QHandle BINARY(255)) { QUIT }",
+            "SELECT $$$MyMacro(1) FROM t",
+            "SELECT $$$MyMacro FROM t",
+            "SELECT a FROM t WHERE a not> 1 OR a not< 2 OR a not[ 'x' OR a %contains ('y')",
+            "SELECT a FROM t WHERE a NOT> 1 OR a %CONTAINS ('y', 'z') OR a %CONTAINSTERM ('w')",
+            "SELECT a FROM t WHERE a NOT] 'x' AND a %STARTSWITH 'y' AND a <= 1",
+            "( SELECT a FROM t ) UNION ( SELECT b FROM u )",
+        ]);
+    }
+
+    #[test]
+    fn create_trigger() {
+        all_ok(&[
+            "CREATE TRIGGER trg AFTER INSERT ON t LANGUAGE OBJECTSCRIPT { QUIT }",
+            "CREATE OR REPLACE TRIGGER TrigBUOF BEFORE UPDATE OF Home_Street,Home_City ON Sample.Person REFERENCING OLD ROW AS o NEW ROW AS n FOR EACH ROW WHEN (o.Age > 1) LANGUAGE SQL BEGIN INSERT INTO log VALUES (1); END",
+            "CREATE TRIGGER TrigAD AFTER UPDATE,DELETE ORDER 4 ON Sample.Person FOR EACH STATEMENT BEGIN INSERT INTO log VALUES (1); END",
+            "DROP TRIGGER trg",
+            "DROP TRIGGER IF EXISTS trg FROM t",
+        ]);
+    }
+
+    #[test]
+    fn special_system_variable_full_names() {
+        all_ok(&[
+            "SELECT $HOROLOG + 1 INTO :x",
+            "SELECT $H + 1 INTO :x",
+            "SELECT Name INTO :x FROM t WHERE a < $HOROLOG",
+            "SELECT $JOB, $TLEVEL, $ZHOROLOG, $ZJOB, $ZVERSION INTO :a, :b, :c, :d, :e",
+            "SELECT $J, $TL, $ZH, $ZJ, $ZV INTO :a, :b, :c, :d, :e",
+        ]);
+    }
+
+    #[test]
+    fn window_order_direction_and_offsets() {
+        all_ok(&[
+            "SELECT ROW_NUMBER() OVER (ORDER BY Name DESC) FROM t",
+            "SELECT NTH_VALUE(Name, 2) OVER (ORDER BY Name) FROM t",
+            "SELECT LAG(Name, 1) OVER (ORDER BY Name) FROM t",
+            "SELECT LEAD(a, 1, 0) OVER (PARTITION BY Age ORDER BY Name ASC, a DESC) FROM t",
+            "SELECT COUNT(*) OVER (PARTITION BY Age) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn all_before_expression() {
+        all_ok(&[
+            "SELECT ALL Name FROM t",
+            "SELECT COUNT(ALL Name) FROM t",
+            "SELECT ALLOWED FROM t",
+            "SELECT COUNT(ALLOWED) FROM t",
+        ]);
+    }
+
+    #[test]
+    fn for_some_with_blank_before_condition() {
+        all_ok(&[
+            "SELECT a FROM t WHERE FOR SOME (u AS e) (e.a = t.a)",
+            "SELECT a FROM t WHERE FOR SOME (u)(u.a = t.a)",
+        ]);
+    }
+
+    #[test]
+    fn odbc_escape_blank_before_close() {
+        all_ok(&[
+            "SELECT {d '2020-01-01' } FROM t",
+            "SELECT {fn NOW() } FROM t",
+            "SELECT {fn NOW()} + 1 FROM t",
+            "SELECT p.Name FROM {oj t p LEFT OUTER JOIN u c ON p.a = c.a}",
+            "SELECT p.Name FROM {oj t p LEFT OUTER JOIN u c ON p.a = c.a }",
+        ]);
+    }
+
+    #[test]
+    fn grant_revoke_objects() {
+        all_ok(&[
+            "GRANT USE ON FOREIGN SERVER s1 TO u1",
+            "GRANT USE ON FOREIGN SERVERS s1, s2 TO u1",
+            "GRANT USE ON SERVER s1 TO u1",
+            "GRANT SELECT ON Servers TO u1",
+            "GRANT SELECT ON Server TO u1",
+            "GRANT SELECT ON ServerLog TO u1",
+            "GRANT SELECT ON Servers1 TO u1",
+            "GRANT SELECT ON Servers, Other TO u1",
+            "grant select on cubes c1, c2 to u1",
+            "REVOKE SELECT ON CUBE c1 FROM u1",
+            "REVOKE SELECT ON CUBES c1, c2 FROM u1",
+            "REVOKE USE ON FOREIGN SERVER s1 FROM u1",
+            "REVOKE SELECT ON Servers FROM u1",
+            "REVOKE SELECT ON SCHEMA SQLUser FROM u1",
+            "REVOKE SELECT ON * FROM u1",
+        ]);
+    }
+
+    #[test]
+    fn qualified_index_names() {
+        all_ok(&[
+            "SELECT Name FROM %IGNOREINDEX t.NameIdx t",
+            "SELECT Name FROM %IGNOREINDEX SQLUser.t.NameIdx SQLUser.t",
+            "SELECT Name FROM %IGNOREINDEX NameIdx t",
+            "SELECT Name FROM %IGNOREINDEX SQLUser.t.* SQLUser.t",
+            "SELECT Name FROM t WHERE %ID %FIND SEARCH_INDEX(t.NameIdx, 'foo')",
+        ]);
+    }
+
+    #[test]
+    fn reserved_words_are_not_aliases() {
+        all_ok(&["SELECT Name %INTOLIST :x FROM t", "SELECT a FROM %NOBSL t"]);
+        assert!(SQL::parse("SELECT 1 AS Partition INTO :x").is_err());
+        assert!(SQL::parse("SELECT a FROM t %NOBSL").is_err());
+        assert!(SQL::parse("SELECT a FROM t Partition").is_err());
+    }
+
+    #[test]
+    fn longer_keyword_before_its_prefix() {
+        all_ok(&[
+            "CREATE TABLE t (a TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE t (a TIMESTAMP DEFAULT CURRENT_TIMESTAMP(3))",
+            "CREATE TABLE t (a TIME DEFAULT CURRENT_TIME)",
+            "CREATE TABLE t (a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+            "CREATE TABLE t (a TIME ON UPDATE CURRENT_TIME)",
+            "ALTER TABLE t CONVERT SHARDED",
+            "ALTER TABLE t CONVERT SHARD",
+        ]);
+    }
+
+    #[test]
+    fn view_check_option_level() {
+        all_ok(&[
+            "CREATE VIEW v AS SELECT a FROM t WITH CASCADED CHECK OPTION",
+            "CREATE VIEW v AS SELECT a FROM t WITH CASCADE CHECK OPTION",
+            "CREATE VIEW v AS SELECT a FROM t WITH LOCAL CHECK OPTION",
+            "CREATE VIEW v AS SELECT a FROM t WITH CHECK OPTION",
+        ]);
+        assert!(SQL::parse("CREATE VIEW v AS SELECT a FROM t WITH CHECK CASCADED OPTION").is_err());
+        assert!(SQL::parse("CREATE VIEW v AS SELECT a FROM t WITH CHECK LOCAL OPTION").is_err());
+    }
+
+    #[test]
+    fn blanks_between_adjacent_clauses() {
+        all_ok(&[
+            "CREATE TABLE t (a INT, b INT, FOREIGN KEY (a) REFERENCES u (a) ON DELETE CASCADE ON UPDATE NO ACTION)",
+            "CREATE TABLE t (a INT, FOREIGN KEY (a) REFERENCES u (a) ON UPDATE NO ACTION ON DELETE CASCADE)",
+            "CREATE USER u IDENTIFIED BY 'pw'",
+            "CREATE USER u IDENTIFY BY pw",
+            "ALTER USER u PASSWORD 'pw'",
+            "ALTER USER u WITH PASSWORD 'pw'",
+            "THROUGH FOREIGN SERVER fs SELECT a FROM t",
+            "CREATE INDEX i ON t (a) WITH DATA (b) PAD_INDEX",
+            "CREATE INDEX i ON t (a) WITH PAD_INDEX, FILLFACTOR = 80",
+            "CREATE INDEX i ON t (a) WITH DATA (b), PAD_INDEX",
+        ]);
+    }
+
+    #[test]
+    fn alter_column_clauses_are_not_types() {
+        all_ok(&[
+            "ALTER TABLE t ALTER COLUMN b NOT NULL",
+            "ALTER TABLE t ALTER COLUMN b SET DEFAULT 1",
+            "ALTER TABLE t ALTER COLUMN b DROP DEFAULT",
+            "ALTER TABLE t ALTER COLUMN b RENAME c",
+            "ALTER TABLE t ALTER COLUMN b COLLATE %EXACT",
+            "ALTER TABLE t MODIFY b DEFAULT 'x' NOT NULL",
+            "ALTER TABLE t ALTER COLUMN b %String(MAXLEN=20)",
+            "ALTER TABLE t ALTER COLUMN b %Library.String(MAXLEN=20)",
+            "CREATE TABLE t (a %String(MAXLEN=20), n NUMERIC(10,2))",
+        ]);
+    }
+
+    #[test]
+    fn package_qualified_class_names() {
+        all_ok(&[
+            "CREATE INDEX i ON t (a) AS %iFind.Index.Basic",
+            "DROP PROCEDURE IF EXISTS P FROM Pkg.Cls",
+            "DROP FUNCTION f FROM Pkg.Cls",
+            "CREATE PROCEDURE P() FOR Pkg.Cls LANGUAGE OBJECTSCRIPT { QUIT }",
+        ]);
+    }
+
+    #[test]
+    fn optional_clauses() {
+        all_ok(&[
+            "CREATE TABLE t (a INT) SHARD KEY (a)",
+            "CREATE TABLE t (a INT) PARTITION BY RANGE (a) INTERVAL 10",
+            "CREATE TABLE t (a INT) SHARD KEY (a) PARTITION BY RANGE (a) INTERVAL 10",
+            "CREATE TABLE t (a INT) SHARD KEY (a) WITH %CLASSPARAMETER DEFAULTGLOBAL = '^x'",
+            "CREATE TABLE t (a INT) IN dbspace",
+            "CREATE TABLE t (a INT) EXTENT SIZE 16",
+            "DROP FOREIGN SERVER fs",
+            "DROP FOREIGN SERVER fs CASCADE",
+            "DROP FOREIGN TABLE ft",
+            "CREATE TABLE t (a VARCHAR(10) %TRUNCATE(5))",
+            "CREATE TABLE t (a VARCHAR(10) %TRUNCATE(5) ALPHAUP)",
+            "CREATE TABLE t (a VARCHAR(10) COLLATE %TRUNCATE(5))",
+            "CREATE FOREIGN SERVER fs FOREIGN DATA WRAPPER CSV HOST '/tmp'",
+            "CREATE FUNCTION f() RETURNS INT LANGUAGE SQL BEGIN RETURN 1; END",
+            "CREATE FUNCTION f() RETURNS INT LANGUAGE SQL BEGIN INSERT INTO log VALUES (1); RETURN 1; END",
+        ]);
+    }
+
+    #[test]
+    fn alter_table_alternatives() {
+        all_ok(&[
+            "ALTER TABLE t DROP ALL PARTITIONS",
+            "ALTER TABLE t DROP PARTITION ID '1'",
+            "ALTER TABLE t TRUNCATE PARTITION ID '1'",
+            "ALTER TABLE t DROP PARTITION ('x')",
+            "ALTER TABLE t TRUNCATE PARTITION ('x')",
+            "ALTER TABLE t DROP PARTITION BETWEEN 1 AND 2",
+            "ALTER TABLE t MOVE PARTITION ('x') TO db",
+            "ALTER TABLE t DROP COLUMN b",
+            "ALTER TABLE t DROP b, c",
+            "ALTER TABLE t ADD FOREIGN KEY fk (a) REFERENCES u (a)",
+            "ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES u (a)",
+            "ALTER TABLE t CONVERT STORAGETYPE = COLUMNAR",
+            "ALTER TABLE t CONVERT TO STORAGETYPE = COLUMNAR",
+        ]);
+        assert!(SQL::parse("ALTER TABLE t CONVERT COLUMNAR").is_err());
+        assert!(SQL::parse("ALTER TABLE t DROP PARTITION HASH (a) IN 4 PARTITIONS").is_err());
+    }
+
+    #[test]
+    fn single_tokens_as_iris_takes_them() {
+        all_ok(&[
+            "DROP AGGREGATE IF EXISTS Foo.Bar",
+            "DROP AGGREGATE Foo.Bar",
+            "CREATE ML CONFIGURATION c PROVIDER PMML",
+            "CREATE ML CONFIGURATION c PROVIDER AutoML USING {\"x\":1}",
+            "CREATE MODEL m PREDICTING (a) FROM t",
+            "CREATE MODEL m PREDICTING (a) FROM t USING {\"seed\":3}",
+            "CREATE MODEL m PREDICTING (a) FROM (SELECT a FROM t)",
+            "TRAIN MODEL m FROM t",
+            "VALIDATE MODEL m FROM t",
+            "CREATE TABLE t (a TIMESTAMP DEFAULT GETUTCDATE())",
+            "TUNE TABLE t %SAMPLE_PERCENT .5",
+            "TUNE TABLE t %SAMPLE_PERCENT 1",
+            "TUNE TABLE t %SAMPLE_PERCENT 0.25",
+            "LOAD DATA FROM FILE '/x.csv' INTO t USING {\"from\":{\"file\":{\"header\":true}}}",
+            "LOAD DATA FROM FILE '/x.csv' INTO t USING '{\"from\":{\"file\":{\"header\":true}}}'",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs TABLE 'x'",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs FILE 'x.csv' COLUMNS (a INT) USING {\"x\":1}",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs QUERY 'SELECT 1'",
+            "CREATE FOREIGN TABLE ft (a INT) SERVER fs TABLE 'x' USING '{\"x\":1}'",
+        ]);
+        for rejected in [
+            "DROP IF EXISTS AGGREGATE Foo.Bar",
+            "CREATE ML CONFIGURATION c PROVIDER PMMML",
+            "CREATE ML CONFIGURATION c PROVIDER AutoML USING '{\"x\":1}'",
+            "TUNE TABLE t %SAMPLE_PERCENT 2",
+            "TUNE TABLE t %SAMPLE_PERCENT 0",
+            "TUNE TABLE t %SAMPLE_PERCENT 25%",
+            "SELECT SYSDATE() FROM t",
+        ] {
+            assert!(SQL::parse(rejected).is_err(), "{rejected}");
+        }
     }
 }

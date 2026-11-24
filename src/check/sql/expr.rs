@@ -1,5 +1,5 @@
 use either::Either;
-use tygr_objectscript::sql::grammar::core::*;
+use tygr_objectscript::sql::core::*;
 
 use super::{SqlProcedureUse, Walk, Walker};
 

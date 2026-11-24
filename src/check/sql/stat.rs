@@ -1,6 +1,6 @@
 use either::Either;
 use tygr::Print;
-use tygr_objectscript::sql::{Space, grammar::core::*};
+use tygr_objectscript::sql::{Space, core::*};
 
 use super::{SqlProcedureUse, Walk, Walker, name_of};
 
