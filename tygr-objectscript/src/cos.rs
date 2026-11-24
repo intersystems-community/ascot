@@ -3322,7 +3322,9 @@ pub enum FormalDefaultValue {
     },
     // `= …`: a declaration's optional argument without a default; IRIS compiles no such source.
     Elided(StringEq!("…")),
-    Literal(Literal<FormalNumber>),
+    Literal(Literal<FormalNumber>, NotFollowedBy<IsOSExprSafe>),
+    // IRIS's own classes carry these, as exported, though its class loader refuses them in source.
+    Expression(Expr),
 }
 
 #[derive(Grammar)]

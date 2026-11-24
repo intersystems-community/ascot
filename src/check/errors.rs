@@ -2755,10 +2755,11 @@ type_error_kinds! {
     #[severity = Warning]
     #[message = "Class '{name}' is also declared in {other_uri}"]
     DuplicateClassName { name: String, other_uri: String },
-    /// A method body, or an argument default in `{braces}`, that doesn't parse; the rest of the
-    /// body goes unchecked. IRIS refuses to compile the class. The message names the mistake where
-    /// it is clear, such as an unknown command or a function given the wrong arguments, and
-    /// otherwise lists what could come next at that point; correct the marked line.
+    /// A method body that doesn't parse, the rest of it going unchecked, or an argument default
+    /// that is neither a literal nor an expression in `{braces}`. IRIS refuses to compile the
+    /// document. The message names the mistake where it is clear, such as an unknown command or a
+    /// function given the wrong arguments, and otherwise lists what could come next at that point;
+    /// correct the marked line.
     ///
     /// ```objectscript
     /// Class Demo.InvalidSyntax
