@@ -1,5 +1,0 @@
-error: `into` goes on a variant or on the type, not on a field
-  --> tests/levels/into_on_field.rs:16:9
-   |
-16 |         #[sugar(into = |all| None)]
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^

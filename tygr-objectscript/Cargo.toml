@@ -13,7 +13,6 @@ tygr-objectscript-macros = { version = "0.7.0", path = "../tygr-objectscript-mac
 
 [dev-dependencies]
 serde_json = "1"
-trybuild = "1"
 
 [lints.clippy]
 # Grammars are written as nested generic types by design; complexity here

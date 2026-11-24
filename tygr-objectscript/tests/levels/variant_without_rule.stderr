@@ -1,5 +1,0 @@
-error: a sugar variant needs a rule: `#[sugar(into = EXPR)]` on the variant, or on the type
-  --> tests/levels/variant_without_rule.rs:15:9
-   |
-15 |         #[sugar]
-   |         ^^^^^^^^

@@ -4,7 +4,7 @@
 //! `core`, the same minus its syntactic sugar, each `#[sugar]` mark carrying its rewrite into the
 //! core (see `desugar`).
 
-#[tygr_objectscript_macros::levels(full, core, desugar = super::super::desugar::Desugar)]
+#[tygr_objectscript_macros::levels]
 pub mod leveled {
     use either::Either;
     use tygr::*;
