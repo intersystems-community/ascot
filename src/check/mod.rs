@@ -918,6 +918,19 @@ impl<T, B, A> CommaList<T> for VecSep<T, CommaSep<B, A>> {
     }
 }
 
+// Each argument behind the offset just past the `(` or `,` before it, where its gap starts.
+fn args_after_gaps<'b>(
+    env: &CodeEnv<'_>,
+    list: &'b MthArgList,
+) -> impl Iterator<Item = (usize, &'b Ranged<Option<cos::MthArg>>)> {
+    let list = &list.wrapped;
+    let first = list.items[0].start - list.prefix.print().len();
+    let after_commas = list.seps.iter().map(|comma| comma.suffix.start);
+    std::iter::once(first)
+        .chain(after_commas)
+        .zip(list.items(env))
+}
+
 // The conditions after the first of an `If` or `While`, each behind its comma.
 type Conjuncts = [Conjunct];
 
@@ -3462,7 +3475,7 @@ fn check_member_of<'a>(
         let datatype = env.collection_datatype(element);
         if let Some(proc) = collection_method(*kind, element, &mem.id(), datatype) {
             let proc = TyProcedureOrAny::Procedure(proc);
-            return check_call(env, flow, proc, args.items(env), env.range(mem));
+            return check_call(env, flow, proc, args_after_gaps(env, args), env.range(mem));
         }
     }
     check_member(env.value_ty(&base), mem, args, env, flow)
@@ -3631,7 +3644,7 @@ fn check_member<'a>(
                 None => env.resolve_mem::<Methods>(&ty, name.clone(), range, true),
             };
             let method = referenced(env, range, method)?;
-            check_call(env, flow, method, args.items(env), range)
+            check_call(env, flow, method, args_after_gaps(env, args), range)
         }
     }
 }
@@ -3699,7 +3712,7 @@ fn check_super_call<'a>(
 ) -> Result<Option<Ty>, QuasiTypeError> {
     let range = env.range(args);
     let ty = env.resolve_super_mstr(range)?;
-    check_call(env, flow, ty, args.items(env), range)
+    check_call(env, flow, ty, args_after_gaps(env, args), range)
 }
 
 // A member named at `range`, recorded as a reference to where it's declared.
@@ -3771,6 +3784,7 @@ fn check_param_arg<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     par: NormalArg,
+    gap: usize,
     arg: &Ranged<Option<cos::MthArg>>,
     declared_at: Option<bindings::Location>,
 ) -> Result<(), QuasiTypeError> {
@@ -3782,18 +3796,21 @@ fn check_param_arg<'a>(
         };
         if !arg_text.starts_with(&par.name) {
             let prefix = if par.mode.is_none() { "" } else { "." };
-            let (label, padding_right) = if let Some(default) = par.default.as_ref()
+            let label = if let Some(default) = par.default.as_ref()
                 && arg.is_none()
             {
-                (format!("{}{}: {}", prefix, par.name, default), false)
+                format!("{}{}: {}", prefix, par.name, default)
             } else {
-                (format!("{}{}:", prefix, par.name), arg.is_some())
+                format!("{}{}:", prefix, par.name)
             };
+            // The editor keeps a hint on the character after it, so one at an argument's first
+            // character is pushed right by what is typed there: it goes where the gap starts.
+            let spaced = arg.is_some() && gap < arg.start;
             env.hint(bindings::InlayHint {
-                position: env.position(arg.start),
+                position: env.position(if spaced { gap } else { arg.start }),
                 label,
-                padding_left: false,
-                padding_right,
+                padding_left: spaced,
+                padding_right: arg.is_some() && !spaced,
             });
         }
     }
@@ -3903,7 +3920,7 @@ fn check_call<'a, 'b>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     base: TyProcedureOrAny,
-    args: impl Iterator<Item = &'b Ranged<Option<cos::MthArg>>>,
+    args: impl Iterator<Item = (usize, &'b Ranged<Option<cos::MthArg>>)>,
     range: bindings::Range,
 ) -> Result<Option<Ty>, QuasiTypeError> {
     match base {
@@ -3911,18 +3928,22 @@ fn check_call<'a, 'b>(
         // An unknown callee may read or write any public variable.
         TyProcedureOrAny::Any => {
             flow.read_write_publics()?;
-            Ok(Some(builtins::check_args_any(env, flow, args)?))
+            Ok(Some(builtins::check_args_any(
+                env,
+                flow,
+                args.map(|(_, arg)| arg),
+            )?))
         }
         TyProcedureOrAny::Procedure(base) => {
             // `f()` parses as one empty argument; it means no argument at all.
             let mut args: Vec<_> = args.collect();
-            if let [only] = args.as_slice()
+            if let [(_, only)] = args.as_slice()
                 && only.is_none()
             {
                 args.clear();
             }
             let mut count = 0;
-            for (i, &arg) in args.iter().enumerate() {
+            for (i, &(gap, arg)) in args.iter().enumerate() {
                 count += 1;
                 let par = if let Some(par) = base.get_arg(i) {
                     par
@@ -3936,12 +3957,13 @@ fn check_call<'a, 'b>(
                         .at(env.range(arg))
                         .into(),
                     );
-                    builtins::check_args_any(env, flow, args[i..].iter().copied())?;
+                    builtins::check_args_any(env, flow, args[i..].iter().map(|&(_, arg)| arg))?;
                     break;
                 };
                 let declared_at = Option::zip(base.uri.clone(), par.declared_at)
                     .map(|(uri, range)| bindings::Location::new(uri, range));
-                check_param_arg(env, flow, par, arg, declared_at).with_range(|| env.range(arg))?;
+                check_param_arg(env, flow, par, gap, arg, declared_at)
+                    .with_range(|| env.range(arg))?;
                 if matches!(
                     arg.deref(),
                     Some(cos::MthArg::Expr {
@@ -4306,7 +4328,7 @@ fn call_label<'a>(
         env,
         flow,
         proc,
-        args.iter().flat_map(|args| args.items(env)),
+        args.iter().flat_map(|args| args_after_gaps(env, args)),
         range,
     )?;
     // A nested label runs on this block's variables: what it assigns is assigned here too.
