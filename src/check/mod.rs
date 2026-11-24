@@ -30,6 +30,7 @@ pub(crate) use similar::top_similar;
 use either::Either::{self, Left, Right};
 use env::*;
 use flow::*;
+use std::collections::HashSet;
 use std::{iter::once, ops::Deref};
 use tygr::{IntoInner, OLC, Parse, Print, Ranged};
 use tygr_objectscript::cos::VecSep;
@@ -2211,7 +2212,6 @@ fn check_try<'a>(
     {
         // `CatchTarget` carries no range of its own; anchor on the catch block instead.
         let range = env.range(catch_block);
-        catch_flow.note_unread_role(local.name.clone(), range, UnreadRole::Catch);
         // What is caught is an exception whatever was thrown: IRIS raises <ILLEGAL VALUE> for a
         // value and <METHOD DOES NOT EXIST> for an object of another class, both
         // %Exception.SystemException (measured on 2026.3). A `#dim` naming a subclass stands.
@@ -2222,7 +2222,11 @@ fn check_try<'a>(
             }
             _ => exception,
         };
-        catch_flow.handle_set(local, ty.into(), range)?
+        let name = local.name.clone();
+        catch_flow.handle_set(local, ty.into(), range)?;
+        // A handler that needs nothing from the exception still names it, as the documentation
+        // prefers to a bare `Catch {`, so the variable counts as read.
+        catch_flow.read(&name)?
     }
     catch_flow.with_block(env.range(catch_block), |flow| catch_block.check(env, flow))?;
     flow.merge(catch_flow)
@@ -2290,11 +2294,16 @@ fn check_for<'a>(
                 declared,
                 infinite,
                 optional,
+                ranged,
             } = check_for_specs(env, flow, specs)?;
             // `var` carries no range of its own; anchor on the loop body instead.
             let range = block.map(|b| env.range(b)).unwrap_or_default();
             if let Left(local) = var.as_local(env, flow)? {
-                flow.handle_set(local, declared.into(), range)?
+                let name = local.name.clone();
+                flow.handle_set(local, declared.into(), range)?;
+                if ranged {
+                    flow.read(&name)?;
+                }
             }
             flow.with_loop(range, optional, infinite, env, |flow| {
                 block.map_or(Ok(()), |block| block.check(env, flow))
@@ -2316,6 +2325,8 @@ struct CheckForSpecs {
     infinite: bool,
     // true if the for loop can be empty
     optional: bool,
+    // true if a spec is a range, whose increment reads the variable whether or not the body does
+    ranged: bool,
 }
 
 fn check_for_specs<'a, T>(
@@ -2326,6 +2337,7 @@ fn check_for_specs<'a, T>(
     let mut declared = None;
     let mut infinite = false;
     let mut optional = true;
+    let mut ranged = false;
     for spec in specs.items.iter() {
         let spec_ty = match spec {
             cos::ForSpec::Range {
@@ -2333,6 +2345,7 @@ fn check_for_specs<'a, T>(
                 increment,
                 end,
             } => {
+                ranged = true;
                 let start = start.to_ty(env, flow)?;
                 increment.to_ty(env, flow)?;
                 if let Some(end) = end.as_deref() {
@@ -2356,6 +2369,7 @@ fn check_for_specs<'a, T>(
         declared: declared.unwrap(),
         infinite,
         optional,
+        ranged,
     })
 }
 
@@ -4945,10 +4959,38 @@ pub(crate) fn check_cls(
         };
         diagnostics.push(err.into());
     }
-    let mut include_labels = env
-        .base
-        .include_labels(&env.base.inherited_include_names(cls));
-    include_labels.extend(env.base.include_labels(&include_names));
+    // In name order, as IRIS compiles them: a method body's `#define` reaches the methods after it.
+    let mut members = cls.members.in_order();
+    members.sort_by(|a, b| a.name.it.cmp(&b.name.it));
+    let mut include_labels = Labels::new();
+    let mut seen = HashSet::new();
+    for include in (env.base.inherited_include_names(cls).iter())
+        .chain(&include_names)
+        .filter(|include| seen.insert(include.as_str()))
+    {
+        let labels = env.base.include_labels(std::slice::from_ref(include));
+        for member in &members {
+            if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
+                && !method.is_abstract
+                && matches!(
+                    method.language.or(cls.keywords.language),
+                    None | Some(bindings::Language::Objectscript | bindings::Language::Tsql)
+                )
+                && let Some(label) = labels.get(&member.name.it)
+            {
+                diagnostics.push(
+                    TypeError::method_named_like_included_label(
+                        member.name.range,
+                        member.name.it.clone(),
+                        include.clone(),
+                        label.procedure().and_then(|label| label.location()),
+                    )
+                    .into(),
+                );
+            }
+        }
+        include_labels.extend(labels);
+    }
     let doc = ClassDocument::new(
         cls.name.it.to_string().into(),
         cls.keywords.language,
@@ -4967,9 +5009,6 @@ pub(crate) fn check_cls(
         )));
     }
     let min_description_lines = min_description_lines(env);
-    // In name order, as IRIS compiles them: a method body's `#define` reaches the methods after it.
-    let mut members = cls.members.in_order();
-    members.sort_by(|a, b| a.name.it.cmp(&b.name.it));
     for member in members {
         if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
             && let Some(min) = min_description_lines

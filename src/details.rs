@@ -349,15 +349,8 @@ pub struct MethodDetails {
 // class document, like `normal_args`.
 pub struct BraceDefault {
     pub name: String,
-    pub value: DefaultValue,
-}
-
-pub enum DefaultValue {
-    Expr(Ranged<cos::Expr>),
-    // The braces' text when it isn't an expression.
-    Braces(WithRange<String>),
-    // No literal; kept for the checker to report.
-    Unbraced(bindings::Range),
+    // The expression, or the braces' text when it isn't one, or `…`, a default that is no value.
+    pub value: Either<Ranged<cos::Expr>, WithRange<String>>,
 }
 
 pub enum RoutineElementKind {
@@ -1136,14 +1129,6 @@ fn process_member(
     }
 }
 
-// A string or a signed number, all IRIS takes unbraced (2026.2); a label default need only begin
-// with one.
-pub(crate) fn literal_prefix(text: &str) -> Option<usize> {
-    let string = cos::OSString::parse_prefix(text).map(|(_, end)| end);
-    let number = <(Option<cos::PlusMinus>, cos::Number)>::parse_prefix(text).map(|(_, end)| end);
-    string.or(number).ok()
-}
-
 fn method_kind(
     olc: &OLC,
     src: &str,
@@ -1165,22 +1150,13 @@ fn method_kind(
             let default = formal.default?.prefixed;
             let at = olc.range(&default);
             let value = match default.into_inner() {
-                cos::FormalDefaultValue::Brace { expr, .. } => DefaultValue::Expr(expr),
+                cos::FormalDefaultValue::Brace { expr, .. } => Left(expr),
                 cos::FormalDefaultValue::Other(cos::OSExpr::Brace { content, .. }) => {
                     let range = olc.range(&content);
-                    DefaultValue::Braces(WithRange::new(content.print(), range))
+                    Right(WithRange::new(content.print(), range))
                 }
-                cos::FormalDefaultValue::Other(other) => {
-                    let text = other.print();
-                    // A point must be followed by a digit: IRIS refuses `= 1.` and `= 1.E3` (2026.2).
-                    let point_ok = text
-                        .find('.')
-                        .is_none_or(|i| text[i + 1..].starts_with(|c: char| c.is_ascii_digit()));
-                    if literal_prefix(&text) == Some(text.len()) && point_ok {
-                        return None;
-                    }
-                    DefaultValue::Unbraced(at)
-                }
+                cos::FormalDefaultValue::Elided(_) => Right(WithRange::new("…".to_string(), at)),
+                cos::FormalDefaultValue::Other(_) => return None,
             };
             Some(BraceDefault { name, value })
         })

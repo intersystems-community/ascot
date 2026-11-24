@@ -241,10 +241,11 @@ fn formal(mode: Option<RefMode>, name: &str, t: Option<&str>, default: Option<&s
     format!("{mode}{name}{}{default}", as_type(t))
 }
 
-// A number, one quoted string, or an expression already in the `{}` any other default needs in
-// class syntax (IRIS reports some with their braces and some without).
+// A number, one quoted string, `…` (optional, with no default to speak of), or an expression
+// already in the `{}` any other default needs in class syntax (IRIS reports some with their braces
+// and some without).
 fn literal(d: &str) -> bool {
-    if d.parse::<f64>().is_ok() || (d.starts_with('{') && d.ends_with('}')) {
+    if d == "…" || d.parse::<f64>().is_ok() || (d.starts_with('{') && d.ends_with('}')) {
         return true;
     }
     let Some(body) = d.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
@@ -783,5 +784,29 @@ mod tests {
             "{}",
             declared.source()
         );
+    }
+
+    // `= …`: optional, with no default to speak of; the marker is read and written as it stands.
+    #[test]
+    fn an_elided_default_is_kept_as_written() {
+        let header = "Method M(a As %String = …, rest...) As %String";
+        let declared = DeclaredClass {
+            doc: String::new(),
+            header: "Class Demo.Elided".to_string(),
+            import: vec![],
+            include: vec![],
+            storage: None,
+            members: vec![DeclaredMember {
+                doc: String::new(),
+                header: header.to_string(),
+                aliases: vec![],
+            }],
+        };
+        let info = declared.to_class_info("Demo.Elided").expect("parses");
+        let MemberKind::Method(signature) = &info.members[0].kind else {
+            panic!("{:?}", info.members[0].kind);
+        };
+        assert_eq!(signature.normal[0].default.as_deref(), Some("…"));
+        assert_eq!(DeclaredClass::from(&info).members[0].header, header);
     }
 }
