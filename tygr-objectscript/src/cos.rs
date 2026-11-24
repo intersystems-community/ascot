@@ -3314,6 +3314,8 @@ pub enum FormalDefaultValue {
         expr: Ranged<Expr>,
         close: Raw<(Space, StringEq!("}"))>,
     },
+    // `= …`: a declaration's optional argument without a default; IRIS compiles no such source.
+    Elided(StringEq!("…")),
     // Including braces whose text is no expression, for the checker to report.
     Other(OSExpr),
 }
@@ -7600,6 +7602,24 @@ mod regression_tests {
     #[test]
     fn variable_names_may_start_with_or_contain_any_letter() {
         routine(" s Ω=1,aé=3,%é=2 s ^é=2,^a.é.b=1,^|\"USER\"|é=3,^%é=4\n").expect("Ok");
+    }
+
+    #[test]
+    fn elided_formal_default_beside_a_variadic_formal() {
+        let text =
+            "Class A.E\n{\n\nMethod M(a As %String = …, args...) As %String\n{\n quit 1\n}\n\n}\n";
+        let cls = ClassDefinition::parse(text).expect("Ok");
+        let header = &methods(&cls)[0].header;
+        let spec = header.formal_spec.as_ref().expect("formals");
+        let elided: Vec<_> = (spec.formals().into_iter())
+            .map(|formal| {
+                let default = formal.default.as_ref()?;
+                Some(matches!(*default.prefixed, FormalDefaultValue::Elided(_)))
+            })
+            .collect();
+        assert_eq!(elided, [Some(true), None]);
+        assert!(spec.formals()[1].variadic.is_some());
+        assert_eq!(cls.print(), text);
     }
 
     #[test]

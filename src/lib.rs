@@ -92,6 +92,7 @@ pub use tygr_objectscript::{cos, sql};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    hash::Hash,
     sync::Arc,
 };
 
@@ -103,6 +104,7 @@ use crate::{
     check::WorkspaceEnv,
     cos::Routine,
     details::{ClassDetails, MemberKindSpecificDetails, WithRange, with_range_name},
+    macro_expand::Fidelity,
 };
 
 // The only thing that decides how a document is analyzed: `.cls` files are checked as classes;
@@ -546,12 +548,15 @@ impl WorkspaceStruct {
                         let details = details::routine_element_kind(olc, element)?;
                         Some((details.name.range, element))
                     })
-                    .find(|(name, _)| rtn.map.relocate_source_range(*name) == Some(*range))?;
+                    .find(|(name, _)| {
+                        rtn.map.map_lsp_range(*name).map(|(range, _)| range) == Some(*range)
+                    })?;
                 let end = olc.position(details::routine_element_end(element));
-                rtn.map.relocate_source_range(bindings::Range {
+                let declaration = bindings::Range {
                     start: name.start,
                     end,
-                })
+                };
+                Some(rtn.map.map_lsp_range(declaration)?.0)
             }
             DocKind::Inc => Some(full_range(&self.doc_text(uri)?)),
         }
@@ -751,7 +756,10 @@ impl WorkspaceStruct {
             .flat_map(|subs| subs.items.iter())
             .filter_map(|elem| details::routine_element_kind(olc, elem))
             .filter_map(|details| {
-                let range = rtn.map.relocate_source_range(details.name.range)?;
+                let (range, fidelity) = rtn.map.map_lsp_range(details.name.range)?;
+                if fidelity == Fidelity::Inexact {
+                    return None;
+                }
                 Some(bindings::SymbolInfo {
                     name: details.name.it,
                     kind: bindings::SymbolKind::Function,
@@ -809,7 +817,7 @@ impl WorkspaceStruct {
                 };
             }
         };
-        let result = match details {
+        let mut result = match details {
             DocDetails::Cls(_, Some(check)) | DocDetails::Rtn(_, Some(check)) => return check,
             DocDetails::Cls(cls, None) => {
                 let env = self.workspace_env();
@@ -867,32 +875,35 @@ impl WorkspaceStruct {
                         }
                     });
                 }
+                // Hints only strictly inside source text; hovers and references at its edges too.
                 let hints = doc_env
                     .inlay_hints
                     .into_inner()
                     .into_iter()
-                    .filter_map(|hint| {
-                        Some(InlayHint {
-                            position: rtn.map.relocate_position(hint.position)?,
-                            ..hint
-                        })
+                    .filter_map(|hint| match rtn.map.map_position(hint.position)? {
+                        (position, Fidelity::Exact) => Some(InlayHint { position, ..hint }),
+                        _ => None,
                     })
                     .collect();
+                let in_source = |range| {
+                    let (range, fidelity) = rtn.map.map_lsp_range(range)?;
+                    (fidelity != Fidelity::Inexact).then_some(range)
+                };
                 let hover_types = doc_env
                     .hover_types
                     .into_inner()
                     .into_iter()
-                    .filter_map(|(range, ty)| Some((rtn.map.relocate_source_range(range)?, ty)))
+                    .filter_map(|(range, ty)| Some((in_source(range)?, ty)))
                     .collect();
                 let mut references: Vec<_> = env
                     .references()
                     .into_iter()
                     .filter_map(|(range, mut location)| {
-                        let range = rtn.map.relocate_source_range(range)?;
+                        let range = in_source(range)?;
                         // A same-file label/procedure's `Location` is also in
                         // expanded-macro coordinates and needs relocating too.
                         if location.uri == uri {
-                            location.range = rtn.map.relocate_source_range(location.range)?;
+                            location.range = in_source(location.range)?;
                         }
                         Some((range, location))
                     })
@@ -916,9 +927,23 @@ impl WorkspaceStruct {
             // An include that parses has nothing to check on its own -- see `DocDetails::Inc`.
             DocDetails::Inc(_) => return empty,
         };
+        // Recorded twice over, as for an argument a macro body pastes twice.
+        dedup(&mut result.diagnostics, |d| {
+            (d.range, d.code.clone(), d.message.clone())
+        });
+        dedup(&mut result.hints, |hint| {
+            (hint.position, hint.label.clone())
+        });
+        dedup(&mut result.references, Clone::clone);
         self.store_check(uri, result.clone());
         result
     }
+}
+
+// Keeps the first of the items alike in `key`.
+fn dedup<T, K: Hash + Eq>(items: &mut Vec<T>, key: impl Fn(&T) -> K) {
+    let mut seen = HashSet::new();
+    items.retain(|item| seen.insert(key(item)));
 }
 
 // Internal mutability (RefCell) is needed because &mut can't pass wasm boundary for now.
@@ -2535,16 +2560,16 @@ mod tests {
         let uri = "MacroArg.mac".to_string();
         workspace.open(
             uri.clone(),
-            "ROUTINE Test\n\n#define X x\n\n\tSet x = 1\n\tWrite $$$X\n\tQuit\n".to_string(),
+            "ROUTINE Test\n\n#define X(%a) %a\n\n\tSet x = 1\n\tWrite $$$X(x)\n\tQuit\n"
+                .to_string(),
         );
         let diagnostics = workspace.diagnostics(uri.clone());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
-        // Line 5 (`\tWrite $$$X`): a whole-token macro that expands to a bare variable read,
-        // so both `hover_type` (for `x`) and `macro_expansion` (for `$$$X`) apply here.
+        // `x` is a macro argument: a hover type and a macro expansion both apply.
         let position = bindings::Position {
             line: 5,
-            character: 9,
+            character: 12,
         };
         assert!(workspace.hover_type(uri.clone(), position).is_some());
         assert!(workspace.macro_expansion(uri.clone(), position).is_some());
@@ -3223,6 +3248,7 @@ mod tests {
         );
     }
 
+    // A declaration's `= …` makes the argument optional without saying what it is when left out.
     // The mask also corrects the `%OnNew` that `%New` takes its arguments from.
     // Without its own `%OnNew`, `%New` takes its own arguments: an optional `initvalue`.
     #[test]

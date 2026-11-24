@@ -2832,7 +2832,7 @@
     { "header": "ClassMethod %FromObjectSwizzle(oref As %Any, property As %String) As This" },
     { "header": "ClassMethod %FromPVA(global As %String, keymap As %DynamicKeyMap = \"\", flags As %Integer = 0) As This" },
     { "header": "Method %GetSwizzleObject(force As %Integer = 0, Output oid As %ObjectIdentity) As %Status" },
-    { "header": "Method %ToJSON(outstrm As %Stream.Object = \"\") As %String" },
+    { "header": "Method %ToJSON(outstrm As %Stream.Object = …) As %String" },
     { "header": "Method ConvertStreamToValue(value) As This" },
     { "header": "ClassMethod fromPVA(gloref As %RawString, keymap As %DynamicKeyMap = \"\") As This" },
     { "header": "Method put(key As %DataType, value As %Any, type As %String) As This" },
