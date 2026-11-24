@@ -89,7 +89,7 @@ Every diagnostic ascot reports, from the checker's own definitions (`ascot diagn
 | [A6274](A6274.md) | Assigning a {source} to '{name}' declared as {target} |
 | [A6613](A6613.md) | ZQUIT takes an integer of 1 or more; {value} acts as a bare ZQUIT and clears the whole stack |
 | [A6627](A6627.md) | Host variable ':{name}' is undefined here; embedded SQL reads it as NULL |
-| [A6705](A6705.md) | Too few arguments: '{next_arg}' is required |
+| [A6705](A6705.md) | Too few arguments: '{next_arg}' may be required |
 | [A6826](A6826.md) | This '{ty}' value may be undefined{expr} |
 | [A7155](A7155.md) | ObjectScript evaluates operators strictly left to right, without precedence; this may not compute what you expect |
 | [A7408](A7408.md) | Label '{label}' is inside braces, where ascot does not follow labels, so the checks after it may be incomplete |

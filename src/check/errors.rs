@@ -1836,7 +1836,7 @@ type_error_kinds! {
     /// ```
     #[code = "A6705"]
     #[severity = Warning]
-    #[message = "Too few arguments: '{next_arg}' is required"]
+    #[message = "Too few arguments: '{next_arg}' may be required"]
     TooFewArguments { next_arg: String },
     /// The call passes more arguments than the callee declares, and the callee has no `args...`
     /// to take the rest. IRIS compiles the call and raises `<PARAMETER>` when it runs. The first

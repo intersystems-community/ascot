@@ -3223,6 +3223,7 @@ mod tests {
         );
     }
 
+    // A declaration's `= …` makes the argument optional without saying what it is when left out.
     // The mask also corrects the `%OnNew` that `%New` takes its arguments from.
     // Without its own `%OnNew`, `%New` takes its own arguments: an optional `initvalue`.
     #[test]
