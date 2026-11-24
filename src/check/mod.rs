@@ -780,9 +780,7 @@ fn labels_in_blocks<'b>(body: &'b ProcedureBody, out: &mut Vec<&'b cos::RoutineE
     });
 }
 
-// A class method with embedded SQL has `SQLCODE` and every host variable, a formal included, in
-// its public list, and `New`s the ones that are no formal on entry (measured on IRIS 2026.2); a
-// routine's procedure block has neither.
+// IRIS makes SQLCODE and a class method's SQL host variables public, not a routine's (2026.2).
 fn sql_publics(body: &ProcedureBody) -> HashSet<String> {
     let mut names = HashSet::new();
     walk_blocks(body, &mut |it| {

@@ -958,8 +958,7 @@ impl<'a> Flow<'a> {
         )
     }
 
-    // The names a method's embedded SQL makes public (see `sql_publics`): unlike a `PublicList`
-    // entry, one that is no formal holds no value on entry, the compiler's own `New` saw to that.
+    // Made public by embedded SQL; unlike a `PublicList` entry, holding no value on entry.
     pub(crate) fn make_public(
         &mut self,
         names: impl IntoIterator<Item = String>,
