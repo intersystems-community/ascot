@@ -704,6 +704,9 @@ pub mod leveled {
     use super::*;
     use crate::convert::VecSep;
 
+    #[sugar]
+    use super::sugar::*;
+
     #[derive(Grammar)]
     pub struct TName(pub Src<DottedIdent>);
 
@@ -810,26 +813,6 @@ pub mod leveled {
     pub enum Sign {
         Plus(StringEq!("+")),
         Minus(StringEq!("-")),
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(name = "percent op")]
-    pub enum PercentOp {
-        AlphaUp(StringEqCI!("%ALPHAUP")),
-        Exact(StringEqCI!("%EXACT")),
-        External(StringEqCI!("%EXTERNAL")),
-        Internal(StringEqCI!("%INTERNAL")),
-        IntExt(StringEqCI!("%INTEXT")),
-        MinusOp(StringEqCI!("%MINUS")),
-        Mvr(StringEqCI!("%MVR")),
-        OdbcIn(StringEqCI!("%ODBCIN")),
-        OdbcOut(StringEqCI!("%ODBCOUT")),
-        PlusOp(StringEqCI!("%PLUS")),
-        RuntimeIn(StringEqCI!("%RUNTIMEIN")),
-        RuntimeOut(StringEqCI!("%RUNTIMEOUT")),
-        Upper(Either<StringEqCI!("%UPPER"), StringEqCI!("UPPER")>),
-        StringOperator(StringOperator),
     }
 
     #[derive(Grammar)]
@@ -986,31 +969,6 @@ pub mod leveled {
         };
         let args = vec![expr.desugar(), term(truncation)];
         call(&operation.op.print(), args)
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(name = "%string operation")]
-    pub struct StringOperation {
-        pub op: StringOperator,
-        pub args: Args<(Scalx, ArgSep, ColTrun)>,
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(name = "%string operator")]
-    pub enum StringOperator {
-        String(StringEqCI!("%STRING")),
-        SqlString(StringEqCI!("%SQLSTRING")),
-        SqlUpper(StringEqCI!("%SQLUPPER")),
-        Truncate(StringEqCI!("%TRUNCATE")),
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    pub enum ColTrun {
-        Const(PConst),
-        HostVar(HostVar),
     }
 
     #[derive(Grammar)]
@@ -1328,158 +1286,11 @@ pub mod leveled {
         TSqlVersion(StringEqCI!("$TSQL_VERSION"), Args<()>),
     }
 
-    /// The functions a call by name spells, which the core reads as calls.
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(name = "scalar function")]
-    pub enum ScalarFunction {
-        PercentObject(StringEqCI!("%OBJECT"), Args<Scalx>),
-        PercentOid(StringEqCI!("%OID"), Args<Scalx>),
-        Similarity(StringEqCI!("%SIMILARITY"), Args<RR>),
-        Abs(StringEqCI!("ABS"), Args<Scalx>),
-        Ascii(StringEqCI!("ASCII"), Args<Scalx>),
-        Ceiling(StringEqCI!("CEILING"), Args<Scalx>),
-        CharacterLength(StringEqCI!("CHARACTER_LENGTH"), Args<Scalx>),
-        CharIndex(StringEqCI!("CHARINDEX"), Args<RRO>),
-        CharLength(StringEqCI!("CHAR_LENGTH"), Args<Scalx>),
-        Coalesce(StringEqCI!("COALESCE"), Args1Plus),
-        Convert(StringEqCI!("CONVERT"), Args<RRO>),
-        DataLength(StringEqCI!("DATALENGTH"), Args<Scalx>),
-        Date(StringEqCI!("DATE"), Args<Scalx>),
-        DateAdd(StringEqCI!("DATEADD"), Args<RRR<DatePart>>),
-        DateDiff(StringEqCI!("DATEDIFF"), Args<RRR<DatePart>>),
-        DateName(StringEqCI!("DATENAME"), Args<RR<DatePart>>),
-        DatePart(StringEqCI!("DATEPART"), Args<RR<DatePartPart>>),
-        DateTrunc(StringEqCI!("DATE_TRUNC"), Args<RR<DatePart>>),
-        Day(StringEqCI!("DAY"), Args<Scalx>),
-        Decode(StringEqCI!("DECODE"), Args1Plus),
-        Embedding(StringEqCI!("EMBEDDING"), Args<RO>),
-        Floor(StringEqCI!("FLOOR"), Args<Scalx>),
-        GetDate(StringEqCI!("GETDATE"), Args<Option<Scalx>>),
-        GetUtcDate(StringEqCI!("GETUTCDATE"), Args<Option<Scalx>>),
-        Greatest(StringEqCI!("GREATEST"), Args1Plus),
-        HashBytes(StringEqCI!("HASHBYTES"), Args<RR>),
-        IfNull(StringEqCI!("IFNULL"), Args<RRO>),
-        Instr(StringEqCI!("INSTR"), Args<RROO>),
-        IsNull(StringEqCI!("ISNULL"), Args<RR>),
-        IsNumeric(StringEqCI!("ISNUMERIC"), Args<Scalx>),
-        LastDay(StringEqCI!("LAST_DAY"), Args<Scalx>),
-        LastIdentity(StringEqCI!("LAST_IDENTITY"), Args<()>),
-        LCase(StringEqCI!("LCASE"), Args<Scalx>),
-        Least(StringEqCI!("LEAST"), Args1Plus),
-        Left(StringEqCI!("LEFT"), Args<RR>),
-        Len(StringEqCI!("LEN"), Args<Scalx>),
-        Length(StringEqCI!("LENGTH"), Args<Scalx>),
-        Lower(StringEqCI!("LOWER"), Args<Scalx>),
-        LPad(StringEqCI!("LPAD"), Args<RRO>),
-        LTrim(StringEqCI!("LTRIM"), Args<Scalx>),
-        Month(StringEqCI!("MONTH"), Args<Scalx>),
-        Now(StringEqCI!("NOW"), Args<()>),
-        NullIf(StringEqCI!("NULLIF"), Args<RR>),
-        Nvl(StringEqCI!("NVL"), Args<RR>),
-        PatIndex(StringEqCI!("PATINDEX"), Args<RR>),
-        Position(StringEqCI!("POSITION"), Args<SQLPositionArgs>),
-        Power(StringEqCI!("POWER"), Args<RR>),
-        Repeat(StringEqCI!("REPEAT"), Args<RR>),
-        Replace(StringEqCI!("REPLACE"), Args<RRR>),
-        Replicate(StringEqCI!("REPLICATE"), Args<RR>),
-        Reverse(StringEqCI!("REVERSE"), Args<Scalx>),
-        Right(StringEqCI!("RIGHT"), Args<RR>),
-        Round(StringEqCI!("ROUND"), Args<RR>),
-        RPad(StringEqCI!("RPAD"), Args<RRO>),
-        RTrim(StringEqCI!("RTRIM"), Args<Scalx>),
-        Sign(StringEqCI!("SIGN"), Args<Scalx>),
-        Space(StringEqCI!("SPACE"), Args<Scalx>),
-        Str(StringEqCI!("STR"), Args<ROO>),
-        String(StringEqCI!("STRING"), Args1Plus),
-        Stuff(StringEqCI!("STUFF"), Args<RRRR>),
-        Substr(StringEqCI!("SUBSTR"), Args<RRO>),
-        Substring(StringEqCI!("SUBSTRING"), SubstringArgs),
-        ToChar(StringEqCI!("TOCHAR"), Args<RO>),
-        ToDate(StringEqCI!("TODATE"), Args<RO>),
-        ToUSChar(StringEqCI!("TO_CHAR"), Args<RO>),
-        ToUSDate(StringEqCI!("TO_DATE"), Args<RO>),
-        ToNumber(StringEqCI!("TO_NUMBER"), Args<Src<Term>>),
-        ToTimestamp(StringEqCI!("TO_TIMESTAMP"), Args<RO>),
-        UCase(StringEqCI!("UCASE"), Args<Scalx>),
-        UnixTimestamp(StringEqCI!("UNIX_TIMESTAMP"), Args<Option<Scalx>>),
-        VectorCosine(StringEqCI!("VECTOR_COSINE"), Args<RR>),
-        VectorDotProduct(StringEqCI!("VECTOR_DOT_PRODUCT"), Args<RR>),
-        Year(StringEqCI!("YEAR"), Args<Scalx>),
-    }
-
-    #[sugar]
-    pub type DatePart = OptionallyWrapped<DatePartCommon>;
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(name = "datepart_part")]
-    pub struct DatePartPart(pub OptionallyWrapped<DatePartPartRaw>);
-
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum OptionallyWrapped<T: Grammar> {
         Wrapped(Parenthesized<T>),
         Scalar(T),
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(inline)]
-    pub enum DatePartCommon {
-        Year(Either<StringEqCI!("YEAR"), Either<StringEqCI!("YYYY"), StringEqCI!("YY")>>),
-        Quarter(Either<StringEqCI!("QUARTER"), Either<StringEqCI!("QQ"), StringEqCI!("Q")>>),
-        Month(Either<StringEqCI!("MONTH"), Either<StringEqCI!("MM"), StringEqCI!("M")>>),
-        Week(Either<StringEqCI!("WEEK"), Either<StringEqCI!("WK"), StringEqCI!("WW")>>),
-        Weekday(Either<StringEqCI!("WEEKDAY"), Either<StringEqCI!("DW"), StringEqCI!("W")>>),
-        DayOfYear(Either<StringEqCI!("DAYOFYEAR"), Either<StringEqCI!("DY"), StringEqCI!("Y")>>),
-        Day(Either<StringEqCI!("DAY"), Either<StringEqCI!("DD"), StringEqCI!("D")>>),
-        Hour(Either<StringEqCI!("HOUR"), StringEqCI!("HH")>),
-        Minute(Either<StringEqCI!("MINUTE"), Either<StringEqCI!("MI"), StringEqCI!("N")>>),
-        Second(Either<StringEqCI!("SECOND"), Either<StringEqCI!("SS"), StringEqCI!("S")>>),
-        Millisecond(Either<StringEqCI!("MILLISECOND"), StringEqCI!("MS")>),
-        Microsecond(Either<StringEqCI!("MICROSECOND"), StringEqCI!("MCS")>),
-        Nanosecond(Either<StringEqCI!("NANOSECOND"), StringEqCI!("NS")>),
-        Literal(Literal),
-        HostVar(HostVar),
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(name = "datepart_part_raw")]
-    pub enum DatePartPartRaw {
-        SqlTimestamp(Either<StringEqCI!("SQLTIMESTAMP"), StringEqCI!("STS")>),
-        Common(DatePartCommon),
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(inline)]
-    pub struct SQLPositionArgs {
-        pub needle: Scalx,
-        pub in_kw: (Space, StringEqCI!("IN"), Space),
-        pub haystack: Scalx,
-    }
-
-    #[sugar]
-    pub type SubstringArgs = Args<SubstringArgsInternal>;
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(name = "substring args")]
-    pub enum SubstringArgsInternal {
-        Keyword {
-            expr: Scalx,
-            from_kw: (Space, StringEqCI!("FROM"), Space),
-            start: Scalx,
-            for_clause: Option<((Space, StringEqCI!("FOR"), Space), Scalx)>,
-        },
-        Position {
-            expr: Scalx,
-            comma: ArgSep,
-            start: Scalx,
-            length: Option<(ArgSep, Scalx)>,
-        },
     }
 
     /// TRIM's arguments, `BOTH ' ' FROM x` in the core: a lone spec trims blanks, lone chars both ends.
@@ -1683,83 +1494,6 @@ pub mod leveled {
 
     pub type XTFunArgs = Parenthesized<Option<VecSep<Scalx, ArgSep>>>;
 
-    #[sugar]
-    pub type ODBCEscape = Wrap<(StringEq!("{"), Space), DTS, (Space, StringEq!("}"))>;
-
-    #[sugar]
-    #[derive(Grammar)]
-    pub enum DTS {
-        Function(FunExt),
-        DateTime(DTSVal),
-    }
-
-    #[sugar]
-    pub type FunExt = Prefix<(StringEqCI!("FN"), Space), ODBCFunc>;
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(name = "odbc func")]
-    pub enum ODBCFunc {
-        // Similar to SQLScalarFunction but in ODBC escape syntax
-        Abs(StringEqCI!("ABS"), Args<Scalx>),
-        Acos(StringEqCI!("ACOS"), Args<Scalx>),
-        Asin(StringEqCI!("ASIN"), Args<Scalx>),
-        Atan(StringEqCI!("ATAN"), Args<Scalx>),
-        Ceiling(StringEqCI!("CEILING"), Args<Scalx>),
-        Cos(StringEqCI!("COS"), Args<Scalx>),
-        Cot(StringEqCI!("COT"), Args<Scalx>),
-        Exp(StringEqCI!("EXP"), Args<Scalx>),
-        Floor(StringEqCI!("FLOOR"), Args<Scalx>),
-        Log(StringEqCI!("LOG"), Args<Scalx>),
-        Log10(StringEqCI!("LOG10"), Args<Scalx>),
-        Mod(StringEqCI!("MOD"), Args<RR>),
-        Pi(StringEqCI!("PI"), Option<StringEq!("()")>),
-        Power(StringEqCI!("POWER"), Args<RR>),
-        Sin(StringEqCI!("SIN"), Args<Scalx>),
-        Sqrt(StringEqCI!("SQRT"), Args<Scalx>),
-        Tan(StringEqCI!("TAN"), Args<Scalx>),
-        Ascii(StringEqCI!("ASCII"), Args<Scalx>),
-        Char(StringEqCI!("CHAR"), Args<Scalx>),
-        Concat(StringEqCI!("CONCAT"), Args<RR>),
-        CurDate(StringEqCI!("CURDATE"), Option<StringEq!("()")>),
-        CurTime(StringEqCI!("CURTIME"), Option<StringEq!("()")>),
-        Database(StringEqCI!("DATABASE"), Option<StringEq!("()")>),
-        DayName(StringEqCI!("DAYNAME"), Args<Scalx>),
-        DayOfMonth(StringEqCI!("DAYOFMONTH"), Args<Scalx>),
-        DayOfWeek(StringEqCI!("DAYOFWEEK"), Args<Scalx>),
-        DayOfYear(StringEqCI!("DAYOFYEAR"), Args<Scalx>),
-        Hour(StringEqCI!("HOUR"), Args<Scalx>),
-        LCase(StringEqCI!("LCASE"), Args<Scalx>),
-        Left(StringEqCI!("LEFT"), Args<RR>),
-        Length(StringEqCI!("LENGTH"), Args<Scalx>),
-        LTrim(StringEqCI!("LTRIM"), Args<Scalx>),
-        Minute(StringEqCI!("MINUTE"), Args<Scalx>),
-        Month(StringEqCI!("MONTH"), Args<Scalx>),
-        MonthName(StringEqCI!("MONTHNAME"), Args<Scalx>),
-        Now(StringEqCI!("NOW"), Option<StringEq!("()")>),
-        Quarter(StringEqCI!("QUARTER"), Args<Scalx>),
-        Repeat(StringEqCI!("REPEAT"), Args<RR>),
-        Right(StringEqCI!("RIGHT"), Args<RR>),
-        Round(StringEqCI!("ROUND"), Args<RR>),
-        RTrim(StringEqCI!("RTRIM"), Args<Scalx>),
-        Second(StringEqCI!("SECOND"), Args<Scalx>),
-        Sign(StringEqCI!("SIGN"), Args<Scalx>),
-        Space(StringEqCI!("SPACE"), Args<Scalx>),
-        Substring(StringEqCI!("SUBSTRING"), SubstringArgs),
-        TimestampAdd(
-            StringEqCI!("TIMESTAMPADD"),
-            Args<RRR<OptionallyQuoted<TSAddInterval>>>,
-        ),
-        TimestampDiff(
-            StringEqCI!("TIMESTAMPDIFF"),
-            Args<RRR<OptionallyQuoted<TSDiffInterval>>>,
-        ),
-        Truncate(StringEqCI!("TRUNCATE"), Args<RR>),
-        UCase(StringEqCI!("UCASE"), Args<Scalx>),
-        Week(StringEqCI!("WEEK"), Args<Scalx>),
-        Year(StringEqCI!("YEAR"), Args<Scalx>),
-    }
-
     /// `{fn CONVERT(x, SQL_TYPE)}` and `{fn IFNULL(x, y)}`, which IRIS reads otherwise without the
     /// escape (CONVERT takes `SQL_TYPE` for a column, IFNULL(x, y) is NULL when x is not; measured on
     /// 2026.2), and `{fn USER}`, whose niladic `USER` has no parentheses for the braces' comments.
@@ -1817,24 +1551,6 @@ pub mod leveled {
         SqlTime(StringEqCI!("SQL_TIME")),
         SqlVarChar(StringEqCI!("SQL_VARCHAR")),
         SqlDouble(StringEqCI!("SQL_DOUBLE")),
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(name = "dts val")]
-    pub struct DTSVal {
-        pub dts_type: DTSType,
-        pub sp: Space,
-        pub val_spec: DTSValSpec,
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(name = "dts type")]
-    pub enum DTSType {
-        Date(StringEqCI!("D")),
-        Timestamp(StringEqCI!("TS")),
-        Time(StringEqCI!("T")),
     }
 
     #[derive(Grammar)]
@@ -2403,9 +2119,6 @@ pub mod leveled {
         RowOffset((StringEqCI!("%ROWOFFSET"), Space), ValSpec, Space),
     }
 
-    /// `ALL` where `DISTINCT` could stand: what a SELECT or an aggregate does without it.
-    pub type AllKw = (StringEqCI!("ALL"), NotFollowedBy<IdentifierPart>, Space);
-
     pub type SQLTopClause = Wrap<(StringEqCI!("TOP"), Space1), TopSpec, Space>;
 
     #[derive(Grammar)]
@@ -2575,13 +2288,6 @@ pub mod leveled {
             core::Tables {
                 first: core::Tref::Join(first),
             }
-        }
-    }
-
-    #[sugar]
-    impl Tables {
-        pub fn iter(&self) -> impl Iterator<Item = &Tref> {
-            std::iter::once(&self.first).chain(self.rest.iter().map(|(_, tref)| tref))
         }
     }
 
@@ -2856,24 +2562,6 @@ pub mod leveled {
         pub count: RowCount,
         #[sugar]
         pub rows: Option<(Space, RowRowsInline)>,
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    pub struct Fetch {
-        pub keyword: (Space, StringEqCI!("FETCH"), Space),
-        pub direction: Option<(Either<StringEqCI!("FIRST"), StringEqCI!("NEXT")>, Space)>,
-        pub valspec: RowCount,
-        pub row_keyword: Option<(Space, RowRowsInline)>,
-        pub only: Option<(Space, StringEqCI!("ONLY"))>,
-    }
-
-    #[sugar]
-    #[derive(Grammar)]
-    #[tygr(inline)]
-    pub enum RowRowsInline {
-        Rows(StringEqCI!("ROWS")),
-        Row(StringEqCI!("ROW")),
     }
 
     #[derive(Grammar)]
@@ -6610,6 +6298,303 @@ pub mod leveled {
         IgnoreFixedStats(StringEqCI!("IGNOREFIXEDSTATS")),
         SkipAutomaticStatsCollection(StringEqCI!("SKIPAUTOMATICSTATSCOLLECTION")),
     }
+}
+
+/// The spellings only the full level has, which `leveled` imports for its sugar variants.
+#[allow(clippy::upper_case_acronyms)]
+mod sugar {
+    use either::Either;
+    use tygr::*;
+
+    use super::*;
+
+    #[derive(Grammar, Clone)]
+    #[tygr(name = "percent op")]
+    pub enum PercentOp {
+        AlphaUp(StringEqCI!("%ALPHAUP")),
+        Exact(StringEqCI!("%EXACT")),
+        External(StringEqCI!("%EXTERNAL")),
+        Internal(StringEqCI!("%INTERNAL")),
+        IntExt(StringEqCI!("%INTEXT")),
+        MinusOp(StringEqCI!("%MINUS")),
+        Mvr(StringEqCI!("%MVR")),
+        OdbcIn(StringEqCI!("%ODBCIN")),
+        OdbcOut(StringEqCI!("%ODBCOUT")),
+        PlusOp(StringEqCI!("%PLUS")),
+        RuntimeIn(StringEqCI!("%RUNTIMEIN")),
+        RuntimeOut(StringEqCI!("%RUNTIMEOUT")),
+        Upper(Either<StringEqCI!("%UPPER"), StringEqCI!("UPPER")>),
+        StringOperator(StringOperator),
+    }
+
+    #[derive(Grammar, Clone)]
+    #[tygr(name = "%string operation")]
+    pub struct StringOperation {
+        pub op: StringOperator,
+        pub args: Args<(Scalx, ArgSep, ColTrun)>,
+    }
+
+    #[derive(Grammar, Clone)]
+    #[tygr(name = "%string operator")]
+    pub enum StringOperator {
+        String(StringEqCI!("%STRING")),
+        SqlString(StringEqCI!("%SQLSTRING")),
+        SqlUpper(StringEqCI!("%SQLUPPER")),
+        Truncate(StringEqCI!("%TRUNCATE")),
+    }
+
+    #[derive(Grammar, Clone)]
+    pub enum ColTrun {
+        Const(PConst),
+        HostVar(HostVar),
+    }
+
+    /// The functions a call by name spells, which the core reads as calls.
+    #[derive(Grammar, Clone)]
+    #[tygr(name = "scalar function")]
+    pub enum ScalarFunction {
+        PercentObject(StringEqCI!("%OBJECT"), Args<Scalx>),
+        PercentOid(StringEqCI!("%OID"), Args<Scalx>),
+        Similarity(StringEqCI!("%SIMILARITY"), Args<RR>),
+        Abs(StringEqCI!("ABS"), Args<Scalx>),
+        Ascii(StringEqCI!("ASCII"), Args<Scalx>),
+        Ceiling(StringEqCI!("CEILING"), Args<Scalx>),
+        CharacterLength(StringEqCI!("CHARACTER_LENGTH"), Args<Scalx>),
+        CharIndex(StringEqCI!("CHARINDEX"), Args<RRO>),
+        CharLength(StringEqCI!("CHAR_LENGTH"), Args<Scalx>),
+        Coalesce(StringEqCI!("COALESCE"), Args1Plus),
+        Convert(StringEqCI!("CONVERT"), Args<RRO>),
+        DataLength(StringEqCI!("DATALENGTH"), Args<Scalx>),
+        Date(StringEqCI!("DATE"), Args<Scalx>),
+        DateAdd(StringEqCI!("DATEADD"), Args<RRR<DatePart>>),
+        DateDiff(StringEqCI!("DATEDIFF"), Args<RRR<DatePart>>),
+        DateName(StringEqCI!("DATENAME"), Args<RR<DatePart>>),
+        DatePart(StringEqCI!("DATEPART"), Args<RR<DatePartPart>>),
+        DateTrunc(StringEqCI!("DATE_TRUNC"), Args<RR<DatePart>>),
+        Day(StringEqCI!("DAY"), Args<Scalx>),
+        Decode(StringEqCI!("DECODE"), Args1Plus),
+        Embedding(StringEqCI!("EMBEDDING"), Args<RO>),
+        Floor(StringEqCI!("FLOOR"), Args<Scalx>),
+        GetDate(StringEqCI!("GETDATE"), Args<Option<Scalx>>),
+        GetUtcDate(StringEqCI!("GETUTCDATE"), Args<Option<Scalx>>),
+        Greatest(StringEqCI!("GREATEST"), Args1Plus),
+        HashBytes(StringEqCI!("HASHBYTES"), Args<RR>),
+        IfNull(StringEqCI!("IFNULL"), Args<RRO>),
+        Instr(StringEqCI!("INSTR"), Args<RROO>),
+        IsNull(StringEqCI!("ISNULL"), Args<RR>),
+        IsNumeric(StringEqCI!("ISNUMERIC"), Args<Scalx>),
+        LastDay(StringEqCI!("LAST_DAY"), Args<Scalx>),
+        LastIdentity(StringEqCI!("LAST_IDENTITY"), Args<()>),
+        LCase(StringEqCI!("LCASE"), Args<Scalx>),
+        Least(StringEqCI!("LEAST"), Args1Plus),
+        Left(StringEqCI!("LEFT"), Args<RR>),
+        Len(StringEqCI!("LEN"), Args<Scalx>),
+        Length(StringEqCI!("LENGTH"), Args<Scalx>),
+        Lower(StringEqCI!("LOWER"), Args<Scalx>),
+        LPad(StringEqCI!("LPAD"), Args<RRO>),
+        LTrim(StringEqCI!("LTRIM"), Args<Scalx>),
+        Month(StringEqCI!("MONTH"), Args<Scalx>),
+        Now(StringEqCI!("NOW"), Args<()>),
+        NullIf(StringEqCI!("NULLIF"), Args<RR>),
+        Nvl(StringEqCI!("NVL"), Args<RR>),
+        PatIndex(StringEqCI!("PATINDEX"), Args<RR>),
+        Position(StringEqCI!("POSITION"), Args<SQLPositionArgs>),
+        Power(StringEqCI!("POWER"), Args<RR>),
+        Repeat(StringEqCI!("REPEAT"), Args<RR>),
+        Replace(StringEqCI!("REPLACE"), Args<RRR>),
+        Replicate(StringEqCI!("REPLICATE"), Args<RR>),
+        Reverse(StringEqCI!("REVERSE"), Args<Scalx>),
+        Right(StringEqCI!("RIGHT"), Args<RR>),
+        Round(StringEqCI!("ROUND"), Args<RR>),
+        RPad(StringEqCI!("RPAD"), Args<RRO>),
+        RTrim(StringEqCI!("RTRIM"), Args<Scalx>),
+        Sign(StringEqCI!("SIGN"), Args<Scalx>),
+        Space(StringEqCI!("SPACE"), Args<Scalx>),
+        Str(StringEqCI!("STR"), Args<ROO>),
+        String(StringEqCI!("STRING"), Args1Plus),
+        Stuff(StringEqCI!("STUFF"), Args<RRRR>),
+        Substr(StringEqCI!("SUBSTR"), Args<RRO>),
+        Substring(StringEqCI!("SUBSTRING"), SubstringArgs),
+        ToChar(StringEqCI!("TOCHAR"), Args<RO>),
+        ToDate(StringEqCI!("TODATE"), Args<RO>),
+        ToUSChar(StringEqCI!("TO_CHAR"), Args<RO>),
+        ToUSDate(StringEqCI!("TO_DATE"), Args<RO>),
+        ToNumber(StringEqCI!("TO_NUMBER"), Args<Src<Term>>),
+        ToTimestamp(StringEqCI!("TO_TIMESTAMP"), Args<RO>),
+        UCase(StringEqCI!("UCASE"), Args<Scalx>),
+        UnixTimestamp(StringEqCI!("UNIX_TIMESTAMP"), Args<Option<Scalx>>),
+        VectorCosine(StringEqCI!("VECTOR_COSINE"), Args<RR>),
+        VectorDotProduct(StringEqCI!("VECTOR_DOT_PRODUCT"), Args<RR>),
+        Year(StringEqCI!("YEAR"), Args<Scalx>),
+    }
+
+    pub type DatePart = OptionallyWrapped<DatePartCommon>;
+
+    #[derive(Grammar, Clone)]
+    #[tygr(name = "datepart_part")]
+    pub struct DatePartPart(pub OptionallyWrapped<DatePartPartRaw>);
+
+    #[derive(Grammar, Clone)]
+    #[tygr(inline)]
+    pub enum DatePartCommon {
+        Year(Either<StringEqCI!("YEAR"), Either<StringEqCI!("YYYY"), StringEqCI!("YY")>>),
+        Quarter(Either<StringEqCI!("QUARTER"), Either<StringEqCI!("QQ"), StringEqCI!("Q")>>),
+        Month(Either<StringEqCI!("MONTH"), Either<StringEqCI!("MM"), StringEqCI!("M")>>),
+        Week(Either<StringEqCI!("WEEK"), Either<StringEqCI!("WK"), StringEqCI!("WW")>>),
+        Weekday(Either<StringEqCI!("WEEKDAY"), Either<StringEqCI!("DW"), StringEqCI!("W")>>),
+        DayOfYear(Either<StringEqCI!("DAYOFYEAR"), Either<StringEqCI!("DY"), StringEqCI!("Y")>>),
+        Day(Either<StringEqCI!("DAY"), Either<StringEqCI!("DD"), StringEqCI!("D")>>),
+        Hour(Either<StringEqCI!("HOUR"), StringEqCI!("HH")>),
+        Minute(Either<StringEqCI!("MINUTE"), Either<StringEqCI!("MI"), StringEqCI!("N")>>),
+        Second(Either<StringEqCI!("SECOND"), Either<StringEqCI!("SS"), StringEqCI!("S")>>),
+        Millisecond(Either<StringEqCI!("MILLISECOND"), StringEqCI!("MS")>),
+        Microsecond(Either<StringEqCI!("MICROSECOND"), StringEqCI!("MCS")>),
+        Nanosecond(Either<StringEqCI!("NANOSECOND"), StringEqCI!("NS")>),
+        Literal(Literal),
+        HostVar(HostVar),
+    }
+
+    #[derive(Grammar, Clone)]
+    #[tygr(name = "datepart_part_raw")]
+    pub enum DatePartPartRaw {
+        SqlTimestamp(Either<StringEqCI!("SQLTIMESTAMP"), StringEqCI!("STS")>),
+        Common(DatePartCommon),
+    }
+
+    #[derive(Grammar, Clone)]
+    #[tygr(inline)]
+    pub struct SQLPositionArgs {
+        pub needle: Scalx,
+        pub in_kw: (Space, StringEqCI!("IN"), Space),
+        pub haystack: Scalx,
+    }
+
+    pub type SubstringArgs = Args<SubstringArgsInternal>;
+
+    #[derive(Grammar, Clone)]
+    #[tygr(name = "substring args")]
+    pub enum SubstringArgsInternal {
+        Keyword {
+            expr: Scalx,
+            from_kw: (Space, StringEqCI!("FROM"), Space),
+            start: Scalx,
+            for_clause: Option<((Space, StringEqCI!("FOR"), Space), Scalx)>,
+        },
+        Position {
+            expr: Scalx,
+            comma: ArgSep,
+            start: Scalx,
+            length: Option<(ArgSep, Scalx)>,
+        },
+    }
+
+    pub type ODBCEscape = Wrap<(StringEq!("{"), Space), DTS, (Space, StringEq!("}"))>;
+
+    #[derive(Grammar, Clone)]
+    pub enum DTS {
+        Function(FunExt),
+        DateTime(DTSVal),
+    }
+
+    pub type FunExt = Prefix<(StringEqCI!("FN"), Space), ODBCFunc>;
+
+    #[derive(Grammar, Clone)]
+    #[tygr(name = "odbc func")]
+    pub enum ODBCFunc {
+        // Similar to SQLScalarFunction but in ODBC escape syntax
+        Abs(StringEqCI!("ABS"), Args<Scalx>),
+        Acos(StringEqCI!("ACOS"), Args<Scalx>),
+        Asin(StringEqCI!("ASIN"), Args<Scalx>),
+        Atan(StringEqCI!("ATAN"), Args<Scalx>),
+        Ceiling(StringEqCI!("CEILING"), Args<Scalx>),
+        Cos(StringEqCI!("COS"), Args<Scalx>),
+        Cot(StringEqCI!("COT"), Args<Scalx>),
+        Exp(StringEqCI!("EXP"), Args<Scalx>),
+        Floor(StringEqCI!("FLOOR"), Args<Scalx>),
+        Log(StringEqCI!("LOG"), Args<Scalx>),
+        Log10(StringEqCI!("LOG10"), Args<Scalx>),
+        Mod(StringEqCI!("MOD"), Args<RR>),
+        Pi(StringEqCI!("PI"), Option<StringEq!("()")>),
+        Power(StringEqCI!("POWER"), Args<RR>),
+        Sin(StringEqCI!("SIN"), Args<Scalx>),
+        Sqrt(StringEqCI!("SQRT"), Args<Scalx>),
+        Tan(StringEqCI!("TAN"), Args<Scalx>),
+        Ascii(StringEqCI!("ASCII"), Args<Scalx>),
+        Char(StringEqCI!("CHAR"), Args<Scalx>),
+        Concat(StringEqCI!("CONCAT"), Args<RR>),
+        CurDate(StringEqCI!("CURDATE"), Option<StringEq!("()")>),
+        CurTime(StringEqCI!("CURTIME"), Option<StringEq!("()")>),
+        Database(StringEqCI!("DATABASE"), Option<StringEq!("()")>),
+        DayName(StringEqCI!("DAYNAME"), Args<Scalx>),
+        DayOfMonth(StringEqCI!("DAYOFMONTH"), Args<Scalx>),
+        DayOfWeek(StringEqCI!("DAYOFWEEK"), Args<Scalx>),
+        DayOfYear(StringEqCI!("DAYOFYEAR"), Args<Scalx>),
+        Hour(StringEqCI!("HOUR"), Args<Scalx>),
+        LCase(StringEqCI!("LCASE"), Args<Scalx>),
+        Left(StringEqCI!("LEFT"), Args<RR>),
+        Length(StringEqCI!("LENGTH"), Args<Scalx>),
+        LTrim(StringEqCI!("LTRIM"), Args<Scalx>),
+        Minute(StringEqCI!("MINUTE"), Args<Scalx>),
+        Month(StringEqCI!("MONTH"), Args<Scalx>),
+        MonthName(StringEqCI!("MONTHNAME"), Args<Scalx>),
+        Now(StringEqCI!("NOW"), Option<StringEq!("()")>),
+        Quarter(StringEqCI!("QUARTER"), Args<Scalx>),
+        Repeat(StringEqCI!("REPEAT"), Args<RR>),
+        Right(StringEqCI!("RIGHT"), Args<RR>),
+        Round(StringEqCI!("ROUND"), Args<RR>),
+        RTrim(StringEqCI!("RTRIM"), Args<Scalx>),
+        Second(StringEqCI!("SECOND"), Args<Scalx>),
+        Sign(StringEqCI!("SIGN"), Args<Scalx>),
+        Space(StringEqCI!("SPACE"), Args<Scalx>),
+        Substring(StringEqCI!("SUBSTRING"), SubstringArgs),
+        TimestampAdd(
+            StringEqCI!("TIMESTAMPADD"),
+            Args<RRR<OptionallyQuoted<TSAddInterval>>>,
+        ),
+        TimestampDiff(
+            StringEqCI!("TIMESTAMPDIFF"),
+            Args<RRR<OptionallyQuoted<TSDiffInterval>>>,
+        ),
+        Truncate(StringEqCI!("TRUNCATE"), Args<RR>),
+        UCase(StringEqCI!("UCASE"), Args<Scalx>),
+        Week(StringEqCI!("WEEK"), Args<Scalx>),
+        Year(StringEqCI!("YEAR"), Args<Scalx>),
+    }
+
+    #[derive(Grammar, Clone)]
+    #[tygr(name = "dts val")]
+    pub struct DTSVal {
+        pub dts_type: DTSType,
+        pub sp: Space,
+        pub val_spec: DTSValSpec,
+    }
+
+    #[derive(Grammar, Clone)]
+    #[tygr(name = "dts type")]
+    pub enum DTSType {
+        Date(StringEqCI!("D")),
+        Timestamp(StringEqCI!("TS")),
+        Time(StringEqCI!("T")),
+    }
+
+    #[derive(Grammar, Clone)]
+    pub struct Fetch {
+        pub keyword: (Space, StringEqCI!("FETCH"), Space),
+        pub direction: Option<(Either<StringEqCI!("FIRST"), StringEqCI!("NEXT")>, Space)>,
+        pub valspec: RowCount,
+        pub row_keyword: Option<(Space, RowRowsInline)>,
+        pub only: Option<(Space, StringEqCI!("ONLY"))>,
+    }
+
+    #[derive(Grammar, Clone)]
+    #[tygr(inline)]
+    pub enum RowRowsInline {
+        Rows(StringEqCI!("ROWS")),
+        Row(StringEqCI!("ROW")),
+    }
+
+    /// `ALL` where `DISTINCT` could stand: what a SELECT or an aggregate does without it.
+    pub type AllKw = (StringEqCI!("ALL"), NotFollowedBy<IdentifierPart>, Space);
 }
 
 #[cfg(test)]

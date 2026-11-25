@@ -17,7 +17,7 @@ use syn::{
 
 /// `#[sugar]` on a variant leaves it out of the core, converted by the author's `impl Desugar` for
 /// `XSugar<'a>`, the emitted enum of the marked variants holding their fields by reference; on a
-/// field, drops it; on a struct or enum, emits the core type with the conversion left to the author.
+/// field, drops it; on a struct or enum, both levels keep it and the author writes the conversion.
 #[proc_macro_attribute]
 pub fn levels(_: TokenStream, item: TokenStream) -> TokenStream {
     let module = syn::parse_macro_input!(item as ItemMod);

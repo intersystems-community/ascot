@@ -5,7 +5,7 @@
 use either::Either;
 use tygr::{Grammar, Hidden, NotFollowedBy, Prefix, Ranged, Raw, Suffix, Vec1, Wrap};
 
-use super::{core, full, *};
+use super::{core, full, sugar, *};
 use crate::convert::VecSep;
 use crate::cos::{MacroArgUnit, OSText};
 
@@ -330,7 +330,7 @@ shapes! {
 }
 
 /// `POSITION(a IN b)` has the arguments of `CHARINDEX(a, b)`.
-impl Arg for full::SQLPositionArgs {
+impl Arg for sugar::SQLPositionArgs {
     fn args(&self, out: &mut Vec<core::Scalx>) {
         self.needle.args(out);
         self.haystack.args(out)
@@ -338,7 +338,7 @@ impl Arg for full::SQLPositionArgs {
 }
 
 /// `SUBSTRING(x FROM s FOR l)` has the arguments of `SUBSTRING(x, s, l)`.
-impl Arg for full::SubstringArgsInternal {
+impl Arg for sugar::SubstringArgsInternal {
     fn args(&self, out: &mut Vec<core::Scalx>) {
         match self {
             Self::Keyword {
@@ -366,8 +366,8 @@ impl Arg for full::SubstringArgsInternal {
 }
 
 /// A datepart keyword is its full name in a string literal; a literal or host variable stays.
-fn datepart(part: &full::DatePartCommon) -> core::Scalx {
-    use full::DatePartCommon::*;
+fn datepart(part: &sugar::DatePartCommon) -> core::Scalx {
+    use sugar::DatePartCommon::*;
     string(match part {
         Year(_) => "year",
         Quarter(_) => "quarter",
@@ -395,17 +395,17 @@ fn unwrapped<T: Grammar>(part: &full::OptionallyWrapped<T>) -> &T {
     }
 }
 
-impl Arg for full::DatePart {
+impl Arg for sugar::DatePart {
     fn args(&self, out: &mut Vec<core::Scalx>) {
         out.push(datepart(unwrapped(self)))
     }
 }
 
-impl Arg for full::DatePartPart {
+impl Arg for sugar::DatePartPart {
     fn args(&self, out: &mut Vec<core::Scalx>) {
         out.push(match unwrapped(&self.0) {
-            full::DatePartPartRaw::SqlTimestamp(_) => string("sqltimestamp"),
-            full::DatePartPartRaw::Common(common) => datepart(common),
+            sugar::DatePartPartRaw::SqlTimestamp(_) => string("sqltimestamp"),
+            sugar::DatePartPartRaw::Common(common) => datepart(common),
         })
     }
 }
