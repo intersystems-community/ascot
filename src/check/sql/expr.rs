@@ -395,8 +395,8 @@ impl Walk for Predicate {
             Predicate::ForSomeElement {
                 column, predicate, ..
             } => {
-                w.column(column);
-                w.unchecked(predicate)
+                w.column(&column.wrapped);
+                w.unchecked(&predicate.1)
             }
             Predicate::ForSome {
                 tables, condition, ..
