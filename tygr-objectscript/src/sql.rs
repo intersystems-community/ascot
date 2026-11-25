@@ -2085,12 +2085,25 @@ pub mod leveled {
 
     pub type NotKw = StringEqCI!("NOT");
 
-    /// A predicate's keyword or its negation.
+    /// A predicate's keyword or its negation, the keyword under the `NOT` the condition's impl adds.
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum Negatable<K: Grammar> {
         Plain(K),
+        #[sugar]
         Negated(NotKw, Space, K),
+    }
+
+    /// A negated keyword is the keyword; the condition's impl puts the `NOT` around the predicate.
+    impl<K: Grammar + Desugar> Desugar for NegatableSugar<'_, K>
+    where
+        K::Core: Grammar,
+    {
+        type Core = core::Negatable<K::Core>;
+        fn desugar(&self) -> Self::Core {
+            let Self::Negated(_, _, keyword) = self;
+            core::Negatable::Plain(keyword.desugar())
+        }
     }
 
     /// A keyword or clause read the same when omitted: spelled, or omitted and read as its default.
@@ -2121,7 +2134,7 @@ pub mod leveled {
         }
     }
 
-    /// An operator and a quantifier against a subquery; `IN` is `= ANY` and `NOT IN` `<> ALL`.
+    /// An operator and a quantifier against a subquery; `IN` is `= ANY`, a `NOT IN` under the condition's NOT.
     #[derive(Grammar)]
     #[tygr(name = "quantified op")]
     pub enum QuantifiedOp {
@@ -2134,31 +2147,21 @@ pub mod leveled {
         In(Negatable<StringEqCI!("IN")>),
     }
 
-    /// `IN (subquery)` is `= ANY (subquery)`, `NOT IN (subquery)` `<> ALL (subquery)` (measured on 2026.2).
+    /// `IN (subquery)` is `= ANY (subquery)`; a `NOT IN` is `NOT (... = ANY ...)` by the condition's impl.
     impl Desugar for QuantifiedOpSugar<'_> {
         type Core = core::QuantifiedOp;
         fn desugar(&self) -> Self::Core {
-            let Self::In(in_kw) = self;
-            let (op, quantifier) = match in_kw {
-                Negatable::Plain(_) => (
-                    core::CmpOp::Eq(Default::default()),
-                    core::Quantifier::Any(Default::default()),
-                ),
-                Negatable::Negated(..) => (
-                    core::CmpOp::Ne(core::NotEqualsOperation::Diamond(Default::default())),
-                    core::Quantifier::All(Default::default()),
-                ),
-            };
             core::QuantifiedOp::Op {
-                op,
+                op: core::CmpOp::Eq(Default::default()),
                 sp: Space::blank(),
-                quantifier,
+                quantifier: core::Quantifier::Any(Default::default()),
             }
         }
     }
 
     #[derive(Grammar)]
     #[tygr(name = "cond")]
+    #[sugar]
     pub enum Cond {
         Not {
             not_kw: (StringEqCI!("NOT"), Space),
@@ -2173,6 +2176,81 @@ pub mod leveled {
             noindex: NoIndex,
             predicate: Predicate,
         },
+    }
+
+    /// A negated predicate is `NOT (predicate)`: NOT BETWEEN, NOT IN, NOT LIKE, NOT %MATCHES, NOT %INLIST,
+    /// IS NOT NULL, IS NOT JSON and NOT IN (subquery), as NOT (= ANY), each measured on 2026.2 with NULL
+    /// rows; NOT[ and NOT] stay as written, a quantified one being no NOT (... ALL ...) on IRIS.
+    impl Desugar for Cond {
+        type Core = core::Cond;
+        fn desugar(&self) -> Self::Core {
+            let (noindex, predicate) = match self {
+                Cond::Not { not_kw, condition } => {
+                    return core::Cond::Not {
+                        not_kw: not_kw.desugar(),
+                        condition: condition.desugar(),
+                    };
+                }
+                Cond::Paren {
+                    open,
+                    predicate,
+                    close,
+                } => {
+                    return core::Cond::Paren {
+                        open: open.desugar(),
+                        predicate: predicate.desugar(),
+                        close: close.desugar(),
+                    };
+                }
+                Cond::Predicate { noindex, predicate } => (noindex, predicate),
+            };
+            let plain = core::Cond::Predicate {
+                noindex: noindex.desugar(),
+                predicate: predicate.desugar(),
+            };
+            let Some(not_kw) = negation(predicate) else {
+                return plain;
+            };
+            core::Cond::Not {
+                not_kw: (not_kw, Space::blank()),
+                condition: Box::new(Src::synthesized(core::Cond::Paren {
+                    open: (Default::default(), Space::default()),
+                    predicate: Box::new(core::Prdct(VecSep::one(core::And(VecSep::one(
+                        Src::synthesized(plain),
+                    ))))),
+                    close: (Space::default(), Default::default()),
+                })),
+            }
+        }
+    }
+
+    /// The `NOT` of the predicate's negated keyword.
+    fn negation(predicate: &Predicate) -> Option<NotKw> {
+        use Comparison::*;
+        let Predicate::Comparison { tail, .. } = predicate else {
+            return None;
+        };
+        match tail {
+            IsNull { null_kw, .. } => negated(null_kw),
+            Between { between_kw, .. } => negated(between_kw),
+            Like { like_kw, .. } => negated(like_kw),
+            Matches { matches_kw, .. } => negated(matches_kw),
+            In { in_kw, .. } => negated(in_kw),
+            InList { inlist_kw, .. } => negated(inlist_kw),
+            IsJSON { json_kw, .. } => negated(json_kw),
+            Query {
+                op: QuantifiedOp::In(in_kw),
+                ..
+            } => negated(in_kw),
+            _ => None,
+        }
+    }
+
+    fn negated<K: Grammar>(keyword: &Negatable<K>) -> Option<NotKw> {
+        match keyword {
+            Negatable::Negated(not, ..) => Some(*not),
+            Negatable::Plain(_) => None,
+        }
     }
 
     /// What a `%NOINDEX` hint may precede (measured on 2026.2: not a `NOT` or a parenthesis).
