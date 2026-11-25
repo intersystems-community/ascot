@@ -27,43 +27,43 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "SELECT a FROM t WHERE a NOT[ 'x'",
-        "SELECT a FROM t WHERE NOT (a [ 'x')",
+        "SELECT a FROM t WHERE a NOT[ 'x'",
     ),
     (
         "SELECT a FROM t WHERE a NOT] 'x'",
-        "SELECT a FROM t WHERE NOT (a ] 'x')",
+        "SELECT a FROM t WHERE a NOT] 'x'",
     ),
     (
         "SELECT a FROM t WHERE a IS NOT NULL",
-        "SELECT a FROM t WHERE NOT (a IS NULL)",
+        "SELECT a FROM t WHERE a IS NOT NULL",
     ),
     (
         "SELECT a FROM t WHERE a not /* c */ BETWEEN 1 AND 2",
-        "SELECT a FROM t WHERE not (a BETWEEN 1 AND 2)",
+        "SELECT a FROM t WHERE a not /* c */ BETWEEN 1 AND 2",
     ),
     (
         "SELECT a FROM t WHERE a NOT IN (1, 2)",
-        "SELECT a FROM t WHERE NOT (a IN (1, 2))",
+        "SELECT a FROM t WHERE a NOT IN (1, 2)",
     ),
     (
         "SELECT a FROM t WHERE a NOT LIKE 'x%'",
-        "SELECT a FROM t WHERE NOT (a LIKE 'x%')",
+        "SELECT a FROM t WHERE a NOT LIKE 'x%'",
     ),
     (
         "SELECT a FROM t WHERE a NOT %MATCHES 'p'",
-        "SELECT a FROM t WHERE NOT (a %MATCHES 'p')",
+        "SELECT a FROM t WHERE a NOT %MATCHES 'p'",
     ),
     (
         "SELECT a FROM t WHERE a NOT %INLIST :l",
-        "SELECT a FROM t WHERE NOT (a %INLIST :l)",
+        "SELECT a FROM t WHERE a NOT %INLIST :l",
     ),
     (
         "SELECT a FROM t WHERE a IS NOT JSON",
-        "SELECT a FROM t WHERE NOT (a IS JSON)",
+        "SELECT a FROM t WHERE a IS NOT JSON",
     ),
     (
         "SELECT a FROM t WHERE NOT a IS NOT NULL",
-        "SELECT a FROM t WHERE NOT NOT (a IS NULL)",
+        "SELECT a FROM t WHERE NOT a IS NOT NULL",
     ),
     (
         "SELECT a FROM t WHERE a IN (SELECT b FROM u)",
@@ -71,7 +71,7 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "SELECT a FROM t WHERE a NOT IN (SELECT b FROM u)",
-        "SELECT a FROM t WHERE NOT (a = ANY (SELECT b FROM u))",
+        "SELECT a FROM t WHERE a <> ALL (SELECT b FROM u)",
     ),
     (
         "SELECT a FROM t WHERE a = SOME (SELECT b FROM u)",
@@ -79,11 +79,11 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "SELECT a FROM t WHERE a NOT[ ANY (SELECT b FROM u)",
-        "SELECT a FROM t WHERE NOT (a [ ALL (SELECT b FROM u))",
+        "SELECT a FROM t WHERE a NOT[ ANY (SELECT b FROM u)",
     ),
     (
         "SELECT a FROM t WHERE a NOT] ALL (SELECT b FROM u)",
-        "SELECT a FROM t WHERE NOT (a ] ANY (SELECT b FROM u))",
+        "SELECT a FROM t WHERE a NOT] ALL (SELECT b FROM u)",
     ),
     (
         "SELECT a FROM t WHERE a = 1 ! b = 2",

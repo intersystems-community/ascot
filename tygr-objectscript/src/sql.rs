@@ -764,7 +764,6 @@ pub mod leveled {
     #[tygr(name = "contains predicate")]
     pub enum ContainsPredicate {
         LB(StringEq!("[")),
-        #[sugar(into = |_| core::ContainsPredicate::LB(Default::default()))]
         NotLB(StringEqCI!("NOT[")),
     }
 
@@ -772,7 +771,6 @@ pub mod leveled {
     #[tygr(name = "follows predicate")]
     pub enum FollowsPredicate {
         Follows(StringEq!("]")),
-        #[sugar(into = |_| core::FollowsPredicate::Follows(Default::default()))]
         NotFollows(StringEqCI!("NOT]")),
     }
 
@@ -2021,32 +2019,12 @@ pub mod leveled {
 
     pub type NotKw = StringEqCI!("NOT");
 
-    /// A predicate's keyword or its negation, the keyword under the `NOT` the condition's rule adds.
+    /// A predicate's keyword or its negation.
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum Negatable<K: Grammar> {
         Plain(K),
-        #[sugar(into = plain)]
         Negated(NotKw, Space, K),
-    }
-
-    #[sugar]
-    impl<K: Grammar> Negatable<K> {
-        /// The `NOT` of a negated keyword.
-        pub fn negation(&self) -> Option<NotKw> {
-            match self {
-                Negatable::Negated(not, ..) => Some(*not),
-                Negatable::Plain(_) => None,
-            }
-        }
-    }
-
-    /// A negated keyword reads as the keyword, under the `NOT` that `cond` adds.
-    fn plain<K: Desugar>(_: &NotKw, _: &Space, keyword: &K) -> core::Negatable<K::Core>
-    where
-        K::Core: Grammar,
-    {
-        core::Negatable::Plain(keyword.desugar())
     }
 
     /// A keyword or clause read the same when omitted: spelled, or omitted and read as its default.
@@ -2063,7 +2041,7 @@ pub mod leveled {
         core::Implied::Spelled(Space::blank(), K::default())
     }
 
-    /// What compares a value with a subquery: an operator and a quantifier, or `IN`, which is `= ANY`.
+    /// An operator and a quantifier against a subquery; `IN` is `= ANY` and `NOT IN` `<> ALL`.
     #[derive(Grammar)]
     #[tygr(name = "quantified op")]
     pub enum QuantifiedOp {
@@ -2076,18 +2054,27 @@ pub mod leveled {
         In(Negatable<StringEqCI!("IN")>),
     }
 
-    /// `IN (subquery)` is `= ANY (subquery)`.
-    fn in_any(_: &Negatable<StringEqCI!("IN")>) -> core::QuantifiedOp {
+    /// `IN (subquery)` is `= ANY (subquery)`, `NOT IN (subquery)` `<> ALL (subquery)` (measured on 2026.2).
+    fn in_any(in_kw: &Negatable<StringEqCI!("IN")>) -> core::QuantifiedOp {
+        let (op, quantifier) = match in_kw {
+            Negatable::Plain(_) => (
+                core::CmpOp::Eq(Default::default()),
+                core::Quantifier::Any(Default::default()),
+            ),
+            Negatable::Negated(..) => (
+                core::CmpOp::Ne(core::NotEqualsOperation::Diamond(Default::default())),
+                core::Quantifier::All(Default::default()),
+            ),
+        };
         core::QuantifiedOp::Op {
-            op: core::CmpOp::Eq(Default::default()),
+            op,
             sp: Space::blank(),
-            quantifier: core::Quantifier::Any(Default::default()),
+            quantifier,
         }
     }
 
     #[derive(Grammar)]
     #[tygr(name = "cond")]
-    #[sugar(into = cond)]
     pub enum Cond {
         Not {
             not_kw: (StringEqCI!("NOT"), Space),
@@ -2136,97 +2123,6 @@ pub mod leveled {
             sp: Space,
             tail: Comparison,
         },
-    }
-
-    /// A condition: its predicate, in `NOT (...)` when the predicate is negated. IRIS applies a
-    /// quantified `NOT[` or `NOT]` to each row (measured on 2026.2), so under the `NOT` its quantifier
-    /// flips: `x NOT[ ANY (q)` is `NOT (x [ ALL (q))`.
-    fn cond(cond: &Cond, mut plain: core::Cond) -> core::Cond {
-        let Some(not_kw) = negation(cond) else {
-            return plain;
-        };
-        if let core::Cond::Predicate {
-            predicate:
-                core::Predicate::Comparison {
-                    tail:
-                        core::Comparison::Query {
-                            op: core::QuantifiedOp::Op { quantifier, .. },
-                            ..
-                        },
-                    ..
-                },
-            ..
-        } = &mut plain
-            && let Cond::Predicate {
-                predicate:
-                    Predicate::Comparison {
-                        tail:
-                            Comparison::Query {
-                                op: QuantifiedOp::Op { op, .. },
-                                ..
-                            },
-                        ..
-                    },
-                ..
-            } = cond
-            && negated(op)
-        {
-            *quantifier = match quantifier {
-                core::Quantifier::All(_) => core::Quantifier::Any(Default::default()),
-                core::Quantifier::Any(_) => core::Quantifier::All(Default::default()),
-            };
-        }
-        core::Cond::Not {
-            not_kw: (not_kw, Space::blank()),
-            condition: Box::new(Src::synthesized(core::Cond::Paren {
-                open: (Default::default(), Space::default()),
-                predicate: Box::new(core::Prdct(VecSep::one(core::And(VecSep::one(
-                    Src::synthesized(plain),
-                ))))),
-                close: (Space::default(), Default::default()),
-            })),
-        }
-    }
-
-    /// The `NOT` of a negated predicate: the keyword's own, or one made for `NOT[` and `NOT]`.
-    fn negation(cond: &Cond) -> Option<NotKw> {
-        use {Comparison::*, QuantifiedOp};
-        let Cond::Predicate {
-            predicate: Predicate::Comparison { tail, .. },
-            ..
-        } = cond
-        else {
-            return None;
-        };
-        match tail {
-            IsNull { null_kw, .. } => null_kw.negation(),
-            Between { between_kw, .. } => between_kw.negation(),
-            Like { like_kw, .. } => like_kw.negation(),
-            Matches { matches_kw, .. } => matches_kw.negation(),
-            In { in_kw, .. } => in_kw.negation(),
-            InList { inlist_kw, .. } => inlist_kw.negation(),
-            IsJSON { json_kw, .. } => json_kw.negation(),
-            Query {
-                op: QuantifiedOp::In(in_kw),
-                ..
-            } => in_kw.negation(),
-            Scalx { op, .. }
-            | Query {
-                op: QuantifiedOp::Op { op, .. },
-                ..
-            } if negated(op) => Some(Default::default()),
-            _ => None,
-        }
-    }
-
-    /// `NOT[` or `NOT]`, which read as `[` and `]` under the `NOT` that `cond` adds.
-    fn negated(op: &CmpOp) -> bool {
-        use {CmpOp, ContainsPredicate, FollowsPredicate};
-        matches!(
-            op,
-            CmpOp::Contains(ContainsPredicate::NotLB(_))
-                | CmpOp::Follows(FollowsPredicate::NotFollows(_))
-        )
     }
 
     #[derive(Grammar)]
