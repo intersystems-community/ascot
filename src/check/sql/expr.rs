@@ -22,7 +22,7 @@ impl Walk for Term {
             Term::Scalx(scalx) => scalx.walk(w),
             Term::Query(query) => query.walk(w),
             Term::Call(f) => {
-                let args = f.args.wrapped.as_ref().map_or(0, |args| args.items.len());
+                let args = f.args.1.wrapped.as_ref().map_or(0, |args| args.items.len());
                 w.call(&f.name.0, args, SqlProcedureUse::Function);
                 f.args.walk(w)
             }
@@ -38,7 +38,7 @@ impl Walk for Term {
     }
 }
 
-impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar> Walk for ArgsRR<T1, T2> {
+impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar> Walk for RR<T1, T2> {
     fn walk(&self, w: &mut Walker) {
         self.arg1.walk(w);
         self.arg2.walk(w)
@@ -46,7 +46,7 @@ impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar> Walk for ArgsRR<T1, T2>
 }
 
 impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar, T3: Walk + tygr::Grammar> Walk
-    for ArgsRRR<T1, T2, T3>
+    for RRR<T1, T2, T3>
 {
     fn walk(&self, w: &mut Walker) {
         self.arg1.walk(w);
@@ -55,7 +55,7 @@ impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar, T3: Walk + tygr::Gramma
     }
 }
 
-impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar> Walk for ArgsRO<T1, T2> {
+impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar> Walk for RO<T1, T2> {
     fn walk(&self, w: &mut Walker) {
         self.arg1.walk(w);
         if let Some((_, arg2)) = &self.arg2 {
@@ -65,7 +65,7 @@ impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar> Walk for ArgsRO<T1, T2>
 }
 
 impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar, T3: Walk + tygr::Grammar> Walk
-    for ArgsROO<T1, T2, T3>
+    for ROO<T1, T2, T3>
 {
     fn walk(&self, w: &mut Walker) {
         self.arg1.walk(w);
@@ -79,7 +79,7 @@ impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar, T3: Walk + tygr::Gramma
 }
 
 impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar, T3: Walk + tygr::Grammar> Walk
-    for ArgsRRO<T1, T2, T3>
+    for RRO<T1, T2, T3>
 {
     fn walk(&self, w: &mut Walker) {
         self.arg1.walk(w);
@@ -95,7 +95,7 @@ impl<
     T2: Walk + tygr::Grammar,
     T3: Walk + tygr::Grammar,
     T4: Walk + tygr::Grammar,
-> Walk for ArgsRROO<T1, T2, T3, T4>
+> Walk for RROO<T1, T2, T3, T4>
 {
     fn walk(&self, w: &mut Walker) {
         self.arg1.walk(w);
@@ -119,12 +119,12 @@ impl Walk for Builtin {
             Cast(_, cast) => cast.walk(w),
             Convert(_, a) => a.walk(w),
             JSONArray(_, a) => {
-                if let Some((items, _)) = &a.wrapped {
+                if let Some((items, _)) = &a.1.wrapped {
                     items.walk(w)
                 }
             }
             JSONObject(_, a) => {
-                if let Some((pairs, _)) = &a.wrapped {
+                if let Some((pairs, _)) = &a.1.wrapped {
                     pairs.walk(w)
                 }
             }

@@ -110,7 +110,7 @@ fn column_list(
     columns: &Option<SQLColumnListParen>,
     values: &(Space, ValueSource),
 ) {
-    for column in columns.iter().flat_map(|list| list.wrapped.items.iter()) {
+    for column in columns.iter().flat_map(|list| list.1.wrapped.items.iter()) {
         w.column(column)
     }
     match &values.1 {
@@ -183,6 +183,7 @@ impl Walk for CallStatement {
     fn walk(&self, w: &mut Walker) {
         let args = self
             .args
+            .1
             .wrapped
             .as_ref()
             .map_or(0, |args| args.items.len());

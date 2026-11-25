@@ -3,7 +3,7 @@
 //! containers, and the argument gathering the function rules share.
 
 use either::Either;
-use tygr::{Grammar, Hidden, NotFollowedBy, Prefix, Ranged, Raw, StringEq, Suffix, Vec1, Wrap};
+use tygr::{Grammar, Hidden, NotFollowedBy, Prefix, Ranged, Raw, Suffix, Vec1, Wrap};
 
 use super::{core, full, *};
 use crate::convert::VecSep;
@@ -210,9 +210,6 @@ impl<G: Desugar> Desugar for NotFollowedBy<G> {
     }
 }
 
-type Open = (Space, StringEq!("("), Space);
-type Close = (Space, StringEq!(")"));
-
 /// `a, b`.
 pub(super) fn commas<T>(items: Vec<T>) -> VecSep<T, ArgSep> {
     let sep = (Space::default(), Default::default(), Space::blank());
@@ -222,9 +219,10 @@ pub(super) fn commas<T>(items: Vec<T>) -> VecSep<T, ArgSep> {
 
 /// `(a, b)`.
 pub(super) fn list(args: Vec<core::Scalx>) -> core::ArgsN {
-    let open = (Space::default(), Default::default(), Space::default());
     let items = (!args.is_empty()).then(|| commas(args));
-    Wrap::new(open, items, (Space::default(), Default::default()))
+    let open = (Default::default(), Space::default());
+    let list = Wrap::new(open, items, (Space::default(), Default::default()));
+    (Space::default(), list)
 }
 
 /// A term as an expression of its own, standing for the node being rewritten.
@@ -279,7 +277,7 @@ impl Arg for VecSep<full::Scalx, ArgSep> {
     }
 }
 
-impl Arg for full::Args0 {
+impl Arg for () {
     fn args(&self, _: &mut Vec<core::Scalx>) {}
 }
 
@@ -304,7 +302,7 @@ impl<K, T: Arg, U: Arg> Arg for (K, T, U) {
     }
 }
 
-impl<T: Arg> Arg for Wrap<Open, T, Close> {
+impl<T: Arg> Arg for full::Parenthesized<T> {
     fn args(&self, out: &mut Vec<core::Scalx>) {
         self.wrapped.args(out)
     }
@@ -322,13 +320,13 @@ macro_rules! shapes {
 }
 
 shapes! {
-    ArgsRR<T1, T2> { arg1 arg2 }
-    ArgsRRR<T1, T2, T3> { arg1 arg2 arg3 }
-    ArgsRRRR<T1, T2, T3, T4> { arg1 arg2 arg3 arg4 }
-    ArgsRO<T1, T2> { arg1 arg2 }
-    ArgsROO<T1, T2, T3> { arg1 rest }
-    ArgsRRO<T1, T2, T3> { arg1 arg2 arg3 }
-    ArgsRROO<T1, T2, T3, T4> { arg1 arg2 rest }
+    RR<T1, T2> { arg1 arg2 }
+    RRR<T1, T2, T3> { arg1 arg2 arg3 }
+    RRRR<T1, T2, T3, T4> { arg1 arg2 arg3 arg4 }
+    RO<T1, T2> { arg1 arg2 }
+    ROO<T1, T2, T3> { arg1 rest }
+    RRO<T1, T2, T3> { arg1 arg2 arg3 }
+    RROO<T1, T2, T3, T4> { arg1 arg2 rest }
 }
 
 /// `POSITION(a IN b)` has the arguments of `CHARINDEX(a, b)`.

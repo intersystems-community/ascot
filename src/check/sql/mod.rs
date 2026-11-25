@@ -13,7 +13,7 @@ use resolve::{Columns, Lookup, ProcInfo};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::sql::core::*;
 use tygr_objectscript::sql::{
-    DottedIdent, HostRef, HostVar, Ident, Integer, Param, SQLIdentNonKeyword, Src, Sub, Var,
+    DottedIdent, HostRef, HostVar, Ident, Integer, Param, SQLIdentNonKeyword, Space, Src, Sub, Var,
 };
 
 mod expr;
@@ -307,6 +307,12 @@ impl<T: Walk> Walk for Box<T> {
 impl<T: Walk> Walk for Src<T> {
     fn walk(&self, w: &mut Walker) {
         self.node.walk(w)
+    }
+}
+
+impl<T: Walk> Walk for (Space, T) {
+    fn walk(&self, w: &mut Walker) {
+        self.1.walk(w)
     }
 }
 
