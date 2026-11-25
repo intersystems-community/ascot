@@ -26,7 +26,7 @@ NAME=ascot-parse-$IMAGE_NAME-$RELEASE-${NAMESPACE//%/}
 IMAGE=containers.intersystems.com/intersystems/$IMAGE_NAME:$RELEASE
 
 [ -x "$ASCOT" ] || (cd "$ROOT" && cargo build --release)
-DECLARATIONS=$(dirname "$OUT")/$IMAGE_NAME-$RELEASE-${NAMESPACE//%/}.d.json
+DECLARATIONS=$(dirname "$OUT")/$IMAGE_NAME-$RELEASE-${NAMESPACE//%/}.ascot.decls
 mkdir -p "$(dirname "$OUT")"
 # A rerun into the same OUT keeps the declarations it built.
 [ -s "$DECLARATIONS" ] ||

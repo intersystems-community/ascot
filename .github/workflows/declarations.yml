@@ -31,16 +31,16 @@ jobs:
       - run: cargo build --release
       - name: Declare
         run: |
-          NAME=${{ inputs.image }}-${{ inputs.release }}.d.json
-          [ "${{ inputs.namespace }}" = %SYS ] || NAME=${{ inputs.image }}-${{ inputs.release }}.${{ inputs.namespace }}.d.json
+          NAME=${{ inputs.image }}-${{ inputs.release }}.ascot.decls
+          [ "${{ inputs.namespace }}" = %SYS ] || NAME=${{ inputs.image }}-${{ inputs.release }}.${{ inputs.namespace }}.ascot.decls
           echo "NAME=$NAME" >> "$GITHUB_ENV"
           scripts/prebuilt-declarations.sh ${{ inputs.release }} $NAME ${{ inputs.image }} ${{ inputs.namespace }}
-          gzip -9 $NAME
-          sha256sum $NAME.gz > $NAME.gz.sha256
+          gzip -9 $NAME && mv $NAME.gz $NAME
+          sha256sum $NAME > $NAME.sha256
       - name: Upload
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view declarations >/dev/null 2>&1 || gh release create declarations --prerelease --latest=false --title "Pre-built IRIS declarations" --notes-file .github/declarations-release.md
           gh release edit declarations --notes-file .github/declarations-release.md
-          gh release upload declarations "$NAME.gz" "$NAME.gz.sha256" --clobber
+          gh release upload declarations "$NAME" "$NAME.sha256" --clobber

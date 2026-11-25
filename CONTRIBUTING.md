@@ -106,7 +106,7 @@ ascot can't, such as `#if $$$comClassDefined(...)`; an include the namespace lac
 Each release builds the files for the current Community release (the `declarations` job of the
 Release workflow: `iris-community` and `irishealth-community` `%SYS`, and IRIS for Health's
 `HSLIB` and `HSSYS`) and attaches them beside the binaries, named
-`<image>-<release>[.<namespace>].d.json.gz` with a `.sha256` beside each; `--iris <release>`
+`<image>-<release>[.<namespace>].ascot.decls` with a `.sha256` beside each; `--iris <release>`
 downloads from the release of the ascot that asks, into `~/.ascot/<ascot version>`, and falls back
 to the `declarations` GitHub Release, a prerelease on a fixed tag that is never GitHub's "latest"
 (which `releases/latest/download` must keep resolving to an ascot build), where releases before
@@ -115,14 +115,14 @@ to the `declarations` GitHub Release, a prerelease on a fixed tag that is never 
 by hand:
 
 ```sh
-scripts/prebuilt-declarations.sh 2026.2 iris-community-2026.2.d.json
-gzip -9 iris-community-2026.2.d.json
-shasum -a 256 iris-community-2026.2.d.json.gz > iris-community-2026.2.d.json.gz.sha256
-gh release upload declarations iris-community-2026.2.d.json.gz{,.sha256} --clobber
+scripts/prebuilt-declarations.sh 2026.2 iris-community-2026.2.ascot.decls
+gzip -9 iris-community-2026.2.ascot.decls && mv iris-community-2026.2.ascot.decls{.gz,}
+shasum -a 256 iris-community-2026.2.ascot.decls > iris-community-2026.2.ascot.decls.sha256
+gh release upload declarations iris-community-2026.2.ascot.decls{,.sha256} --clobber
 ```
 
 Bump `DEFAULT_RELEASE` in `src/release.rs` when a new Community release's file is up, and replace
-`declarations/iris-community-<release>.d.json.gz` with it: the `bundled-declarations` feature and
+`declarations/iris-community-<release>.ascot.decls` with it: the `bundled-declarations` feature and
 the npm package carry that copy, and a bump without the file does not build. The format's version,
 `DECLARATIONS_VERSION` in `src/declared.rs`, is semver: a file is readable while its major part
 matches, so bump the major for a change old ascots can't read, the minor for an addition, and

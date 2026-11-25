@@ -58,9 +58,9 @@ npx jco transpile "$COMPONENT" \
 # The pre-built declarations of the IRIS release this ascot defaults to, the copy under
 # `declarations/` that the crate's `bundled-declarations` feature carries too: what `createWorkspace()`
 # checks against when the host passes no env, as `--iris latest` does on the command line.
-ASSET=$(basename "$REPO_ROOT"/declarations/iris-community-*.d.json.gz)
+ASSET=$(basename "$REPO_ROOT"/declarations/iris-community-*.ascot.decls)
 RELEASE=${ASSET#iris-community-}
-RELEASE=${RELEASE%.d.json.gz}
+RELEASE=${RELEASE%.ascot.decls}
 echo "bundling $ASSET ..."
 cp "$REPO_ROOT/declarations/$ASSET" "lib/$ASSET"
 printf 'export const release = "%s";\nexport const file = new URL("./%s", import.meta.url);\n' "$RELEASE" "$ASSET" > lib/declarations.js
