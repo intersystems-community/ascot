@@ -160,7 +160,7 @@ impl Walk for Frmit {
     fn walk(&self, w: &mut Walker) {
         match self {
             Frmit::TVF { function, alias } => {
-                let args = function.args.as_ref().map_or(0, |args| args.items.len());
+                let args = (function.args.wrapped.as_ref()).map_or(0, |args| args.items.len());
                 w.call(&function.table.0, args, SqlProcedureUse::Table);
                 w.table(None, alias.as_ref());
                 function.args.walk(w)
@@ -169,7 +169,7 @@ impl Walk for Frmit {
                 w.table(None, alias.as_ref());
                 query.walk(w)
             }
-            Frmit::JTab { joined, .. } => joined.walk(w),
+            Frmit::JTab(joined) => joined.walk(w),
             Frmit::JSONTable { alias, .. } => w.table(None, alias.as_ref()),
             Frmit::Table { name, alias } => w.table(Some(name_of(&name.0)), alias.as_ref()),
         }

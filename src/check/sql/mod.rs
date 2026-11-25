@@ -389,7 +389,7 @@ impl Walk for Param {
 impl Walk for ValSpec {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ValSpec::Scalx { exprs, .. } => exprs.walk(w),
+            ValSpec::Scalx(exprs) => exprs.walk(w),
             ValSpec::Var { var, subs } => {
                 var.walk(w);
                 subs.walk(w)

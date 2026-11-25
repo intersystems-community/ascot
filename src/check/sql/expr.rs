@@ -128,13 +128,13 @@ impl Walk for Builtin {
                     pairs.walk(w)
                 }
             }
-            Predict(_, a) => a.with_clause.walk(w),
+            Predict(_, a) => a.1.wrapped.with_clause.walk(w),
             Probability(_, a) => {
-                a.for_clause.walk(w);
-                a.with_clause.walk(w)
+                a.1.wrapped.for_clause.walk(w);
+                a.1.wrapped.with_clause.walk(w)
             }
             SearchIndex(_, a) => {
-                for (_, scalx) in &a.scalx_list {
+                for (_, scalx) in &a.1.wrapped.scalx_list {
                     scalx.walk(w)
                 }
             }
@@ -245,7 +245,7 @@ impl Walk for SQLCastExpression {
 
 impl Walk for XMLElement {
     fn walk(&self, w: &mut Walker) {
-        self.values.walk(w)
+        self.args.1.wrapped.2.walk(w)
     }
 }
 
@@ -316,8 +316,9 @@ impl Walk for Window {
         if let Some(Either::Right(args)) = &self.arg.wrapped {
             args.walk(w)
         }
-        self.partition.walk(w);
-        self.order.walk(w)
+        let (partition, order, _) = &self.spec.wrapped;
+        partition.walk(w);
+        order.walk(w)
     }
 }
 
@@ -382,7 +383,7 @@ impl Walk for Cond {
     fn walk(&self, w: &mut Walker) {
         match self {
             Cond::Not { condition, .. } => condition.walk(w),
-            Cond::Paren { predicate, .. } => predicate.walk(w),
+            Cond::Paren(predicate) => predicate.walk(w),
             Cond::Predicate { predicate, .. } => predicate.walk(w),
         }
     }
@@ -449,12 +450,12 @@ impl Walk for Comparison {
 impl Walk for ForCnd {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ForCnd::Paren(_, _, predicate, _, _) => predicate.walk(w),
-            ForCnd::GroupHaving { group, having, .. } => {
-                group.walk(w);
-                having.walk(w)
+            ForCnd::Paren(predicate) => predicate.walk(w),
+            ForCnd::GroupHaving(parens) => {
+                parens.wrapped.0.walk(w);
+                parens.wrapped.1.walk(w)
             }
-            ForCnd::GroupOnly(_, _, group, _, _) => group.walk(w),
+            ForCnd::GroupOnly(group) => group.walk(w),
         }
     }
 }

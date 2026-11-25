@@ -302,7 +302,7 @@ impl<K, T: Arg, U: Arg> Arg for (K, T, U) {
     }
 }
 
-impl<T: Arg> Arg for full::Parenthesized<T> {
+impl<T: Arg> Arg for Parenthesized<T> {
     fn args(&self, out: &mut Vec<core::Scalx>) {
         self.wrapped.args(out)
     }

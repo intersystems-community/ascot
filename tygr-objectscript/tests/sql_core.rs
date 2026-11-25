@@ -158,12 +158,8 @@ const RULES: &[(&str, &str)] = &[
         "SELECT a FROM t LIMIT 5 OFFSET 3",
     ),
     (
+        "SELECT a FROM t WHERE a %INLIST :l SIZE (((10)))",
         "SELECT a FROM t WHERE a %INLIST :l SIZE ((10))",
-        "SELECT a FROM t WHERE a %INLIST :l SIZE (10)",
-    ),
-    (
-        "SELECT a FROM t WHERE a %INLIST :l SIZE 10",
-        "SELECT a FROM t WHERE a %INLIST :l SIZE (10)",
     ),
     (
         "INSERT t SET a = :x, b = 2",

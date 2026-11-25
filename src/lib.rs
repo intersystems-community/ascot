@@ -42,6 +42,7 @@
 //!   host's or its own connection's (native only).
 //! - `iris.rs`: declaration files, answering `IrisContext` offline (native only).
 
+#![recursion_limit = "256"]
 mod atelier;
 pub mod bindings;
 pub mod check;
