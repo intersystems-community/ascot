@@ -6,8 +6,8 @@
 #
 # Usage: scripts/prebuilt-declarations.sh [RELEASE] [OUT] [IMAGE] [NAMESPACE]
 #   RELEASE    the image tag, default 2026.2
-#   OUT        the file to write, default IMAGE-RELEASE.d.json, or IMAGE-RELEASE.NAMESPACE.d.json
-#              for a namespace other than %SYS
+#   OUT        the file to write, default IMAGE-RELEASE.ascot.decls, or
+#              IMAGE-RELEASE.NAMESPACE.ascot.decls for a namespace other than %SYS
 #   IMAGE      the image, iris-community (default) or irishealth-community
 #   NAMESPACE  the namespace to declare, default %SYS; IRIS for Health keeps its HS and Ens
 #              classes in HSLIB
@@ -17,8 +17,8 @@ set -euo pipefail
 RELEASE=${1:-2026.2}
 IMAGE_NAME=${3:-iris-community}
 NAMESPACE=${4:-%SYS}
-DEFAULT_OUT=$IMAGE_NAME-$RELEASE.d.json
-[ "$NAMESPACE" = %SYS ] || DEFAULT_OUT=$IMAGE_NAME-$RELEASE.$NAMESPACE.d.json
+DEFAULT_OUT=$IMAGE_NAME-$RELEASE.ascot.decls
+[ "$NAMESPACE" = %SYS ] || DEFAULT_OUT=$IMAGE_NAME-$RELEASE.$NAMESPACE.ascot.decls
 OUT=${2:-$DEFAULT_OUT}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ASCOT=${ASCOT:-$ROOT/target/release/ascot}

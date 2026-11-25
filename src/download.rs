@@ -32,7 +32,7 @@ pub(crate) fn fetch_into(
     dir: &Path,
 ) -> Result<PathBuf, String> {
     let asset = release.asset();
-    let path = dir.join(asset.trim_end_matches(".gz"));
+    let path = dir.join(&asset);
     if path.exists() {
         return Ok(path);
     }
@@ -169,7 +169,7 @@ mod tests {
         ]);
         let dir = temp_dir("ok");
         let path = fetch_into(&release("2026.2"), &[&url], &dir).unwrap();
-        assert_eq!(path, dir.join("iris-community-2026.2.d.json"));
+        assert_eq!(path, dir.join("iris-community-2026.2.ascot.decls"));
         assert_eq!(Declarations::load(&path).unwrap().namespace, "%SYS");
         assert_eq!(*hits.lock().unwrap(), 2);
         assert_eq!(fetch_into(&release("2026.2"), &[&url], &dir).unwrap(), path);
@@ -218,7 +218,7 @@ mod tests {
         ]);
         let dir = temp_dir("fallback");
         let path = fetch_into(&release("2026.2"), &[&empty, &url], &dir).unwrap();
-        assert_eq!(path, dir.join("iris-community-2026.2.d.json"));
+        assert_eq!(path, dir.join("iris-community-2026.2.ascot.decls"));
         assert_eq!(*empty_hits.lock().unwrap(), 1);
         assert_eq!(*hits.lock().unwrap(), 2);
         fs::remove_dir_all(&dir).unwrap();

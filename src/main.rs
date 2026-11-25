@@ -91,8 +91,8 @@ enum Command {
         /// The namespace to declare [default: %SYS]
         #[arg(long, value_name = "NS")]
         iris_namespace: Option<String>,
-        /// The declaration file to write, for example user.d.json
-        /// [default: ~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json]
+        /// The declaration file to write, for example user.ascot.decls
+        /// [default: ~/.ascot/<host>-<port>[-<prefix>]-<namespace>.ascot.decls]
         file: Option<PathBuf>,
     },
     #[cfg(feature = "format")]
@@ -387,7 +387,7 @@ fn declare(url: &str, namespace: Option<&str>, out: Option<&Path>) {
     }
 }
 
-/// `~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json`, its directory created.
+/// `~/.ascot/<host>-<port>[-<prefix>]-<namespace>.ascot.decls`, its directory created.
 #[cfg(feature = "declare")]
 fn default_declaration_file(url: &str, namespace: &str) -> Result<PathBuf, String> {
     let dir = std::env::home_dir()
@@ -415,7 +415,7 @@ fn default_declaration_file(url: &str, namespace: &str) -> Result<PathBuf, Strin
             }
         })
         .collect();
-    Ok(dir.join(format!("{name}.d.json")))
+    Ok(dir.join(format!("{name}.ascot.decls")))
 }
 
 #[cfg(feature = "mcp")]
