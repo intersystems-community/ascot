@@ -383,14 +383,22 @@ impl Walk for Cond {
         match self {
             Cond::Not { condition, .. } => condition.walk(w),
             Cond::Paren { predicate, .. } => predicate.walk(w),
-            Cond::Exists { query, .. } => query.walk(w),
-            Cond::ForSomeElement {
+            Cond::Predicate { predicate, .. } => predicate.walk(w),
+        }
+    }
+}
+
+impl Walk for Predicate {
+    fn walk(&self, w: &mut Walker) {
+        match self {
+            Predicate::Exists { query, .. } => query.walk(w),
+            Predicate::ForSomeElement {
                 column, predicate, ..
             } => {
                 w.column(column);
                 w.unchecked(predicate)
             }
-            Cond::ForSome {
+            Predicate::ForSome {
                 tables, condition, ..
             } => {
                 w.push_frame();
@@ -400,7 +408,7 @@ impl Walk for Cond {
                 }
                 w.pop_frame()
             }
-            Cond::Comparison { lhs, tail, .. } => {
+            Predicate::Comparison { lhs, tail, .. } => {
                 lhs.walk(w);
                 tail.walk(w)
             }

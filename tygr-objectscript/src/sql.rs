@@ -2098,13 +2098,21 @@ pub mod leveled {
             predicate: Box<Prdct>,
             close: (Space, StringEq!(")")),
         },
-        Exists {
+        Predicate {
             noindex: NoIndex,
+            predicate: Predicate,
+        },
+    }
+
+    /// What a `%NOINDEX` hint may precede (measured on 2026.2: not a `NOT` or a parenthesis).
+    #[derive(Grammar)]
+    #[tygr(name = "predicate")]
+    pub enum Predicate {
+        Exists {
             exists_kw: (StringEqCI!("EXISTS"), Space),
             query: SQLSubquery,
         },
         ForSomeElement {
-            noindex: NoIndex,
             for_kw: (StringEqCI!("FOR"), Space, StringEqCI!("SOME"), Space),
             percent_element: StringEqCI!("%ELEMENT"),
             open_paren1: (Space, StringEq!("("), Space),
@@ -2116,7 +2124,6 @@ pub mod leveled {
             close_paren2: (Space, StringEq!(")")),
         },
         ForSome {
-            noindex: NoIndex,
             for_kw: (StringEqCI!("FOR"), Space),
             some_kw: (StringEqCI!("SOME"), Space),
             open: (StringEq!("("), Space),
@@ -2125,7 +2132,6 @@ pub mod leveled {
             condition: Option<(Space, Box<ForCnd>)>,
         },
         Comparison {
-            noindex: NoIndex,
             lhs: Scalx,
             sp: Space,
             tail: Comparison,
@@ -2139,18 +2145,26 @@ pub mod leveled {
         let Some(not_kw) = negation(cond) else {
             return plain;
         };
-        if let core::Cond::Comparison {
-            tail:
-                core::Comparison::Query {
-                    op: core::QuantifiedOp::Op { quantifier, .. },
+        if let core::Cond::Predicate {
+            predicate:
+                core::Predicate::Comparison {
+                    tail:
+                        core::Comparison::Query {
+                            op: core::QuantifiedOp::Op { quantifier, .. },
+                            ..
+                        },
                     ..
                 },
             ..
         } = &mut plain
-            && let Cond::Comparison {
-                tail:
-                    Comparison::Query {
-                        op: QuantifiedOp::Op { op, .. },
+            && let Cond::Predicate {
+                predicate:
+                    Predicate::Comparison {
+                        tail:
+                            Comparison::Query {
+                                op: QuantifiedOp::Op { op, .. },
+                                ..
+                            },
                         ..
                     },
                 ..
@@ -2177,7 +2191,11 @@ pub mod leveled {
     /// The `NOT` of a negated predicate: the keyword's own, or one made for `NOT[` and `NOT]`.
     fn negation(cond: &Cond) -> Option<NotKw> {
         use {Comparison::*, QuantifiedOp};
-        let Cond::Comparison { tail, .. } = cond else {
+        let Cond::Predicate {
+            predicate: Predicate::Comparison { tail, .. },
+            ..
+        } = cond
+        else {
             return None;
         };
         match tail {
@@ -6800,9 +6818,13 @@ mod tests {
             .items
             .iter()
             .map(|cond| match &cond.node {
-                Cond::Comparison {
-                    lhs,
-                    tail: Comparison::Between { lower, upper, .. },
+                Cond::Predicate {
+                    predicate:
+                        Predicate::Comparison {
+                            lhs,
+                            tail: Comparison::Between { lower, upper, .. },
+                            ..
+                        },
                     ..
                 } => {
                     assert_eq!(
@@ -6811,38 +6833,53 @@ mod tests {
                     );
                     "between"
                 }
-                Cond::Comparison {
-                    tail:
-                        Comparison::IsNull {
-                            null_kw: Negatable::Negated(..),
+                Cond::Predicate {
+                    predicate:
+                        Predicate::Comparison {
+                            tail:
+                                Comparison::IsNull {
+                                    null_kw: Negatable::Negated(..),
+                                    ..
+                                },
                             ..
                         },
                     ..
                 } => "is not null",
-                Cond::Comparison {
-                    tail:
-                        Comparison::Query {
-                            op:
-                                QuantifiedOp::Op {
-                                    quantifier: Quantifier::Any(_),
+                Cond::Predicate {
+                    predicate:
+                        Predicate::Comparison {
+                            tail:
+                                Comparison::Query {
+                                    op:
+                                        QuantifiedOp::Op {
+                                            quantifier: Quantifier::Any(_),
+                                            ..
+                                        },
                                     ..
                                 },
                             ..
                         },
                     ..
                 } => "quantified",
-                Cond::Comparison {
-                    tail:
-                        Comparison::In {
-                            in_kw: Negatable::Negated(..),
+                Cond::Predicate {
+                    predicate:
+                        Predicate::Comparison {
+                            tail:
+                                Comparison::In {
+                                    in_kw: Negatable::Negated(..),
+                                    ..
+                                },
                             ..
                         },
                     ..
                 } => "not in",
-                Cond::Comparison {
+                Cond::Predicate {
                     noindex: Some(_),
-                    tail: Comparison::Scalx { expr, .. },
-                    ..
+                    predicate:
+                        Predicate::Comparison {
+                            tail: Comparison::Scalx { expr, .. },
+                            ..
+                        },
                 } => {
                     assert_eq!(expr.print(), "3");
                     "compare"
