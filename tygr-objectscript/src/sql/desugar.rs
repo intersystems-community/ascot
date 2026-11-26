@@ -43,6 +43,7 @@ identity!(
     IsNotParen,
     SpaceUnit,
     Space,
+    Space1,
     Ident,
     SQLIdentNonKeyword,
     IdentifierStart,
