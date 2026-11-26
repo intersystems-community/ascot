@@ -298,9 +298,9 @@ impl<T: Walk> Walk for Vec1<T> {
     }
 }
 
-impl<T: Walk + tygr::Grammar> Walk for Nested<T> {
+impl<T: Walk + tygr::Grammar, B: tygr::Grammar + Default> Walk for Nested<T, B> {
     fn walk(&self, w: &mut Walker) {
-        let Nested::Bare(t) = self;
+        let Nested::Bare(_, t) = self;
         t.walk(w)
     }
 }

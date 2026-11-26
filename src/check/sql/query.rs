@@ -62,7 +62,7 @@ impl Walk for Selex {
         self.where_clause.walk(w);
         self.group.walk(w);
         self.having.walk(w);
-        for (option, _) in &self.options {
+        for (_, option) in &self.options {
             option.walk(w)
         }
         self.selst.walk(w);
@@ -74,7 +74,7 @@ impl Walk for Selex {
 impl Walk for Selst {
     fn walk(&self, w: &mut Walker) {
         self.quantifier.walk(w);
-        if let Some((_, _, top, _)) = &self.top {
+        if let Some((_, top, _)) = &self.top {
             top.walk(w)
         }
         self.select_list.walk(w);
@@ -85,7 +85,7 @@ impl Walk for Selst {
 impl Walk for SelectOption {
     fn walk(&self, w: &mut Walker) {
         match self {
-            SelectOption::RowLimit(_, _, val) | SelectOption::RowOffset(_, _, val) => val.walk(w),
+            SelectOption::RowLimit(_, val) | SelectOption::RowOffset(_, val) => val.walk(w),
             _ => {}
         }
     }
@@ -116,20 +116,20 @@ impl Walk for FromClause {
     }
 }
 
-impl Walk for Tables {
+impl<B: tygr::Grammar + Default> Walk for Tables<B> {
     fn walk(&self, w: &mut Walker) {
         self.first.walk(w)
     }
 }
 
-impl Walk for Tref {
+impl<B: tygr::Grammar + Default> Walk for Tref<B> {
     fn walk(&self, w: &mut Walker) {
         let Tref::Join(table) = self;
         table.walk(w)
     }
 }
 
-impl Walk for JTab {
+impl<B: tygr::Grammar + Default> Walk for JTab<B> {
     fn walk(&self, w: &mut Walker) {
         self.formit.walk(w);
         for (_, join) in &self.joins {
@@ -141,10 +141,7 @@ impl Walk for JTab {
 impl Walk for Join {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Join::Cross {
-                table: (_, table), ..
-            }
-            | Join::Natural { table, .. } => table.walk(w),
+            Join::Cross { table, .. } | Join::Natural { table, .. } => table.walk(w),
             Join::Qualified { table, spec, .. } => {
                 table.walk(w);
                 if let (_, JSpec::On { condition, .. }) = spec {
@@ -155,10 +152,10 @@ impl Walk for Join {
     }
 }
 
-impl Walk for Frmit {
+impl<B: tygr::Grammar + Default> Walk for Frmit<B> {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Frmit::TVF { function, alias } => {
+            Frmit::TVF(_, function, alias) => {
                 let args = (function.args.wrapped.as_ref()).map_or(0, |(args, _)| args.items.len());
                 w.call(&function.table.0, args, SqlProcedureUse::Table);
                 w.table(None, alias.as_ref());
@@ -166,13 +163,13 @@ impl Walk for Frmit {
                     args.walk(w)
                 }
             }
-            Frmit::Query { query, alias, .. } => {
+            Frmit::Lateral(_, _, _, query, alias) | Frmit::Query(_, query, alias) => {
                 w.table(None, alias.as_ref());
                 query.walk(w)
             }
-            Frmit::JTab(joined) => joined.walk(w),
-            Frmit::JSONTable { alias, .. } => w.table(None, alias.as_ref()),
-            Frmit::Table { name, alias } => w.table(Some(name_of(&name.0)), alias.as_ref()),
+            Frmit::JTab(_, joined) => joined.walk(w),
+            Frmit::JSONTable(_, _, alias) => w.table(None, alias.as_ref()),
+            Frmit::Table(_, name, alias) => w.table(Some(name_of(&name.0)), alias.as_ref()),
         }
     }
 }

@@ -1,6 +1,6 @@
 use either::Either;
 use tygr::Print;
-use tygr_objectscript::sql::{Space, core::*};
+use tygr_objectscript::sql::{Space1, core::*};
 
 use super::{SqlProcedureUse, Walk, Walker, name_of};
 
@@ -44,7 +44,7 @@ impl Walk for Insrt {
 impl Walk for Updat {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
-        match &self.body.1 {
+        match &self.body {
             UpdatBody::Update {
                 target,
                 assignment,
@@ -109,7 +109,7 @@ impl Walk for Asign {
 fn column_list(
     w: &mut Walker,
     columns: &Option<SQLColumnListParen>,
-    values: &(Space, ValueSource),
+    values: &(Space1, ValueSource),
 ) {
     for column in columns.iter().flat_map(|list| list.1.wrapped.items.iter()) {
         w.column(column)

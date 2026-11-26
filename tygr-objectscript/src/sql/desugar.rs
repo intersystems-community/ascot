@@ -237,27 +237,25 @@ impl<G: Desugar> Desugar for NotFollowedBy<G> {
 }
 
 pub(super) fn commas<T>(items: Vec<T>) -> VecSep<T, ArgSep> {
-    let sep = (Space::default(), Default::default(), Space::blank());
-    let seps = vec![sep; items.len().saturating_sub(1)];
+    let seps = vec![Default::default(); items.len().saturating_sub(1)];
     VecSep { items, seps }
 }
 
 pub(super) fn parenthesized<T>(wrapped: T) -> Parenthesized<T> {
-    let open = (Default::default(), Space::default());
-    Wrap::new(open, wrapped, (Space::default(), Default::default()))
+    Wrap::new(Default::default(), wrapped, Default::default())
 }
 
 pub(super) fn list(args: Vec<core::Scalx>) -> core::ArgsN {
     let items = (!args.is_empty()).then(|| commas(args));
-    (Space::default(), parenthesized(items))
+    (Default::default(), parenthesized(items))
 }
 
 /// A term as the expression standing for the node being rewritten.
-pub(super) fn term(term: core::Term) -> core::Scalx {
-    core::Scalx(VecSep::one(synthesized(term)))
+pub(super) fn term<B: Grammar + Default>(term: core::Term) -> core::Scalx<B> {
+    core::Scalx::one(synthesized(term))
 }
 
-pub(super) fn string(text: &str) -> core::Scalx {
+pub(super) fn string<B: Grammar + Default>(text: &str) -> core::Scalx<B> {
     let literal = StringLiteral(Raw::new(format!("'{text}'")));
     term(core::Term::Literal(Literal::String(literal)))
 }
@@ -297,9 +295,12 @@ impl Arg for full::Scalx {
     }
 }
 
-impl Arg for Ranged<full::Term> {
+impl Arg for full::Operand {
     fn args(self, out: &mut Vec<core::Scalx>) {
-        out.push(core::Scalx(VecSep::one(self.desugar())))
+        out.push(core::Scalx {
+            first: self.desugar(),
+            rest: Vec::new(),
+        })
     }
 }
 

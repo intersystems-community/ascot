@@ -3,10 +3,21 @@ use tygr_objectscript::sql::core::*;
 
 use super::{SqlProcedureUse, Walk, Walker};
 
-impl Walk for Scalx {
+impl<B: tygr::Grammar + Default> Walk for Scalx<B> {
     fn walk(&self, w: &mut Walker) {
-        let Scalx(terms) = self;
-        terms.walk(w)
+        self.first.walk(w);
+        for (.., operand) in &self.rest {
+            operand.walk(w)
+        }
+    }
+}
+
+impl<B: tygr::Grammar + Default> Walk for Operand<B> {
+    fn walk(&self, w: &mut Walker) {
+        match self {
+            Operand::Paren(_, scalx) => scalx.walk(w),
+            Operand::Term(_, term) => term.walk(w),
+        }
     }
 }
 
@@ -19,7 +30,6 @@ impl Walk for Term {
             Term::Unary { term, .. } => term.walk(w),
             Term::XTFun(f) => f.args.walk(w),
             Term::Case(case) => case.walk(w),
-            Term::Scalx(scalx) => scalx.walk(w),
             Term::Query(query) => query.walk(w),
             Term::Call(f) => {
                 let args = f.args.1.wrapped.as_ref().map_or(0, |args| args.items.len());
@@ -208,9 +218,9 @@ impl Walk for PredictAssign {
 
 impl Walk for TrimArgs {
     fn walk(&self, w: &mut Walker) {
-        let TrimHow::SpecChars(_, _, chars, _) = &self.how;
+        let TrimArgs::SpecChars(_, chars, _, _, expr) = self;
         chars.walk(w);
-        self.expr.walk(w)
+        expr.walk(w)
     }
 }
 
@@ -356,7 +366,7 @@ impl Walk for Case {
     fn walk(&self, w: &mut Walker) {
         match &self.body {
             CaseBody::Searched(whens) => whens.walk(w),
-            CaseBody::Simple(_, operand, whens) => {
+            CaseBody::Simple(operand, whens) => {
                 operand.walk(w);
                 whens.walk(w)
             }
@@ -379,24 +389,30 @@ impl Walk for Implied<SQLElseClause> {
     }
 }
 
-impl Walk for Prdct {
+impl<B: tygr::Grammar + Default> Walk for Prdct<B> {
     fn walk(&self, w: &mut Walker) {
-        self.0.walk(w)
+        self.first.walk(w);
+        for OrAnd::Or(_, _, and) in &self.rest {
+            and.walk(w)
+        }
     }
 }
 
-impl Walk for And {
+impl<B: tygr::Grammar + Default> Walk for And<B> {
     fn walk(&self, w: &mut Walker) {
-        self.0.walk(w)
+        self.first.walk(w);
+        for AndCond::And(_, _, cond) in &self.rest {
+            cond.walk(w)
+        }
     }
 }
 
-impl Walk for Cond {
+impl<B: tygr::Grammar + Default> Walk for Cond<B> {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Cond::Not { condition, .. } => condition.walk(w),
-            Cond::Paren(predicate) => predicate.walk(w),
-            Cond::Predicate { predicate, .. } => predicate.walk(w),
+            Cond::Not(_, _, condition) => condition.walk(w),
+            Cond::Paren(_, predicate) => predicate.walk(w),
+            Cond::Predicate(_, _, predicate) => predicate.walk(w),
         }
     }
 }
@@ -464,7 +480,9 @@ impl Walk for ForCnd {
         match self {
             ForCnd::Prdct(predicate) => predicate.walk(w),
             ForCnd::GroupHaving(group, having) => {
-                group.walk(w);
+                if let Some((group, _)) = group {
+                    group.walk(w)
+                }
                 having.walk(w)
             }
         }

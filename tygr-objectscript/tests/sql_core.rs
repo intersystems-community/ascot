@@ -221,10 +221,17 @@ fn core_selex(text: &str) -> core::Selex {
 }
 
 fn first_term(selex: &core::Selex) -> &Ranged<core::Term> {
-    let core::SelectItem::Expr { expr, .. } = &selex.selst.select_list.items[0].ranged else {
+    let core::SelectItem::Expr { expr, .. } = &selex.selst.1.select_list.items[0].ranged else {
         panic!("a star")
     };
-    &expr.0.items[0]
+    term_of(expr)
+}
+
+fn term_of<B: tygr::Grammar + Default>(expr: &core::Scalx<B>) -> &Ranged<core::Term> {
+    let core::Operand::Term(_, term) = &expr.first else {
+        panic!("parentheses")
+    };
+    term
 }
 
 /// A node a rule synthesizes takes the range of the node it replaces: the ELSE NULL of a CASE its CASE's,
@@ -235,53 +242,47 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
     let text =
         "SELECT CASE WHEN a = 1 THEN 'x' END, TRIM(b), %SQLUPPER c FROM t, u WHERE d NOT IN (1, 2)";
     let selex = core_selex(text);
-    let items = &selex.selst.select_list.items;
+    let items = &selex.selst.1.select_list.items;
     let at = |node: &Ranged<core::Term>| &text[node.range()];
     let core::Term::Case(case) = &first_term(&selex).ranged else {
         panic!("{text}")
     };
     let core::Implied::Spelled(_, else_clause, _) = &case.else_clause;
     assert_eq!(
-        at(&else_clause.result.0.items[0]),
+        at(term_of(&else_clause.result)),
         "CASE WHEN a = 1 THEN 'x' END"
     );
     let core::SelectItem::Expr { expr, .. } = &items[1].ranged else {
         panic!("{text}")
     };
-    let core::Term::Builtin(trim) = &expr.0.items[0].ranged else {
+    let core::Term::Builtin(trim) = &term_of(expr).ranged else {
         panic!("{text}")
     };
     let core::Builtin::Trim(_, (_, args)) = &**trim else {
         panic!("{text}")
     };
-    let core::TrimHow::SpecChars(_, _, chars, _) = &args.wrapped.how;
-    assert_eq!(at(&chars.0.items[0]), "TRIM(b)");
+    let core::TrimArgs::SpecChars(_, chars, ..) = &args.wrapped;
+    assert_eq!(at(term_of(chars)), "TRIM(b)");
     let core::SelectItem::Expr { expr, .. } = &items[2].ranged else {
         panic!("{text}")
     };
-    let core::Term::Call(call) = &expr.0.items[0].ranged else {
+    let core::Term::Call(call) = &term_of(expr).ranged else {
         panic!("{text}")
     };
     assert_eq!(&text[call.name.name.range()], "%SQLUPPER c");
     let core::Tref::Join(tables) = &selex.from.as_ref().unwrap().1.tables.first;
     assert_eq!(&text[tables.joins[0].1.range()], "u");
-    let condition = &selex.where_clause.as_ref().unwrap().1.prefixed.0.items[0]
-        .0
-        .items[0];
-    let core::Cond::Not {
-        condition: inner, ..
-    } = &condition.ranged
-    else {
+    let condition = &selex.where_clause.as_ref().unwrap().1.prefixed.first.first;
+    let core::Cond::Not(_, _, inner) = condition else {
         panic!("{text}")
     };
-    assert_eq!(&text[inner.range()], "d NOT IN (1, 2)");
-    let core::Cond::Paren(paren) = &inner.ranged else {
+    let core::Cond::Paren(_, paren) = &**inner else {
         panic!("{text}")
     };
-    assert_eq!(
-        &text[paren.wrapped.0.items[0].0.items[0].range()],
-        "d NOT IN (1, 2)"
-    );
+    let core::Cond::Predicate(_, _, predicate) = &paren.wrapped.first.first else {
+        panic!("{text}")
+    };
+    assert_eq!(&text[predicate.range()], "d NOT IN (1, 2)");
 }
 
 #[test]
@@ -293,13 +294,19 @@ fn terms_take_their_core_shapes() {
     )
     .ranged
     .selst
+    .1
     .select_list
     .items
     .iter()
     .map(|item| match &item.ranged {
         SelectItem::Expr {
-            expr: Scalx(terms), ..
-        } => match &terms.items[0].ranged {
+            expr:
+                Scalx {
+                    first: Operand::Term(_, term),
+                    ..
+                },
+            ..
+        } => match &term.ranged {
             Term::Builtin(_) => "builtin",
             Term::ScalarFunction(_) => "function",
             Term::Call(_) => "call",
@@ -310,6 +317,7 @@ fn terms_take_their_core_shapes() {
             Term::StringOperation(_) => "string operation",
             _ => "other",
         },
+        SelectItem::Expr { .. } => "paren",
         SelectItem::Star(_) => "*",
     })
     .collect();
@@ -340,44 +348,38 @@ fn conditions_hold_their_operands() {
         "SELECT a FROM t WHERE a BETWEEN 1 AND 2 AND b IS NOT NULL AND c = ANY (SELECT c FROM u) \
          AND d NOT IN (1, 2) AND %NOINDEX e > 3",
     );
-    let shapes: Vec<&str> = selex
-        .ranged
-        .where_clause
-        .as_ref()
-        .unwrap()
-        .1
-        .prefixed
-        .0
-        .items[0]
-        .0
-        .items
-        .iter()
-        .map(|cond| match &cond.ranged {
-            Cond::Predicate {
-                predicate:
+    let and = &selex.ranged.where_clause.as_ref().unwrap().1.prefixed.first;
+    let conditions = (and.rest.iter()).filter_map(|and| match and {
+        AndCond::And(_, _, cond) => Some(cond),
+        AndCond::Ampersand(..) => None,
+    });
+    let shapes: Vec<&str> = std::iter::once(&and.first)
+        .chain(conditions)
+        .map(|cond| match cond {
+            Cond::Predicate(_, noindex, predicate) => match (&noindex, &predicate.ranged) {
+                (
+                    _,
                     Predicate::Comparison {
                         lhs,
                         tail: Comparison::Between { lower, upper, .. },
                         ..
                     },
-                ..
-            } => {
-                assert_eq!(
-                    (lhs.print(), lower.print(), upper.print()),
-                    ("a".into(), "1".into(), "2".into())
-                );
-                "between"
-            }
-            Cond::Predicate {
-                predicate:
+                ) => {
+                    assert_eq!(
+                        (lhs.print(), lower.print(), upper.print()),
+                        ("a".into(), " 1".into(), " 2".into())
+                    );
+                    "between"
+                }
+                (
+                    _,
                     Predicate::Comparison {
                         tail: Comparison::IsNull { not: Some(_), .. },
                         ..
                     },
-                ..
-            } => "is not null",
-            Cond::Predicate {
-                predicate:
+                ) => "is not null",
+                (
+                    _,
                     Predicate::Comparison {
                         tail:
                             Comparison::Query {
@@ -390,27 +392,26 @@ fn conditions_hold_their_operands() {
                             },
                         ..
                     },
-                ..
-            } => "quantified",
-            Cond::Predicate {
-                predicate:
+                ) => "quantified",
+                (
+                    _,
                     Predicate::Comparison {
                         tail: Comparison::In { not: Some(_), .. },
                         ..
                     },
-                ..
-            } => "not in",
-            Cond::Predicate {
-                noindex: Some(_),
-                predicate:
+                ) => "not in",
+                (
+                    Some(_),
                     Predicate::Comparison {
                         tail: Comparison::Scalx { expr, .. },
                         ..
                     },
-            } => {
-                assert_eq!(expr.print(), "3");
-                "compare"
-            }
+                ) => {
+                    assert_eq!(expr.print(), "3");
+                    "compare"
+                }
+                _ => "other",
+            },
             _ => "other",
         })
         .collect();
@@ -420,6 +421,7 @@ fn conditions_hold_their_operands() {
     );
 }
 
+// On the main thread's stack: a parenthesis recurses a frame per level, past a test thread's 2 MiB.
 #[test]
 fn malformed_nested_parens_fail_fast() {
     let sql = format!(
@@ -428,7 +430,9 @@ fn malformed_nested_parens_fail_fast() {
         ")".repeat(20)
     );
     let start = std::time::Instant::now();
-    let _ = SQL::parse(&sql);
+    let parse = move || drop(SQL::parse(&sql));
+    let thread = std::thread::Builder::new().stack_size(8 << 20);
+    thread.spawn(parse).unwrap().join().unwrap();
     assert!(start.elapsed() < std::time::Duration::from_secs(1));
 }
 
