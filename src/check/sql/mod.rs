@@ -5,7 +5,7 @@
 use std::ops::Range;
 
 use either::Either;
-use tygr::{Prefix, Print, Suffix, Vec1, Wrap};
+use tygr::{Prefix, Print, Ranged, Suffix, Vec1, Wrap};
 
 use crate::bindings::{ClassInfo, MemberKind, SqlProjection};
 use crate::check::errors::{SqlProcedureUse, TypeErrorKind};
@@ -13,8 +13,8 @@ use resolve::{Columns, Lookup, ProcInfo};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::sql::core::*;
 use tygr_objectscript::sql::{
-    DottedIdent, HostRef, HostVar, Ident, Integer, Param, SQLIdentNonKeyword, Space, Space1, Src,
-    Sub, Var,
+    DottedIdent, HostRef, HostVar, Ident, Integer, Param, SQLIdentNonKeyword, Space, Space1, Sub,
+    Var,
 };
 
 mod expr;
@@ -82,7 +82,7 @@ fn text(ident: &Ident) -> String {
     }
 }
 
-fn name_of(dotted: &Src<DottedIdent>) -> Name {
+fn name_of(dotted: &Ranged<DottedIdent>) -> Name {
     Name {
         parts: dotted.parts().map(text).collect(),
         range: dotted.range(),
@@ -217,7 +217,7 @@ impl Walker<'_> {
         }
     }
 
-    fn call(&mut self, name: &Src<DottedIdent>, args: usize, used: SqlProcedureUse) {
+    fn call(&mut self, name: &Ranged<DottedIdent>, args: usize, used: SqlProcedureUse) {
         if let Some(check) = self.check.filter(|_| !self.unchecked) {
             resolve::call(check, &name_of(name), args, used);
         }
@@ -304,9 +304,9 @@ impl<T: Walk> Walk for Box<T> {
     }
 }
 
-impl<T: Walk> Walk for Src<T> {
+impl<T: Walk> Walk for Ranged<T> {
     fn walk(&self, w: &mut Walker) {
-        self.node.walk(w)
+        self.ranged.walk(w)
     }
 }
 

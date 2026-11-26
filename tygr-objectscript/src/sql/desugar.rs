@@ -2,6 +2,8 @@
 //! marks in `sql`. Here the trait, the impls of the leaves both levels share and of tygr's
 //! containers, and the argument gathering the function rules share.
 
+use std::cell::Cell;
+
 use either::Either;
 use tygr::{Grammar, Hidden, NotFollowedBy, Prefix, Ranged, Raw, Suffix, Vec1, Wrap};
 
@@ -198,18 +200,25 @@ impl<T: Desugar> Desugar for Hidden<T> {
     }
 }
 
+thread_local! {
+    /// The range of the `Ranged` node being desugared, which the nodes a rule synthesizes stand for.
+    static REWRITING: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+
 impl<T: Desugar> Desugar for Ranged<T> {
     type Core = Ranged<T::Core>;
     fn desugar(&self) -> Self::Core {
-        Ranged::new(self.start, self.ranged.desugar(), self.end)
+        let outer = REWRITING.replace((self.start, self.end));
+        let ranged = self.ranged.desugar();
+        REWRITING.set(outer);
+        Ranged::new(self.start, ranged, self.end)
     }
 }
 
-impl<T: Desugar> Desugar for Src<T> {
-    type Core = Src<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        Src::new(self.range(), self.rewriting(|| self.node.desugar()))
-    }
+/// A node a rule synthesizes, at the range of the node being rewritten.
+pub fn synthesized<T>(node: T) -> Ranged<T> {
+    let (start, end) = REWRITING.get();
+    Ranged::new(start, node, end)
 }
 
 impl<G: Desugar> Desugar for NotFollowedBy<G> {
@@ -237,7 +246,7 @@ pub(super) fn list(args: Vec<core::Scalx>) -> core::ArgsN {
 
 /// A term as the expression standing for the node being rewritten.
 pub(super) fn term(term: core::Term) -> core::Scalx {
-    core::Scalx(VecSep::one(Src::synthesized(term)))
+    core::Scalx(VecSep::one(synthesized(term)))
 }
 
 pub(super) fn string(text: &str) -> core::Scalx {
@@ -257,7 +266,7 @@ pub(super) fn call(name: &str, args: Vec<core::Scalx>) -> core::Term {
     core::Term::Call(core::Call {
         name: core::SQLFunctionName {
             dollar,
-            name: Src::synthesized(name),
+            name: synthesized(name),
         },
         args: list(args),
     })
@@ -280,7 +289,7 @@ impl Arg for full::Scalx {
     }
 }
 
-impl Arg for Src<full::Term> {
+impl Arg for Ranged<full::Term> {
     fn args(&self, out: &mut Vec<core::Scalx>) {
         out.push(core::Scalx(VecSep::one(self.desugar())))
     }

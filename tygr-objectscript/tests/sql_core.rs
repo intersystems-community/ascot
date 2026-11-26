@@ -1,9 +1,9 @@
 //! The core level of the SQL grammar and the desugaring into it, over hand-written statements: the core
-//! text re-parses under the core grammar and desugars to itself, every `Src` node maps a range of it to a
-//! range of the source, and the trees take their shapes; the statements each level accepts and the core
-//! text each rule gives are corpus documents under ByFeature/SQL.
+//! text re-parses under the core grammar and desugars to itself, a node a rule synthesizes stands at the
+//! source of the node it replaces, and the trees take their shapes; the statements each level accepts and
+//! the core text each rule gives are corpus documents under ByFeature/SQL.
 
-use tygr::{Parse, Print};
+use tygr::{Parse, Print, Ranged};
 use tygr_objectscript::sql::core;
 use tygr_objectscript::sql::desugar::Desugar;
 use tygr_objectscript::sql::*;
@@ -154,31 +154,6 @@ fn desugaring_the_core_text_changes_nothing() {
     }
 }
 
-#[test]
-fn every_src_node_maps_the_core_text_to_the_source() {
-    for text in texts() {
-        let desugared = full(text).desugar();
-        let (core_text, mappings) = print_mapped(&desugared);
-        for mapping in &mappings {
-            let within =
-                |range: &std::ops::Range<usize>, len| range.start <= range.end && range.end <= len;
-            assert!(within(&mapping.origin, text.len()), "{text}: {mapping:?}");
-            assert!(
-                within(&mapping.printed, core_text.len()),
-                "{text}: {mapping:?}"
-            );
-        }
-        // Innermost first: the statement, around the others, comes last.
-        let stat = mappings.last().unwrap();
-        assert_eq!(stat.origin, full(text).stat.range(), "{text}");
-        assert_eq!(
-            &core_text[stat.printed.clone()],
-            desugared.stat.print(),
-            "{text}"
-        );
-    }
-}
-
 /// Both EBNFs, with their rule counts, under `--nocapture`.
 #[test]
 fn the_core_grammar_has_fewer_rules() {
@@ -224,33 +199,89 @@ fn the_local_statements_round_trip_through_the_core() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-#[test]
-fn src_nodes_map_their_print_to_their_source() {
-    let text = "SELECT a, b FROM t WHERE a = 1 ORDER BY b";
-    let (printed, mappings) = print_mapped(&SQL::parse(text).unwrap());
-    assert_eq!(printed, text);
-    assert!(mappings.iter().all(|m| m.printed == m.origin));
-    let origins: Vec<&str> = mappings.iter().map(|m| &text[m.origin.clone()]).collect();
-    for node in [
-        "a",
-        "b",
-        "t",
-        "a = 1",
-        "SELECT a, b FROM t WHERE a = 1 ORDER BY b",
-    ] {
-        assert!(origins.contains(&node), "{node} is not among {origins:?}");
-    }
-}
-
-fn selex(text: &str) -> Src<Selex> {
+fn selex(text: &str) -> Ranged<Selex> {
     let sql = SQL::parse(text).unwrap();
-    let Stat::Selct(stat) = sql.stat.node else {
+    let Stat::Selct(stat) = sql.stat.ranged else {
         panic!("{text}")
     };
     let Some(QTerm::Selex(selex)) = stat.query.0.items.into_iter().next() else {
         panic!("{text}")
     };
     selex
+}
+
+fn core_selex(text: &str) -> core::Selex {
+    let core::Stat::Selct(stat) = full(text).desugar().stat.ranged else {
+        panic!("{text}")
+    };
+    let Some(core::QTerm::Selex(selex)) = stat.query.0.items.into_iter().next() else {
+        panic!("{text}")
+    };
+    selex.ranged
+}
+
+fn first_term(selex: &core::Selex) -> &Ranged<core::Term> {
+    let core::SelectItem::Expr { expr, .. } = &selex.selst.select_list.0.items[0].ranged else {
+        panic!("a star")
+    };
+    &expr.0.items[0]
+}
+
+/// A node a rule synthesizes takes the range of the node it replaces: the ELSE NULL of a CASE its CASE's,
+/// a call's name and argument the term's, a lifted NOT and its parenthesized condition the condition's,
+/// and a comma's CROSS JOIN the table entry's.
+#[test]
+fn synthesized_nodes_stand_at_the_source_they_replace() {
+    let text =
+        "SELECT CASE WHEN a = 1 THEN 'x' END, TRIM(b), %SQLUPPER c FROM t, u WHERE d NOT IN (1, 2)";
+    let selex = core_selex(text);
+    let items = &selex.selst.select_list.0.items;
+    let at = |node: &Ranged<core::Term>| &text[node.range()];
+    let core::Term::Case(case) = &first_term(&selex).ranged else {
+        panic!("{text}")
+    };
+    let core::Implied::Spelled(_, else_clause, _) = &case.else_clause;
+    assert_eq!(
+        at(&else_clause.result.0.items[0]),
+        "CASE WHEN a = 1 THEN 'x' END"
+    );
+    let core::SelectItem::Expr { expr, .. } = &items[1].ranged else {
+        panic!("{text}")
+    };
+    let core::Term::Builtin(trim) = &expr.0.items[0].ranged else {
+        panic!("{text}")
+    };
+    let core::Builtin::Trim(_, (_, args)) = &**trim else {
+        panic!("{text}")
+    };
+    let core::TrimHow::SpecChars(_, _, chars, _) = &args.wrapped.how;
+    assert_eq!(at(&chars.0.items[0]), "TRIM(b)");
+    let core::SelectItem::Expr { expr, .. } = &items[2].ranged else {
+        panic!("{text}")
+    };
+    let core::Term::Call(call) = &expr.0.items[0].ranged else {
+        panic!("{text}")
+    };
+    assert_eq!(&text[call.name.name.range()], "%SQLUPPER c");
+    let core::Tref::Join(tables) = &selex.from.as_ref().unwrap().1.tables.first;
+    assert_eq!(&text[tables.joins[0].1.range()], "u");
+    let condition = &selex.where_clause.as_ref().unwrap().1.prefixed.0.items[0]
+        .0
+        .items[0];
+    let core::Cond::Not {
+        condition: inner, ..
+    } = &condition.ranged
+    else {
+        panic!("{text}")
+    };
+    assert_eq!(&text[inner.range()], "d NOT IN (1, 2)");
+    let core::Cond::Paren(paren) = &inner.ranged else {
+        panic!("{text}")
+    };
+    assert_eq!(
+        &text[paren.wrapped.0.items[0].0.items[0].range()],
+        "d NOT IN (1, 2)"
+    );
 }
 
 #[test]
@@ -260,16 +291,16 @@ fn terms_take_their_core_shapes() {
          -a, %SQLUPPER a, %TRUNCATE(a, 3), CAST(a AS INT), TIMESTAMPADD(SQL_TSI_DAY, 1, d), \
          CONVERT(a, SQL_VARCHAR), CONVERT(VARCHAR, a), f(a) FROM t",
     )
-    .node
+    .ranged
     .selst
     .select_list
     .0
     .items
     .iter()
-    .map(|item| match &item.node {
+    .map(|item| match &item.ranged {
         SelectItem::Expr {
             expr: Scalx(terms), ..
-        } => match &terms.items[0].node {
+        } => match &terms.items[0].ranged {
             Term::Builtin(_) => "builtin",
             Term::ScalarFunction(_) => "function",
             Term::Call(_) => "call",
@@ -310,11 +341,19 @@ fn conditions_hold_their_operands() {
         "SELECT a FROM t WHERE a BETWEEN 1 AND 2 AND b IS NOT NULL AND c = ANY (SELECT c FROM u) \
          AND d NOT IN (1, 2) AND %NOINDEX e > 3",
     );
-    let shapes: Vec<&str> = selex.node.where_clause.as_ref().unwrap().1.prefixed.0.items[0]
+    let shapes: Vec<&str> = selex
+        .ranged
+        .where_clause
+        .as_ref()
+        .unwrap()
+        .1
+        .prefixed
+        .0
+        .items[0]
         .0
         .items
         .iter()
-        .map(|cond| match &cond.node {
+        .map(|cond| match &cond.ranged {
             Cond::Predicate {
                 predicate:
                     Predicate::Comparison {

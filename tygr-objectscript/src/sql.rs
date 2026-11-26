@@ -9,9 +9,6 @@
 //! `Parenthesized<T>` for every pair of parentheses; tygr's combinators before a hand-rolled shape,
 //! an alias only where it shortens; and two rules reading the same text are one.
 
-use std::cell::{Cell, RefCell};
-use std::ops::{Deref, Range};
-
 use either::Either;
 use tygr::*;
 
@@ -665,97 +662,6 @@ pub enum Sub {
 
 pub type ArgSep = (Space, StringEq!(","), Space);
 
-/// `T` with the range of the source text it comes from or, after a rewrite, stands for.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Parse)]
-#[tygr(inline, try_from_infallible = Ranged<T>)]
-pub struct Src<T> {
-    pub range: Range<usize>,
-    pub node: T,
-}
-
-impl<T> Src<T> {
-    pub fn new(range: Range<usize>, node: T) -> Self {
-        Src { range, node }
-    }
-
-    pub fn range(&self) -> Range<usize> {
-        self.range.clone()
-    }
-
-    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Src<U> {
-        Src {
-            range: self.range,
-            node: f(self.node),
-        }
-    }
-
-    /// A node a rule synthesizes takes the range of the node being rewritten (see `rewriting`).
-    pub fn synthesized(node: T) -> Self {
-        let (start, end) = REWRITING.get();
-        Src::new(start..end, node)
-    }
-
-    /// `f()`, during which `synthesized` nodes take `self`'s range.
-    pub fn rewriting<R>(&self, f: impl FnOnce() -> R) -> R {
-        let outer = REWRITING.replace((self.range.start, self.range.end));
-        let result = f();
-        REWRITING.set(outer);
-        result
-    }
-}
-
-impl<T> From<Ranged<T>> for Src<T> {
-    fn from(ranged: Ranged<T>) -> Self {
-        Src {
-            range: ranged.range(),
-            node: ranged.ranged,
-        }
-    }
-}
-
-impl<T> Deref for Src<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &self.node
-    }
-}
-
-/// Where a node printed, and the range of the text it comes from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Mapping {
-    pub printed: Range<usize>,
-    pub origin: Range<usize>,
-}
-
-thread_local! {
-    static RECORDER: RefCell<Option<Vec<Mapping>>> = const { RefCell::new(None) };
-    static REWRITING: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
-}
-
-impl<T: Print> Print for Src<T> {
-    fn print_to(&self, buf: &mut String) {
-        let start = buf.len();
-        self.node.print_to(buf);
-        RECORDER.with_borrow_mut(|recorder| {
-            if let Some(mappings) = recorder {
-                mappings.push(Mapping {
-                    printed: start..buf.len(),
-                    origin: self.range.clone(),
-                });
-            }
-        });
-    }
-}
-
-/// `t`'s text, with where each `Src` node in it printed, innermost first.
-pub fn print_mapped<T: Print>(t: &T) -> (String, Vec<Mapping>) {
-    let outer = RECORDER.replace(Some(Vec::new()));
-    let text = t.print();
-    let mappings = RECORDER.replace(outer).unwrap_or_default();
-    (text, mappings)
-}
-
 /// The functions whose arguments both levels spell: the builtins, aggregates and window functions.
 const OWN_SYNTAX: &[&str] = &[
     "CAST",
@@ -829,20 +735,20 @@ pub mod leveled {
     use super::sugar::*;
 
     #[derive(Grammar)]
-    pub struct TName(pub Src<DottedIdent>);
+    pub struct TName(pub Ranged<DottedIdent>);
 
     /// A function's name, `$` before an ObjectScript function's (`$EXTRACT`, `$TSQL_SPID`).
     #[derive(Grammar)]
     pub struct SQLFunctionName {
         pub dollar: Option<StringEq!("$")>,
-        pub name: Src<DottedIdent>,
+        pub name: Ranged<DottedIdent>,
     }
 
     #[derive(Grammar)]
     pub enum Colmn {
-        Str(Src<Ident>, Space, StringEq!("."), Space, StringEq!("*")),
+        Str(Ranged<Ident>, Space, StringEq!("."), Space, StringEq!("*")),
         Arr(
-            Src<DottedIdent>,
+            Ranged<DottedIdent>,
             Vec<(Space, StringEq!("->"), Space, Ident)>,
         ),
     }
@@ -913,13 +819,13 @@ pub mod leveled {
         Unary {
             op: Sign,
             space: Space,
-            term: Box<Src<Term>>,
+            term: Box<Ranged<Term>>,
         },
         #[sugar]
         PercentUnary {
             op: PercentOp,
             space: Space,
-            term: Box<Src<Term>>,
+            term: Box<Ranged<Term>>,
         },
         #[sugar]
         StringOperation(Box<StringOperation>),
@@ -1024,8 +930,8 @@ pub mod leveled {
         }
     }
 
-    fn percent_call(op: &PercentOp, term: &Src<Term>) -> core::Term {
-        let arg = match &term.node {
+    fn percent_call(op: &PercentOp, term: &Ranged<Term>) -> core::Term {
+        let arg = match &term.ranged {
             Term::Scalx(parens) => (*parens.wrapped).desugar(),
             _ => core::Scalx(VecSep::one(term.desugar())),
         };
@@ -1178,7 +1084,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct Scalx(pub VecSep<Src<Term>, (Space, Scalop, Space)>);
+    pub struct Scalx(pub VecSep<Ranged<Term>, (Space, Scalop, Space)>);
     #[derive(Grammar)]
     pub struct Case {
         pub case_kw: Kw!("CASE"),
@@ -1220,9 +1126,9 @@ pub mod leveled {
         fn default() -> Self {
             SQLElseClause {
                 else_kw: (Default::default(), Space::blank()),
-                result: Scalx(VecSep::one(Src::synthesized(
-                    Term::Null(Default::default()),
-                ))),
+                result: Scalx(VecSep::one(desugar::synthesized(Term::Null(
+                    Default::default(),
+                )))),
             }
         }
     }
@@ -1821,7 +1727,9 @@ pub mod leveled {
     pub struct Prdct(pub VecSep<And, (Space, Spellings!(Kw!("OR"), StringEq!("!")), Space)>);
 
     #[derive(Grammar)]
-    pub struct And(pub VecSep<Src<Cond>, (Space, Spellings!(Kw!("AND"), StringEq!("&")), Space)>);
+    pub struct And(
+        pub VecSep<Ranged<Cond>, (Space, Spellings!(Kw!("AND"), StringEq!("&")), Space)>,
+    );
 
     pub type NoIndex = Option<(Kw!("%NOINDEX"), Space)>;
 
@@ -1904,7 +1812,7 @@ pub mod leveled {
     pub enum Cond {
         Not {
             not_kw: (Kw!("NOT"), Space),
-            condition: Box<Src<Cond>>,
+            condition: Box<Ranged<Cond>>,
         },
         Paren(Parenthesized<Box<Prdct>>),
         Predicate {
@@ -1938,11 +1846,9 @@ pub mod leveled {
             }
             core::Cond::Not {
                 not_kw: (Default::default(), Space::blank()),
-                condition: Box::new(Src::synthesized(core::Cond::Paren(parenthesized(
-                    Box::new(core::Prdct(VecSep::one(core::And(VecSep::one(
-                        Src::synthesized(plain),
-                    ))))),
-                )))),
+                condition: Box::new(synthesized(core::Cond::Paren(parenthesized(Box::new(
+                    core::Prdct(VecSep::one(core::And(VecSep::one(synthesized(plain))))),
+                ))))),
             }
         }
     }
@@ -2142,7 +2048,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct WithList(pub VecSep<Src<WithListElement>, ArgSep>);
+    pub struct WithList(pub VecSep<Ranged<WithListElement>, ArgSep>);
 
     pub type WithClause = Prefix<(Kw!("WITH"), Space), WithList>;
 
@@ -2184,8 +2090,8 @@ pub mod leveled {
         fn ordered_with_top(terms: &[QTerm]) -> bool {
             terms.iter().all(|term| match term {
                 QTerm::Selex(selex) => {
-                    !matches!(selex.node.tail, Some((_, Either::Left(_))))
-                        || selex.node.selst.top.is_some()
+                    !matches!(selex.ranged.tail, Some((_, Either::Left(_))))
+                        || selex.ranged.selst.top.is_some()
                 }
                 QTerm::Query(_) => true,
             })
@@ -2196,7 +2102,7 @@ pub mod leveled {
         /// operand with TOP, whose ORDER BY sees that operand's aliases alone), one without TOP the whole's.
         pub(super) fn ends_with_statement_order(&self) -> bool {
             matches!(self.0.items.last(), Some(QTerm::Selex(selex))
-                if selex.node.selst.top.is_none() && matches!(selex.node.tail, Some((_, Either::Left(_)))))
+                if selex.ranged.selst.top.is_none() && matches!(selex.ranged.tail, Some((_, Either::Left(_)))))
         }
 
         /// Whether the operands order their rows as 2026.2 allows before a statement's own ORDER BY (`ordered`):
@@ -2213,7 +2119,7 @@ pub mod leveled {
         let Some(core::QTerm::Selex(last)) = query.0.items.last_mut() else {
             return None;
         };
-        let Some((space, Either::Left(order))) = last.node.tail.take_if(|_| is_statement) else {
+        let Some((space, Either::Left(order))) = last.ranged.tail.take_if(|_| is_statement) else {
             return None;
         };
         Some((space, order))
@@ -2296,7 +2202,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct SelectList(pub VecSep<Src<SelectItem>, ArgSep>);
+    pub struct SelectList(pub VecSep<Ranged<SelectItem>, ArgSep>);
 
     #[derive(Grammar)]
     pub enum SelectItem {
@@ -2389,35 +2295,29 @@ pub mod leveled {
     pub struct Tables {
         pub first: Tref,
         #[sugar]
-        pub rest: Vec<(ArgSep, Tref)>,
+        pub rest: Vec<(ArgSep, Ranged<Tref>)>,
     }
 
-    /// `FROM a, b` is `FROM a CROSS JOIN b`, each join at its reference's range, in parentheses when it has joins.
+    /// `FROM a, b` is `FROM a CROSS JOIN b`, b's own joins after it: 2026.2 reads `t, u LEFT JOIN v ON …` as
+    /// `t CROSS JOIN u LEFT JOIN v ON …`, the ON seeing u and v alone, the rows of `t CROSS JOIN (u LEFT JOIN v …)`.
     impl Desugar for Tables {
         type Core = core::Tables;
         fn desugar(&self) -> Self::Core {
             let core::Tref::Join(mut first) = self.first.desugar();
-            for (_, tref) in &self.rest {
-                let core::Tref::Join(mut table) = tref.desugar();
-                let start = table.formit.range().start;
-                let end = (table.joins.last())
-                    .map_or(table.formit.range().end, |(_, join)| join.range().end);
-                if !table.joins.is_empty() {
-                    table = core::JTab {
-                        formit: Src::new(
-                            start..end,
-                            core::Frmit::JTab(parenthesized(Box::new(table))),
-                        ),
-                        joins: Vec::new(),
-                    };
-                }
+            for (_, entry) in &self.rest {
+                let core::Tref::Join(core::JTab { formit, joins }) = entry.ranged.desugar();
+                let table = Box::new(core::JTab {
+                    formit,
+                    joins: Vec::new(),
+                });
                 let cross = core::Join::Cross {
                     cross_kw: Default::default(),
-                    table: (Space::blank(), Box::new(table)),
+                    table: (Space::blank(), table),
                 };
                 first
                     .joins
-                    .push((Space::blank(), Src::new(start..end, cross)));
+                    .push((Space::blank(), Ranged::new(entry.start, cross, entry.end)));
+                first.joins.extend(joins);
             }
             core::Tables {
                 first: core::Tref::Join(first),
@@ -2447,8 +2347,8 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct JTab {
-        pub formit: Src<Frmit>,
-        pub joins: Vec<(Space, Src<Join>)>,
+        pub formit: Ranged<Frmit>,
+        pub joins: Vec<(Space, Ranged<Join>)>,
     }
 
     #[derive(Grammar)]
@@ -2571,7 +2471,8 @@ pub mod leveled {
 
     pub type Having = Prefix<(Kw!("HAVING"), Space), Prdct>;
 
-    pub type Order = Prefix<(Kw!("ORDER"), Space1, Kw!("BY"), Space), VecSep<Src<Ordir>, ArgSep>>;
+    pub type Order =
+        Prefix<(Kw!("ORDER"), Space1, Kw!("BY"), Space), VecSep<Ranged<Ordir>, ArgSep>>;
 
     #[derive(Grammar)]
     pub struct Ordir {
@@ -2661,7 +2562,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum QTerm {
         Query(SQLSubquery),
-        Selex(Src<Selex>),
+        Selex(Ranged<Selex>),
     }
     #[derive(Grammar)]
     #[tygr(validated)]
@@ -2731,7 +2632,7 @@ pub mod leveled {
         #[sugar]
         SetList {
             set_kw: Kw!("SET"),
-            assignments: (Space, VecSep<Src<SQLSetAssignment>, ArgSep>),
+            assignments: (Space, VecSep<Ranged<SQLSetAssignment>, ArgSep>),
         },
         ColumnList {
             columns: Option<SQLColumnListParen>,
@@ -3084,19 +2985,19 @@ pub mod leveled {
                 terms
                     .items
                     .iter()
-                    .all(|term| !matches!(term.node, Term::Column(_)))
+                    .all(|term| !matches!(term.ranged, Term::Column(_)))
             })
         }
     }
 
     #[derive(Grammar)]
-    pub struct RoutineName(pub Src<DottedIdent>);
+    pub struct RoutineName(pub Ranged<DottedIdent>);
 
     #[derive(Grammar)]
     pub struct Explain {
         pub explain_kw: Kw!("EXPLAIN"),
         pub options: Vec<(Space1, ExplainOption)>,
-        pub statement: (Space, Box<Src<Stat>>),
+        pub statement: (Space, Box<Ranged<Stat>>),
     }
 
     /// EXPLAIN's options, in any order (2026.2 takes EXPLAIN STAT ALT, EXPLAIN INTO :x ALT and INTO :x, :y).
@@ -3143,7 +3044,7 @@ pub mod leveled {
                 && tail.order.is_some()
                 && tail.limit.is_none()
                 && let Some((space, Either::Right(limit))) =
-                    selex.node.tail.take_if(|(_, tail)| tail.is_right())
+                    selex.ranged.tail.take_if(|(_, tail)| tail.is_right())
             {
                 tail.limit = Some((space, limit));
             }
@@ -4201,7 +4102,7 @@ pub mod leveled {
     pub enum ModelSource {
         Subquery {
             kw: (Kw!("FROM"), Space),
-            selex: Parenthesized<Src<Selex>>,
+            selex: Parenthesized<Ranged<Selex>>,
         },
         Inline {
             from: FromClause,
@@ -4392,7 +4293,7 @@ pub mod leveled {
         Code(CodeBody),
         Stat {
             lang: Option<(Kw!("LANGUAGE"), Space1, Kw!("SQL"), Space)>,
-            stat: Box<Src<Stat>>,
+            stat: Box<Ranged<Stat>>,
         },
     }
 
@@ -4452,7 +4353,7 @@ pub mod leveled {
     pub struct SQL {
         pub space_before: Space,
         pub view_column_list: Option<(FList1, Option<(Space, Kw!("AS"))>, Space)>,
-        pub stat: Src<Stat>,
+        pub stat: Ranged<Stat>,
         pub space_after: Space,
     }
 
@@ -4466,7 +4367,7 @@ pub mod leveled {
             Space,
         ),
         pub tname: TName,
-        pub remote_statement: (Space, Box<Src<Stat>>),
+        pub remote_statement: (Space, Box<Ranged<Stat>>),
     }
 
     #[derive(Grammar)]
@@ -4646,7 +4547,7 @@ pub mod leveled {
         Kw!("BEGIN"),
         Vec1<(
             Space,
-            Either<ReturnStatement, Src<Stat>>,
+            Either<ReturnStatement, Ranged<Stat>>,
             Space,
             StringEq!(";"),
         )>,
@@ -5988,7 +5889,7 @@ mod sugar {
         ToDate(Kw!("TODATE"), Args<RO>),
         ToUSChar(Kw!("TO_CHAR"), Args<RO>),
         ToUSDate(Kw!("TO_DATE"), Args<RO>),
-        ToNumber(Kw!("TO_NUMBER"), Args<Src<Term>>),
+        ToNumber(Kw!("TO_NUMBER"), Args<Ranged<Term>>),
         ToTimestamp(Kw!("TO_TIMESTAMP"), Args<RO>),
         UCase(Kw!("UCASE"), Args<Scalx>),
         UnixTimestamp(Kw!("UNIX_TIMESTAMP"), Args<Option<Scalx>>),
