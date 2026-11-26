@@ -341,8 +341,9 @@ impl MethodDetails {
             return Ok(());
         }
         let body_macros = cls.body_macros.borrow().clone();
-        let (expanded, source_map, definitions) = match env.base.expand_method_body(
+        let (expanded, source_map, definitions, body_macros) = match env.base.expand_method_body(
             env.uri(),
+            name,
             &self.header_text,
             self.body.it.as_str(),
             &cls.macro_definitions,
@@ -354,21 +355,7 @@ impl MethodDetails {
                 return Ok(());
             }
         };
-        {
-            let mut body_macros = cls.body_macros.borrow_mut();
-            for (macro_name, definition) in definitions.own() {
-                if !cls.macro_definitions.contains_key(macro_name)
-                    && !body_macros.definitions.contains_key(macro_name)
-                {
-                    body_macros
-                        .definitions
-                        .insert(macro_name.clone(), definition.clone());
-                    body_macros
-                        .methods
-                        .insert(macro_name.clone(), name.to_string());
-                }
-            }
-        }
+        *cls.body_macros.borrow_mut() = body_macros;
         let expanded_olc = OLC::new(&expanded);
         let method_env =
             DocumentEnv::new(env.base, &expanded_olc, env.uri()).with_source_map(&source_map);
