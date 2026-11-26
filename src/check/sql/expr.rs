@@ -15,7 +15,7 @@ impl<B: tygr::Grammar + Default> Walk for ValueExpression<B> {
 impl<B: tygr::Grammar + Default> Walk for Operand<B> {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Operand::Paren(_, scalx) => scalx.walk(w),
+            Operand::Paren(_, expression) => expression.walk(w),
             Operand::ValueExpressionPrimary(_, term) => term.walk(w),
         }
     }
@@ -146,8 +146,8 @@ impl Walk for Builtin {
                 with(w, &a.1.wrapped.with_clause)
             }
             SearchIndex(_, a) => {
-                for (_, scalx) in &a.1.wrapped.scalx_list {
-                    scalx.walk(w)
+                for (_, expression) in &a.1.wrapped.scalx_list {
+                    expression.walk(w)
                 }
             }
             TimestampAdd(_, a) => a.walk(w),
@@ -212,7 +212,7 @@ impl Walk for PredictWith {
 
 impl Walk for PredictAssignment {
     fn walk(&self, w: &mut Walker) {
-        self.scalx.walk(w)
+        self.expression.walk(w)
     }
 }
 
@@ -263,7 +263,7 @@ impl Walk for XMLValue {
         match self {
             XMLValue::Concat(concat) => concat.walk(w),
             XMLValue::Attributes(attrs) => attrs.attrs.walk(w),
-            XMLValue::Expr(scalx) => scalx.walk(w),
+            XMLValue::Expr(expression) => expression.walk(w),
             XMLValue::Value2(value) => value.walk(w),
         }
     }
@@ -356,8 +356,8 @@ impl Walk for WindowFunctionType {
 
 impl Walk for SortSpecification {
     fn walk(&self, w: &mut Walker) {
-        if let SortKey::ValueExpression(scalx) = &self.expr {
-            scalx.walk(w)
+        if let SortKey::ValueExpression(expression) = &self.expr {
+            expression.walk(w)
         }
     }
 }
@@ -449,8 +449,12 @@ impl Walk for Comparison {
     fn walk(&self, w: &mut Walker) {
         match self {
             Comparison::ValueExpression { expr, .. }
-            | Comparison::StarEq { scalx: expr, .. }
-            | Comparison::EqStar { scalx: expr, .. } => expr.walk(w),
+            | Comparison::StarEq {
+                expression: expr, ..
+            }
+            | Comparison::EqStar {
+                expression: expr, ..
+            } => expr.walk(w),
             Comparison::Query { expr, .. } => expr.walk(w),
             Comparison::IsNull { .. } | Comparison::IsJSON { .. } => {}
             Comparison::Between { lower, upper, .. } => {

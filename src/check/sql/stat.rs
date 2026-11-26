@@ -7,10 +7,10 @@ use super::{SqlProcedureUse, Walk, Walker, name_of};
 impl Walk for Statement {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Statement::SelectStatement(stat) => stat.walk(w),
-            Statement::Insert(stat) => stat.walk(w),
-            Statement::Update(stat) => stat.walk(w),
-            Statement::Delete(stat) => stat.walk(w),
+            Statement::SelectStatement(statement) => statement.walk(w),
+            Statement::Insert(statement) => statement.walk(w),
+            Statement::Update(statement) => statement.walk(w),
+            Statement::Delete(statement) => statement.walk(w),
             Statement::ThroughStatement(thr) => w.unchecked(&thr.remote_statement.1),
             Statement::DDL(ddl) => w.unchecked(ddl),
             Statement::Declare(decl) => decl.walk(w),
@@ -154,8 +154,8 @@ impl Walk for ValuesClause {
 impl Walk for WhereCondition {
     fn walk(&self, w: &mut Walker) {
         match self {
-            WhereCondition::BooleanValueExpression(prdct) => prdct.walk(w),
-            WhereCondition::CurrentOf { prdct, .. } => prdct.walk(w),
+            WhereCondition::BooleanValueExpression(condition) => condition.walk(w),
+            WhereCondition::CurrentOf { condition, .. } => condition.walk(w),
         }
     }
 }
@@ -172,9 +172,9 @@ impl Walk for DeclareCursor {
 
 impl Walk for CursorStatement {
     fn walk(&self, w: &mut Walker) {
-        if let CursorStatement::Fetch { cursor, targt, .. } = self {
+        if let CursorStatement::Fetch { cursor, into, .. } = self {
             w.hosts.fetches = Some(cursor.print());
-            targt.walk(w)
+            into.walk(w)
         }
     }
 }
@@ -242,16 +242,16 @@ impl Walk for DDL {
         match self {
             DDL::Create { what, .. } => what.walk(w),
             DDL::Alter {
-                what: Altered::View(def),
+                what: Altered::View(definition),
                 ..
-            } => def.walk(w),
+            } => definition.walk(w),
             DDL::CancelQuery {
-                val,
+                id,
                 cancel_scope,
                 timeout,
                 ..
             } => {
-                val.walk(w);
+                id.walk(w);
                 if let Some((_, scope)) = cancel_scope {
                     scope.walk(w)
                 }
@@ -284,7 +284,7 @@ impl Walk for DDL {
 impl Walk for Created {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Created::View { def, .. } => def.walk(w),
+            Created::View { definition, .. } => definition.walk(w),
             Created::TableAs {
                 with_clause, query, ..
             } => {
@@ -324,7 +324,7 @@ impl Walk for TriggerBody {
     fn walk(&self, w: &mut Walker) {
         match self {
             TriggerBody::Code(body) => body.walk(w),
-            TriggerBody::Statement { stat, .. } => stat.walk(w),
+            TriggerBody::Statement { statement, .. } => statement.walk(w),
         }
     }
 }
@@ -358,7 +358,7 @@ impl Walk for SqlBody {
         for (_, statement, _, _) in self.body.wrapped.iter() {
             match statement {
                 Either::Left(ret) => ret.value.1.walk(w),
-                Either::Right(stat) => stat.walk(w),
+                Either::Right(statement) => statement.walk(w),
             }
         }
     }
@@ -388,7 +388,7 @@ impl Walk for ParameterDeclaration {
 impl Walk for ModelSource {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ModelSource::Subquery { selex, .. } => selex.walk(w),
+            ModelSource::Subquery { query, .. } => query.walk(w),
             ModelSource::Inline {
                 from,
                 where_clause,
@@ -397,8 +397,8 @@ impl Walk for ModelSource {
                 tail,
             } => {
                 from.walk(w);
-                if let Some((_, prdct)) = where_clause {
-                    prdct.walk(w)
+                if let Some((_, condition)) = where_clause {
+                    condition.walk(w)
                 }
                 if let Some((_, group)) = group {
                     group.walk(w)
@@ -424,8 +424,8 @@ impl Walk for TrainWith {
 
 impl Walk for WithExpression {
     fn walk(&self, w: &mut Walker) {
-        if let WithExpression::ValueExpression(scalx) = self {
-            scalx.walk(w)
+        if let WithExpression::ValueExpression(expression) = self {
+            expression.walk(w)
         }
     }
 }

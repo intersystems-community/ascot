@@ -49,7 +49,7 @@ impl Walk for QueryTerm {
     fn walk(&self, w: &mut Walker) {
         match self {
             QueryTerm::Query(query) => query.walk(w),
-            QueryTerm::QuerySpecification(selex) => selex.walk(w),
+            QueryTerm::QuerySpecification(query) => query.walk(w),
         }
     }
 }
@@ -78,14 +78,14 @@ impl Walk for SelectList {
             top.walk(w)
         }
         self.select_list.walk(w);
-        self.targt.walk(w)
+        self.into.walk(w)
     }
 }
 
 impl Walk for SelectOption {
     fn walk(&self, w: &mut Walker) {
         match self {
-            SelectOption::RowLimit(_, val) | SelectOption::RowOffset(_, val) => val.walk(w),
+            SelectOption::RowLimit(_, value) | SelectOption::RowOffset(_, value) => value.walk(w),
             _ => {}
         }
     }
@@ -131,7 +131,7 @@ impl<B: tygr::Grammar + Default> Walk for TableReference<B> {
 
 impl<B: tygr::Grammar + Default> Walk for JoinedTable<B> {
     fn walk(&self, w: &mut Walker) {
-        self.formit.walk(w);
+        self.primary.walk(w);
         for (_, join) in &self.joins {
             join.walk(w)
         }

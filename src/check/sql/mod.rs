@@ -118,7 +118,7 @@ pub(super) fn analyze(sql: &SQL, check: Option<&dyn Resolver>) -> Hosts {
         unchecked: false,
         access: Access::Read,
     };
-    sql.stat.walk(&mut w);
+    sql.statement.walk(&mut w);
     w.hosts
 }
 

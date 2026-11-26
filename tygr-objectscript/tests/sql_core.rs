@@ -199,30 +199,32 @@ fn the_local_statements_round_trip_through_the_core() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-fn selex(text: &str) -> Ranged<QuerySpecification> {
+fn query(text: &str) -> Ranged<QuerySpecification> {
     let sql = SQL::parse(text).unwrap();
-    let Statement::SelectStatement(stat) = sql.stat.ranged else {
+    let Statement::SelectStatement(statement) = sql.statement.ranged else {
         panic!("{text}")
     };
-    let Some(QueryTerm::QuerySpecification(selex)) = stat.query.0.items.into_iter().next() else {
-        panic!("{text}")
-    };
-    selex
-}
-
-fn core_selex(text: &str) -> core::QuerySpecification {
-    let core::Statement::SelectStatement(stat) = full(text).desugar().stat.ranged else {
-        panic!("{text}")
-    };
-    let Some(core::QueryTerm::QuerySpecification(selex)) = stat.query.0.items.into_iter().next()
+    let Some(QueryTerm::QuerySpecification(query)) = statement.query.0.items.into_iter().next()
     else {
         panic!("{text}")
     };
-    selex.ranged
+    query
 }
 
-fn first_term(selex: &core::QuerySpecification) -> &Ranged<core::ValueExpressionPrimary> {
-    let core::SelectItem::Expr { expr, .. } = &selex.selst.1.select_list.items[0].ranged else {
+fn core_selex(text: &str) -> core::QuerySpecification {
+    let core::Statement::SelectStatement(statement) = full(text).desugar().statement.ranged else {
+        panic!("{text}")
+    };
+    let Some(core::QueryTerm::QuerySpecification(query)) =
+        statement.query.0.items.into_iter().next()
+    else {
+        panic!("{text}")
+    };
+    query.ranged
+}
+
+fn first_term(query: &core::QuerySpecification) -> &Ranged<core::ValueExpressionPrimary> {
+    let core::SelectItem::Expr { expr, .. } = &query.selst.1.select_list.items[0].ranged else {
         panic!("a star")
     };
     term_of(expr)
@@ -244,10 +246,10 @@ fn term_of<B: tygr::Grammar + Default>(
 fn synthesized_nodes_stand_at_the_source_they_replace() {
     let text =
         "SELECT CASE WHEN a = 1 THEN 'x' END, TRIM(b), %SQLUPPER c FROM t, u WHERE d NOT IN (1, 2)";
-    let selex = core_selex(text);
-    let items = &selex.selst.1.select_list.items;
+    let query = core_selex(text);
+    let items = &query.selst.1.select_list.items;
     let at = |node: &Ranged<core::ValueExpressionPrimary>| &text[node.range()];
-    let core::ValueExpressionPrimary::Case(case) = &first_term(&selex).ranged else {
+    let core::ValueExpressionPrimary::Case(case) = &first_term(&query).ranged else {
         panic!("{text}")
     };
     let core::Implied::Spelled(_, else_clause, _) = &case.else_clause;
@@ -273,9 +275,9 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
         panic!("{text}")
     };
     assert_eq!(&text[call.name.name.range()], "%SQLUPPER c");
-    let core::TableReference::Join(tables) = &selex.from.as_ref().unwrap().1.tables.first;
+    let core::TableReference::Join(tables) = &query.from.as_ref().unwrap().1.tables.first;
     assert_eq!(&text[tables.joins[0].1.range()], "u");
-    let condition = &selex.where_clause.as_ref().unwrap().1.prefixed.first.first;
+    let condition = &query.where_clause.as_ref().unwrap().1.prefixed.first.first;
     let core::BooleanFactor::Not(_, _, inner) = condition else {
         panic!("{text}")
     };
@@ -290,7 +292,7 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
 
 #[test]
 fn terms_take_their_core_shapes() {
-    let shapes: Vec<&str> = selex(
+    let shapes: Vec<&str> = query(
         "SELECT CURRENT_DATE, USER, SYSDATE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP(3), USERNAME, \
          -a, %SQLUPPER a, %TRUNCATE(a, 3), CAST(a AS INT), TIMESTAMPADD(SQL_TSI_DAY, 1, d), \
          CONVERT(a, SQL_VARCHAR), CONVERT(VARCHAR, a), f(a) FROM t",
@@ -347,11 +349,11 @@ fn terms_take_their_core_shapes() {
 
 #[test]
 fn conditions_hold_their_operands() {
-    let selex = selex(
+    let query = query(
         "SELECT a FROM t WHERE a BETWEEN 1 AND 2 AND b IS NOT NULL AND c = ANY (SELECT c FROM u) \
          AND d NOT IN (1, 2) AND %NOINDEX e > 3",
     );
-    let and = &selex.ranged.where_clause.as_ref().unwrap().1.prefixed.first;
+    let and = &query.ranged.where_clause.as_ref().unwrap().1.prefixed.first;
     let conditions = (and.rest.iter()).filter_map(|and| match and {
         AndBooleanFactor::And(_, _, cond) => Some(cond),
         AndBooleanFactor::Ampersand(..) => None,

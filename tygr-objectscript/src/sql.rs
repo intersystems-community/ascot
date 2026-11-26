@@ -556,7 +556,7 @@ pub struct Integer {
 #[derive(Grammar, Clone)]
 #[tygr(inline)]
 pub struct Exponent {
-    e: StringEqCI!("E"),
+    e_kw: StringEqCI!("E"),
     sign: Option<Sign>,
     digits: StringOf1<IsDigit>,
 }
@@ -1440,7 +1440,7 @@ pub mod leveled {
     pub struct PredictAssignment {
         pub ident: Ident,
         pub eq: (Space, StringEq!("="), Space),
-        pub scalx: ValueExpression,
+        pub expression: ValueExpression,
     }
 
     #[derive(Grammar)]
@@ -1539,7 +1539,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct ExtrinsicFunction {
-        pub fun: Prefix<StringEqCI!("$$"), StringOf1<IsExtFuncChar>>,
+        pub function: Prefix<StringEqCI!("$$"), StringOf1<IsExtFuncChar>>,
         pub args: Parenthesized<Option<VecSep<ValueExpression, ArgSep>>>,
     }
 
@@ -1709,7 +1709,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum AggregateFunction {
         AggFuncArgs {
-            fun: SetFunctionType,
+            function: SetFunctionType,
             arg: Args<AggregateFunctionArgs>,
         },
         CountStar(Kw!("COUNT"), Args<StringEq!("*")>),
@@ -1750,7 +1750,7 @@ pub mod leveled {
         Distinct {
             kw: Kw!("DISTINCT"),
             by: Option<(Space1, Prefix<(Kw!("BY"), Space), List>)>,
-            sp: Space1,
+            space: Space1,
         },
         All(#[sugar] Option<(Kw!("ALL"), Space1)>),
     }
@@ -1966,7 +1966,7 @@ pub mod leveled {
     pub enum QuantifiedCompOp {
         Op {
             op: CompOp,
-            sp: Space,
+            space: Space,
             quantifier: Quantifier,
         },
         #[sugar]
@@ -1977,18 +1977,22 @@ pub mod leveled {
         type Core = core::QuantifiedCompOp;
         fn desugar(self) -> Self::Core {
             match self {
-                QuantifiedCompOp::Op { op, sp, quantifier } => core::QuantifiedCompOp::Op {
+                QuantifiedCompOp::Op {
+                    op,
+                    space,
+                    quantifier,
+                } => core::QuantifiedCompOp::Op {
                     quantifier: match (op.negated(), quantifier) {
                         (false, quantifier) => quantifier.desugar(),
                         (true, Quantifier::All(_)) => core::Quantifier::Any(Default::default()),
                         (true, Quantifier::Any(_)) => Default::default(),
                     },
                     op: op.desugar(),
-                    sp: sp.desugar(),
+                    space: space.desugar(),
                 },
                 QuantifiedCompOp::In { .. } => core::QuantifiedCompOp::Op {
                     op: core::CompOp::Eq(Default::default()),
-                    sp: Default::default(),
+                    space: Default::default(),
                     quantifier: core::Quantifier::Any(Default::default()),
                 },
             }
@@ -2013,7 +2017,7 @@ pub mod leveled {
                 BooleanFactor::Not(_, not, cond) => {
                     BooleanFactor::Not(Default::default(), not, cond)
                 }
-                BooleanFactor::Paren(_, prdct) => BooleanFactor::Paren(None, prdct),
+                BooleanFactor::Paren(_, condition) => BooleanFactor::Paren(None, condition),
                 BooleanFactor::Predicate(_, noindex, predicate) => {
                     BooleanFactor::Predicate(Default::default(), noindex, predicate)
                 }
@@ -2038,8 +2042,8 @@ pub mod leveled {
                         cond.desugar(),
                     );
                 }
-                BooleanFactor::Paren(before, prdct) => {
-                    return core::BooleanFactor::Paren(before.desugar(), prdct.desugar());
+                BooleanFactor::Paren(before, condition) => {
+                    return core::BooleanFactor::Paren(before.desugar(), condition.desugar());
                 }
                 BooleanFactor::Predicate(before, noindex, predicate) => {
                     (before, noindex, predicate)
@@ -2107,7 +2111,7 @@ pub mod leveled {
         },
         Comparison {
             lhs: ValueExpression,
-            sp: Space,
+            space: Space,
             tail: Comparison,
         },
     }
@@ -2123,11 +2127,11 @@ pub mod leveled {
     pub enum Comparison {
         StarEq {
             op: (StringEqCI!("*="), Space),
-            scalx: ValueExpression,
+            expression: ValueExpression,
         },
         EqStar {
             op: (StringEqCI!("=*"), Space),
-            scalx: ValueExpression,
+            expression: ValueExpression,
         },
         IsNull {
             is_kw: (Kw!("IS"), Space1),
@@ -2159,7 +2163,7 @@ pub mod leveled {
         },
         Query {
             op: QuantifiedCompOp,
-            sp: Space,
+            space: Space,
             expr: Subquery,
         },
         In {
@@ -2262,9 +2266,9 @@ pub mod leveled {
     impl Query {
         fn ordered_with_top(terms: &[QueryTerm]) -> bool {
             terms.iter().all(|term| match term {
-                QueryTerm::QuerySpecification(selex) => {
-                    !matches!(selex.ranged.tail, Some((_, Either::Left(_))))
-                        || selex.ranged.selst.1.top.is_some()
+                QueryTerm::QuerySpecification(query) => {
+                    !matches!(query.ranged.tail, Some((_, Either::Left(_))))
+                        || query.ranged.selst.1.top.is_some()
                 }
                 QueryTerm::Query(_) => true,
             })
@@ -2274,8 +2278,8 @@ pub mod leveled {
         /// (2026.2 takes a second ORDER BY after SELECT TOP 1 a FROM t ORDER BY a DESC, and after a UNION's last
         /// operand with TOP, whose ORDER BY sees that operand's aliases alone), one without TOP the whole's.
         pub(super) fn ends_with_statement_order(&self) -> bool {
-            matches!(self.0.items.last(), Some(QueryTerm::QuerySpecification(selex))
-                if selex.ranged.selst.1.top.is_none() && matches!(selex.ranged.tail, Some((_, Either::Left(_)))))
+            matches!(self.0.items.last(), Some(QueryTerm::QuerySpecification(query))
+                if query.ranged.selst.1.top.is_none() && matches!(query.ranged.tail, Some((_, Either::Left(_)))))
         }
 
         /// Whether the operands order their rows as 2026.2 allows before a statement's own ORDER BY (`ordered`):
@@ -2370,7 +2374,7 @@ pub mod leveled {
         pub quantifier: SetQuantifier,
         pub top: Option<(Kw!("TOP"), TopSpecification, Space1)>,
         pub select_list: VecSep<Ranged<SelectItem>, ArgSep>,
-        pub targt: Option<(Space1, IntoClause)>,
+        pub into: Option<(Space1, IntoClause)>,
     }
 
     #[derive(Grammar)]
@@ -2386,7 +2390,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct Alias {
         pub as_kw: Implied<Kw!("AS")>,
-        pub sp: Space1,
+        pub space: Space1,
         pub name: SQLIdentNonKeyword,
     }
 
@@ -2467,10 +2471,10 @@ pub mod leveled {
         fn desugar(self) -> Self::Core {
             let core::TableReference::Join(mut first) = self.first.desugar();
             for (_, entry) in self.rest {
-                let core::TableReference::Join(core::JoinedTable { formit, joins }) =
+                let core::TableReference::Join(core::JoinedTable { primary, joins }) =
                     entry.ranged.desugar();
                 let table = Box::new(core::JoinedTable {
-                    formit: formit.after(),
+                    primary: primary.after(),
                     joins: Vec::new(),
                 });
                 let cross = core::Join::Cross {
@@ -2519,14 +2523,14 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct JoinedTable<B: Grammar + Default = ()> {
-        pub formit: TablePrimary<B>,
+        pub primary: TablePrimary<B>,
         pub joins: Vec<(Space1, Ranged<Join>)>,
     }
 
     impl<B: Grammar + Default> JoinedTable<B> {
         pub fn after<C: Grammar + Default>(self) -> JoinedTable<C> {
             JoinedTable {
-                formit: self.formit.after(),
+                primary: self.primary.after(),
                 joins: self.joins,
             }
         }
@@ -2540,12 +2544,12 @@ pub mod leveled {
         },
         Natural {
             natural_kw: (Kw!("NATURAL"), Space1),
-            jtype: JoinType,
+            join_type: JoinType,
             join_kw: Kw!("JOIN"),
             table: Box<JoinedTable<Space1>>,
         },
         Qualified {
-            jtype: JoinType,
+            join_type: JoinType,
             join_kw: Kw!("JOIN"),
             table: Box<JoinedTable<Space1>>,
             spec: (Space1, JoinSpecification),
@@ -2574,7 +2578,7 @@ pub mod leveled {
         },
         Using {
             using_kw: (Kw!("USING"), Space),
-            flist1: ColumnNameList,
+            columns: ColumnNameList,
         },
     }
 
@@ -2602,8 +2606,8 @@ pub mod leveled {
                     TablePrimary::TableValuedFunction(before, function, alias)
                 }
                 TablePrimary::Table(_, name, alias) => TablePrimary::Table(before, name, alias),
-                TablePrimary::Lateral(_, kw, sp, query, alias) => {
-                    TablePrimary::Lateral(before, kw, sp, query, alias)
+                TablePrimary::Lateral(_, kw, space, query, alias) => {
+                    TablePrimary::Lateral(before, kw, space, query, alias)
                 }
                 TablePrimary::Query(_, query, alias) => TablePrimary::Query(None, query, alias),
                 TablePrimary::JoinedTable(_, table) => TablePrimary::JoinedTable(None, table),
@@ -2893,7 +2897,7 @@ pub mod leveled {
                 .unzip();
             let values = core::ValuesClause {
                 values_kw: Default::default(),
-                sp: Default::default(),
+                space: Default::default(),
                 spec: core::ValuesSpecification::ValueExpression(parenthesized(commas(values))),
             };
             core::ColumnList {
@@ -2922,7 +2926,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct ValuesClause {
         pub values_kw: Kw!("VALUES"),
-        pub sp: Space,
+        pub space: Space,
         pub spec: ValuesSpecification,
     }
 
@@ -2972,7 +2976,7 @@ pub mod leveled {
         CurrentOf {
             current_of: (Space1, Kw!("CURRENT OF"), Space1),
             ident: Ident,
-            prdct: Option<(Space1, Prefix<Kw!("AND"), BooleanValueExpression<Space1>>)>,
+            condition: Option<(Space1, Prefix<Kw!("AND"), BooleanValueExpression<Space1>>)>,
         },
     }
 
@@ -3115,7 +3119,7 @@ pub mod leveled {
         Fetch {
             fetch_kw: (Kw!("FETCH"), Space1),
             cursor: Ident,
-            targt: Option<(Space, IntoClause)>,
+            into: Option<(Space, IntoClause)>,
         },
         Close {
             close_kw: (Kw!("CLOSE"), Space1),
@@ -3173,9 +3177,9 @@ pub mod leveled {
                 .wrapped
                 .iter()
                 .flat_map(|args| args.items.iter()))
-            .all(|scalx| {
-                let rest = scalx.rest.iter().map(|(.., operand)| operand);
-                std::iter::once(&scalx.first).chain(rest).all(|operand| {
+            .all(|expression| {
+                let rest = expression.rest.iter().map(|(.., operand)| operand);
+                std::iter::once(&expression.first).chain(rest).all(|operand| {
                     !matches!(operand, Operand::ValueExpressionPrimary(_, term) if matches!(term.ranged, ValueExpressionPrimary::Column(_)))
                 })
             })
@@ -3230,11 +3234,11 @@ pub mod leveled {
             if let Some(order) = take_statement_order(&mut query) {
                 tail.order = Some(order);
             }
-            if let [core::QueryTerm::QuerySpecification(selex)] = &mut query.0.items[..]
+            if let [core::QueryTerm::QuerySpecification(query)] = &mut query.0.items[..]
                 && tail.order.is_some()
                 && tail.limit.is_none()
                 && let Some((space, Either::Right(limit))) =
-                    selex.ranged.tail.take_if(|(_, tail)| tail.is_right())
+                    query.ranged.tail.take_if(|(_, tail)| tail.is_right())
             {
                 tail.limit = Some((space, limit));
             }
@@ -3268,7 +3272,7 @@ pub mod leveled {
             value: Number,
         },
         PkeyIsIdkey {
-            pkey_kw: Kw!("PKEY_IS_IDKEY"),
+            kw: Kw!("PKEY_IS_IDKEY"),
             eq: (Space, StringEq!("="), Space),
             value: TrueFalse,
         },
@@ -3449,7 +3453,7 @@ pub mod leveled {
     pub enum Action {
         Complex {
             privilege: ColumnPrivilege,
-            sp: Space,
+            space: Space,
             columns: ColumnNameList,
         },
         Simple(SimplePrivilege),
@@ -3556,7 +3560,7 @@ pub mod leveled {
     pub enum CheckPrivilegeCommand {
         Admin(VecSep<AdminPrivilege, ArgSep>),
         PrivilegeSpecification {
-            priv_spec: PrivilegeSpecification,
+            privilege: PrivilegeSpecification,
             on_kw: (Space1, Kw!("ON"), Space1),
             object: TableName,
         },
@@ -3649,7 +3653,7 @@ pub mod leveled {
         },
         CancelQuery {
             kw: Kw!("CANCEL QUERY"),
-            val: Nested<Count, Space1>,
+            id: Nested<Count, Space1>,
             cancel_scope: Option<(Space1, CancelQueryScope)>,
             timeout: Option<(Space1, Kw!("TIMEOUT"), Nested<Count, Space1>)>,
         },
@@ -3685,7 +3689,7 @@ pub mod leveled {
         },
         TuneTable {
             kw: (Kw!("TUNE TABLE"), Space1),
-            tname: TableName,
+            table_name: TableName,
             options: Vec<(Space1, TuneOption)>,
         },
         UnfreezePlans {
@@ -3717,7 +3721,7 @@ pub mod leveled {
             name: Ident,
             on_kw: (Space1, Kw!("ON"), Space1),
             table_kw: Option<(Kw!("TABLE"), Space1)>,
-            tname: TableName,
+            table_name: TableName,
         },
         Database {
             kw: (Kw!("DATABASE"), Space1),
@@ -3728,11 +3732,11 @@ pub mod leveled {
         ForeignTable {
             kw: (Kw!("FOREIGN TABLE"), Space1),
             if_not_exists: IfNotExists,
-            tname: TableName,
+            table_name: TableName,
             columns: Option<Args<VecSep<(Ident, (Space, DataType)), ArgSep>>>,
             server: (Space1, Kw!("SERVER"), Space1),
             server_name: TableName,
-            ft_options: Option<(Space, ForeignTableOptions)>,
+            options: Option<(Space, ForeignTableOptions)>,
             values: Option<(Space1, Kw!("VALUES"), Space, ColumnNameList)>,
             using_json: Option<((Space1, Kw!("USING"), Space), JSONString)>,
             novalidate: Option<(Space1, Kw!("NOVALIDATE"))>,
@@ -3742,7 +3746,7 @@ pub mod leveled {
             if_not_exists: IfNotExists,
             name: Ident,
             predicting: (Space1, Kw!("PREDICTING"), Space),
-            pred: Parenthesized<(Ident, Option<(Space1, DataType)>)>,
+            predicted: Parenthesized<(Ident, Option<(Space1, DataType)>)>,
             source: Option<(Space1, ModelSource)>,
             with_clause: Option<(Space, ModelWithClause)>,
             using_clause: Option<(Space1, UsingClause)>,
@@ -3760,7 +3764,7 @@ pub mod leveled {
             kw: (Kw!("TABLE"), Space1),
             if_not_exists: IfNotExists,
             nojourn: Option<(Kw!("%NOJOURN"), Space1)>,
-            tname: TableName,
+            table_name: TableName,
             as_kw: (Space1, Kw!("AS"), Space1),
             with_clause: Option<(WithClause, Space1)>,
             query: SourceQuery,
@@ -3773,7 +3777,7 @@ pub mod leveled {
         Server {
             server_kw: ServerKw,
             if_not_exists: IfNotExists,
-            tname: TableName,
+            table_name: TableName,
             type_clause: Option<((Space1, Kw!("TYPE"), Space), ServerType)>,
             fdw: (Space1, Kw!("FOREIGN DATA WRAPPER"), Space1),
             fdw_name: Ident,
@@ -3790,8 +3794,8 @@ pub mod leveled {
             name: Ident,
             on_kw: (Space1, Kw!("ON"), Space1),
             table_kw: Option<(Kw!("TABLE"), Space1)>,
-            tname: TableName,
-            comp_list: Args<VecSep<ComponentSpecification, ArgSep>>,
+            table_name: TableName,
+            components: Args<VecSep<ComponentSpecification, ArgSep>>,
             as_clause: Option<(
                 (Space1, Kw!("AS"), Space1),
                 DottedIdent,
@@ -3803,7 +3807,7 @@ pub mod leveled {
         },
         View {
             or_replace: OrReplace,
-            def: ViewDefinition,
+            definition: ViewDefinition,
         },
         Method(CreateRoutine<MethodPrefix, Kw!("METHOD"), MethodBody>),
         Query(CreateRoutine<OrReplace, Kw!("QUERY"), QueryBody>),
@@ -3851,11 +3855,11 @@ pub mod leveled {
             body: (Space1, TriggerBody),
         },
         Table {
-            temp: Option<(TableScope, Space1)>,
+            scope: Option<(TableScope, Space1)>,
             table_kw: (Kw!("TABLE"), Space1),
             if_not_exists: IfNotExists,
-            tname: TableName,
-            elems: Args<VecSep<TableElement, ArgSep>>,
+            table_name: TableName,
+            elements: Args<VecSep<TableElement, ArgSep>>,
             options: Option<(Space1, TableOptionList)>,
         },
     }
@@ -3869,7 +3873,7 @@ pub mod leveled {
         },
         ForeignTable {
             kw: (Kw!("FOREIGN TABLE"), Space1),
-            tname: TableName,
+            table_name: TableName,
         },
         MlConfiguration {
             kw: (Kw!("ML CONFIGURATION"), Space1),
@@ -3883,7 +3887,7 @@ pub mod leveled {
         },
         Table {
             kw: (Kw!("TABLE"), Space1),
-            tname: TableName,
+            table_name: TableName,
             with_check: Option<((Space1, Kw!("WITH"), Space1), CheckOrNoCheck)>,
             action: Option<(Space1, AlterAction)>,
         },
@@ -3893,7 +3897,7 @@ pub mod leveled {
         },
         Server {
             server_kw: ServerKw,
-            tname: TableName,
+            table_name: TableName,
             action: (Space1, AlterServerAction),
         },
         View(ViewDefinition),
@@ -3911,9 +3915,9 @@ pub mod leveled {
         },
         SetRuntime {
             kw: (Kw!("SET RUNTIME"), Space1),
-            prop: StatisticsProperty,
+            property: StatisticsProperty,
             eq: (Space, StringEq!("="), Space),
-            val: TrueFalse,
+            value: TrueFalse,
         },
     }
 
@@ -3935,7 +3939,7 @@ pub mod leveled {
         ForeignTable {
             kw: (Kw!("FOREIGN TABLE"), Space1),
             if_exists: IfExists,
-            tname: TableName,
+            table_name: TableName,
             cascade: Option<(Space1, DropBehavior)>,
         },
         Routine {
@@ -3974,13 +3978,13 @@ pub mod leveled {
             kw: (Kw!("SCHEMA"), Space1),
             if_exists: IfExists,
             name: Ident,
-            cascade_restrict: Option<(Space1, DropBehavior)>,
+            behavior: Option<(Space1, DropBehavior)>,
         },
         Table {
             kw: (Kw!("TABLE"), Space1),
             if_exists: IfExists,
             nojourn: Option<(Kw!("%NOJOURN"), Space1)>,
-            tname: TableName,
+            table_name: TableName,
             cascade: Option<(Space1, DropBehavior)>,
             data: Option<(Space1, DataOption)>,
         },
@@ -3993,13 +3997,13 @@ pub mod leveled {
         View {
             kw: (Kw!("VIEW"), Space1),
             if_exists: IfExists,
-            tname: TableName,
+            table_name: TableName,
             cascade: Option<(Space1, DropBehavior)>,
         },
         Server {
             server_kw: ServerKw,
             if_exists: IfExists,
-            tname: TableName,
+            table_name: TableName,
             cascade: Option<(Space1, DropBehavior)>,
         },
         Aggregate {
@@ -4020,7 +4024,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct ViewDefinition {
         pub kw: (Kw!("VIEW"), Space1),
-        pub tname: TableName,
+        pub table_name: TableName,
         pub col_list: Option<(Space, ColumnNameList)>,
         pub as_kw: (Space1, Kw!("AS"), Space),
         pub with_clause: Option<(WithClause, Space1)>,
@@ -4204,7 +4208,7 @@ pub mod leveled {
     pub enum ModelSource {
         Subquery {
             kw: (Kw!("FROM"), Space),
-            selex: Parenthesized<Ranged<QuerySpecification>>,
+            query: Parenthesized<Ranged<QuerySpecification>>,
         },
         Inline {
             from: FromClause,
@@ -4305,7 +4309,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct H2OOption {
         pub kw: Kw!("JAVATLSCONFIGFILE"),
-        pub val: (Space, LiteralOrNull),
+        pub value: (Space, LiteralOrNull),
     }
 
     #[derive(Grammar)]
@@ -4376,7 +4380,7 @@ pub mod leveled {
         Code(CodeBody),
         Statement {
             lang: Option<(Kw!("LANGUAGE SQL"), Space1)>,
-            stat: Box<Ranged<Statement>>,
+            statement: Box<Ranged<Statement>>,
         },
     }
 
@@ -4436,7 +4440,7 @@ pub mod leveled {
     pub struct SQL {
         pub space_before: Space,
         pub view_column_list: Option<(ColumnNameList, Option<(Space, Kw!("AS"))>, Space)>,
-        pub stat: Ranged<Statement>,
+        pub statement: Ranged<Statement>,
         pub space_after: Space,
     }
 
@@ -4449,7 +4453,7 @@ pub mod leveled {
             Kw!("SERVER"),
             Space,
         ),
-        pub tname: TableName,
+        pub table_name: TableName,
         pub remote_statement: (Space, Box<Ranged<Statement>>),
     }
 
@@ -4509,7 +4513,7 @@ pub mod leveled {
     pub struct ParameterDeclaration {
         pub direction: Option<(ParameterMode, Space)>,
         pub name: Ident,
-        pub datyp: (Space1, DataType),
+        pub data_type: (Space1, DataType),
         pub default: Option<(Space, DefaultClause)>,
     }
 
@@ -4553,7 +4557,7 @@ pub mod leveled {
         },
         Returns {
             kw: (Kw!("RETURNS"), Space1),
-            datyp: DataType,
+            data_type: DataType,
         },
         SelectMode {
             kw: (Kw!("SELECTMODE"), Space1),
@@ -4774,7 +4778,7 @@ pub mod leveled {
         },
         StorageDefault {
             clause: StorageDefaultConvertClause,
-            del: Option<(Space1, DataOption)>,
+            data: Option<(Space1, DataOption)>,
         },
         Shard {
             to: Option<(Kw!("TO"), Space1)>,
@@ -4809,7 +4813,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum AlterColumnAction {
         DatypCollate {
-            datyp: DataType,
+            data_type: DataType,
             collate: Option<(Space1, Kw!("COLLATE"), Space1, SqlCollation)>,
         },
         SqlCollation(SqlCollation),
@@ -4888,11 +4892,11 @@ pub mod leveled {
         CurrentUser(Kw!("CURRENT_USER")),
         GetDate {
             kw: Kw!("GETDATE"),
-            prec: Args<Option<UnsignedInteger>>,
+            precision: Args<Option<UnsignedInteger>>,
         },
         GetUtcDate {
             kw: Kw!("GETUTCDATE"),
-            prec: Args<Option<UnsignedInteger>>,
+            precision: Args<Option<UnsignedInteger>>,
         },
         Null(Kw!("NULL")),
         ObjectScript {
@@ -4930,7 +4934,7 @@ pub mod leveled {
         },
         Clauses(ModifyColumnClauses),
         Typed {
-            datyp: DataType,
+            data_type: DataType,
             clauses: Option<(Space1, ModifyColumnClauses)>,
         },
     }
@@ -5066,7 +5070,7 @@ pub mod leveled {
     #[tygr(inline)]
     pub struct UniqueSpecification {
         pub cluster: Cluster,
-        pub flist: (Space, NamedKeyColumns),
+        pub columns: (Space, NamedKeyColumns),
     }
 
     #[derive(Grammar)]
@@ -5119,7 +5123,7 @@ pub mod leveled {
     pub enum ColumnDataType {
         DataType(DataType),
         Identity {
-            datyp: Option<DataType>,
+            data_type: Option<DataType>,
             identity: (Space, Identity),
         },
     }
@@ -5552,11 +5556,11 @@ pub mod leveled {
         CurrentUser(Kw!("CURRENT_USER")),
         GetDate {
             kw: Kw!("GETDATE"),
-            prec: Parenthesized<Option<UnsignedInteger>>,
+            precision: Parenthesized<Option<UnsignedInteger>>,
         },
         GetUtcDate {
             kw: Kw!("GETUTCDATE"),
-            prec: Parenthesized<Option<UnsignedInteger>>,
+            precision: Parenthesized<Option<UnsignedInteger>>,
         },
         Null(Kw!("NULL")),
         SessionUser(Kw!("SESSION_USER")),
@@ -5577,7 +5581,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct ReferencesSpecification {
         pub name: TableName,
-        pub flist: Option<(Space, ColumnNameList)>,
+        pub columns: Option<(Space, ColumnNameList)>,
         pub match_spec: Option<(Space, Kw!("MATCH"), Space1, MatchType)>,
         pub action: Option<(Space, Either<ReferentialTriggeredAction, Kw!("NOCHECK")>)>,
     }
@@ -5620,7 +5624,7 @@ pub mod leveled {
     pub enum NamedKeyColumns {
         Named {
             name: Ident,
-            flist: (Space, ColumnNameList),
+            columns: (Space, ColumnNameList),
         },
         Columns(KeyColumns),
     }
@@ -5696,7 +5700,7 @@ pub mod leveled {
         File(FileSource),
         Jdbc {
             kw: (Kw!("JDBC"), Space),
-            cnxn: JdbcConnectionSpecification,
+            connection: JdbcConnectionSpecification,
             data: (Space, JdbcDataSpecification),
         },
     }
@@ -5720,7 +5724,7 @@ pub mod leveled {
     #[tygr(inline)]
     pub struct ColumnNameAndType {
         pub name: Ident,
-        pub datyp: (Space1, DataType),
+        pub data_type: (Space1, DataType),
     }
 
     #[derive(Grammar)]
@@ -5989,7 +5993,7 @@ mod sugar {
     #[derive(Grammar, Clone)]
     pub struct ODBCDateTimeLiteral {
         pub dts_type: ODBCDateTimeType,
-        pub sp: Space,
+        pub space: Space,
         pub val_spec: ODBCDateTimeValue,
     }
 
