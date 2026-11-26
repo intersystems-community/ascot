@@ -23,7 +23,7 @@ impl Walk for Term {
             Term::Query(query) => query.walk(w),
             Term::Call(f) => {
                 let args = f.args.1.wrapped.as_ref().map_or(0, |args| args.items.len());
-                w.call(&f.name.0, args, SqlProcedureUse::Function);
+                w.call(&f.name.name, args, SqlProcedureUse::Function);
                 f.args.walk(w)
             }
             Term::HostVar(host_var) => host_var.walk(w),
@@ -146,32 +146,6 @@ impl Walk for Builtin {
             Trim(_, a) => a.walk(w),
             Odbc(a) => a.walk(w),
             CurrentTimestamp(_, a) | CurrentTime(_, a) => a.walk(w),
-            DollarExtract(_, a) | DollarFNumber(_, a) | DollarList(_, a) | DollarListGet(_, a) => {
-                a.walk(w)
-            }
-            DollarFind(_, a)
-            | DollarJustify(_, a)
-            | DollarListFind(_, a)
-            | DollarTranslate(_, a) => a.walk(w),
-            DollarLength(_, a)
-            | DollarListData(_, a)
-            | DollarListFromString(_, a)
-            | DollarListToString(_, a) => a.walk(w),
-            DollarListBuild(_, a) => a.walk(w),
-            DollarListLength(_, a) => a.walk(w),
-            DollarListSame(_, a)
-            | DollarMvFmt(_, a)
-            | DollarMvFmts(_, a)
-            | DollarMvIconv(_, a)
-            | DollarMvIconvs(_, a)
-            | DollarMvOconv(_, a)
-            | DollarMvOconvs(_, a) => a.walk(w),
-            DollarPiece(_, a) => a.walk(w),
-            TSqlObjectId(_, a) | TSqlObjectName(_, a) => a.walk(w),
-            TSqlDbName(..) | TSqlError(..) | TSqlFetchStatus(..) | TSqlGetUtcDate(..)
-            | TSqlHostName(..) | TSqlLockTimeout(..) | TSqlNestLevel(..) | TSqlServerName(..)
-            | TSqlSpid(..) | TSqlSqlStatus(..) | TSqlTranCount(..) | TSqlVersion(..)
-            | TSqlNewId(..) => {}
         }
     }
 }

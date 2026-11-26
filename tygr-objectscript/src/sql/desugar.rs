@@ -237,14 +237,21 @@ pub(super) fn string(text: &str) -> core::Scalx {
     term(core::Term::Literal(Literal::String(literal)))
 }
 
-/// `name(args)`, the call by name.
+/// `name(args)`, the call by name, `$` and all.
 pub(super) fn call(name: &str, args: Vec<core::Scalx>) -> core::Term {
+    let (dollar, name) = match name.strip_prefix('$') {
+        Some(name) => (Some(Default::default()), name),
+        None => (None, name),
+    };
     let name = DottedIdent {
         head: Ident::simple(name),
         rest: Vec::new(),
     };
     core::Term::Call(core::Call {
-        name: core::SQLFunctionName(Src::synthesized(name)),
+        name: core::SQLFunctionName {
+            dollar,
+            name: Src::synthesized(name),
+        },
         args: list(args),
     })
 }

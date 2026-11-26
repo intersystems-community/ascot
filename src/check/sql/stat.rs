@@ -172,7 +172,7 @@ impl Walk for CallStatement {
             .wrapped
             .as_ref()
             .map_or(0, |args| args.items.len());
-        w.call(&self.routine.1.0.0, args, SqlProcedureUse::Call);
+        w.call(&self.routine.1.0, args, SqlProcedureUse::Call);
         self.args.walk(w);
         if let Some((.., names)) = &self.using {
             for name in &names.items {

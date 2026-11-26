@@ -819,9 +819,13 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct TName(pub Src<DottedIdent>);
 
+    /// A function's name, `$` before an ObjectScript function's (`$EXTRACT`, `$TSQL_SPID`).
     #[derive(Grammar)]
     #[tygr(name = "SQL function name")]
-    pub struct SQLFunctionName(pub Src<DottedIdent>);
+    pub struct SQLFunctionName {
+        pub dollar: Option<StringEq!("$")>,
+        pub name: Src<DottedIdent>,
+    }
 
     #[derive(Grammar)]
     #[tygr(name = "colmn")]
@@ -989,7 +993,13 @@ pub mod leveled {
             LastIdentity LCase Least Left Len Length Lower LPad LTrim Month Now NullIf Nvl PatIndex Power
             Repeat Replace Replicate Reverse Right Round RPad RTrim Sign Space Str String Stuff Substr
             Substring ToChar ToDate ToUSChar ToUSDate ToNumber ToTimestamp UCase UnixTimestamp
-            VectorCosine VectorDotProduct Year;;
+            VectorCosine VectorDotProduct Year DollarExtract DollarFind DollarFNumber DollarJustify
+            DollarLength DollarList DollarListBuild DollarListData DollarListFind DollarListFromString
+            DollarListGet DollarListLength DollarListSame DollarListToString DollarMvFmt DollarMvFmts
+            DollarMvIconv DollarMvIconvs DollarMvOconv DollarMvOconvs DollarPiece DollarTranslate
+            TSqlDbName TSqlError TSqlFetchStatus TSqlGetUtcDate TSqlHostName TSqlLockTimeout TSqlNestLevel
+            TSqlServerName TSqlSpid TSqlSqlStatus TSqlTranCount TSqlVersion TSqlNewId TSqlObjectId
+            TSqlObjectName;;
             ScalarFunction::Position(_, a) => call("CHARINDEX", args(a)),
         )
     }
@@ -1123,7 +1133,8 @@ pub mod leveled {
     }
 
     /// A function called by name, built-in or user-defined; a function with a syntax of its own cannot be
-    /// called otherwise (2026.2 rejects TIMESTAMPADD(:u, 1, a), CONCAT(b, b, b), ROUND(a) and COUNT(a, b)).
+    /// called otherwise (2026.2 rejects TIMESTAMPADD(:u, 1, a), CONCAT(b, b, b), ROUND(a) and COUNT(a, b)),
+    /// and a `$` name is a scalar function's or nothing (2026.2 rejects $ASCII(x)).
     #[derive(Grammar)]
     #[tygr(name = "call", validated)]
     pub struct Call {
@@ -1132,10 +1143,15 @@ pub mod leveled {
     }
 
     impl Validate for Call {
-        const REQUIREMENT: &'static str = "not name a function with a syntax of its own";
+        const REQUIREMENT: &'static str =
+            "not name a function with a syntax of its own or an unknown $ function";
         fn validate(&self) -> bool {
-            let name = self.name.0.print().to_uppercase();
-            !OWN_SYNTAX.contains(&name.as_str()) && !SCALAR_FUNCTIONS.contains(&name.as_str())
+            let name = self.name.print().to_uppercase();
+            // The core's list is empty: it calls `$EXTRACT` and its kin by name, as it calls ABS.
+            let dollar = self.name.dollar.is_some() && !SCALAR_FUNCTIONS.is_empty();
+            !dollar
+                && !OWN_SYNTAX.contains(&name.as_str())
+                && !SCALAR_FUNCTIONS.contains(&name.as_str())
         }
     }
 
@@ -1385,8 +1401,8 @@ pub mod leveled {
 
     pub type Args1Plus = Args<VecSep<Scalx, ArgSep>>;
 
-    /// The functions a call by name cannot spell: the `$` functions, CURRENT_TIMESTAMP and
-    /// CURRENT_TIME with a precision, which the niladic would shadow, and the ODBC-only functions.
+    /// The functions with a syntax of their own, CURRENT_TIMESTAMP and CURRENT_TIME with a precision,
+    /// which the niladic would shadow, and the ODBC-only functions.
     #[derive(Grammar)]
     #[tygr(name = "builtin")]
     pub enum Builtin {
@@ -1417,43 +1433,6 @@ pub mod leveled {
         Odbc(ODBCOnly),
         CurrentTimestamp(Kw!("CURRENT_TIMESTAMP"), Args<Scalx>),
         CurrentTime(Kw!("CURRENT_TIME"), Args<Scalx>),
-        DollarExtract(Kw!("$EXTRACT"), Args<ROO>),
-        DollarFind(Kw!("$FIND"), Args<RRO>),
-        DollarFNumber(Kw!("$FNUMBER"), Args<ROO>),
-        DollarJustify(Kw!("$JUSTIFY"), Args<RRO>),
-        DollarLength(Kw!("$LENGTH"), Args<RO>),
-        DollarList(Kw!("$LIST"), Args<ROO>),
-        DollarListBuild(Kw!("$LISTBUILD"), ArgsN),
-        DollarListData(Kw!("$LISTDATA"), Args<RO>),
-        DollarListFind(Kw!("$LISTFIND"), Args<RRO>),
-        DollarListFromString(Kw!("$LISTFROMSTRING"), Args<RO>),
-        DollarListGet(Kw!("$LISTGET"), Args<ROO>),
-        DollarListLength(Kw!("$LISTLENGTH"), Args<Scalx>),
-        DollarListSame(Kw!("$LISTSAME"), Args<RR>),
-        DollarListToString(Kw!("$LISTTOSTRING"), Args<RO>),
-        DollarMvFmt(Kw!("$MVFMT"), Args<RR>),
-        DollarMvFmts(Kw!("$MVFMTS"), Args<RR>),
-        DollarMvIconv(Kw!("$MVICONV"), Args<RR>),
-        DollarMvIconvs(Kw!("$MVICONVS"), Args<RR>),
-        DollarMvOconv(Kw!("$MVOCONV"), Args<RR>),
-        DollarMvOconvs(Kw!("$MVOCONVS"), Args<RR>),
-        DollarPiece(Kw!("$PIECE"), Args<RROO>),
-        DollarTranslate(Kw!("$TRANSLATE"), Args<RRO>),
-        TSqlDbName(Kw!("$TSQL_DB_NAME"), Args<()>),
-        TSqlError(Kw!("$TSQL_ERROR"), Args<()>),
-        TSqlFetchStatus(Kw!("$TSQL_FETCH_STATUS"), Args<()>),
-        TSqlGetUtcDate(Kw!("$TSQL_GETUTCDATE"), Args<()>),
-        TSqlHostName(Kw!("$TSQL_HOST_NAME"), Args<()>),
-        TSqlLockTimeout(Kw!("$TSQL_LOCK_TIMEOUT"), Args<()>),
-        TSqlNestLevel(Kw!("$TSQL_NESTLEVEL"), Args<()>),
-        TSqlServerName(Kw!("$TSQL_SERVERNAME"), Args<()>),
-        TSqlSpid(Kw!("$TSQL_SPID"), Args<()>),
-        TSqlSqlStatus(Kw!("$TSQL_SQLSTATUS"), Args<()>),
-        TSqlTranCount(Kw!("$TSQL_TRANCOUNT"), Args<()>),
-        TSqlVersion(Kw!("$TSQL_VERSION"), Args<()>),
-        TSqlNewId(Kw!("$TSQL_NEWID"), Args<()>),
-        TSqlObjectId(Kw!("$TSQL_OBJECT_ID"), Args<Scalx>),
-        TSqlObjectName(Kw!("$TSQL_OBJECT_NAME"), Args<Scalx>),
     }
 
     #[derive(Grammar)]
@@ -3408,7 +3387,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "routine name")]
-    pub struct RoutineName(pub SQLFunctionName);
+    pub struct RoutineName(pub Src<DottedIdent>);
 
     #[derive(Grammar)]
     #[tygr(name = "explain")]
@@ -6372,7 +6351,8 @@ mod sugar {
         HostVar(HostVar),
     }
 
-    /// The functions a call by name spells, which the core reads as calls.
+    /// The functions a call by name spells, which the core reads as calls, the ObjectScript `$` functions
+    /// among them (2026.2 takes these and no other `$` name).
     #[derive(Grammar, Clone)]
     #[tygr(name = "scalar function")]
     pub enum ScalarFunction {
@@ -6446,6 +6426,43 @@ mod sugar {
         VectorCosine(Kw!("VECTOR_COSINE"), Args<RR>),
         VectorDotProduct(Kw!("VECTOR_DOT_PRODUCT"), Args<RR>),
         Year(Kw!("YEAR"), Args<Scalx>),
+        DollarExtract(Kw!("$EXTRACT"), Args<ROO>),
+        DollarFind(Kw!("$FIND"), Args<RRO>),
+        DollarFNumber(Kw!("$FNUMBER"), Args<ROO>),
+        DollarJustify(Kw!("$JUSTIFY"), Args<RRO>),
+        DollarLength(Kw!("$LENGTH"), Args<RO>),
+        DollarList(Kw!("$LIST"), Args<ROO>),
+        DollarListBuild(Kw!("$LISTBUILD"), ArgsN),
+        DollarListData(Kw!("$LISTDATA"), Args<RO>),
+        DollarListFind(Kw!("$LISTFIND"), Args<RRO>),
+        DollarListFromString(Kw!("$LISTFROMSTRING"), Args<RO>),
+        DollarListGet(Kw!("$LISTGET"), Args<ROO>),
+        DollarListLength(Kw!("$LISTLENGTH"), Args<Scalx>),
+        DollarListSame(Kw!("$LISTSAME"), Args<RR>),
+        DollarListToString(Kw!("$LISTTOSTRING"), Args<RO>),
+        DollarMvFmt(Kw!("$MVFMT"), Args<RR>),
+        DollarMvFmts(Kw!("$MVFMTS"), Args<RR>),
+        DollarMvIconv(Kw!("$MVICONV"), Args<RR>),
+        DollarMvIconvs(Kw!("$MVICONVS"), Args<RR>),
+        DollarMvOconv(Kw!("$MVOCONV"), Args<RR>),
+        DollarMvOconvs(Kw!("$MVOCONVS"), Args<RR>),
+        DollarPiece(Kw!("$PIECE"), Args<RROO>),
+        DollarTranslate(Kw!("$TRANSLATE"), Args<RRO>),
+        TSqlDbName(Kw!("$TSQL_DB_NAME"), Args<()>),
+        TSqlError(Kw!("$TSQL_ERROR"), Args<()>),
+        TSqlFetchStatus(Kw!("$TSQL_FETCH_STATUS"), Args<()>),
+        TSqlGetUtcDate(Kw!("$TSQL_GETUTCDATE"), Args<()>),
+        TSqlHostName(Kw!("$TSQL_HOST_NAME"), Args<()>),
+        TSqlLockTimeout(Kw!("$TSQL_LOCK_TIMEOUT"), Args<()>),
+        TSqlNestLevel(Kw!("$TSQL_NESTLEVEL"), Args<()>),
+        TSqlServerName(Kw!("$TSQL_SERVERNAME"), Args<()>),
+        TSqlSpid(Kw!("$TSQL_SPID"), Args<()>),
+        TSqlSqlStatus(Kw!("$TSQL_SQLSTATUS"), Args<()>),
+        TSqlTranCount(Kw!("$TSQL_TRANCOUNT"), Args<()>),
+        TSqlVersion(Kw!("$TSQL_VERSION"), Args<()>),
+        TSqlNewId(Kw!("$TSQL_NEWID"), Args<()>),
+        TSqlObjectId(Kw!("$TSQL_OBJECT_ID"), Args<Scalx>),
+        TSqlObjectName(Kw!("$TSQL_OBJECT_NAME"), Args<Scalx>),
     }
 
     #[derive(Grammar, Clone)]
