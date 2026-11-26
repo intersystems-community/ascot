@@ -1,266 +1,84 @@
-//! The core level of the SQL grammar and the desugaring into it, over hand-written statements: each
-//! rule rewrites its statement to the core text given, the core text re-parses under the core
-//! grammar and desugars to itself, and every `Src` node maps a range of it to a range of the source.
+//! The core level of the SQL grammar and the desugaring into it, over hand-written statements: the core
+//! text re-parses under the core grammar and desugars to itself, every `Src` node maps a range of it to a
+//! range of the source, and the trees take their shapes; the statements each level accepts and the core
+//! text each rule gives are corpus documents under ByFeature/SQL.
 
 use tygr::{Parse, Print};
 use tygr_objectscript::sql::core;
 use tygr_objectscript::sql::desugar::Desugar;
-use tygr_objectscript::sql::{SQL, print_mapped};
+use tygr_objectscript::sql::*;
 
-/// One statement per rule, with the exact core text.
-const RULES: &[(&str, &str)] = &[
-    (
-        "SELECT a FROM t WHERE a != 1",
-        "SELECT a FROM t WHERE a <> 1",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT= 1",
-        "SELECT a FROM t WHERE a <> 1",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT> 1",
-        "SELECT a FROM t WHERE a <= 1",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT< 1",
-        "SELECT a FROM t WHERE a >= 1",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT[ 'x'",
-        "SELECT a FROM t WHERE a NOT[ 'x'",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT] 'x'",
-        "SELECT a FROM t WHERE a NOT] 'x'",
-    ),
-    (
-        "SELECT a FROM t WHERE a IS NOT NULL",
-        "SELECT a FROM t WHERE NOT (a IS NULL)",
-    ),
-    (
-        "SELECT a FROM t WHERE a not /* c */ BETWEEN 1 AND 2",
-        "SELECT a FROM t WHERE not (a BETWEEN 1 AND 2)",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT IN (1, 2)",
-        "SELECT a FROM t WHERE NOT (a IN (1, 2))",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT LIKE 'x%'",
-        "SELECT a FROM t WHERE NOT (a LIKE 'x%')",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT %MATCHES 'p'",
-        "SELECT a FROM t WHERE NOT (a %MATCHES 'p')",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT %INLIST :l",
-        "SELECT a FROM t WHERE NOT (a %INLIST :l)",
-    ),
-    (
-        "SELECT a FROM t WHERE a IS NOT JSON",
-        "SELECT a FROM t WHERE NOT (a IS JSON)",
-    ),
-    (
-        "SELECT a FROM t WHERE NOT a IS NOT NULL",
-        "SELECT a FROM t WHERE NOT NOT (a IS NULL)",
-    ),
-    (
-        "SELECT a FROM t WHERE a IN (SELECT b FROM u)",
-        "SELECT a FROM t WHERE a = ANY (SELECT b FROM u)",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT IN (SELECT b FROM u)",
-        "SELECT a FROM t WHERE NOT (a = ANY (SELECT b FROM u))",
-    ),
-    (
-        "SELECT a FROM t WHERE a = SOME (SELECT b FROM u)",
-        "SELECT a FROM t WHERE a = ANY (SELECT b FROM u)",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT[ ANY (SELECT b FROM u)",
-        "SELECT a FROM t WHERE a NOT[ ANY (SELECT b FROM u)",
-    ),
-    (
-        "SELECT a FROM t WHERE a NOT] ALL (SELECT b FROM u)",
-        "SELECT a FROM t WHERE a NOT] ALL (SELECT b FROM u)",
-    ),
-    (
-        "SELECT a FROM t WHERE a = 1 ! b = 2",
-        "SELECT a FROM t WHERE a = 1 OR b = 2",
-    ),
-    (
-        "SELECT a FROM t WHERE a = 1 & b = 2",
-        "SELECT a FROM t WHERE a = 1 AND b = 2",
-    ),
-    ("SELECT ALL a FROM t", "SELECT a FROM t"),
-    (
-        "SELECT %NOLOCK ALL /* c */ a FROM t",
-        "SELECT %NOLOCK a FROM t",
-    ),
-    ("SELECT ALLOWED FROM t", "SELECT ALLOWED FROM t"),
-    (
-        "SELECT COUNT(ALL a), COUNT(ALL /* c */ b), COUNT(ALLOWED) FROM t",
-        "SELECT COUNT(a), COUNT(b), COUNT(ALLOWED) FROM t",
-    ),
-    (
-        "SELECT a FROM t ORDER BY a ASC, b DESC",
-        "SELECT a FROM t ORDER BY a, b DESC",
-    ),
-    ("SELECT a x FROM t u", "SELECT a AS x FROM t AS u"),
-    (
-        "SELECT a FROM t, u v, w",
-        "SELECT a FROM t CROSS JOIN u AS v CROSS JOIN w",
-    ),
-    (
-        "SELECT a FROM t, u RIGHT JOIN v ON u.a = v.a",
-        "SELECT a FROM t CROSS JOIN (u RIGHT OUTER JOIN v ON u.a = v.a)",
-    ),
-    (
-        "SELECT a FROM {oj t LEFT OUTER JOIN u ON t.a = u.a}",
-        "SELECT a FROM t LEFT OUTER JOIN u ON t.a = u.a",
-    ),
-    (
-        "SELECT a FROM t JOIN u ON t.a = u.a",
-        "SELECT a FROM t INNER JOIN u ON t.a = u.a",
-    ),
-    (
-        "SELECT a FROM t LEFT JOIN u ON t.a = u.a FULL JOIN v USING (a)",
-        "SELECT a FROM t LEFT OUTER JOIN u ON t.a = u.a FULL OUTER JOIN v USING (a)",
-    ),
-    (
-        "SELECT a FROM t NATURAL RIGHT JOIN u",
-        "SELECT a FROM t NATURAL RIGHT OUTER JOIN u",
-    ),
-    (
-        "SELECT a FROM t OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY",
-        "SELECT a FROM t LIMIT 10 OFFSET 5",
-    ),
-    (
-        "SELECT a FROM t FETCH FIRST 10 ROWS ONLY",
-        "SELECT a FROM t LIMIT 10",
-    ),
-    (
-        "SELECT a FROM t FETCH FIRST 10 /* c */ ROWS /* d */ ONLY",
-        "SELECT a FROM t LIMIT 10",
-    ),
-    (
-        "SELECT a FROM t OFFSET 5 ROWS",
-        "SELECT a FROM t LIMIT ALL OFFSET 5",
-    ),
-    ("SELECT a FROM t LIMIT ALL", "SELECT a FROM t"),
-    (
-        "SELECT a FROM t LIMIT ALL OFFSET 3",
-        "SELECT a FROM t LIMIT ALL OFFSET 3",
-    ),
-    (
-        "SELECT a FROM t LIMIT 5 OFFSET 3 /* c */ ROWS",
-        "SELECT a FROM t LIMIT 5 OFFSET 3",
-    ),
-    (
-        "SELECT a FROM t WHERE a %INLIST :l SIZE (((10)))",
-        "SELECT a FROM t WHERE a %INLIST :l SIZE ((10))",
-    ),
-    (
-        "INSERT t SET a = :x, b = 2",
-        "INSERT INTO t (a, b) VALUES (:x, 2)",
-    ),
-    (
-        "INSERT INTO t SET a = 1 /* c */, b = 2",
-        "INSERT INTO t (a, b) VALUES (1, 2)",
-    ),
-    (
-        "INSERT %NOLOCK t (a) VALUES (1)",
-        "INSERT %NOLOCK INTO t (a) VALUES (1)",
-    ),
-    (
-        "UPDATE t (a, b) VALUES (1, 2) WHERE c = 3",
-        "UPDATE t SET a = 1, b = 2 WHERE c = 3",
-    ),
-    (
-        "UPDATE t (a) SELECT b FROM u",
-        "UPDATE t (a) SELECT b FROM u",
-    ),
-    ("DELETE t WHERE a = 1", "DELETE FROM t WHERE a = 1"),
-    ("DELETE %NOLOCK t", "DELETE %NOLOCK FROM t"),
-    ("COMMIT WORK", "COMMIT"),
-    ("ROLLBACK WORK", "ROLLBACK"),
-    ("%INTRANS", "%INTRANSACTION"),
-    ("TRUNCATE TABLE %NOLOCK t", "TRUNCATE TABLE %NOLOCK t"),
-    (
-        "SELECT ABS(a), COALESCE(a, b), $LISTBUILD(a, b), CURRENT_TIMESTAMP(3) FROM t",
-        "SELECT ABS(a), COALESCE(a, b), $LISTBUILD(a, b), CURRENT_TIMESTAMP(3) FROM t",
-    ),
-    (
-        "SELECT {fn ABS(a)}, {fn PI}, {fn NOW}, {fn CURDATE()} FROM t",
-        "SELECT ABS(a), PI(), NOW(), CURDATE() FROM t",
-    ),
-    (
-        "SELECT {fn CONVERT(a, SQL_VARCHAR)}, {fn IFNULL(a, b)}, {fn USER} FROM t",
-        "SELECT {fn CONVERT(a, SQL_VARCHAR)}, {fn IFNULL(a, b)}, {fn USER} FROM t",
-    ),
-    (
-        "SELECT {fn TIMESTAMPADD(SQL_TSI_DAY, 1, d)}, {fn SUBSTRING(a FROM 1 FOR 2)} FROM t",
-        "SELECT TIMESTAMPADD(SQL_TSI_DAY, 1, d), SUBSTRING(a, 1, 2) FROM t",
-    ),
-    (
-        "SELECT {d '2020-01-01'}, {t '10:00:00'}, {ts :x} FROM t",
-        "SELECT CAST('2020-01-01' AS DATE), CAST('10:00:00' AS TIME), CAST(:x AS TIMESTAMP) FROM t",
-    ),
-    (
-        "SELECT {fn /* c */ NOW() /* d */} FROM t",
-        "SELECT NOW() FROM t",
-    ),
-    (
-        "SELECT %SQLUPPER a, UPPER a, %EXACT (a), %TRUNCATE(a, 3), %SQLSTRING(a, (3)) FROM t",
-        "SELECT %SQLUPPER(a), UPPER(a), %EXACT(a), %TRUNCATE(a, 3), %SQLSTRING(a, 3) FROM t",
-    ),
-    (
-        "SELECT %SQLUPPER /* c */ a FROM t",
-        "SELECT %SQLUPPER(a) FROM t",
-    ),
-    (
-        "SELECT POSITION(a IN b), SUBSTRING(a FROM 1 FOR 2), SUBSTRING(a FROM 1) FROM t",
-        "SELECT CHARINDEX(a, b), SUBSTRING(a, 1, 2), SUBSTRING(a, 1) FROM t",
-    ),
-    (
-        "SELECT POSITION(a /* c */ IN /* d */ b) FROM t",
-        "SELECT CHARINDEX(a, b) FROM t",
-    ),
-    (
-        "SELECT DATEADD(dd, 1, d), DATEDIFF((yyyy), d, e), DATEPART(sts, d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
-        "SELECT DATEADD(DAY, 1, d), DATEDIFF(YEAR, d, e), DATEPART(SQLTIMESTAMP, d), DATENAME(WEEKDAY, d), DATE_TRUNC(:p, d) FROM t",
-    ),
-    (
-        "SELECT TRIM(a), TRIM(x FROM a), TRIM(LEADING FROM a), TRIM(TRAILING a), TRIM(BOTH x FROM a) FROM t",
-        "SELECT TRIM(BOTH ' ' FROM a), TRIM(BOTH x FROM a), TRIM(LEADING ' ' FROM a), TRIM(TRAILING ' ' FROM a), TRIM(BOTH x FROM a) FROM t",
-    ),
-    (
-        "SELECT CASE WHEN a = 1 THEN 'x' END, CASE a WHEN 1 THEN 'x' END FROM t",
-        "SELECT CASE WHEN a = 1 THEN 'x' ELSE NULL END, CASE a WHEN 1 THEN 'x' ELSE NULL END FROM t",
-    ),
-    (
-        "SELECT $H, $J, $TL, $ZH, $ZJ, $ZTS, $ZTZ, $ZV, $ZNSPACE FROM t",
-        "SELECT $HOROLOG, $JOB, $TLEVEL, $ZHOROLOG, $ZJOB, $ZTIMESTAMP, $ZTIMEZONE, $ZVERSION, $NAMESPACE FROM t",
-    ),
-    ("SELECT a _ b FROM t", "SELECT a || b FROM t"),
-    (
-        "SELECT SUM(a) OVER (ORDER BY b ROWS 1 PRECEDING) FROM t",
-        "SELECT SUM(a) OVER (ORDER BY b ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t",
-    ),
-];
-
-/// Sugar the core grammar admits, as the rewrite drops a node whose type the core keeps, rewrites
-/// one form of a node whose other forms stay, or spells a call by name, whose arguments the core
-/// reads as columns.
-const ADMITTED: &[&str] = &[
-    "SELECT a FROM t LIMIT ALL",
-    "UPDATE t (a, b) VALUES (1, 2) WHERE c = 3",
-    "SELECT DATEADD(dd, 1, d), DATEDIFF((yyyy), d, e), DATEPART(sts, d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
-];
-
-/// Statements mixing the rules, and the sugar-free rest of the grammar.
+/// One statement per rule of the rewrite, statements mixing them, and the sugar-free rest of the grammar;
+/// the core text each rule gives is pinned by the corpus documents under ByFeature/SQL/Core.
 const STATEMENTS: &[&str] = &[
+    "SELECT a FROM t WHERE a != 1",
+    "SELECT a FROM t WHERE a NOT= 1",
+    "SELECT a FROM t WHERE a NOT> 1",
+    "SELECT a FROM t WHERE a NOT< 1",
+    "SELECT a FROM t WHERE a NOT[ 'x'",
+    "SELECT a FROM t WHERE a NOT] 'x'",
+    "SELECT a FROM t WHERE a IS NOT NULL",
+    "SELECT a FROM t WHERE a not /* c */ BETWEEN 1 AND 2",
+    "SELECT a FROM t WHERE a NOT IN (1, 2)",
+    "SELECT a FROM t WHERE a NOT LIKE 'x%'",
+    "SELECT a FROM t WHERE a NOT %MATCHES 'p'",
+    "SELECT a FROM t WHERE a NOT %INLIST :l",
+    "SELECT a FROM t WHERE a IS NOT JSON",
+    "SELECT a FROM t WHERE NOT a IS NOT NULL",
+    "SELECT a FROM t WHERE a IN (SELECT b FROM u)",
+    "SELECT a FROM t WHERE a NOT IN (SELECT b FROM u)",
+    "SELECT a FROM t WHERE a = SOME (SELECT b FROM u)",
+    "SELECT a FROM t WHERE a NOT[ ANY (SELECT b FROM u)",
+    "SELECT a FROM t WHERE a NOT] ALL (SELECT b FROM u)",
+    "SELECT a FROM t WHERE a = 1 ! b = 2",
+    "SELECT a FROM t WHERE a = 1 & b = 2",
+    "SELECT ALL a FROM t",
+    "SELECT %NOLOCK ALL /* c */ a FROM t",
+    "SELECT ALLOWED FROM t",
+    "SELECT COUNT(ALL a), COUNT(ALL /* c */ b), COUNT(ALLOWED) FROM t",
+    "SELECT a FROM t ORDER BY a ASC, b DESC",
+    "SELECT a x FROM t u",
+    "SELECT a FROM t, u v, w",
+    "SELECT a FROM t, u RIGHT JOIN v ON u.a = v.a",
+    "SELECT a FROM {oj t LEFT OUTER JOIN u ON t.a = u.a}",
+    "SELECT a FROM t JOIN u ON t.a = u.a",
+    "SELECT a FROM t LEFT JOIN u ON t.a = u.a FULL JOIN v USING (a)",
+    "SELECT a FROM t NATURAL RIGHT JOIN u",
+    "SELECT a FROM t OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY",
+    "SELECT a FROM t FETCH FIRST 10 ROWS ONLY",
+    "SELECT a FROM t FETCH FIRST 10 /* c */ ROWS /* d */ ONLY",
+    "SELECT a FROM t OFFSET 5 ROWS",
+    "SELECT a FROM t LIMIT ALL",
+    "SELECT a FROM t LIMIT ALL OFFSET 3",
+    "SELECT a FROM t LIMIT 5 OFFSET 3 /* c */ ROWS",
+    "SELECT a FROM t WHERE a %INLIST :l SIZE (((10)))",
+    "INSERT t SET a = :x, b = 2",
+    "INSERT INTO t SET a = 1 /* c */, b = 2",
+    "INSERT %NOLOCK t (a) VALUES (1)",
+    "UPDATE t (a, b) VALUES (1, 2) WHERE c = 3",
+    "UPDATE t (a) SELECT b FROM u",
+    "DELETE t WHERE a = 1",
+    "DELETE %NOLOCK t",
+    "COMMIT WORK",
+    "ROLLBACK WORK",
+    "%INTRANS",
+    "TRUNCATE TABLE %NOLOCK t",
+    "SELECT ABS(a), COALESCE(a, b), $LISTBUILD(a, b), CURRENT_TIMESTAMP(3) FROM t",
+    "SELECT {fn ABS(a)}, {fn PI}, {fn NOW}, {fn CURDATE()} FROM t",
+    "SELECT {fn CONVERT(a, SQL_VARCHAR)}, {fn IFNULL(a, b)}, {fn USER} FROM t",
+    "SELECT {fn TIMESTAMPADD(SQL_TSI_DAY, 1, d)}, {fn SUBSTRING(a FROM 1 FOR 2)} FROM t",
+    "SELECT {d '2020-01-01'}, {t '10:00:00'}, {ts :x} FROM t",
+    "SELECT {fn /* c */ NOW() /* d */} FROM t",
+    "SELECT %SQLUPPER a, UPPER a, %EXACT (a), %TRUNCATE(a, 3), %SQLSTRING(a, (3)) FROM t",
+    "SELECT %SQLUPPER /* c */ a FROM t",
+    "SELECT POSITION(a IN b), SUBSTRING(a FROM 1 FOR 2), SUBSTRING(a FROM 1) FROM t",
+    "SELECT POSITION(a /* c */ IN /* d */ b) FROM t",
+    "SELECT DATEADD(dd, 1, d), DATEDIFF((yyyy), d, e), DATEPART(sts, d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
+    "SELECT TRIM(a), TRIM(x FROM a), TRIM(LEADING FROM a), TRIM(TRAILING a), TRIM(BOTH x FROM a) FROM t",
+    "SELECT CASE WHEN a = 1 THEN 'x' END, CASE a WHEN 1 THEN 'x' END FROM t",
+    "SELECT $H, $J, $TL, $ZH, $ZJ, $ZTS, $ZTZ, $ZV, $ZNSPACE FROM t",
+    "SELECT a _ b FROM t",
+    "SELECT SUM(a) OVER (ORDER BY b ROWS 1 PRECEDING) FROM t",
     "SELECT ALL a, b AS x, c y FROM t u, v WHERE a != 1 AND b NOT> 2 OR c IS NOT NULL",
     "SELECT %SQLUPPER a, %TRUNCATE(a, 3), POSITION(a IN b), SUBSTRING(a FROM 1 FOR 2) FROM t",
     "SELECT {fn NOW()}, {fn PI}, {fn USER}, {fn CONVERT(a, SQL_VARCHAR)}, {d '2020-01-01'} FROM t",
@@ -310,26 +128,7 @@ fn full(text: &str) -> SQL {
 }
 
 fn texts() -> impl Iterator<Item = &'static str> {
-    RULES
-        .iter()
-        .map(|(text, _)| *text)
-        .chain(STATEMENTS.iter().copied())
-}
-
-#[test]
-fn each_rule_rewrites_its_statement() {
-    for (text, core_text) in RULES {
-        assert_eq!(full(text).desugar().print(), *core_text, "{text}");
-    }
-}
-
-#[test]
-fn the_core_grammar_lacks_the_sugar() {
-    for (text, core_text) in RULES {
-        if text != core_text && !ADMITTED.contains(text) {
-            assert!(core::SQL::parse(text).is_err(), "{text}");
-        }
-    }
+    STATEMENTS.iter().copied()
 }
 
 #[test]
@@ -418,4 +217,199 @@ fn the_local_statements_round_trip_through_the_core() {
         failures.len()
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn src_nodes_map_their_print_to_their_source() {
+    let text = "SELECT a, b FROM t WHERE a = 1 ORDER BY b";
+    let (printed, mappings) = print_mapped(&SQL::parse(text).unwrap());
+    assert_eq!(printed, text);
+    assert!(mappings.iter().all(|m| m.printed == m.origin));
+    let origins: Vec<&str> = mappings.iter().map(|m| &text[m.origin.clone()]).collect();
+    for node in [
+        "a",
+        "b",
+        "t",
+        "a = 1",
+        "SELECT a, b FROM t WHERE a = 1 ORDER BY b",
+    ] {
+        assert!(origins.contains(&node), "{node} is not among {origins:?}");
+    }
+}
+
+fn selex(text: &str) -> Src<Selex> {
+    let sql = SQL::parse(text).unwrap();
+    let Stat::Selct(stat) = sql.stat.node else {
+        panic!("{text}")
+    };
+    let Some(QTerm::Selex(selex)) = stat.body.query.0.items.into_iter().next() else {
+        panic!("{text}")
+    };
+    selex
+}
+
+#[test]
+fn terms_take_their_core_shapes() {
+    let shapes: Vec<&str> = selex(
+        "SELECT CURRENT_DATE, USER, SYSDATE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP(3), USERNAME, \
+         -a, %SQLUPPER a, %TRUNCATE(a, 3), CAST(a AS INT), TIMESTAMPADD(SQL_TSI_DAY, 1, d), \
+         TIMESTAMPADD(:unit, 1, d), CONVERT(a, SQL_VARCHAR), CONVERT(VARCHAR, a), f(a) FROM t",
+    )
+    .node
+    .selst
+    .select_list
+    .0
+    .items
+    .iter()
+    .map(|item| match &item.node {
+        SelectItem::Expr {
+            expr: Scalx(terms), ..
+        } => match &terms.items[0].node {
+            Term::Builtin(_) => "builtin",
+            Term::ScalarFunction(_) => "function",
+            Term::Call(_) => "call",
+            Term::Niladic(..) => "niladic",
+            Term::Column(_) => "column",
+            Term::Unary { .. } => "unary",
+            Term::PercentUnary { .. } => "percent",
+            Term::StringOperation(_) => "string operation",
+            _ => "other",
+        },
+        SelectItem::Star(_) => "*",
+    })
+    .collect();
+    assert_eq!(
+        shapes,
+        [
+            "niladic",
+            "niladic",
+            "niladic",
+            "niladic",
+            "builtin",
+            "column",
+            "unary",
+            "percent",
+            "string operation",
+            "builtin",
+            "builtin",
+            "call",
+            "builtin",
+            "function",
+            "call",
+        ]
+    );
+}
+
+#[test]
+fn conditions_hold_their_operands() {
+    let selex = selex(
+        "SELECT a FROM t WHERE a BETWEEN 1 AND 2 AND b IS NOT NULL AND c = ANY (SELECT c FROM u) \
+         AND d NOT IN (1, 2) AND %NOINDEX e > 3",
+    );
+    let shapes: Vec<&str> = selex.node.where_clause.as_ref().unwrap().1.prefixed.0.items[0]
+        .0
+        .items
+        .iter()
+        .map(|cond| match &cond.node {
+            Cond::Predicate {
+                predicate:
+                    Predicate::Comparison {
+                        lhs,
+                        tail: Comparison::Between { lower, upper, .. },
+                        ..
+                    },
+                ..
+            } => {
+                assert_eq!(
+                    (lhs.print(), lower.print(), upper.print()),
+                    ("a".into(), "1".into(), "2".into())
+                );
+                "between"
+            }
+            Cond::Predicate {
+                predicate:
+                    Predicate::Comparison {
+                        tail:
+                            Comparison::IsNull {
+                                null_kw: Negatable::Negated(..),
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } => "is not null",
+            Cond::Predicate {
+                predicate:
+                    Predicate::Comparison {
+                        tail:
+                            Comparison::Query {
+                                op:
+                                    QuantifiedOp::Op {
+                                        quantifier: Quantifier::Any(_),
+                                        ..
+                                    },
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } => "quantified",
+            Cond::Predicate {
+                predicate:
+                    Predicate::Comparison {
+                        tail:
+                            Comparison::In {
+                                in_kw: Negatable::Negated(..),
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } => "not in",
+            Cond::Predicate {
+                noindex: Some(_),
+                predicate:
+                    Predicate::Comparison {
+                        tail: Comparison::Scalx { expr, .. },
+                        ..
+                    },
+            } => {
+                assert_eq!(expr.print(), "3");
+                "compare"
+            }
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        shapes,
+        ["between", "is not null", "quantified", "not in", "compare"]
+    );
+}
+
+#[test]
+fn malformed_nested_parens_fail_fast() {
+    let sql = format!(
+        "SELECT a FROM t WHERE {}a = = 1{}",
+        "(".repeat(20),
+        ")".repeat(20)
+    );
+    let start = std::time::Instant::now();
+    let _ = SQL::parse(&sql);
+    assert!(start.elapsed() < std::time::Duration::from_secs(1));
+}
+
+#[test]
+fn alter_table_inside_esql_parens() {
+    assert!(tygr_objectscript::cos::Command::parse("&sql(ALTER TABLE t ADD COLUMN x INT)").is_ok());
+}
+
+#[test]
+fn one_order_direction() {
+    assert!(SQL::parse("SELECT a FROM t ORDER BY a ASC DESC").is_err());
+}
+
+#[test]
+fn through_foreign_server() {
+    // Not a corpus document: the class would compile only with the server defined.
+    assert!(SQL::parse("THROUGH FOREIGN SERVER fs SELECT a FROM t").is_ok());
 }
