@@ -652,10 +652,12 @@ impl WorkspaceStruct {
                                     .collect()
                             });
                             define(definitions, name, params, false, input);
+                            dones.body_macros.remove(&name.print());
                         }
                         HMacroCommand::Def1arg { name, arg, .. } => {
                             let params = arg.as_ref().map(|arg| vec![arg.deref().print()]);
                             define(definitions, name, params, true, input);
+                            dones.body_macros.remove(&name.print());
                         }
                         HMacroCommand::Include(included_name) => {
                             let included_name = included_name.deref();
@@ -705,7 +707,9 @@ impl WorkspaceStruct {
                             self.resolve_branch(definitions, todos, dones, keep)?;
                         }
                         HMacroCommand::Undef(..) => {
-                            definitions.remove(&macro_name_in(input));
+                            let name = macro_name_in(input);
+                            definitions.remove(&name);
+                            dones.body_macros.remove(&name);
                         }
                         _ => dones.push(&unit.print(), &origin, precise),
                     },
@@ -1174,14 +1178,15 @@ impl WorkspaceStruct {
     pub(crate) fn expand_method_body<'b>(
         &self,
         uri: &str,
+        method: &str,
         header: &str,
         body: &str,
         base_definitions: &'b MacroDefinitions,
         body_macros: &BodyMacros,
-    ) -> Result<(String, SourceMap, Definitions<'b>), Diagnostic> {
+    ) -> Result<(String, SourceMap, Definitions<'b>, BodyMacros), Diagnostic> {
         let mut dones = DoneList::new();
         dones.body_macros = body_macros.methods.clone();
-        // The body's own `#define`s land in the layer too, for `check::mod` to recognize.
+        // Carried definitions join the layer; its final state is what the next method inherits.
         let mut definitions = Definitions::over(base_definitions);
         for (name, definition) in &body_macros.definitions {
             definitions.insert(name.clone(), definition.clone());
@@ -1200,11 +1205,24 @@ impl WorkspaceStruct {
             let mut todos = TodoList::new(precise_items(in_body, Origin::top_level));
             self.expand_units(&mut definitions, &mut todos, &mut dones)
         })();
+        // Measured on IRIS 2026.2: a redefinition replaces the carried definition and an `#undef`
+        // ends it, while a redefinition of a name the class defines stays in its method.
+        let mut body_macros = BodyMacros::default();
+        for (name, definition) in definitions.own() {
+            if !base_definitions.contains_key(name) {
+                let owner = dones.body_macros.get(name).cloned();
+                let owner = owner.unwrap_or_else(|| method.to_string());
+                body_macros
+                    .definitions
+                    .insert(name.clone(), definition.clone());
+                body_macros.methods.insert(name.clone(), owner);
+            }
+        }
         let map = dones.into_source_map(&text);
         match result {
             Ok(()) => {
                 let expanded_text = map.expanded_text.clone();
-                Ok((expanded_text, map, definitions))
+                Ok((expanded_text, map, definitions, body_macros))
             }
             Err(error) => Err(map.relocate_error(error, uri, SyntaxScope::MethodBody)),
         }
