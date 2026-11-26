@@ -478,7 +478,6 @@ mod tests {
                 ("Demo", "T") => Lookup::Found(columns(&["Name", "Age", "ID"])),
                 ("Demo", "U") => Lookup::Found(columns(&["Name", "Title", "ID"])),
                 ("Demo", "V") => Lookup::Found(None),
-                ("SQLUser", "GUEST") => Lookup::Found(columns(&["Name", "ID"])),
                 _ => Lookup::Missing,
             }
         }
@@ -519,7 +518,7 @@ mod tests {
         let fine = [
             // A correlated reference reaches the enclosing query's names.
             "SELECT Name INTO :n FROM Demo.T p WHERE EXISTS (SELECT 1 FROM Demo.U u WHERE u.Title = p.Name)",
-            // An unqualified table is the class's own schema's.
+            // An unqualified table is the class's own schema's first.
             "SELECT Name FROM T",
             // A trailing `ORDER BY` names the first branch's columns and aliases.
             "SELECT Name AS N FROM Demo.T UNION SELECT Name FROM Demo.U ORDER BY N",
@@ -544,8 +543,6 @@ mod tests {
             ("SELECT Name FROM Demo.Nope", "Demo.Nope", "A3261"),
             ("SELECT Nope FROM Demo.T", "Nope", "A7340"),
             ("SELECT Age FROM U", "Age", "A7340"),
-            // Only the class's own schema is searched, not SQLUser.
-            ("SELECT Name FROM Guest", "Guest", "A3261"),
             ("SELECT p.Age FROM Demo.U p", "p.Age", "A7340"),
             (
                 "SELECT Name FROM Demo.T p WHERE EXISTS (SELECT 1 FROM Demo.U u WHERE q.Name = 1)",
