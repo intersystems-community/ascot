@@ -6204,7 +6204,6 @@ pub mod leveled {
 #[allow(clippy::upper_case_acronyms)]
 mod sugar {
     use either::Either;
-    use tygr::*;
 
     use super::*;
 
