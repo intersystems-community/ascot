@@ -242,7 +242,7 @@ fn selex(text: &str) -> Src<Selex> {
     let Stat::Selct(stat) = sql.stat.node else {
         panic!("{text}")
     };
-    let Some(QTerm::Selex(selex)) = stat.body.query.0.items.into_iter().next() else {
+    let Some(QTerm::Selex(selex)) = stat.query.0.items.into_iter().next() else {
         panic!("{text}")
     };
     selex

@@ -28,14 +28,19 @@ impl Walk for WithListElement {
     }
 }
 
-// The statement around its branches; its `ORDER BY` and row limit see the first branch's names.
+// The CTEs are tables of every query under the `WITH`; the statement around its branches, whose
+// `ORDER BY` and row limit see the first branch's names.
 impl Walk for Selct {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
+        if let Some((with, _)) = &self.with_clause {
+            with.walk(w)
+        }
+        w.push_frame();
         w.current().branches = true;
         self.query.walk(w);
-        self.order.walk(w);
-        self.row_limiting_clause.walk(w);
+        self.tail.walk(w);
+        w.pop_frame();
         w.pop_frame()
     }
 }
@@ -71,9 +76,9 @@ impl Walk for Selex {
         // branch's columns and aliases, which the statement's frame holds.
         if w.in_statement() {
             w.pop_frame();
-            self.order.walk(w)
+            self.tail.walk(w)
         } else {
-            self.order.walk(w);
+            self.tail.walk(w);
             w.pop_frame()
         }
     }
@@ -164,10 +169,12 @@ impl Walk for Frmit {
     fn walk(&self, w: &mut Walker) {
         match self {
             Frmit::TVF { function, alias } => {
-                let args = (function.args.wrapped.as_ref()).map_or(0, |args| args.items.len());
+                let args = (function.args.wrapped.as_ref()).map_or(0, |(args, _)| args.items.len());
                 w.call(&function.table.0, args, SqlProcedureUse::Table);
                 w.table(None, alias.as_ref());
-                function.args.walk(w)
+                if let Some((args, _)) = &function.args.wrapped {
+                    args.walk(w)
+                }
             }
             Frmit::Query { query, alias, .. } => {
                 w.table(None, alias.as_ref());
@@ -177,6 +184,19 @@ impl Walk for Frmit {
             Frmit::JSONTable { alias, .. } => w.table(None, alias.as_ref()),
             Frmit::Table { name, alias } => w.table(Some(name_of(&name.0)), alias.as_ref()),
         }
+    }
+}
+
+impl Walk for Tail {
+    fn walk(&self, w: &mut Walker) {
+        self.order.walk(w);
+        self.limit.walk(w)
+    }
+}
+
+impl Walk for QueryExpr {
+    fn walk(&self, w: &mut Walker) {
+        self.0.walk(w)
     }
 }
 

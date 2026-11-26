@@ -2365,7 +2365,7 @@ pub mod leveled {
 
     pub type EscapeScalx = Prefix<(Kw!("ESCAPE"), Space), Scalx>;
 
-    pub type SQLSubquery = Parenthesized<Box<Query>>;
+    pub type SQLSubquery = Parenthesized<QueryExpr>;
 
     #[derive(Grammar)]
     #[tygr(name = "quantifier")]
@@ -2451,7 +2451,34 @@ pub mod leveled {
         pub where_clause: Option<(Space, WhereClause)>,
         pub group: Option<(Space, Group)>,
         pub having: Option<(Space, Having)>,
+        pub tail: Tail,
+    }
+
+    /// ORDER BY and a row limit, after a SELECT and again after the query: 2026.2 takes LIMIT 1 ORDER BY a LIMIT 2
+    /// and LIMIT 1 LIMIT 2 (the first limiting the SELECT, the second the whole), not ORDER BY a LIMIT 1 LIMIT 2,
+    /// LIMIT 1 LIMIT 2 ORDER BY a or LIMIT 1 ORDER BY a UNION (-25), and ORDER BY in an operand only with TOP.
+    #[derive(Grammar)]
+    pub struct Tail {
         pub order: Option<(Space, Order)>,
+        pub limit: Option<(Space, RowLimitingClause)>,
+    }
+
+    /// A query inside a statement, as a subquery, a CTE body, a view, an INSERT's or a CREATE TABLE AS's source:
+    /// 2026.2 takes a row limit in every operand and ORDER BY only with TOP (SQLCODE -143 otherwise).
+    #[derive(Grammar)]
+    #[tygr(validated)]
+    pub struct QueryExpr(pub Box<Query>);
+
+    impl Validate for QueryExpr {
+        const REQUIREMENT: &'static str = "order an operand only with TOP";
+        fn validate(&self) -> bool {
+            self.0.0.items.iter().all(|term| match term {
+                QTerm::Selex(selex) => {
+                    selex.node.tail.order.is_none() || selex.node.selst.top.is_some()
+                }
+                QTerm::Query(_) => true,
+            })
+        }
     }
 
     #[derive(Grammar)]
@@ -2553,9 +2580,6 @@ pub mod leveled {
         NoReduce(Kw!("%noreduce")),
         NoSVSO(Kw!("%nosvso")),
         NoTopOpt(Kw!("%notopopt")),
-        NoFactorOrderByOr(Kw!("%nofactororderbyor")),
-        NoFactorAndFromOr(Kw!("%nofactorandfromor")),
-        NoMergeEquiAgg(Kw!("%nomergeequivagg")),
         IgnoreIndices(Kw!("%ignoreindices"), Space, IndexRefs),
         IgnoreIndex(Kw!("%ignoreindex"), Space, IndexRefs),
         StartTable(Kw!("%starttable")),
@@ -2772,16 +2796,15 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "json_table")]
     pub struct JSONTable {
-        pub kw: StringEq!("JSON_TABLE"),
-        pub args: Args<(JSONApiCommonSyntax, Space, JSONTableColumnsSpec)>,
+        pub kw: Kw!("JSON_TABLE"),
+        pub args: Args<(JSONApiCommonSyntax, Option<(Space, JSONTableColumnsSpec)>)>,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "json_api_common_syntax")]
     pub struct JSONApiCommonSyntax {
-        pub context_item: StringLiteral,
-        pub sep: ArgSep,
-        pub path_spec: StringLiteral,
+        pub context_item: Scalx,
+        pub path: Option<(ArgSep, StringLiteral)>,
     }
 
     #[derive(Grammar)]
@@ -2794,7 +2817,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "json_table_columns_clause")]
     pub struct JSONTableColumnsClause {
-        pub kw: StringEq!("COLUMNS"),
+        pub kw: Kw!("COLUMNS"),
         pub columns: Args<VecSep<JSONTableRegularColumnDefinition, ArgSep>>,
     }
 
@@ -2804,13 +2827,13 @@ pub mod leveled {
         pub name: Ident,
         pub sp1: Space,
         pub data_type: Datyp,
-        pub path_clause: Option<(Space, StringEq!("PATH"), Space, StringLiteral)>,
+        pub path_clause: Option<(Space, Kw!("PATH"), Space, StringLiteral)>,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "json_table_type_clause")]
     pub struct JSONTableTypeClause {
-        pub kw: StringEq!("%TYPE"),
+        pub kw: Kw!("%TYPE"),
         pub sp1: Space,
         pub type_name: StringLiteral,
     }
@@ -2818,7 +2841,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct TVF {
         pub table: TName,
-        pub args: Parenthesized<Option<VecSep<DTSValSpec, ArgSep>>>,
+        pub args: Parenthesized<Option<(VecSep<Scalx, ArgSep>, Option<(Space, StringEq!(","))>)>>,
     }
 
     pub type WhereClause = Prefix<(Kw!("WHERE"), Space), Prdct>;
@@ -3097,10 +3120,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "value source")]
     pub enum ValueSource {
-        Query {
-            query: Box<Query>,
-            order: Option<(Space, Order)>,
-        },
+        Query(QueryExpr),
         ValSpec {
             values_kw: Kw!("VALUES"),
             sp: Space,
@@ -3326,7 +3346,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum DeclStatement {
         Explain(Explain),
-        Selct(WithStat<Selct>),
+        Selct(Selct),
     }
 
     #[derive(Grammar)]
@@ -3399,33 +3419,51 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "explain sql statement")]
     pub enum ExplainSQLStatement {
-        Select(WithStat<Selct>),
+        Select(Selct),
         Update(WithStat<Updat>),
         Delete(WithStat<Delet>),
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "selct")]
+    #[tygr(name = "selct", validated)]
     #[sugar]
     pub struct Selct {
+        pub with_clause: Option<(WithClause, Space)>,
         pub query: Query,
-        pub order: Option<(Space, Order)>,
-        pub row_limiting_clause: Option<(Space, RowLimitingClause)>,
+        pub tail: Tail,
     }
 
-    /// `LIMIT ALL` alone, which limits nothing, goes.
+    /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383), not a parenthesized later one, and
+    /// anything after a SELECT operand's ORDER BY, which is the statement's own.
+    impl Validate for Selct {
+        const REQUIREMENT: &'static str =
+            "begin with SELECT after WITH and end with its last SELECT's ORDER BY";
+        fn validate(&self) -> bool {
+            let items = &self.query.0.items;
+            let ordered =
+                |term: &QTerm| matches!(term, QTerm::Selex(s) if s.node.tail.order.is_some());
+            (self.with_clause.is_none() || matches!(items[0], QTerm::Selex(_)))
+                && (!ordered(items.last().expect("one term")) || self.tail.print().is_empty())
+        }
+    }
+
+    /// A lone SELECT's row limit before ORDER BY stands after it, reading the same (LIMIT 2 ORDER BY a DESC gives
+    /// the rows ORDER BY a DESC LIMIT 2 gives); in a union it limits its operand and stays.
     impl Desugar for Selct {
         type Core = core::Selct;
         fn desugar(&self) -> Self::Core {
-            let unlimited = |clause: &core::RowLimitingClause| {
-                matches!(clause, core::RowLimitingClause::LimitOffset { limit, offset: None }
-                    if matches!(limit.prefixed, core::LimitSpec::All(..)))
-            };
+            let mut query = self.query.desugar();
+            let mut tail = self.tail.desugar();
+            if let [core::QTerm::Selex(selex)] = &mut query.0.items[..]
+                && tail.order.is_some()
+                && tail.limit.is_none()
+            {
+                tail.limit = selex.node.tail.limit.take();
+            }
             core::Selct {
-                query: self.query.desugar(),
-                order: self.order.desugar(),
-                row_limiting_clause: (self.row_limiting_clause.desugar())
-                    .filter(|(_, clause)| !unlimited(clause)),
+                with_clause: self.with_clause.desugar(),
+                query,
+                tail,
             }
         }
     }
@@ -3899,7 +3937,7 @@ pub mod leveled {
             tname: TName,
             col_list: Option<(Space, FList1)>,
             as_kw: (Space, Kw!("AS"), Space),
-            query: Query,
+            query: QueryExpr,
             with_clause: Option<((Space, Kw!("WITH"), Space1), ViewWith)>,
         },
         AlterStatsDropFixed {
@@ -4058,7 +4096,7 @@ pub mod leveled {
             tname: TName,
             as_kw: (Space, Kw!("AS"), Space),
             with_clause: Option<(WithClause, Space)>,
-            query: Query,
+            query: QueryExpr,
             options: Option<(Space, TableOptionList)>,
         },
         CreateUser {
@@ -4828,7 +4866,7 @@ pub mod leveled {
             Space,
         ),
         pub tname: TName,
-        pub remote_statement: (Space, WithStat<Selct>),
+        pub remote_statement: (Space, Selct),
     }
 
     #[derive(Grammar)]
@@ -4841,7 +4879,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "stat")]
     pub enum Stat {
-        Selct(WithStat<Selct>),
+        Selct(Selct),
         Insert(WithStat<Insrt>),
         Update(WithStat<Updat>),
         Delete(WithStat<Delet>),

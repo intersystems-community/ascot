@@ -115,7 +115,7 @@ fn column_list(
         w.column(column)
     }
     match &values.1 {
-        query @ ValueSource::Query { .. } => w.outside(query),
+        query @ ValueSource::Query(_) => w.outside(query),
         values => values.walk(w),
     }
 }
@@ -130,10 +130,7 @@ impl Walk for SQLSetAssignment {
 impl Walk for ValueSource {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ValueSource::Query { query, order } => {
-                query.walk(w);
-                order.walk(w)
-            }
+            ValueSource::Query(query) => query.walk(w),
             ValueSource::ValSpec { spec, .. } => spec.walk(w),
         }
     }
