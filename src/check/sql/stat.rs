@@ -4,36 +4,36 @@ use tygr_objectscript::sql::core::*;
 
 use super::{SqlProcedureUse, Walk, Walker, name_of};
 
-impl Walk for Stat {
+impl Walk for Statement {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Stat::Selct(stat) => stat.walk(w),
-            Stat::Insert(stat) => stat.walk(w),
-            Stat::Update(stat) => stat.walk(w),
-            Stat::Delete(stat) => stat.walk(w),
-            Stat::Thr(thr) => w.unchecked(&thr.remote_statement.1),
-            Stat::DDL(ddl) => w.unchecked(ddl),
-            Stat::Declare(decl) => decl.walk(w),
-            Stat::OFC(ofc) => ofc.walk(w),
-            Stat::TpRelated(tp) => tp.walk(w),
-            Stat::Call(call) => call.walk(w),
-            Stat::Explain(explain) => explain.walk(w),
-            Stat::Truncate(_)
-            | Stat::SetOption(_)
-            | Stat::Grant(_)
-            | Stat::Revok(_)
-            | Stat::Setml(_)
-            | Stat::ChkPrv(_)
-            | Stat::Savepoint(_)
-            | Stat::Lock(_)
-            | Stat::Unlock(_) => {}
+            Statement::SelectStatement(stat) => stat.walk(w),
+            Statement::Insert(stat) => stat.walk(w),
+            Statement::Update(stat) => stat.walk(w),
+            Statement::Delete(stat) => stat.walk(w),
+            Statement::ThroughStatement(thr) => w.unchecked(&thr.remote_statement.1),
+            Statement::DDL(ddl) => w.unchecked(ddl),
+            Statement::Declare(decl) => decl.walk(w),
+            Statement::CursorStatement(ofc) => ofc.walk(w),
+            Statement::TransactionStatement(tp) => tp.walk(w),
+            Statement::Call(call) => call.walk(w),
+            Statement::ExplainStatement(explain) => explain.walk(w),
+            Statement::Truncate(_)
+            | Statement::SetOption(_)
+            | Statement::GrantStatement(_)
+            | Statement::RevokeStatement(_)
+            | Statement::SetMlConfigurationStatement(_)
+            | Statement::CheckPrivilegeStatement(_)
+            | Statement::Savepoint(_)
+            | Statement::Lock(_)
+            | Statement::Unlock(_) => {}
         }
     }
 }
 
 // The target table is the frame of the column list, the values, the `SET` and the `WHERE`: IRIS
 // resolves a name in a VALUES list against it as in a SET (measured on 2026.2).
-impl Walk for Insrt {
+impl Walk for InsertStatement {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
         self.target.1.walk(w);
@@ -42,11 +42,11 @@ impl Walk for Insrt {
     }
 }
 
-impl Walk for Updat {
+impl Walk for UpdateStatement {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
         match &self.body {
-            UpdatBody::Update {
+            UpdateStatementBody::Update {
                 target,
                 assignment,
                 from,
@@ -58,13 +58,15 @@ impl Walk for Updat {
                 where_clause.walk(w);
                 assignment.1.walk(w)
             }
-            UpdatBody::UpdateStats { table, .. } => w.table(Some(name_of(&table.0)), None),
+            UpdateStatementBody::UpdateStats { table, .. } => {
+                w.table(Some(name_of(&table.0)), None)
+            }
         }
         w.pop_frame()
     }
 }
 
-impl Walk for Delet {
+impl Walk for DeleteStatement {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
         self.target.1.walk(w);
@@ -74,7 +76,7 @@ impl Walk for Delet {
     }
 }
 
-impl Walk for IUDTarget {
+impl Walk for TargetTable {
     fn walk(&self, w: &mut Walker) {
         let alias = self.alias.as_ref();
         match &self.target {
@@ -87,11 +89,11 @@ impl Walk for IUDTarget {
     }
 }
 
-impl Walk for InsertValues {
+impl Walk for InsertColumnsAndSource {
     fn walk(&self, w: &mut Walker) {
         match self {
-            InsertValues::Asign(values) => values.walk(w),
-            InsertValues::DefaultValues { columns, .. } => {
+            InsertColumnsAndSource::InsertSource(values) => values.walk(w),
+            InsertColumnsAndSource::DefaultValues { columns, .. } => {
                 for column in columns.iter().flat_map(|list| list.1.wrapped.items.iter()) {
                     w.column(column)
                 }
@@ -100,16 +102,16 @@ impl Walk for InsertValues {
     }
 }
 
-impl Walk for Asign {
+impl Walk for InsertSource {
     fn walk(&self, w: &mut Walker) {
-        let Asign::ColumnList(list) = self;
+        let InsertSource::ColumnList(list) = self;
         list.walk(w)
     }
 }
 
-impl Walk for UpdateAsign {
+impl Walk for UpdateSource {
     fn walk(&self, w: &mut Walker) {
-        let UpdateAsign::ColumnList(list) = self;
+        let UpdateSource::ColumnList(list) = self;
         list.walk(w)
     }
 }
@@ -127,7 +129,7 @@ impl<Values: Walk + Grammar> Walk for ColumnList<Values> {
     }
 }
 
-impl Walk for SQLSetAssignment {
+impl Walk for SetClause {
     fn walk(&self, w: &mut Walker) {
         w.column(&self.column);
         self.value.walk(w)
@@ -149,28 +151,28 @@ impl Walk for ValuesClause {
     }
 }
 
-impl Walk for Werop {
+impl Walk for WhereCondition {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Werop::Prdct(prdct) => prdct.walk(w),
-            Werop::CurrentOf { prdct, .. } => prdct.walk(w),
+            WhereCondition::BooleanValueExpression(prdct) => prdct.walk(w),
+            WhereCondition::CurrentOf { prdct, .. } => prdct.walk(w),
         }
     }
 }
 
-impl Walk for Decl {
+impl Walk for DeclareCursor {
     fn walk(&self, w: &mut Walker) {
         w.hosts.declares = Some(self.cursor_name.1.print());
         match &self.statement {
-            DeclStatement::Explain(statement) => statement.walk(w),
-            DeclStatement::Selct(statement) => statement.walk(w),
+            DeclaredStatement::ExplainStatement(statement) => statement.walk(w),
+            DeclaredStatement::SelectStatement(statement) => statement.walk(w),
         }
     }
 }
 
-impl Walk for OFC {
+impl Walk for CursorStatement {
     fn walk(&self, w: &mut Walker) {
-        if let OFC::Fetch { cursor, targt, .. } = self {
+        if let CursorStatement::Fetch { cursor, targt, .. } = self {
             w.hosts.fetches = Some(cursor.print());
             targt.walk(w)
         }
@@ -200,7 +202,7 @@ impl Walk for CallStatement {
     }
 }
 
-impl Walk for Explain {
+impl Walk for ExplainStatement {
     fn walk(&self, w: &mut Walker) {
         for (_, option) in &self.options {
             if let ExplainOption::Into(_, _, params) = option {
@@ -213,23 +215,23 @@ impl Walk for Explain {
     }
 }
 
-impl Walk for TpRelated {
+impl Walk for TransactionStatement {
     fn walk(&self, w: &mut Walker) {
         match self {
-            TpRelated::StartTransaction(StartTP { modes, .. })
-            | TpRelated::SetTransaction(SetTP { modes, .. }) => {
+            TransactionStatement::StartTransaction(StartTransactionStatement { modes, .. })
+            | TransactionStatement::SetTransaction(SetTransactionStatement { modes, .. }) => {
                 if let Some((_, modes)) = modes {
                     modes.walk(w)
                 }
             }
-            TpRelated::Rollback(_) | TpRelated::TPOption(_) => {}
+            TransactionStatement::Rollback(_) | TransactionStatement::TransactionOption(_) => {}
         }
     }
 }
 
-impl Walk for TRMode {
+impl Walk for TransactionMode {
     fn walk(&self, w: &mut Walker) {
-        if let TRMode::DiagnosticsSize { size, .. } = self {
+        if let TransactionMode::DiagnosticsSize { size, .. } = self {
             size.walk(w)
         }
     }
@@ -309,7 +311,7 @@ impl Walk for Created {
     }
 }
 
-impl Walk for ViewDef {
+impl Walk for ViewDefinition {
     fn walk(&self, w: &mut Walker) {
         if let Some((with, _)) = &self.with_clause {
             with.walk(w)
@@ -322,7 +324,7 @@ impl Walk for TriggerBody {
     fn walk(&self, w: &mut Walker) {
         match self {
             TriggerBody::Code(body) => body.walk(w),
-            TriggerBody::Stat { stat, .. } => stat.walk(w),
+            TriggerBody::Statement { stat, .. } => stat.walk(w),
         }
     }
 }
@@ -366,7 +368,7 @@ impl Walk for ReturnValue {
     fn walk(&self, w: &mut Walker) {
         match self {
             ReturnValue::Paren(value) => value.walk(w),
-            ReturnValue::HostVar(host_var) => host_var.walk(w),
+            ReturnValue::HostVariable(host_var) => host_var.walk(w),
             ReturnValue::Literal(..) | ReturnValue::Marker(_) => {}
         }
     }
@@ -422,7 +424,7 @@ impl Walk for TrainWith {
 
 impl Walk for WithExpression {
     fn walk(&self, w: &mut Walker) {
-        if let WithExpression::Scalx(scalx) = self {
+        if let WithExpression::ValueExpression(scalx) = self {
             scalx.walk(w)
         }
     }

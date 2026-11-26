@@ -199,36 +199,39 @@ fn the_local_statements_round_trip_through_the_core() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-fn selex(text: &str) -> Ranged<Selex> {
+fn selex(text: &str) -> Ranged<QuerySpecification> {
     let sql = SQL::parse(text).unwrap();
-    let Stat::Selct(stat) = sql.stat.ranged else {
+    let Statement::SelectStatement(stat) = sql.stat.ranged else {
         panic!("{text}")
     };
-    let Some(QTerm::Selex(selex)) = stat.query.0.items.into_iter().next() else {
+    let Some(QueryTerm::QuerySpecification(selex)) = stat.query.0.items.into_iter().next() else {
         panic!("{text}")
     };
     selex
 }
 
-fn core_selex(text: &str) -> core::Selex {
-    let core::Stat::Selct(stat) = full(text).desugar().stat.ranged else {
+fn core_selex(text: &str) -> core::QuerySpecification {
+    let core::Statement::SelectStatement(stat) = full(text).desugar().stat.ranged else {
         panic!("{text}")
     };
-    let Some(core::QTerm::Selex(selex)) = stat.query.0.items.into_iter().next() else {
+    let Some(core::QueryTerm::QuerySpecification(selex)) = stat.query.0.items.into_iter().next()
+    else {
         panic!("{text}")
     };
     selex.ranged
 }
 
-fn first_term(selex: &core::Selex) -> &Ranged<core::Term> {
+fn first_term(selex: &core::QuerySpecification) -> &Ranged<core::ValueExpressionPrimary> {
     let core::SelectItem::Expr { expr, .. } = &selex.selst.1.select_list.items[0].ranged else {
         panic!("a star")
     };
     term_of(expr)
 }
 
-fn term_of<B: tygr::Grammar + Default>(expr: &core::Scalx<B>) -> &Ranged<core::Term> {
-    let core::Operand::Term(_, term) = &expr.first else {
+fn term_of<B: tygr::Grammar + Default>(
+    expr: &core::ValueExpression<B>,
+) -> &Ranged<core::ValueExpressionPrimary> {
+    let core::Operand::ValueExpressionPrimary(_, term) = &expr.first else {
         panic!("parentheses")
     };
     term
@@ -243,8 +246,8 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
         "SELECT CASE WHEN a = 1 THEN 'x' END, TRIM(b), %SQLUPPER c FROM t, u WHERE d NOT IN (1, 2)";
     let selex = core_selex(text);
     let items = &selex.selst.1.select_list.items;
-    let at = |node: &Ranged<core::Term>| &text[node.range()];
-    let core::Term::Case(case) = &first_term(&selex).ranged else {
+    let at = |node: &Ranged<core::ValueExpressionPrimary>| &text[node.range()];
+    let core::ValueExpressionPrimary::Case(case) = &first_term(&selex).ranged else {
         panic!("{text}")
     };
     let core::Implied::Spelled(_, else_clause, _) = &case.else_clause;
@@ -255,7 +258,7 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
     let core::SelectItem::Expr { expr, .. } = &items[1].ranged else {
         panic!("{text}")
     };
-    let core::Term::Builtin(trim) = &term_of(expr).ranged else {
+    let core::ValueExpressionPrimary::Builtin(trim) = &term_of(expr).ranged else {
         panic!("{text}")
     };
     let core::Builtin::Trim(_, (_, args)) = &**trim else {
@@ -266,20 +269,20 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
     let core::SelectItem::Expr { expr, .. } = &items[2].ranged else {
         panic!("{text}")
     };
-    let core::Term::Call(call) = &term_of(expr).ranged else {
+    let core::ValueExpressionPrimary::Call(call) = &term_of(expr).ranged else {
         panic!("{text}")
     };
     assert_eq!(&text[call.name.name.range()], "%SQLUPPER c");
-    let core::Tref::Join(tables) = &selex.from.as_ref().unwrap().1.tables.first;
+    let core::TableReference::Join(tables) = &selex.from.as_ref().unwrap().1.tables.first;
     assert_eq!(&text[tables.joins[0].1.range()], "u");
     let condition = &selex.where_clause.as_ref().unwrap().1.prefixed.first.first;
-    let core::Cond::Not(_, _, inner) = condition else {
+    let core::BooleanFactor::Not(_, _, inner) = condition else {
         panic!("{text}")
     };
-    let core::Cond::Paren(_, paren) = &**inner else {
+    let core::BooleanFactor::Paren(_, paren) = &**inner else {
         panic!("{text}")
     };
-    let core::Cond::Predicate(_, _, predicate) = &paren.wrapped.first.first else {
+    let core::BooleanFactor::Predicate(_, _, predicate) = &paren.wrapped.first.first else {
         panic!("{text}")
     };
     assert_eq!(&text[predicate.range()], "d NOT IN (1, 2)");
@@ -301,20 +304,20 @@ fn terms_take_their_core_shapes() {
     .map(|item| match &item.ranged {
         SelectItem::Expr {
             expr:
-                Scalx {
-                    first: Operand::Term(_, term),
+                ValueExpression {
+                    first: Operand::ValueExpressionPrimary(_, term),
                     ..
                 },
             ..
         } => match &term.ranged {
-            Term::Builtin(_) => "builtin",
-            Term::ScalarFunction(_) => "function",
-            Term::Call(_) => "call",
-            Term::Niladic(..) => "niladic",
-            Term::Column(_) => "column",
-            Term::Unary { .. } => "unary",
-            Term::PercentUnary { .. } => "percent",
-            Term::StringOperation(_) => "string operation",
+            ValueExpressionPrimary::Builtin(_) => "builtin",
+            ValueExpressionPrimary::ScalarFunction(_) => "function",
+            ValueExpressionPrimary::Call(_) => "call",
+            ValueExpressionPrimary::Niladic(..) => "niladic",
+            ValueExpressionPrimary::Column(_) => "column",
+            ValueExpressionPrimary::Unary { .. } => "unary",
+            ValueExpressionPrimary::PercentUnary { .. } => "percent",
+            ValueExpressionPrimary::StringOperation(_) => "string operation",
             _ => "other",
         },
         SelectItem::Expr { .. } => "paren",
@@ -350,68 +353,70 @@ fn conditions_hold_their_operands() {
     );
     let and = &selex.ranged.where_clause.as_ref().unwrap().1.prefixed.first;
     let conditions = (and.rest.iter()).filter_map(|and| match and {
-        AndCond::And(_, _, cond) => Some(cond),
-        AndCond::Ampersand(..) => None,
+        AndBooleanFactor::And(_, _, cond) => Some(cond),
+        AndBooleanFactor::Ampersand(..) => None,
     });
     let shapes: Vec<&str> = std::iter::once(&and.first)
         .chain(conditions)
         .map(|cond| match cond {
-            Cond::Predicate(_, noindex, predicate) => match (&noindex, &predicate.ranged) {
-                (
-                    _,
-                    Predicate::Comparison {
-                        lhs,
-                        tail: Comparison::Between { lower, upper, .. },
-                        ..
-                    },
-                ) => {
-                    assert_eq!(
-                        (lhs.print(), lower.print(), upper.print()),
-                        ("a".into(), " 1".into(), " 2".into())
-                    );
-                    "between"
+            BooleanFactor::Predicate(_, noindex, predicate) => {
+                match (&noindex, &predicate.ranged) {
+                    (
+                        _,
+                        Predicate::Comparison {
+                            lhs,
+                            tail: Comparison::Between { lower, upper, .. },
+                            ..
+                        },
+                    ) => {
+                        assert_eq!(
+                            (lhs.print(), lower.print(), upper.print()),
+                            ("a".into(), " 1".into(), " 2".into())
+                        );
+                        "between"
+                    }
+                    (
+                        _,
+                        Predicate::Comparison {
+                            tail: Comparison::IsNull { not: Some(_), .. },
+                            ..
+                        },
+                    ) => "is not null",
+                    (
+                        _,
+                        Predicate::Comparison {
+                            tail:
+                                Comparison::Query {
+                                    op:
+                                        QuantifiedCompOp::Op {
+                                            quantifier: Quantifier::Any(_),
+                                            ..
+                                        },
+                                    ..
+                                },
+                            ..
+                        },
+                    ) => "quantified",
+                    (
+                        _,
+                        Predicate::Comparison {
+                            tail: Comparison::In { not: Some(_), .. },
+                            ..
+                        },
+                    ) => "not in",
+                    (
+                        Some(_),
+                        Predicate::Comparison {
+                            tail: Comparison::ValueExpression { expr, .. },
+                            ..
+                        },
+                    ) => {
+                        assert_eq!(expr.print(), "3");
+                        "compare"
+                    }
+                    _ => "other",
                 }
-                (
-                    _,
-                    Predicate::Comparison {
-                        tail: Comparison::IsNull { not: Some(_), .. },
-                        ..
-                    },
-                ) => "is not null",
-                (
-                    _,
-                    Predicate::Comparison {
-                        tail:
-                            Comparison::Query {
-                                op:
-                                    QuantifiedOp::Op {
-                                        quantifier: Quantifier::Any(_),
-                                        ..
-                                    },
-                                ..
-                            },
-                        ..
-                    },
-                ) => "quantified",
-                (
-                    _,
-                    Predicate::Comparison {
-                        tail: Comparison::In { not: Some(_), .. },
-                        ..
-                    },
-                ) => "not in",
-                (
-                    Some(_),
-                    Predicate::Comparison {
-                        tail: Comparison::Scalx { expr, .. },
-                        ..
-                    },
-                ) => {
-                    assert_eq!(expr.print(), "3");
-                    "compare"
-                }
-                _ => "other",
-            },
+            }
             _ => "other",
         })
         .collect();

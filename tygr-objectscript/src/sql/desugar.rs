@@ -53,23 +53,23 @@ identity!(
     DelimitedIdentifierPart,
     DelimitedIdentifier,
     DottedIdent,
-    StdCharacterRepresentation,
+    CharacterRepresentation,
     StringLiteral,
     Integer,
-    SQLExponent,
+    Exponent,
     Number,
     NumberBase,
     Literal,
-    HostVar,
-    Var,
-    HostRef,
+    HostVariable,
+    VariableReference,
+    HostReference,
     Host,
     HostIdentifier,
     HostIdentifierStart,
     HostIdentifierPart,
-    Param,
+    TargetSpecification,
     Sign,
-    Sub,
+    Subscript,
     MacroArgUnit,
     OSText,
 );
@@ -245,22 +245,26 @@ pub(super) fn parenthesized<T>(wrapped: T) -> Parenthesized<T> {
     Wrap::new(Default::default(), wrapped, Default::default())
 }
 
-pub(super) fn list(args: Vec<core::Scalx>) -> core::ArgsN {
+pub(super) fn list(args: Vec<core::ValueExpression>) -> core::ArgsN {
     let items = (!args.is_empty()).then(|| commas(args));
     (Default::default(), parenthesized(items))
 }
 
 /// A term as the expression standing for the node being rewritten.
-pub(super) fn term<B: Grammar + Default>(term: core::Term) -> core::Scalx<B> {
-    core::Scalx::one(synthesized(term))
+pub(super) fn term<B: Grammar + Default>(
+    term: core::ValueExpressionPrimary,
+) -> core::ValueExpression<B> {
+    core::ValueExpression::one(synthesized(term))
 }
 
-pub(super) fn string<B: Grammar + Default>(text: &str) -> core::Scalx<B> {
+pub(super) fn string<B: Grammar + Default>(text: &str) -> core::ValueExpression<B> {
     let literal = StringLiteral(Raw::new(format!("'{text}'")));
-    term(core::Term::Literal(Literal::String(literal)))
+    term(core::ValueExpressionPrimary::Literal(Literal::String(
+        literal,
+    )))
 }
 
-pub(super) fn call(name: &str, args: Vec<core::Scalx>) -> core::Term {
+pub(super) fn call(name: &str, args: Vec<core::ValueExpression>) -> core::ValueExpressionPrimary {
     let (dollar, name) = match name.strip_prefix('$') {
         Some(name) => (Some(Default::default()), name),
         None => (None, name),
@@ -269,8 +273,8 @@ pub(super) fn call(name: &str, args: Vec<core::Scalx>) -> core::Term {
         head: Ident::simple(name),
         rest: Vec::new(),
     };
-    core::Term::Call(core::Call {
-        name: core::SQLFunctionName {
+    core::ValueExpressionPrimary::Call(core::Call {
+        name: core::FunctionName {
             dollar,
             name: synthesized(name),
         },
@@ -280,42 +284,42 @@ pub(super) fn call(name: &str, args: Vec<core::Scalx>) -> core::Term {
 
 /// The arguments a function's argument list gives the call, in order.
 pub(super) trait Arg {
-    fn args(self, out: &mut Vec<core::Scalx>);
+    fn args(self, out: &mut Vec<core::ValueExpression>);
 }
 
-pub(super) fn args(shape: impl Arg) -> Vec<core::Scalx> {
+pub(super) fn args(shape: impl Arg) -> Vec<core::ValueExpression> {
     let mut out = Vec::new();
     shape.args(&mut out);
     out
 }
 
-impl Arg for full::Scalx {
-    fn args(self, out: &mut Vec<core::Scalx>) {
+impl Arg for full::ValueExpression {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
         out.push(self.desugar())
     }
 }
 
 impl Arg for full::Operand {
-    fn args(self, out: &mut Vec<core::Scalx>) {
-        out.push(core::Scalx {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
+        out.push(core::ValueExpression {
             first: self.desugar(),
             rest: Vec::new(),
         })
     }
 }
 
-impl Arg for VecSep<full::Scalx, ArgSep> {
-    fn args(self, out: &mut Vec<core::Scalx>) {
+impl Arg for VecSep<full::ValueExpression, ArgSep> {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
         out.extend(self.items.into_iter().map(Desugar::desugar))
     }
 }
 
 impl Arg for () {
-    fn args(self, _: &mut Vec<core::Scalx>) {}
+    fn args(self, _: &mut Vec<core::ValueExpression>) {}
 }
 
 impl<T: Arg> Arg for Option<T> {
-    fn args(self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
         if let Some(arg) = self {
             arg.args(out)
         }
@@ -323,20 +327,20 @@ impl<T: Arg> Arg for Option<T> {
 }
 
 impl<K, T: Arg> Arg for (K, T) {
-    fn args(self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
         self.1.args(out)
     }
 }
 
 impl<K, T: Arg, U: Arg> Arg for (K, T, U) {
-    fn args(self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
         self.1.args(out);
         self.2.args(out)
     }
 }
 
 impl<T: Arg> Arg for Parenthesized<T> {
-    fn args(self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
         self.wrapped.args(out)
     }
 }
@@ -345,7 +349,7 @@ impl<T: Arg> Arg for Parenthesized<T> {
 macro_rules! shapes {
     ($($Shape:ident<$($T:ident),*> { $($field:ident)* })*) => {$(
         impl<$($T: Arg + Grammar),*> Arg for full::$Shape<$($T),*> {
-            fn args(self, out: &mut Vec<core::Scalx>) {
+            fn args(self, out: &mut Vec<core::ValueExpression>) {
                 $(self.$field.args(out);)*
             }
         }
@@ -363,22 +367,22 @@ shapes! {
 }
 
 /// `POSITION(a IN b)` has the arguments of `CHARINDEX(a, b)`.
-impl Arg for sugar::SQLPositionArgs {
-    fn args(self, out: &mut Vec<core::Scalx>) {
+impl Arg for sugar::PositionArgs {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
         self.needle.args(out);
         self.haystack.args(out)
     }
 }
 
 impl Arg for sugar::SubstringArgsInternal {
-    fn args(self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
         self.expr.args(out);
         self.rest.args(out)
     }
 }
 
 impl<L: Arg, R: Arg> Arg for Either<L, R> {
-    fn args(self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
         match self {
             Either::Left(left) => left.args(out),
             Either::Right(right) => right.args(out),

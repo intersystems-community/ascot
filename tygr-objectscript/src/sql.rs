@@ -109,9 +109,9 @@ char_class!(pub IsAnyChar, "any_char", |_ch| true);
 
 pub type StringEndsWith<T> = Raw<(Vec<(NotFollowedBy<T>, IsAnyChar)>, T)>;
 
-pub type SQLLineComment = Wrap<StringEq!("--"), StringOf<IsNotNL>, Option<StringEq!("\n")>>;
+pub type SimpleComment = Wrap<StringEq!("--"), StringOf<IsNotNL>, Option<StringEq!("\n")>>;
 
-pub type SQLMultiLineComment = Prefix<StringEq!("/*"), StringEndsWith<StringEq!("*/")>>;
+pub type BracketedComment = Prefix<StringEq!("/*"), StringEndsWith<StringEq!("*/")>>;
 
 char_class!(pub IsExtFuncChar, "non left paren character", |ch| {
     !matches!(ch, '(' | '$')
@@ -125,8 +125,8 @@ char_class!(pub IsNotParen, "any tokens except \"(\" and \")\"", |ch| ch
 #[tygr(hidden)]
 pub enum SpaceUnit {
     Raw(Blanks),
-    LC(SQLLineComment),
-    MC(SQLMultiLineComment),
+    LC(SimpleComment),
+    MC(BracketedComment),
 }
 
 /// Blanks and comments, possibly none: around punctuation.
@@ -529,16 +529,17 @@ impl DottedIdent {
     }
 }
 
-pub type StdStringLiteral = Wrap<StringEq!("'"), Vec<StdCharacterRepresentation>, StringEq!("'")>;
+pub type CharacterStringLiteral =
+    Wrap<StringEq!("'"), Vec<CharacterRepresentation>, StringEq!("'")>;
 
 #[derive(Grammar, Clone)]
-pub enum StdCharacterRepresentation {
+pub enum CharacterRepresentation {
     DSQ(StringEq!("''")),
     Char(IsNotSQ),
 }
 
 #[derive(Grammar, Clone)]
-pub struct StringLiteral(pub Raw<StdStringLiteral>);
+pub struct StringLiteral(pub Raw<CharacterStringLiteral>);
 
 #[derive(Grammar, Clone)]
 pub enum Sign {
@@ -554,7 +555,7 @@ pub struct Integer {
 
 #[derive(Grammar, Clone)]
 #[tygr(inline)]
-pub struct SQLExponent {
+pub struct Exponent {
     e: StringEqCI!("E"),
     sign: Option<Sign>,
     digits: StringOf1<IsDigit>,
@@ -563,7 +564,7 @@ pub struct SQLExponent {
 #[derive(Grammar, Clone)]
 pub struct Number {
     base: NumberBase,
-    exponent: Option<SQLExponent>,
+    exponent: Option<Exponent>,
 }
 
 #[derive(Grammar, Clone)]
@@ -585,7 +586,7 @@ pub enum Literal {
 }
 
 #[derive(Grammar, Clone)]
-pub struct HostVar {
+pub struct HostVariable {
     pub colon: Option<StringEq!(":")>,
     pub host: SubscriptedHost,
 }
@@ -596,24 +597,24 @@ pub enum SubscriptedHost {
     Instance {
         kind: Either<StringEq!("i%"), StringEq!("r%")>,
         name: HostIdentifier,
-        subs: Option<Parenthesized<VecSep<Sub, ArgSep>>>,
+        subs: Option<Parenthesized<VecSep<Subscript, ArgSep>>>,
     },
     Variable {
         host: Host,
-        subs: Option<SubList>,
+        subs: Option<Subscripts>,
     },
 }
 
-pub type SubList = Parenthesized<Option<VecSep<Sub, ArgSep>>>;
+pub type Subscripts = Parenthesized<Option<VecSep<Subscript, ArgSep>>>;
 
 #[derive(Grammar, Clone)]
-pub enum Var {
-    HostRef(HostRef),
+pub enum VariableReference {
+    HostReference(HostReference),
     Ident(Ident),
 }
 
 #[derive(Grammar, Clone)]
-pub struct HostRef {
+pub struct HostReference {
     pub colon: Option<StringEq!(":")>,
     pub host: Host,
 }
@@ -646,15 +647,15 @@ pub enum HostIdentifierPart {
 }
 
 #[derive(Grammar, Clone)]
-pub enum Param {
-    HostVar(HostVar),
-    Ident(Ident, Option<SubList>),
+pub enum TargetSpecification {
+    HostVariable(HostVariable),
+    Ident(Ident, Option<Subscripts>),
 }
 
 #[derive(Grammar, Clone)]
-pub enum Sub {
+pub enum Subscript {
     Literal(Literal),
-    Var(Var),
+    VariableReference(VariableReference),
 }
 
 pub type ArgSep = (Space, StringEq!(","), Space);
@@ -728,7 +729,7 @@ macro_rules! scalar_functions {
 
         const SCALAR_FUNCTIONS: &[&str] = &[$($name,)*];
 
-        fn scalar_function(function: ScalarFunction) -> core::Term {
+        fn scalar_function(function: ScalarFunction) -> core::ValueExpressionPrimary {
             match function {
                 $(ScalarFunction::$Variant(_, a) => call(scalar_functions!(@name $name $($core)?), args(a)),)*
             }
@@ -757,17 +758,17 @@ pub mod leveled {
     use super::sugar::*;
 
     #[derive(Grammar)]
-    pub struct TName(pub Ranged<DottedIdent>);
+    pub struct TableName(pub Ranged<DottedIdent>);
 
     /// A function's name, `$` before an ObjectScript function's (`$EXTRACT`, `$TSQL_SPID`).
     #[derive(Grammar)]
-    pub struct SQLFunctionName {
+    pub struct FunctionName {
         pub dollar: Option<StringEq!("$")>,
         pub name: Ranged<DottedIdent>,
     }
 
     #[derive(Grammar)]
-    pub enum Colmn {
+    pub enum ColumnReference {
         Str(Ranged<Ident>, Space, StringEq!("."), Space, StringEq!("*")),
         Arr(
             Ranged<DottedIdent>,
@@ -779,7 +780,7 @@ pub mod leveled {
     pub struct UnsignedInteger(pub StringOf1<IsDigit>);
 
     #[derive(Grammar)]
-    pub enum OrderPredicate {
+    pub enum OrderingOperator {
         Le(Spellings!(StringEq!("<="), StringEqCI!("NOT>"))),
         Ge(Spellings!(StringEq!(">="), StringEqCI!("NOT<"))),
         Gt(StringEq!(">")),
@@ -788,42 +789,42 @@ pub mod leveled {
 
     /// `[` or `NOT[`, the NOT against the bracket: 2026.2 refuses `NOT [`.
     #[derive(Grammar)]
-    pub struct ContainsPredicate {
+    pub struct ContainsOperator {
         #[sugar]
         pub not: Option<Kw!("NOT")>,
         pub op: StringEq!("["),
     }
 
     #[derive(Grammar)]
-    pub struct FollowsPredicate {
+    pub struct FollowsOperator {
         #[sugar]
         pub not: Option<Kw!("NOT")>,
         pub op: StringEq!("]"),
     }
 
     #[derive(Grammar)]
-    pub enum CmpOp {
+    pub enum CompOp {
         StartsWith(Kw!("%STARTSWITH")),
         Eq(StringEq!("=")),
         Ne(Spellings!(StringEq!("<>"), StringEq!("!="), StringEqCI!("NOT="))),
-        Ord(OrderPredicate),
-        Contains(ContainsPredicate),
-        Follows(FollowsPredicate),
+        Ord(OrderingOperator),
+        Contains(ContainsOperator),
+        Follows(FollowsOperator),
     }
 
     #[sugar]
-    impl CmpOp {
+    impl CompOp {
         fn negated(&self) -> bool {
             matches!(
                 self,
-                CmpOp::Contains(ContainsPredicate { not: Some(_), .. })
-                    | CmpOp::Follows(FollowsPredicate { not: Some(_), .. })
+                CompOp::Contains(ContainsOperator { not: Some(_), .. })
+                    | CompOp::Follows(FollowsOperator { not: Some(_), .. })
             )
         }
     }
 
     #[derive(Grammar)]
-    pub enum Term {
+    pub enum ValueExpressionPrimary {
         Macro(
             StringEq!("$$$"),
             Identifier,
@@ -833,8 +834,8 @@ pub mod leveled {
         Builtin(Box<Builtin>),
         #[sugar]
         ScalarFunction(Box<ScalarFunction>),
-        Window(Box<Window>),
-        Agg(Box<Agg>),
+        WindowFunction(Box<WindowFunction>),
+        AggregateFunction(Box<AggregateFunction>),
         Unary {
             op: Sign,
             space: Space,
@@ -842,27 +843,27 @@ pub mod leveled {
         },
         #[sugar]
         PercentUnary {
-            op: PercentOp,
+            op: PercentOperator,
             term: Box<Operand<Space1>>,
         },
         #[sugar]
         StringOperation(Box<StringOperation>),
-        XTFun(Box<XTFun>),
+        ExtrinsicFunction(Box<ExtrinsicFunction>),
         ParameterMarker(StringEq!("?")),
         Case(Box<Case>),
         #[sugar]
         OdbcEscape(Box<ODBCEscape>),
-        Query(SQLSubquery),
+        Query(Subquery),
         Niladic(Niladic),
         Call(Call),
-        Column(Colmn),
+        Column(ColumnReference),
         SpecialSystemVariable(SpecialSystemVariable),
-        HostVar(HostVar),
+        HostVariable(HostVariable),
         Null(Kw!("NULL")),
     }
 
-    impl Desugar for TermSugar {
-        type Core = core::Term;
+    impl Desugar for ValueExpressionPrimarySugar {
+        type Core = core::ValueExpressionPrimary;
         fn desugar(self) -> Self::Core {
             match self {
                 Self::ScalarFunction(f) => scalar_function(*f),
@@ -884,66 +885,70 @@ pub mod leveled {
         };
     }
 
-    fn odbc_function(function: ODBCFunc) -> core::Term {
-        calls!(ODBCFunc: function;
+    fn odbc_function(function: ODBCFunction) -> core::ValueExpressionPrimary {
+        calls!(ODBCFunction: function;
             Abs Acos Asin Atan2 Atan Ceiling Cos Cot Exp Floor Log Log10 Mod Power Sin Sqrt Tan Ascii Char
             Concat DayName DayOfMonth DayOfWeek DayOfYear Degrees Hour LCase Left Length LTrim Minute Month
             MonthName Quarter Radians Repeat Right Round RTrim Second Sign Space Substring Truncate UCase Week
             Year;
             Pi CurDate CurTime Database Now;
-            ODBCFunc::TimestampAdd(kw, a) => {
-                core::Term::Builtin(Box::new(core::Builtin::TimestampAdd(kw.desugar(), a.desugar())))
+            ODBCFunction::TimestampAdd(kw, a) => {
+                core::ValueExpressionPrimary::Builtin(Box::new(core::Builtin::TimestampAdd(kw.desugar(), a.desugar())))
             }
-            ODBCFunc::TimestampDiff(kw, a) => {
-                core::Term::Builtin(Box::new(core::Builtin::TimestampDiff(kw.desugar(), a.desugar())))
+            ODBCFunction::TimestampDiff(kw, a) => {
+                core::ValueExpressionPrimary::Builtin(Box::new(core::Builtin::TimestampDiff(kw.desugar(), a.desugar())))
             }
         )
     }
 
-    fn cast(value: DTSVal) -> core::Term {
+    fn cast(value: ODBCDateTimeLiteral) -> core::ValueExpressionPrimary {
         let cast_type = match value.dts_type {
-            DTSType::Date(_) => core::CastType::Date(Default::default()),
-            DTSType::Time(_) => core::CastType::Time(Default::default()),
-            DTSType::Timestamp(_) => core::CastType::Timestamp(Default::default()),
+            ODBCDateTimeType::Date(_) => core::CastTarget::Date(Default::default()),
+            ODBCDateTimeType::Time(_) => core::CastTarget::Time(Default::default()),
+            ODBCDateTimeType::Timestamp(_) => core::CastTarget::Timestamp(Default::default()),
         };
         let expr = term(match value.val_spec {
-            DTSValSpec::Literal(literal) => core::Term::Literal(literal),
-            DTSValSpec::HostVar(host_var) => core::Term::HostVar(host_var),
+            ODBCDateTimeValue::Literal(literal) => core::ValueExpressionPrimary::Literal(literal),
+            ODBCDateTimeValue::HostVariable(host_var) => {
+                core::ValueExpressionPrimary::HostVariable(host_var)
+            }
         });
-        let cast = core::SQLCastExpression {
+        let cast = core::CastArgs {
             expr,
             as_kw: Default::default(),
             cast_type,
         };
-        core::Term::Builtin(Box::new(core::Builtin::Cast(
+        core::ValueExpressionPrimary::Builtin(Box::new(core::Builtin::Cast(
             Default::default(),
             (Default::default(), parenthesized(Box::new(cast))),
         )))
     }
 
-    fn odbc_escape(escape: ODBCEscape) -> core::Term {
+    fn odbc_escape(escape: ODBCEscape) -> core::ValueExpressionPrimary {
         match escape.wrapped {
-            DTS::DateTime(value) => cast(value),
-            DTS::Function(function) => odbc_function(function.prefixed),
+            ODBCEscapeContent::DateTime(value) => cast(value),
+            ODBCEscapeContent::Function(function) => odbc_function(function.prefixed),
         }
     }
 
-    fn percent_call(op: PercentOp, term: Operand<Space1>) -> core::Term {
+    fn percent_call(op: PercentOperator, term: Operand<Space1>) -> core::ValueExpressionPrimary {
         let arg = match term {
             Operand::Paren(_, parens) => (*parens.wrapped).desugar(),
-            Operand::Term(_, term) => core::Scalx::one(term.desugar()),
+            Operand::ValueExpressionPrimary(_, term) => core::ValueExpression::one(term.desugar()),
         };
         call(&op.print(), vec![arg])
     }
 
-    fn string_operation(operation: StringOperation) -> core::Term {
+    fn string_operation(operation: StringOperation) -> core::ValueExpressionPrimary {
         let (expr, _, truncation) = operation.args.1.wrapped;
         let truncation = match truncation {
-            ColTrun::Const(constant) => {
+            TruncationLength::Const(constant) => {
                 let core::Nested::Bare(_, literal) = constant.desugar();
-                core::Term::Literal(literal)
+                core::ValueExpressionPrimary::Literal(literal)
             }
-            ColTrun::HostVar(host_var) => core::Term::HostVar(host_var),
+            TruncationLength::HostVariable(host_var) => {
+                core::ValueExpressionPrimary::HostVariable(host_var)
+            }
         };
         let args = vec![expr.desugar(), term(truncation)];
         call(&operation.op.print(), args)
@@ -970,7 +975,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(validated)]
     pub struct Call {
-        pub name: SQLFunctionName,
+        pub name: FunctionName,
         pub args: ArgsN,
     }
 
@@ -989,60 +994,60 @@ pub mod leveled {
     const DOLLAR_CALLS: bool = false;
 
     scalar_functions! {
-        PercentObject "%OBJECT" Args<Scalx>;
-        PercentOid "%OID" Args<Scalx>;
+        PercentObject "%OBJECT" Args<ValueExpression>;
+        PercentOid "%OID" Args<ValueExpression>;
         Similarity "%SIMILARITY" Args<RR>;
-        Abs "ABS" Args<Scalx>;
-        Ascii "ASCII" Args<Scalx>;
-        Ceiling "CEILING" Args<Scalx>;
-        CharacterLength "CHARACTER_LENGTH" Args<Scalx>;
+        Abs "ABS" Args<ValueExpression>;
+        Ascii "ASCII" Args<ValueExpression>;
+        Ceiling "CEILING" Args<ValueExpression>;
+        CharacterLength "CHARACTER_LENGTH" Args<ValueExpression>;
         CharIndex "CHARINDEX" Args<RRO>;
-        CharLength "CHAR_LENGTH" Args<Scalx>;
-        Char "CHAR" Args<Scalx>;
+        CharLength "CHAR_LENGTH" Args<ValueExpression>;
+        Char "CHAR" Args<ValueExpression>;
         Coalesce "COALESCE" Args1Plus;
         Concat "CONCAT" Args<RR>;
         Convert "CONVERT" Args<RRO>;
-        DataLength "DATALENGTH" Args<Scalx>;
-        Date "DATE" Args<Scalx>;
-        Day "DAY" Args<Scalx>;
+        DataLength "DATALENGTH" Args<ValueExpression>;
+        Date "DATE" Args<ValueExpression>;
+        Day "DAY" Args<ValueExpression>;
         Decode "DECODE" Args1Plus;
         Embedding "EMBEDDING" Args<RO>;
-        Floor "FLOOR" Args<Scalx>;
-        GetDate "GETDATE" Args<Option<Scalx>>;
-        GetUtcDate "GETUTCDATE" Args<Option<Scalx>>;
+        Floor "FLOOR" Args<ValueExpression>;
+        GetDate "GETDATE" Args<Option<ValueExpression>>;
+        GetUtcDate "GETUTCDATE" Args<Option<ValueExpression>>;
         Greatest "GREATEST" Args1Plus;
         HashBytes "HASHBYTES" Args<RR>;
         IfNull "IFNULL" Args<RRO>;
         Instr "INSTR" Args<RROO>;
         IsNull "ISNULL" Args<RR>;
-        IsNumeric "ISNUMERIC" Args<Scalx>;
-        LastDay "LAST_DAY" Args<Scalx>;
+        IsNumeric "ISNUMERIC" Args<ValueExpression>;
+        LastDay "LAST_DAY" Args<ValueExpression>;
         LastIdentity "LAST_IDENTITY" Args<()>;
-        LCase "LCASE" Args<Scalx>;
+        LCase "LCASE" Args<ValueExpression>;
         Least "LEAST" Args1Plus;
         Left "LEFT" Args<RR>;
-        Len "LEN" Args<Scalx>;
-        Length "LENGTH" Args<Scalx>;
-        Lower "LOWER" Args<Scalx>;
+        Len "LEN" Args<ValueExpression>;
+        Length "LENGTH" Args<ValueExpression>;
+        Lower "LOWER" Args<ValueExpression>;
         LPad "LPAD" Args<RRO>;
-        LTrim "LTRIM" Args<Scalx>;
-        Month "MONTH" Args<Scalx>;
+        LTrim "LTRIM" Args<ValueExpression>;
+        Month "MONTH" Args<ValueExpression>;
         Now "NOW" Args<()>;
         NullIf "NULLIF" Args<RR>;
         Nvl "NVL" Args<RR>;
         PatIndex "PATINDEX" Args<RR>;
-        Position "POSITION" Args<SQLPositionArgs> => "CHARINDEX";
+        Position "POSITION" Args<PositionArgs> => "CHARINDEX";
         Power "POWER" Args<RR>;
         Repeat "REPEAT" Args<RR>;
         Replace "REPLACE" Args<RRR>;
         Replicate "REPLICATE" Args<RR>;
-        Reverse "REVERSE" Args<Scalx>;
+        Reverse "REVERSE" Args<ValueExpression>;
         Right "RIGHT" Args<RR>;
         Round "ROUND" Args<RRO>;
         RPad "RPAD" Args<RRO>;
-        RTrim "RTRIM" Args<Scalx>;
-        Sign "SIGN" Args<Scalx>;
-        Space "SPACE" Args<Scalx>;
+        RTrim "RTRIM" Args<ValueExpression>;
+        Sign "SIGN" Args<ValueExpression>;
+        Space "SPACE" Args<ValueExpression>;
         Str "STR" Args<ROO>;
         String "STRING" Args1Plus;
         Stuff "STUFF" Args<RRRR>;
@@ -1054,11 +1059,11 @@ pub mod leveled {
         ToUSDate "TO_DATE" Args<RO>;
         ToNumber "TO_NUMBER" Args<Operand>;
         ToTimestamp "TO_TIMESTAMP" Args<RO>;
-        UCase "UCASE" Args<Scalx>;
-        UnixTimestamp "UNIX_TIMESTAMP" Args<Option<Scalx>>;
+        UCase "UCASE" Args<ValueExpression>;
+        UnixTimestamp "UNIX_TIMESTAMP" Args<Option<ValueExpression>>;
         VectorCosine "VECTOR_COSINE" Args<RR>;
         VectorDotProduct "VECTOR_DOT_PRODUCT" Args<RR>;
-        Year "YEAR" Args<Scalx>;
+        Year "YEAR" Args<ValueExpression>;
         DollarExtract "$EXTRACT" Args<ROO>;
         DollarFind "$FIND" Args<RRO>;
         DollarFNumber "$FNUMBER" Args<ROO>;
@@ -1070,7 +1075,7 @@ pub mod leveled {
         DollarListFind "$LISTFIND" Args<RRO>;
         DollarListFromString "$LISTFROMSTRING" Args<RO>;
         DollarListGet "$LISTGET" Args<ROO>;
-        DollarListLength "$LISTLENGTH" Args<Scalx>;
+        DollarListLength "$LISTLENGTH" Args<ValueExpression>;
         DollarListSame "$LISTSAME" Args<RR>;
         DollarListToString "$LISTTOSTRING" Args<RO>;
         DollarMvFmt "$MVFMT" Args<RR>;
@@ -1094,8 +1099,8 @@ pub mod leveled {
         TSqlTranCount "$TSQL_TRANCOUNT" Args<()>;
         TSqlVersion "$TSQL_VERSION" Args<()>;
         TSqlNewId "$TSQL_NEWID" Args<()>;
-        TSqlObjectId "$TSQL_OBJECT_ID" Args<Scalx>;
-        TSqlObjectName "$TSQL_OBJECT_NAME" Args<Scalx>;
+        TSqlObjectId "$TSQL_OBJECT_ID" Args<ValueExpression>;
+        TSqlObjectName "$TSQL_OBJECT_NAME" Args<ValueExpression>;
     }
 
     /// A function without parentheses; `USER` takes an empty pair too (2026.2).
@@ -1109,7 +1114,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum Scalop {
+    pub enum BinaryOperator {
         Concat(Spellings!(StringEq!("||"), StringEq!("_"))),
         Mod(StringEq!("#")),
         Mul(StringEq!("*")),
@@ -1122,22 +1127,22 @@ pub mod leveled {
     /// Terms joined by operators, the first after the blank `B` its place gives it: `Space1` after a keyword,
     /// nothing inside parentheses or after an operator.
     #[derive(Grammar)]
-    pub struct Scalx<B: Grammar + Default = ()> {
+    pub struct ValueExpression<B: Grammar + Default = ()> {
         pub first: Operand<B>,
-        pub rest: Vec<(Space, Scalop, Space, Operand)>,
+        pub rest: Vec<(Space, BinaryOperator, Space, Operand)>,
     }
 
-    impl<B: Grammar + Default> Scalx<B> {
-        pub fn one(term: Ranged<Term>) -> Self {
-            Scalx {
-                first: Operand::Term(Default::default(), term),
+    impl<B: Grammar + Default> ValueExpression<B> {
+        pub fn one(term: Ranged<ValueExpressionPrimary>) -> Self {
+            ValueExpression {
+                first: Operand::ValueExpressionPrimary(Default::default(), term),
                 rest: Vec::new(),
             }
         }
 
         /// The expression after another blank, where a rewrite places it.
-        pub fn after<C: Grammar + Default>(self) -> Scalx<C> {
-            Scalx {
+        pub fn after<C: Grammar + Default>(self) -> ValueExpression<C> {
+            ValueExpression {
                 first: self.first.after(),
                 rest: self.rest,
             }
@@ -1148,15 +1153,17 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum Operand<B: Grammar + Default = ()> {
-        Paren(Option<B>, Parenthesized<Box<Scalx>>),
-        Term(B, Ranged<Term>),
+        Paren(Option<B>, Parenthesized<Box<ValueExpression>>),
+        ValueExpressionPrimary(B, Ranged<ValueExpressionPrimary>),
     }
 
     impl<B: Grammar + Default> Operand<B> {
         pub fn after<C: Grammar + Default>(self) -> Operand<C> {
             match self {
                 Operand::Paren(_, parens) => Operand::Paren(None, parens),
-                Operand::Term(_, term) => Operand::Term(Default::default(), term),
+                Operand::ValueExpressionPrimary(_, term) => {
+                    Operand::ValueExpressionPrimary(Default::default(), term)
+                }
             }
         }
     }
@@ -1165,7 +1172,7 @@ pub mod leveled {
     pub struct Case {
         pub case_kw: Kw!("CASE"),
         pub body: CaseBody,
-        pub else_clause: Implied<SQLElseClause>,
+        pub else_clause: Implied<ElseClause>,
         pub end_kw: (Space1, Kw!("END")),
     }
 
@@ -1173,8 +1180,11 @@ pub mod leveled {
     /// rejects a searched CASE without WHEN and takes a simple one.
     #[derive(Grammar)]
     pub enum CaseBody {
-        Searched(Vec1<(Space1, When<Prdct<Space1>>)>),
-        Simple(Scalx<Space1>, Vec<(Space1, When<Scalx<Space1>>)>),
+        Searched(Vec1<(Space1, When<BooleanValueExpression<Space1>>)>),
+        Simple(
+            ValueExpression<Space1>,
+            Vec<(Space1, When<ValueExpression<Space1>>)>,
+        ),
     }
 
     #[derive(Grammar)]
@@ -1183,7 +1193,7 @@ pub mod leveled {
         pub when_kw: WhenKw,
         pub operand: T,
         pub then_kw: (Space1, ThenKw),
-        pub result: Scalx<Space1>,
+        pub result: ValueExpression<Space1>,
     }
 
     // Aliases, since a derive on a generic struct cannot see through a type macro.
@@ -1194,26 +1204,28 @@ pub mod leveled {
     /// Omitted, a CASE reads `ELSE NULL`.
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct SQLElseClause {
+    pub struct ElseClause {
         pub else_kw: Kw!("ELSE"),
-        pub result: Scalx<Space1>,
+        pub result: ValueExpression<Space1>,
     }
 
-    impl Default for SQLElseClause {
+    impl Default for ElseClause {
         fn default() -> Self {
-            SQLElseClause {
+            ElseClause {
                 else_kw: Default::default(),
-                result: Scalx::one(desugar::synthesized(Term::Null(Default::default()))),
+                result: ValueExpression::one(desugar::synthesized(ValueExpressionPrimary::Null(
+                    Default::default(),
+                ))),
             }
         }
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct SQLCastExpression {
-        pub expr: Scalx,
+    pub struct CastArgs {
+        pub expr: ValueExpression,
         pub as_kw: (Space1, Kw!("AS"), Space1),
-        pub cast_type: CastType,
+        pub cast_type: CastTarget,
     }
 
     /// A blank and the parenthesized arguments of a function; in a shape, R is a required argument
@@ -1222,7 +1234,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct RR<T1: Grammar = Scalx, T2: Grammar = Scalx> {
+    pub struct RR<T1: Grammar = ValueExpression, T2: Grammar = ValueExpression> {
         pub arg1: T1,
         pub sep1: ArgSep,
         pub arg2: T2,
@@ -1230,7 +1242,11 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct RRR<T1: Grammar = Scalx, T2: Grammar = Scalx, T3: Grammar = Scalx> {
+    pub struct RRR<
+        T1: Grammar = ValueExpression,
+        T2: Grammar = ValueExpression,
+        T3: Grammar = ValueExpression,
+    > {
         pub arg1: T1,
         pub sep1: ArgSep,
         pub arg2: T2,
@@ -1241,10 +1257,10 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct RRRR<
-        T1: Grammar = Scalx,
-        T2: Grammar = Scalx,
-        T3: Grammar = Scalx,
-        T4: Grammar = Scalx,
+        T1: Grammar = ValueExpression,
+        T2: Grammar = ValueExpression,
+        T3: Grammar = ValueExpression,
+        T4: Grammar = ValueExpression,
     > {
         pub arg1: T1,
         pub sep1: ArgSep,
@@ -1257,21 +1273,29 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct RO<T1: Grammar = Scalx, T2: Grammar = Scalx> {
+    pub struct RO<T1: Grammar = ValueExpression, T2: Grammar = ValueExpression> {
         pub arg1: T1,
         pub arg2: Option<(ArgSep, T2)>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct ROO<T1: Grammar = Scalx, T2: Grammar = Scalx, T3: Grammar = Scalx> {
+    pub struct ROO<
+        T1: Grammar = ValueExpression,
+        T2: Grammar = ValueExpression,
+        T3: Grammar = ValueExpression,
+    > {
         pub arg1: T1,
         pub rest: Option<(ArgSep, T2, Option<(ArgSep, T3)>)>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct RRO<T1: Grammar = Scalx, T2: Grammar = Scalx, T3: Grammar = Scalx> {
+    pub struct RRO<
+        T1: Grammar = ValueExpression,
+        T2: Grammar = ValueExpression,
+        T3: Grammar = ValueExpression,
+    > {
         pub arg1: T1,
         pub sep1: ArgSep,
         pub arg2: T2,
@@ -1281,10 +1305,10 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct RROO<
-        T1: Grammar = Scalx,
-        T2: Grammar = Scalx,
-        T3: Grammar = Scalx,
-        T4: Grammar = Scalx,
+        T1: Grammar = ValueExpression,
+        T2: Grammar = ValueExpression,
+        T3: Grammar = ValueExpression,
+        T4: Grammar = ValueExpression,
     > {
         pub arg1: T1,
         pub sep1: ArgSep,
@@ -1292,9 +1316,9 @@ pub mod leveled {
         pub rest: Option<(ArgSep, T3, Option<(ArgSep, T4)>)>,
     }
 
-    pub type ArgsN = Args<Option<VecSep<Scalx, ArgSep>>>;
+    pub type ArgsN = Args<Option<VecSep<ValueExpression, ArgSep>>>;
 
-    pub type Args1Plus = Args<VecSep<Scalx, ArgSep>>;
+    pub type Args1Plus = Args<VecSep<ValueExpression, ArgSep>>;
 
     /// The functions with a syntax of their own, CURRENT_TIMESTAMP and CURRENT_TIME with a precision,
     /// which the niladic would shadow, and the ODBC-only functions.
@@ -1303,30 +1327,33 @@ pub mod leveled {
         XmlConcat(XMLConcat),
         XmlElement(XMLElement),
         XmlForest(XMLForest),
-        Cast(Kw!("CAST"), Args<Box<SQLCastExpression>>),
+        Cast(Kw!("CAST"), Args<Box<CastArgs>>),
         DateAdd(Kw!("DATEADD"), Args<RRR<Nested<DatePart>>>),
         DateDiff(Kw!("DATEDIFF"), Args<RRR<Nested<DatePart>>>),
         DateName(Kw!("DATENAME"), Args<RR<Nested<DatePart>>>),
-        DatePart(Kw!("DATEPART"), Args<RR<Nested<DatePartPart>>>),
+        DatePart(Kw!("DATEPART"), Args<RR<Nested<ExtendedDatePart>>>),
         DateTrunc(Kw!("DATE_TRUNC"), Args<RR<Nested<DatePart>>>),
-        JSONArray(Kw!("JSON_ARRAY"), SQLJSONArrayArgs),
-        JSONObject(Kw!("JSON_OBJECT"), SQLJSONObjectArgs),
-        Predict(Kw!("PREDICT"), Args<SQLPredictArgs>),
-        Probability(Kw!("PROBABILITY"), Args<SQLProbabilityArgs>),
-        SearchIndex(Kw!("SEARCH_INDEX"), Args<SQLSearchIndexArgs>),
+        JSONArray(Kw!("JSON_ARRAY"), JSONArrayArgs),
+        JSONObject(Kw!("JSON_OBJECT"), JSONObjectArgs),
+        Predict(Kw!("PREDICT"), Args<PredictArgs>),
+        Probability(Kw!("PROBABILITY"), Args<ProbabilityArgs>),
+        SearchIndex(Kw!("SEARCH_INDEX"), Args<SearchIndexArgs>),
         TimestampAdd(
             Kw!("TIMESTAMPADD"),
-            Args<RRR<DoubleQuotable<TSAddInterval>>>,
+            Args<RRR<DoubleQuotable<TimestampAddInterval>>>,
         ),
         TimestampDiff(
             Kw!("TIMESTAMPDIFF"),
-            Args<RRR<DoubleQuotable<TSDiffInterval>>>,
+            Args<RRR<DoubleQuotable<TimestampDiffInterval>>>,
         ),
-        ToVector(Kw!("TO_VECTOR"), Args<ROO<Scalx, VectorDatyp, Integer>>),
+        ToVector(
+            Kw!("TO_VECTOR"),
+            Args<ROO<ValueExpression, VectorDataType, Integer>>,
+        ),
         Trim(Kw!("TRIM"), Args<TrimArgs>),
-        Odbc(ODBCOnly),
-        CurrentTimestamp(Kw!("CURRENT_TIMESTAMP"), Args<Scalx>),
-        CurrentTime(Kw!("CURRENT_TIME"), Args<Scalx>),
+        Odbc(ODBCOnlyFunctionEscape),
+        CurrentTimestamp(Kw!("CURRENT_TIMESTAMP"), Args<ValueExpression>),
+        CurrentTime(Kw!("CURRENT_TIME"), Args<ValueExpression>),
     }
 
     #[derive(Grammar)]
@@ -1339,13 +1366,28 @@ pub mod leveled {
     /// `BOTH ' ' FROM expr` in the core: a lone spec trims blanks, lone chars both ends.
     #[derive(Grammar)]
     pub enum TrimArgs {
-        SpecChars(TrimSpec, Scalx<Space1>, Space1, Kw!("FROM"), Scalx<Space1>),
+        SpecChars(
+            TrimSpecification,
+            ValueExpression<Space1>,
+            Space1,
+            Kw!("FROM"),
+            ValueExpression<Space1>,
+        ),
         #[sugar]
-        Spec(TrimSpec, Option<(Space1, Kw!("FROM"))>, Scalx<Space1>),
+        Spec(
+            TrimSpecification,
+            Option<(Space1, Kw!("FROM"))>,
+            ValueExpression<Space1>,
+        ),
         #[sugar]
-        Chars(Scalx, Space1, Kw!("FROM"), Scalx<Space1>),
+        Chars(
+            ValueExpression,
+            Space1,
+            Kw!("FROM"),
+            ValueExpression<Space1>,
+        ),
         #[sugar]
-        Bare(Scalx),
+        Bare(ValueExpression),
     }
 
     impl Desugar for TrimArgsSugar {
@@ -1363,7 +1405,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum TrimSpec {
+    pub enum TrimSpecification {
         Both(Kw!("BOTH")),
         Leading(Kw!("LEADING")),
         Trailing(Kw!("TRAILING")),
@@ -1371,15 +1413,15 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct SQLSearchIndexArgs {
+    pub struct SearchIndexArgs {
         pub table: Vec<(Ident, StringEq!("."))>,
         pub index_name: Ident,
-        pub scalx_list: Vec<(ArgSep, Scalx)>,
+        pub scalx_list: Vec<(ArgSep, ValueExpression)>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct SQLPredictArgs {
+    pub struct PredictArgs {
         pub model: Ident,
         pub use_clause: Option<(Space, PredictProbabilityUse)>,
         pub with_clause: Option<((Space, Kw!("WITH"), Space), PredictWith)>,
@@ -1390,36 +1432,46 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum PredictWith {
         Unnamed(List),
-        Named(VecSep<PredictAssign, ArgSep>),
+        Named(VecSep<PredictAssignment, ArgSep>),
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct PredictAssign {
+    pub struct PredictAssignment {
         pub ident: Ident,
         pub eq: (Space, StringEq!("="), Space),
-        pub scalx: Scalx,
+        pub scalx: ValueExpression,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct SQLProbabilityArgs {
+    pub struct ProbabilityArgs {
         pub model: Ident,
         pub use_clause: Option<(Space, PredictProbabilityUse)>,
-        pub for_clause: Option<(Space1, Prefix<Kw!("FOR"), Scalx<Space1>>)>,
+        pub for_clause: Option<(Space1, Prefix<Kw!("FOR"), ValueExpression<Space1>>)>,
         pub with_clause: Option<((Space, Kw!("WITH"), Space), PredictWith)>,
     }
 
-    pub type SQLJSONArrayArgs =
-        Args<Option<(VecSep<Scalx, ArgSep>, Option<(Space, JSONNullClause)>)>>;
+    pub type JSONArrayArgs = Args<
+        Option<(
+            VecSep<ValueExpression, ArgSep>,
+            Option<(Space, JSONNullClause)>,
+        )>,
+    >;
 
-    pub type SQLJSONObjectArgs =
-        Args<Option<(SQLJSONKeyValuePairs, Option<(Space, JSONNullClause)>)>>;
+    pub type JSONObjectArgs = Args<Option<(JSONKeyValuePairs, Option<(Space, JSONNullClause)>)>>;
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct SQLJSONKeyValuePairs(
-        pub VecSep<(Scalx, (Space, StringEq!(":"), Space), Scalx), ArgSep>,
+    pub struct JSONKeyValuePairs(
+        pub  VecSep<
+            (
+                ValueExpression,
+                (Space, StringEq!(":"), Space),
+                ValueExpression,
+            ),
+            ArgSep,
+        >,
     );
 
     #[derive(Grammar)]
@@ -1434,13 +1486,13 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct XMLElement {
         pub keyword: Kw!("XMLELEMENT"),
-        pub args: Args<(SQLXmlElementName, Vec<(ArgSep, XMLValue)>)>,
+        pub args: Args<(XMLElementName, Vec<(ArgSep, XMLValue)>)>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
     /// `NAME "x"`, `NAME` or `"x"`: 2026.2 rejects a plain identifier, `XMLELEMENT(a, b)` and `NAME foo`.
-    pub enum SQLXmlElementName {
+    pub enum XMLElementName {
         Name(Kw!("NAME"), Option<(Space, DelimitedIdentifier)>),
         Delimited(DelimitedIdentifier),
     }
@@ -1449,12 +1501,12 @@ pub mod leveled {
     pub enum XMLValue {
         Concat(Box<XMLConcat>),
         Attributes(XMLAttributes),
-        Expr(Scalx),
-        Value2(XMLValue2),
+        Expr(ValueExpression),
+        Value2(XMLContent),
     }
 
     #[derive(Grammar)]
-    pub enum XMLValue2 {
+    pub enum XMLContent {
         Element(Box<XMLElement>),
         Forest(Box<XMLForest>),
         Comment(StringEq!("<--"), StringEndsWith<StringEq!("-->")>),
@@ -1463,57 +1515,57 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct XMLAttributes {
         pub keyword: Kw!("XMLATTRIBUTES"),
-        pub attrs: Args<VecSep<SQLXmlAttribute, ArgSep>>,
+        pub attrs: Args<VecSep<XMLAttribute, ArgSep>>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct SQLXmlAttribute {
-        pub expr: Scalx,
+    pub struct XMLAttribute {
+        pub expr: ValueExpression,
         pub alias: Option<((Space1, Kw!("AS"), Space1), Ident)>,
     }
 
     #[derive(Grammar)]
     pub struct XMLForest {
         pub keyword: Kw!("XMLFOREST"),
-        pub items: Args<VecSep<SQLXmlAttribute, ArgSep>>,
+        pub items: Args<VecSep<XMLAttribute, ArgSep>>,
     }
 
     #[derive(Grammar)]
     pub struct XMLConcat {
         pub keyword: Kw!("XMLCONCAT"),
-        pub values: Args<VecSep<XMLValue2, ArgSep>>,
+        pub values: Args<VecSep<XMLContent, ArgSep>>,
     }
 
     #[derive(Grammar)]
-    pub struct XTFun {
+    pub struct ExtrinsicFunction {
         pub fun: Prefix<StringEqCI!("$$"), StringOf1<IsExtFuncChar>>,
-        pub args: Parenthesized<Option<VecSep<Scalx, ArgSep>>>,
+        pub args: Parenthesized<Option<VecSep<ValueExpression, ArgSep>>>,
     }
 
     /// `{fn CONVERT(x, SQL_TYPE)}` and `{fn IFNULL(x, y)}`, which IRIS reads otherwise without the escape (2026.2:
     /// CONVERT takes `SQL_TYPE` for a column, IFNULL(x, y) is NULL when x is not), and `{fn USER}`; `fn` is declared
     /// as ODBC spells it, so the core prints `{fn`.
-    pub type ODBCOnly =
-        Wrap<(StringEq!("{"), Space, Kw!("fn"), Space1), ODBCOnlyFunc, (Space, StringEq!("}"))>;
+    pub type ODBCOnlyFunctionEscape =
+        Wrap<(StringEq!("{"), Space, Kw!("fn"), Space1), ODBCOnlyFunction, (Space, StringEq!("}"))>;
 
     #[derive(Grammar)]
-    pub enum ODBCOnlyFunc {
-        Convert(Kw!("CONVERT"), Args<RR<Scalx, SQLConvertFunc>>),
+    pub enum ODBCOnlyFunction {
+        Convert(Kw!("CONVERT"), Args<RR<ValueExpression, ODBCConvertType>>),
         IfNull(Kw!("IFNULL"), Args<RR>),
         User(Kw!("USER"), Option<Args<()>>),
     }
 
-    pub type DQuote = StringEq!("\"");
+    pub type DoubleQuote = StringEq!("\"");
 
-    pub type SQuote = StringEq!("'");
+    pub type SingleQuote = StringEq!("'");
 
     /// A keyword bare or in double quotes, as TIMESTAMPADD's interval (2026.2 rejects `'SQL_TSI_DAY'`).
     #[derive(Grammar)]
     pub enum DoubleQuotable<K: Grammar> {
         Bare(K),
         #[sugar]
-        Quoted(Wrap<DQuote, K, DQuote>),
+        Quoted(Wrap<DoubleQuote, K, DoubleQuote>),
     }
 
     impl<K: Grammar + Desugar> Desugar for DoubleQuotableSugar<K>
@@ -1533,9 +1585,9 @@ pub mod leveled {
     pub enum Quotable<K: Grammar> {
         Bare(K),
         #[sugar]
-        Single(Wrap<SQuote, K, SQuote>),
+        Single(Wrap<SingleQuote, K, SingleQuote>),
         #[sugar]
-        Double(Wrap<DQuote, K, DQuote>),
+        Double(Wrap<DoubleQuote, K, DoubleQuote>),
     }
 
     impl<K: Grammar + Desugar> Desugar for QuotableSugar<K>
@@ -1576,18 +1628,18 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum DatePart {
         Keyword(Quotable<DatePartCommon>),
-        HostVar(HostVar),
+        HostVariable(HostVariable),
     }
 
     /// DATEPART's date part, which SQLTIMESTAMP joins.
     #[derive(Grammar)]
-    pub enum DatePartPart {
-        Keyword(Quotable<DatePartPartRaw>),
-        HostVar(HostVar),
+    pub enum ExtendedDatePart {
+        Keyword(Quotable<ExtendedDatePartKeyword>),
+        HostVariable(HostVariable),
     }
 
     #[derive(Grammar)]
-    pub enum DatePartPartRaw {
+    pub enum ExtendedDatePartKeyword {
         SqlTimestamp(Kw!("SQLTIMESTAMP", "STS")),
         Common(DatePartCommon),
     }
@@ -1610,7 +1662,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum TSAddInterval {
+    pub enum TimestampAddInterval {
         Year(Kw!("SQL_TSI_YEAR")),
         Quarter(Kw!("SQL_TSI_QUARTER")),
         Month(Kw!("SQL_TSI_MONTH")),
@@ -1623,7 +1675,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum TSDiffInterval {
+    pub enum TimestampDiffInterval {
         Year(Kw!("SQL_TSI_YEAR")),
         Month(Kw!("SQL_TSI_MONTH")),
         Week(Kw!("SQL_TSI_WEEK")),
@@ -1635,7 +1687,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum SQLConvertFunc {
+    pub enum ODBCConvertType {
         SqlTimestamp(Kw!("SQL_TIMESTAMP")),
         SqlInteger(Kw!("SQL_INTEGER")),
         SqlBigInt(Kw!("SQL_BIGINT")),
@@ -1649,19 +1701,22 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum DTSValSpec {
+    pub enum ODBCDateTimeValue {
         Literal(Literal),
-        HostVar(HostVar),
+        HostVariable(HostVariable),
     }
 
     #[derive(Grammar)]
-    pub enum Agg {
-        AggFuncArgs { fun: AggFunc, arg: Args<AggArg> },
+    pub enum AggregateFunction {
+        AggFuncArgs {
+            fun: SetFunctionType,
+            arg: Args<AggregateFunctionArgs>,
+        },
         CountStar(Kw!("COUNT"), Args<StringEq!("*")>),
     }
 
     #[derive(Grammar)]
-    pub enum AggFunc {
+    pub enum SetFunctionType {
         Avg(Kw!("AVG")),
         Count(Kw!("COUNT")),
         Sum(Kw!("SUM")),
@@ -1681,9 +1736,9 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct AggArg {
+    pub struct AggregateFunctionArgs {
         pub quantifier: SetQuantifier,
-        pub expr: Scalx,
+        pub expr: ValueExpression,
         pub foreach: Option<(Space1, Prefix<(Kw!("%FOREACH"), Space), List>)>,
         pub afterhaving: Option<(Space1, Kw!("%AFTERHAVING"))>,
     }
@@ -1700,61 +1755,65 @@ pub mod leveled {
         All(#[sugar] Option<(Kw!("ALL"), Space1)>),
     }
 
-    pub type List = Parenthesized<VecSep<Scalx, ArgSep>>;
+    pub type List = Parenthesized<VecSep<ValueExpression, ArgSep>>;
 
     #[derive(Grammar)]
-    pub struct Window {
-        pub call: WindowCall,
+    pub struct WindowFunction {
+        pub call: WindowFunctionType,
         pub over_kw: (Space1, Kw!("OVER"), Space),
         pub spec: Parenthesized<(
-            Option<WindowPartition>,
-            Option<(Space, Order)>,
-            Option<(Space, Kw!("ROWS"), Space1, WindowRows)>,
+            Option<WindowPartitionClause>,
+            Option<(Space, OrderByClause)>,
+            Option<(Space, Kw!("ROWS"), Space1, WindowFrameExtent)>,
         )>,
     }
 
     /// Each window function with its arguments: 2026.2 rejects ROW_NUMBER(a), SUM(*), SUM(a, b), NTILE(),
     /// LEAD(a, 1, 0, 1) and FIRST_VALUE(a, 1), and COUNT takes * or an aggregate's argument.
     #[derive(Grammar)]
-    pub enum WindowCall {
+    pub enum WindowFunctionType {
         RowNumber(Kw!("ROW_NUMBER"), Args<()>),
         Rank(Kw!("RANK"), Args<()>),
         DenseRank(Kw!("DENSE_RANK"), Args<()>),
         PercentRank(Kw!("PERCENT_RANK"), Args<()>),
         CumeDist(Kw!("CUME_DIST"), Args<()>),
-        NTile(Kw!("NTILE"), Args<Scalx>),
-        FirstValue(Kw!("FIRST_VALUE"), Args<Scalx>),
-        LastValue(Kw!("LAST_VALUE"), Args<Scalx>),
+        NTile(Kw!("NTILE"), Args<ValueExpression>),
+        FirstValue(Kw!("FIRST_VALUE"), Args<ValueExpression>),
+        LastValue(Kw!("LAST_VALUE"), Args<ValueExpression>),
         NthValue(Kw!("NTH_VALUE"), Args<RO>),
         Lead(Kw!("LEAD"), Args<ROO>),
         Lag(Kw!("LAG"), Args<ROO>),
-        Sum(Kw!("SUM"), Args<Scalx>),
-        Avg(Kw!("AVG"), Args<Scalx>),
-        Count(Kw!("COUNT"), Args<Either<StringEq!("*"), AggArg>>),
-        Min(Kw!("MIN"), Args<Scalx>),
-        Max(Kw!("MAX"), Args<Scalx>),
+        Sum(Kw!("SUM"), Args<ValueExpression>),
+        Avg(Kw!("AVG"), Args<ValueExpression>),
+        Count(
+            Kw!("COUNT"),
+            Args<Either<StringEq!("*"), AggregateFunctionArgs>>,
+        ),
+        Min(Kw!("MIN"), Args<ValueExpression>),
+        Max(Kw!("MAX"), Args<ValueExpression>),
     }
 
-    pub type WindowPartition = Prefix<(Kw!("PARTITION BY"), Space1), VecSep<Scalx, ArgSep>>;
+    pub type WindowPartitionClause =
+        Prefix<(Kw!("PARTITION BY"), Space1), VecSep<ValueExpression, ArgSep>>;
 
     #[derive(Grammar)]
-    pub enum WindowRows {
+    pub enum WindowFrameExtent {
         #[sugar]
-        Single(WindowRowsBound),
+        Single(WindowFrameBound),
         Between {
             between_kw: Kw!("BETWEEN"),
-            start: (Space1, WindowRowsBound),
-            end: (Space1, Kw!("AND"), Space1, WindowRowsBound),
+            start: (Space1, WindowFrameBound),
+            end: (Space1, Kw!("AND"), Space1, WindowFrameBound),
         },
     }
 
     /// `ROWS n PRECEDING` is `ROWS BETWEEN n PRECEDING AND CURRENT ROW`, the standard's lone-bound reading.
-    impl Desugar for WindowRowsSugar {
-        type Core = core::WindowRows;
+    impl Desugar for WindowFrameExtentSugar {
+        type Core = core::WindowFrameExtent;
         fn desugar(self) -> Self::Core {
             let Self::Single(bound) = self;
-            let current_row = core::WindowRowsBound::CurrentRow(Default::default());
-            core::WindowRows::Between {
+            let current_row = core::WindowFrameBound::CurrentRow(Default::default());
+            core::WindowFrameExtent::Between {
                 between_kw: Default::default(),
                 start: (Default::default(), bound.desugar()),
                 end: (
@@ -1768,7 +1827,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum WindowRowsBound {
+    pub enum WindowFrameBound {
         UnboundedPreceding(Kw!("UNBOUNDED PRECEDING")),
         UnboundedFollowing(Kw!("UNBOUNDED FOLLOWING")),
         Preceding(
@@ -1786,15 +1845,15 @@ pub mod leveled {
 
     /// Conditions joined by OR, the first after the blank `B` its place gives it.
     #[derive(Grammar)]
-    pub struct Prdct<B: Grammar + Default = ()> {
-        pub first: And<B>,
-        pub rest: Vec<OrAnd>,
+    pub struct BooleanValueExpression<B: Grammar + Default = ()> {
+        pub first: BooleanTerm<B>,
+        pub rest: Vec<OrBooleanTerm>,
     }
 
-    impl<B: Grammar + Default> Prdct<B> {
-        pub fn one(cond: Cond<B>) -> Self {
-            Prdct {
-                first: And {
+    impl<B: Grammar + Default> BooleanValueExpression<B> {
+        pub fn one(cond: BooleanFactor<B>) -> Self {
+            BooleanValueExpression {
+                first: BooleanTerm {
                     first: cond,
                     rest: Vec::new(),
                 },
@@ -1806,17 +1865,17 @@ pub mod leveled {
     /// `OR` and the conditions it joins, or `!`, which needs no blanks.
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub enum OrAnd {
-        Or(Space1, Kw!("OR"), And<Space1>),
+    pub enum OrBooleanTerm {
+        Or(Space1, Kw!("OR"), BooleanTerm<Space1>),
         #[sugar]
-        Bang(Space, StringEq!("!"), And<Space>),
+        Bang(Space, StringEq!("!"), BooleanTerm<Space>),
     }
 
-    impl Desugar for OrAndSugar {
-        type Core = core::OrAnd;
+    impl Desugar for OrBooleanTermSugar {
+        type Core = core::OrBooleanTerm;
         fn desugar(self) -> Self::Core {
             let Self::Bang(_, _, and) = self;
-            core::OrAnd::Or(
+            core::OrBooleanTerm::Or(
                 Default::default(),
                 Default::default(),
                 and.desugar().after(),
@@ -1825,14 +1884,14 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct And<B: Grammar + Default = ()> {
-        pub first: Cond<B>,
-        pub rest: Vec<AndCond>,
+    pub struct BooleanTerm<B: Grammar + Default = ()> {
+        pub first: BooleanFactor<B>,
+        pub rest: Vec<AndBooleanFactor>,
     }
 
-    impl<B: Grammar + Default> And<B> {
-        pub fn after<C: Grammar + Default>(self) -> And<C> {
-            And {
+    impl<B: Grammar + Default> BooleanTerm<B> {
+        pub fn after<C: Grammar + Default>(self) -> BooleanTerm<C> {
+            BooleanTerm {
                 first: self.first.after(),
                 rest: self.rest,
             }
@@ -1842,17 +1901,17 @@ pub mod leveled {
     /// `AND` and the condition it joins, or `&`, which needs no blanks.
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub enum AndCond {
-        And(Space1, Kw!("AND"), Cond<Space1>),
+    pub enum AndBooleanFactor {
+        And(Space1, Kw!("AND"), BooleanFactor<Space1>),
         #[sugar]
-        Ampersand(Space, StringEq!("&"), Cond<Space>),
+        Ampersand(Space, StringEq!("&"), BooleanFactor<Space>),
     }
 
-    impl Desugar for AndCondSugar {
-        type Core = core::AndCond;
+    impl Desugar for AndBooleanFactorSugar {
+        type Core = core::AndBooleanFactor;
         fn desugar(self) -> Self::Core {
             let Self::Ampersand(_, _, cond) = self;
-            core::AndCond::And(
+            core::AndBooleanFactor::And(
                 Default::default(),
                 Default::default(),
                 cond.desugar().after(),
@@ -1904,9 +1963,9 @@ pub mod leveled {
     /// and `NOT[`, negating each comparison, flips the quantifier under it: `a NOT[ ANY q` is `NOT (a [ ALL q)`.
     #[derive(Grammar)]
     #[sugar]
-    pub enum QuantifiedOp {
+    pub enum QuantifiedCompOp {
         Op {
-            op: CmpOp,
+            op: CompOp,
             sp: Space,
             quantifier: Quantifier,
         },
@@ -1914,11 +1973,11 @@ pub mod leveled {
         In { not: Not, in_kw: Kw!("IN") },
     }
 
-    impl Desugar for QuantifiedOp {
-        type Core = core::QuantifiedOp;
+    impl Desugar for QuantifiedCompOp {
+        type Core = core::QuantifiedCompOp;
         fn desugar(self) -> Self::Core {
             match self {
-                QuantifiedOp::Op { op, sp, quantifier } => core::QuantifiedOp::Op {
+                QuantifiedCompOp::Op { op, sp, quantifier } => core::QuantifiedCompOp::Op {
                     quantifier: match (op.negated(), quantifier) {
                         (false, quantifier) => quantifier.desugar(),
                         (true, Quantifier::All(_)) => core::Quantifier::Any(Default::default()),
@@ -1927,8 +1986,8 @@ pub mod leveled {
                     op: op.desugar(),
                     sp: sp.desugar(),
                 },
-                QuantifiedOp::In { .. } => core::QuantifiedOp::Op {
-                    op: core::CmpOp::Eq(Default::default()),
+                QuantifiedCompOp::In { .. } => core::QuantifiedCompOp::Op {
+                    op: core::CompOp::Eq(Default::default()),
                     sp: Default::default(),
                     quantifier: core::Quantifier::Any(Default::default()),
                 },
@@ -1942,19 +2001,21 @@ pub mod leveled {
     /// A condition after the blank `B` its place gives it: negated, in parentheses, or a predicate.
     #[derive(Grammar)]
     #[sugar]
-    pub enum Cond<B: Grammar + Default = ()> {
-        Not(B, NotKw, Box<Cond<Space1>>),
-        Paren(Option<B>, Parenthesized<Box<Prdct>>),
+    pub enum BooleanFactor<B: Grammar + Default = ()> {
+        Not(B, NotKw, Box<BooleanFactor<Space1>>),
+        Paren(Option<B>, Parenthesized<Box<BooleanValueExpression>>),
         Predicate(B, NoIndex, Ranged<Predicate>),
     }
 
-    impl<B: Grammar + Default> Cond<B> {
-        pub fn after<C: Grammar + Default>(self) -> Cond<C> {
+    impl<B: Grammar + Default> BooleanFactor<B> {
+        pub fn after<C: Grammar + Default>(self) -> BooleanFactor<C> {
             match self {
-                Cond::Not(_, not, cond) => Cond::Not(Default::default(), not, cond),
-                Cond::Paren(_, prdct) => Cond::Paren(None, prdct),
-                Cond::Predicate(_, noindex, predicate) => {
-                    Cond::Predicate(Default::default(), noindex, predicate)
+                BooleanFactor::Not(_, not, cond) => {
+                    BooleanFactor::Not(Default::default(), not, cond)
+                }
+                BooleanFactor::Paren(_, prdct) => BooleanFactor::Paren(None, prdct),
+                BooleanFactor::Predicate(_, noindex, predicate) => {
+                    BooleanFactor::Predicate(Default::default(), noindex, predicate)
                 }
             }
         }
@@ -1963,33 +2024,39 @@ pub mod leveled {
     /// A negated predicate is `NOT(predicate)`: NOT BETWEEN, NOT IN, NOT LIKE, NOT %MATCHES, NOT %INLIST,
     /// IS NOT NULL, IS NOT JSON, NOT IN (subquery), as NOT (= ANY), NOT[ and NOT], each measured on 2026.2 with
     /// NULL rows (IRIS's own NOT (… ALL …) returns the rows of … ANY … there, not those of NOT[ ANY).
-    impl<B: Grammar + Default + Desugar> Desugar for Cond<B>
+    impl<B: Grammar + Default + Desugar> Desugar for BooleanFactor<B>
     where
         B::Core: Grammar + Default,
     {
-        type Core = core::Cond<B::Core>;
+        type Core = core::BooleanFactor<B::Core>;
         fn desugar(self) -> Self::Core {
             let (before, noindex, predicate) = match self {
-                Cond::Not(before, not, cond) => {
-                    return core::Cond::Not(before.desugar(), not.desugar(), cond.desugar());
+                BooleanFactor::Not(before, not, cond) => {
+                    return core::BooleanFactor::Not(
+                        before.desugar(),
+                        not.desugar(),
+                        cond.desugar(),
+                    );
                 }
-                Cond::Paren(before, prdct) => {
-                    return core::Cond::Paren(before.desugar(), prdct.desugar());
+                BooleanFactor::Paren(before, prdct) => {
+                    return core::BooleanFactor::Paren(before.desugar(), prdct.desugar());
                 }
-                Cond::Predicate(before, noindex, predicate) => (before, noindex, predicate),
+                BooleanFactor::Predicate(before, noindex, predicate) => {
+                    (before, noindex, predicate)
+                }
             };
             let negated = negated(&predicate);
             let (before, noindex, predicate) =
                 (before.desugar(), noindex.desugar(), predicate.desugar());
             if !negated {
-                return core::Cond::Predicate(before, noindex, predicate);
+                return core::BooleanFactor::Predicate(before, noindex, predicate);
             }
-            let plain = core::Cond::Predicate((), noindex, predicate);
-            let parenthesized = parenthesized(Box::new(core::Prdct::one(plain)));
-            core::Cond::Not(
+            let plain = core::BooleanFactor::Predicate((), noindex, predicate);
+            let parenthesized = parenthesized(Box::new(core::BooleanValueExpression::one(plain)));
+            core::BooleanFactor::Not(
                 before,
                 Default::default(),
-                Box::new(core::Cond::Paren(None, parenthesized)),
+                Box::new(core::BooleanFactor::Paren(None, parenthesized)),
             )
         }
     }
@@ -2008,12 +2075,12 @@ pub mod leveled {
             | InList { not, .. }
             | IsJSON { not, .. }
             | Query {
-                op: QuantifiedOp::In { not, .. },
+                op: QuantifiedCompOp::In { not, .. },
                 ..
             } => not.is_some(),
-            Scalx { op, .. }
+            ValueExpression { op, .. }
             | Query {
-                op: QuantifiedOp::Op { op, .. },
+                op: QuantifiedCompOp::Op { op, .. },
                 ..
             } => op.negated(),
             _ => false,
@@ -2025,30 +2092,30 @@ pub mod leveled {
     pub enum Predicate {
         Exists {
             exists_kw: (Kw!("EXISTS"), Space),
-            query: SQLSubquery,
+            query: Subquery,
         },
         ForSomeElement {
             kw: (Kw!("FOR SOME %ELEMENT"), Space),
-            column: Parenthesized<Colmn>,
+            column: Parenthesized<ColumnReference>,
             label: Option<Alias>,
-            predicate: (Space, Parenthesized<Box<Prdct>>),
+            predicate: (Space, Parenthesized<Box<BooleanValueExpression>>),
         },
         ForSome {
             kw: (Kw!("FOR SOME"), Space),
-            tables: Parenthesized<Tables>,
-            condition: Option<(Space, Parenthesized<Box<ForCnd>>)>,
+            tables: Parenthesized<TableReferenceList>,
+            condition: Option<(Space, Parenthesized<Box<ForSomeCondition>>)>,
         },
         Comparison {
-            lhs: Scalx,
+            lhs: ValueExpression,
             sp: Space,
             tail: Comparison,
         },
     }
 
     #[derive(Grammar)]
-    pub enum ForCnd {
-        Prdct(Prdct),
-        GroupHaving(Option<(Group, Space1)>, Having),
+    pub enum ForSomeCondition {
+        BooleanValueExpression(BooleanValueExpression),
+        GroupHaving(Option<(GroupByClause, Space1)>, HavingClause),
     }
 
     #[doc(hidden)]
@@ -2056,11 +2123,11 @@ pub mod leveled {
     pub enum Comparison {
         StarEq {
             op: (StringEqCI!("*="), Space),
-            scalx: Scalx,
+            scalx: ValueExpression,
         },
         EqStar {
             op: (StringEqCI!("=*"), Space),
-            scalx: Scalx,
+            scalx: ValueExpression,
         },
         IsNull {
             is_kw: (Kw!("IS"), Space1),
@@ -2072,28 +2139,28 @@ pub mod leveled {
             #[sugar]
             not: Not,
             between_kw: Kw!("BETWEEN"),
-            lower: Scalx<Space1>,
+            lower: ValueExpression<Space1>,
             and_kw: (Space1, Kw!("AND")),
-            upper: Scalx<Space1>,
+            upper: ValueExpression<Space1>,
         },
         Like {
             #[sugar]
             not: Not,
             like_kw: Kw!("LIKE"),
-            pattern: Scalx<Space1>,
-            escape: Option<(Space1, EscapeScalx)>,
+            pattern: ValueExpression<Space1>,
+            escape: Option<(Space1, EscapeClause)>,
         },
         Matches {
             #[sugar]
             not: Not,
             matches_kw: Kw!("%MATCHES"),
-            pattern: Scalx<Space1>,
-            escape: Option<(Space1, EscapeScalx)>,
+            pattern: ValueExpression<Space1>,
+            escape: Option<(Space1, EscapeClause)>,
         },
         Query {
-            op: QuantifiedOp,
+            op: QuantifiedCompOp,
             sp: Space,
-            expr: SQLSubquery,
+            expr: Subquery,
         },
         In {
             #[sugar]
@@ -2105,17 +2172,17 @@ pub mod leveled {
             #[sugar]
             not: Not,
             inlist_kw: Kw!("%INLIST"),
-            list_expr: Scalx<Space1>,
+            list_expr: ValueExpression<Space1>,
             size_hint: Option<(Space1, SizeHint)>,
         },
         Find {
             find_kw: Kw!("%FIND"),
-            expr: Scalx<Space1>,
+            expr: ValueExpression<Space1>,
             size_hint: Option<(Space1, SizeHint)>,
         },
         Pattern {
             pattern_kw: Kw!("%PATTERN"),
-            pattern: Scalx<Space1>,
+            pattern: ValueExpression<Space1>,
         },
         IsJSON {
             format: Option<(Kw!("FORMAT JSON"), Space1)>,
@@ -2129,16 +2196,16 @@ pub mod leveled {
             kw: Either<Kw!("%CONTAINSTERM"), Kw!("%CONTAINS")>,
             list: Args1Plus,
         },
-        Scalx {
-            op: CmpOp,
+        ValueExpression {
+            op: CompOp,
             space: Space,
-            expr: Scalx,
+            expr: ValueExpression,
         },
     }
 
-    pub type EscapeScalx = Prefix<Kw!("ESCAPE"), Scalx<Space1>>;
+    pub type EscapeClause = Prefix<Kw!("ESCAPE"), ValueExpression<Space1>>;
 
-    pub type SQLSubquery = Parenthesized<QueryExpr>;
+    pub type Subquery = Parenthesized<QueryExpression>;
 
     #[derive(Grammar)]
     pub enum Quantifier {
@@ -2166,40 +2233,40 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct WithListElement {
         pub name: Ident,
-        pub columns: Option<(Space, FList1)>,
+        pub columns: Option<(Space, ColumnNameList)>,
         pub as_kw: (Space1, Kw!("AS"), Space),
-        pub query: SQLSubquery,
+        pub query: Subquery,
     }
 
     #[derive(Grammar)]
-    pub struct Selex {
+    pub struct QuerySpecification {
         pub kw: Kw!("SELECT"),
         pub options: Vec<(Space1, SelectOption)>,
-        pub selst: (Space1, Selst),
+        pub selst: (Space1, SelectList),
         pub from: Option<(Space1, FromClause)>,
         pub where_clause: Option<(Space1, WhereClause)>,
-        pub group: Option<(Space1, Group)>,
-        pub having: Option<(Space1, Having)>,
-        pub tail: Option<(Space1, Either<Order, RowLimitingClause>)>,
+        pub group: Option<(Space1, GroupByClause)>,
+        pub having: Option<(Space1, HavingClause)>,
+        pub tail: Option<(Space1, Either<OrderByClause, RowLimitingClause>)>,
     }
 
     /// ORDER BY and a row limit after the query, as a SELECT takes one of the two (ORDER BY with TOP alone, see
-    /// QueryExpr): 2026.2 reads LIMIT 1 ORDER BY a LIMIT 2 and LIMIT 1 LIMIT 2, the first limit the SELECT's and
+    /// QueryExpression): 2026.2 reads LIMIT 1 ORDER BY a LIMIT 2 and LIMIT 1 LIMIT 2, the first limit the SELECT's and
     /// the second the whole's, not ORDER BY a LIMIT 1 LIMIT 2, LIMIT 1 LIMIT 2 ORDER BY a or LIMIT 1 ORDER BY a UNION.
     #[derive(Grammar)]
     pub struct Tail {
-        pub order: Option<(Space1, Order)>,
+        pub order: Option<(Space1, OrderByClause)>,
         pub limit: Option<(Space1, RowLimitingClause)>,
     }
 
     impl Query {
-        fn ordered_with_top(terms: &[QTerm]) -> bool {
+        fn ordered_with_top(terms: &[QueryTerm]) -> bool {
             terms.iter().all(|term| match term {
-                QTerm::Selex(selex) => {
+                QueryTerm::QuerySpecification(selex) => {
                     !matches!(selex.ranged.tail, Some((_, Either::Left(_))))
                         || selex.ranged.selst.1.top.is_some()
                 }
-                QTerm::Query(_) => true,
+                QueryTerm::Query(_) => true,
             })
         }
 
@@ -2207,7 +2274,7 @@ pub mod leveled {
         /// (2026.2 takes a second ORDER BY after SELECT TOP 1 a FROM t ORDER BY a DESC, and after a UNION's last
         /// operand with TOP, whose ORDER BY sees that operand's aliases alone), one without TOP the whole's.
         pub(super) fn ends_with_statement_order(&self) -> bool {
-            matches!(self.0.items.last(), Some(QTerm::Selex(selex))
+            matches!(self.0.items.last(), Some(QueryTerm::QuerySpecification(selex))
                 if selex.ranged.selst.1.top.is_none() && matches!(selex.ranged.tail, Some((_, Either::Left(_)))))
         }
 
@@ -2220,9 +2287,9 @@ pub mod leveled {
         }
     }
 
-    fn take_statement_order(query: &mut core::Query) -> Option<(Space1, core::Order)> {
+    fn take_statement_order(query: &mut core::Query) -> Option<(Space1, core::OrderByClause)> {
         let is_statement = query.ends_with_statement_order();
-        let Some(core::QTerm::Selex(last)) = query.0.items.last_mut() else {
+        let Some(core::QueryTerm::QuerySpecification(last)) = query.0.items.last_mut() else {
             return None;
         };
         let Some((space, Either::Left(order))) = last.ranged.tail.take_if(|_| is_statement) else {
@@ -2238,7 +2305,7 @@ pub mod leveled {
     #[sugar]
     pub struct SourceQuery {
         pub query: Query,
-        pub order: Option<(Space1, Order)>,
+        pub order: Option<(Space1, OrderByClause)>,
     }
 
     impl Validate for SourceQuery {
@@ -2261,9 +2328,9 @@ pub mod leveled {
     /// and ORDER BY only with TOP (SQLCODE -143 otherwise).
     #[derive(Grammar)]
     #[tygr(validated)]
-    pub struct QueryExpr(pub Box<Query>);
+    pub struct QueryExpression(pub Box<Query>);
 
-    impl Validate for QueryExpr {
+    impl Validate for QueryExpression {
         const REQUIREMENT: &'static str = "order an operand only with TOP";
         fn validate(&self) -> bool {
             Query::ordered_with_top(&self.0.0.items)
@@ -2283,7 +2350,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum TopSpec {
+    pub enum TopSpecification {
         All(Space1, Kw!("ALL")),
         Count(Nested<Count, Space1>),
     }
@@ -2294,22 +2361,25 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum Count {
         Literal(Literal),
-        HostVar(HostVar),
+        HostVariable(HostVariable),
         Marker(StringEq!("?")),
     }
 
     #[derive(Grammar)]
-    pub struct Selst {
+    pub struct SelectList {
         pub quantifier: SetQuantifier,
-        pub top: Option<(Kw!("TOP"), TopSpec, Space1)>,
+        pub top: Option<(Kw!("TOP"), TopSpecification, Space1)>,
         pub select_list: VecSep<Ranged<SelectItem>, ArgSep>,
-        pub targt: Option<(Space1, Targt)>,
+        pub targt: Option<(Space1, IntoClause)>,
     }
 
     #[derive(Grammar)]
     pub enum SelectItem {
         Star(StringEq!("*")),
-        Expr { expr: Scalx, alias: Option<Alias> },
+        Expr {
+            expr: ValueExpression,
+            alias: Option<Alias>,
+        },
     }
 
     // The blank stays inside the alias, so that a reference without one consumes nothing after it.
@@ -2320,25 +2390,25 @@ pub mod leveled {
         pub name: SQLIdentNonKeyword,
     }
 
-    pub type Into = Prefix<(Kw!("INTO"), Space), VecSep<Param, ArgSep>>;
+    pub type Into = Prefix<(Kw!("INTO"), Space), VecSep<TargetSpecification, ArgSep>>;
 
     #[derive(Grammar)]
-    pub enum Targt {
+    pub enum IntoClause {
         Into(Into),
         IntoList(IntoList),
     }
 
-    pub type IntoList = Prefix<Kw!("%INTOLIST"), (Space, Param)>;
+    pub type IntoList = Prefix<Kw!("%INTOLIST"), (Space, TargetSpecification)>;
 
     #[derive(Grammar)]
     pub struct FromClause {
         pub keyword: Kw!("FROM"),
-        pub options: Vec<(Space1, FromOpt)>,
-        pub tables: Tables<Space1>,
+        pub options: Vec<(Space1, FromOption)>,
+        pub tables: TableReferenceList<Space1>,
     }
 
     #[derive(Grammar)]
-    pub enum FromOpt {
+    pub enum FromOption {
         InOrder(Kw!("%INORDER")),
         Full(Kw!("%FULL")),
         DbugFull(Kw!("%DBUGFULL")),
@@ -2370,35 +2440,36 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct IndexRef {
         pub table: Vec<(Ident, Space, StringEq!("."), Space)>,
-        pub index: IndexSpec,
+        pub index: IndexSpecification,
     }
 
     #[derive(Grammar)]
-    pub enum IndexSpec {
+    pub enum IndexSpecification {
         Name(Ident),
         All(StringEq!("*")),
     }
 
     #[derive(Grammar)]
     #[sugar]
-    pub struct Tables<B: Grammar + Default = ()> {
-        pub first: Tref<B>,
+    pub struct TableReferenceList<B: Grammar + Default = ()> {
+        pub first: TableReference<B>,
         #[sugar]
-        pub rest: Vec<(ArgSep, Ranged<Tref>)>,
+        pub rest: Vec<(ArgSep, Ranged<TableReference>)>,
     }
 
     /// `FROM a, b` is `FROM a CROSS JOIN b`, b's own joins after it: 2026.2 reads `t, u LEFT JOIN v ON …` as
     /// `t CROSS JOIN u LEFT JOIN v ON …`, the ON seeing u and v alone, the rows of `t CROSS JOIN (u LEFT JOIN v …)`.
-    impl<B: Grammar + Default + Desugar> Desugar for Tables<B>
+    impl<B: Grammar + Default + Desugar> Desugar for TableReferenceList<B>
     where
         B::Core: Grammar + Default,
     {
-        type Core = core::Tables<B::Core>;
+        type Core = core::TableReferenceList<B::Core>;
         fn desugar(self) -> Self::Core {
-            let core::Tref::Join(mut first) = self.first.desugar();
+            let core::TableReference::Join(mut first) = self.first.desugar();
             for (_, entry) in self.rest {
-                let core::Tref::Join(core::JTab { formit, joins }) = entry.ranged.desugar();
-                let table = Box::new(core::JTab {
+                let core::TableReference::Join(core::JoinedTable { formit, joins }) =
+                    entry.ranged.desugar();
+                let table = Box::new(core::JoinedTable {
                     formit: formit.after(),
                     joins: Vec::new(),
                 });
@@ -2412,44 +2483,49 @@ pub mod leveled {
                 ));
                 first.joins.extend(joins);
             }
-            core::Tables {
-                first: core::Tref::Join(first),
+            core::TableReferenceList {
+                first: core::TableReference::Join(first),
             }
         }
     }
 
     /// A joined table, or the ODBC `{oj …}` escape around one, after the blank `B` its place gives it.
     #[derive(Grammar)]
-    pub enum Tref<B: Grammar + Default = ()> {
-        Join(JTab<B>),
+    pub enum TableReference<B: Grammar + Default = ()> {
+        Join(JoinedTable<B>),
         #[sugar]
-        OJSyntax(Option<B>, OjOpen, JTab<Space1>, OjClose),
+        OJSyntax(
+            Option<B>,
+            OuterJoinEscapeOpen,
+            JoinedTable<Space1>,
+            OuterJoinEscapeClose,
+        ),
     }
 
-    pub type OjOpen = (StringEq!("{"), Space, Kw!("OJ"));
+    pub type OuterJoinEscapeOpen = (StringEq!("{"), Space, Kw!("OJ"));
 
-    pub type OjClose = (Space, StringEq!("}"));
+    pub type OuterJoinEscapeClose = (Space, StringEq!("}"));
 
-    impl<B: Grammar + Default + Desugar> Desugar for TrefSugar<B>
+    impl<B: Grammar + Default + Desugar> Desugar for TableReferenceSugar<B>
     where
         B::Core: Grammar + Default,
     {
-        type Core = core::Tref<B::Core>;
+        type Core = core::TableReference<B::Core>;
         fn desugar(self) -> Self::Core {
             let Self::OJSyntax(_, _, table, _) = self;
-            core::Tref::Join(table.desugar().after())
+            core::TableReference::Join(table.desugar().after())
         }
     }
 
     #[derive(Grammar)]
-    pub struct JTab<B: Grammar + Default = ()> {
-        pub formit: Frmit<B>,
+    pub struct JoinedTable<B: Grammar + Default = ()> {
+        pub formit: TablePrimary<B>,
         pub joins: Vec<(Space1, Ranged<Join>)>,
     }
 
-    impl<B: Grammar + Default> JTab<B> {
-        pub fn after<C: Grammar + Default>(self) -> JTab<C> {
-            JTab {
+    impl<B: Grammar + Default> JoinedTable<B> {
+        pub fn after<C: Grammar + Default>(self) -> JoinedTable<C> {
+            JoinedTable {
                 formit: self.formit.after(),
                 joins: self.joins,
             }
@@ -2460,45 +2536,45 @@ pub mod leveled {
     pub enum Join {
         Cross {
             cross_kw: Kw!("CROSS JOIN"),
-            table: Box<JTab<Space1>>,
+            table: Box<JoinedTable<Space1>>,
         },
         Natural {
             natural_kw: (Kw!("NATURAL"), Space1),
-            jtype: JType,
+            jtype: JoinType,
             join_kw: Kw!("JOIN"),
-            table: Box<JTab<Space1>>,
+            table: Box<JoinedTable<Space1>>,
         },
         Qualified {
-            jtype: JType,
+            jtype: JoinType,
             join_kw: Kw!("JOIN"),
-            table: Box<JTab<Space1>>,
-            spec: (Space1, JSpec),
+            table: Box<JoinedTable<Space1>>,
+            spec: (Space1, JoinSpecification),
         },
     }
 
     /// LEFT, RIGHT or FULL, OUTER implied, or INNER, the join without a word.
     #[derive(Grammar)]
-    pub enum JType {
-        Outer(Side, Implied<Kw!("OUTER")>, Space1),
+    pub enum JoinType {
+        Outer(OuterJoinType, Implied<Kw!("OUTER")>, Space1),
         Inner(#[sugar] Option<(Kw!("INNER"), Space1)>),
     }
 
     #[derive(Grammar)]
-    pub enum Side {
+    pub enum OuterJoinType {
         Left(Kw!("LEFT")),
         Right(Kw!("RIGHT")),
         Full(Kw!("FULL")),
     }
 
     #[derive(Grammar)]
-    pub enum JSpec {
+    pub enum JoinSpecification {
         On {
             on_kw: Kw!("ON"),
-            condition: Prdct<Space1>,
+            condition: BooleanValueExpression<Space1>,
         },
         Using {
             using_kw: (Kw!("USING"), Space),
-            flist1: FList1,
+            flist1: ColumnNameList,
         },
     }
 
@@ -2506,27 +2582,31 @@ pub mod leveled {
 
     /// A table reference after the blank `B` its place gives it, which a parenthesis may do without.
     #[derive(Grammar)]
-    pub enum Frmit<B: Grammar + Default = ()> {
+    pub enum TablePrimary<B: Grammar + Default = ()> {
         JSONTable(B, JSONTable, Option<Alias>),
-        TVF(B, TVF, Option<Alias>),
-        Table(B, TName, Option<Alias>),
-        Lateral(B, LateralKw, Space, SQLSubquery, Option<Alias>),
-        Query(Option<B>, SQLSubquery, Option<Alias>),
-        JTab(Option<B>, Parenthesized<Box<JTab>>),
+        TableValuedFunction(B, TableValuedFunction, Option<Alias>),
+        Table(B, TableName, Option<Alias>),
+        Lateral(B, LateralKw, Space, Subquery, Option<Alias>),
+        Query(Option<B>, Subquery, Option<Alias>),
+        JoinedTable(Option<B>, Parenthesized<Box<JoinedTable>>),
     }
 
-    impl<B: Grammar + Default> Frmit<B> {
-        pub fn after<C: Grammar + Default>(self) -> Frmit<C> {
+    impl<B: Grammar + Default> TablePrimary<B> {
+        pub fn after<C: Grammar + Default>(self) -> TablePrimary<C> {
             let before = Default::default();
             match self {
-                Frmit::JSONTable(_, table, alias) => Frmit::JSONTable(before, table, alias),
-                Frmit::TVF(_, function, alias) => Frmit::TVF(before, function, alias),
-                Frmit::Table(_, name, alias) => Frmit::Table(before, name, alias),
-                Frmit::Lateral(_, kw, sp, query, alias) => {
-                    Frmit::Lateral(before, kw, sp, query, alias)
+                TablePrimary::JSONTable(_, table, alias) => {
+                    TablePrimary::JSONTable(before, table, alias)
                 }
-                Frmit::Query(_, query, alias) => Frmit::Query(None, query, alias),
-                Frmit::JTab(_, table) => Frmit::JTab(None, table),
+                TablePrimary::TableValuedFunction(_, function, alias) => {
+                    TablePrimary::TableValuedFunction(before, function, alias)
+                }
+                TablePrimary::Table(_, name, alias) => TablePrimary::Table(before, name, alias),
+                TablePrimary::Lateral(_, kw, sp, query, alias) => {
+                    TablePrimary::Lateral(before, kw, sp, query, alias)
+                }
+                TablePrimary::Query(_, query, alias) => TablePrimary::Query(None, query, alias),
+                TablePrimary::JoinedTable(_, table) => TablePrimary::JoinedTable(None, table),
             }
         }
     }
@@ -2534,17 +2614,20 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct JSONTable {
         pub kw: Kw!("JSON_TABLE"),
-        pub args: Args<(JSONApiCommonSyntax, Option<(Space, JSONTableColumnsSpec)>)>,
+        pub args: Args<(
+            JSONApiCommonSyntax,
+            Option<(Space, JSONTableColumnsSpecification)>,
+        )>,
     }
 
     #[derive(Grammar)]
     pub struct JSONApiCommonSyntax {
-        pub context_item: Scalx,
+        pub context_item: ValueExpression,
         pub path: Option<(ArgSep, StringLiteral)>,
     }
 
     #[derive(Grammar)]
-    pub enum JSONTableColumnsSpec {
+    pub enum JSONTableColumnsSpecification {
         Columns(JSONTableColumnsClause),
         Type(JSONTableTypeClause),
     }
@@ -2559,7 +2642,7 @@ pub mod leveled {
     pub struct JSONTableRegularColumnDefinition {
         pub name: Ident,
         pub sp1: Space1,
-        pub data_type: Datyp,
+        pub data_type: DataType,
         pub path_clause: Option<(Space1, Kw!("PATH"), Space, StringLiteral)>,
     }
 
@@ -2571,47 +2654,53 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct TVF {
-        pub table: TName,
-        pub args: Parenthesized<Option<(VecSep<Scalx, ArgSep>, Option<(Space, StringEq!(","))>)>>,
+    pub struct TableValuedFunction {
+        pub table: TableName,
+        pub args: Parenthesized<
+            Option<(
+                VecSep<ValueExpression, ArgSep>,
+                Option<(Space, StringEq!(","))>,
+            )>,
+        >,
     }
 
-    pub type WhereClause = Prefix<Kw!("WHERE"), Prdct<Space1>>;
+    pub type WhereClause = Prefix<Kw!("WHERE"), BooleanValueExpression<Space1>>;
 
-    pub type Group = Prefix<(Kw!("GROUP BY"), Space1), VecSep<Scalx, ArgSep>>;
+    pub type GroupByClause = Prefix<(Kw!("GROUP BY"), Space1), VecSep<ValueExpression, ArgSep>>;
 
-    pub type Having = Prefix<Kw!("HAVING"), Prdct<Space1>>;
+    pub type HavingClause = Prefix<Kw!("HAVING"), BooleanValueExpression<Space1>>;
 
-    pub type Order = Prefix<(Kw!("ORDER BY"), Space1), VecSep<Ranged<Ordir>, ArgSep>>;
+    pub type OrderByClause =
+        Prefix<(Kw!("ORDER BY"), Space1), VecSep<Ranged<SortSpecification>, ArgSep>>;
 
     #[derive(Grammar)]
-    pub struct Ordir {
-        pub expr: Ordit,
-        pub direction: Direction,
+    pub struct SortSpecification {
+        pub expr: SortKey,
+        pub direction: OrderingSpecification,
     }
 
     /// DESC, or ASC, the order without a word.
     #[derive(Grammar)]
-    pub enum Direction {
+    pub enum OrderingSpecification {
         Desc(Space1, Kw!("DESC")),
         Asc(#[sugar] Option<(Space1, Kw!("ASC"))>),
     }
 
     #[derive(Grammar)]
-    pub enum Ordit {
+    pub enum SortKey {
         Literal(Literal),
-        Scalx(Scalx),
+        ValueExpression(ValueExpression),
     }
 
     #[derive(Grammar)]
     pub enum RowLimitingClause {
         LimitOffset {
-            limit: Prefix<Kw!("LIMIT"), LimitSpec>,
-            offset: Option<(Space1, Offset)>,
+            limit: Prefix<Kw!("LIMIT"), LimitSpecification>,
+            offset: Option<(Space1, ResultOffsetClause)>,
         },
         #[sugar]
         OffsetFetch {
-            offset: Offset,
+            offset: ResultOffsetClause,
             fetch: Option<(Space1, Fetch)>,
         },
         #[sugar]
@@ -2623,13 +2712,13 @@ pub mod leveled {
     impl Desugar for RowLimitingClauseSugar {
         type Core = core::RowLimitingClause;
         fn desugar(self) -> Self::Core {
-            let count = |fetch: Fetch| core::LimitSpec::Val(fetch.valspec.desugar());
+            let count = |fetch: Fetch| core::LimitSpecification::Val(fetch.valspec.desugar());
             let (limit, offset) = match self {
                 Self::OffsetFetch { offset, fetch } => (
                     fetch.map_or_else(Default::default, |(_, fetch)| count(fetch)),
                     Some((
                         Default::default(),
-                        core::Offset {
+                        core::ResultOffsetClause {
                             kw: Default::default(),
                             count: offset.count.desugar(),
                         },
@@ -2645,24 +2734,24 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum LimitSpec {
+    pub enum LimitSpecification {
         All(Space1, Kw!("ALL")),
         Val(Nested<Count, Space1>),
     }
 
     #[derive(Grammar)]
-    pub struct Offset {
+    pub struct ResultOffsetClause {
         pub kw: Kw!("OFFSET"),
         pub count: Nested<Count, Space1>,
         #[sugar]
-        pub rows: Option<(Space1, RowRowsInline)>,
+        pub rows: Option<(Space1, RowOrRows)>,
     }
 
     #[derive(Grammar)]
-    pub struct Query(pub VecSep<QTerm, (Space, QueryOp, Space)>);
+    pub struct Query(pub VecSep<QueryTerm, (Space, QueryOperator, Space)>);
 
     #[derive(Grammar)]
-    pub enum QueryOp {
+    pub enum QueryOperator {
         Union {
             union_kw: Kw!("UNION"),
             all: Option<(Space1, Kw!("ALL"))>,
@@ -2673,18 +2762,18 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum QTerm {
-        Query(SQLSubquery),
-        Selex(Ranged<Selex>),
+    pub enum QueryTerm {
+        Query(Subquery),
+        QuerySpecification(Ranged<QuerySpecification>),
     }
     #[derive(Grammar)]
-    pub struct Insrt {
+    pub struct InsertStatement {
         pub insert_kw: Kw!("INSERT"),
         pub or_update: Option<(Space1, Kw!("OR UPDATE"))>,
         pub options: Vec<(Space1, InsertOption)>,
         pub into_kw: Implied<Kw!("INTO")>,
-        pub target: (Space, IUDTarget),
-        pub values: (Space, InsertValues),
+        pub target: (Space, TargetTable),
+        pub values: (Space, InsertColumnsAndSource),
     }
 
     /// The options INSERT, UPDATE and DELETE share, a repeated one allowed; INSERT adds %NOSTREAM, UPDATE %NOSTREAM
@@ -2729,7 +2818,7 @@ pub mod leveled {
     pub type OptionWord = UpdateOption;
 
     #[derive(Grammar)]
-    pub struct IUDTarget {
+    pub struct TargetTable {
         pub not_option: NotFollowedBy<OptionWord>,
         pub target: TableOrSubquery,
         pub alias: Option<Alias>,
@@ -2737,16 +2826,16 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum TableOrSubquery {
-        Table(TName),
-        Subquery(SQLSubquery),
+        Table(TableName),
+        Subquery(Subquery),
     }
 
     /// An INSERT's values, or DEFAULT VALUES after an optional column list (2026.2 takes both).
     #[derive(Grammar)]
-    pub enum InsertValues {
-        Asign(Asign),
+    pub enum InsertColumnsAndSource {
+        InsertSource(InsertSource),
         DefaultValues {
-            columns: Option<SQLColumnListParen>,
+            columns: Option<ColumnReferenceList>,
             kw: (Space, Kw!("DEFAULT VALUES")),
         },
     }
@@ -2754,18 +2843,18 @@ pub mod leveled {
     /// The values of an INSERT: a column list with VALUES, a query or a host array, or SET assignments, which read
     /// as the column list with VALUES.
     #[derive(Grammar)]
-    pub enum Asign {
+    pub enum InsertSource {
         #[sugar]
-        SetList(SetList),
+        SetClauseList(SetClauseList),
         ColumnList(ColumnList<ValueSource>),
     }
 
-    impl Desugar for AsignSugar {
-        type Core = core::Asign;
+    impl Desugar for InsertSourceSugar {
+        type Core = core::InsertSource;
         fn desugar(self) -> Self::Core {
-            let Self::SetList(list) = self;
+            let Self::SetClauseList(list) = self;
             let core::ColumnList { columns, values } = list.desugar();
-            core::Asign::ColumnList(core::ColumnList {
+            core::InsertSource::ColumnList(core::ColumnList {
                 columns,
                 values: (values.0, core::ValueSource::Values(values.1)),
             })
@@ -2774,29 +2863,29 @@ pub mod leveled {
 
     /// The values of an UPDATE: a column list with VALUES, or SET assignments reading the same.
     #[derive(Grammar)]
-    pub enum UpdateAsign {
+    pub enum UpdateSource {
         #[sugar]
-        SetList(SetList),
+        SetClauseList(SetClauseList),
         ColumnList(ColumnList<ValuesClause>),
     }
 
-    impl Desugar for UpdateAsignSugar {
-        type Core = core::UpdateAsign;
+    impl Desugar for UpdateSourceSugar {
+        type Core = core::UpdateSource;
         fn desugar(self) -> Self::Core {
-            let Self::SetList(list) = self;
-            core::UpdateAsign::ColumnList(list.desugar())
+            let Self::SetClauseList(list) = self;
+            core::UpdateSource::ColumnList(list.desugar())
         }
     }
 
     /// `SET a = 1, b = 2` reads as `(a, b) VALUES (1, 2)`.
     #[derive(Grammar)]
     #[sugar]
-    pub struct SetList {
+    pub struct SetClauseList {
         pub set_kw: Kw!("SET"),
-        pub assignments: (Space1, VecSep<Ranged<SQLSetAssignment>, ArgSep>),
+        pub assignments: (Space1, VecSep<Ranged<SetClause>, ArgSep>),
     }
 
-    impl Desugar for SetList {
+    impl Desugar for SetClauseList {
         type Core = core::ColumnList<core::ValuesClause>;
         fn desugar(self) -> Self::Core {
             let (columns, values) = (self.assignments.1.items.into_iter())
@@ -2805,7 +2894,7 @@ pub mod leveled {
             let values = core::ValuesClause {
                 values_kw: Default::default(),
                 sp: Default::default(),
-                spec: core::ValSpec::Scalx(parenthesized(commas(values))),
+                spec: core::ValuesSpecification::ValueExpression(parenthesized(commas(values))),
             };
             core::ColumnList {
                 columns: Some((Default::default(), parenthesized(commas(columns)))),
@@ -2816,13 +2905,13 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct ColumnList<Values: Grammar> {
-        pub columns: Option<SQLColumnListParen>,
+        pub columns: Option<ColumnReferenceList>,
         pub values: (Space, Values),
     }
 
-    pub type FList1 = Parenthesized<VecSep<Ident, ArgSep>>;
+    pub type ColumnNameList = Parenthesized<VecSep<Ident, ArgSep>>;
 
-    pub type SQLColumnListParen = Args<VecSep<Colmn, ArgSep>>;
+    pub type ColumnReferenceList = Args<VecSep<ColumnReference, ArgSep>>;
 
     #[derive(Grammar)]
     pub enum ValueSource {
@@ -2834,64 +2923,67 @@ pub mod leveled {
     pub struct ValuesClause {
         pub values_kw: Kw!("VALUES"),
         pub sp: Space,
-        pub spec: ValSpec,
+        pub spec: ValuesSpecification,
     }
 
     #[derive(Grammar)]
-    pub enum ValSpec {
-        Scalx(List),
-        Var { var: Var, subs: SubList },
+    pub enum ValuesSpecification {
+        ValueExpression(List),
+        VariableReference {
+            var: VariableReference,
+            subs: Subscripts,
+        },
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct SQLSetAssignment {
-        pub column: Colmn,
+    pub struct SetClause {
+        pub column: ColumnReference,
         pub eq: (Space, StringEq!("="), Space),
-        pub value: Scalx,
+        pub value: ValueExpression,
     }
 
     #[derive(Grammar)]
-    pub struct Updat {
+    pub struct UpdateStatement {
         pub update_kw: Kw!("UPDATE"),
-        pub body: UpdatBody,
+        pub body: UpdateStatementBody,
     }
 
     #[derive(Grammar)]
-    pub enum UpdatBody {
+    pub enum UpdateStatementBody {
         UpdateStats {
             stats_kw: (Space1, Kw!("STATISTICS"), Space1),
-            table: TName,
+            table: TableName,
         },
         Update {
             options: Vec<(Space1, UpdateOption)>,
-            target: (Space, IUDTarget),
-            assignment: (Space, UpdateAsign),
+            target: (Space, TargetTable),
+            assignment: (Space, UpdateSource),
             from: Option<(Space1, FromClause)>,
-            where_clause: Option<(Space1, WhereWerop)>,
+            where_clause: Option<(Space1, DmlWhereClause)>,
         },
     }
 
-    pub type WhereWerop = Prefix<Kw!("WHERE"), Werop>;
+    pub type DmlWhereClause = Prefix<Kw!("WHERE"), WhereCondition>;
 
     #[derive(Grammar)]
-    pub enum Werop {
-        Prdct(Prdct<Space1>),
+    pub enum WhereCondition {
+        BooleanValueExpression(BooleanValueExpression<Space1>),
         CurrentOf {
             current_of: (Space1, Kw!("CURRENT OF"), Space1),
             ident: Ident,
-            prdct: Option<(Space1, Prefix<Kw!("AND"), Prdct<Space1>>)>,
+            prdct: Option<(Space1, Prefix<Kw!("AND"), BooleanValueExpression<Space1>>)>,
         },
     }
 
     #[derive(Grammar)]
-    pub struct Delet {
+    pub struct DeleteStatement {
         pub delete_kw: Kw!("DELETE"),
         pub options: Vec<(Space1, DmlOption)>,
         pub from_kw: Implied<Kw!("FROM")>,
-        pub target: (Space, IUDTarget),
+        pub target: (Space, TargetTable),
         pub from: Option<(Space1, FromClause)>,
-        pub where_clause: Option<(Space1, WhereWerop)>,
+        pub where_clause: Option<(Space1, DmlWhereClause)>,
     }
 
     /// 2026.2 refuses `TRUNCATE TABLE %NOLOCK %NOLOCK t` and takes the options in any order.
@@ -2900,7 +2992,7 @@ pub mod leveled {
     pub struct Truncate {
         pub kw: Kw!("TRUNCATE TABLE"),
         pub options: Vec<(Space1, TruncateOption)>,
-        pub table: (Space1, NotFollowedBy<OptionWord>, TName),
+        pub table: (Space1, NotFollowedBy<OptionWord>, TableName),
         pub alias: Option<Alias>,
     }
 
@@ -2913,34 +3005,34 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub enum TpRelated {
-        StartTransaction(StartTP),
-        SetTransaction(SetTP),
-        Rollback(RollB),
-        TPOption(TPOption),
+    pub enum TransactionStatement {
+        StartTransaction(StartTransactionStatement),
+        SetTransaction(SetTransactionStatement),
+        Rollback(RollbackStatement),
+        TransactionOption(TransactionOption),
     }
 
     /// `START TRANSACTION [%COMMITMODE mode] [[,] modes]`: 2026.2 takes the comma before the modes with and
     /// without a commit mode, and between two modes alone; omitted, %COMMITMODE keeps the process's.
     #[derive(Grammar)]
-    pub struct StartTP {
+    pub struct StartTransactionStatement {
         pub kw: Kw!("START TRANSACTION"),
-        pub commit_mode: Option<(Space1, CommitModeSpec)>,
+        pub commit_mode: Option<(Space1, CommitModeClause)>,
         pub modes: TransactionModes,
     }
 
     /// `[START] SET TRANSACTION`, as START TRANSACTION (2026.2 takes START SET TRANSACTION).
     #[derive(Grammar)]
-    pub struct SetTP {
+    pub struct SetTransactionStatement {
         pub start_kw: Option<(Kw!("START"), Space1)>,
         pub kw: Kw!("SET TRANSACTION"),
-        pub commit_mode: Option<(Space1, CommitModeSpec)>,
+        pub commit_mode: Option<(Space1, CommitModeClause)>,
         pub modes: TransactionModes,
     }
 
-    pub type CommitModeSpec = Prefix<Kw!("%COMMITMODE"), (Space1, CommitMode)>;
+    pub type CommitModeClause = Prefix<Kw!("%COMMITMODE"), (Space1, CommitMode)>;
 
-    pub type TransactionModes = Option<(Either<ArgSep, Space1>, VecSep<TRMode, ArgSep>)>;
+    pub type TransactionModes = Option<(Either<ArgSep, Space1>, VecSep<TransactionMode, ArgSep>)>;
 
     #[derive(Grammar)]
     pub enum CommitMode {
@@ -2950,10 +3042,10 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum TRMode {
+    pub enum TransactionMode {
         IsolationLevel {
             kw: (Kw!("ISOLATION LEVEL"), Space1),
-            level: GetLevel,
+            level: LevelOfIsolation,
         },
         ReadOnly(Kw!("READ ONLY")),
         ReadWrite(Kw!("READ WRITE")),
@@ -2964,7 +3056,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum GetLevel {
+    pub enum LevelOfIsolation {
         ReadUncommitted(Kw!("READ UNCOMMITTED")),
         ReadCommitted(Kw!("READ COMMITTED")),
         ReadVerified(Kw!("READ VERIFIED")),
@@ -2973,7 +3065,7 @@ pub mod leveled {
 
     /// ROLLBACK [WORK] or ROLLBACK TO SAVEPOINT name; 2026.2 rejects ROLLBACK WORK TO SAVEPOINT.
     #[derive(Grammar)]
-    pub enum RollB {
+    pub enum RollbackStatement {
         Savepoint(Kw!("ROLLBACK TO SAVEPOINT"), Space1, Ident),
         Bare(Kw!("ROLLBACK"), #[sugar] Option<(Space1, Kw!("WORK"))>),
     }
@@ -2989,7 +3081,7 @@ pub mod leveled {
     pub struct LockTable<Verb: Grammar, Tail: Grammar> {
         pub kw: Verb,
         pub table_kw: Option<(Space1, Kw!("TABLE"))>,
-        pub table: (Space, TName),
+        pub table: (Space, TableName),
         pub mode: (
             Space,
             Kw!("IN"),
@@ -3004,7 +3096,7 @@ pub mod leveled {
     pub type Wait = (Kw!("WAIT"), Space, Literal);
 
     #[derive(Grammar)]
-    pub enum TPOption {
+    pub enum TransactionOption {
         InTransaction(Kw!("%INTRANSACTION", "%INTRANS")),
         BegTrans(Kw!("%BEGTRANS")),
         Commit {
@@ -3015,7 +3107,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum OFC {
+    pub enum CursorStatement {
         Open {
             open_kw: (Kw!("OPEN"), Space1),
             cursor: Ident,
@@ -3023,7 +3115,7 @@ pub mod leveled {
         Fetch {
             fetch_kw: (Kw!("FETCH"), Space1),
             cursor: Ident,
-            targt: Option<(Space, Targt)>,
+            targt: Option<(Space, IntoClause)>,
         },
         Close {
             close_kw: (Kw!("CLOSE"), Space1),
@@ -3032,22 +3124,22 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct Decl {
+    pub struct DeclareCursor {
         pub declare_kw: Kw!("DECLARE"),
         pub cursor_name: (Space1, Ident),
         pub cursor_kw: (Space1, Kw!("CURSOR FOR"), Space1),
-        pub statement: DeclStatement,
-        pub for_clause: Option<(Space1, Prefix<(Kw!("FOR"), Space1), UpdtCls>)>,
+        pub statement: DeclaredStatement,
+        pub for_clause: Option<(Space1, Prefix<(Kw!("FOR"), Space1), UpdatabilityClause>)>,
     }
 
     #[derive(Grammar)]
-    pub enum DeclStatement {
-        Explain(Explain),
-        Selct(Selct),
+    pub enum DeclaredStatement {
+        ExplainStatement(ExplainStatement),
+        SelectStatement(SelectStatement),
     }
 
     #[derive(Grammar)]
-    pub enum UpdtCls {
+    pub enum UpdatabilityClause {
         ReadOnly(Kw!("READ ONLY")),
         Update(Kw!("UPDATE")),
     }
@@ -3056,7 +3148,7 @@ pub mod leveled {
     #[tygr(validated)]
     pub struct CallStatement {
         pub output: Option<(
-            Either<HostVar, StringEq!("?")>,
+            Either<HostVariable, StringEq!("?")>,
             Space,
             StringEq!("="),
             Space,
@@ -3068,7 +3160,7 @@ pub mod leveled {
             Space1,
             Kw!("USING"),
             Space,
-            VecSep<Either<HostVar, StringEq!("?")>, ArgSep>,
+            VecSep<Either<HostVariable, StringEq!("?")>, ArgSep>,
         )>,
     }
 
@@ -3084,17 +3176,17 @@ pub mod leveled {
             .all(|scalx| {
                 let rest = scalx.rest.iter().map(|(.., operand)| operand);
                 std::iter::once(&scalx.first).chain(rest).all(|operand| {
-                    !matches!(operand, Operand::Term(_, term) if matches!(term.ranged, Term::Column(_)))
+                    !matches!(operand, Operand::ValueExpressionPrimary(_, term) if matches!(term.ranged, ValueExpressionPrimary::Column(_)))
                 })
             })
         }
     }
 
     #[derive(Grammar)]
-    pub struct Explain {
+    pub struct ExplainStatement {
         pub explain_kw: Kw!("EXPLAIN"),
         pub options: Vec<(Space1, ExplainOption)>,
-        pub statement: (Space, Box<Ranged<Stat>>),
+        pub statement: (Space, Box<Ranged<Statement>>),
     }
 
     /// EXPLAIN's options, in any order (2026.2 takes EXPLAIN STAT ALT, EXPLAIN INTO :x ALT and INTO :x, :y).
@@ -3103,13 +3195,13 @@ pub mod leveled {
         Alt(Kw!("ALT")),
         All(Kw!("ALL")),
         Stat(Kw!("STAT", "STATS")),
-        Into(Kw!("INTO"), Space, VecSep<Param, ArgSep>),
+        Into(Kw!("INTO"), Space, VecSep<TargetSpecification, ArgSep>),
     }
 
     #[derive(Grammar)]
     #[tygr(validated)]
     #[sugar]
-    pub struct Selct {
+    pub struct SelectStatement {
         pub with_clause: Option<(WithClause, Space)>,
         pub query: Query,
         pub tail: Tail,
@@ -3117,11 +3209,12 @@ pub mod leveled {
 
     /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383), not a parenthesized later one, and
     /// orders the rows as `Query::orders_once` says.
-    impl Validate for Selct {
+    impl Validate for SelectStatement {
         const REQUIREMENT: &'static str =
             "begin with SELECT after WITH, order an operand only with TOP and its rows once";
         fn validate(&self) -> bool {
-            (self.with_clause.is_none() || matches!(self.query.0.items[0], QTerm::Selex(_)))
+            (self.with_clause.is_none()
+                || matches!(self.query.0.items[0], QueryTerm::QuerySpecification(_)))
                 && self.query.orders_once(self.tail.order.is_some())
         }
     }
@@ -3129,15 +3222,15 @@ pub mod leveled {
     /// The statement's ORDER BY, parsed as its last operand's, stands in the Tail, and a lone SELECT's row limit
     /// before ORDER BY after it, reading the same (LIMIT 2 ORDER BY a DESC gives the rows ORDER BY a DESC LIMIT 2
     /// gives); in a union a row limit limits its operand and stays.
-    impl Desugar for Selct {
-        type Core = core::Selct;
+    impl Desugar for SelectStatement {
+        type Core = core::SelectStatement;
         fn desugar(self) -> Self::Core {
             let mut query = self.query.desugar();
             let mut tail = self.tail.desugar();
             if let Some(order) = take_statement_order(&mut query) {
                 tail.order = Some(order);
             }
-            if let [core::QTerm::Selex(selex)] = &mut query.0.items[..]
+            if let [core::QueryTerm::QuerySpecification(selex)] = &mut query.0.items[..]
                 && tail.order.is_some()
                 && tail.limit.is_none()
                 && let Some((space, Either::Right(limit))) =
@@ -3145,7 +3238,7 @@ pub mod leveled {
             {
                 tail.limit = Some((space, limit));
             }
-            core::Selct {
+            core::SelectStatement {
                 with_clause: self.with_clause.desugar(),
                 query,
                 tail,
@@ -3154,7 +3247,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct SQLOption {
+    pub struct SetOptionStatement {
         pub kw: (Kw!("SET OPTION"), Space1),
         pub setting: OptionSetting,
     }
@@ -3254,16 +3347,16 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct Setml {
+    pub struct SetMlConfigurationStatement {
         pub kw: (Kw!("SET ML CONFIGURATION"), Space1),
         pub name: Ident,
     }
 
-    pub type Grant = Prefix<Kw!("GRANT"), (Space, GrantCmd)>;
+    pub type GrantStatement = Prefix<Kw!("GRANT"), (Space, GrantCommand)>;
 
     /// WITH GRANT OPTION goes with cubes and objects, WITH ADMIN OPTION with roles and admin privileges.
     #[derive(Grammar)]
-    pub enum GrantCmd {
+    pub enum GrantCommand {
         Cube(Granting<CubeGranted, Kw!("GRANT")>),
         Object(Granting<ObjectGranted, Kw!("GRANT")>),
         Admin(Granting<AdminGranted, Kw!("ADMIN")>),
@@ -3273,14 +3366,14 @@ pub mod leveled {
     pub struct Granting<What: Grammar, With: Grammar> {
         pub what: What,
         pub to_kw: (Space1, Kw!("TO"), Space),
-        pub grantees: Grntee,
+        pub grantees: GranteeList,
         pub with: WithOption<With>,
     }
 
     #[derive(Grammar)]
     pub struct CubeGranted {
         pub select_kw: Kw!("SELECT"),
-        pub columns: Option<(Space, FList1)>,
+        pub columns: Option<(Space, ColumnNameList)>,
         pub on_kw: (Space, Kw!("ON"), Space1),
         pub cube_kw: Kw!("CUBE", "CUBES"),
         pub cubes: (Space, VecSep<Ident, ArgSep>),
@@ -3289,21 +3382,21 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum ObjectGranted {
         Privileges {
-            privileges: SimplePrivs,
+            privileges: ObjectPrivileges,
             on_kw: (Space1, Kw!("ON"), Space),
-            objects: Objcts,
+            objects: Objects,
         },
         Actions {
             actions: VecSep<Action, ArgSep>,
             on_kw: (Space1, Kw!("ON"), Space1),
-            object: TName,
+            object: TableName,
         },
     }
 
     /// The roles last, since a privilege keyword is an identifier too.
     #[derive(Grammar)]
     pub enum AdminGranted {
-        Privileges(VecSep<AdminPriv, ArgSep>),
+        Privileges(VecSep<AdminPrivilege, ArgSep>),
         Roles(VecSep<Ident, ArgSep>),
     }
 
@@ -3311,14 +3404,14 @@ pub mod leveled {
 
     pub type GrantOptionFor = Option<(Kw!("GRANT OPTION FOR"), Space)>;
 
-    pub type Revok = Prefix<Kw!("REVOKE"), (Space, RevokeCmd)>;
+    pub type RevokeStatement = Prefix<Kw!("REVOKE"), (Space, RevokeCommand)>;
 
     /// GRANT OPTION FOR, CASCADE or RESTRICT and AS go with objects, AS not with cubes, none with roles and admin
     /// privileges (2026.2 refuses `REVOKE role FROM u CASCADE` and `REVOKE GRANT OPTION FOR role FROM u`).
     #[derive(Grammar)]
-    pub enum RevokeCmd {
-        Cube(Revoking<GrantOptionFor, CubeGranted, Option<(Space, CascadeOpt)>>),
-        Object(Revoking<GrantOptionFor, ObjectGranted, (Option<(Space, CascadeOpt)>, AsGrantor)>),
+    pub enum RevokeCommand {
+        Cube(Revoking<GrantOptionFor, CubeGranted, Option<(Space, DropBehavior)>>),
+        Object(Revoking<GrantOptionFor, ObjectGranted, (Option<(Space, DropBehavior)>, AsGrantor)>),
         Admin(Revoking<(), AdminGranted, ()>),
     }
 
@@ -3327,43 +3420,43 @@ pub mod leveled {
         pub grant_option: Before,
         pub what: What,
         pub from_kw: (Space1, Kw!("FROM"), Space),
-        pub grantees: Grntee,
+        pub grantees: GranteeList,
         pub tail: After,
     }
 
-    pub type AsGrantor = Option<(Space1, Kw!("AS"), Space, Grntee)>;
+    pub type AsGrantor = Option<(Space1, Kw!("AS"), Space, GranteeList)>;
 
     #[derive(Grammar)]
-    pub enum SimplePrivs {
+    pub enum ObjectPrivileges {
         All {
             all_kw: Kw!("ALL"),
             privileges_kw: Option<(Space1, Kw!("PRIVILEGES"))>,
         },
         Star(StringEq!("*")),
-        List(VecSep<SimplePriv, ArgSep>),
+        List(VecSep<SimplePrivilege, ArgSep>),
         Execute(Kw!("EXECUTE")),
         Use(Kw!("USE")),
     }
 
     #[derive(Grammar)]
-    pub enum SimplePriv {
+    pub enum SimplePrivilege {
         Alter(Kw!("%ALTER")),
         Delete(Kw!("DELETE")),
-        OptCol(OptColPriv),
+        OptCol(ColumnPrivilege),
     }
 
     #[derive(Grammar)]
     pub enum Action {
         Complex {
-            privilege: OptColPriv,
+            privilege: ColumnPrivilege,
             sp: Space,
-            columns: FList1,
+            columns: ColumnNameList,
         },
-        Simple(SimplePriv),
+        Simple(SimplePrivilege),
     }
 
     #[derive(Grammar)]
-    pub enum OptColPriv {
+    pub enum ColumnPrivilege {
         Select(Kw!("SELECT")),
         Insert(Kw!("INSERT")),
         Update(Kw!("UPDATE")),
@@ -3371,7 +3464,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum AdminPriv {
+    pub enum AdminPrivilege {
         CreateMethod(Kw!("%CREATE_METHOD")),
         DropMethod(Kw!("%DROP_METHOD")),
         CreateFunction(Kw!("%CREATE_FUNCTION")),
@@ -3406,7 +3499,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum Grntee {
+    pub enum GranteeList {
         Star(StringEq!("*")),
         List(VecSep<User, ArgSep>),
     }
@@ -3418,20 +3511,20 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum Objcts {
+    pub enum Objects {
         Star(StringEq!("*")),
         Schemas {
             schema_kw: (Kw!("SCHEMA"), Space1),
             schemas: VecSep<Ident, ArgSep>,
         },
         ForeignServers(ForeignServerPrivilegeClause),
-        Tables(VecSep<TName, ArgSep>),
+        Tables(VecSep<TableName, ArgSep>),
     }
 
     #[derive(Grammar)]
     pub enum ForeignServerPrivilegeList {
         Star(StringEq!("*")),
-        List(VecSep<TName, ArgSep>),
+        List(VecSep<TableName, ArgSep>),
     }
 
     #[derive(Grammar)]
@@ -3447,62 +3540,63 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct ChkPrv {
+    pub struct CheckPrivilegeStatement {
         pub checkpriv_kw: Kw!("%CHECKPRIV"),
-        pub grant_option: Option<(Space1, GrantOpt)>,
-        pub command: (Space1, ChkPrvCmd),
+        pub grant_option: Option<(Space1, GrantOrAdminOptionFor)>,
+        pub command: (Space1, CheckPrivilegeCommand),
     }
 
     #[derive(Grammar)]
-    pub struct GrantOpt {
+    pub struct GrantOrAdminOptionFor {
         pub kind: Either<Kw!("GRANT"), Kw!("ADMIN")>,
         pub option_for: (Space1, Kw!("OPTION FOR")),
     }
 
     #[derive(Grammar)]
-    pub enum ChkPrvCmd {
-        Admin(VecSep<AdminPriv, ArgSep>),
-        PrivSpec {
-            priv_spec: PrivSpec,
+    pub enum CheckPrivilegeCommand {
+        Admin(VecSep<AdminPrivilege, ArgSep>),
+        PrivilegeSpecification {
+            priv_spec: PrivilegeSpecification,
             on_kw: (Space1, Kw!("ON"), Space1),
-            object: TName,
+            object: TableName,
         },
     }
 
     #[derive(Grammar)]
-    pub enum PrivSpec {
+    pub enum PrivilegeSpecification {
         Action(Action),
         Execute(Kw!("EXECUTE")),
         Use(Kw!("USE")),
     }
 
-    type OptParenScalx = Option<Parenthesized<Scalx>>;
-    type OptParenScalx2 = Option<Parenthesized<(Scalx, Option<(ArgSep, Scalx)>)>>;
+    type OptionalLength = Option<Parenthesized<ValueExpression>>;
+    type OptionalPrecisionScale =
+        Option<Parenthesized<(ValueExpression, Option<(ArgSep, ValueExpression)>)>>;
 
     /// CAST's types, the varying ones before the types they begin with; 2026.2 takes NCHAR VARYING and refuses
     /// DOUBLE PRECISION, INT(10) and VARCHAR(10, 2).
     #[derive(Grammar)]
-    pub enum CastType {
+    pub enum CastTarget {
         Bigint(Kw!("BIGINT")),
-        Varbinary(Kw!("VARBINARY", "BINARY VARYING"), OptParenScalx),
-        Binary(Kw!("BINARY"), OptParenScalx),
+        Varbinary(Kw!("VARBINARY", "BINARY VARYING"), OptionalLength),
+        Binary(Kw!("BINARY"), OptionalLength),
         Bit(Kw!("BIT")),
         Varchar(
             Kw!("VARCHAR", "CHARACTER VARYING", "CHAR VARYING"),
-            OptParenScalx,
+            OptionalLength,
         ),
-        Char(Kw!("CHAR", "CHARACTER"), OptParenScalx),
+        Char(Kw!("CHAR", "CHARACTER"), OptionalLength),
         Datetime(Kw!("DATETIME")),
         Date(Kw!("DATE")),
-        Decimal(Kw!("DECIMAL", "DEC"), OptParenScalx2),
+        Decimal(Kw!("DECIMAL", "DEC"), OptionalPrecisionScale),
         Double(Kw!("DOUBLE")),
         Float(Kw!("FLOAT")),
         Guid(Kw!("GUID")),
         Integer(Kw!("INTEGER", "INT")),
         Money(Kw!("MONEY")),
-        Nvarchar(Kw!("NVARCHAR", "NCHAR VARYING"), OptParenScalx),
-        Nchar(Kw!("NCHAR"), OptParenScalx),
-        Numeric(Kw!("NUMERIC"), OptParenScalx2),
+        Nvarchar(Kw!("NVARCHAR", "NCHAR VARYING"), OptionalLength),
+        Nchar(Kw!("NCHAR"), OptionalLength),
+        Numeric(Kw!("NUMERIC"), OptionalPrecisionScale),
         Posixtime(Kw!("POSIXTIME")),
         Real(Kw!("REAL")),
         Smalldatetime(Kw!("SMALLDATETIME")),
@@ -3519,9 +3613,9 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct UserSpec {
+    pub struct UserSpecification {
         pub name: Ident,
-        pub password: Option<(Space, PWPrefix, Space, Password)>,
+        pub password: Option<(Space, PasswordKeyword, Space, Password)>,
         pub default: Option<((Space1, Kw!("DEFAULT"), Space1), Ident, (Space1, Ident))>,
         pub temporary: Option<((Space1, Kw!("TEMPORARY"), Space1), Ident, (Space1, Ident))>,
     }
@@ -3561,8 +3655,8 @@ pub mod leveled {
         },
         Collect {
             kw: (Kw!("COLLECT"), Space1),
-            clause: StatsClause,
-            target: (Space1, Kw!("FOR"), Space1, StatsScope),
+            clause: StatisticsKeyword,
+            target: (Space1, Kw!("FOR"), Space1, StatisticsScope),
             sample: Option<((Space1, Kw!("%SAMPLE_PERCENT"), Space1), PercentValue)>,
         },
         FreezePlans {
@@ -3571,7 +3665,7 @@ pub mod leveled {
         },
         Load {
             kw: (Kw!("LOAD"), Space1),
-            spec: LoadSpec,
+            spec: LoadSpecification,
         },
         PurgeQueries {
             kw: (Kw!("PURGE"), Space1),
@@ -3585,13 +3679,13 @@ pub mod leveled {
             as_name: Option<((Space1, Kw!("AS"), Space1), Ident)>,
             not_default: Option<(Space1, Kw!("NOT DEFAULT"))>,
             for_col: Option<((Space1, Kw!("FOR"), Space1), DottedIdent)>,
-            with_clause: Option<(Space1, WithClauseTrain)>,
+            with_clause: Option<(Space1, TrainWithClause)>,
             source: Option<(Space1, ModelSource)>,
             using_clause: Option<(Space1, UsingClause)>,
         },
         TuneTable {
             kw: (Kw!("TUNE TABLE"), Space1),
-            tname: TName,
+            tname: TableName,
             options: Vec<(Space1, TuneOption)>,
         },
         UnfreezePlans {
@@ -3609,7 +3703,7 @@ pub mod leveled {
             name: Ident,
             as_name: Option<((Space1, Kw!("AS"), Space1), Ident)>,
             use_name: Option<((Space1, Kw!("USE"), Space1), Ident)>,
-            with_clause: Option<(Space1, WithClauseTrain)>,
+            with_clause: Option<(Space1, TrainWithClause)>,
             source: Option<(Space1, ModelSource)>,
         },
     }
@@ -3623,7 +3717,7 @@ pub mod leveled {
             name: Ident,
             on_kw: (Space1, Kw!("ON"), Space1),
             table_kw: Option<(Kw!("TABLE"), Space1)>,
-            tname: TName,
+            tname: TableName,
         },
         Database {
             kw: (Kw!("DATABASE"), Space1),
@@ -3634,12 +3728,12 @@ pub mod leveled {
         ForeignTable {
             kw: (Kw!("FOREIGN TABLE"), Space1),
             if_not_exists: IfNotExists,
-            tname: TName,
-            columns: Option<Args<VecSep<(Ident, (Space, Datyp)), ArgSep>>>,
+            tname: TableName,
+            columns: Option<Args<VecSep<(Ident, (Space, DataType)), ArgSep>>>,
             server: (Space1, Kw!("SERVER"), Space1),
-            server_name: TName,
-            ft_options: Option<(Space, FTOptions)>,
-            values: Option<(Space1, Kw!("VALUES"), Space, FList1)>,
+            server_name: TableName,
+            ft_options: Option<(Space, ForeignTableOptions)>,
+            values: Option<(Space1, Kw!("VALUES"), Space, ColumnNameList)>,
             using_json: Option<((Space1, Kw!("USING"), Space), JSONString)>,
             novalidate: Option<(Space1, Kw!("NOVALIDATE"))>,
         },
@@ -3648,9 +3742,9 @@ pub mod leveled {
             if_not_exists: IfNotExists,
             name: Ident,
             predicting: (Space1, Kw!("PREDICTING"), Space),
-            pred: Parenthesized<(Ident, Option<(Space1, Datyp)>)>,
+            pred: Parenthesized<(Ident, Option<(Space1, DataType)>)>,
             source: Option<(Space1, ModelSource)>,
-            with_clause: Option<(Space, WithClauseCreate)>,
+            with_clause: Option<(Space, ModelWithClause)>,
             using_clause: Option<(Space1, UsingClause)>,
         },
         Role {
@@ -3666,7 +3760,7 @@ pub mod leveled {
             kw: (Kw!("TABLE"), Space1),
             if_not_exists: IfNotExists,
             nojourn: Option<(Kw!("%NOJOURN"), Space1)>,
-            tname: TName,
+            tname: TableName,
             as_kw: (Space1, Kw!("AS"), Space1),
             with_clause: Option<(WithClause, Space1)>,
             query: SourceQuery,
@@ -3674,19 +3768,19 @@ pub mod leveled {
         },
         User {
             kw: (Kw!("USER"), Space1),
-            user: UserSpec,
+            user: UserSpecification,
         },
         Server {
             server_kw: ServerKw,
             if_not_exists: IfNotExists,
-            tname: TName,
+            tname: TableName,
             type_clause: Option<((Space1, Kw!("TYPE"), Space), ServerType)>,
             fdw: (Space1, Kw!("FOREIGN DATA WRAPPER"), Space1),
             fdw_name: Ident,
             connection: (Space1, CreateServerConnection),
             delimited: Option<(Space1, CreateServerDelimitedIds)>,
             passthrough: Option<(Space1, EnableDisable, Space1, Kw!("PASSTHROUGH"))>,
-            pushdown: Option<(Space1, FTPushdownClause)>,
+            pushdown: Option<(Space1, PushdownClause)>,
             using_json: Option<((Space1, Kw!("USING"), Space), JSONString)>,
         },
         Index {
@@ -3696,20 +3790,20 @@ pub mod leveled {
             name: Ident,
             on_kw: (Space1, Kw!("ON"), Space1),
             table_kw: Option<(Kw!("TABLE"), Space1)>,
-            tname: TName,
-            comp_list: Args<VecSep<ComponentSpec, ArgSep>>,
+            tname: TableName,
+            comp_list: Args<VecSep<ComponentSpecification, ArgSep>>,
             as_clause: Option<(
                 (Space1, Kw!("AS"), Space1),
                 DottedIdent,
-                Option<(Space, CreateIndexAsParams)>,
+                Option<(Space, CreateIndexAsParameters)>,
             )>,
             with_clause: Option<(Space1, CreateIndexWithClause)>,
-            in_on: Option<(Space1, InOn, (Space, Token))>,
-            defer_immediate: Option<(Space1, ImmediateDefer, Option<(Space1, Kw!("BUILD"))>)>,
+            in_on: Option<(Space1, InOrOn, (Space, NameOrLiteral))>,
+            defer_immediate: Option<(Space1, ImmediateOrDefer, Option<(Space1, Kw!("BUILD"))>)>,
         },
         View {
             or_replace: OrReplace,
-            def: ViewDef,
+            def: ViewDefinition,
         },
         Method(CreateRoutine<MethodPrefix, Kw!("METHOD"), MethodBody>),
         Query(CreateRoutine<OrReplace, Kw!("QUERY"), QueryBody>),
@@ -3718,8 +3812,8 @@ pub mod leveled {
             or_replace: OrReplace,
             agg_kw: (Kw!("AGGREGATE"), Space1),
             name: DottedIdent,
-            params: Args<VecSep<(Ident, Space1, Datyp), ArgSep>>,
-            returns: Option<((Space1, Kw!("RETURNS"), Space1), Datyp)>,
+            params: Args<VecSep<(Ident, Space1, DataType), ArgSep>>,
+            returns: Option<((Space1, Kw!("RETURNS"), Space1), DataType)>,
             initialize: Option<((Space1, Kw!("INITIALIZE WITH"), Space1), DottedIdent)>,
             iterate: ((Space1, Kw!("ITERATE WITH"), Space1), DottedIdent),
             merge: Option<((Space1, Kw!("MERGE WITH"), Space1), DottedIdent)>,
@@ -3731,32 +3825,37 @@ pub mod leveled {
             name: Ident,
             provider: ((Space1, Kw!("PROVIDER"), Space1), ProviderName),
             desc: Option<((Space1, Kw!("%DESCRIPTION"), Space), LiteralOrNull)>,
-            using_clause: Option<(Space1, MlconfigUsingClause)>,
+            using_clause: Option<(Space1, MlConfigUsingClause)>,
             settings: Option<(Space1, ProviderSpecificSettings)>,
         },
         Trigger {
             or_replace: OrReplace,
             trigger_kw: (Kw!("TRIGGER"), Space1),
-            name: TName,
-            time: (Space1, TriggerTime, Space1),
+            name: TableName,
+            time: (Space1, TriggerActionTime, Space1),
             events: VecSep<TriggerEvent, ArgSep>,
             order: Option<(Space1, Kw!("ORDER"), Space, Literal)>,
-            on: (Space1, Kw!("ON"), Space1, TName),
+            on: (Space1, Kw!("ON"), Space1, TableName),
             referencing: Option<(
                 Space1,
                 Kw!("REFERENCING"),
                 Vec1<(Space1, TriggerReferencing)>,
             )>,
             for_each: Option<(Space1, Kw!("FOR EACH"), Space1, TriggerOrientation)>,
-            when: Option<(Space1, Kw!("WHEN"), Space, Parenthesized<Prdct>)>,
+            when: Option<(
+                Space1,
+                Kw!("WHEN"),
+                Space,
+                Parenthesized<BooleanValueExpression>,
+            )>,
             body: (Space1, TriggerBody),
         },
         Table {
-            temp: Option<(CreateTableTemp, Space1)>,
+            temp: Option<(TableScope, Space1)>,
             table_kw: (Kw!("TABLE"), Space1),
             if_not_exists: IfNotExists,
-            tname: TName,
-            elems: Args<VecSep<Telem, ArgSep>>,
+            tname: TableName,
+            elems: Args<VecSep<TableElement, ArgSep>>,
             options: Option<(Space1, TableOptionList)>,
         },
     }
@@ -3765,12 +3864,12 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum Altered {
         Stats {
-            scope: StatsScope,
-            action: (Space1, StatsAction),
+            scope: StatisticsScope,
+            action: (Space1, StatisticsAction),
         },
         ForeignTable {
             kw: (Kw!("FOREIGN TABLE"), Space1),
-            tname: TName,
+            tname: TableName,
         },
         MlConfiguration {
             kw: (Kw!("ML CONFIGURATION"), Space1),
@@ -3784,35 +3883,35 @@ pub mod leveled {
         },
         Table {
             kw: (Kw!("TABLE"), Space1),
-            tname: TName,
-            with_check: Option<((Space1, Kw!("WITH"), Space1), CheckSpec)>,
+            tname: TableName,
+            with_check: Option<((Space1, Kw!("WITH"), Space1), CheckOrNoCheck)>,
             action: Option<(Space1, AlterAction)>,
         },
         User {
             kw: (Kw!("USER"), Space1),
-            user: UserSpec,
+            user: UserSpecification,
         },
         Server {
             server_kw: ServerKw,
-            tname: TName,
+            tname: TableName,
             action: (Space1, AlterServerAction),
         },
-        View(ViewDef),
+        View(ViewDefinition),
     }
 
     #[derive(Grammar)]
-    pub enum StatsAction {
+    pub enum StatisticsAction {
         DropFixed {
             kw: (Kw!("DROP FIXED"), Space1),
-            clause: StatsClause,
+            clause: StatisticsKeyword,
         },
         Fix {
             kw: (Kw!("FIX"), Space1),
-            clause: StatsClause,
+            clause: StatisticsKeyword,
         },
         SetRuntime {
             kw: (Kw!("SET RUNTIME"), Space1),
-            prop: StatsProperty,
+            prop: StatisticsProperty,
             eq: (Space, StringEq!("="), Space),
             val: TrueFalse,
         },
@@ -3824,8 +3923,8 @@ pub mod leveled {
         Trigger {
             kw: (Kw!("TRIGGER"), Space1),
             if_exists: IfExists,
-            name: TName,
-            from: Option<((Space1, Kw!("FROM"), Space1), TName)>,
+            name: TableName,
+            from: Option<((Space1, Kw!("FROM"), Space1), TableName)>,
         },
         Database {
             kw: (Kw!("DATABASE"), Space1),
@@ -3836,8 +3935,8 @@ pub mod leveled {
         ForeignTable {
             kw: (Kw!("FOREIGN TABLE"), Space1),
             if_exists: IfExists,
-            tname: TName,
-            cascade: Option<(Space1, CascadeOpt)>,
+            tname: TableName,
+            cascade: Option<(Space1, DropBehavior)>,
         },
         Routine {
             kind: (RoutineKind, Space),
@@ -3853,7 +3952,7 @@ pub mod leveled {
             on: Option<(
                 (Space1, Kw!("ON"), Space1),
                 Option<(Kw!("TABLE"), Space1)>,
-                TName,
+                TableName,
             )>,
         },
         MlConfiguration {
@@ -3875,14 +3974,14 @@ pub mod leveled {
             kw: (Kw!("SCHEMA"), Space1),
             if_exists: IfExists,
             name: Ident,
-            cascade_restrict: Option<(Space1, CascadeOpt)>,
+            cascade_restrict: Option<(Space1, DropBehavior)>,
         },
         Table {
             kw: (Kw!("TABLE"), Space1),
             if_exists: IfExists,
             nojourn: Option<(Kw!("%NOJOURN"), Space1)>,
-            tname: TName,
-            cascade: Option<(Space1, CascadeOpt)>,
+            tname: TableName,
+            cascade: Option<(Space1, DropBehavior)>,
             data: Option<(Space1, DataOption)>,
         },
         User {
@@ -3894,14 +3993,14 @@ pub mod leveled {
         View {
             kw: (Kw!("VIEW"), Space1),
             if_exists: IfExists,
-            tname: TName,
-            cascade: Option<(Space1, CascadeOpt)>,
+            tname: TableName,
+            cascade: Option<(Space1, DropBehavior)>,
         },
         Server {
             server_kw: ServerKw,
             if_exists: IfExists,
-            tname: TName,
-            cascade: Option<(Space1, CascadeOpt)>,
+            tname: TableName,
+            cascade: Option<(Space1, DropBehavior)>,
         },
         Aggregate {
             kw: (Kw!("AGGREGATE"), Space1),
@@ -3919,14 +4018,14 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct ViewDef {
+    pub struct ViewDefinition {
         pub kw: (Kw!("VIEW"), Space1),
-        pub tname: TName,
-        pub col_list: Option<(Space, FList1)>,
+        pub tname: TableName,
+        pub col_list: Option<(Space, ColumnNameList)>,
         pub as_kw: (Space1, Kw!("AS"), Space),
         pub with_clause: Option<(WithClause, Space1)>,
-        pub query: QueryExpr,
-        pub view_with: Option<((Space1, Kw!("WITH"), Space1), ViewWith)>,
+        pub query: QueryExpression,
+        pub view_with: Option<((Space1, Kw!("WITH"), Space1), ViewWithOption)>,
     }
 
     /// 2026.2 takes STATIC before METHOD alone and not with OR REPLACE (-51), an external language for a FUNCTION
@@ -3953,14 +4052,14 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct CreateTableTemp {
-        pub private_global: PrivateGlobal,
+    pub struct TableScope {
+        pub private_global: GlobalOrPrivate,
         pub space: Space1,
         pub temporary: Kw!("TEMPORARY"),
     }
 
     #[derive(Grammar)]
-    pub enum PrivateGlobal {
+    pub enum GlobalOrPrivate {
         Global(Kw!("GLOBAL")),
         Private(Kw!("PRIVATE")),
     }
@@ -3993,11 +4092,11 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub enum CreateIndexAsParams {
-        Parens(Parenthesized<Option<VecSep<IndexParameterSpec, ArgSep>>>),
+    pub enum CreateIndexAsParameters {
+        Parens(Parenthesized<Option<VecSep<IndexParameterSpecification, ArgSep>>>),
         With {
             kw: (Kw!("WITH"), Space1),
-            params: VecSep<IndexParameterSpec, ArgSep>,
+            params: VecSep<IndexParameterSpecification, ArgSep>,
         },
     }
 
@@ -4007,7 +4106,7 @@ pub mod leveled {
     #[tygr(inline, validated)]
     pub struct CreateIndexWithClause {
         pub kw: Kw!("WITH"),
-        pub data: Option<(Space1, Kw!("DATA"), Space, FList1)>,
+        pub data: Option<(Space1, Kw!("DATA"), Space, ColumnNameList)>,
         pub options: Option<(Space1, VecSep<IndexOption, Either<ArgSep, Space1>>)>,
     }
 
@@ -4043,20 +4142,20 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum ImmediateDefer {
+    pub enum ImmediateOrDefer {
         Immediate(Kw!("IMMEDIATE")),
         Defer(Kw!("DEFER")),
     }
 
     #[derive(Grammar)]
     pub enum Password {
-        HostVar(HostVar),
+        HostVariable(HostVariable),
         Ident(Ident),
         Literal(Literal),
         NULL(Kw!("NULL")),
     }
 
-    pub type PWPrefix = Kw!("IDENTIFY BY", "IDENTIFIED BY", "WITH PASSWORD", "PASSWORD");
+    pub type PasswordKeyword = Kw!("IDENTIFY BY", "IDENTIFIED BY", "WITH PASSWORD", "PASSWORD");
 
     #[derive(Grammar)]
     pub enum BuildScope {
@@ -4082,7 +4181,7 @@ pub mod leveled {
             name_kw: (Kw!("NAME"), Space),
             names: VecSep<PurgeName, ArgSep>,
         },
-        Table((Kw!("TABLE"), Space1), TName),
+        Table((Kw!("TABLE"), Space1), TableName),
     }
 
     #[derive(Grammar)]
@@ -4094,35 +4193,35 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum FreezeScope {
         Id((Kw!("ID"), Space), Literal),
-        Scope(StatsScope),
+        Scope(StatisticsScope),
     }
 
     pub type CancelQueryScope = Prefix<Kw!("IDENTIFIED BY"), Nested<Count, Space1>>;
 
-    pub type WithClauseCreate = Prefix<(Kw!("WITH"), Space), Parenthesized<ColumnDefList>>;
+    pub type ModelWithClause = Prefix<(Kw!("WITH"), Space), Parenthesized<ColumnNameAndTypeList>>;
 
     #[derive(Grammar)]
     pub enum ModelSource {
         Subquery {
             kw: (Kw!("FROM"), Space),
-            selex: Parenthesized<Ranged<Selex>>,
+            selex: Parenthesized<Ranged<QuerySpecification>>,
         },
         Inline {
             from: FromClause,
             where_clause: Option<(Space, WhereClause)>,
-            group: Option<(Space, Group)>,
-            having: Option<(Space, Having)>,
+            group: Option<(Space, GroupByClause)>,
+            having: Option<(Space, HavingClause)>,
             tail: Tail,
         },
     }
 
     pub type UsingClause = Prefix<(Kw!("USING"), Space), JSONObject>;
 
-    pub type WithClauseTrain = Prefix<(Kw!("WITH"), Space), TrainWith>;
+    pub type TrainWithClause = Prefix<(Kw!("WITH"), Space), TrainWith>;
 
     #[derive(Grammar)]
     pub enum TrainWith {
-        List(FList1),
+        List(ColumnNameList),
         Assignment(VecSep<(Ident, (Space, StringEq!("="), Space), WithExpression), ArgSep>),
     }
 
@@ -4130,7 +4229,7 @@ pub mod leveled {
     pub enum WithExpression {
         Ident(Ident),
         Literal(Literal),
-        Scalx(Scalx),
+        ValueExpression(ValueExpression),
     }
 
     #[derive(Grammar)]
@@ -4166,26 +4265,26 @@ pub mod leveled {
         Null(Kw!("NULL")),
     }
 
-    pub type MlconfigUsingClause = Prefix<(Kw!("USING"), Space), MlconfigUsing>;
+    pub type MlConfigUsingClause = Prefix<(Kw!("USING"), Space), MlConfigUsing>;
 
     /// What ALTER ML CONFIGURATION changes, in any order; 2026.2 rejects the statement without a clause.
     #[derive(Grammar)]
     pub enum MlConfigClause {
         Provider(Kw!("PROVIDER"), Space1, ProviderName),
         Description(Kw!("%DESCRIPTION"), Space, LiteralOrNull),
-        Using(MlconfigUsingClause),
+        Using(MlConfigUsingClause),
         Settings(ProviderSpecificSettings),
     }
 
     #[derive(Grammar)]
-    pub enum MlconfigUsing {
+    pub enum MlConfigUsing {
         JSONString(JSONObject),
         Null(Kw!("NULL")),
     }
 
     #[derive(Grammar)]
     pub enum ProviderSpecificSettings {
-        DR(VecSep<DROption, Space>),
+        DR(VecSep<DataRobotOption, Space>),
         H2O(VecSep<H2OOption, Space>),
     }
 
@@ -4198,7 +4297,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct DROption {
+    pub struct DataRobotOption {
         pub name: Either<Kw!("APITOKEN"), Kw!("URL")>,
         pub value: (Space, LiteralOrNull),
     }
@@ -4210,7 +4309,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum FTOptions {
+    pub enum ForeignTableOptions {
         Table((Kw!("TABLE"), Space), Literal),
         Query((Kw!("QUERY"), Space), Literal),
         File(FileSource),
@@ -4226,10 +4325,10 @@ pub mod leveled {
         FILE(StringEqCI!("'FILE'")),
     }
 
-    pub type FTPushdownClause = Prefix<Kw!("PUSHDOWN"), (Space1, FTPushdownType)>;
+    pub type PushdownClause = Prefix<Kw!("PUSHDOWN"), (Space1, PushdownType)>;
 
     #[derive(Grammar)]
-    pub enum FTPushdownType {
+    pub enum PushdownType {
         Ansi92(Kw!("ANSI92")),
         Basic(Kw!("BASIC")),
         Extended(Kw!("EXTENDED")),
@@ -4238,7 +4337,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum TriggerTime {
+    pub enum TriggerActionTime {
         Before(Kw!("BEFORE")),
         After(Kw!("AFTER")),
     }
@@ -4275,20 +4374,20 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum TriggerBody {
         Code(CodeBody),
-        Stat {
+        Statement {
             lang: Option<(Kw!("LANGUAGE SQL"), Space1)>,
-            stat: Box<Ranged<Stat>>,
+            stat: Box<Ranged<Statement>>,
         },
     }
 
     #[derive(Grammar)]
-    pub enum LockSpec {
+    pub enum LockMode {
         Row(Kw!("ROW")),
         Page(Kw!("PAGE")),
     }
 
     #[derive(Grammar)]
-    pub enum CascadeOpt {
+    pub enum DropBehavior {
         Restrict(Kw!("RESTRICT")),
         Cascade(Kw!("CASCADE")),
     }
@@ -4300,22 +4399,22 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct MoveSpec {
-        pub partition_range: Option<(PartitionRangeSpec, Space)>,
+    pub struct MoveSpecification {
+        pub partition_range: Option<(PartitionRangeSpecification, Space)>,
         pub to_kw: Kw!("TO"),
         pub database: (Space1, Ident),
-        pub activate: Option<(Space1, SQLActivateSpec)>,
+        pub activate: Option<(Space1, ActivateSpecification)>,
     }
 
     #[derive(Grammar)]
-    pub struct SQLActivateSpec {
+    pub struct ActivateSpecification {
         pub force_or_defer: Option<(Either<Kw!("FORCE"), Kw!("DEFER")>, Space1)>,
         pub activate_kw: Kw!("ACTIVATE"),
         pub mappings_kw: Option<(Space1, Kw!("MAPPINGS"))>,
     }
 
     #[derive(Grammar)]
-    pub enum ViewWith {
+    pub enum ViewWithOption {
         ReadOnly(Kw!("READ ONLY")),
         LeveledCheck {
             levels: (LevelsClause, Space1),
@@ -4336,13 +4435,13 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct SQL {
         pub space_before: Space,
-        pub view_column_list: Option<(FList1, Option<(Space, Kw!("AS"))>, Space)>,
-        pub stat: Ranged<Stat>,
+        pub view_column_list: Option<(ColumnNameList, Option<(Space, Kw!("AS"))>, Space)>,
+        pub stat: Ranged<Statement>,
         pub space_after: Space,
     }
 
     #[derive(Grammar)]
-    pub struct Thr {
+    pub struct ThroughStatement {
         pub kw: (
             Kw!("THROUGH"),
             Space1,
@@ -4350,39 +4449,39 @@ pub mod leveled {
             Kw!("SERVER"),
             Space,
         ),
-        pub tname: TName,
-        pub remote_statement: (Space, Box<Ranged<Stat>>),
+        pub tname: TableName,
+        pub remote_statement: (Space, Box<Ranged<Statement>>),
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct WithStat<T: Grammar> {
+    pub struct WithStatement<T: Grammar> {
         pub with_clause: Option<(WithClause, Space)>,
         pub body: T,
     }
 
     #[derive(Grammar)]
-    pub enum Stat {
-        Selct(Selct),
-        Insert(WithStat<Insrt>),
-        Update(WithStat<Updat>),
-        Delete(WithStat<Delet>),
-        Thr(Thr),
+    pub enum Statement {
+        SelectStatement(SelectStatement),
+        Insert(WithStatement<InsertStatement>),
+        Update(WithStatement<UpdateStatement>),
+        Delete(WithStatement<DeleteStatement>),
+        ThroughStatement(ThroughStatement),
         Truncate(Truncate),
         DDL(DDL),
-        Declare(Decl),
-        OFC(OFC),
-        SetOption(SQLOption),
-        Grant(Grant),
-        Revok(Revok),
-        TpRelated(TpRelated),
+        Declare(DeclareCursor),
+        CursorStatement(CursorStatement),
+        SetOption(SetOptionStatement),
+        GrantStatement(GrantStatement),
+        RevokeStatement(RevokeStatement),
+        TransactionStatement(TransactionStatement),
         Savepoint(Savepoint),
         Lock(LockTable<Kw!("LOCK"), Wait>),
         Unlock(LockTable<Kw!("UNLOCK"), Kw!("IMMEDIATE")>),
         Call(CallStatement),
-        Explain(Explain),
-        Setml(Setml),
-        ChkPrv(ChkPrv),
+        ExplainStatement(ExplainStatement),
+        SetMlConfigurationStatement(SetMlConfigurationStatement),
+        CheckPrivilegeStatement(CheckPrivilegeStatement),
     }
 
     #[derive(Grammar)]
@@ -4402,21 +4501,21 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct CodeSpecification<Body: Grammar = CodeBody> {
         pub params: Parenthesized<Option<VecSep<ParameterDeclaration, ArgSep>>>,
-        pub characteristics: Vec<(Space, MethodQueryCharacteristics)>,
+        pub characteristics: Vec<(Space, RoutineCharacteristic)>,
         pub body: (Space, Body),
     }
 
     #[derive(Grammar)]
     pub struct ParameterDeclaration {
-        pub direction: Option<(ParameterDirection, Space)>,
+        pub direction: Option<(ParameterMode, Space)>,
         pub name: Ident,
-        pub datyp: (Space1, Datyp),
+        pub datyp: (Space1, DataType),
         pub default: Option<(Space, DefaultClause)>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub enum ParameterDirection {
+    pub enum ParameterMode {
         In(Kw!("IN")),
         InOut(Kw!("INOUT")),
         Out(Kw!("OUT")),
@@ -4436,7 +4535,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum MethodQueryCharacteristics {
+    pub enum RoutineCharacteristic {
         ContainId {
             kw: (Kw!("CONTAINID"), Space),
             value: Literal,
@@ -4450,11 +4549,11 @@ pub mod leveled {
         Proc(ProcedureKw),
         Results {
             kw: (Kw!("RESULTS"), Space),
-            clause: Parenthesized<ColumnDefList>,
+            clause: Parenthesized<ColumnNameAndTypeList>,
         },
         Returns {
             kw: (Kw!("RETURNS"), Space1),
-            datyp: Datyp,
+            datyp: DataType,
         },
         SelectMode {
             kw: (Kw!("SELECTMODE"), Space1),
@@ -4538,7 +4637,7 @@ pub mod leveled {
         Kw!("BEGIN"),
         Vec1<(
             Space,
-            Either<ReturnStatement, Ranged<Stat>>,
+            Either<ReturnStatement, Ranged<Statement>>,
             Space,
             StringEq!(";"),
         )>,
@@ -4556,7 +4655,7 @@ pub mod leveled {
     pub enum ReturnValue {
         Paren(Parenthesized<Box<ReturnValue>>),
         Literal(Option<Sign>, Literal),
-        HostVar(HostVar),
+        HostVariable(HostVariable),
         Marker(StringEq!("?")),
     }
 
@@ -4589,9 +4688,9 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct ComponentSpec {
+    pub struct ComponentSpecification {
         pub name: Ident,
-        pub collection: Option<(Space, CollectionSpec)>,
+        pub collection: Option<(Space, CollectionSpecification)>,
         pub collate: Option<(Space1, Kw!("COLLATE"), Space1, SqlCollation)>,
         pub direction: Option<(Space, ComponentDirection)>,
     }
@@ -4603,10 +4702,10 @@ pub mod leveled {
         Desc(Kw!("DESC")),
     }
 
-    pub type CollectionSpec = Parenthesized<Either<Kw!("ELEMENTS"), Kw!("KEYS")>>;
+    pub type CollectionSpecification = Parenthesized<Either<Kw!("ELEMENTS"), Kw!("KEYS")>>;
 
     #[derive(Grammar)]
-    pub struct IndexParameterSpec {
+    pub struct IndexParameterSpecification {
         pub name: Ident,
         pub eq: (Space, StringEq!("="), Space),
         pub value: Literal,
@@ -4615,19 +4714,19 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum AlterAction {
         CheckConstraintAll {
-            check: CheckSpec,
+            check: CheckOrNoCheck,
             kw: (Space1, Kw!("CONSTRAINT ALL")),
         },
         DropAllPartitions {
-            drop_kw: DropKeywd,
+            drop_kw: DropKeyword,
             kw: (Space1, Kw!("ALL PARTITIONS")),
         },
         DropPartition {
-            drop_kw: DropKeywd,
-            partition: (Space1, PartitionRangeSpec),
+            drop_kw: DropKeyword,
+            partition: (Space1, PartitionRangeSpecification),
         },
         DropAction {
-            drop_kw: DropKeywd,
+            drop_kw: DropKeyword,
             action: (Space, DropAction),
         },
         Add {
@@ -4638,7 +4737,7 @@ pub mod leveled {
             kw: Kw!("ALTER"),
             column_kw: Option<(Space1, Kw!("COLUMN"))>,
             name: (Space, Ident),
-            alter: (Space, AlterCol),
+            alter: (Space, AlterColumnAction),
         },
         Cleanup(Kw!("CLEANUP")),
         Convert {
@@ -4647,15 +4746,15 @@ pub mod leveled {
         },
         LockMode {
             kw: (Kw!("LOCK MODE"), Space),
-            spec: Parenthesized<LockSpec>,
+            spec: Parenthesized<LockMode>,
         },
         Modify {
             kw: (Kw!("MODIFY"), Space),
-            specs: Either<Parenthesized<ModSpecList>, ModSpecList>,
+            specs: Either<Parenthesized<ModifySpecificationList>, ModifySpecificationList>,
         },
         Move {
             kw: (Kw!("MOVE"), Space1),
-            spec: MoveSpec,
+            spec: MoveSpecification,
         },
         Rename {
             kw: (Kw!("RENAME"), Space1),
@@ -4663,7 +4762,7 @@ pub mod leveled {
         },
         Truncate {
             kw: (Kw!("TRUNCATE"), Space1),
-            partition: PartitionRangeSpec,
+            partition: PartitionRangeSpecification,
         },
     }
 
@@ -4680,7 +4779,7 @@ pub mod leveled {
         Shard {
             to: Option<(Kw!("TO"), Space1)>,
             clause: ShardConvertClause,
-            timing: Option<(Space, ImmediateDefer)>,
+            timing: Option<(Space, ImmediateOrDefer)>,
         },
     }
 
@@ -4708,9 +4807,9 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum AlterCol {
+    pub enum AlterColumnAction {
         DatypCollate {
-            datyp: Datyp,
+            datyp: DataType,
             collate: Option<(Space1, Kw!("COLLATE"), Space1, SqlCollation)>,
         },
         SqlCollation(SqlCollation),
@@ -4720,7 +4819,7 @@ pub mod leveled {
         },
         Default {
             kw: (Kw!("DEFAULT"), Space),
-            value: Setdef,
+            value: DefaultOption,
         },
         DropDefault(Kw!("DROP DEFAULT")),
         NotNull(Kw!("NOT NULL")),
@@ -4731,39 +4830,39 @@ pub mod leveled {
         },
         SetDefault {
             kw: (Kw!("SET DEFAULT"), Space),
-            value: Setdef,
+            value: DefaultOption,
         },
     }
 
     #[derive(Grammar)]
     pub enum StorageDefaultConvertClause {
         Column(ColumnStorageDefaultConversion),
-        Type(StorageDefaultConversionTypeSpec),
+        Type(StorageDefaultConversionTypeSpecification),
     }
 
     #[derive(Grammar)]
-    pub struct StorageDefaultConversionTypeSpec {
+    pub struct StorageDefaultConversionTypeSpecification {
         pub to: Option<(Kw!("TO"), Space1)>,
         pub kw: (Kw!("STORAGETYPE"), Space, StringEq!("="), Space),
-        pub typ: Storagetype,
+        pub typ: StorageType,
     }
 
     #[derive(Grammar)]
     pub struct ColumnStorageDefaultConversion {
         pub kw: Kw!("COLUMNS", "COLUMN"),
         pub list: (Space, VecSep<Ident, ArgSep>),
-        pub spec: (Space, StorageDefaultConversionTypeSpec),
+        pub spec: (Space, StorageDefaultConversionTypeSpecification),
     }
 
     /// A DEFAULT value, in parentheses to any depth (2026.2 takes ((1))).
     #[derive(Grammar)]
-    pub enum Setdef {
-        Spec(DefSpec),
-        Paren(Parenthesized<Box<Setdef>>),
+    pub enum DefaultOption {
+        Spec(BareDefaultOption),
+        Paren(Parenthesized<Box<DefaultOption>>),
     }
 
     #[derive(Grammar)]
-    pub enum DefSpec {
+    pub enum BareDefaultOption {
         Cos {
             kw: (Kw!("%COS"), Space),
             value: Literal,
@@ -4812,41 +4911,41 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct ModSpec {
+    pub struct ModifySpecification {
         pub name: Ident,
-        pub change: (Space1, ModChange),
+        pub change: (Space1, ModifyChange),
     }
 
     /// 2026.2 takes `a INT DEFAULT 1 CONSTRAINT nn NOT NULL` in this order, at least one part, `a RENAME b` and
     /// `a SET DEFAULT 1`, not `a NOT NULL DEFAULT 1`, `a COLLATE SQLUPPER` or `a` alone.
     #[derive(Grammar)]
-    pub enum ModChange {
+    pub enum ModifyChange {
         Rename {
             kw: (Kw!("RENAME"), Space1),
             new_name: Ident,
         },
         SetDefault {
             kw: (Kw!("SET DEFAULT"), Space),
-            value: Setdef,
+            value: DefaultOption,
         },
-        Clauses(ModCol),
+        Clauses(ModifyColumnClauses),
         Typed {
-            datyp: Datyp,
-            clauses: Option<(Space1, ModCol)>,
+            datyp: DataType,
+            clauses: Option<(Space1, ModifyColumnClauses)>,
         },
     }
 
-    pub type ModSpecList = VecSep<ModSpec, ArgSep>;
+    pub type ModifySpecificationList = VecSep<ModifySpecification, ArgSep>;
 
     #[derive(Grammar)]
     #[tygr(validated)]
-    pub struct ModCol {
-        pub default: Option<(Kw!("DEFAULT"), Space, Setdef)>,
+    pub struct ModifyColumnClauses {
+        pub default: Option<(Kw!("DEFAULT"), Space, DefaultOption)>,
         pub constraint: Option<(Space, Kw!("CONSTRAINT"), Space1, Ident)>,
-        pub null: Option<(Space, NullSpec)>,
+        pub null: Option<(Space, Nullability)>,
     }
 
-    impl Validate for ModCol {
+    impl Validate for ModifyColumnClauses {
         const REQUIREMENT: &'static str = "name a default, a constraint or nullability";
         fn validate(&self) -> bool {
             self.default.is_some() || self.constraint.is_some() || self.null.is_some()
@@ -4855,12 +4954,12 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct NullSpec {
+    pub struct Nullability {
         pub not: Option<(Kw!("NOT"), Space1)>,
         pub null: Kw!("NULL"),
     }
 
-    pub type DropKeywd = Kw!("DROP", "DELETE");
+    pub type DropKeyword = Kw!("DROP", "DELETE");
 
     #[derive(Grammar)]
     pub enum DropAction {
@@ -4883,13 +4982,13 @@ pub mod leveled {
     #[tygr(inline)]
     pub struct DropColumnItem {
         pub name: Ident,
-        pub cascade: Option<(Space1, CascadeOpt)>,
+        pub cascade: Option<(Space1, DropBehavior)>,
         pub data: Option<(Space1, DataOption)>,
     }
 
     #[derive(Grammar)]
     pub struct AddAction {
-        pub constraint: Option<(Kw!("CONSTRAINT"), Space, TName, Space)>,
+        pub constraint: Option<(Kw!("CONSTRAINT"), Space, TableName, Space)>,
         pub body: AddBody,
     }
 
@@ -4897,94 +4996,95 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum AddBody {
-        ForeignKey(OptionallyWrapped<AltFkeySpec>),
+        ForeignKey(OptionallyWrapped<AddForeignKey>),
         PrimaryKey {
-            spec: OptionallyWrapped<AltPkey>,
-            on: Option<(Space1, Kw!("ON"), Space, Token)>,
+            spec: OptionallyWrapped<AddPrimaryKey>,
+            on: Option<(Space1, Kw!("ON"), Space, NameOrLiteral)>,
         },
         Unique {
-            spec: OptionallyWrapped<AltUnique>,
+            spec: OptionallyWrapped<AddUnique>,
             fillfactor: FillFactor,
-            on: Option<(Space1, Kw!("ON"), Space, Token)>,
+            on: Option<(Space1, Kw!("ON"), Space, NameOrLiteral)>,
         },
-        ColDef(OptionallyWrapped<Coldef>),
-        Index(TblIndex),
+        ColDef(OptionallyWrapped<AddColumnDefinition>),
+        Index(TableIndex),
         Default {
             kw: (Kw!("DEFAULT"), Space),
-            value: Setdef,
+            value: DefaultOption,
             for_kw: (Space1, Kw!("FOR"), Space1),
             name: Ident,
         },
     }
 
-    pub type Coldef = Prefix<Option<(Kw!("COLUMN"), Space)>, OptionallyWrapped<Tecdef>>;
+    pub type AddColumnDefinition =
+        Prefix<Option<(Kw!("COLUMN"), Space)>, OptionallyWrapped<ColumnDefinition>>;
 
     #[derive(Grammar)]
-    pub enum CheckSpec {
+    pub enum CheckOrNoCheck {
         Check(Kw!("CHECK")),
         NoCheck(Kw!("NOCHECK")),
     }
 
     #[derive(Grammar)]
-    pub struct AltPkey {
+    pub struct AddPrimaryKey {
         pub kw: (Kw!("PRIMARY KEY"), Space),
-        pub spec: FList2,
+        pub spec: NamedKeyColumns,
     }
 
     /// FOREIGN KEY [name] (columns) REFERENCES ...: 2026.2 takes the name in ALTER TABLE ADD, not in CREATE TABLE.
     #[derive(Grammar)]
-    pub struct AltFkeySpec {
+    pub struct AddForeignKey {
         pub kw: (Kw!("FOREIGN KEY"), Space),
-        pub flist2: FList2,
+        pub flist2: NamedKeyColumns,
         pub references_kw: (Space1, Kw!("REFERENCES"), Space1),
-        pub ref_: Ref,
+        pub ref_: ReferencesSpecification,
     }
 
     #[derive(Grammar)]
-    pub struct TblForeign {
+    pub struct TableForeignKey {
         pub kw: (Kw!("FOREIGN KEY"), Space),
-        pub columns: TblKeyColumns,
+        pub columns: KeyColumns,
         pub references_kw: (Space1, Kw!("REFERENCES"), Space1),
-        pub ref_: Ref,
+        pub ref_: ReferencesSpecification,
     }
 
     /// `[CONSTRAINT name] INDEX|KEY name (components)`, a table element and an ALTER TABLE ADD action on 2026.2.
     #[derive(Grammar)]
-    pub struct TblIndex {
+    pub struct TableIndex {
         pub kw: (Kw!("INDEX", "KEY"), Space),
         pub name: DottedIdent,
-        pub components: Args<VecSep<ComponentSpec, ArgSep>>,
+        pub components: Args<VecSep<ComponentSpecification, ArgSep>>,
     }
 
     #[derive(Grammar)]
-    pub struct AltUnique {
+    pub struct AddUnique {
         pub kw: Kw!("UNIQUE"),
-        pub spec: UniqueSpec,
+        pub spec: UniqueSpecification,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct UniqueSpec {
+    pub struct UniqueSpecification {
         pub cluster: Cluster,
-        pub flist: (Space, FList2),
+        pub flist: (Space, NamedKeyColumns),
     }
 
     #[derive(Grammar)]
-    pub enum InOn {
+    pub enum InOrOn {
         In(Kw!("IN")),
         On(Kw!("ON")),
     }
 
-    pub type Token = Either<Ident, Literal>;
+    pub type NameOrLiteral = Either<Ident, Literal>;
 
     #[derive(Grammar)]
-    pub struct Telem {
+    pub struct TableElement {
         pub constraint: Option<(Kw!("CONSTRAINT"), Space, Ident, Space)>,
-        pub option: TelemOption,
+        pub option: TableElementOption,
     }
 
     #[derive(Grammar)]
-    pub enum TelemOption {
+    pub enum TableElementOption {
         Description {
             kw: (Kw!("%DESCRIPTION"), Space),
             value: Literal,
@@ -4999,44 +5099,44 @@ pub mod leveled {
             value: Literal,
         },
         ClassParameter(ClassParameter),
-        ExtentsizeClause(ExtentsizeClause),
+        ExtentSizeClause(ExtentSizeClause),
         Shard(Shard),
-        TblForeign(TblForeign),
-        TblPrimaryKey(TblPrimaryKey),
-        TblUnique(TblUnique),
-        Index(TblIndex),
-        Tecdef(Tecdef),
+        TableForeignKey(TableForeignKey),
+        TablePrimaryKey(TablePrimaryKey),
+        TableUnique(TableUnique),
+        Index(TableIndex),
+        ColumnDefinition(ColumnDefinition),
     }
 
     #[derive(Grammar)]
-    pub struct Tecdef {
+    pub struct ColumnDefinition {
         pub name: Ident,
-        pub typ: (Space1, Tectyp),
-        pub qualifiers: Vec<(Space, FldQualifier)>,
+        pub typ: (Space1, ColumnDataType),
+        pub qualifiers: Vec<(Space, ColumnQualifier)>,
     }
 
     #[derive(Grammar)]
-    pub enum Tectyp {
-        Datyp(Datyp),
+    pub enum ColumnDataType {
+        DataType(DataType),
         Identity {
-            datyp: Option<Datyp>,
+            datyp: Option<DataType>,
             identity: (Space, Identity),
         },
     }
 
     pub type Identity = Prefix<Kw!("IDENTITY"), Option<Args<(Literal, ArgSep, Literal)>>>;
 
-    pub type TblUnique = Prefix<Kw!("UNIQUE"), TblUniqueSpec>;
+    pub type TableUnique = Prefix<Kw!("UNIQUE"), TableUniqueSpecification>;
 
     #[derive(Grammar)]
-    pub struct TblUniqueSpec {
+    pub struct TableUniqueSpecification {
         pub cluster: Cluster,
-        pub columns: (Space, TblKeyColumns),
+        pub columns: (Space, KeyColumns),
     }
 
     #[derive(Grammar)]
-    pub enum TblKeyColumns {
-        Parens(FList1),
+    pub enum KeyColumns {
+        Parens(ColumnNameList),
         Bare(VecSep<Ident, ArgSep>),
     }
 
@@ -5049,10 +5149,10 @@ pub mod leveled {
         Literal,
     )>;
 
-    pub type TblPrimaryKey = Prefix<(Kw!("PRIMARY KEY"), Space), TblUniqueSpec>;
+    pub type TablePrimaryKey = Prefix<(Kw!("PRIMARY KEY"), Space), TableUniqueSpecification>;
 
     #[derive(Grammar)]
-    pub struct ExtentsizeClause {
+    pub struct ExtentSizeClause {
         pub kw: (Kw!("%EXTENTSIZE", "%NUMROWS"), Space),
         pub value: Literal,
     }
@@ -5066,17 +5166,17 @@ pub mod leveled {
         pub value: (Space, Literal),
     }
 
-    pub type Shard = Prefix<Kw!("SHARD"), ShardSpec>;
-    pub type Sharded = Prefix<Kw!("SHARDED"), ShardSpec>;
+    pub type Shard = Prefix<Kw!("SHARD"), ShardSpecification>;
+    pub type Sharded = Prefix<Kw!("SHARDED"), ShardSpecification>;
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct ShardSpec {
+    pub struct ShardSpecification {
         pub key: Option<(
             Space,
             Kw!("KEY"),
             Space,
-            FList1,
+            ColumnNameList,
             Option<(Space, CoshardClause)>,
         )>,
     }
@@ -5086,7 +5186,7 @@ pub mod leveled {
     pub struct CoshardClause {
         pub kw: Kw!("COSHARD"),
         pub with: Option<(Space1, Kw!("WITH"))>,
-        pub name: Either<Args<TName>, (Space, TName)>,
+        pub name: Either<Args<TableName>, (Space, TableName)>,
     }
 
     #[derive(Grammar)]
@@ -5096,19 +5196,19 @@ pub mod leveled {
             partition: Option<(PartitionOption, Space)>,
             with_kw: (Kw!("WITH"), Space1),
             options: VecSep<TableOption, ArgSep>,
-            informix: Option<(Space, InformixCompatability)>,
+            informix: Option<(Space, InformixCompatibility)>,
         },
         Shard {
             shard: Shard,
             partition: Option<(Space, PartitionOption)>,
         },
         Partition(PartitionOption),
-        InformixCompat(InformixCompatability),
+        InformixCompat(InformixCompatibility),
     }
 
     #[derive(Grammar)]
-    pub struct InformixCompatability {
-        pub in_on: Option<(InOn, Space, Token)>,
+    pub struct InformixCompatibility {
+        pub in_on: Option<(InOrOn, Space, NameOrLiteral)>,
         pub extent_size: Option<(Space, Kw!("EXTENT SIZE"), Space, Literal)>,
         pub next_size: Option<(Space, Kw!("NEXT SIZE"), Space, Literal)>,
     }
@@ -5120,7 +5220,7 @@ pub mod leveled {
             kw: Kw!("STORAGETYPE"),
             #[sugar]
             eq: Option<(Space, StringEq!("="))>,
-            value: (Space, Storagetype),
+            value: (Space, StorageType),
         },
     }
 
@@ -5168,7 +5268,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct PartitionRangeSpec {
+    pub struct PartitionRangeSpecification {
         pub kw: Kw!("PARTITION"),
         pub range: PartitionRange,
     }
@@ -5200,12 +5300,12 @@ pub mod leveled {
     pub type PartitionPrefix = Parenthesized<VecSep<Literal, ArgSep>>;
 
     #[derive(Grammar)]
-    pub enum FldQualifier {
+    pub enum ColumnQualifier {
         Description {
             kw: (Kw!("%DESCRIPTION"), Space),
             value: Literal,
         },
-        Fcon(Fcon),
+        ColumnConstraintDefinition(ColumnConstraintDefinition),
         SqlCollation(SqlCollation),
         Calculated(Kw!("CALCULATED")),
         CharacterSet {
@@ -5222,20 +5322,20 @@ pub mod leveled {
         },
         ComputeOnChange {
             kw: (Kw!("COMPUTEONCHANGE"), Space),
-            list: FList1,
+            list: ColumnNameList,
         },
         Default {
             kw: (Kw!("DEFAULT"), Space),
-            value: Setdef,
+            value: DefaultOption,
         },
         OnUpdate {
             kw: (Kw!("ON UPDATE"), Space),
-            value: UpdateSpec,
+            value: OnUpdateValue,
         },
         Private(Kw!("PRIVATE")),
         StorageType {
             kw: (Kw!("WITH STORAGETYPE"), Space, StringEq!("="), Space),
-            value: Storagetype,
+            value: StorageType,
         },
         AutoIncrement(Kw!("AUTO_INCREMENT")),
         Transient(Kw!("TRANSIENT")),
@@ -5292,23 +5392,25 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum Storagetype {
+    pub enum StorageType {
         Columnar(Kw!("COLUMNAR")),
         Row(Kw!("ROW")),
     }
 
     #[derive(Grammar)]
-    pub struct Datyp {
-        pub spec: DatypSpec,
-        pub args: Option<Args<DatypArgs>>,
+    pub struct DataType {
+        pub spec: DataTypeSpecification,
+        pub args: Option<Args<DataTypeArgs>>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct DatypArgs(pub Vec<Either<Parenthesized<Box<DatypArgs>>, StringOf1<IsNotParen>>>);
+    pub struct DataTypeArgs(
+        pub Vec<Either<Parenthesized<Box<DataTypeArgs>>, StringOf1<IsNotParen>>>,
+    );
 
     #[derive(Grammar)]
-    pub enum DatypSpec {
+    pub enum DataTypeSpecification {
         HashParen(Parenthesized<Vec<(StringEq!("#"), Space)>>),
         Binary {
             kw: Kw!("BINARY"),
@@ -5364,16 +5466,16 @@ pub mod leveled {
         Varchar(Kw!("VARCHAR")),
         Vector(Kw!("VECTOR")),
         AnyToken {
-            head: DatypName,
+            head: DataTypeName,
             rest: Vec<(StringEq!("."), Ident)>,
         },
     }
 
     #[derive(Grammar)]
     #[tygr(validated, inline)]
-    pub struct DatypName(pub Ident);
+    pub struct DataTypeName(pub Ident);
 
-    impl Validate for DatypName {
+    impl Validate for DataTypeName {
         const REQUIREMENT: &'static str = "not be a column clause keyword";
         fn validate(&self) -> bool {
             !matches!(
@@ -5384,11 +5486,11 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum Fcon {
+    pub enum ColumnConstraintDefinition {
         Constraint {
             kw: (Kw!("CONSTRAINT"), Space),
-            name: TName,
-            spec: (Space, NamedFconSpec),
+            name: TableName,
+            spec: (Space, NamedColumnConstraint),
         },
         Identity {
             kw: Kw!("IDENTITY"),
@@ -5402,7 +5504,7 @@ pub mod leveled {
         },
         References {
             kw: (Kw!("REFERENCES"), Space1),
-            reference: Ref,
+            reference: ReferencesSpecification,
         },
         Unique {
             kw: Kw!("UNIQUE"),
@@ -5411,10 +5513,10 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum NamedFconSpec {
+    pub enum NamedColumnConstraint {
         Default {
             kw: (Kw!("DEFAULT"), Space),
-            value: Setdef,
+            value: DefaultOption,
         },
         NotNull(Kw!("NOT NULL")),
         PrimaryKey {
@@ -5423,7 +5525,7 @@ pub mod leveled {
         },
         References {
             kw: (Kw!("REFERENCES"), Space1),
-            reference: Ref,
+            reference: ReferencesSpecification,
         },
         Unique {
             kw: Kw!("UNIQUE"),
@@ -5432,7 +5534,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum UpdateSpec {
+    pub enum OnUpdateValue {
         Negative {
             minus: (StringEq!("-"), Space),
             value: Number,
@@ -5473,37 +5575,41 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct Ref {
-        pub name: TName,
-        pub flist: Option<(Space, FList1)>,
-        pub match_spec: Option<(Space, Kw!("MATCH"), Space1, MatchSpec)>,
-        pub action: Option<(Space, Either<TriggeredAction, Kw!("NOCHECK")>)>,
+    pub struct ReferencesSpecification {
+        pub name: TableName,
+        pub flist: Option<(Space, ColumnNameList)>,
+        pub match_spec: Option<(Space, Kw!("MATCH"), Space1, MatchType)>,
+        pub action: Option<(Space, Either<ReferentialTriggeredAction, Kw!("NOCHECK")>)>,
     }
 
     /// ON UPDATE and ON DELETE in either order, NOCHECK after both: 2026.2 refuses two ON DELETE rules,
     /// `ON DELETE CASCADE NOCHECK` and `NOCHECK ON DELETE CASCADE`.
     #[derive(Grammar)]
-    pub enum TriggeredAction {
+    pub enum ReferentialTriggeredAction {
         UpdateFirst(TriggeredRules<Kw!("UPDATE"), Kw!("DELETE")>),
         DeleteFirst(TriggeredRules<Kw!("DELETE"), Kw!("UPDATE")>),
     }
 
     #[derive(Grammar)]
     pub struct TriggeredRules<First: Grammar, Second: Grammar> {
-        pub first: RefRule<First>,
-        pub second: Option<(Space1, RefRule<Second>, Option<(Space1, Kw!("NOCHECK"))>)>,
+        pub first: ReferentialRule<First>,
+        pub second: Option<(
+            Space1,
+            ReferentialRule<Second>,
+            Option<(Space1, Kw!("NOCHECK"))>,
+        )>,
     }
 
-    pub type RefRule<Event> = Prefix<(Kw!("ON"), Space1, Event, Space1), RefAction>;
+    pub type ReferentialRule<Event> = Prefix<(Kw!("ON"), Space1, Event, Space1), ReferentialAction>;
 
     #[derive(Grammar)]
-    pub enum MatchSpec {
+    pub enum MatchType {
         Full(Kw!("FULL")),
         Partial(Kw!("PARTIAL")),
     }
 
     #[derive(Grammar)]
-    pub enum RefAction {
+    pub enum ReferentialAction {
         Cascade(Kw!("CASCADE")),
         NoAction(Kw!("NO ACTION")),
         SetDefault(Kw!("SET DEFAULT")),
@@ -5511,21 +5617,24 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum FList2 {
-        Named { name: Ident, flist: (Space, FList1) },
-        Columns(TblKeyColumns),
+    pub enum NamedKeyColumns {
+        Named {
+            name: Ident,
+            flist: (Space, ColumnNameList),
+        },
+        Columns(KeyColumns),
     }
 
     #[derive(Grammar)]
-    pub enum LoadSpec {
+    pub enum LoadSpecification {
         Sql {
             kw: (Kw!("SQL"), Space1),
-            spec: LoadSqlSpec,
+            spec: LoadSqlSpecification,
         },
         Data {
             hints: Option<LoadHints>,
             kw: (Kw!("DATA"), Space1),
-            spec: LoadDataSpec,
+            spec: LoadDataSpecification,
         },
     }
 
@@ -5561,20 +5670,20 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum LoadDataSpec {
-        Inline(LoadDataSpecInline),
-        WithUsing(LoadDataSpecWithUsing),
+    pub enum LoadDataSpecification {
+        Inline(LoadDataSpecificationInline),
+        WithUsing(LoadDataSpecificationWithUsing),
     }
 
     #[derive(Grammar)]
-    pub struct LoadDataSpecInline {
+    pub struct LoadDataSpecificationInline {
         pub from: LoadDataFrom,
         pub into: (Space, LoadDataInto),
         pub using: Option<(Space, LoadDataUsing)>,
     }
 
     #[derive(Grammar)]
-    pub struct LoadDataSpecWithUsing {
+    pub struct LoadDataSpecificationWithUsing {
         pub from: Option<(LoadDataFrom, Space)>,
         pub into: Option<(LoadDataInto, Space)>,
         pub using: LoadDataUsing,
@@ -5587,33 +5696,38 @@ pub mod leveled {
         File(FileSource),
         Jdbc {
             kw: (Kw!("JDBC"), Space),
-            cnxn: JdbcCnxnSpec,
-            data: (Space, JdbcDataSpec),
+            cnxn: JdbcConnectionSpecification,
+            data: (Space, JdbcDataSpecification),
         },
     }
 
-    pub type ColumnDefList = VecSep<ColumnDefItem, ArgSep>;
+    pub type ColumnNameAndTypeList = VecSep<ColumnNameAndType, ArgSep>;
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct FileSource {
         pub kw: (Kw!("FILE"), Space),
         pub path: Literal,
-        pub columns: Option<(Space, Kw!("COLUMNS"), Space, Parenthesized<ColumnDefList>)>,
+        pub columns: Option<(
+            Space,
+            Kw!("COLUMNS"),
+            Space,
+            Parenthesized<ColumnNameAndTypeList>,
+        )>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct ColumnDefItem {
+    pub struct ColumnNameAndType {
         pub name: Ident,
-        pub datyp: (Space1, Datyp),
+        pub datyp: (Space1, DataType),
     }
 
     #[derive(Grammar)]
-    pub enum JdbcCnxnSpec {
+    pub enum JdbcConnectionSpecification {
         Connection {
             kw: Option<(Kw!("CONNECTION"), Space)>,
-            spec: CnxnSpec,
+            spec: ConnectionSpecification,
         },
         Url {
             kw: Option<(Kw!("URL"), Space)>,
@@ -5622,7 +5736,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum JdbcDataSpec {
+    pub enum JdbcDataSpecification {
         Query {
             kw: (Kw!("QUERY"), Space),
             value: Literal,
@@ -5634,7 +5748,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum CnxnSpec {
+    pub enum ConnectionSpecification {
         Ident(Ident),
         Literal(Literal),
     }
@@ -5642,9 +5756,9 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct LoadDataInto {
         pub kw: (Kw!("INTO"), Space),
-        pub table: TName,
-        pub columns: Option<(Space, FList1)>,
-        pub values: Option<(Space1, Kw!("VALUES"), Space, FList1)>,
+        pub table: TableName,
+        pub columns: Option<(Space, ColumnNameList)>,
+        pub values: Option<(Space1, Kw!("VALUES"), Space, ColumnNameList)>,
     }
 
     pub type LoadDataUsing = Prefix<(Kw!("USING"), Space), LoadOptions>;
@@ -5656,7 +5770,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct LoadSqlSpec {
+    pub struct LoadSqlSpecification {
         pub kw: (Kw!("FROM"), Space1),
         pub source: SqlSource,
         pub dialect: Option<(Space, Kw!("DIALECT"), Space, Literal)>,
@@ -5689,7 +5803,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum SubAlterServerAction {
-        FtPushdown(FTPushdownClause),
+        FtPushdown(PushdownClause),
         Connection {
             kw: (Kw!("CONNECTION"), Space),
             value: Literal,
@@ -5703,7 +5817,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum VectorDatyp {
+    pub enum VectorDataType {
         Decimal(Kw!("DECIMAL")),
         Double(Kw!("DOUBLE")),
         Float(Kw!("FLOAT")),
@@ -5711,22 +5825,22 @@ pub mod leveled {
         String(Kw!("STRING")),
     }
 
-    pub type StatsClause = Kw!("STATISTICS", "STATS");
+    pub type StatisticsKeyword = Kw!("STATISTICS", "STATS");
 
     #[derive(Grammar)]
-    pub enum StatsScope {
+    pub enum StatisticsScope {
         Schema {
             kw: (Kw!("SCHEMA"), Space1),
             schema: Ident,
         },
         Table {
             kw: (Kw!("TABLE"), Space1),
-            table: TName,
+            table: TableName,
         },
     }
 
     #[derive(Grammar)]
-    pub enum StatsProperty {
+    pub enum StatisticsProperty {
         IgnoreFixedStats(Kw!("IGNOREFIXEDSTATS")),
         SkipAutomaticStatsCollection(Kw!("SKIPAUTOMATICSTATSCOLLECTION")),
     }
@@ -5740,7 +5854,7 @@ mod sugar {
     use super::*;
 
     #[derive(Grammar, Clone)]
-    pub enum PercentOp {
+    pub enum PercentOperator {
         AlphaUp(Kw!("%ALPHAUP")),
         Exact(Kw!("%EXACT")),
         External(Kw!("%EXTERNAL")),
@@ -5760,7 +5874,7 @@ mod sugar {
     #[derive(Grammar, Clone)]
     pub struct StringOperation {
         pub op: StringOperator,
-        pub args: Args<(Scalx, ArgSep, ColTrun)>,
+        pub args: Args<(ValueExpression, ArgSep, TruncationLength)>,
     }
 
     #[derive(Grammar, Clone)]
@@ -5772,115 +5886,115 @@ mod sugar {
     }
 
     #[derive(Grammar, Clone)]
-    pub enum ColTrun {
+    pub enum TruncationLength {
         Const(Nested<Literal>),
-        HostVar(HostVar),
+        HostVariable(HostVariable),
     }
 
     #[derive(Grammar, Clone)]
     #[tygr(inline)]
-    pub struct SQLPositionArgs {
-        pub needle: Scalx,
+    pub struct PositionArgs {
+        pub needle: ValueExpression,
         pub in_kw: (Space1, Kw!("IN"), Space),
-        pub haystack: Scalx,
+        pub haystack: ValueExpression,
     }
 
     pub type SubstringArgs = Args<SubstringArgsInternal>;
 
     #[derive(Grammar, Clone)]
     pub struct SubstringArgsInternal {
-        pub expr: Scalx,
+        pub expr: ValueExpression,
         pub rest: Either<
             (
                 (Space, Kw!("FROM"), Space),
-                Scalx,
-                Option<((Space, Kw!("FOR"), Space), Scalx)>,
+                ValueExpression,
+                Option<((Space, Kw!("FOR"), Space), ValueExpression)>,
             ),
-            (ArgSep, Scalx, Option<(ArgSep, Scalx)>),
+            (ArgSep, ValueExpression, Option<(ArgSep, ValueExpression)>),
         >,
     }
 
-    pub type ODBCEscape = Wrap<(StringEq!("{"), Space), DTS, (Space, StringEq!("}"))>;
+    pub type ODBCEscape = Wrap<(StringEq!("{"), Space), ODBCEscapeContent, (Space, StringEq!("}"))>;
 
     #[derive(Grammar, Clone)]
-    pub enum DTS {
-        Function(Prefix<(Kw!("FN"), Space1), ODBCFunc>),
-        DateTime(DTSVal),
+    pub enum ODBCEscapeContent {
+        Function(Prefix<(Kw!("FN"), Space1), ODBCFunction>),
+        DateTime(ODBCDateTimeLiteral),
     }
 
     #[derive(Grammar, Clone)]
-    pub enum ODBCFunc {
-        Abs(Kw!("ABS"), Args<Scalx>),
-        Acos(Kw!("ACOS"), Args<Scalx>),
-        Asin(Kw!("ASIN"), Args<Scalx>),
+    pub enum ODBCFunction {
+        Abs(Kw!("ABS"), Args<ValueExpression>),
+        Acos(Kw!("ACOS"), Args<ValueExpression>),
+        Asin(Kw!("ASIN"), Args<ValueExpression>),
         Atan2(Kw!("ATAN2"), Args<RR>),
-        Atan(Kw!("ATAN"), Args<Scalx>),
-        Ceiling(Kw!("CEILING"), Args<Scalx>),
-        Cos(Kw!("COS"), Args<Scalx>),
-        Cot(Kw!("COT"), Args<Scalx>),
-        Exp(Kw!("EXP"), Args<Scalx>),
-        Floor(Kw!("FLOOR"), Args<Scalx>),
-        Log(Kw!("LOG"), Args<Scalx>),
-        Log10(Kw!("LOG10"), Args<Scalx>),
+        Atan(Kw!("ATAN"), Args<ValueExpression>),
+        Ceiling(Kw!("CEILING"), Args<ValueExpression>),
+        Cos(Kw!("COS"), Args<ValueExpression>),
+        Cot(Kw!("COT"), Args<ValueExpression>),
+        Exp(Kw!("EXP"), Args<ValueExpression>),
+        Floor(Kw!("FLOOR"), Args<ValueExpression>),
+        Log(Kw!("LOG"), Args<ValueExpression>),
+        Log10(Kw!("LOG10"), Args<ValueExpression>),
         Mod(Kw!("MOD"), Args<RR>),
         Pi(Kw!("PI"), Option<Args<()>>),
         Power(Kw!("POWER"), Args<RR>),
-        Sin(Kw!("SIN"), Args<Scalx>),
-        Sqrt(Kw!("SQRT"), Args<Scalx>),
-        Tan(Kw!("TAN"), Args<Scalx>),
-        Ascii(Kw!("ASCII"), Args<Scalx>),
-        Char(Kw!("CHAR"), Args<Scalx>),
+        Sin(Kw!("SIN"), Args<ValueExpression>),
+        Sqrt(Kw!("SQRT"), Args<ValueExpression>),
+        Tan(Kw!("TAN"), Args<ValueExpression>),
+        Ascii(Kw!("ASCII"), Args<ValueExpression>),
+        Char(Kw!("CHAR"), Args<ValueExpression>),
         Concat(Kw!("CONCAT"), Args<RR>),
         CurDate(Kw!("CURDATE"), Option<Args<()>>),
         CurTime(Kw!("CURTIME"), Option<Args<()>>),
         Database(Kw!("DATABASE"), Option<Args<()>>),
-        DayName(Kw!("DAYNAME"), Args<Scalx>),
-        DayOfMonth(Kw!("DAYOFMONTH"), Args<Scalx>),
-        DayOfWeek(Kw!("DAYOFWEEK"), Args<Scalx>),
-        DayOfYear(Kw!("DAYOFYEAR"), Args<Scalx>),
-        Degrees(Kw!("DEGREES"), Args<Scalx>),
-        Hour(Kw!("HOUR"), Args<Scalx>),
-        LCase(Kw!("LCASE"), Args<Scalx>),
+        DayName(Kw!("DAYNAME"), Args<ValueExpression>),
+        DayOfMonth(Kw!("DAYOFMONTH"), Args<ValueExpression>),
+        DayOfWeek(Kw!("DAYOFWEEK"), Args<ValueExpression>),
+        DayOfYear(Kw!("DAYOFYEAR"), Args<ValueExpression>),
+        Degrees(Kw!("DEGREES"), Args<ValueExpression>),
+        Hour(Kw!("HOUR"), Args<ValueExpression>),
+        LCase(Kw!("LCASE"), Args<ValueExpression>),
         Left(Kw!("LEFT"), Args<RR>),
-        Length(Kw!("LENGTH"), Args<Scalx>),
-        LTrim(Kw!("LTRIM"), Args<Scalx>),
-        Minute(Kw!("MINUTE"), Args<Scalx>),
-        Month(Kw!("MONTH"), Args<Scalx>),
-        MonthName(Kw!("MONTHNAME"), Args<Scalx>),
+        Length(Kw!("LENGTH"), Args<ValueExpression>),
+        LTrim(Kw!("LTRIM"), Args<ValueExpression>),
+        Minute(Kw!("MINUTE"), Args<ValueExpression>),
+        Month(Kw!("MONTH"), Args<ValueExpression>),
+        MonthName(Kw!("MONTHNAME"), Args<ValueExpression>),
         Now(Kw!("NOW"), Option<Args<()>>),
-        Quarter(Kw!("QUARTER"), Args<Scalx>),
-        Radians(Kw!("RADIANS"), Args<Scalx>),
+        Quarter(Kw!("QUARTER"), Args<ValueExpression>),
+        Radians(Kw!("RADIANS"), Args<ValueExpression>),
         Repeat(Kw!("REPEAT"), Args<RR>),
         Right(Kw!("RIGHT"), Args<RR>),
         Round(Kw!("ROUND"), Args<RR>),
-        RTrim(Kw!("RTRIM"), Args<Scalx>),
-        Second(Kw!("SECOND"), Args<Scalx>),
-        Sign(Kw!("SIGN"), Args<Scalx>),
-        Space(Kw!("SPACE"), Args<Scalx>),
+        RTrim(Kw!("RTRIM"), Args<ValueExpression>),
+        Second(Kw!("SECOND"), Args<ValueExpression>),
+        Sign(Kw!("SIGN"), Args<ValueExpression>),
+        Space(Kw!("SPACE"), Args<ValueExpression>),
         Substring(Kw!("SUBSTRING"), SubstringArgs),
         TimestampAdd(
             Kw!("TIMESTAMPADD"),
-            Args<RRR<DoubleQuotable<TSAddInterval>>>,
+            Args<RRR<DoubleQuotable<TimestampAddInterval>>>,
         ),
         TimestampDiff(
             Kw!("TIMESTAMPDIFF"),
-            Args<RRR<DoubleQuotable<TSDiffInterval>>>,
+            Args<RRR<DoubleQuotable<TimestampDiffInterval>>>,
         ),
         Truncate(Kw!("TRUNCATE"), Args<RR>),
-        UCase(Kw!("UCASE"), Args<Scalx>),
-        Week(Kw!("WEEK"), Args<Scalx>),
-        Year(Kw!("YEAR"), Args<Scalx>),
+        UCase(Kw!("UCASE"), Args<ValueExpression>),
+        Week(Kw!("WEEK"), Args<ValueExpression>),
+        Year(Kw!("YEAR"), Args<ValueExpression>),
     }
 
     #[derive(Grammar, Clone)]
-    pub struct DTSVal {
-        pub dts_type: DTSType,
+    pub struct ODBCDateTimeLiteral {
+        pub dts_type: ODBCDateTimeType,
         pub sp: Space,
-        pub val_spec: DTSValSpec,
+        pub val_spec: ODBCDateTimeValue,
     }
 
     #[derive(Grammar, Clone)]
-    pub enum DTSType {
+    pub enum ODBCDateTimeType {
         Date(Kw!("D")),
         Timestamp(Kw!("TS")),
         Time(Kw!("T")),
@@ -5891,13 +6005,13 @@ mod sugar {
         pub keyword: Kw!("FETCH"),
         pub direction: Option<(Space1, Either<Kw!("FIRST"), Kw!("NEXT")>)>,
         pub valspec: Nested<Count, Space1>,
-        pub row_keyword: Option<(Space1, RowRowsInline)>,
+        pub row_keyword: Option<(Space1, RowOrRows)>,
         pub only: Option<(Space1, Kw!("ONLY"))>,
     }
 
     #[derive(Grammar, Clone)]
     #[tygr(inline)]
-    pub enum RowRowsInline {
+    pub enum RowOrRows {
         Rows(Kw!("ROWS")),
         Row(Kw!("ROW")),
     }

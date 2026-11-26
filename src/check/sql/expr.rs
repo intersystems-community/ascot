@@ -3,7 +3,7 @@ use tygr_objectscript::sql::core::*;
 
 use super::{SqlProcedureUse, Walk, Walker};
 
-impl<B: tygr::Grammar + Default> Walk for Scalx<B> {
+impl<B: tygr::Grammar + Default> Walk for ValueExpression<B> {
     fn walk(&self, w: &mut Walker) {
         self.first.walk(w);
         for (.., operand) in &self.rest {
@@ -16,34 +16,34 @@ impl<B: tygr::Grammar + Default> Walk for Operand<B> {
     fn walk(&self, w: &mut Walker) {
         match self {
             Operand::Paren(_, scalx) => scalx.walk(w),
-            Operand::Term(_, term) => term.walk(w),
+            Operand::ValueExpressionPrimary(_, term) => term.walk(w),
         }
     }
 }
 
-impl Walk for Term {
+impl Walk for ValueExpressionPrimary {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Term::Builtin(f) => f.walk(w),
-            Term::Window(window) => window.walk(w),
-            Term::Agg(agg) => agg.walk(w),
-            Term::Unary { term, .. } => term.walk(w),
-            Term::XTFun(f) => f.args.walk(w),
-            Term::Case(case) => case.walk(w),
-            Term::Query(query) => query.walk(w),
-            Term::Call(f) => {
+            ValueExpressionPrimary::Builtin(f) => f.walk(w),
+            ValueExpressionPrimary::WindowFunction(window) => window.walk(w),
+            ValueExpressionPrimary::AggregateFunction(agg) => agg.walk(w),
+            ValueExpressionPrimary::Unary { term, .. } => term.walk(w),
+            ValueExpressionPrimary::ExtrinsicFunction(f) => f.args.walk(w),
+            ValueExpressionPrimary::Case(case) => case.walk(w),
+            ValueExpressionPrimary::Query(query) => query.walk(w),
+            ValueExpressionPrimary::Call(f) => {
                 let args = f.args.1.wrapped.as_ref().map_or(0, |args| args.items.len());
                 w.call(&f.name.name, args, SqlProcedureUse::Function);
                 f.args.walk(w)
             }
-            Term::HostVar(host_var) => host_var.walk(w),
-            Term::Column(column) => w.column(column),
-            Term::Macro(..)
-            | Term::Literal(_)
-            | Term::ParameterMarker(_)
-            | Term::SpecialSystemVariable(_)
-            | Term::Niladic(..)
-            | Term::Null(_) => {}
+            ValueExpressionPrimary::HostVariable(host_var) => host_var.walk(w),
+            ValueExpressionPrimary::Column(column) => w.column(column),
+            ValueExpressionPrimary::Macro(..)
+            | ValueExpressionPrimary::Literal(_)
+            | ValueExpressionPrimary::ParameterMarker(_)
+            | ValueExpressionPrimary::SpecialSystemVariable(_)
+            | ValueExpressionPrimary::Niladic(..)
+            | ValueExpressionPrimary::Null(_) => {}
         }
     }
 }
@@ -160,33 +160,33 @@ impl Walk for Builtin {
     }
 }
 
-impl Walk for ODBCOnlyFunc {
+impl Walk for ODBCOnlyFunction {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ODBCOnlyFunc::Convert(_, a) => a.walk(w),
-            ODBCOnlyFunc::IfNull(_, a) => a.walk(w),
-            ODBCOnlyFunc::User(..) => {}
+            ODBCOnlyFunction::Convert(_, a) => a.walk(w),
+            ODBCOnlyFunction::IfNull(_, a) => a.walk(w),
+            ODBCOnlyFunction::User(..) => {}
         }
     }
 }
 
 impl Walk for DatePart {
     fn walk(&self, w: &mut Walker) {
-        if let DatePart::HostVar(host_var) = self {
+        if let DatePart::HostVariable(host_var) = self {
             host_var.walk(w)
         }
     }
 }
 
-impl Walk for DatePartPart {
+impl Walk for ExtendedDatePart {
     fn walk(&self, w: &mut Walker) {
-        if let DatePartPart::HostVar(host_var) = self {
+        if let ExtendedDatePart::HostVariable(host_var) = self {
             host_var.walk(w)
         }
     }
 }
 
-impl Walk for SQLJSONKeyValuePairs {
+impl Walk for JSONKeyValuePairs {
     fn walk(&self, w: &mut Walker) {
         for (key, _, value) in &self.0.items {
             key.walk(w);
@@ -210,7 +210,7 @@ impl Walk for PredictWith {
     }
 }
 
-impl Walk for PredictAssign {
+impl Walk for PredictAssignment {
     fn walk(&self, w: &mut Walker) {
         self.scalx.walk(w)
     }
@@ -224,9 +224,9 @@ impl Walk for TrimArgs {
     }
 }
 
-impl Walk for SQLCastExpression {
+impl Walk for CastArgs {
     fn walk(&self, w: &mut Walker) {
-        use CastType::*;
+        use CastTarget::*;
         self.expr.walk(w);
         match &self.cast_type {
             Binary(_, a)
@@ -269,17 +269,17 @@ impl Walk for XMLValue {
     }
 }
 
-impl Walk for XMLValue2 {
+impl Walk for XMLContent {
     fn walk(&self, w: &mut Walker) {
         match self {
-            XMLValue2::Element(element) => element.walk(w),
-            XMLValue2::Forest(forest) => forest.walk(w),
-            XMLValue2::Comment(..) => {}
+            XMLContent::Element(element) => element.walk(w),
+            XMLContent::Forest(forest) => forest.walk(w),
+            XMLContent::Comment(..) => {}
         }
     }
 }
 
-impl Walk for SQLXmlAttribute {
+impl Walk for XMLAttribute {
     fn walk(&self, w: &mut Walker) {
         self.expr.walk(w)
     }
@@ -297,16 +297,16 @@ impl Walk for XMLConcat {
     }
 }
 
-impl Walk for Agg {
+impl Walk for AggregateFunction {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Agg::AggFuncArgs { arg, .. } => arg.walk(w),
-            Agg::CountStar(..) => {}
+            AggregateFunction::AggFuncArgs { arg, .. } => arg.walk(w),
+            AggregateFunction::CountStar(..) => {}
         }
     }
 }
 
-impl Walk for AggArg {
+impl Walk for AggregateFunctionArgs {
     fn walk(&self, w: &mut Walker) {
         self.quantifier.walk(w);
         self.expr.walk(w);
@@ -322,7 +322,7 @@ impl Walk for SetQuantifier {
     }
 }
 
-impl Walk for Window {
+impl Walk for WindowFunction {
     fn walk(&self, w: &mut Walker) {
         self.call.walk(w);
         let (partition, order, _) = &self.spec.wrapped;
@@ -331,9 +331,9 @@ impl Walk for Window {
     }
 }
 
-impl Walk for WindowCall {
+impl Walk for WindowFunctionType {
     fn walk(&self, w: &mut Walker) {
-        use WindowCall::*;
+        use WindowFunctionType::*;
         match self {
             RowNumber(..) | Rank(..) | DenseRank(..) | PercentRank(..) | CumeDist(..) => {}
             NTile(_, a)
@@ -354,9 +354,9 @@ impl Walk for WindowCall {
     }
 }
 
-impl Walk for Ordir {
+impl Walk for SortSpecification {
     fn walk(&self, w: &mut Walker) {
-        if let Ordit::Scalx(scalx) = &self.expr {
+        if let SortKey::ValueExpression(scalx) = &self.expr {
             scalx.walk(w)
         }
     }
@@ -382,37 +382,37 @@ impl<T: Walk + tygr::Grammar> Walk for When<T> {
     }
 }
 
-impl Walk for Implied<SQLElseClause> {
+impl Walk for Implied<ElseClause> {
     fn walk(&self, w: &mut Walker) {
         let Implied::Spelled(_, else_clause, _) = self;
         else_clause.result.walk(w)
     }
 }
 
-impl<B: tygr::Grammar + Default> Walk for Prdct<B> {
+impl<B: tygr::Grammar + Default> Walk for BooleanValueExpression<B> {
     fn walk(&self, w: &mut Walker) {
         self.first.walk(w);
-        for OrAnd::Or(_, _, and) in &self.rest {
+        for OrBooleanTerm::Or(_, _, and) in &self.rest {
             and.walk(w)
         }
     }
 }
 
-impl<B: tygr::Grammar + Default> Walk for And<B> {
+impl<B: tygr::Grammar + Default> Walk for BooleanTerm<B> {
     fn walk(&self, w: &mut Walker) {
         self.first.walk(w);
-        for AndCond::And(_, _, cond) in &self.rest {
+        for AndBooleanFactor::And(_, _, cond) in &self.rest {
             cond.walk(w)
         }
     }
 }
 
-impl<B: tygr::Grammar + Default> Walk for Cond<B> {
+impl<B: tygr::Grammar + Default> Walk for BooleanFactor<B> {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Cond::Not(_, _, condition) => condition.walk(w),
-            Cond::Paren(_, predicate) => predicate.walk(w),
-            Cond::Predicate(_, _, predicate) => predicate.walk(w),
+            BooleanFactor::Not(_, _, condition) => condition.walk(w),
+            BooleanFactor::Paren(_, predicate) => predicate.walk(w),
+            BooleanFactor::Predicate(_, _, predicate) => predicate.walk(w),
         }
     }
 }
@@ -448,7 +448,7 @@ impl Walk for Predicate {
 impl Walk for Comparison {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Comparison::Scalx { expr, .. }
+            Comparison::ValueExpression { expr, .. }
             | Comparison::StarEq { scalx: expr, .. }
             | Comparison::EqStar { scalx: expr, .. } => expr.walk(w),
             Comparison::Query { expr, .. } => expr.walk(w),
@@ -475,11 +475,11 @@ impl Walk for Comparison {
     }
 }
 
-impl Walk for ForCnd {
+impl Walk for ForSomeCondition {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ForCnd::Prdct(predicate) => predicate.walk(w),
-            ForCnd::GroupHaving(group, having) => {
+            ForSomeCondition::BooleanValueExpression(predicate) => predicate.walk(w),
+            ForSomeCondition::GroupHaving(group, having) => {
                 if let Some((group, _)) = group {
                     group.walk(w)
                 }

@@ -13,8 +13,8 @@ use resolve::{Columns, Lookup, ProcInfo};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::sql::core::*;
 use tygr_objectscript::sql::{
-    DottedIdent, Host, HostVar, Ident, Integer, Param, SQLIdentNonKeyword, Space, Space1, Sub,
-    SubscriptedHost, Var,
+    DottedIdent, Host, HostVariable, Ident, Integer, SQLIdentNonKeyword, Space, Space1, Subscript,
+    SubscriptedHost, TargetSpecification, VariableReference,
 };
 
 mod expr;
@@ -192,17 +192,17 @@ impl Walker<'_> {
         self.current().aliases.push(alias);
     }
 
-    fn column(&mut self, column: &Colmn) {
+    fn column(&mut self, column: &ColumnReference) {
         let Some(check) = self.check.filter(|_| !self.unchecked) else {
             return;
         };
         let column = match column {
-            Colmn::Str(label, ..) => ColumnRef {
+            ColumnReference::Str(label, ..) => ColumnRef {
                 qualifier: vec![text(label)],
                 name: None,
                 range: label.range(),
             },
-            Colmn::Arr(dotted, _) => {
+            ColumnReference::Arr(dotted, _) => {
                 let mut qualifier: Vec<String> = dotted.parts().map(text).collect();
                 let name = qualifier.pop();
                 ColumnRef {
@@ -267,10 +267,10 @@ macro_rules! leaf {
 }
 leaf!(
     Integer,
-    VectorDatyp,
-    DoubleQuotable<TSAddInterval>,
-    DoubleQuotable<TSDiffInterval>,
-    SQLConvertFunc
+    VectorDataType,
+    DoubleQuotable<TimestampAddInterval>,
+    DoubleQuotable<TimestampDiffInterval>,
+    ODBCConvertType
 );
 
 impl<T: Walk> Walk for Option<T> {
@@ -367,7 +367,7 @@ impl<A: Walk, B: Walk> Walk for Either<A, B> {
     }
 }
 
-impl Walk for HostVar {
+impl Walk for HostVariable {
     fn walk(&self, w: &mut Walker) {
         match &self.host {
             SubscriptedHost::Instance { subs, .. } => w.read(subs),
@@ -379,29 +379,29 @@ impl Walk for HostVar {
     }
 }
 
-impl Walk for Sub {
+impl Walk for Subscript {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Sub::Literal(_) => {}
-            Sub::Var(var) => var.walk(w),
+            Subscript::Literal(_) => {}
+            Subscript::VariableReference(var) => var.walk(w),
         }
     }
 }
 
-impl Walk for Var {
+impl Walk for VariableReference {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Var::HostRef(host_ref) => w.host(&host_ref.host, false),
-            Var::Ident(ident) => w.ident(ident, false),
+            VariableReference::HostReference(host_ref) => w.host(&host_ref.host, false),
+            VariableReference::Ident(ident) => w.ident(ident, false),
         }
     }
 }
 
-impl Walk for Param {
+impl Walk for TargetSpecification {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Param::HostVar(host_var) => host_var.walk(w),
-            Param::Ident(ident, subs) => {
+            TargetSpecification::HostVariable(host_var) => host_var.walk(w),
+            TargetSpecification::Ident(ident, subs) => {
                 w.ident(ident, subs.is_some());
                 w.read(subs)
             }
@@ -409,11 +409,11 @@ impl Walk for Param {
     }
 }
 
-impl Walk for ValSpec {
+impl Walk for ValuesSpecification {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ValSpec::Scalx(exprs) => exprs.walk(w),
-            ValSpec::Var { var, subs } => {
+            ValuesSpecification::ValueExpression(exprs) => exprs.walk(w),
+            ValuesSpecification::VariableReference { var, subs } => {
                 var.walk(w);
                 subs.walk(w)
             }
@@ -421,20 +421,20 @@ impl Walk for ValSpec {
     }
 }
 
-impl Walk for DTSValSpec {
+impl Walk for ODBCDateTimeValue {
     fn walk(&self, w: &mut Walker) {
         match self {
-            DTSValSpec::Literal(_) => {}
-            DTSValSpec::HostVar(host_var) => host_var.walk(w),
+            ODBCDateTimeValue::Literal(_) => {}
+            ODBCDateTimeValue::HostVariable(host_var) => host_var.walk(w),
         }
     }
 }
 
-impl Walk for Targt {
+impl Walk for IntoClause {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Targt::Into(into) => w.written(into),
-            Targt::IntoList(into) => w.written(&into.prefixed.1),
+            IntoClause::Into(into) => w.written(into),
+            IntoClause::IntoList(into) => w.written(&into.prefixed.1),
         }
     }
 }

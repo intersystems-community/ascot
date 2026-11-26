@@ -3,7 +3,7 @@ use tygr_objectscript::sql::core::*;
 use super::{SqlProcedureUse, Walk, Walker, name_of};
 
 // The CTEs are tables of every query under the `WITH`.
-impl<T: Walk + tygr::Grammar> Walk for WithStat<T> {
+impl<T: Walk + tygr::Grammar> Walk for WithStatement<T> {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
         if let Some((with, _)) = &self.with_clause {
@@ -24,7 +24,7 @@ impl Walk for WithListElement {
 
 // The CTEs are tables of every query under the `WITH`; the statement around its branches, whose
 // `ORDER BY` and row limit see the first branch's names.
-impl Walk for Selct {
+impl Walk for SelectStatement {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
         if let Some((with, _)) = &self.with_clause {
@@ -45,16 +45,16 @@ impl Walk for Query {
     }
 }
 
-impl Walk for QTerm {
+impl Walk for QueryTerm {
     fn walk(&self, w: &mut Walker) {
         match self {
-            QTerm::Query(query) => query.walk(w),
-            QTerm::Selex(selex) => selex.walk(w),
+            QueryTerm::Query(query) => query.walk(w),
+            QueryTerm::QuerySpecification(selex) => selex.walk(w),
         }
     }
 }
 
-impl Walk for Selex {
+impl Walk for QuerySpecification {
     // In the order SQL evaluates the clauses, so that each name is bound before it is used.
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
@@ -71,7 +71,7 @@ impl Walk for Selex {
     }
 }
 
-impl Walk for Selst {
+impl Walk for SelectList {
     fn walk(&self, w: &mut Walker) {
         self.quantifier.walk(w);
         if let Some((_, top, _)) = &self.top {
@@ -91,9 +91,9 @@ impl Walk for SelectOption {
     }
 }
 
-impl Walk for TopSpec {
+impl Walk for TopSpecification {
     fn walk(&self, w: &mut Walker) {
-        if let TopSpec::Count(count) = self {
+        if let TopSpecification::Count(count) = self {
             count.walk(w)
         }
     }
@@ -116,20 +116,20 @@ impl Walk for FromClause {
     }
 }
 
-impl<B: tygr::Grammar + Default> Walk for Tables<B> {
+impl<B: tygr::Grammar + Default> Walk for TableReferenceList<B> {
     fn walk(&self, w: &mut Walker) {
         self.first.walk(w)
     }
 }
 
-impl<B: tygr::Grammar + Default> Walk for Tref<B> {
+impl<B: tygr::Grammar + Default> Walk for TableReference<B> {
     fn walk(&self, w: &mut Walker) {
-        let Tref::Join(table) = self;
+        let TableReference::Join(table) = self;
         table.walk(w)
     }
 }
 
-impl<B: tygr::Grammar + Default> Walk for JTab<B> {
+impl<B: tygr::Grammar + Default> Walk for JoinedTable<B> {
     fn walk(&self, w: &mut Walker) {
         self.formit.walk(w);
         for (_, join) in &self.joins {
@@ -144,7 +144,7 @@ impl Walk for Join {
             Join::Cross { table, .. } | Join::Natural { table, .. } => table.walk(w),
             Join::Qualified { table, spec, .. } => {
                 table.walk(w);
-                if let (_, JSpec::On { condition, .. }) = spec {
+                if let (_, JoinSpecification::On { condition, .. }) = spec {
                     condition.walk(w)
                 }
             }
@@ -152,10 +152,10 @@ impl Walk for Join {
     }
 }
 
-impl<B: tygr::Grammar + Default> Walk for Frmit<B> {
+impl<B: tygr::Grammar + Default> Walk for TablePrimary<B> {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Frmit::TVF(_, function, alias) => {
+            TablePrimary::TableValuedFunction(_, function, alias) => {
                 let args = (function.args.wrapped.as_ref()).map_or(0, |(args, _)| args.items.len());
                 w.call(&function.table.0, args, SqlProcedureUse::Table);
                 w.table(None, alias.as_ref());
@@ -163,13 +163,13 @@ impl<B: tygr::Grammar + Default> Walk for Frmit<B> {
                     args.walk(w)
                 }
             }
-            Frmit::Lateral(_, _, _, query, alias) | Frmit::Query(_, query, alias) => {
+            TablePrimary::Lateral(_, _, _, query, alias) | TablePrimary::Query(_, query, alias) => {
                 w.table(None, alias.as_ref());
                 query.walk(w)
             }
-            Frmit::JTab(_, joined) => joined.walk(w),
-            Frmit::JSONTable(_, _, alias) => w.table(None, alias.as_ref()),
-            Frmit::Table(_, name, alias) => w.table(Some(name_of(&name.0)), alias.as_ref()),
+            TablePrimary::JoinedTable(_, joined) => joined.walk(w),
+            TablePrimary::JSONTable(_, _, alias) => w.table(None, alias.as_ref()),
+            TablePrimary::Table(_, name, alias) => w.table(Some(name_of(&name.0)), alias.as_ref()),
         }
     }
 }
@@ -192,7 +192,7 @@ impl Walk for SourceQuery {
     }
 }
 
-impl Walk for QueryExpr {
+impl Walk for QueryExpression {
     fn walk(&self, w: &mut Walker) {
         self.0.walk(w)
     }
@@ -206,9 +206,9 @@ impl Walk for RowLimitingClause {
     }
 }
 
-impl Walk for LimitSpec {
+impl Walk for LimitSpecification {
     fn walk(&self, w: &mut Walker) {
-        if let LimitSpec::Val(count) = self {
+        if let LimitSpecification::Val(count) = self {
             count.walk(w)
         }
     }
@@ -217,13 +217,13 @@ impl Walk for LimitSpec {
 impl Walk for Count {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Count::HostVar(host_var) => host_var.walk(w),
+            Count::HostVariable(host_var) => host_var.walk(w),
             Count::Literal(_) | Count::Marker(_) => {}
         }
     }
 }
 
-impl Walk for Offset {
+impl Walk for ResultOffsetClause {
     fn walk(&self, w: &mut Walker) {
         self.count.walk(w)
     }
