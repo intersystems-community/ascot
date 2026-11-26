@@ -147,7 +147,10 @@ impl Walk for JTab {
 impl Walk for Join {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Join::Cross { table, .. } | Join::Natural { table, .. } => table.walk(w),
+            Join::Cross {
+                table: (_, table), ..
+            }
+            | Join::Natural { table, .. } => table.walk(w),
             Join::Qualified { table, spec, .. } => {
                 table.walk(w);
                 if let (_, JSpec::On { condition, .. }) = spec {

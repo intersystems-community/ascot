@@ -2563,13 +2563,8 @@ pub mod leveled {
                     };
                 }
                 let cross = core::Join::Cross {
-                    cross_kw: (
-                        Default::default(),
-                        Default::default(),
-                        Default::default(),
-                        Space::blank(),
-                    ),
-                    table: Box::new(table),
+                    cross_kw: Default::default(),
+                    table: (Space::blank(), Box::new(table)),
                 };
                 first
                     .joins
@@ -2586,8 +2581,8 @@ pub mod leveled {
         Join(JTab),
         #[sugar]
         OJSyntax {
-            open: StringEq!("{"),
-            oj: (Ident, Space),
+            open: (StringEq!("{"), Space),
+            oj: (Kw!("OJ"), Space1),
             table: JTab,
             close: (Space, StringEq!("}")),
         },
@@ -2610,8 +2605,8 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum Join {
         Cross {
-            cross_kw: (Kw!("CROSS"), Space1, Kw!("JOIN"), Space),
-            table: Box<JTab>,
+            cross_kw: (Kw!("CROSS"), Space1, Kw!("JOIN")),
+            table: (Space, Box<JTab>),
         },
         Natural {
             natural_kw: (Kw!("NATURAL"), Space1),
@@ -4965,11 +4960,8 @@ pub mod leveled {
         Bitmap(Kw!("BITMAP")),
         Bitslice(Kw!("BITSLICE")),
         Columnar(Kw!("COLUMNAR")),
-        Unique {
-            kw: (Kw!("UNIQUE"), Space),
-            cluster: Cluster,
-        },
-        Cluster(Cluster),
+        Unique { kw: Kw!("UNIQUE"), cluster: Cluster },
+        Cluster(ClusterType),
     }
 
     #[derive(Grammar)]
@@ -5358,7 +5350,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct AltUnique {
-        pub kw: (Kw!("UNIQUE"), Space),
+        pub kw: Kw!("UNIQUE"),
         pub spec: UniqueSpec,
     }
 
@@ -5427,7 +5419,7 @@ pub mod leveled {
 
     pub type Identity = Prefix<Kw!("IDENTITY"), Option<Args<(Literal, ArgSep, Literal)>>>;
 
-    pub type TblUnique = Prefix<(Kw!("UNIQUE"), Space), TblUniqueSpec>;
+    pub type TblUnique = Prefix<Kw!("UNIQUE"), TblUniqueSpec>;
 
     #[derive(Grammar)]
     pub struct TblUniqueSpec {
@@ -5832,15 +5824,15 @@ pub mod leveled {
         NotNull(Kw!("NOT"), Space1, Kw!("NULL")),
         Null(Kw!("NULL")),
         Primary {
-            kw: (Kw!("PRIMARY"), Option<(Space1, Kw!("KEY"))>, Space),
+            kw: (Kw!("PRIMARY"), Option<(Space1, Kw!("KEY"))>),
             cluster: Cluster,
         },
         References {
-            kw: (Kw!("REFERENCES"), Space),
+            kw: (Kw!("REFERENCES"), Space1),
             reference: Ref,
         },
         Unique {
-            kw: (Kw!("UNIQUE"), Space),
+            kw: Kw!("UNIQUE"),
             cluster: Cluster,
         },
     }
@@ -5853,15 +5845,15 @@ pub mod leveled {
         },
         NotNull(Kw!("NOT"), Space1, Kw!("NULL")),
         PrimaryKey {
-            kw: (Kw!("PRIMARY"), Space1, Kw!("KEY"), Space),
+            kw: (Kw!("PRIMARY"), Space1, Kw!("KEY")),
             cluster: Cluster,
         },
         References {
-            kw: (Kw!("REFERENCES"), Space),
+            kw: (Kw!("REFERENCES"), Space1),
             reference: Ref,
         },
         Unique {
-            kw: (Kw!("UNIQUE"), Space),
+            kw: Kw!("UNIQUE"),
             cluster: Cluster,
         },
     }
@@ -5898,8 +5890,7 @@ pub mod leveled {
         User(Kw!("USER")),
     }
 
-    #[derive(Grammar)]
-    pub struct Cluster(pub Option<ClusterType>);
+    pub type Cluster = Option<(Space1, ClusterType)>;
 
     #[derive(Grammar)]
     #[tygr(inline)]
@@ -5917,20 +5908,27 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum TriggeredAction {
-        DeleteFirst {
-            delete_rule: DeleteRule,
-            update_rule: Option<(Space1, UpdateRule, Option<(Space, Kw!("NOCHECK"))>)>,
-        },
-        UpdateFirst {
-            update_rule: UpdateRule,
-            delete_rule: Option<(Space1, DeleteRule, Option<(Space, Kw!("NOCHECK"))>)>,
-        },
+    #[tygr(validated)]
+    pub struct TriggeredAction {
+        pub first: RefRule,
+        pub second: Option<(Space1, RefRule, Option<(Space1, Kw!("NOCHECK"))>)>,
     }
 
-    pub type UpdateRule = Prefix<(Kw!("ON"), Space1, Kw!("UPDATE"), Space1), RefAction>;
+    impl Validate for TriggeredAction {
+        const REQUIREMENT: &'static str = "name ON UPDATE and ON DELETE once each";
+        fn validate(&self) -> bool {
+            let event = |rule: &RefRule| matches!(rule.prefix.2, RefEvent::Update(_));
+            (self.second.as_ref()).is_none_or(|(_, rule, _)| event(rule) != event(&self.first))
+        }
+    }
 
-    pub type DeleteRule = Prefix<(Kw!("ON"), Space1, Kw!("DELETE"), Space1), RefAction>;
+    pub type RefRule = Prefix<(Kw!("ON"), Space1, RefEvent, Space1), RefAction>;
+
+    #[derive(Grammar)]
+    pub enum RefEvent {
+        Update(Kw!("UPDATE")),
+        Delete(Kw!("DELETE")),
+    }
 
     #[derive(Grammar)]
     pub enum MatchSpec {
