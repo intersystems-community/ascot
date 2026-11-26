@@ -861,16 +861,19 @@ pub mod leveled {
         Lt(StringEq!("<")),
     }
 
+    /// `[` or `NOT[`, the NOT against the bracket: 2026.2 refuses `NOT [`.
     #[derive(Grammar)]
-    pub enum ContainsPredicate {
-        LB(StringEq!("[")),
-        NotLB(StringEqCI!("NOT[")),
+    pub struct ContainsPredicate {
+        #[sugar]
+        pub not: Option<Kw!("NOT")>,
+        pub op: StringEq!("["),
     }
 
     #[derive(Grammar)]
-    pub enum FollowsPredicate {
-        Follows(StringEq!("]")),
-        NotFollows(StringEqCI!("NOT]")),
+    pub struct FollowsPredicate {
+        #[sugar]
+        pub not: Option<Kw!("NOT")>,
+        pub op: StringEq!("]"),
     }
 
     #[derive(Grammar)]
@@ -881,6 +884,17 @@ pub mod leveled {
         Ord(OrderPredicate),
         Contains(ContainsPredicate),
         Follows(FollowsPredicate),
+    }
+
+    #[sugar]
+    impl CmpOp {
+        fn negated(&self) -> bool {
+            matches!(
+                self,
+                CmpOp::Contains(ContainsPredicate { not: Some(_), .. })
+                    | CmpOp::Follows(FollowsPredicate { not: Some(_), .. })
+            )
+        }
     }
 
     #[derive(Grammar)]
@@ -1849,8 +1863,10 @@ pub mod leveled {
         }
     }
 
-    /// An operator and a quantifier against a subquery; `IN` is `= ANY`, a `NOT IN` under the condition's NOT.
+    /// An operator and a quantifier against a subquery; `IN` is `= ANY`, a `NOT IN` under the condition's NOT,
+    /// and `NOT[`, negating each comparison, flips the quantifier under it: `a NOT[ ANY q` is `NOT (a [ ALL q)`.
     #[derive(Grammar)]
+    #[sugar]
     pub enum QuantifiedOp {
         Op {
             op: CmpOp,
@@ -1861,13 +1877,24 @@ pub mod leveled {
         In { not: Not, in_kw: Kw!("IN") },
     }
 
-    impl Desugar for QuantifiedOpSugar<'_> {
+    impl Desugar for QuantifiedOp {
         type Core = core::QuantifiedOp;
         fn desugar(&self) -> Self::Core {
-            core::QuantifiedOp::Op {
-                op: core::CmpOp::Eq(Default::default()),
-                sp: Space::blank(),
-                quantifier: core::Quantifier::Any(Default::default()),
+            match self {
+                QuantifiedOp::Op { op, sp, quantifier } => core::QuantifiedOp::Op {
+                    op: op.desugar(),
+                    sp: sp.desugar(),
+                    quantifier: match (op.negated(), quantifier) {
+                        (false, quantifier) => quantifier.desugar(),
+                        (true, Quantifier::All(_)) => core::Quantifier::Any(Default::default()),
+                        (true, Quantifier::Any(_)) => Default::default(),
+                    },
+                },
+                QuantifiedOp::In { .. } => core::QuantifiedOp::Op {
+                    op: core::CmpOp::Eq(Default::default()),
+                    sp: Space::blank(),
+                    quantifier: core::Quantifier::Any(Default::default()),
+                },
             }
         }
     }
@@ -1887,8 +1914,8 @@ pub mod leveled {
     }
 
     /// A negated predicate is `NOT (predicate)`: NOT BETWEEN, NOT IN, NOT LIKE, NOT %MATCHES, NOT %INLIST,
-    /// IS NOT NULL, IS NOT JSON and NOT IN (subquery), as NOT (= ANY), each measured on 2026.2 with NULL
-    /// rows; NOT[ and NOT] stay as written, a quantified one being no NOT (... ALL ...) on IRIS.
+    /// IS NOT NULL, IS NOT JSON, NOT IN (subquery), as NOT (= ANY), NOT[ and NOT], each measured on 2026.2 with
+    /// NULL rows (IRIS's own NOT (… ALL …) returns the rows of … ANY … there, not those of NOT[ ANY).
     impl Desugar for Cond {
         type Core = core::Cond;
         fn desugar(&self) -> Self::Core {
@@ -1906,7 +1933,7 @@ pub mod leveled {
                 noindex: noindex.desugar(),
                 predicate: predicate.desugar(),
             };
-            if !negation(predicate) {
+            if !negated(predicate) {
                 return plain;
             }
             core::Cond::Not {
@@ -1920,7 +1947,7 @@ pub mod leveled {
         }
     }
 
-    fn negation(predicate: &Predicate) -> bool {
+    fn negated(predicate: &Predicate) -> bool {
         use Comparison::*;
         let Predicate::Comparison { tail, .. } = predicate else {
             return false;
@@ -1937,6 +1964,11 @@ pub mod leveled {
                 op: QuantifiedOp::In { not, .. },
                 ..
             } => not.is_some(),
+            Scalx { op, .. }
+            | Query {
+                op: QuantifiedOp::Op { op, .. },
+                ..
+            } => op.negated(),
             _ => false,
         }
     }
