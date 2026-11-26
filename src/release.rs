@@ -32,7 +32,7 @@ pub const BUNDLED_DECLARATIONS: Option<BundledDeclarations> = Some(BundledDeclar
     bytes: include_bytes!(concat!(
         "../declarations/iris-community-",
         default_release!(),
-        ".d.json.gz"
+        ".ascot.decls"
     )),
 });
 #[cfg(not(feature = "bundled-declarations"))]
@@ -98,7 +98,7 @@ impl<'a> Release<'a> {
             crate::iris::DEFAULT_NAMESPACE => String::new(),
             other => format!(".{other}"),
         };
-        format!("{}-{}{namespace}.d.json.gz", self.image, self.tag)
+        format!("{}-{}{namespace}.ascot.decls", self.image, self.tag)
     }
 }
 
@@ -115,7 +115,7 @@ impl std::fmt::Display for Release<'_> {
 impl Release<'_> {
     /// Where `~/.ascot` keeps this release's declaration file, present or not.
     pub fn cached_file(&self) -> Result<PathBuf, String> {
-        Ok(cache_dir()?.join(self.asset().trim_end_matches(".gz")))
+        Ok(cache_dir()?.join(self.asset()))
     }
 }
 
@@ -163,15 +163,15 @@ mod tests {
         );
         assert_eq!(
             release("irishealth-community:2026.2:HSLIB").asset(),
-            "irishealth-community-2026.2.HSLIB.d.json.gz"
+            "irishealth-community-2026.2.HSLIB.ascot.decls"
         );
         for not_one in [
             "2026",
             "v2026.2",
-            "user.d.json",
+            "user.ascot.decls",
             "http://localhost:52773",
             "2026.2.0",
-            "2026.2.d.json",
+            "2026.2.ascot.decls",
             "a:b:c:d",
             "irishealth-community:HSLIB",
         ] {

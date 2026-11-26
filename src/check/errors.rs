@@ -1109,7 +1109,7 @@ type_error_kinds! {
     /// package and the table's name as its own or as its `SqlTableName`, and no class query of
     /// the package is a `SqlView` of that name. IRIS compiles the statement and gives it SQLCODE
     /// -30 when it runs. The schema is the package with dots as underscores, `SQLUser` for `User`,
-    /// and an unqualified table is in `SQLUser`.
+    /// and an unqualified table is in the class's own schema, a routine's in `SQLUser`.
     ///
     /// ```objectscript env=none compiles
     /// Class Demo.SqlTableNotFound

@@ -286,8 +286,8 @@ IRIS; `iris` says which:
   and `%SYS` when left out; `latest` serves as the tag there too.
 - `--iris http://user:password@host:port[/prefix]` with `--iris-namespace`
   (default `%SYS`): a live connection to IRIS through the Atelier REST API.
-- `--iris path/to/declarations.d.json`: a declaration file, a released one or
-  one you [built yourself](#build-your-own-declaration-files). No REST
+- `--iris path/to/declarations.ascot.decls`: a declaration file, a released
+  one or one you [built yourself](#build-your-own-declaration-files). No REST
   requests, and no instance needed.
 - `--iris none`: no environment, so every class, routine or include outside the
   workspace is an error.
@@ -311,10 +311,10 @@ report we take.
 machines without the instance can check against it:
 
 ```sh
-ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER path/to/declaration.d.json
+ascot declare --iris http://user:password@localhost:8080/iris --iris-namespace USER path/to/declaration.ascot.decls
 ```
 
-Without the file argument it writes `~/.ascot/<host>-<port>[-<prefix>]-<namespace>.d.json`.
+Without the file argument it writes `~/.ascot/<host>-<port>[-<prefix>]-<namespace>.ascot.decls`.
 
 ### Style
 

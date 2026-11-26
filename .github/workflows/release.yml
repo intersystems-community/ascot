@@ -104,17 +104,17 @@ jobs:
       - run: cargo build --release
       - name: Declare
         run: |
-          RELEASE=$(basename declarations/iris-community-*.d.json.gz .d.json.gz)
+          RELEASE=$(basename declarations/iris-community-*.ascot.decls .ascot.decls)
           RELEASE=${RELEASE#iris-community-}
-          NAME=${{ matrix.image }}-$RELEASE.d.json
-          [ "${{ matrix.namespace }}" = %SYS ] || NAME=${{ matrix.image }}-$RELEASE.${{ matrix.namespace }}.d.json
+          NAME=${{ matrix.image }}-$RELEASE.ascot.decls
+          [ "${{ matrix.namespace }}" = %SYS ] || NAME=${{ matrix.image }}-$RELEASE.${{ matrix.namespace }}.ascot.decls
           scripts/prebuilt-declarations.sh $RELEASE $NAME ${{ matrix.image }} ${{ matrix.namespace }}
-          gzip -9 $NAME
-          sha256sum $NAME.gz > $NAME.gz.sha256
+          gzip -9 $NAME && mv $NAME.gz $NAME
+          sha256sum $NAME > $NAME.sha256
       - uses: actions/upload-artifact@v7
         with:
           name: declarations-${{ matrix.image }}-${{ matrix.namespace }}
-          path: '*.d.json.gz*'
+          path: '*.ascot.decls*'
           if-no-files-found: error
 
   # The release's diagnostics reference, `docs/<version>`, which its binaries link to.
@@ -144,8 +144,8 @@ jobs:
             *.tar.gz
             *.zip
             style.json
-            *.d.json.gz
-            *.d.json.gz.sha256
+            *.ascot.decls
+            *.ascot.decls.sha256
           generate_release_notes: true
 
       - name: Update the Homebrew tap

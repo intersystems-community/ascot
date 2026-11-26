@@ -65,6 +65,10 @@ pub(crate) struct ColumnRef {
 
 // What the walker asks of the checker, when there is one (see `resolve`).
 pub(crate) trait Resolver {
+    // The schema of an unqualified name: the class's own, `SQLUser` in a routine.
+    fn default_schema(&self) -> String {
+        "SQLUser".to_string()
+    }
     fn table(&self, schema: &str, table: &str) -> Lookup<Option<Columns>>;
     fn procedure(&self, schema: &str, name: &str) -> Lookup<ProcInfo>;
     fn report(&self, kind: TypeErrorKind, range: &Range<usize>);

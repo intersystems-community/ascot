@@ -77,7 +77,7 @@ const connected = await createWorkspace(new MyAtelier());
 ```
 
 A list of these is asked in order, the first source that holds a document answering for it, so
-`createWorkspace([fs.readFileSync(".ascot/iris-community-2026.2.d.json.gz"), new MyAtelier()])`
+`createWorkspace([fs.readFileSync(".ascot/iris-community-2026.2.ascot.decls"), new MyAtelier()])`
 reads the system classes from the file and your own from the server. `setEnv` takes the same, and
 rejects a declaration file that doesn't read, the sources in force staying.
 
