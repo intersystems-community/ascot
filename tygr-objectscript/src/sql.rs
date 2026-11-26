@@ -2739,7 +2739,7 @@ pub mod leveled {
         Asign(Asign),
         DefaultValues {
             columns: Option<SQLColumnListParen>,
-            kw: (Space1, Kw!("DEFAULT VALUES")),
+            kw: (Space, Kw!("DEFAULT VALUES")),
         },
     }
 
@@ -2754,7 +2754,7 @@ pub mod leveled {
         },
         ColumnList {
             columns: Option<SQLColumnListParen>,
-            values: (Space1, ValueSource),
+            values: (Space, ValueSource),
         },
     }
 
@@ -5117,8 +5117,8 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct InformixCompatability {
         pub in_on: Option<(InOn, Space, Token)>,
-        pub extent_size: Option<(Space1, Kw!("EXTENT SIZE"), Space, Literal)>,
-        pub next_size: Option<(Space1, Kw!("NEXT SIZE"), Space, Literal)>,
+        pub extent_size: Option<(Space, Kw!("EXTENT SIZE"), Space, Literal)>,
+        pub next_size: Option<(Space, Kw!("NEXT SIZE"), Space, Literal)>,
     }
 
     #[derive(Grammar)]

@@ -1,6 +1,6 @@
 use either::Either;
 use tygr::Print;
-use tygr_objectscript::sql::{Space1, core::*};
+use tygr_objectscript::sql::{Space, core::*};
 
 use super::{SqlProcedureUse, Walk, Walker, name_of};
 
@@ -109,7 +109,7 @@ impl Walk for Asign {
 fn column_list(
     w: &mut Walker,
     columns: &Option<SQLColumnListParen>,
-    values: &(Space1, ValueSource),
+    values: &(Space, ValueSource),
 ) {
     for column in columns.iter().flat_map(|list| list.1.wrapped.items.iter()) {
         w.column(column)
