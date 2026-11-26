@@ -219,9 +219,13 @@ impl Walk for SQLCastExpression {
         use CastType::*;
         self.expr.walk(w);
         match &self.cast_type {
-            Binary(_, _, a) | Character(_, _, a) | Char(_, _, a) => a.walk(w),
-            Nchar(_, a) | Nvarchar(_, a) | Varbinary(_, a) | Varchar(_, a) => a.walk(w),
-            Decimal(_, a) | Dec(_, a) | Numeric(_, a) => {
+            Binary(_, a)
+            | Char(_, a)
+            | Nchar(_, a)
+            | Nvarchar(_, a)
+            | Varbinary(_, a)
+            | Varchar(_, a) => a.walk(w),
+            Decimal(_, a) | Numeric(_, a) => {
                 if let Some(a) = a {
                     a.wrapped.0.walk(w);
                     if let Some((_, scale)) = &a.wrapped.1 {
@@ -230,8 +234,8 @@ impl Walk for SQLCastExpression {
                 }
             }
             Bigint(_) | Bit(_) | Datetime(_) | Date(_) | Double(_) | Float(_) | Guid(_)
-            | Integer(_) | Int(_) | Money(_) | Posixtime(_) | Real(_) | Smalldatetime(_)
-            | Smallint(_) | Smallmoney(_) | Timestamp(_) | Time(_) | Tinyint(_) => {}
+            | Integer(_) | Money(_) | Posixtime(_) | Real(_) | Smalldatetime(_) | Smallint(_)
+            | Smallmoney(_) | Timestamp(_) | Time(_) | Tinyint(_) => {}
         }
     }
 }

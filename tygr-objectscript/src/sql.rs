@@ -3877,32 +3877,40 @@ pub mod leveled {
     type OptParenScalx = Option<Parenthesized<Scalx>>;
     type OptParenScalx2 = Option<Parenthesized<(Scalx, Option<(ArgSep, Scalx)>)>>;
 
+    /// CAST's types, a second spelling the sugar of the first; 2026.2 takes NCHAR VARYING and refuses DOUBLE
+    /// PRECISION, INT(10) and VARCHAR(10, 2).
     #[derive(Grammar)]
     #[tygr(name = "cast type")]
     pub enum CastType {
         Bigint(Kw!("BIGINT")),
-        Binary(
-            Kw!("BINARY"),
-            Option<(Space1, Kw!("VARYING"))>,
-            OptParenScalx,
-        ),
+        #[sugar]
+        BinaryVarying(Kw!("BINARY"), Space1, Kw!("VARYING"), OptParenScalx),
+        Binary(Kw!("BINARY"), OptParenScalx),
         Bit(Kw!("BIT")),
-        Character(
-            Kw!("CHARACTER"),
-            Option<(Space1, Kw!("VARYING"))>,
+        #[sugar]
+        CharVarying(
+            Either<Kw!("CHARACTER"), Kw!("CHAR")>,
+            Space1,
+            Kw!("VARYING"),
             OptParenScalx,
         ),
-        Char(Kw!("CHAR"), Option<(Space1, Kw!("VARYING"))>, OptParenScalx),
+        #[sugar]
+        Character(Kw!("CHARACTER"), OptParenScalx),
+        Char(Kw!("CHAR"), OptParenScalx),
         Datetime(Kw!("DATETIME")),
         Date(Kw!("DATE")),
         Decimal(Kw!("DECIMAL"), OptParenScalx2),
+        #[sugar]
         Dec(Kw!("DEC"), OptParenScalx2),
         Double(Kw!("DOUBLE")),
         Float(Kw!("FLOAT")),
         Guid(Kw!("GUID")),
         Integer(Kw!("INTEGER")),
+        #[sugar]
         Int(Kw!("INT")),
         Money(Kw!("MONEY")),
+        #[sugar]
+        NcharVarying(Kw!("NCHAR"), Space1, Kw!("VARYING"), OptParenScalx),
         Nchar(Kw!("NCHAR"), OptParenScalx),
         Numeric(Kw!("NUMERIC"), OptParenScalx2),
         Nvarchar(Kw!("NVARCHAR"), OptParenScalx),
@@ -3916,6 +3924,29 @@ pub mod leveled {
         Tinyint(Kw!("TINYINT")),
         Varbinary(Kw!("VARBINARY"), OptParenScalx),
         Varchar(Kw!("VARCHAR"), OptParenScalx),
+    }
+
+    /// INT is INTEGER, DEC DECIMAL, CHARACTER CHAR, and CHAR[ACTER] VARYING, BINARY VARYING and NCHAR VARYING are
+    /// VARCHAR, VARBINARY and NVARCHAR.
+    impl Desugar for CastTypeSugar<'_> {
+        type Core = core::CastType;
+        fn desugar(&self) -> Self::Core {
+            use core::CastType::*;
+            match self {
+                Self::Int(_) => Integer(Default::default()),
+                Self::Dec(_, precision) => Decimal(Default::default(), precision.desugar()),
+                Self::Character(_, precision) => Char(Default::default(), precision.desugar()),
+                Self::CharVarying(.., precision) => {
+                    Varchar(Default::default(), precision.desugar())
+                }
+                Self::BinaryVarying(.., precision) => {
+                    Varbinary(Default::default(), precision.desugar())
+                }
+                Self::NcharVarying(.., precision) => {
+                    Nvarchar(Default::default(), precision.desugar())
+                }
+            }
+        }
     }
 
     pub type IfExists = Option<(Kw!("IF"), Space1, Kw!("EXISTS"), Space)>;
@@ -6294,9 +6325,18 @@ pub mod leveled {
         Decimal(Kw!("DECIMAL")),
         Double(Kw!("DOUBLE")),
         Float(Kw!("FLOAT")),
+        #[sugar]
         Int(Kw!("INT")),
         Integer(Kw!("INTEGER")),
         String(Kw!("STRING")),
+    }
+
+    /// INT is INTEGER.
+    impl Desugar for VectorDatypSugar<'_> {
+        type Core = core::VectorDatyp;
+        fn desugar(&self) -> Self::Core {
+            core::VectorDatyp::Integer(Default::default())
+        }
     }
 
     #[derive(Grammar)]
