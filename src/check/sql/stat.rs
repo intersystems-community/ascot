@@ -225,14 +225,11 @@ impl Walk for TRMode {
 impl Walk for DDL {
     fn walk(&self, w: &mut Walker) {
         match self {
-            DDL::CreOrAltView {
-                with_clause, query, ..
-            } => {
-                if let Some((with, _)) = with_clause {
-                    with.walk(w)
-                }
-                query.walk(w)
-            }
+            DDL::Create { what, .. } => what.walk(w),
+            DDL::Alter {
+                what: Altered::View(def),
+                ..
+            } => def.walk(w),
             DDL::CancelQuery {
                 val,
                 cancel_scope,
@@ -247,24 +244,6 @@ impl Walk for DDL {
                     timeout.walk(w)
                 }
             }
-            DDL::CreateTableAs {
-                with_clause, query, ..
-            } => {
-                if let Some((with, _)) = with_clause {
-                    with.walk(w)
-                }
-                query.walk(w)
-            }
-            DDL::CreateTrigger { when, body, .. } => {
-                if let Some((.., when)) = when {
-                    when.walk(w)
-                }
-                body.1.walk(w)
-            }
-            DDL::CreateModel {
-                source: Some((_, source)),
-                ..
-            } => source.walk(w),
             DDL::TrainModel {
                 with_clause,
                 source,
@@ -282,13 +261,45 @@ impl Walk for DDL {
                     source.walk(w)
                 }
             }
-            DDL::CreateFunction { spec, .. }
-            | DDL::CreateProcedure { spec, .. }
-            | DDL::CreateQuery { spec, .. }
-            | DDL::CreateMethod { spec, .. } => spec.1.walk(w),
-            DDL::CreateAggregate { params, .. } => params.walk(w),
             _ => {}
         }
+    }
+}
+
+impl Walk for Created {
+    fn walk(&self, w: &mut Walker) {
+        match self {
+            Created::View { def, .. } => def.walk(w),
+            Created::TableAs {
+                with_clause, query, ..
+            } => {
+                if let Some((with, _)) = with_clause {
+                    with.walk(w)
+                }
+                query.walk(w)
+            }
+            Created::Trigger { when, body, .. } => {
+                if let Some((.., when)) = when {
+                    when.walk(w)
+                }
+                body.1.walk(w)
+            }
+            Created::Model {
+                source: Some((_, source)),
+                ..
+            } => source.walk(w),
+            Created::Routine(routine) => routine.spec.1.walk(w),
+            _ => {}
+        }
+    }
+}
+
+impl Walk for ViewDef {
+    fn walk(&self, w: &mut Walker) {
+        if let Some((with, _)) = &self.with_clause {
+            with.walk(w)
+        }
+        self.query.walk(w)
     }
 }
 
@@ -304,16 +315,22 @@ impl Walk for TriggerBody {
 impl Walk for CodeBody {
     fn walk(&self, w: &mut Walker) {
         if let CodeBody::Sql { body, .. } = self {
-            for (_, statement, _, _) in &body.wrapped {
+            for (_, statement, _, _) in body.wrapped.iter() {
                 match statement {
-                    Either::Left(ret) => {
-                        if let Some((_, ReturnValue::HostRef(host_ref))) = &ret.value {
-                            w.host(host_ref, false)
-                        }
-                    }
+                    Either::Left(ret) => ret.value.1.walk(w),
                     Either::Right(stat) => stat.walk(w),
                 }
             }
+        }
+    }
+}
+
+impl Walk for ReturnValue {
+    fn walk(&self, w: &mut Walker) {
+        match self {
+            ReturnValue::Paren(value) => value.walk(w),
+            ReturnValue::HostVar(host_var) => host_var.walk(w),
+            ReturnValue::Literal(..) | ReturnValue::Marker(_) => {}
         }
     }
 }
@@ -332,11 +349,7 @@ impl Walk for ParameterList {
 }
 
 impl Walk for ParameterDeclaration {
-    fn walk(&self, w: &mut Walker) {
-        if let Some((_, default)) = &self.default {
-            default.value.walk(w)
-        }
-    }
+    fn walk(&self, _: &mut Walker) {}
 }
 
 impl Walk for ModelSource {
@@ -348,7 +361,7 @@ impl Walk for ModelSource {
                 where_clause,
                 group,
                 having,
-                order,
+                tail,
             } => {
                 from.walk(w);
                 if let Some((_, prdct)) = where_clause {
@@ -360,9 +373,7 @@ impl Walk for ModelSource {
                 if let Some((_, having)) = having {
                     having.walk(w)
                 }
-                if let Some((_, order)) = order {
-                    order.walk(w)
-                }
+                tail.walk(w)
             }
         }
     }

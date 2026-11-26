@@ -3422,8 +3422,17 @@ pub mod leveled {
         Alt(Kw!("ALT")),
         All(Kw!("ALL")),
         Stat(Kw!("STAT")),
+        #[sugar]
         Stats(Kw!("STATS")),
         Into(Kw!("INTO"), Space, VecSep<Param, ArgSep>),
+    }
+
+    impl Desugar for ExplainOptionSugar<'_> {
+        type Core = core::ExplainOption;
+        fn desugar(&self) -> Self::Core {
+            let Self::Stats(_) = self;
+            core::ExplainOption::Stat(Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -3600,49 +3609,74 @@ pub mod leveled {
 
     pub type Grant = Prefix<Kw!("GRANT"), (Space, GrantCmd)>;
 
+    /// WITH ADMIN OPTION goes with roles and admin privileges, WITH GRANT OPTION with objects.
     #[derive(Grammar)]
-    #[tygr(name = "grant cmd")]
-    pub enum GrantCmd {
-        AdminPrivileges {
-            privileges: VecSep<AdminPriv, ArgSep>,
-            to_kw: (Space1, Kw!("TO"), Space),
-            grantees: Grntee,
-            with_admin: WithOption<Kw!("ADMIN")>,
-        },
-        Roles {
-            roles: VecSep<Role, ArgSep>,
-            to_kw: (Space, Kw!("TO"), Space),
-            grantees: Grntee,
-            with_admin: WithOption<Kw!("ADMIN")>,
+    #[tygr(name = "grant cmd", validated)]
+    pub struct GrantCmd {
+        pub what: Granted,
+        pub to_kw: (Space, Kw!("TO"), Space),
+        pub grantees: Grntee,
+        pub with: WithOption<Either<Kw!("ADMIN"), Kw!("GRANT")>>,
+    }
+
+    impl Validate for GrantCmd {
+        const REQUIREMENT: &'static str =
+            "take WITH ADMIN OPTION on roles and admin privileges, WITH GRANT OPTION on objects";
+        fn validate(&self) -> bool {
+            match &self.with {
+                None => true,
+                Some((.., Either::Left(_), _, _)) => self.what.is_admin(),
+                Some((.., Either::Right(_), _, _)) => !self.what.is_admin(),
+            }
+        }
+    }
+
+    /// What GRANT gives and REVOKE takes back; the roles last, since a privilege keyword is an identifier too.
+    #[derive(Grammar)]
+    pub enum Granted {
+        AdminPrivileges(VecSep<AdminPriv, ArgSep>),
+        CubeSelect {
+            select_kw: Kw!("SELECT"),
+            columns: Option<(Space, FList1)>,
+            on_kw: (Space, Kw!("ON"), Space1),
+            cube_kw: CubeKw,
+            cubes: (Space, CubeList),
         },
         ObjectPrivileges {
             privileges: SimplePrivs,
             on_kw: (Space, Kw!("ON"), Space),
             objects: Objcts,
-            to_kw: (Space, Kw!("TO"), Space),
-            grantees: Grntee,
-            with_grant: WithOption<Kw!("GRANT")>,
         },
         Actions {
             actions: VecSep<Action, ArgSep>,
             on_kw: (Space, Kw!("ON"), Space),
             object: Object,
-            to_kw: (Space, Kw!("TO"), Space),
-            grantees: Grntee,
-            with_grant: WithOption<Kw!("GRANT")>,
         },
-        CubeSelect {
-            select_kw: Kw!("SELECT"),
-            on_kw: (Space1, Kw!("ON"), Space1),
-            cube_kw: Either<Kw!("CUBES"), Kw!("CUBE")>,
-            cubes: (Space, CubeList),
-            to_kw: (Space, Kw!("TO"), Space),
-            grantees: Grntee,
-            with_grant: WithOption<Kw!("GRANT")>,
-        },
+        Roles(VecSep<Role, ArgSep>),
+    }
+
+    impl Granted {
+        fn is_admin(&self) -> bool {
+            matches!(self, Self::AdminPrivileges(_) | Self::Roles(_))
+        }
     }
 
     pub type WithOption<K> = Option<(Space, Kw!("WITH"), Space, K, Space, Kw!("OPTION"))>;
+
+    #[derive(Grammar)]
+    pub enum CubeKw {
+        Cube(Kw!("CUBE")),
+        #[sugar]
+        Cubes(Kw!("CUBES")),
+    }
+
+    impl Desugar for CubeKwSugar<'_> {
+        type Core = core::CubeKw;
+        fn desugar(&self) -> Self::Core {
+            let Self::Cubes(_) = self;
+            core::CubeKw::Cube(Default::default())
+        }
+    }
 
     pub type GrantOptionFor = Option<(
         Kw!("GRANT"),
@@ -3655,49 +3689,26 @@ pub mod leveled {
 
     pub type Revok = Prefix<Kw!("REVOKE"), (Space, RevokeCmd)>;
 
+    /// GRANT OPTION FOR, CASCADE or RESTRICT and AS go with objects, AS not with cubes.
     #[derive(Grammar)]
-    #[tygr(name = "revoke cmd")]
-    pub enum RevokeCmd {
-        AdminPrivileges {
-            privileges: VecSep<AdminPriv, ArgSep>,
-            from_kw: (Space1, Kw!("FROM"), Space),
-            grantees: Grntee,
-        },
-        Roles {
-            roles: VecSep<Role, ArgSep>,
-            from_kw: (Space, Kw!("FROM"), Space),
-            grantees: Grntee,
-        },
-        ObjectPrivileges {
-            grant_option: GrantOptionFor,
-            privileges: SimplePrivs,
-            on_kw: (Space, Kw!("ON"), Space),
-            objects: Objcts,
-            from_kw: (Space, Kw!("FROM"), Space),
-            grantees: Grntee,
-            behavior: Option<(Space, CascadeOpt)>,
-            as_clause: Option<(Space, Kw!("AS"), Space, Grntee)>,
-        },
-        Actions {
-            grant_option: GrantOptionFor,
-            actions: VecSep<Action, ArgSep>,
-            on_kw: (Space, Kw!("ON"), Space),
-            object: Object,
-            from_kw: (Space, Kw!("FROM"), Space),
-            grantees: Grntee,
-            behavior: Option<(Space, CascadeOpt)>,
-            as_clause: Option<(Space, Kw!("AS"), Space, Grntee)>,
-        },
-        CubeSelect {
-            grant_option: GrantOptionFor,
-            select_kw: Kw!("SELECT"),
-            on_kw: (Space1, Kw!("ON"), Space1),
-            cube_kw: Either<Kw!("CUBES"), Kw!("CUBE")>,
-            cubes: (Space, CubeList),
-            from_kw: (Space, Kw!("FROM"), Space),
-            grantees: Grntee,
-            behavior: Option<(Space, CascadeOpt)>,
-        },
+    #[tygr(name = "revoke cmd", validated)]
+    pub struct RevokeCmd {
+        pub grant_option: GrantOptionFor,
+        pub what: Granted,
+        pub from_kw: (Space, Kw!("FROM"), Space),
+        pub grantees: Grntee,
+        pub behavior: Option<(Space, CascadeOpt)>,
+        pub as_clause: Option<(Space, Kw!("AS"), Space, Grntee)>,
+    }
+
+    impl Validate for RevokeCmd {
+        const REQUIREMENT: &'static str =
+            "take GRANT OPTION FOR, CASCADE, RESTRICT and AS on objects alone, AS not on cubes";
+        fn validate(&self) -> bool {
+            let object = !self.what.is_admin();
+            let plain = self.grant_option.is_none() && self.behavior.is_none() && self.as_clause.is_none();
+            (object || plain) && !(matches!(self.what, Granted::CubeSelect { .. }) && self.as_clause.is_some())
+        }
     }
 
     #[derive(Grammar)]
@@ -3818,7 +3829,10 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "foreign-server-privilege-list")]
-    pub struct ForeignServerPrivilegeList(pub VecSep<TName, ArgSep>);
+    pub enum ForeignServerPrivilegeList {
+        Star(StringEq!("*")),
+        List(VecSep<TName, ArgSep>),
+    }
 
     #[derive(Grammar)]
     #[tygr(name = "foreign-server-privilege-clause")]
@@ -3836,8 +3850,17 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "SERVERS/SERVER")]
     pub enum ServersServer {
-        Servers(Kw!("SERVERS")),
         Server(Kw!("SERVER")),
+        #[sugar]
+        Servers(Kw!("SERVERS")),
+    }
+
+    impl Desugar for ServersServerSugar<'_> {
+        type Core = core::ServersServer;
+        fn desugar(&self) -> Self::Core {
+            let Self::Servers(_) = self;
+            core::ServersServer::Server(Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -3972,83 +3995,17 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "ddl")]
     pub enum DDL {
-        CreOrAltView {
-            cre_or_alt: CreOrAlt,
-            kw: (Space1, Kw!("VIEW"), Space),
-            tname: TName,
-            col_list: Option<(Space, FList1)>,
-            as_kw: (Space, Kw!("AS"), Space),
-            with_clause: Option<(WithClause, Space)>,
-            query: QueryExpr,
-            view_with: Option<((Space, Kw!("WITH"), Space1), ViewWith)>,
+        Create {
+            kw: (Kw!("CREATE"), Space1),
+            what: Created,
         },
-        AlterStatsDropFixed {
+        Alter {
             kw: (Kw!("ALTER"), Space1),
-            scope: StatsScope,
-            drop_fixed: (Space, Kw!("DROP"), Space1, Kw!("FIXED"), Space1),
-            clause: StatsClause,
+            what: Altered,
         },
-        AlterStatsFix {
-            kw: (Kw!("ALTER"), Space1),
-            scope: StatsScope,
-            fix: (Space, Kw!("FIX"), Space1),
-            clause: StatsClause,
-        },
-        AlterStatsSetRuntime {
-            kw: (Kw!("ALTER"), Space1),
-            scope: StatsScope,
-            set_runtime: (Space, Kw!("SET"), Space1, Kw!("RUNTIME"), Space1),
-            prop: StatsProperty,
-            eq: (Space, StringEq!("="), Space),
-            val: TrueFalse,
-        },
-        AlterForeignTable {
-            kw: (
-                Kw!("ALTER"),
-                Space1,
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("TABLE"),
-                Space,
-            ),
-            tname: TName,
-            action: (Space, AlterFTAction),
-        },
-        AlterMlConfiguration {
-            kw: (
-                Kw!("ALTER"),
-                Space1,
-                Kw!("ML"),
-                Space1,
-                Kw!("CONFIGURATION"),
-                Space,
-            ),
-            name: MLConfigurationName,
-            provider: Option<((Space, Kw!("PROVIDER"), Space1), ProviderName)>,
-            desc: Option<((Space, Kw!("%DESCRIPTION"), Space), LiteralOrNull)>,
-            using_clause: Option<(Space, MlconfigUsingClause)>,
-            settings: Option<(Space, ProviderSpecificSettings)>,
-        },
-        AlterModel {
-            kw: (Kw!("ALTER"), Space1, Kw!("MODEL"), Space),
-            name: ModelName,
-            action: (Space, AlterModelAction),
-        },
-        AlterTable {
-            kw: (Kw!("ALTER"), Space1, Kw!("TABLE"), Space),
-            tname: TName,
-            with_check: Option<((Space, Kw!("WITH"), Space1), CheckSpec)>,
-            action: Option<(Space, AlterAction)>,
-        },
-        AlterUser {
-            kw: (Kw!("ALTER"), Space1, Kw!("USER"), Space),
-            user: UserSpec,
-        },
-        AlterServer {
-            kw: (Kw!("ALTER"), Space1),
-            server_kw: ServerKw,
-            tname: TName,
-            action: (Space, AlterServerAction),
+        Drop {
+            kw: (Kw!("DROP"), Space1),
+            what: Dropped,
         },
         BuildIndex {
             kw: (Kw!("BUILD"), Space1, Kw!("INDEX"), Space1),
@@ -4067,345 +4024,6 @@ pub mod leveled {
             clause: StatsClause,
             target: (Space1, Kw!("FOR"), Space1, StatsScope),
             sample: Option<((Space, Kw!("%SAMPLE_PERCENT"), Space), PercentValue)>,
-        },
-        CreateBitmapextentIndex {
-            kw: (
-                Kw!("CREATE"),
-                Space1,
-                Kw!("BITMAPEXTENT"),
-                Space1,
-                Kw!("INDEX"),
-                Space,
-            ),
-            name: IndexName,
-            on_kw: (Space, Kw!("ON"), Space),
-            table_kw: Option<(Kw!("TABLE"), Space)>,
-            tname: TName,
-        },
-        CreateDatabase {
-            kw: (Kw!("CREATE"), Space1, Kw!("DATABASE"), Space1),
-            file: Option<(Kw!("FILE"), Space1)>,
-            name: DatabaseName,
-            on_dir: Option<(
-                (Space1, Kw!("ON"), Space1, Kw!("DIRECTORY")),
-                Option<(Space, StringEq!("="))>,
-                (Space, DirectoryName),
-            )>,
-            with_opts: Option<((Space, Kw!("WITH")), Vec1<(Space, DBOption)>)>,
-        },
-        CreateForeignTable {
-            kw: (
-                Kw!("CREATE"),
-                Space1,
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("TABLE"),
-                Space,
-            ),
-            if_not_exists: IfNotExists,
-            tname: TName,
-            columns: Option<Args<VecSep<(Ident, (Space, Datyp)), ArgSep>>>,
-            server: (Space, Kw!("SERVER"), Space),
-            server_name: TName,
-            ft_options: Option<(Space, FTOptions)>,
-            values: Option<(Space, Kw!("VALUES"), Space, FList1)>,
-            using_json: Option<((Space, Kw!("USING"), Space), JSONString)>,
-            novalidate: Option<(Space, Kw!("NOVALIDATE"))>,
-        },
-        CreateModel {
-            kw: (Kw!("CREATE"), Space1, Kw!("MODEL"), Space),
-            if_not_exists: IfNotExists,
-            name: ModelName,
-            predicting: (Space, Kw!("PREDICTING"), Space),
-            pred: Parenthesized<(Ident, Option<(Space, Datyp)>)>,
-            with_clause: Option<(Space, WithClauseCreate)>,
-            source: Option<(Space, ModelSource)>,
-            using_clause: Option<(Space, UsingClause)>,
-        },
-        CreateRole {
-            kw: (Kw!("CREATE"), Space1, Kw!("ROLE"), Space),
-            name: Ident,
-        },
-        CreateSchema {
-            kw: (Kw!("CREATE"), Space1, Kw!("SCHEMA"), Space),
-            if_not_exists: IfNotExists,
-            name: Ident,
-        },
-        CreateTableAs {
-            kw: (Kw!("CREATE"), Space1, Kw!("TABLE"), Space),
-            if_not_exists: IfNotExists,
-            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
-            tname: TName,
-            as_kw: (Space, Kw!("AS"), Space),
-            with_clause: Option<(WithClause, Space)>,
-            query: SourceQuery,
-            options: Option<(Space, TableOptionList)>,
-        },
-        CreateUser {
-            kw: (Kw!("CREATE"), Space1, Kw!("USER"), Space),
-            user: UserSpec,
-        },
-        CreateServer {
-            kw: (Kw!("CREATE"), Space1),
-            server_kw: ServerKw,
-            tname: TName,
-            type_clause: Option<((Space, Kw!("TYPE"), Space), ServerType)>,
-            fdw: (
-                Space,
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("DATA"),
-                Space1,
-                Kw!("WRAPPER"),
-                Space,
-            ),
-            fdw_name: FDWName,
-            connection: (Space, CreateServerConnection),
-            delimited: Option<(Space, CreateServerDelimitedIds)>,
-            passthrough: Option<(Space, EnableDisable, Space1, Kw!("PASSTHROUGH"))>,
-            pushdown: Option<(Space, FTPushdownClause)>,
-            using_json: Option<((Space, Kw!("USING"), Space), JSONString)>,
-        },
-        CreateIndex {
-            kw: (Kw!("CREATE"), Space1),
-            partitioned: Option<(CreateIndexPartitioned, Space1)>,
-            qualifiers: Option<(IndexQualifiers, Space)>,
-            index_kw: (Kw!("INDEX"), Space),
-            name: IndexName,
-            on_kw: (Space, Kw!("ON"), Space),
-            table_kw: Option<(Kw!("TABLE"), Space)>,
-            tname: TName,
-            comp_list: Args<VecSep<ComponentSpec, ArgSep>>,
-            as_clause: Option<(
-                (Space, Kw!("AS"), Space),
-                ClassName,
-                Option<(Space, CreateIndexAsParams)>,
-            )>,
-            with_clause: Option<(Space, CreateIndexWithClause)>,
-            in_on: Option<(Space, InOn, (Space, Token))>,
-            defer_immediate: Option<(Space, ImmediateDefer, Option<(Space1, Kw!("BUILD"))>)>,
-        },
-        CreateAggregate {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            agg_kw: (Kw!("AGGREGATE"), Space),
-            name: QualifiedSPName,
-            params: Args<Option<ParameterList>>,
-            returns: Option<((Space, Kw!("RETURNS"), Space), Datyp)>,
-            initialize: Option<(
-                (Space, Kw!("INITIALIZE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
-            )>,
-            iterate: (
-                (Space, Kw!("ITERATE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
-            ),
-            merge: Option<(
-                (Space, Kw!("MERGE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
-            )>,
-            finalize: Option<(
-                (Space, Kw!("FINALIZE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
-            )>,
-        },
-        CreateFunction {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            func_kw: (Kw!("FUNCTION"), Space),
-            name: QualifiedSPName,
-            spec: (Space, CodeSpecification),
-        },
-        CreateMlConfiguration {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            ml_kw: (Kw!("ML"), Space1, Kw!("CONFIGURATION"), Space),
-            name: MLConfigurationName,
-            provider: ((Space, Kw!("PROVIDER"), Space1), ProviderName),
-            desc: Option<((Space1, Kw!("%DESCRIPTION"), Space), LiteralOrNull)>,
-            using_clause: Option<(Space, MlconfigUsingClause)>,
-            settings: Option<(Space, ProviderSpecificSettings)>,
-        },
-        CreateProcedure {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            proc_kw: (Either<Kw!("PROCEDURE"), Kw!("PROC")>, Space),
-            name: QualifiedSPName,
-            spec: (Space, CodeSpecification),
-        },
-        CreateTrigger {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            trigger_kw: (Kw!("TRIGGER"), Space),
-            name: TName,
-            time: (Space, TriggerTime, Space1),
-            events: VecSep<TriggerEvent, ArgSep>,
-            order: Option<(Space, Kw!("ORDER"), Space1, NonNegativeInteger)>,
-            on: (Space, Kw!("ON"), Space, TName),
-            referencing: Option<(Space, Kw!("REFERENCING"), Vec1<(Space, TriggerReferencing)>)>,
-            for_each: Option<(
-                Space,
-                Kw!("FOR"),
-                Space1,
-                Kw!("EACH"),
-                Space1,
-                TriggerOrientation,
-            )>,
-            when: Option<(Space, Kw!("WHEN"), Space, Parenthesized<Prdct>)>,
-            body: (Space, TriggerBody),
-        },
-        DropTrigger {
-            kw: (Kw!("DROP"), Space1, Kw!("TRIGGER"), Space),
-            if_exists: IfExists,
-            name: TName,
-            from: Option<((Space, Kw!("FROM"), Space), TName)>,
-        },
-        CreateQuery {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            query_kw: (Kw!("QUERY"), Space),
-            name: QualifiedSPName,
-            spec: (Space, CodeSpecification),
-        },
-        CreateMethod {
-            kw: (Kw!("CREATE"), Space1),
-            static_kw: Option<(Kw!("STATIC"), Space1)>,
-            method_kw: (Kw!("METHOD"), Space),
-            name: QualifiedSPName,
-            spec: (Space, CodeSpecification),
-        },
-        CreateTable {
-            kw: (Kw!("CREATE"), Space1),
-            temp: Option<(CreateTableTemp, Space1)>,
-            table_kw: (Kw!("TABLE"), Space),
-            if_not_exists: IfNotExists,
-            tname: TName,
-            elems: Args<VecSep<Telem, ArgSep>>,
-            options: Option<(Space, TableOptionList)>,
-        },
-        DropDatabase {
-            kw: (Kw!("DROP"), Space1, Kw!("DATABASE"), Space1),
-            if_exists: IfExists,
-            name: DatabaseName,
-            retain: Option<(Space1, Kw!("RETAIN_FILES"))>,
-        },
-        DropForeignTable {
-            kw: (
-                Kw!("DROP"),
-                Space1,
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("TABLE"),
-                Space,
-            ),
-            if_exists: IfExists,
-            tname: TName,
-            cascade: Option<(Space, CascadeOpt)>,
-        },
-        DropFunction {
-            kw: (Kw!("DROP"), Space1, Kw!("FUNCTION"), Space),
-            if_exists: IfExists,
-            name: QualifiedSPName,
-            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
-        },
-        DropIndexDot {
-            kw: (Kw!("DROP"), Space1, Kw!("INDEX"), Space),
-            if_exists: IfExists,
-            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
-            tname: Ident,
-            name: Vec1<((Space, StringEq!("."), Space), Ident)>,
-        },
-        DropIndexOn {
-            kw: (Kw!("DROP"), Space1, Kw!("INDEX"), Space),
-            if_exists: IfExists,
-            name: IndexName,
-            on: Option<(
-                (Space, Kw!("ON"), Space),
-                Option<(Kw!("TABLE"), Space)>,
-                TName,
-            )>,
-        },
-        DropMethod {
-            kw: (Kw!("DROP"), Space1, Kw!("METHOD"), Space),
-            if_exists: IfExists,
-            name: QualifiedSPName,
-            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
-        },
-        DropMlConfiguration {
-            kw: (
-                Kw!("DROP"),
-                Space1,
-                Kw!("ML"),
-                Space1,
-                Kw!("CONFIGURATION"),
-                Space,
-            ),
-            if_exists: IfExists,
-            name: MLConfigurationName,
-        },
-        DropModel {
-            kw: (Kw!("DROP"), Space1, Kw!("MODEL"), Space),
-            if_exists: IfExists,
-            name: ModelName,
-        },
-        DropProcedure {
-            kw: (
-                Kw!("DROP"),
-                Space1,
-                Either<Kw!("PROCEDURE"), Kw!("PROC")>,
-                Space,
-            ),
-            if_exists: IfExists,
-            name: QualifiedSPName,
-            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
-        },
-        DropQuery {
-            kw: (Kw!("DROP"), Space1, Kw!("QUERY"), Space),
-            if_exists: IfExists,
-            name: QualifiedSPName,
-            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
-        },
-        DropRole {
-            kw: (Kw!("DROP"), Space1, Kw!("ROLE"), Space),
-            if_exists: IfExists,
-            name: Ident,
-        },
-        DropSchema {
-            kw: (Kw!("DROP"), Space1, Kw!("SCHEMA"), Space),
-            if_exists: IfExists,
-            name: Ident,
-            cascade_restrict: Option<(Space, CascadeOpt)>,
-        },
-        DropTable {
-            kw: (Kw!("DROP"), Space1, Kw!("TABLE"), Space),
-            if_exists: IfExists,
-            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
-            tname: TName,
-            cascade: Option<(Space, CascadeOpt)>,
-            data: Option<(Space, DataOption)>,
-        },
-        DropUser {
-            kw: (Kw!("DROP"), Space1, Kw!("USER"), Space),
-            if_exists: IfExists,
-            name: Ident,
-            cascade: Option<(Space, Kw!("CASCADE"))>,
-        },
-        DropView {
-            kw: (Kw!("DROP"), Space1, Kw!("VIEW"), Space),
-            if_exists: IfExists,
-            tname: TName,
-            cascade: Option<(Space, CascadeOpt)>,
-        },
-        DropServer {
-            kw: (Kw!("DROP"), Space1),
-            server_kw: ServerKw,
-            tname: TName,
-            cascade: Option<(Space, CascadeOpt)>,
-        },
-        DropAggregate {
-            kw: (Kw!("DROP"), Space1, Kw!("AGGREGATE"), Space),
-            if_exists: IfExists,
-            name: QualifiedSPName,
         },
         FreezePlans {
             kw: (Kw!("FREEZE"), Space1, Kw!("PLANS")),
@@ -4426,7 +4044,7 @@ pub mod leveled {
             name: ModelName,
             as_name: Option<((Space, Kw!("AS"), Space), ModelName)>,
             not_default: Option<(Space, Kw!("NOT"), Space1, Kw!("DEFAULT"))>,
-            for_col: Option<((Space, Kw!("FOR"), Space), ColumnDefItem)>,
+            for_col: Option<((Space, Kw!("FOR"), Space), DottedIdent)>,
             with_clause: Option<(Space, WithClauseTrain)>,
             source: Option<(Space, ModelSource)>,
             using_clause: Option<(Space, UsingClause)>,
@@ -4453,8 +4071,414 @@ pub mod leveled {
             use_name: Option<((Space, Kw!("USE"), Space), ModelName)>,
             with_clause: Option<(Space, WithClauseTrain)>,
             source: Option<(Space, ModelSource)>,
+        },
+    }
+
+    /// What CREATE makes; OR REPLACE where 2026.2 takes it (VIEW, AGGREGATE, ML CONFIGURATION, TRIGGER and the
+    /// routines), since CREATE OR REPLACE TABLE, INDEX, USER, ROLE, SCHEMA, DATABASE, MODEL and SERVER fail (-51).
+    #[derive(Grammar)]
+    pub enum Created {
+        BitmapextentIndex {
+            kw: (
+                Kw!("BITMAPEXTENT"),
+                Space1,
+                Kw!("INDEX"),
+                Space,
+            ),
+            name: IndexName,
+            on_kw: (Space, Kw!("ON"), Space),
+            table_kw: Option<(Kw!("TABLE"), Space)>,
+            tname: TName,
+        },
+        Database {
+            kw: (Kw!("DATABASE"), Space1),
+            file: Option<(Kw!("FILE"), Space1)>,
+            name: DatabaseName,
+            on_dir: Option<OnDirectory>,
+        },
+        ForeignTable {
+            kw: (
+                Kw!("FOREIGN"),
+                Space1,
+                Kw!("TABLE"),
+                Space,
+            ),
+            if_not_exists: IfNotExists,
+            tname: TName,
+            columns: Option<Args<VecSep<(Ident, (Space, Datyp)), ArgSep>>>,
+            server: (Space, Kw!("SERVER"), Space),
+            server_name: TName,
+            ft_options: Option<(Space, FTOptions)>,
+            values: Option<(Space, Kw!("VALUES"), Space, FList1)>,
+            using_json: Option<((Space, Kw!("USING"), Space), JSONString)>,
+            novalidate: Option<(Space, Kw!("NOVALIDATE"))>,
+        },
+        Model {
+            kw: (Kw!("MODEL"), Space),
+            if_not_exists: IfNotExists,
+            name: ModelName,
+            predicting: (Space, Kw!("PREDICTING"), Space),
+            pred: Parenthesized<(Ident, Option<(Space, Datyp)>)>,
+            source: Option<(Space, ModelSource)>,
+            with_clause: Option<(Space, WithClauseCreate)>,
             using_clause: Option<(Space, UsingClause)>,
         },
+        Role {
+            kw: (Kw!("ROLE"), Space),
+            name: Ident,
+        },
+        Schema {
+            kw: (Kw!("SCHEMA"), Space),
+            if_not_exists: IfNotExists,
+            name: Ident,
+        },
+        TableAs {
+            kw: (Kw!("TABLE"), Space),
+            if_not_exists: IfNotExists,
+            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
+            tname: TName,
+            as_kw: (Space, Kw!("AS"), Space),
+            with_clause: Option<(WithClause, Space)>,
+            query: SourceQuery,
+            options: Option<(Space, TableOptionList)>,
+        },
+        User {
+            kw: (Kw!("USER"), Space),
+            user: UserSpec,
+        },
+        Server {
+            server_kw: ServerKw,
+            if_not_exists: IfNotExists,
+            tname: TName,
+            type_clause: Option<((Space, Kw!("TYPE"), Space), ServerType)>,
+            fdw: (
+                Space,
+                Kw!("FOREIGN"),
+                Space1,
+                Kw!("DATA"),
+                Space1,
+                Kw!("WRAPPER"),
+                Space,
+            ),
+            fdw_name: FDWName,
+            connection: (Space, CreateServerConnection),
+            delimited: Option<(Space, CreateServerDelimitedIds)>,
+            passthrough: Option<(Space, EnableDisable, Space1, Kw!("PASSTHROUGH"))>,
+            pushdown: Option<(Space, FTPushdownClause)>,
+            using_json: Option<((Space, Kw!("USING"), Space), JSONString)>,
+        },
+        Index {
+            partitioned: Option<(CreateIndexPartitioned, Space1)>,
+            qualifiers: Option<(IndexQualifiers, Space)>,
+            index_kw: (Kw!("INDEX"), Space),
+            name: IndexName,
+            on_kw: (Space, Kw!("ON"), Space),
+            table_kw: Option<(Kw!("TABLE"), Space)>,
+            tname: TName,
+            comp_list: Args<VecSep<ComponentSpec, ArgSep>>,
+            as_clause: Option<(
+                (Space, Kw!("AS"), Space),
+                ClassName,
+                Option<(Space, CreateIndexAsParams)>,
+            )>,
+            with_clause: Option<(Space, CreateIndexWithClause)>,
+            in_on: Option<(Space, InOn, (Space, Token))>,
+            defer_immediate: Option<(Space, ImmediateDefer, Option<(Space1, Kw!("BUILD"))>)>,
+        },
+        View {
+            or_replace: OrReplace,
+            def: ViewDef,
+        },
+        Routine(CreateRoutine),
+        Aggregate {
+            or_replace: OrReplace,
+            agg_kw: (Kw!("AGGREGATE"), Space),
+            name: QualifiedSPName,
+            params: Args<VecSep<(Ident, Space1, Datyp), ArgSep>>,
+            returns: Option<((Space, Kw!("RETURNS"), Space), Datyp)>,
+            initialize: Option<(
+                (Space, Kw!("INITIALIZE"), Space1, Kw!("WITH"), Space),
+                QualifiedSPName,
+            )>,
+            iterate: (
+                (Space, Kw!("ITERATE"), Space1, Kw!("WITH"), Space),
+                QualifiedSPName,
+            ),
+            merge: Option<(
+                (Space, Kw!("MERGE"), Space1, Kw!("WITH"), Space),
+                QualifiedSPName,
+            )>,
+            finalize: Option<(
+                (Space, Kw!("FINALIZE"), Space1, Kw!("WITH"), Space),
+                QualifiedSPName,
+            )>,
+        },
+        MlConfiguration {
+            or_replace: OrReplace,
+            ml_kw: (Kw!("ML"), Space1, Kw!("CONFIGURATION"), Space),
+            name: MLConfigurationName,
+            provider: ((Space, Kw!("PROVIDER"), Space1), ProviderName),
+            desc: Option<((Space1, Kw!("%DESCRIPTION"), Space), LiteralOrNull)>,
+            using_clause: Option<(Space, MlconfigUsingClause)>,
+            settings: Option<(Space, ProviderSpecificSettings)>,
+        },
+        Trigger {
+            or_replace: OrReplace,
+            trigger_kw: (Kw!("TRIGGER"), Space),
+            name: TName,
+            time: (Space, TriggerTime, Space1),
+            events: VecSep<TriggerEvent, ArgSep>,
+            order: Option<(Space1, Kw!("ORDER"), Space, Literal)>,
+            on: (Space, Kw!("ON"), Space, TName),
+            referencing: Option<(Space1, Kw!("REFERENCING"), Vec1<(Space1, TriggerReferencing)>)>,
+            for_each: Option<(Space1, Kw!("FOR"), Space1, Kw!("EACH"), Space1, TriggerOrientation)>,
+            when: Option<(Space, Kw!("WHEN"), Space, Parenthesized<Prdct>)>,
+            body: (Space, TriggerBody),
+        },
+        Table {
+            temp: Option<(CreateTableTemp, Space1)>,
+            table_kw: (Kw!("TABLE"), Space),
+            if_not_exists: IfNotExists,
+            tname: TName,
+            elems: Args<VecSep<Telem, ArgSep>>,
+            options: Option<(Space, TableOptionList)>,
+        },
+    }
+
+    /// What ALTER changes; the statistics forms first, since ALTER TABLE t FIX STATISTICS is one of them.
+    #[derive(Grammar)]
+    pub enum Altered {
+        Stats {
+            scope: StatsScope,
+            action: (Space, StatsAction),
+        },
+        ForeignTable {
+            kw: (
+                Kw!("FOREIGN"),
+                Space1,
+                Kw!("TABLE"),
+                Space,
+            ),
+            tname: TName,
+        },
+        MlConfiguration {
+            kw: (
+                Kw!("ML"),
+                Space1,
+                Kw!("CONFIGURATION"),
+                Space,
+            ),
+            name: MLConfigurationName,
+            clauses: Vec1<(Space, MlConfigClause)>,
+        },
+        Model {
+            kw: (Kw!("MODEL"), Space),
+            name: ModelName,
+            action: (Space, AlterModelAction),
+        },
+        Table {
+            kw: (Kw!("TABLE"), Space),
+            tname: TName,
+            with_check: Option<((Space, Kw!("WITH"), Space1), CheckSpec)>,
+            action: Option<(Space, AlterAction)>,
+        },
+        User {
+            kw: (Kw!("USER"), Space),
+            user: UserSpec,
+        },
+        Server {
+            server_kw: ServerKw,
+            tname: TName,
+            action: (Space, AlterServerAction),
+        },
+        View(ViewDef),
+    }
+
+    #[derive(Grammar)]
+    pub enum StatsAction {
+        DropFixed {
+            kw: (Kw!("DROP"), Space1, Kw!("FIXED"), Space1),
+            clause: StatsClause,
+        },
+        Fix {
+            kw: (Kw!("FIX"), Space1),
+            clause: StatsClause,
+        },
+        SetRuntime {
+            kw: (Kw!("SET"), Space1, Kw!("RUNTIME"), Space1),
+            prop: StatsProperty,
+            eq: (Space, StringEq!("="), Space),
+            val: TrueFalse,
+        },
+    }
+
+    /// What DROP removes; an index by its dotted name, ON its table, or both (2026.2 takes DROP INDEX t.i ON t).
+    #[derive(Grammar)]
+    pub enum Dropped {
+        Trigger {
+            kw: (Kw!("TRIGGER"), Space),
+            if_exists: IfExists,
+            name: TName,
+            from: Option<((Space, Kw!("FROM"), Space), TName)>,
+        },
+        Database {
+            kw: (Kw!("DATABASE"), Space1),
+            if_exists: IfExists,
+            name: DatabaseName,
+            retain: Option<(Space1, Kw!("RETAIN_FILES"))>,
+        },
+        ForeignTable {
+            kw: (
+                Kw!("FOREIGN"),
+                Space1,
+                Kw!("TABLE"),
+                Space,
+            ),
+            if_exists: IfExists,
+            tname: TName,
+            cascade: Option<(Space, CascadeOpt)>,
+        },
+        Routine {
+            kind: (RoutineKind, Space),
+            if_exists: IfExists,
+            name: QualifiedSPName,
+            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
+        },
+        Index {
+            kw: (Kw!("INDEX"), Space),
+            if_exists: IfExists,
+            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
+            name: VecSep<Ident, (Space, StringEq!("."), Space)>,
+            on: Option<((Space, Kw!("ON"), Space), Option<(Kw!("TABLE"), Space)>, TName)>,
+        },
+        MlConfiguration {
+            kw: (
+                Kw!("ML"),
+                Space1,
+                Kw!("CONFIGURATION"),
+                Space,
+            ),
+            if_exists: IfExists,
+            name: MLConfigurationName,
+        },
+        Model {
+            kw: (Kw!("MODEL"), Space),
+            if_exists: IfExists,
+            name: ModelName,
+        },
+        Role {
+            kw: (Kw!("ROLE"), Space),
+            if_exists: IfExists,
+            name: Ident,
+        },
+        Schema {
+            kw: (Kw!("SCHEMA"), Space),
+            if_exists: IfExists,
+            name: Ident,
+            cascade_restrict: Option<(Space, CascadeOpt)>,
+        },
+        Table {
+            kw: (Kw!("TABLE"), Space),
+            if_exists: IfExists,
+            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
+            tname: TName,
+            cascade: Option<(Space, CascadeOpt)>,
+            data: Option<(Space, DataOption)>,
+        },
+        User {
+            kw: (Kw!("USER"), Space),
+            if_exists: IfExists,
+            name: Ident,
+            cascade: Option<(Space, Kw!("CASCADE"))>,
+        },
+        View {
+            kw: (Kw!("VIEW"), Space),
+            if_exists: IfExists,
+            tname: TName,
+            cascade: Option<(Space, CascadeOpt)>,
+        },
+        Server {
+            server_kw: ServerKw,
+            if_exists: IfExists,
+            tname: TName,
+            cascade: Option<(Space, CascadeOpt)>,
+        },
+        Aggregate {
+            kw: (Kw!("AGGREGATE"), Space),
+            if_exists: IfExists,
+            name: QualifiedSPName,
+        },
+    }
+
+    #[derive(Grammar)]
+    pub struct OnDirectory {
+        pub kw: (Space1, Kw!("ON"), Space1, Kw!("DIRECTORY")),
+        #[sugar]
+        pub eq: Option<(Space, StringEq!("="))>,
+        pub dir: (Space, DirectoryName),
+    }
+
+    #[derive(Grammar)]
+    pub struct ViewDef {
+        pub kw: (Kw!("VIEW"), Space),
+        pub tname: TName,
+        pub col_list: Option<(Space, FList1)>,
+        pub as_kw: (Space, Kw!("AS"), Space),
+        pub with_clause: Option<(WithClause, Space)>,
+        pub query: QueryExpr,
+        pub view_with: Option<((Space, Kw!("WITH"), Space1), ViewWith)>,
+    }
+
+    /// 2026.2 takes STATIC before METHOD alone ("METHOD expected" after CREATE STATIC PROCEDURE) and not with OR
+    /// REPLACE (-51), an external language for a FUNCTION or PROCEDURE alone ("'SQL', 'OBJECTSCRIPT', or 'PYTHON'
+    /// expected" for a METHOD) and SQL or OBJECTSCRIPT for a QUERY ("'SQL', or 'OBJECTSCRIPT' expected").
+    #[derive(Grammar)]
+    #[tygr(validated)]
+    pub struct CreateRoutine {
+        pub or_replace: OrReplace,
+        pub static_kw: Option<(Kw!("STATIC"), Space1)>,
+        pub kind: (RoutineKind, Space),
+        pub name: QualifiedSPName,
+        pub spec: (Space, CodeSpecification),
+    }
+
+    impl Validate for CreateRoutine {
+        const REQUIREMENT: &'static str =
+            "take STATIC on a METHOD without OR REPLACE, and a language its kind allows";
+        fn validate(&self) -> bool {
+            let (kind, body) = (&self.kind.0, &self.spec.1.body.1);
+            let static_ok = self.static_kw.is_none()
+                || (matches!(kind, RoutineKind::Method(_)) && self.or_replace.is_none());
+            let language_ok = match kind {
+                RoutineKind::Method(_) => !matches!(body, CodeBody::External { .. }),
+                RoutineKind::Query(_) => matches!(body, CodeBody::Sql { .. } | CodeBody::Cos { .. }),
+                _ => true,
+            };
+            static_ok && language_ok
+        }
+    }
+
+    #[derive(Grammar)]
+    pub enum RoutineKind {
+        Function(Kw!("FUNCTION")),
+        Method(Kw!("METHOD")),
+        Procedure(ProcedureKw),
+        Query(Kw!("QUERY")),
+    }
+
+    #[derive(Grammar)]
+    pub enum ProcedureKw {
+        Procedure(Kw!("PROCEDURE")),
+        #[sugar]
+        Proc(Kw!("PROC")),
+    }
+
+    impl Desugar for ProcedureKwSugar<'_> {
+        type Core = core::ProcedureKw;
+        fn desugar(&self) -> Self::Core {
+            let Self::Proc(_) = self;
+            core::ProcedureKw::Procedure(Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -4481,13 +4505,9 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "create server connection")]
-    pub enum CreateServerConnection {
-        Connection((Kw!("CONNECTION"), Space), Literal),
-        Host {
-            kw: (Kw!("HOST"), Space),
-            host: Literal,
-            options: Option<Args<DBServerOptions>>,
-        },
+    pub struct CreateServerConnection {
+        pub kind: (Either<Kw!("CONNECTION"), Kw!("HOST")>, Space),
+        pub value: Literal,
     }
 
     #[derive(Grammar)]
@@ -4507,15 +4527,16 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum CreateIndexAsParams {
-        Parens(Parenthesized<VecSep<IndexParameterSpec, ArgSep>>),
+        Parens(Parenthesized<Option<VecSep<IndexParameterSpec, ArgSep>>>),
         With {
             kw: (Kw!("WITH"), Space),
             params: VecSep<IndexParameterSpec, ArgSep>,
         },
     }
 
+    /// 2026.2 takes `WITH DATA (b) PAD_INDEX, FILLFACTOR = 80`, not `WITH DATA (b), PAD_INDEX`.
     #[derive(Grammar)]
-    #[tygr(inline)]
+    #[tygr(inline, validated)]
     pub struct CreateIndexWithClause {
         pub kw: (Kw!("WITH"), Space),
         pub data: Option<(Kw!("DATA"), Space, FList1)>,
@@ -4524,6 +4545,20 @@ pub mod leveled {
         pub ignore_dup: IndexWithItem<Kw!("IGNORE_DUP_KEY")>,
         pub drop_existing: IndexWithItem<Kw!("DROP_EXISTING")>,
         pub stats_norecompute: IndexWithItem<Kw!("STATISTICS_NORECOMPUTE")>,
+    }
+
+    impl Validate for CreateIndexWithClause {
+        const REQUIREMENT: &'static str = "put no comma before the first option";
+        fn validate(&self) -> bool {
+            let commas = [
+                self.pad_index.as_ref().map(|item| item.1.is_some()),
+                self.fillfactor.as_ref().map(|item| item.1.is_some()),
+                self.ignore_dup.as_ref().map(|item| item.1.is_some()),
+                self.drop_existing.as_ref().map(|item| item.1.is_some()),
+                self.stats_norecompute.as_ref().map(|item| item.1.is_some()),
+            ];
+            commas.iter().flatten().next() != Some(&true)
+        }
     }
 
     /// An item of an index's WITH clause, after a blank and an optional comma.
@@ -4537,15 +4572,12 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "alter-ft-action")]
-    pub struct AlterFTAction(pub Ident);
-
-    #[derive(Grammar)]
     #[tygr(name = "model-name")]
     pub struct ModelName(pub Ident);
 
     #[derive(Grammar)]
     pub enum Password {
+        HostVar(HostVar),
         Ident(Ident),
         Literal(Literal),
         NULL(Kw!("NULL")),
@@ -4553,9 +4585,18 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum PWPrefix {
-        IdentifiedBy(Kw!("IDENTIFIED"), Space1, Kw!("BY")),
         IdentifyBy(Kw!("IDENTIFY"), Space1, Kw!("BY")),
+        #[sugar]
+        IdentifiedBy(Kw!("IDENTIFIED"), Space1, Kw!("BY")),
+        #[sugar]
         WithPassword(Option<(Kw!("WITH"), Space1)>, Kw!("PASSWORD")),
+    }
+
+    impl Desugar for PWPrefixSugar<'_> {
+        type Core = core::PWPrefix;
+        fn desugar(&self) -> Self::Core {
+            core::PWPrefix::IdentifyBy(Default::default(), Default::default(), Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -4583,17 +4624,22 @@ pub mod leveled {
         Age((Kw!("AGE"), Space), Literal),
         Name {
             name_kw: (Kw!("NAME"), Space),
-            names: VecSep<VecSep<Ident, (Space, StringEq!("."), Space)>, ArgSep>,
+            names: VecSep<PurgeName, ArgSep>,
         },
         Table((Kw!("TABLE"), Space), TName),
+    }
+
+    #[derive(Grammar)]
+    pub enum PurgeName {
+        Literal(Literal),
+        Dotted(VecSep<Either<StringEq!("*"), Ident>, (Space, StringEq!("."), Space)>),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "freeze scope")]
     pub enum FreezeScope {
         Id((Kw!("ID"), Space), Literal),
-        Schema((Kw!("SCHEMA"), Space), Schema),
-        Table((Kw!("TABLE"), Space), TName),
+        Scope(StatsScope),
     }
 
     pub type CancelQueryScope = Prefix<(Kw!("IDENTIFIED"), Space1, Kw!("BY"), Space), Count>;
@@ -4612,7 +4658,7 @@ pub mod leveled {
             where_clause: Option<(Space, WhereClause)>,
             group: Option<(Space, Group)>,
             having: Option<(Space, Having)>,
-            order: Option<(Space, Order)>,
+            tail: Tail,
         },
     }
 
@@ -4663,7 +4709,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "scope")]
     pub enum Scope {
-        Days(Integer, (Space1, Kw!("DAYS"))),
+        Days(NonNegativeInteger, Space1, Kw!("DAYS")),
         All(Kw!("ALL")),
     }
 
@@ -4685,6 +4731,15 @@ pub mod leveled {
 
     pub type MlconfigUsingClause = Prefix<(Kw!("USING"), Space), MlconfigUsing>;
 
+    /// What ALTER ML CONFIGURATION changes, in any order; 2026.2 rejects the statement without a clause.
+    #[derive(Grammar)]
+    pub enum MlConfigClause {
+        Provider(Kw!("PROVIDER"), Space1, ProviderName),
+        Description(Kw!("%DESCRIPTION"), Space, LiteralOrNull),
+        Using(MlconfigUsingClause),
+        Settings(ProviderSpecificSettings),
+    }
+
     #[derive(Grammar)]
     #[tygr(name = "mlconfig-using")]
     pub enum MlconfigUsing {
@@ -4695,8 +4750,8 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "provider_specific_settings")]
     pub enum ProviderSpecificSettings {
-        DR(VecSep<DROption, ArgSep>),
-        H2O(VecSep<H2OOption, ArgSep>),
+        DR(VecSep<DROption, Space>),
+        H2O(VecSep<H2OOption, Space>),
     }
 
     #[derive(Grammar)]
@@ -4712,7 +4767,6 @@ pub mod leveled {
     #[tygr(name = "DR option")]
     pub struct DROption {
         pub name: Either<Kw!("APITOKEN"), Kw!("URL")>,
-        pub eq: Option<(Space, StringEq!("="))>,
         pub value: (Space, LiteralOrNull),
     }
 
@@ -4720,13 +4774,8 @@ pub mod leveled {
     #[tygr(name = "H2O option")]
     pub struct H2OOption {
         pub kw: Kw!("JAVATLSCONFIGFILE"),
-        pub eq: Option<(Space, StringEq!("="))>,
         pub val: (Space, LiteralOrNull),
     }
-
-    #[derive(Grammar)]
-    #[tygr(name = "db_option")]
-    pub struct DBOption(pub Ident);
 
     #[derive(Grammar)]
     #[tygr(name = "ft-options")]
@@ -4753,16 +4802,13 @@ pub mod leveled {
     #[tygr(name = "fdw-name")]
     pub struct FDWName(pub Ident);
 
-    #[derive(Grammar)]
-    #[tygr(name = "db-server-options")]
-    pub struct DBServerOptions(pub Ident);
-
     pub type FTPushdownClause = Prefix<Kw!("PUSHDOWN"), (Space1, FTPushdownType)>;
 
     #[derive(Grammar)]
     #[tygr(name = "ft-pushdown-type")]
     pub enum FTPushdownType {
         Ansi92(Kw!("ANSI92")),
+        Basic(Kw!("BASIC")),
         Extended(Kw!("EXTENDED")),
         Iris(Kw!("IRIS")),
         Off(Kw!("OFF")),
@@ -4794,12 +4840,16 @@ pub mod leveled {
         },
     }
 
+    /// OLD|NEW [ROW|TABLE [AS]] alias: 2026.2 takes AS after ROW or TABLE alone.
     #[derive(Grammar)]
     #[tygr(name = "trigger referencing")]
     pub struct TriggerReferencing {
         pub old_new: Either<Kw!("OLD"), Kw!("NEW")>,
-        pub row: Option<(Space1, Kw!("ROW"))>,
-        pub as_kw: Option<(Space1, Kw!("AS"))>,
+        pub kind: Option<(
+            Space1,
+            Either<Kw!("ROW"), Kw!("TABLE")>,
+            Option<(Space1, Kw!("AS"))>,
+        )>,
         pub alias: (Space, Ident),
     }
 
@@ -4807,6 +4857,7 @@ pub mod leveled {
     #[tygr(name = "trigger orientation")]
     pub enum TriggerOrientation {
         RowAndObject(Kw!("ROW_AND_OBJECT")),
+        RowAndObjectWords(Kw!("ROW"), Space1, Kw!("AND"), Space1, Kw!("OBJECT")),
         Row(Kw!("ROW")),
         Statement(Kw!("STATEMENT")),
     }
@@ -4860,21 +4911,14 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "cre or alt")]
-    pub enum CreOrAlt {
-        Alter(Kw!("ALTER")),
-        Create(
-            Kw!("CREATE"),
-            Option<(Space1, Kw!("OR"), Space1, Kw!("REPLACE"))>,
-        ),
-    }
-
-    #[derive(Grammar)]
     #[tygr(name = "view with")]
     pub enum ViewWith {
         ReadOnly(Kw!("READ"), Space1, Kw!("ONLY")),
+        LeveledCheck {
+            levels: (LevelsClause, Space1),
+            kw: (Kw!("CHECK"), Space1, Kw!("OPTION")),
+        },
         Check {
-            levels: Option<(LevelsClause, Space1)>,
             kw: (Kw!("CHECK"), Space1, Kw!("OPTION")),
             constraint: Option<(Space1, Kw!("CONSTRAINT"), Space, Ident)>,
         },
@@ -4884,8 +4928,17 @@ pub mod leveled {
     #[tygr(name = "levels clause")]
     pub enum LevelsClause {
         Cascaded(Kw!("CASCADED")),
+        #[sugar]
         Cascade(Kw!("CASCADE")),
         Local(Kw!("LOCAL")),
+    }
+
+    impl Desugar for LevelsClauseSugar<'_> {
+        type Core = core::LevelsClause;
+        fn desugar(&self) -> Self::Core {
+            let Self::Cascade(_) = self;
+            core::LevelsClause::Cascaded(Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -4996,7 +5049,14 @@ pub mod leveled {
     #[tygr(name = "default clause")]
     pub struct DefaultClause {
         pub default_kw: Option<(Kw!("DEFAULT"), Space)>,
-        pub value: Scalx,
+        pub value: ParameterDefault,
+    }
+
+    #[derive(Grammar)]
+    pub enum ParameterDefault {
+        Literal(Option<Sign>, Literal),
+        Null(Kw!("NULL")),
+        Niladic(Niladic),
     }
 
     #[derive(Grammar)]
@@ -5004,15 +5064,15 @@ pub mod leveled {
     pub enum MethodQueryCharacteristics {
         ContainId {
             kw: (Kw!("CONTAINID"), Space),
-            value: Integer,
+            value: Literal,
         },
         Final(Kw!("FINAL")),
         For {
             kw: (Kw!("FOR"), Space),
-            classname: Classname,
+            classname: ClassName,
         },
         Private(Kw!("PRIVATE")),
-        Proc(Either<Kw!("PROCEDURE"), Kw!("PROC")>),
+        Proc(ProcedureKw),
         Results {
             kw: (Kw!("RESULTS"), Space),
             clause: ResultSetClause,
@@ -5025,11 +5085,11 @@ pub mod leveled {
             kw: (Kw!("SELECTMODE"), Space1),
             mode: SelectMode,
         },
-        ResultSets {
-            dynamic: Option<(Kw!("DYNAMIC"), Space1)>,
-            kw: (Kw!("RESULT"), Space1, Kw!("SETS")),
-            count: Option<(Space, Integer)>,
+        DynamicResultSets {
+            kw: (Kw!("DYNAMIC"), Space1, Kw!("RESULT"), Space1, Kw!("SETS")),
+            count: Option<(Space1, Literal)>,
         },
+        ResultSets(Kw!("RESULT"), Space1, Kw!("SETS")),
     }
 
     #[derive(Grammar)]
@@ -5057,6 +5117,19 @@ pub mod leveled {
             ),
             body: Either<COSMethodBody, COSQueryBody>,
         },
+        External {
+            kw: (
+                Kw!("LANGUAGE"),
+                Space1,
+                ExternalLanguage,
+                Space1,
+                Kw!("EXTERNAL"),
+                Space1,
+                Kw!("NAME"),
+                Space,
+            ),
+            name: StringLiteral,
+        },
         Python {
             kw: (Kw!("LANGUAGE"), Space1, Kw!("PYTHON"), Space),
             body: Prefix<StringEq!("{"), StringEndsWith<StringEq!("}")>>,
@@ -5067,9 +5140,16 @@ pub mod leveled {
         },
     }
 
+    #[derive(Grammar)]
+    pub enum ExternalLanguage {
+        Java(Kw!("JAVA")),
+        DotNet(Kw!("DOTNET")),
+        Python(Kw!("PYTHON")),
+    }
+
     pub type SqlMethodBody = Wrap<
         Kw!("BEGIN"),
-        Vec<(
+        Vec1<(
             Space,
             Either<ReturnStatement, Src<Stat>>,
             Space,
@@ -5082,14 +5162,16 @@ pub mod leveled {
     #[tygr(name = "return statement")]
     pub struct ReturnStatement {
         pub kw: Kw!("RETURN"),
-        pub value: Option<(Space, ReturnValue)>,
+        pub value: (Space, ReturnValue),
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum ReturnValue {
-        HostRef(HostRef),
-        Literal(Literal),
+        Paren(Parenthesized<Box<ReturnValue>>),
+        Literal(Option<Sign>, Literal),
+        HostVar(HostVar),
+        Marker(ParameterMarker),
     }
 
     #[derive(Grammar)]
@@ -5150,13 +5232,6 @@ pub mod leveled {
     }
 
     pub type CollectionSpec = Parenthesized<Either<Kw!("ELEMENTS"), Kw!("KEYS")>>;
-
-    #[derive(Grammar)]
-    #[tygr(name = "classname")]
-    pub struct Classname {
-        pub first: DottedIdent,
-        pub rest: Vec<(ArgSep, Ident)>,
-    }
 
     #[derive(Grammar)]
     #[tygr(name = "index parameter spec")]
@@ -5225,7 +5300,10 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "convert clause")]
     pub enum ConvertClause {
-        Partition(PartitionConvertClause),
+        Partition {
+            to: Option<(Kw!("TO"), Space1)>,
+            clause: PartitionConvertClause,
+        },
         StorageDefault {
             clause: StorageDefaultConvertClause,
             del: Option<(Space1, DataOption)>,
@@ -5372,10 +5450,27 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "mod spec")]
+    #[tygr(name = "mod spec", validated)]
     pub struct ModSpec {
         pub name: Ident,
         pub change: (Space, ModChange),
+    }
+
+    impl Validate for ModSpec {
+        const REQUIREMENT: &'static str = "give a type or a change";
+        fn validate(&self) -> bool {
+            !matches!(
+                &self.change.1,
+                ModChange::Modify {
+                    datyp: None,
+                    mod_col: ModCol {
+                        default: None,
+                        constraint: None,
+                        null: None
+                    },
+                }
+            )
+        }
     }
 
     #[derive(Grammar)]
@@ -5410,8 +5505,17 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "drop keywd")]
     pub enum DropKeywd {
-        Delete(Kw!("DELETE")),
         Drop(Kw!("DROP")),
+        #[sugar]
+        Delete(Kw!("DELETE")),
+    }
+
+    impl Desugar for DropKeywdSugar<'_> {
+        type Core = core::DropKeywd;
+        fn desugar(&self) -> Self::Core {
+            let Self::Delete(_) = self;
+            core::DropKeywd::Drop(Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -5452,10 +5556,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "add body")]
     pub enum AddBody {
-        ForeignKey {
-            spec: OptionallyWrapped<AltFkeySpec>,
-            on: Option<(Space, Kw!("ON"), Space, Token)>,
-        },
+        ForeignKey(OptionallyWrapped<AltFkeySpec>),
         PrimaryKey {
             spec: OptionallyWrapped<AltPkey>,
             on: Option<(Space, Kw!("ON"), Space, Token)>,
@@ -5636,6 +5737,7 @@ pub mod leveled {
     pub struct ClassParameter {
         pub kw: (Kw!("%CLASSPARAMETER"), Space),
         pub name: Ident,
+        #[sugar]
         pub eq: Option<(Space, StringEq!("="))>,
         pub value: (Space, Literal),
     }
@@ -5695,16 +5797,18 @@ pub mod leveled {
         ClassParam(ClassParameter),
         StorageType {
             kw: Kw!("STORAGETYPE"),
+            #[sugar]
             eq: Option<(Space, StringEq!("="))>,
             value: (Space, Storagetype),
         },
     }
 
+    /// PARTITION [BY ... | OFF] as a table option; 2026.2 refuses PARTITION ON here and takes it after CONVERT.
     #[derive(Grammar)]
     #[tygr(name = "partition option")]
     pub struct PartitionOption {
-        pub kw: (Kw!("PARTITION"), Space1),
-        pub spec: Either<Prefix<(Kw!("BY"), Space1), PartitionSpecificationList>, Kw!("OFF")>,
+        pub kw: Kw!("PARTITION"),
+        pub spec: Option<(Space1, Either<Prefix<(Kw!("BY"), Space1), PartitionSpecificationList>, Kw!("OFF")>)>,
     }
 
     #[derive(Grammar)]
@@ -5737,11 +5841,35 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "partition datetime interval")]
     pub enum PartitionDatetimeInterval {
-        Day(Either<Kw!("DAYS"), Kw!("DAY")>),
-        Hour(Either<Kw!("HOURS"), Kw!("HOUR")>),
-        Minute(Either<Kw!("MINUTES"), Kw!("MINUTE")>),
-        Month(Either<Kw!("MONTHS"), Kw!("MONTH")>),
-        Year(Either<Kw!("YEARS"), Kw!("YEAR")>),
+        Day(Kw!("DAY")),
+        #[sugar]
+        Days(Kw!("DAYS")),
+        Hour(Kw!("HOUR")),
+        #[sugar]
+        Hours(Kw!("HOURS")),
+        Minute(Kw!("MINUTE")),
+        #[sugar]
+        Minutes(Kw!("MINUTES")),
+        Month(Kw!("MONTH")),
+        #[sugar]
+        Months(Kw!("MONTHS")),
+        Year(Kw!("YEAR")),
+        #[sugar]
+        Years(Kw!("YEARS")),
+    }
+
+    impl Desugar for PartitionDatetimeIntervalSugar<'_> {
+        type Core = core::PartitionDatetimeInterval;
+        fn desugar(&self) -> Self::Core {
+            use core::PartitionDatetimeInterval::*;
+            match self {
+                Self::Days(_) => Day(Default::default()),
+                Self::Hours(_) => Hour(Default::default()),
+                Self::Minutes(_) => Minute(Default::default()),
+                Self::Months(_) => Month(Default::default()),
+                Self::Years(_) => Year(Default::default()),
+            }
+        }
     }
 
     #[derive(Grammar)]
@@ -6125,7 +6253,7 @@ pub mod leveled {
             spec: LoadSqlSpec,
         },
         Data {
-            hints: Option<(LoadHints, Space)>,
+            hints: Option<LoadHints>,
             kw: (Kw!("DATA"), Space1),
             spec: LoadDataSpec,
         },
@@ -6133,7 +6261,35 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "load-hints")]
-    pub struct LoadHints(pub Vec<(LoadHint, Space)>);
+    pub enum LoadHints {
+        Bulk(
+            Kw!("BULK"),
+            Space1,
+            Option<(Kw!("%NOINDEX"), Space1)>,
+            Option<(Kw!("%NOJOURN"), Space1)>,
+        ),
+        Set(LoadHintSet),
+    }
+
+    /// The % hints in any order, each once: 2026.2 rejects %NOJOURN %NOJOURN.
+    #[derive(Grammar)]
+    #[tygr(validated)]
+    pub struct LoadHintSet(pub Vec1<(LoadHint, Space1)>);
+
+    impl Validate for LoadHintSet {
+        const REQUIREMENT: &'static str = "give each hint once";
+        fn validate(&self) -> bool {
+            let names: Vec<String> = self
+                .0
+                .iter()
+                .map(|(hint, _)| hint.print().to_uppercase())
+                .collect();
+            names
+                .iter()
+                .enumerate()
+                .all(|(i, name)| !names[..i].contains(name))
+        }
+    }
 
     #[derive(Grammar)]
     #[tygr(name = "load-hint")]
@@ -6142,7 +6298,6 @@ pub mod leveled {
         NoIndex(Kw!("%NOINDEX")),
         NoJourn(Kw!("%NOJOURN")),
         NoLock(Kw!("%NOLOCK")),
-        Bulk(Kw!("BULK")),
     }
 
     #[derive(Grammar)]
@@ -6280,15 +6435,9 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "alter-server-action")]
-    pub enum AlterServerAction {
-        Alter {
-            kw: (Kw!("ALTER"), Space1),
-            action: SubAlterServerAction,
-        },
-        Modify {
-            kw: (Kw!("MODIFY"), Space1),
-            actions: VecSep<SubAlterServerAction, ArgSep>,
-        },
+    pub struct AlterServerAction {
+        pub kw: (Either<Kw!("ALTER"), Kw!("MODIFY")>, Space1),
+        pub action: SubAlterServerAction,
     }
 
     #[derive(Grammar)]
@@ -6305,18 +6454,6 @@ pub mod leveled {
             value: Literal,
         },
         NoDelimitedIds(Kw!("NODELIMITEDIDS")),
-        Password {
-            kw: (Kw!("PASSWORD"), Space),
-            value: Literal,
-        },
-        Port {
-            kw: (Kw!("PORT"), Space),
-            value: Literal,
-        },
-        Username {
-            kw: (Kw!("USERNAME"), Space),
-            value: Literal,
-        },
     }
 
     #[derive(Grammar)]
@@ -6343,7 +6480,16 @@ pub mod leveled {
     #[tygr(name = "stats clause")]
     pub enum StatsClause {
         Statistics(Kw!("STATISTICS")),
+        #[sugar]
         Stats(Kw!("STATS")),
+    }
+
+    impl Desugar for StatsClauseSugar<'_> {
+        type Core = core::StatsClause;
+        fn desugar(&self) -> Self::Core {
+            let Self::Stats(_) = self;
+            core::StatsClause::Statistics(Default::default())
+        }
     }
 
     #[derive(Grammar)]
