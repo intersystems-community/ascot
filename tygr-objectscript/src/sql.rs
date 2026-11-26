@@ -3939,79 +3939,17 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "ddl")]
     pub enum DDL {
-        CreOrAltView {
-            cre_or_alt: CreOrAlt,
-            kw: (Space1, Kw!("VIEW"), Space),
-            tname: TName,
-            col_list: Option<(Space, FList1)>,
-            as_kw: (Space, Kw!("AS"), Space),
-            with_clause: Option<(WithClause, Space)>,
-            query: QueryExpr,
-            view_with: Option<((Space, Kw!("WITH"), Space1), ViewWith)>,
+        Create {
+            kw: (Kw!("CREATE"), Space1),
+            what: Created,
         },
-        AlterStatsDropFixed {
+        Alter {
             kw: (Kw!("ALTER"), Space1),
-            scope: StatsScope,
-            drop_fixed: (Space, Kw!("DROP"), Space1, Kw!("FIXED"), Space1),
-            clause: StatsClause,
+            what: Altered,
         },
-        AlterStatsFix {
-            kw: (Kw!("ALTER"), Space1),
-            scope: StatsScope,
-            fix: (Space, Kw!("FIX"), Space1),
-            clause: StatsClause,
-        },
-        AlterStatsSetRuntime {
-            kw: (Kw!("ALTER"), Space1),
-            scope: StatsScope,
-            set_runtime: (Space, Kw!("SET"), Space1, Kw!("RUNTIME"), Space1),
-            prop: StatsProperty,
-            eq: (Space, StringEq!("="), Space),
-            val: TrueFalse,
-        },
-        AlterForeignTable {
-            kw: (
-                Kw!("ALTER"),
-                Space1,
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("TABLE"),
-                Space,
-            ),
-            tname: TName,
-        },
-        AlterMlConfiguration {
-            kw: (
-                Kw!("ALTER"),
-                Space1,
-                Kw!("ML"),
-                Space1,
-                Kw!("CONFIGURATION"),
-                Space,
-            ),
-            name: MLConfigurationName,
-            clauses: Vec1<(Space, MlConfigClause)>,
-        },
-        AlterModel {
-            kw: (Kw!("ALTER"), Space1, Kw!("MODEL"), Space),
-            name: ModelName,
-            action: (Space, AlterModelAction),
-        },
-        AlterTable {
-            kw: (Kw!("ALTER"), Space1, Kw!("TABLE"), Space),
-            tname: TName,
-            with_check: Option<((Space, Kw!("WITH"), Space1), CheckSpec)>,
-            action: Option<(Space, AlterAction)>,
-        },
-        AlterUser {
-            kw: (Kw!("ALTER"), Space1, Kw!("USER"), Space),
-            user: UserSpec,
-        },
-        AlterServer {
-            kw: (Kw!("ALTER"), Space1),
-            server_kw: ServerKw,
-            tname: TName,
-            action: (Space, AlterServerAction),
+        Drop {
+            kw: (Kw!("DROP"), Space1),
+            what: Dropped,
         },
         BuildIndex {
             kw: (Kw!("BUILD"), Space1, Kw!("INDEX"), Space1),
@@ -4030,339 +3968,6 @@ pub mod leveled {
             clause: StatsClause,
             target: (Space1, Kw!("FOR"), Space1, StatsScope),
             sample: Option<((Space, Kw!("%SAMPLE_PERCENT"), Space), PercentValue)>,
-        },
-        CreateBitmapextentIndex {
-            kw: (
-                Kw!("CREATE"),
-                Space1,
-                Kw!("BITMAPEXTENT"),
-                Space1,
-                Kw!("INDEX"),
-                Space,
-            ),
-            name: IndexName,
-            on_kw: (Space, Kw!("ON"), Space),
-            table_kw: Option<(Kw!("TABLE"), Space)>,
-            tname: TName,
-        },
-        CreateDatabase {
-            kw: (Kw!("CREATE"), Space1, Kw!("DATABASE"), Space1),
-            file: Option<(Kw!("FILE"), Space1)>,
-            name: DatabaseName,
-            on_dir: Option<(
-                (Space1, Kw!("ON"), Space1, Kw!("DIRECTORY")),
-                Option<(Space, StringEq!("="))>,
-                (Space, DirectoryName),
-            )>,
-        },
-        CreateForeignTable {
-            kw: (
-                Kw!("CREATE"),
-                Space1,
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("TABLE"),
-                Space,
-            ),
-            if_not_exists: IfNotExists,
-            tname: TName,
-            columns: Option<Args<VecSep<(Ident, (Space, Datyp)), ArgSep>>>,
-            server: (Space, Kw!("SERVER"), Space),
-            server_name: TName,
-            ft_options: Option<(Space, FTOptions)>,
-            values: Option<(Space, Kw!("VALUES"), Space, FList1)>,
-            using_json: Option<((Space, Kw!("USING"), Space), JSONString)>,
-            novalidate: Option<(Space, Kw!("NOVALIDATE"))>,
-        },
-        CreateModel {
-            kw: (Kw!("CREATE"), Space1, Kw!("MODEL"), Space),
-            if_not_exists: IfNotExists,
-            name: ModelName,
-            predicting: (Space, Kw!("PREDICTING"), Space),
-            pred: Parenthesized<(Ident, Option<(Space, Datyp)>)>,
-            source: Option<(Space, ModelSource)>,
-            with_clause: Option<(Space, WithClauseCreate)>,
-            using_clause: Option<(Space, UsingClause)>,
-        },
-        CreateRole {
-            kw: (Kw!("CREATE"), Space1, Kw!("ROLE"), Space),
-            name: Ident,
-        },
-        CreateSchema {
-            kw: (Kw!("CREATE"), Space1, Kw!("SCHEMA"), Space),
-            if_not_exists: IfNotExists,
-            name: Ident,
-        },
-        CreateTableAs {
-            kw: (Kw!("CREATE"), Space1, Kw!("TABLE"), Space),
-            if_not_exists: IfNotExists,
-            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
-            tname: TName,
-            as_kw: (Space, Kw!("AS"), Space),
-            with_clause: Option<(WithClause, Space)>,
-            query: SourceQuery,
-            options: Option<(Space, TableOptionList)>,
-        },
-        CreateUser {
-            kw: (Kw!("CREATE"), Space1, Kw!("USER"), Space),
-            user: UserSpec,
-        },
-        CreateServer {
-            kw: (Kw!("CREATE"), Space1),
-            server_kw: ServerKw,
-            if_not_exists: IfNotExists,
-            tname: TName,
-            type_clause: Option<((Space, Kw!("TYPE"), Space), ServerType)>,
-            fdw: (
-                Space,
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("DATA"),
-                Space1,
-                Kw!("WRAPPER"),
-                Space,
-            ),
-            fdw_name: FDWName,
-            connection: (Space, CreateServerConnection),
-            delimited: Option<(Space, CreateServerDelimitedIds)>,
-            passthrough: Option<(Space, EnableDisable, Space1, Kw!("PASSTHROUGH"))>,
-            pushdown: Option<(Space, FTPushdownClause)>,
-            using_json: Option<((Space, Kw!("USING"), Space), JSONString)>,
-        },
-        CreateIndex {
-            kw: (Kw!("CREATE"), Space1),
-            partitioned: Option<(CreateIndexPartitioned, Space1)>,
-            qualifiers: Option<(IndexQualifiers, Space)>,
-            index_kw: (Kw!("INDEX"), Space),
-            name: IndexName,
-            on_kw: (Space, Kw!("ON"), Space),
-            table_kw: Option<(Kw!("TABLE"), Space)>,
-            tname: TName,
-            comp_list: Args<VecSep<ComponentSpec, ArgSep>>,
-            as_clause: Option<(
-                (Space, Kw!("AS"), Space),
-                ClassName,
-                Option<(Space, CreateIndexAsParams)>,
-            )>,
-            with_clause: Option<(Space, CreateIndexWithClause)>,
-            in_on: Option<(Space, InOn, (Space, Token))>,
-            defer_immediate: Option<(Space, ImmediateDefer, Option<(Space1, Kw!("BUILD"))>)>,
-        },
-        CreateAggregate {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            agg_kw: (Kw!("AGGREGATE"), Space),
-            name: QualifiedSPName,
-            params: Args<VecSep<(Ident, Space1, Datyp), ArgSep>>,
-            returns: Option<((Space, Kw!("RETURNS"), Space), Datyp)>,
-            initialize: Option<(
-                (Space, Kw!("INITIALIZE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
-            )>,
-            iterate: (
-                (Space, Kw!("ITERATE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
-            ),
-            merge: Option<(
-                (Space, Kw!("MERGE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
-            )>,
-            finalize: Option<(
-                (Space, Kw!("FINALIZE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
-            )>,
-        },
-        CreateFunction {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            func_kw: (Kw!("FUNCTION"), Space),
-            name: QualifiedSPName,
-            spec: (Space, CodeSpecification),
-        },
-        CreateMlConfiguration {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            ml_kw: (Kw!("ML"), Space1, Kw!("CONFIGURATION"), Space),
-            name: MLConfigurationName,
-            provider: ((Space, Kw!("PROVIDER"), Space1), ProviderName),
-            desc: Option<((Space1, Kw!("%DESCRIPTION"), Space), LiteralOrNull)>,
-            using_clause: Option<(Space, MlconfigUsingClause)>,
-            settings: Option<(Space, ProviderSpecificSettings)>,
-        },
-        CreateProcedure {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            proc_kw: (Either<Kw!("PROCEDURE"), Kw!("PROC")>, Space),
-            name: QualifiedSPName,
-            spec: (Space, CodeSpecification),
-        },
-        CreateTrigger {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            trigger_kw: (Kw!("TRIGGER"), Space),
-            name: TName,
-            time: (Space, TriggerTime, Space1),
-            events: VecSep<TriggerEvent, ArgSep>,
-            order: Option<(Space1, Kw!("ORDER"), Space, Literal)>,
-            on: (Space, Kw!("ON"), Space, TName),
-            referencing: Option<(Space1, Kw!("REFERENCING"), Vec1<(Space1, TriggerReferencing)>)>,
-            for_each: Option<(Space1, Kw!("FOR"), Space1, Kw!("EACH"), Space1, TriggerOrientation)>,
-            when: Option<(Space, Kw!("WHEN"), Space, Parenthesized<Prdct>)>,
-            body: (Space, TriggerBody),
-        },
-        DropTrigger {
-            kw: (Kw!("DROP"), Space1, Kw!("TRIGGER"), Space),
-            if_exists: IfExists,
-            name: TName,
-            from: Option<((Space, Kw!("FROM"), Space), TName)>,
-        },
-        CreateQuery {
-            kw: (Kw!("CREATE"), Space1),
-            or_replace: OrReplace,
-            query_kw: (Kw!("QUERY"), Space),
-            name: QualifiedSPName,
-            spec: (Space, QuerySpec),
-        },
-        CreateMethod {
-            kw: (Kw!("CREATE"), Space1),
-            static_kw: Option<(Kw!("STATIC"), Space1)>,
-            method_kw: (Kw!("METHOD"), Space),
-            name: QualifiedSPName,
-            spec: (Space, MethodSpec),
-        },
-        CreateTable {
-            kw: (Kw!("CREATE"), Space1),
-            temp: Option<(CreateTableTemp, Space1)>,
-            table_kw: (Kw!("TABLE"), Space),
-            if_not_exists: IfNotExists,
-            tname: TName,
-            elems: Args<VecSep<Telem, ArgSep>>,
-            options: Option<(Space, TableOptionList)>,
-        },
-        DropDatabase {
-            kw: (Kw!("DROP"), Space1, Kw!("DATABASE"), Space1),
-            if_exists: IfExists,
-            name: DatabaseName,
-            retain: Option<(Space1, Kw!("RETAIN_FILES"))>,
-        },
-        DropForeignTable {
-            kw: (
-                Kw!("DROP"),
-                Space1,
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("TABLE"),
-                Space,
-            ),
-            if_exists: IfExists,
-            tname: TName,
-            cascade: Option<(Space, CascadeOpt)>,
-        },
-        DropFunction {
-            kw: (Kw!("DROP"), Space1, Kw!("FUNCTION"), Space),
-            if_exists: IfExists,
-            name: QualifiedSPName,
-            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
-        },
-        DropIndexDot {
-            kw: (Kw!("DROP"), Space1, Kw!("INDEX"), Space),
-            if_exists: IfExists,
-            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
-            tname: Ident,
-            name: Vec1<((Space, StringEq!("."), Space), Ident)>,
-        },
-        DropIndexOn {
-            kw: (Kw!("DROP"), Space1, Kw!("INDEX"), Space),
-            if_exists: IfExists,
-            name: IndexName,
-            on: Option<(
-                (Space, Kw!("ON"), Space),
-                Option<(Kw!("TABLE"), Space)>,
-                TName,
-            )>,
-        },
-        DropMethod {
-            kw: (Kw!("DROP"), Space1, Kw!("METHOD"), Space),
-            if_exists: IfExists,
-            name: QualifiedSPName,
-            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
-        },
-        DropMlConfiguration {
-            kw: (
-                Kw!("DROP"),
-                Space1,
-                Kw!("ML"),
-                Space1,
-                Kw!("CONFIGURATION"),
-                Space,
-            ),
-            if_exists: IfExists,
-            name: MLConfigurationName,
-        },
-        DropModel {
-            kw: (Kw!("DROP"), Space1, Kw!("MODEL"), Space),
-            if_exists: IfExists,
-            name: ModelName,
-        },
-        DropProcedure {
-            kw: (
-                Kw!("DROP"),
-                Space1,
-                Either<Kw!("PROCEDURE"), Kw!("PROC")>,
-                Space,
-            ),
-            if_exists: IfExists,
-            name: QualifiedSPName,
-            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
-        },
-        DropQuery {
-            kw: (Kw!("DROP"), Space1, Kw!("QUERY"), Space),
-            if_exists: IfExists,
-            name: QualifiedSPName,
-            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
-        },
-        DropRole {
-            kw: (Kw!("DROP"), Space1, Kw!("ROLE"), Space),
-            if_exists: IfExists,
-            name: Ident,
-        },
-        DropSchema {
-            kw: (Kw!("DROP"), Space1, Kw!("SCHEMA"), Space),
-            if_exists: IfExists,
-            name: Ident,
-            cascade_restrict: Option<(Space, CascadeOpt)>,
-        },
-        DropTable {
-            kw: (Kw!("DROP"), Space1, Kw!("TABLE"), Space),
-            if_exists: IfExists,
-            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
-            tname: TName,
-            cascade: Option<(Space, CascadeOpt)>,
-            data: Option<(Space, DataOption)>,
-        },
-        DropUser {
-            kw: (Kw!("DROP"), Space1, Kw!("USER"), Space),
-            if_exists: IfExists,
-            name: Ident,
-            cascade: Option<(Space, Kw!("CASCADE"))>,
-        },
-        DropView {
-            kw: (Kw!("DROP"), Space1, Kw!("VIEW"), Space),
-            if_exists: IfExists,
-            tname: TName,
-            cascade: Option<(Space, CascadeOpt)>,
-        },
-        DropServer {
-            kw: (Kw!("DROP"), Space1),
-            server_kw: ServerKw,
-            if_exists: IfExists,
-            tname: TName,
-            cascade: Option<(Space, CascadeOpt)>,
-        },
-        DropAggregate {
-            kw: (Kw!("DROP"), Space1, Kw!("AGGREGATE"), Space),
-            if_exists: IfExists,
-            name: QualifiedSPName,
         },
         FreezePlans {
             kw: (Kw!("FREEZE"), Space1, Kw!("PLANS")),
@@ -4411,6 +4016,394 @@ pub mod leveled {
             with_clause: Option<(Space, WithClauseTrain)>,
             source: Option<(Space, ModelSource)>,
         },
+    }
+
+    /// What CREATE makes; OR REPLACE where 2026.2 takes it (VIEW, AGGREGATE, ML CONFIGURATION, TRIGGER and the
+    /// routines), since CREATE OR REPLACE TABLE, INDEX, USER, ROLE, SCHEMA, DATABASE, MODEL and SERVER fail (-51).
+    #[derive(Grammar)]
+    pub enum Created {
+        BitmapextentIndex {
+            kw: (
+                Kw!("BITMAPEXTENT"),
+                Space1,
+                Kw!("INDEX"),
+                Space,
+            ),
+            name: IndexName,
+            on_kw: (Space, Kw!("ON"), Space),
+            table_kw: Option<(Kw!("TABLE"), Space)>,
+            tname: TName,
+        },
+        Database {
+            kw: (Kw!("DATABASE"), Space1),
+            file: Option<(Kw!("FILE"), Space1)>,
+            name: DatabaseName,
+            on_dir: Option<(
+                (Space1, Kw!("ON"), Space1, Kw!("DIRECTORY")),
+                Option<(Space, StringEq!("="))>,
+                (Space, DirectoryName),
+            )>,
+        },
+        ForeignTable {
+            kw: (
+                Kw!("FOREIGN"),
+                Space1,
+                Kw!("TABLE"),
+                Space,
+            ),
+            if_not_exists: IfNotExists,
+            tname: TName,
+            columns: Option<Args<VecSep<(Ident, (Space, Datyp)), ArgSep>>>,
+            server: (Space, Kw!("SERVER"), Space),
+            server_name: TName,
+            ft_options: Option<(Space, FTOptions)>,
+            values: Option<(Space, Kw!("VALUES"), Space, FList1)>,
+            using_json: Option<((Space, Kw!("USING"), Space), JSONString)>,
+            novalidate: Option<(Space, Kw!("NOVALIDATE"))>,
+        },
+        Model {
+            kw: (Kw!("MODEL"), Space),
+            if_not_exists: IfNotExists,
+            name: ModelName,
+            predicting: (Space, Kw!("PREDICTING"), Space),
+            pred: Parenthesized<(Ident, Option<(Space, Datyp)>)>,
+            source: Option<(Space, ModelSource)>,
+            with_clause: Option<(Space, WithClauseCreate)>,
+            using_clause: Option<(Space, UsingClause)>,
+        },
+        Role {
+            kw: (Kw!("ROLE"), Space),
+            name: Ident,
+        },
+        Schema {
+            kw: (Kw!("SCHEMA"), Space),
+            if_not_exists: IfNotExists,
+            name: Ident,
+        },
+        TableAs {
+            kw: (Kw!("TABLE"), Space),
+            if_not_exists: IfNotExists,
+            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
+            tname: TName,
+            as_kw: (Space, Kw!("AS"), Space),
+            with_clause: Option<(WithClause, Space)>,
+            query: SourceQuery,
+            options: Option<(Space, TableOptionList)>,
+        },
+        User {
+            kw: (Kw!("USER"), Space),
+            user: UserSpec,
+        },
+        Server {
+            server_kw: ServerKw,
+            if_not_exists: IfNotExists,
+            tname: TName,
+            type_clause: Option<((Space, Kw!("TYPE"), Space), ServerType)>,
+            fdw: (
+                Space,
+                Kw!("FOREIGN"),
+                Space1,
+                Kw!("DATA"),
+                Space1,
+                Kw!("WRAPPER"),
+                Space,
+            ),
+            fdw_name: FDWName,
+            connection: (Space, CreateServerConnection),
+            delimited: Option<(Space, CreateServerDelimitedIds)>,
+            passthrough: Option<(Space, EnableDisable, Space1, Kw!("PASSTHROUGH"))>,
+            pushdown: Option<(Space, FTPushdownClause)>,
+            using_json: Option<((Space, Kw!("USING"), Space), JSONString)>,
+        },
+        Index {
+            partitioned: Option<(CreateIndexPartitioned, Space1)>,
+            qualifiers: Option<(IndexQualifiers, Space)>,
+            index_kw: (Kw!("INDEX"), Space),
+            name: IndexName,
+            on_kw: (Space, Kw!("ON"), Space),
+            table_kw: Option<(Kw!("TABLE"), Space)>,
+            tname: TName,
+            comp_list: Args<VecSep<ComponentSpec, ArgSep>>,
+            as_clause: Option<(
+                (Space, Kw!("AS"), Space),
+                ClassName,
+                Option<(Space, CreateIndexAsParams)>,
+            )>,
+            with_clause: Option<(Space, CreateIndexWithClause)>,
+            in_on: Option<(Space, InOn, (Space, Token))>,
+            defer_immediate: Option<(Space, ImmediateDefer, Option<(Space1, Kw!("BUILD"))>)>,
+        },
+        View {
+            or_replace: OrReplace,
+            def: ViewDef,
+        },
+        Routine(CreateRoutine),
+        Aggregate {
+            or_replace: OrReplace,
+            agg_kw: (Kw!("AGGREGATE"), Space),
+            name: QualifiedSPName,
+            params: Args<VecSep<(Ident, Space1, Datyp), ArgSep>>,
+            returns: Option<((Space, Kw!("RETURNS"), Space), Datyp)>,
+            initialize: Option<(
+                (Space, Kw!("INITIALIZE"), Space1, Kw!("WITH"), Space),
+                QualifiedSPName,
+            )>,
+            iterate: (
+                (Space, Kw!("ITERATE"), Space1, Kw!("WITH"), Space),
+                QualifiedSPName,
+            ),
+            merge: Option<(
+                (Space, Kw!("MERGE"), Space1, Kw!("WITH"), Space),
+                QualifiedSPName,
+            )>,
+            finalize: Option<(
+                (Space, Kw!("FINALIZE"), Space1, Kw!("WITH"), Space),
+                QualifiedSPName,
+            )>,
+        },
+        MlConfiguration {
+            or_replace: OrReplace,
+            ml_kw: (Kw!("ML"), Space1, Kw!("CONFIGURATION"), Space),
+            name: MLConfigurationName,
+            provider: ((Space, Kw!("PROVIDER"), Space1), ProviderName),
+            desc: Option<((Space1, Kw!("%DESCRIPTION"), Space), LiteralOrNull)>,
+            using_clause: Option<(Space, MlconfigUsingClause)>,
+            settings: Option<(Space, ProviderSpecificSettings)>,
+        },
+        Trigger {
+            or_replace: OrReplace,
+            trigger_kw: (Kw!("TRIGGER"), Space),
+            name: TName,
+            time: (Space, TriggerTime, Space1),
+            events: VecSep<TriggerEvent, ArgSep>,
+            order: Option<(Space1, Kw!("ORDER"), Space, Literal)>,
+            on: (Space, Kw!("ON"), Space, TName),
+            referencing: Option<(Space1, Kw!("REFERENCING"), Vec1<(Space1, TriggerReferencing)>)>,
+            for_each: Option<(Space1, Kw!("FOR"), Space1, Kw!("EACH"), Space1, TriggerOrientation)>,
+            when: Option<(Space, Kw!("WHEN"), Space, Parenthesized<Prdct>)>,
+            body: (Space, TriggerBody),
+        },
+        Table {
+            temp: Option<(CreateTableTemp, Space1)>,
+            table_kw: (Kw!("TABLE"), Space),
+            if_not_exists: IfNotExists,
+            tname: TName,
+            elems: Args<VecSep<Telem, ArgSep>>,
+            options: Option<(Space, TableOptionList)>,
+        },
+    }
+
+    /// What ALTER changes; the statistics forms first, since ALTER TABLE t FIX STATISTICS is one of them.
+    #[derive(Grammar)]
+    pub enum Altered {
+        Stats {
+            scope: StatsScope,
+            action: (Space, StatsAction),
+        },
+        ForeignTable {
+            kw: (
+                Kw!("FOREIGN"),
+                Space1,
+                Kw!("TABLE"),
+                Space,
+            ),
+            tname: TName,
+        },
+        MlConfiguration {
+            kw: (
+                Kw!("ML"),
+                Space1,
+                Kw!("CONFIGURATION"),
+                Space,
+            ),
+            name: MLConfigurationName,
+            clauses: Vec1<(Space, MlConfigClause)>,
+        },
+        Model {
+            kw: (Kw!("MODEL"), Space),
+            name: ModelName,
+            action: (Space, AlterModelAction),
+        },
+        Table {
+            kw: (Kw!("TABLE"), Space),
+            tname: TName,
+            with_check: Option<((Space, Kw!("WITH"), Space1), CheckSpec)>,
+            action: Option<(Space, AlterAction)>,
+        },
+        User {
+            kw: (Kw!("USER"), Space),
+            user: UserSpec,
+        },
+        Server {
+            server_kw: ServerKw,
+            tname: TName,
+            action: (Space, AlterServerAction),
+        },
+        View(ViewDef),
+    }
+
+    #[derive(Grammar)]
+    pub enum StatsAction {
+        DropFixed {
+            kw: (Kw!("DROP"), Space1, Kw!("FIXED"), Space1),
+            clause: StatsClause,
+        },
+        Fix {
+            kw: (Kw!("FIX"), Space1),
+            clause: StatsClause,
+        },
+        SetRuntime {
+            kw: (Kw!("SET"), Space1, Kw!("RUNTIME"), Space1),
+            prop: StatsProperty,
+            eq: (Space, StringEq!("="), Space),
+            val: TrueFalse,
+        },
+    }
+
+    /// What DROP removes; an index by its dotted name, ON its table, or both (2026.2 takes DROP INDEX t.i ON t).
+    #[derive(Grammar)]
+    pub enum Dropped {
+        Trigger {
+            kw: (Kw!("TRIGGER"), Space),
+            if_exists: IfExists,
+            name: TName,
+            from: Option<((Space, Kw!("FROM"), Space), TName)>,
+        },
+        Database {
+            kw: (Kw!("DATABASE"), Space1),
+            if_exists: IfExists,
+            name: DatabaseName,
+            retain: Option<(Space1, Kw!("RETAIN_FILES"))>,
+        },
+        ForeignTable {
+            kw: (
+                Kw!("FOREIGN"),
+                Space1,
+                Kw!("TABLE"),
+                Space,
+            ),
+            if_exists: IfExists,
+            tname: TName,
+            cascade: Option<(Space, CascadeOpt)>,
+        },
+        Routine {
+            kind: (RoutineKind, Space),
+            if_exists: IfExists,
+            name: QualifiedSPName,
+            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
+        },
+        Index {
+            kw: (Kw!("INDEX"), Space),
+            if_exists: IfExists,
+            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
+            name: VecSep<Ident, (Space, StringEq!("."), Space)>,
+            on: Option<((Space, Kw!("ON"), Space), Option<(Kw!("TABLE"), Space)>, TName)>,
+        },
+        MlConfiguration {
+            kw: (
+                Kw!("ML"),
+                Space1,
+                Kw!("CONFIGURATION"),
+                Space,
+            ),
+            if_exists: IfExists,
+            name: MLConfigurationName,
+        },
+        Model {
+            kw: (Kw!("MODEL"), Space),
+            if_exists: IfExists,
+            name: ModelName,
+        },
+        Role {
+            kw: (Kw!("ROLE"), Space),
+            if_exists: IfExists,
+            name: Ident,
+        },
+        Schema {
+            kw: (Kw!("SCHEMA"), Space),
+            if_exists: IfExists,
+            name: Ident,
+            cascade_restrict: Option<(Space, CascadeOpt)>,
+        },
+        Table {
+            kw: (Kw!("TABLE"), Space),
+            if_exists: IfExists,
+            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
+            tname: TName,
+            cascade: Option<(Space, CascadeOpt)>,
+            data: Option<(Space, DataOption)>,
+        },
+        User {
+            kw: (Kw!("USER"), Space),
+            if_exists: IfExists,
+            name: Ident,
+            cascade: Option<(Space, Kw!("CASCADE"))>,
+        },
+        View {
+            kw: (Kw!("VIEW"), Space),
+            if_exists: IfExists,
+            tname: TName,
+            cascade: Option<(Space, CascadeOpt)>,
+        },
+        Server {
+            server_kw: ServerKw,
+            if_exists: IfExists,
+            tname: TName,
+            cascade: Option<(Space, CascadeOpt)>,
+        },
+        Aggregate {
+            kw: (Kw!("AGGREGATE"), Space),
+            if_exists: IfExists,
+            name: QualifiedSPName,
+        },
+    }
+
+    #[derive(Grammar)]
+    pub struct ViewDef {
+        pub kw: (Kw!("VIEW"), Space),
+        pub tname: TName,
+        pub col_list: Option<(Space, FList1)>,
+        pub as_kw: (Space, Kw!("AS"), Space),
+        pub with_clause: Option<(WithClause, Space)>,
+        pub query: QueryExpr,
+        pub view_with: Option<((Space, Kw!("WITH"), Space1), ViewWith)>,
+    }
+
+    /// 2026.2 takes STATIC before METHOD alone ("METHOD expected" after CREATE STATIC PROCEDURE) and not with OR
+    /// REPLACE (-51), an external language for a FUNCTION or PROCEDURE alone ("'SQL', 'OBJECTSCRIPT', or 'PYTHON'
+    /// expected" for a METHOD) and SQL or OBJECTSCRIPT for a QUERY ("'SQL', or 'OBJECTSCRIPT' expected").
+    #[derive(Grammar)]
+    #[tygr(validated)]
+    pub struct CreateRoutine {
+        pub or_replace: OrReplace,
+        pub static_kw: Option<(Kw!("STATIC"), Space1)>,
+        pub kind: (RoutineKind, Space),
+        pub name: QualifiedSPName,
+        pub spec: (Space, CodeSpecification),
+    }
+
+    impl Validate for CreateRoutine {
+        const REQUIREMENT: &'static str =
+            "take STATIC on a METHOD without OR REPLACE, and a language its kind allows";
+        fn validate(&self) -> bool {
+            let (kind, body) = (&self.kind.0, &self.spec.1.body.1);
+            let static_ok = self.static_kw.is_none()
+                || (matches!(kind, RoutineKind::Method(_)) && self.or_replace.is_none());
+            let language_ok = match kind {
+                RoutineKind::Method(_) => !matches!(body, CodeBody::External { .. }),
+                RoutineKind::Query(_) => matches!(body, CodeBody::Sql { .. } | CodeBody::Cos { .. }),
+                _ => true,
+            };
+            static_ok && language_ok
+        }
+    }
+
+    #[derive(Grammar)]
+    pub enum RoutineKind {
+        Function(Kw!("FUNCTION")),
+        Method(Kw!("METHOD")),
+        Procedure(Either<Kw!("PROCEDURE"), Kw!("PROC")>),
+        Query(Kw!("QUERY")),
     }
 
     #[derive(Grammar)]
@@ -4834,16 +4827,6 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "cre or alt")]
-    pub enum CreOrAlt {
-        Alter(Kw!("ALTER")),
-        Create(
-            Kw!("CREATE"),
-            Option<(Space1, Kw!("OR"), Space1, Kw!("REPLACE"))>,
-        ),
-    }
-
-    #[derive(Grammar)]
     #[tygr(name = "view with")]
     pub enum ViewWith {
         ReadOnly(Kw!("READ"), Space1, Kw!("ONLY")),
@@ -4946,30 +4929,6 @@ pub mod leveled {
         pub params: Parenthesized<ParameterList>,
         pub characteristics: Vec<(Space, MethodQueryCharacteristics)>,
         pub body: (Space, CodeBody),
-    }
-
-    /// 2026.2 answers CREATE METHOD ... LANGUAGE JAVA with "'SQL', 'OBJECTSCRIPT', or 'PYTHON' expected".
-    #[derive(Grammar)]
-    #[tygr(validated)]
-    pub struct MethodSpec(pub CodeSpecification);
-
-    impl Validate for MethodSpec {
-        const REQUIREMENT: &'static str = "take LANGUAGE SQL, OBJECTSCRIPT or PYTHON";
-        fn validate(&self) -> bool {
-            !matches!(self.0.body.1, CodeBody::External { .. })
-        }
-    }
-
-    /// 2026.2 answers CREATE QUERY ... LANGUAGE PYTHON with "'SQL', or 'OBJECTSCRIPT' expected".
-    #[derive(Grammar)]
-    #[tygr(validated)]
-    pub struct QuerySpec(pub CodeSpecification);
-
-    impl Validate for QuerySpec {
-        const REQUIREMENT: &'static str = "take LANGUAGE SQL or OBJECTSCRIPT";
-        fn validate(&self) -> bool {
-            matches!(self.0.body.1, CodeBody::Sql { .. } | CodeBody::Cos { .. })
-        }
     }
 
     #[derive(Grammar)]

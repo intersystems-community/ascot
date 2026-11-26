@@ -225,14 +225,11 @@ impl Walk for TRMode {
 impl Walk for DDL {
     fn walk(&self, w: &mut Walker) {
         match self {
-            DDL::CreOrAltView {
-                with_clause, query, ..
-            } => {
-                if let Some((with, _)) = with_clause {
-                    with.walk(w)
-                }
-                query.walk(w)
-            }
+            DDL::Create { what, .. } => what.walk(w),
+            DDL::Alter {
+                what: Altered::View(def),
+                ..
+            } => def.walk(w),
             DDL::CancelQuery {
                 val,
                 cancel_scope,
@@ -247,24 +244,6 @@ impl Walk for DDL {
                     timeout.walk(w)
                 }
             }
-            DDL::CreateTableAs {
-                with_clause, query, ..
-            } => {
-                if let Some((with, _)) = with_clause {
-                    with.walk(w)
-                }
-                query.walk(w)
-            }
-            DDL::CreateTrigger { when, body, .. } => {
-                if let Some((.., when)) = when {
-                    when.walk(w)
-                }
-                body.1.walk(w)
-            }
-            DDL::CreateModel {
-                source: Some((_, source)),
-                ..
-            } => source.walk(w),
             DDL::TrainModel {
                 with_clause,
                 source,
@@ -282,11 +261,45 @@ impl Walk for DDL {
                     source.walk(w)
                 }
             }
-            DDL::CreateFunction { spec, .. } | DDL::CreateProcedure { spec, .. } => spec.1.walk(w),
-            DDL::CreateQuery { spec, .. } => spec.1.0.walk(w),
-            DDL::CreateMethod { spec, .. } => spec.1.0.walk(w),
             _ => {}
         }
+    }
+}
+
+impl Walk for Created {
+    fn walk(&self, w: &mut Walker) {
+        match self {
+            Created::View { def, .. } => def.walk(w),
+            Created::TableAs {
+                with_clause, query, ..
+            } => {
+                if let Some((with, _)) = with_clause {
+                    with.walk(w)
+                }
+                query.walk(w)
+            }
+            Created::Trigger { when, body, .. } => {
+                if let Some((.., when)) = when {
+                    when.walk(w)
+                }
+                body.1.walk(w)
+            }
+            Created::Model {
+                source: Some((_, source)),
+                ..
+            } => source.walk(w),
+            Created::Routine(routine) => routine.spec.1.walk(w),
+            _ => {}
+        }
+    }
+}
+
+impl Walk for ViewDef {
+    fn walk(&self, w: &mut Walker) {
+        if let Some((with, _)) = &self.with_clause {
+            with.walk(w)
+        }
+        self.query.walk(w)
     }
 }
 
