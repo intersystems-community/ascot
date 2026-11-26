@@ -253,7 +253,7 @@ fn terms_take_their_core_shapes() {
     let shapes: Vec<&str> = selex(
         "SELECT CURRENT_DATE, USER, SYSDATE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP(3), USERNAME, \
          -a, %SQLUPPER a, %TRUNCATE(a, 3), CAST(a AS INT), TIMESTAMPADD(SQL_TSI_DAY, 1, d), \
-         TIMESTAMPADD(:unit, 1, d), CONVERT(a, SQL_VARCHAR), CONVERT(VARCHAR, a), f(a) FROM t",
+         CONVERT(a, SQL_VARCHAR), CONVERT(VARCHAR, a), f(a) FROM t",
     )
     .node
     .selst
@@ -292,8 +292,7 @@ fn terms_take_their_core_shapes() {
             "string operation",
             "builtin",
             "builtin",
-            "call",
-            "builtin",
+            "function",
             "function",
             "call",
         ]

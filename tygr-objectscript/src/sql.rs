@@ -758,6 +758,61 @@ pub fn print_mapped<T: Print>(t: &T) -> (String, Vec<Mapping>) {
     (text, mappings)
 }
 
+/// The functions whose arguments both levels spell: the builtins, aggregates and window functions.
+const OWN_SYNTAX: &[&str] = &[
+    "CAST",
+    "JSON_ARRAY",
+    "JSON_OBJECT",
+    "PREDICT",
+    "PROBABILITY",
+    "SEARCH_INDEX",
+    "TIMESTAMPADD",
+    "TIMESTAMPDIFF",
+    "TO_VECTOR",
+    "TRIM",
+    "CURRENT_TIMESTAMP",
+    "CURRENT_TIME",
+    "XMLCONCAT",
+    "XMLELEMENT",
+    "XMLFOREST",
+    "XMLATTRIBUTES",
+    "DATEADD",
+    "DATEDIFF",
+    "DATENAME",
+    "DATEPART",
+    "DATE_TRUNC",
+    "AVG",
+    "COUNT",
+    "SUM",
+    "MAX",
+    "MIN",
+    "LIST",
+    "XMLAGG",
+    "%DLIST",
+    "STDDEV",
+    "STDDEV_POP",
+    "STDDEV_SAMP",
+    "VARIANCE",
+    "VAR_POP",
+    "VAR_SAMP",
+    "JSON_ARRAYAGG",
+    "APPROX_COUNT_DISTINCT",
+    "ROW_NUMBER",
+    "RANK",
+    "DENSE_RANK",
+    "PERCENT_RANK",
+    "CUME_DIST",
+    "NTILE",
+    "FIRST_VALUE",
+    "LAST_VALUE",
+    "NTH_VALUE",
+    "LEAD",
+    "LAG",
+];
+
+/// The functions the core calls by name; the full level, where they have their own syntax, shadows this.
+const SCALAR_FUNCTIONS: &[&str] = &[];
+
 #[tygr_objectscript_macros::levels]
 pub mod leveled {
     use either::Either;
@@ -945,8 +1000,8 @@ pub mod leveled {
     /// A scalar function is the call by its name, `POSITION(a IN b)` the call `CHARINDEX(a, b)`.
     fn scalar_function(function: &ScalarFunction) -> core::Term {
         calls!(ScalarFunction: function;
-            PercentObject PercentOid Similarity Abs Ascii Ceiling CharacterLength CharIndex CharLength
-            Coalesce Convert DataLength Date Day Decode
+            PercentObject PercentOid Similarity Abs Ascii Ceiling CharacterLength CharIndex CharLength Char
+            Coalesce Concat Convert DataLength Date Day Decode
             Embedding Floor GetDate GetUtcDate Greatest HashBytes IfNull Instr IsNull IsNumeric LastDay
             LastIdentity LCase Least Left Len Length Lower LPad LTrim Month Now NullIf Nvl PatIndex Power
             Repeat Replace Replicate Reverse Right Round RPad RTrim Sign Space Str String Stuff Substr
@@ -959,9 +1014,9 @@ pub mod leveled {
     /// `{fn NAME(args)}` is `NAME(args)`, `{fn PI}` and its kin `PI()`, TIMESTAMPADD and TIMESTAMPDIFF builtins.
     fn odbc_function(function: &ODBCFunc) -> core::Term {
         calls!(ODBCFunc: function;
-            Abs Acos Asin Atan Ceiling Cos Cot Exp Floor Log Log10 Mod Power Sin Sqrt Tan Ascii Char
-            Concat DayName DayOfMonth DayOfWeek DayOfYear Hour LCase Left Length LTrim Minute Month
-            MonthName Quarter Repeat Right Round RTrim Second Sign Space Substring Truncate UCase Week
+            Abs Acos Asin Atan2 Atan Ceiling Cos Cot Exp Floor Log Log10 Mod Power Sin Sqrt Tan Ascii Char
+            Concat DayName DayOfMonth DayOfWeek DayOfYear Degrees Hour LCase Left Length LTrim Minute Month
+            MonthName Quarter Radians Repeat Right Round RTrim Second Sign Space Substring Truncate UCase Week
             Year;
             Pi CurDate CurTime Database Now;
             ODBCFunc::TimestampAdd(kw, a) => {
@@ -1084,13 +1139,97 @@ pub mod leveled {
         }
     }
 
-    /// A function called by name, built-in or user-defined.
+    /// A function called by name, built-in or user-defined; a function with a syntax of its own cannot be
+    /// called otherwise (2026.2 rejects TIMESTAMPADD(:u, 1, a), CONCAT(b, b, b), ROUND(a) and COUNT(a, b)).
     #[derive(Grammar)]
-    #[tygr(name = "call")]
+    #[tygr(name = "call", validated)]
     pub struct Call {
         pub name: SQLFunctionName,
         pub args: ArgsN,
     }
+
+    impl Validate for Call {
+        const REQUIREMENT: &'static str = "not name a function with a syntax of its own";
+        fn validate(&self) -> bool {
+            let name = self.name.0.print().to_uppercase();
+            !OWN_SYNTAX.contains(&name.as_str()) && !SCALAR_FUNCTIONS.contains(&name.as_str())
+        }
+    }
+
+    /// The scalar functions, which the full level spells and the core calls by name (a const stays in the full
+    /// level alone, so the core sees the empty list above).
+    const SCALAR_FUNCTIONS: &[&str] = &[
+        "%OBJECT",
+        "%OID",
+        "%SIMILARITY",
+        "ABS",
+        "ASCII",
+        "CEILING",
+        "CHARACTER_LENGTH",
+        "CHARINDEX",
+        "CHAR_LENGTH",
+        "CHAR",
+        "COALESCE",
+        "CONCAT",
+        "CONVERT",
+        "DATALENGTH",
+        "DATE",
+        "DAY",
+        "DECODE",
+        "EMBEDDING",
+        "FLOOR",
+        "GETDATE",
+        "GETUTCDATE",
+        "GREATEST",
+        "HASHBYTES",
+        "IFNULL",
+        "INSTR",
+        "ISNULL",
+        "ISNUMERIC",
+        "LAST_DAY",
+        "LAST_IDENTITY",
+        "LCASE",
+        "LEAST",
+        "LEFT",
+        "LEN",
+        "LENGTH",
+        "LOWER",
+        "LPAD",
+        "LTRIM",
+        "MONTH",
+        "NOW",
+        "NULLIF",
+        "NVL",
+        "PATINDEX",
+        "POSITION",
+        "POWER",
+        "REPEAT",
+        "REPLACE",
+        "REPLICATE",
+        "REVERSE",
+        "RIGHT",
+        "ROUND",
+        "RPAD",
+        "RTRIM",
+        "SIGN",
+        "SPACE",
+        "STR",
+        "STRING",
+        "STUFF",
+        "SUBSTR",
+        "SUBSTRING",
+        "TOCHAR",
+        "TODATE",
+        "TO_CHAR",
+        "TO_DATE",
+        "TO_NUMBER",
+        "TO_TIMESTAMP",
+        "UCASE",
+        "UNIX_TIMESTAMP",
+        "VECTOR_COSINE",
+        "VECTOR_DOT_PRODUCT",
+        "YEAR",
+    ];
 
     /// A niladic function, which stands without parentheses.
     #[derive(Grammar)]
@@ -1100,7 +1239,7 @@ pub mod leveled {
         CurrentTimestamp(Kw!("CURRENT_TIMESTAMP")),
         CurrentTime(Kw!("CURRENT_TIME")),
         SysDate(Kw!("SYSDATE")),
-        User(Kw!("USER")),
+        User(Kw!("USER"), Option<Args<()>>),
     }
 
     #[derive(Grammar)]
@@ -1277,7 +1416,6 @@ pub mod leveled {
         DateName(Kw!("DATENAME"), Args<RR<DatePart>>),
         DatePart(Kw!("DATEPART"), Args<RR<DatePartPart>>),
         DateTrunc(Kw!("DATE_TRUNC"), Args<RR<DatePart>>),
-        Convert(Kw!("CONVERT"), Args<RR<Scalx, SQLConvertFunc>>),
         JSONArray(Kw!("JSON_ARRAY"), SQLJSONArrayArgs),
         JSONObject(Kw!("JSON_OBJECT"), SQLJSONObjectArgs),
         Predict(Kw!("PREDICT"), Args<SQLPredictArgs>),
@@ -1297,7 +1435,7 @@ pub mod leveled {
         CurrentTimestamp(Kw!("CURRENT_TIMESTAMP"), Args<Scalx>),
         CurrentTime(Kw!("CURRENT_TIME"), Args<Scalx>),
         DollarExtract(Kw!("$EXTRACT"), Args<ROO>),
-        DollarFind(Kw!("$FIND"), Args<ROO>),
+        DollarFind(Kw!("$FIND"), Args<RRO>),
         DollarFNumber(Kw!("$FNUMBER"), Args<ROO>),
         DollarJustify(Kw!("$JUSTIFY"), Args<RRO>),
         DollarLength(Kw!("$LENGTH"), Args<RO>),
@@ -1330,6 +1468,9 @@ pub mod leveled {
         TSqlSqlStatus(Kw!("$TSQL_SQLSTATUS"), Args<()>),
         TSqlTranCount(Kw!("$TSQL_TRANCOUNT"), Args<()>),
         TSqlVersion(Kw!("$TSQL_VERSION"), Args<()>),
+        TSqlNewId(Kw!("$TSQL_NEWID"), Args<()>),
+        TSqlObjectId(Kw!("$TSQL_OBJECT_ID"), Args<Scalx>),
+        TSqlObjectName(Kw!("$TSQL_OBJECT_NAME"), Args<Scalx>),
     }
 
     #[derive(Grammar)]
@@ -1458,14 +1599,15 @@ pub mod leveled {
     #[tygr(name = "xmlElement")]
     pub struct XMLElement {
         pub keyword: Kw!("XMLELEMENT"),
-        pub args: Args<(Option<SQLXmlElementName>, Space, VecSep<XMLValue, ArgSep>)>,
+        pub args: Args<(SQLXmlElementName, Vec<(ArgSep, XMLValue)>)>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
+    /// `NAME "x"`, `NAME` or `"x"`: 2026.2 rejects a plain identifier, `XMLELEMENT(a, b)` and `NAME foo`.
     pub enum SQLXmlElementName {
-        Name(Kw!("NAME"), Option<(Space, Ident)>),
-        Ident(Ident),
+        Name(Kw!("NAME"), Option<(Space, DelimitedIdentifier)>),
+        Delimited(DelimitedIdentifier),
     }
 
     #[derive(Grammar)]
@@ -1534,7 +1676,7 @@ pub mod leveled {
     pub enum ODBCOnlyFunc {
         Convert(Kw!("CONVERT"), Args<RR<Scalx, SQLConvertFunc>>),
         IfNull(Kw!("IFNULL"), Args<RR>),
-        User(Kw!("USER"), Option<StringEq!("()")>),
+        User(Kw!("USER"), Option<Args<()>>),
     }
 
     pub type DQuote = StringEq!("\"");
@@ -1765,6 +1907,7 @@ pub mod leveled {
         SqlTime(Kw!("SQL_TIME")),
         SqlVarChar(Kw!("SQL_VARCHAR")),
         SqlDouble(Kw!("SQL_DOUBLE")),
+        SqlPosixtime(Kw!("SQL_POSIXTIME")),
     }
 
     #[derive(Grammar)]
@@ -1825,8 +1968,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "window")]
     pub struct Window {
-        pub fun: WindowFunc,
-        pub arg: Parenthesized<Option<Either<StringEq!("*"), VecSep<Scalx, ArgSep>>>>,
+        pub call: WindowCall,
         pub over_kw: (Space, Kw!("OVER"), Space),
         pub spec: Parenthesized<(
             Option<WindowPartition>,
@@ -1835,25 +1977,26 @@ pub mod leveled {
         )>,
     }
 
+    /// Each window function with its arguments: 2026.2 rejects ROW_NUMBER(a), SUM(*), SUM(a, b), NTILE(),
+    /// LEAD(a, 1, 0, 1) and FIRST_VALUE(a, 1), and COUNT takes * or an aggregate's argument.
     #[derive(Grammar)]
-    #[tygr(name = "window func")]
-    pub enum WindowFunc {
-        RowNumber(Kw!("ROW_NUMBER")),
-        Rank(Kw!("RANK")),
-        DenseRank(Kw!("DENSE_RANK")),
-        PercentRank(Kw!("PERCENT_RANK")),
-        CumeDist(Kw!("CUME_DIST")),
-        NTile(Kw!("NTILE")),
-        FirstValue(Kw!("FIRST_VALUE")),
-        LastValue(Kw!("LAST_VALUE")),
-        NthValue(Kw!("NTH_VALUE")),
-        Lead(Kw!("LEAD")),
-        Lag(Kw!("LAG")),
-        Sum(Kw!("SUM")),
-        Avg(Kw!("AVG")),
-        Count(Kw!("COUNT")),
-        Min(Kw!("MIN")),
-        Max(Kw!("MAX")),
+    pub enum WindowCall {
+        RowNumber(Kw!("ROW_NUMBER"), Args<()>),
+        Rank(Kw!("RANK"), Args<()>),
+        DenseRank(Kw!("DENSE_RANK"), Args<()>),
+        PercentRank(Kw!("PERCENT_RANK"), Args<()>),
+        CumeDist(Kw!("CUME_DIST"), Args<()>),
+        NTile(Kw!("NTILE"), Args<Scalx>),
+        FirstValue(Kw!("FIRST_VALUE"), Args<Scalx>),
+        LastValue(Kw!("LAST_VALUE"), Args<Scalx>),
+        NthValue(Kw!("NTH_VALUE"), Args<RO>),
+        Lead(Kw!("LEAD"), Args<ROO>),
+        Lag(Kw!("LAG"), Args<ROO>),
+        Sum(Kw!("SUM"), Args<Scalx>),
+        Avg(Kw!("AVG"), Args<Scalx>),
+        Count(Kw!("COUNT"), Args<Either<StringEq!("*"), AggArg>>),
+        Min(Kw!("MIN"), Args<Scalx>),
+        Max(Kw!("MAX"), Args<Scalx>),
     }
 
     pub type WindowPartition =
@@ -1879,7 +2022,7 @@ pub mod leveled {
             let current_row = core::WindowRowsBound::CurrentRow(
                 Default::default(),
                 Default::default(),
-                Default::default(),
+                Either::Right(Default::default()),
             );
             core::WindowRows::Between {
                 between_kw: Default::default(),
@@ -1897,9 +2040,17 @@ pub mod leveled {
     pub enum WindowRowsBound {
         UnboundedPreceding(Kw!("UNBOUNDED"), Space1, Kw!("PRECEDING")),
         UnboundedFollowing(Kw!("UNBOUNDED"), Space1, Kw!("FOLLOWING")),
-        Preceding(Number, Space, Kw!("PRECEDING")),
-        Following(Number, Space, Kw!("FOLLOWING")),
-        CurrentRow(Kw!("CURRENT"), Space1, Kw!("ROW")),
+        Preceding(
+            Either<NonNegativeInteger, StringLiteral>,
+            Space,
+            Kw!("PRECEDING"),
+        ),
+        Following(
+            Either<NonNegativeInteger, StringLiteral>,
+            Space,
+            Kw!("FOLLOWING"),
+        ),
+        CurrentRow(Kw!("CURRENT"), Space1, Either<Kw!("ROWS"), Kw!("ROW")>),
     }
     #[derive(Grammar)]
     #[tygr(name = "prdct")]
@@ -2136,7 +2287,6 @@ pub mod leveled {
     pub enum ForCnd {
         Prdct(Prdct),
         GroupHaving(Option<(Group, Space)>, Having),
-        GroupOnly(Group),
     }
 
     pub type AndClause<T> = Prefix<(Kw!("AND"), Space), T>;
@@ -6240,7 +6390,9 @@ mod sugar {
         CharacterLength(Kw!("CHARACTER_LENGTH"), Args<Scalx>),
         CharIndex(Kw!("CHARINDEX"), Args<RRO>),
         CharLength(Kw!("CHAR_LENGTH"), Args<Scalx>),
+        Char(Kw!("CHAR"), Args<Scalx>),
         Coalesce(Kw!("COALESCE"), Args1Plus),
+        Concat(Kw!("CONCAT"), Args<RR>),
         Convert(Kw!("CONVERT"), Args<RRO>),
         DataLength(Kw!("DATALENGTH"), Args<Scalx>),
         Date(Kw!("DATE"), Args<Scalx>),
@@ -6278,7 +6430,7 @@ mod sugar {
         Replicate(Kw!("REPLICATE"), Args<RR>),
         Reverse(Kw!("REVERSE"), Args<Scalx>),
         Right(Kw!("RIGHT"), Args<RR>),
-        Round(Kw!("ROUND"), Args<RR>),
+        Round(Kw!("ROUND"), Args<RRO>),
         RPad(Kw!("RPAD"), Args<RRO>),
         RTrim(Kw!("RTRIM"), Args<Scalx>),
         Sign(Kw!("SIGN"), Args<Scalx>),
@@ -6340,6 +6492,7 @@ mod sugar {
         Abs(Kw!("ABS"), Args<Scalx>),
         Acos(Kw!("ACOS"), Args<Scalx>),
         Asin(Kw!("ASIN"), Args<Scalx>),
+        Atan2(Kw!("ATAN2"), Args<RR>),
         Atan(Kw!("ATAN"), Args<Scalx>),
         Ceiling(Kw!("CEILING"), Args<Scalx>),
         Cos(Kw!("COS"), Args<Scalx>),
@@ -6349,7 +6502,7 @@ mod sugar {
         Log(Kw!("LOG"), Args<Scalx>),
         Log10(Kw!("LOG10"), Args<Scalx>),
         Mod(Kw!("MOD"), Args<RR>),
-        Pi(Kw!("PI"), Option<StringEq!("()")>),
+        Pi(Kw!("PI"), Option<Args<()>>),
         Power(Kw!("POWER"), Args<RR>),
         Sin(Kw!("SIN"), Args<Scalx>),
         Sqrt(Kw!("SQRT"), Args<Scalx>),
@@ -6357,13 +6510,14 @@ mod sugar {
         Ascii(Kw!("ASCII"), Args<Scalx>),
         Char(Kw!("CHAR"), Args<Scalx>),
         Concat(Kw!("CONCAT"), Args<RR>),
-        CurDate(Kw!("CURDATE"), Option<StringEq!("()")>),
-        CurTime(Kw!("CURTIME"), Option<StringEq!("()")>),
-        Database(Kw!("DATABASE"), Option<StringEq!("()")>),
+        CurDate(Kw!("CURDATE"), Option<Args<()>>),
+        CurTime(Kw!("CURTIME"), Option<Args<()>>),
+        Database(Kw!("DATABASE"), Option<Args<()>>),
         DayName(Kw!("DAYNAME"), Args<Scalx>),
         DayOfMonth(Kw!("DAYOFMONTH"), Args<Scalx>),
         DayOfWeek(Kw!("DAYOFWEEK"), Args<Scalx>),
         DayOfYear(Kw!("DAYOFYEAR"), Args<Scalx>),
+        Degrees(Kw!("DEGREES"), Args<Scalx>),
         Hour(Kw!("HOUR"), Args<Scalx>),
         LCase(Kw!("LCASE"), Args<Scalx>),
         Left(Kw!("LEFT"), Args<RR>),
@@ -6372,8 +6526,9 @@ mod sugar {
         Minute(Kw!("MINUTE"), Args<Scalx>),
         Month(Kw!("MONTH"), Args<Scalx>),
         MonthName(Kw!("MONTHNAME"), Args<Scalx>),
-        Now(Kw!("NOW"), Option<StringEq!("()")>),
+        Now(Kw!("NOW"), Option<Args<()>>),
         Quarter(Kw!("QUARTER"), Args<Scalx>),
+        Radians(Kw!("RADIANS"), Args<Scalx>),
         Repeat(Kw!("REPEAT"), Args<RR>),
         Right(Kw!("RIGHT"), Args<RR>),
         Round(Kw!("ROUND"), Args<RR>),

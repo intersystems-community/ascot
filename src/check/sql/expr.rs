@@ -120,7 +120,6 @@ impl Walk for Builtin {
             DateAdd(_, a) | DateDiff(_, a) => a.walk(w),
             DateName(_, a) | DateTrunc(_, a) => a.walk(w),
             DatePart(_, a) => a.walk(w),
-            Convert(_, a) => a.walk(w),
             JSONArray(_, a) => {
                 if let Some((items, _)) = &a.1.wrapped {
                     items.walk(w)
@@ -147,12 +146,13 @@ impl Walk for Builtin {
             Trim(_, a) => a.walk(w),
             Odbc(a) => a.walk(w),
             CurrentTimestamp(_, a) | CurrentTime(_, a) => a.walk(w),
-            DollarExtract(_, a)
-            | DollarFind(_, a)
-            | DollarFNumber(_, a)
-            | DollarList(_, a)
-            | DollarListGet(_, a) => a.walk(w),
-            DollarJustify(_, a) | DollarListFind(_, a) | DollarTranslate(_, a) => a.walk(w),
+            DollarExtract(_, a) | DollarFNumber(_, a) | DollarList(_, a) | DollarListGet(_, a) => {
+                a.walk(w)
+            }
+            DollarFind(_, a)
+            | DollarJustify(_, a)
+            | DollarListFind(_, a)
+            | DollarTranslate(_, a) => a.walk(w),
             DollarLength(_, a)
             | DollarListData(_, a)
             | DollarListFromString(_, a)
@@ -167,9 +167,11 @@ impl Walk for Builtin {
             | DollarMvOconv(_, a)
             | DollarMvOconvs(_, a) => a.walk(w),
             DollarPiece(_, a) => a.walk(w),
+            TSqlObjectId(_, a) | TSqlObjectName(_, a) => a.walk(w),
             TSqlDbName(..) | TSqlError(..) | TSqlFetchStatus(..) | TSqlGetUtcDate(..)
             | TSqlHostName(..) | TSqlLockTimeout(..) | TSqlNestLevel(..) | TSqlServerName(..)
-            | TSqlSpid(..) | TSqlSqlStatus(..) | TSqlTranCount(..) | TSqlVersion(..) => {}
+            | TSqlSpid(..) | TSqlSqlStatus(..) | TSqlTranCount(..) | TSqlVersion(..)
+            | TSqlNewId(..) => {}
         }
     }
 }
@@ -262,7 +264,9 @@ impl Walk for SQLCastExpression {
 
 impl Walk for XMLElement {
     fn walk(&self, w: &mut Walker) {
-        self.args.1.wrapped.2.walk(w)
+        for (_, value) in &self.args.1.wrapped.1 {
+            value.walk(w)
+        }
     }
 }
 
@@ -330,12 +334,33 @@ impl Walk for Dist {
 
 impl Walk for Window {
     fn walk(&self, w: &mut Walker) {
-        if let Some(Either::Right(args)) = &self.arg.wrapped {
-            args.walk(w)
-        }
+        self.call.walk(w);
         let (partition, order, _) = &self.spec.wrapped;
         partition.walk(w);
         order.walk(w)
+    }
+}
+
+impl Walk for WindowCall {
+    fn walk(&self, w: &mut Walker) {
+        use WindowCall::*;
+        match self {
+            RowNumber(..) | Rank(..) | DenseRank(..) | PercentRank(..) | CumeDist(..) => {}
+            NTile(_, a)
+            | FirstValue(_, a)
+            | LastValue(_, a)
+            | Sum(_, a)
+            | Avg(_, a)
+            | Min(_, a)
+            | Max(_, a) => a.walk(w),
+            NthValue(_, a) => a.walk(w),
+            Lead(_, a) | Lag(_, a) => a.walk(w),
+            Count(_, a) => {
+                if let Either::Right(arg) = &a.1.wrapped {
+                    arg.walk(w)
+                }
+            }
+        }
     }
 }
 
@@ -462,7 +487,6 @@ impl Walk for ForCnd {
                 group.walk(w);
                 having.walk(w)
             }
-            ForCnd::GroupOnly(group) => group.walk(w),
         }
     }
 }
