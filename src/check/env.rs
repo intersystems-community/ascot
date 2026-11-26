@@ -32,7 +32,7 @@ use crate::details::{
 use crate::diagnostic_filter::Filter;
 use crate::{
     Definitions, DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos,
-    macro_expand::Fidelity,
+    macro_expand::{BodyMacros, Fidelity},
 };
 use std::marker::PhantomData;
 
@@ -1629,13 +1629,14 @@ impl<'a> WorkspaceEnv<'a> {
     pub(crate) fn expand_method_body<'b>(
         &self,
         uri: &str,
+        method: &str,
         header: &str,
         body: &str,
         base_definitions: &'b MacroDefinitions,
-        body_macros: &crate::macro_expand::BodyMacros,
-    ) -> Result<(String, SourceMap, Definitions<'b>), bindings::Diagnostic> {
+        body_macros: &BodyMacros,
+    ) -> Result<(String, SourceMap, Definitions<'b>, BodyMacros), bindings::Diagnostic> {
         self.workspace
-            .expand_method_body(uri, header, body, base_definitions, body_macros)
+            .expand_method_body(uri, method, header, body, base_definitions, body_macros)
     }
 
     // A workspace-wide routine's label -> signature map, for a cross-routine label call
