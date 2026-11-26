@@ -38,8 +38,6 @@ identity!(
     IsNotStar,
     IsAnyChar,
     IsExtFuncChar,
-    IsDbIdentStart,
-    IsDbIdentPart,
     IsNotParen,
     SpaceUnit,
     Space,

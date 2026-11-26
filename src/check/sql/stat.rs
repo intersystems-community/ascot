@@ -16,11 +16,6 @@ impl Walk for Stat {
             Stat::Declare(decl) => decl.walk(w),
             Stat::OFC(ofc) => ofc.walk(w),
             Stat::TpRelated(tp) => tp.walk(w),
-            Stat::Get(get) => {
-                if let Some((_, _, _, var, ..)) = &get.assignment {
-                    w.written(var)
-                }
-            }
             Stat::Call(call) => call.walk(w),
             Stat::Explain(explain) => explain.walk(w),
             Stat::Truncate(_)
@@ -28,7 +23,9 @@ impl Walk for Stat {
             | Stat::Grant(_)
             | Stat::Revok(_)
             | Stat::Setml(_)
-            | Stat::ChkPrv(_) => {}
+            | Stat::ChkPrv(_)
+            | Stat::Savepoint(_)
+            | Stat::Lock(_) => {}
         }
     }
 }
@@ -70,6 +67,7 @@ impl Walk for Delet {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
         self.target.1.walk(w);
+        self.from.walk(w);
         self.where_clause.walk(w);
         w.pop_frame()
     }
@@ -91,18 +89,20 @@ impl Walk for IUDTarget {
 impl Walk for InsertValues {
     fn walk(&self, w: &mut Walker) {
         match self {
-            InsertValues::ColumnList { columns, values } => column_list(w, columns, values),
-            InsertValues::DefaultValues(..) => {}
+            InsertValues::Asign(values) => values.walk(w),
+            InsertValues::DefaultValues { columns, .. } => {
+                for column in columns.iter().flat_map(|list| list.1.wrapped.items.iter()) {
+                    w.column(column)
+                }
+            }
         }
     }
 }
 
 impl Walk for Asign {
     fn walk(&self, w: &mut Walker) {
-        match self {
-            Asign::SetList { assignments, .. } => assignments.1.walk(w),
-            Asign::ColumnList { columns, values } => column_list(w, columns, values),
-        }
+        let Asign::ColumnList { columns, values } = self;
+        column_list(w, columns, values)
     }
 }
 
@@ -174,25 +174,29 @@ impl Walk for CallStatement {
             .map_or(0, |args| args.items.len());
         w.call(&self.routine.1.0.0, args, SqlProcedureUse::Call);
         self.args.walk(w);
-        if let Some((.., name)) = &self.using {
-            w.hosts.reads.push((name.print(), false))
+        if let Some((.., names)) = &self.using {
+            for name in &names.items {
+                if let Either::Left(host) = name {
+                    w.read(host)
+                }
+            }
         }
-        if let Some((_, name, ..)) = &self.output {
-            w.hosts.writes.push((name.print(), false))
+        if let Some((Either::Left(host), ..)) = &self.output {
+            w.written(host)
         }
     }
 }
 
 impl Walk for Explain {
     fn walk(&self, w: &mut Walker) {
-        if let Some((.., param)) = &self.into {
-            w.written(param)
+        for (_, option) in &self.options {
+            if let ExplainOption::Into(_, _, params) = option {
+                for param in &params.items {
+                    w.written(param)
+                }
+            }
         }
-        match &*self.statement.1 {
-            ExplainSQLStatement::Select(stat) => stat.walk(w),
-            ExplainSQLStatement::Update(stat) => stat.walk(w),
-            ExplainSQLStatement::Delete(stat) => stat.walk(w),
-        }
+        self.statement.1.walk(w)
     }
 }
 

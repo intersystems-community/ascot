@@ -59,14 +59,6 @@ char_class!(pub IsExtFuncChar, "non left paren character", |ch| {
     !matches!(ch, '(' | '$')
 });
 
-char_class!(pub IsDbIdentStart, "db_identifier start", |ch| {
-    ch.is_ascii_alphabetic() || ch == '_'
-});
-
-char_class!(pub IsDbIdentPart, "db_identifier part", |ch| {
-    ch.is_ascii_alphabetic() || ch.is_ascii_digit() || ch == '_' || ch == '-'
-});
-
 char_class!(pub IsNotParen, "any tokens except \"(\" and \")\"", |ch| ch
     != '('
     && ch != ')');
@@ -847,15 +839,6 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "non-negative integer")]
     pub struct NonNegativeInteger(pub StringOf1<IsDigit>);
-
-    #[derive(Grammar)]
-    #[tygr(name = "positive numeric literal value")]
-    pub struct PositivceNumericLiteralValue {
-        pub sign: Option<StringEq!("+")>,
-        pub integer: StringOf1<IsDigit>,
-        pub fraction: Option<(StringEq!("."), StringOf1<IsDigit>)>,
-        pub exponent: Option<SQLExponent>,
-    }
 
     #[derive(Grammar)]
     #[tygr(name = "not equals operation")]
@@ -2999,9 +2982,21 @@ pub mod leveled {
         Subquery(SQLSubquery),
     }
 
+    /// An INSERT's values, or DEFAULT VALUES after an optional column list (2026.2 takes both).
     #[derive(Grammar)]
     #[tygr(name = "insert values")]
     pub enum InsertValues {
+        Asign(Asign),
+        DefaultValues {
+            columns: Option<SQLColumnListParen>,
+            kw: (Space, Kw!("DEFAULT"), Space1, Kw!("VALUES")),
+        },
+    }
+
+    /// The values of an INSERT or UPDATE: a column list with VALUES, a query or a host array, or SET assignments,
+    /// which read as the column list with VALUES.
+    #[derive(Grammar)]
+    pub enum Asign {
         #[sugar]
         SetList {
             set_kw: Kw!("SET"),
@@ -3011,12 +3006,11 @@ pub mod leveled {
             columns: Option<SQLColumnListParen>,
             values: (Space, ValueSource),
         },
-        DefaultValues(Kw!("DEFAULT"), Space1, Kw!("VALUES")),
     }
 
-    /// `INSERT ... SET a = x, b = y` is `INSERT ... (a, b) VALUES (x, y)`.
-    impl Desugar for InsertValuesSugar<'_> {
-        type Core = core::InsertValues;
+    /// `SET a = x, b = y` is `(a, b) VALUES (x, y)`.
+    impl Desugar for AsignSugar<'_> {
+        type Core = core::Asign;
         fn desugar(&self) -> Self::Core {
             let Self::SetList {
                 assignments: (_, list),
@@ -3024,7 +3018,7 @@ pub mod leveled {
             } = self;
             let columns = list.items.iter().map(|a| a.column.desugar()).collect();
             let values = list.items.iter().map(|a| a.value.desugar()).collect();
-            core::InsertValues::ColumnList {
+            core::Asign::ColumnList {
                 columns: Some((
                     Space::default(),
                     Wrap::new(
@@ -3045,70 +3039,6 @@ pub mod leveled {
                         )),
                     },
                 ),
-            }
-        }
-    }
-
-    #[derive(Grammar)]
-    #[sugar]
-    pub enum Asign {
-        SetList {
-            set_kw: Kw!("SET"),
-            assignments: (Space, VecSep<Src<SQLSetAssignment>, ArgSep>),
-        },
-        ColumnList {
-            columns: Option<SQLColumnListParen>,
-            values: (Space, ValueSource),
-        },
-    }
-
-    /// `UPDATE t (a, b) VALUES (x, y)` is `UPDATE t SET a = x, b = y`; a query or host array as values stays.
-    impl Desugar for Asign {
-        type Core = core::Asign;
-        fn desugar(&self) -> Self::Core {
-            match self {
-                Asign::SetList {
-                    set_kw,
-                    assignments,
-                } => core::Asign::SetList {
-                    set_kw: *set_kw,
-                    assignments: assignments.desugar(),
-                },
-                Asign::ColumnList {
-                    columns: Some(columns),
-                    values:
-                        (
-                            _,
-                            ValueSource::ValSpec {
-                                spec: ValSpec::Scalx(exprs),
-                                ..
-                            },
-                        ),
-                } if columns.1.wrapped.items.len() == exprs.wrapped.items.len() => {
-                    let items = (columns.1.wrapped.items.iter().zip(&exprs.wrapped.items))
-                        .map(|(column, value)| {
-                            let Scalx(terms) = value;
-                            let last = terms.items.len() - 1;
-                            let range = terms.items[0].range().start..terms.items[last].range().end;
-                            Src::new(
-                                range,
-                                core::SQLSetAssignment {
-                                    column: column.desugar(),
-                                    eq: (Space::blank(), Default::default(), Space::blank()),
-                                    value: value.desugar(),
-                                },
-                            )
-                        })
-                        .collect();
-                    core::Asign::SetList {
-                        set_kw: Default::default(),
-                        assignments: (Space::blank(), commas(items)),
-                    }
-                }
-                Asign::ColumnList { columns, values } => core::Asign::ColumnList {
-                    columns: columns.desugar(),
-                    values: values.desugar(),
-                },
             }
         }
     }
@@ -3144,10 +3074,29 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "updat")]
+    #[tygr(name = "updat", validated)]
     pub struct Updat {
         pub update_kw: Kw!("UPDATE"),
         pub body: (Space, UpdatBody),
+    }
+
+    impl Validate for Updat {
+        const REQUIREMENT: &'static str = "take VALUES, not a query";
+        fn validate(&self) -> bool {
+            !matches!(
+                &self.body.1,
+                UpdatBody::Update {
+                    assignment: (
+                        _,
+                        Asign::ColumnList {
+                            values: (_, ValueSource::Query(_)),
+                            ..
+                        }
+                    ),
+                    ..
+                }
+            )
+        }
     }
 
     #[derive(Grammar)]
@@ -3189,6 +3138,7 @@ pub mod leveled {
         pub options: Vec<(Space1, DmlOption)>,
         pub from_kw: Implied<Kw!("FROM")>,
         pub target: (Space, IUDTarget),
+        pub from: Option<(Space, FromClause)>,
         pub where_clause: Option<(Space, WhereWerop)>,
     }
 
@@ -3208,17 +3158,24 @@ pub mod leveled {
         pub kw: (Kw!("TRUNCATE"), Space1, Kw!("TABLE")),
         pub options: Vec<(Space1, DmlOption)>,
         pub table: (Space, TName),
+        pub alias: Option<Alias>,
     }
 
     impl Validate for Truncate {
-        const REQUIREMENT: &'static str = "take only %NOCHECK, %NOLOCK and %NOJOURN";
+        const REQUIREMENT: &'static str = "take only %NOCHECK, %NOLOCK and %NOJOURN, each once";
         fn validate(&self) -> bool {
+            let names: Vec<String> = (self.options.iter())
+                .map(|(_, option)| option.print().to_uppercase())
+                .collect();
             self.options.iter().all(|(_, option)| {
                 matches!(
                     option,
                     DmlOption::NoCheck(_) | DmlOption::NoLock(_) | DmlOption::NoJourn(_)
                 )
-            })
+            }) && names
+                .iter()
+                .enumerate()
+                .all(|(i, name)| !names[..i].contains(name))
         }
     }
 
@@ -3228,14 +3185,14 @@ pub mod leveled {
         StartTransaction(StartTP),
         SetTransaction(SetTP),
         Rollback(RollB),
-        TPOption(TP),
+        TPOption(TPOption),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "starttp")]
     pub struct StartTP {
         pub kw: (Kw!("START"), Space1, Kw!("TRANSACTION"), Space),
-        pub commit_mode: Option<(CommitModeSpec, Space)>,
+        pub commit_mode: Option<(CommitModeSpec, Option<(Space, StringEq!(","))>, Space)>,
         pub modes: VecSep<Option<TRMode>, ArgSep>,
     }
 
@@ -3277,21 +3234,64 @@ pub mod leveled {
         ReadCommitted(Kw!("READ"), Space1, Kw!("COMMITTED")),
         ReadVerified(Kw!("READ"), Space1, Kw!("VERIFIED")),
         RepeatableRead(Kw!("REPEATABLE"), Space1, Kw!("READ")),
-        Serializable(Kw!("SERIALIZABLE")),
+    }
+
+    /// ROLLBACK [WORK] or ROLLBACK TO SAVEPOINT name; 2026.2 rejects ROLLBACK WORK TO SAVEPOINT.
+    #[derive(Grammar)]
+    #[tygr(name = "rollb")]
+    pub enum RollB {
+        Savepoint(
+            Kw!("ROLLBACK"),
+            Space1,
+            Kw!("TO"),
+            Space1,
+            Kw!("SAVEPOINT"),
+            Space,
+            Ident,
+        ),
+        Bare(Kw!("ROLLBACK"), #[sugar] Option<(Space1, Kw!("WORK"))>),
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "rollb")]
-    pub struct RollB {
-        pub rollback_kw: Kw!("ROLLBACK"),
-        #[sugar]
-        pub work: Option<(Space1, Kw!("WORK"))>,
+    pub struct Savepoint {
+        pub kw: (Kw!("SAVEPOINT"), Space),
+        pub name: Ident,
     }
 
-    /// `START [SET]`, which may precede a transaction option or GET.
-    pub type StartSet = Option<(Kw!("START"), Space, Option<(Kw!("SET"), Space)>)>;
+    /// LOCK [TABLE] t IN SHARE|EXCLUSIVE MODE [WAIT n] and UNLOCK [TABLE] t IN SHARE|EXCLUSIVE MODE [IMMEDIATE].
+    #[derive(Grammar)]
+    #[tygr(validated)]
+    pub struct LockTable {
+        pub kw: Either<Kw!("UNLOCK"), Kw!("LOCK")>,
+        pub table_kw: Option<(Space1, Kw!("TABLE"))>,
+        pub table: (Space, TName),
+        pub mode: (
+            Space,
+            Kw!("IN"),
+            Space1,
+            Either<Kw!("SHARE"), Kw!("EXCLUSIVE")>,
+            Space1,
+            Kw!("MODE"),
+        ),
+        pub tail: Option<(Space1, LockTail)>,
+    }
 
-    pub type TP = Prefix<StartSet, TPOption>;
+    #[derive(Grammar)]
+    pub enum LockTail {
+        Wait(Kw!("WAIT"), Space, Literal),
+        Immediate(Kw!("IMMEDIATE")),
+    }
+
+    impl Validate for LockTable {
+        const REQUIREMENT: &'static str = "take WAIT with LOCK and IMMEDIATE with UNLOCK";
+        fn validate(&self) -> bool {
+            !matches!(
+                (&self.kw, &self.tail),
+                (Either::Left(_), Some((_, LockTail::Wait(..))))
+                    | (Either::Right(_), Some((_, LockTail::Immediate(_))))
+            )
+        }
+    }
 
     #[derive(Grammar)]
     #[tygr(name = "tp option")]
@@ -3356,30 +3356,41 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "get")]
-    pub struct Get {
-        pub start_set: StartSet,
-        pub get_kw: Kw!("GET"),
-        pub assignment: Option<(
-            Space,
-            Ident,
-            Space,
-            Var,
+    #[tygr(name = "call statement", validated)]
+    pub struct CallStatement {
+        pub output: Option<(
+            Either<HostVar, ParameterMarker>,
             Space,
             StringEq!("="),
             Space,
-            Kw!("%ROWCOUNT"),
         )>,
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "call statement")]
-    pub struct CallStatement {
-        pub output: Option<(StringEq!(":"), HostIdentifier, Space, StringEq!("="), Space)>,
         pub call_kw: Kw!("CALL"),
         pub routine: (Space, RoutineName),
         pub args: ArgsN,
-        pub using: Option<(Space, Kw!("USING"), Space, StringEq!(":"), HostIdentifier)>,
+        pub using: Option<(
+            Space1,
+            Kw!("USING"),
+            Space,
+            VecSep<Either<HostVar, ParameterMarker>, ArgSep>,
+        )>,
+    }
+
+    impl Validate for CallStatement {
+        const REQUIREMENT: &'static str = "take no column as an argument";
+        fn validate(&self) -> bool {
+            (self
+                .args
+                .1
+                .wrapped
+                .iter()
+                .flat_map(|args| args.items.iter()))
+            .all(|Scalx(terms)| {
+                terms
+                    .items
+                    .iter()
+                    .all(|term| !matches!(term.node, Term::Column(_)))
+            })
+        }
     }
 
     #[derive(Grammar)]
@@ -3390,38 +3401,18 @@ pub mod leveled {
     #[tygr(name = "explain")]
     pub struct Explain {
         pub explain_kw: Kw!("EXPLAIN"),
-        pub options: Option<ExplainOptionList>,
-        pub into: Option<(Space1, Kw!("INTO"), Space, Param)>,
-        pub statement: (Space, Box<ExplainSQLStatement>),
+        pub options: Vec<(Space1, ExplainOption)>,
+        pub statement: (Space, Box<Src<Stat>>),
     }
 
+    /// EXPLAIN's options, in any order (2026.2 takes EXPLAIN STAT ALT, EXPLAIN INTO :x ALT and INTO :x, :y).
     #[derive(Grammar)]
-    #[tygr(name = "explain option list")]
-    pub struct ExplainOptionList {
-        pub alt: Option<(Space, AltOption)>,
-        pub stat: Option<(Space, StatOption)>,
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "alt option")]
-    pub enum AltOption {
+    pub enum ExplainOption {
         Alt(Kw!("ALT")),
         All(Kw!("ALL")),
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "stat option")]
-    pub enum StatOption {
         Stat(Kw!("STAT")),
         Stats(Kw!("STATS")),
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "explain sql statement")]
-    pub enum ExplainSQLStatement {
-        Select(Selct),
-        Update(WithStat<Updat>),
-        Delete(WithStat<Delet>),
+        Into(Kw!("INTO"), Space, VecSep<Param, ArgSep>),
     }
 
     #[derive(Grammar)]
@@ -3490,7 +3481,7 @@ pub mod leveled {
         LockTimeout {
             lock_kw: Kw!("LOCK_TIMEOUT"),
             eq: (Space, StringEq!("="), Space),
-            value: PositivceNumericLiteralValue,
+            value: Number,
         },
         PkeyIsIdkey {
             pkey_kw: Kw!("PKEY_IS_IDKEY"),
@@ -3505,7 +3496,7 @@ pub mod leveled {
         AutoParallelThreshold {
             auto_kw: Kw!("AUTO_PARALLEL_THRESHOLD"),
             eq: (Space, StringEq!("="), Space),
-            value: PositivceNumericLiteralValue,
+            value: Number,
         },
         DefaultSchema {
             default_kw: Kw!("DEFAULT_SCHEMA"),
@@ -3520,7 +3511,7 @@ pub mod leveled {
         LockEscalationThreshold {
             lock_kw: Kw!("LOCK_ESCALATION_THRESHOLD"),
             eq: (Space, StringEq!("="), Space),
-            value: PositivceNumericLiteralValue,
+            value: Number,
         },
         LocaleOption(LocaleOption),
     }
@@ -3765,6 +3756,10 @@ pub mod leveled {
         ManageModel(Kw!("%MANAGE_MODEL")),
         UseModel(Kw!("%USE_MODEL")),
         NoJourn(Kw!("%NOJOURN")),
+        BuildIndex(Kw!("%BUILD_INDEX")),
+        DropUnowned(Kw!("%DROP_UNOWNED")),
+        ManageForeignServer(Kw!("%MANAGE_FOREIGN_SERVER")),
+        CancelQuery(Kw!("%CANCEL_QUERY")),
     }
 
     #[derive(Grammar)]
@@ -3861,7 +3856,8 @@ pub mod leveled {
     #[tygr(name = "priv spec")]
     pub enum PrivSpec {
         Action(Action),
-        Threshold(Kw!("%THRESHOLD")),
+        Execute(Kw!("EXECUTE")),
+        Use(Kw!("USE")),
     }
 
     type OptParenScalx = Option<Parenthesized<Scalx>>;
@@ -4860,13 +4856,12 @@ pub mod leveled {
         pub kw: (
             Kw!("THROUGH"),
             Space1,
-            Kw!("FOREIGN"),
-            Space1,
+            Option<(Kw!("FOREIGN"), Space1)>,
             Kw!("SERVER"),
             Space,
         ),
         pub tname: TName,
-        pub remote_statement: (Space, Selct),
+        pub remote_statement: (Space, Box<Src<Stat>>),
     }
 
     #[derive(Grammar)]
@@ -4892,7 +4887,8 @@ pub mod leveled {
         Grant(Grant),
         Revok(Revok),
         TpRelated(TpRelated),
-        Get(Get),
+        Savepoint(Savepoint),
+        Lock(LockTable),
         Call(CallStatement),
         Explain(Explain),
         Setml(Setml),
@@ -4919,16 +4915,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "database_name")]
-    pub struct DatabaseName {
-        pub head: DbIdentHead,
-        pub rest: Vec<IsDbIdentPart>,
-    }
-
-    #[derive(Grammar)]
-    pub enum DbIdentHead {
-        Percent(StringEq!("%"), IsDbIdentPart),
-        Normal(IsDbIdentStart),
-    }
+    pub struct DatabaseName(pub Ident);
 
     #[derive(Grammar)]
     #[tygr(name = "code specification")]

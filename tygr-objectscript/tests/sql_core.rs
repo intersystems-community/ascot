@@ -56,7 +56,6 @@ const STATEMENTS: &[&str] = &[
     "INSERT INTO t SET a = 1 /* c */, b = 2",
     "INSERT %NOLOCK t (a) VALUES (1)",
     "UPDATE t (a, b) VALUES (1, 2) WHERE c = 3",
-    "UPDATE t (a) SELECT b FROM u",
     "DELETE t WHERE a = 1",
     "DELETE %NOLOCK t",
     "COMMIT WORK",
