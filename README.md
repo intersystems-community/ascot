@@ -165,6 +165,14 @@ line the formatter adds is indented like its block, one tab (or `--indent N`
 spaces, or the `indent` rule's unit) deeper for a body's first command.
 `--check` writes nothing and exits non-zero listing the files that would change.
 
+```sh
+ascot sql-core
+```
+
+Reads SQL statements from stdin, one per line, and prints each one's core form,
+the spelling the checker reads once the full grammar's sugar is rewritten; a
+line that doesn't parse prints `error:` and the parser's message.
+
 ### `ascot` as an MCP server
 
 ```sh

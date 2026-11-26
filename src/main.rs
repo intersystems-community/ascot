@@ -1,5 +1,5 @@
 //! The `ascot` command-line binary: argument parsing (with `clap`) and the `analyze`, `declare`,
-//! `diagnostics`, `mcp` and `lsp` subcommands documented in README.md.
+//! `diagnostics`, `sql-core`, `mcp` and `lsp` subcommands documented in README.md.
 //!
 //! A thin shell over the library in `lib.rs`. It walks directories for `.cls`/`.mac`/`.int`/`.inc`
 //! files, loads them into one `Workspace` and prints its diagnostics (`analyze*`), or hands the
@@ -77,6 +77,12 @@ enum Command {
         /// The directory to write; its other Markdown files are removed
         dir: PathBuf,
     },
+    /// Print the core form of SQL statements read from stdin, one per line
+    ///
+    /// Parses each line with the full grammar of embedded SQL and prints its core: the spelling
+    /// the checker reads, every sugar of the full grammar rewritten. A line that does not parse
+    /// prints `error: ` and the parser's message.
+    SqlCore,
     #[cfg(feature = "declare")]
     /// Save an IRIS namespace's declarations to a file
     ///
@@ -259,6 +265,7 @@ fn main() {
                 exit(1);
             }
         }
+        Command::SqlCore => sql_core(),
         #[cfg(feature = "declare")]
         Command::Declare {
             iris,
@@ -336,6 +343,32 @@ impl StyleArgs {
         };
         let text = fs::read_to_string(&path).unwrap_or_else(|err| fail(err.to_string()));
         Some(style::parse(&text).unwrap_or_else(|err| fail(err)))
+    }
+}
+
+/// Prints the core form of each SQL statement on stdin, one per line, or `error: ` and the parser's
+/// message for a line that does not parse.
+fn sql_core() {
+    use tygr::{Parse, Print};
+    use tygr_objectscript::sql::SQL;
+    use tygr_objectscript::sql::desugar::Desugar;
+
+    for line in std::io::stdin().lines() {
+        let line = line.unwrap_or_else(|err| {
+            eprintln!("sql-core: {err}");
+            exit(1)
+        });
+        match SQL::parse(&line) {
+            Ok(sql) => println!("{}", sql.desugar().print()),
+            // The parser's message runs over several lines; the output stays one per statement.
+            Err(err) => println!(
+                "error: {}",
+                err.to_string()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        }
     }
 }
 
