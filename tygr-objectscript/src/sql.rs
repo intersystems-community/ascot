@@ -733,6 +733,27 @@ const SCALAR_FUNCTIONS: &[&str] = &[];
 /// where each is a scalar function, shadows this.
 const DOLLAR_CALLS: bool = true;
 
+/// The functions called by name, the ObjectScript `$` functions among them (2026.2 takes these and no other
+/// `$` name): each its variant, keyword and argument shape, and the name the core calls where another.
+macro_rules! scalar_functions {
+    ($($Variant:ident $name:literal $Args:ty $(=> $core:literal)?;)*) => {
+        #[derive(Grammar, Clone)]
+        pub enum ScalarFunction {
+            $($Variant(Kw!($name), $Args),)*
+        }
+
+        const SCALAR_FUNCTIONS: &[&str] = &[$($name,)*];
+
+        fn scalar_function(function: ScalarFunction) -> core::Term {
+            match function {
+                $(ScalarFunction::$Variant(_, a) => call(scalar_functions!(@name $name $($core)?), args(a)),)*
+            }
+        }
+    };
+    (@name $name:literal) => { $name };
+    (@name $name:literal $core:literal) => { $core };
+}
+
 #[tygr_objectscript_macros::levels]
 pub mod leveled {
     pub type Parenthesized<T> = Wrap<(StringEq!("("), Space), T, (Space, StringEq!(")"))>;
@@ -876,25 +897,6 @@ pub mod leveled {
         };
     }
 
-    fn scalar_function(function: ScalarFunction) -> core::Term {
-        calls!(ScalarFunction: function;
-            PercentObject PercentOid Similarity Abs Ascii Ceiling CharacterLength CharIndex CharLength Char
-            Coalesce Concat Convert DataLength Date Day Decode
-            Embedding Floor GetDate GetUtcDate Greatest HashBytes IfNull Instr IsNull IsNumeric LastDay
-            LastIdentity LCase Least Left Len Length Lower LPad LTrim Month Now NullIf Nvl PatIndex Power
-            Repeat Replace Replicate Reverse Right Round RPad RTrim Sign Space Str String Stuff Substr
-            Substring ToChar ToDate ToUSChar ToUSDate ToNumber ToTimestamp UCase UnixTimestamp
-            VectorCosine VectorDotProduct Year DollarExtract DollarFind DollarFNumber DollarJustify
-            DollarLength DollarList DollarListBuild DollarListData DollarListFind DollarListFromString
-            DollarListGet DollarListLength DollarListSame DollarListToString DollarMvFmt DollarMvFmts
-            DollarMvIconv DollarMvIconvs DollarMvOconv DollarMvOconvs DollarPiece DollarTranslate
-            TSqlDbName TSqlError TSqlFetchStatus TSqlGetUtcDate TSqlHostName TSqlLockTimeout TSqlNestLevel
-            TSqlServerName TSqlSpid TSqlSqlStatus TSqlTranCount TSqlVersion TSqlNewId TSqlObjectId
-            TSqlObjectName;;
-            ScalarFunction::Position(_, a) => call("CHARINDEX", args(a)),
-        )
-    }
-
     fn odbc_function(function: ODBCFunc) -> core::Term {
         calls!(ODBCFunc: function;
             Abs Acos Asin Atan2 Atan Ceiling Cos Cot Exp Floor Log Log10 Mod Power Sin Sqrt Tan Ascii Char
@@ -1001,78 +1003,116 @@ pub mod leveled {
 
     /// The names the full level spells; a const stays in the full level alone, so the core sees the list above.
     const DOLLAR_CALLS: bool = false;
-    const SCALAR_FUNCTIONS: &[&str] = &[
-        "%OBJECT",
-        "%OID",
-        "%SIMILARITY",
-        "ABS",
-        "ASCII",
-        "CEILING",
-        "CHARACTER_LENGTH",
-        "CHARINDEX",
-        "CHAR_LENGTH",
-        "CHAR",
-        "COALESCE",
-        "CONCAT",
-        "CONVERT",
-        "DATALENGTH",
-        "DATE",
-        "DAY",
-        "DECODE",
-        "EMBEDDING",
-        "FLOOR",
-        "GETDATE",
-        "GETUTCDATE",
-        "GREATEST",
-        "HASHBYTES",
-        "IFNULL",
-        "INSTR",
-        "ISNULL",
-        "ISNUMERIC",
-        "LAST_DAY",
-        "LAST_IDENTITY",
-        "LCASE",
-        "LEAST",
-        "LEFT",
-        "LEN",
-        "LENGTH",
-        "LOWER",
-        "LPAD",
-        "LTRIM",
-        "MONTH",
-        "NOW",
-        "NULLIF",
-        "NVL",
-        "PATINDEX",
-        "POSITION",
-        "POWER",
-        "REPEAT",
-        "REPLACE",
-        "REPLICATE",
-        "REVERSE",
-        "RIGHT",
-        "ROUND",
-        "RPAD",
-        "RTRIM",
-        "SIGN",
-        "SPACE",
-        "STR",
-        "STRING",
-        "STUFF",
-        "SUBSTR",
-        "SUBSTRING",
-        "TOCHAR",
-        "TODATE",
-        "TO_CHAR",
-        "TO_DATE",
-        "TO_NUMBER",
-        "TO_TIMESTAMP",
-        "UCASE",
-        "UNIX_TIMESTAMP",
-        "VECTOR_COSINE",
-        "VECTOR_DOT_PRODUCT",
-        "YEAR",
-    ];
+
+    scalar_functions! {
+        PercentObject "%OBJECT" Args<Scalx>;
+        PercentOid "%OID" Args<Scalx>;
+        Similarity "%SIMILARITY" Args<RR>;
+        Abs "ABS" Args<Scalx>;
+        Ascii "ASCII" Args<Scalx>;
+        Ceiling "CEILING" Args<Scalx>;
+        CharacterLength "CHARACTER_LENGTH" Args<Scalx>;
+        CharIndex "CHARINDEX" Args<RRO>;
+        CharLength "CHAR_LENGTH" Args<Scalx>;
+        Char "CHAR" Args<Scalx>;
+        Coalesce "COALESCE" Args1Plus;
+        Concat "CONCAT" Args<RR>;
+        Convert "CONVERT" Args<RRO>;
+        DataLength "DATALENGTH" Args<Scalx>;
+        Date "DATE" Args<Scalx>;
+        Day "DAY" Args<Scalx>;
+        Decode "DECODE" Args1Plus;
+        Embedding "EMBEDDING" Args<RO>;
+        Floor "FLOOR" Args<Scalx>;
+        GetDate "GETDATE" Args<Option<Scalx>>;
+        GetUtcDate "GETUTCDATE" Args<Option<Scalx>>;
+        Greatest "GREATEST" Args1Plus;
+        HashBytes "HASHBYTES" Args<RR>;
+        IfNull "IFNULL" Args<RRO>;
+        Instr "INSTR" Args<RROO>;
+        IsNull "ISNULL" Args<RR>;
+        IsNumeric "ISNUMERIC" Args<Scalx>;
+        LastDay "LAST_DAY" Args<Scalx>;
+        LastIdentity "LAST_IDENTITY" Args<()>;
+        LCase "LCASE" Args<Scalx>;
+        Least "LEAST" Args1Plus;
+        Left "LEFT" Args<RR>;
+        Len "LEN" Args<Scalx>;
+        Length "LENGTH" Args<Scalx>;
+        Lower "LOWER" Args<Scalx>;
+        LPad "LPAD" Args<RRO>;
+        LTrim "LTRIM" Args<Scalx>;
+        Month "MONTH" Args<Scalx>;
+        Now "NOW" Args<()>;
+        NullIf "NULLIF" Args<RR>;
+        Nvl "NVL" Args<RR>;
+        PatIndex "PATINDEX" Args<RR>;
+        Position "POSITION" Args<SQLPositionArgs> => "CHARINDEX";
+        Power "POWER" Args<RR>;
+        Repeat "REPEAT" Args<RR>;
+        Replace "REPLACE" Args<RRR>;
+        Replicate "REPLICATE" Args<RR>;
+        Reverse "REVERSE" Args<Scalx>;
+        Right "RIGHT" Args<RR>;
+        Round "ROUND" Args<RRO>;
+        RPad "RPAD" Args<RRO>;
+        RTrim "RTRIM" Args<Scalx>;
+        Sign "SIGN" Args<Scalx>;
+        Space "SPACE" Args<Scalx>;
+        Str "STR" Args<ROO>;
+        String "STRING" Args1Plus;
+        Stuff "STUFF" Args<RRRR>;
+        Substr "SUBSTR" Args<RRO>;
+        Substring "SUBSTRING" SubstringArgs;
+        ToChar "TOCHAR" Args<RO>;
+        ToDate "TODATE" Args<RO>;
+        ToUSChar "TO_CHAR" Args<RO>;
+        ToUSDate "TO_DATE" Args<RO>;
+        ToNumber "TO_NUMBER" Args<Ranged<Term>>;
+        ToTimestamp "TO_TIMESTAMP" Args<RO>;
+        UCase "UCASE" Args<Scalx>;
+        UnixTimestamp "UNIX_TIMESTAMP" Args<Option<Scalx>>;
+        VectorCosine "VECTOR_COSINE" Args<RR>;
+        VectorDotProduct "VECTOR_DOT_PRODUCT" Args<RR>;
+        Year "YEAR" Args<Scalx>;
+        DollarExtract "$EXTRACT" Args<ROO>;
+        DollarFind "$FIND" Args<RRO>;
+        DollarFNumber "$FNUMBER" Args<ROO>;
+        DollarJustify "$JUSTIFY" Args<RRO>;
+        DollarLength "$LENGTH" Args<RO>;
+        DollarList "$LIST" Args<ROO>;
+        DollarListBuild "$LISTBUILD" ArgsN;
+        DollarListData "$LISTDATA" Args<RO>;
+        DollarListFind "$LISTFIND" Args<RRO>;
+        DollarListFromString "$LISTFROMSTRING" Args<RO>;
+        DollarListGet "$LISTGET" Args<ROO>;
+        DollarListLength "$LISTLENGTH" Args<Scalx>;
+        DollarListSame "$LISTSAME" Args<RR>;
+        DollarListToString "$LISTTOSTRING" Args<RO>;
+        DollarMvFmt "$MVFMT" Args<RR>;
+        DollarMvFmts "$MVFMTS" Args<RR>;
+        DollarMvIconv "$MVICONV" Args<RR>;
+        DollarMvIconvs "$MVICONVS" Args<RR>;
+        DollarMvOconv "$MVOCONV" Args<RR>;
+        DollarMvOconvs "$MVOCONVS" Args<RR>;
+        DollarPiece "$PIECE" Args<RROO>;
+        DollarTranslate "$TRANSLATE" Args<RRO>;
+        TSqlDbName "$TSQL_DB_NAME" Args<()>;
+        TSqlError "$TSQL_ERROR" Args<()>;
+        TSqlFetchStatus "$TSQL_FETCH_STATUS" Args<()>;
+        TSqlGetUtcDate "$TSQL_GETUTCDATE" Args<()>;
+        TSqlHostName "$TSQL_HOST_NAME" Args<()>;
+        TSqlLockTimeout "$TSQL_LOCK_TIMEOUT" Args<()>;
+        TSqlNestLevel "$TSQL_NESTLEVEL" Args<()>;
+        TSqlServerName "$TSQL_SERVERNAME" Args<()>;
+        TSqlSpid "$TSQL_SPID" Args<()>;
+        TSqlSqlStatus "$TSQL_SQLSTATUS" Args<()>;
+        TSqlTranCount "$TSQL_TRANCOUNT" Args<()>;
+        TSqlVersion "$TSQL_VERSION" Args<()>;
+        TSqlNewId "$TSQL_NEWID" Args<()>;
+        TSqlObjectId "$TSQL_OBJECT_ID" Args<Scalx>;
+        TSqlObjectName "$TSQL_OBJECT_NAME" Args<Scalx>;
+    }
 
     /// A function without parentheses; `USER` takes an empty pair too (2026.2).
     #[derive(Grammar)]
@@ -5644,119 +5684,6 @@ mod sugar {
     pub enum ColTrun {
         Const(Nested<Literal>),
         HostVar(HostVar),
-    }
-
-    /// The functions a call by name spells, which the core reads as calls, the ObjectScript `$` functions
-    /// among them (2026.2 takes these and no other `$` name).
-    #[derive(Grammar, Clone)]
-    pub enum ScalarFunction {
-        PercentObject(Kw!("%OBJECT"), Args<Scalx>),
-        PercentOid(Kw!("%OID"), Args<Scalx>),
-        Similarity(Kw!("%SIMILARITY"), Args<RR>),
-        Abs(Kw!("ABS"), Args<Scalx>),
-        Ascii(Kw!("ASCII"), Args<Scalx>),
-        Ceiling(Kw!("CEILING"), Args<Scalx>),
-        CharacterLength(Kw!("CHARACTER_LENGTH"), Args<Scalx>),
-        CharIndex(Kw!("CHARINDEX"), Args<RRO>),
-        CharLength(Kw!("CHAR_LENGTH"), Args<Scalx>),
-        Char(Kw!("CHAR"), Args<Scalx>),
-        Coalesce(Kw!("COALESCE"), Args1Plus),
-        Concat(Kw!("CONCAT"), Args<RR>),
-        Convert(Kw!("CONVERT"), Args<RRO>),
-        DataLength(Kw!("DATALENGTH"), Args<Scalx>),
-        Date(Kw!("DATE"), Args<Scalx>),
-        Day(Kw!("DAY"), Args<Scalx>),
-        Decode(Kw!("DECODE"), Args1Plus),
-        Embedding(Kw!("EMBEDDING"), Args<RO>),
-        Floor(Kw!("FLOOR"), Args<Scalx>),
-        GetDate(Kw!("GETDATE"), Args<Option<Scalx>>),
-        GetUtcDate(Kw!("GETUTCDATE"), Args<Option<Scalx>>),
-        Greatest(Kw!("GREATEST"), Args1Plus),
-        HashBytes(Kw!("HASHBYTES"), Args<RR>),
-        IfNull(Kw!("IFNULL"), Args<RRO>),
-        Instr(Kw!("INSTR"), Args<RROO>),
-        IsNull(Kw!("ISNULL"), Args<RR>),
-        IsNumeric(Kw!("ISNUMERIC"), Args<Scalx>),
-        LastDay(Kw!("LAST_DAY"), Args<Scalx>),
-        LastIdentity(Kw!("LAST_IDENTITY"), Args<()>),
-        LCase(Kw!("LCASE"), Args<Scalx>),
-        Least(Kw!("LEAST"), Args1Plus),
-        Left(Kw!("LEFT"), Args<RR>),
-        Len(Kw!("LEN"), Args<Scalx>),
-        Length(Kw!("LENGTH"), Args<Scalx>),
-        Lower(Kw!("LOWER"), Args<Scalx>),
-        LPad(Kw!("LPAD"), Args<RRO>),
-        LTrim(Kw!("LTRIM"), Args<Scalx>),
-        Month(Kw!("MONTH"), Args<Scalx>),
-        Now(Kw!("NOW"), Args<()>),
-        NullIf(Kw!("NULLIF"), Args<RR>),
-        Nvl(Kw!("NVL"), Args<RR>),
-        PatIndex(Kw!("PATINDEX"), Args<RR>),
-        Position(Kw!("POSITION"), Args<SQLPositionArgs>),
-        Power(Kw!("POWER"), Args<RR>),
-        Repeat(Kw!("REPEAT"), Args<RR>),
-        Replace(Kw!("REPLACE"), Args<RRR>),
-        Replicate(Kw!("REPLICATE"), Args<RR>),
-        Reverse(Kw!("REVERSE"), Args<Scalx>),
-        Right(Kw!("RIGHT"), Args<RR>),
-        Round(Kw!("ROUND"), Args<RRO>),
-        RPad(Kw!("RPAD"), Args<RRO>),
-        RTrim(Kw!("RTRIM"), Args<Scalx>),
-        Sign(Kw!("SIGN"), Args<Scalx>),
-        Space(Kw!("SPACE"), Args<Scalx>),
-        Str(Kw!("STR"), Args<ROO>),
-        String(Kw!("STRING"), Args1Plus),
-        Stuff(Kw!("STUFF"), Args<RRRR>),
-        Substr(Kw!("SUBSTR"), Args<RRO>),
-        Substring(Kw!("SUBSTRING"), SubstringArgs),
-        ToChar(Kw!("TOCHAR"), Args<RO>),
-        ToDate(Kw!("TODATE"), Args<RO>),
-        ToUSChar(Kw!("TO_CHAR"), Args<RO>),
-        ToUSDate(Kw!("TO_DATE"), Args<RO>),
-        ToNumber(Kw!("TO_NUMBER"), Args<Ranged<Term>>),
-        ToTimestamp(Kw!("TO_TIMESTAMP"), Args<RO>),
-        UCase(Kw!("UCASE"), Args<Scalx>),
-        UnixTimestamp(Kw!("UNIX_TIMESTAMP"), Args<Option<Scalx>>),
-        VectorCosine(Kw!("VECTOR_COSINE"), Args<RR>),
-        VectorDotProduct(Kw!("VECTOR_DOT_PRODUCT"), Args<RR>),
-        Year(Kw!("YEAR"), Args<Scalx>),
-        DollarExtract(Kw!("$EXTRACT"), Args<ROO>),
-        DollarFind(Kw!("$FIND"), Args<RRO>),
-        DollarFNumber(Kw!("$FNUMBER"), Args<ROO>),
-        DollarJustify(Kw!("$JUSTIFY"), Args<RRO>),
-        DollarLength(Kw!("$LENGTH"), Args<RO>),
-        DollarList(Kw!("$LIST"), Args<ROO>),
-        DollarListBuild(Kw!("$LISTBUILD"), ArgsN),
-        DollarListData(Kw!("$LISTDATA"), Args<RO>),
-        DollarListFind(Kw!("$LISTFIND"), Args<RRO>),
-        DollarListFromString(Kw!("$LISTFROMSTRING"), Args<RO>),
-        DollarListGet(Kw!("$LISTGET"), Args<ROO>),
-        DollarListLength(Kw!("$LISTLENGTH"), Args<Scalx>),
-        DollarListSame(Kw!("$LISTSAME"), Args<RR>),
-        DollarListToString(Kw!("$LISTTOSTRING"), Args<RO>),
-        DollarMvFmt(Kw!("$MVFMT"), Args<RR>),
-        DollarMvFmts(Kw!("$MVFMTS"), Args<RR>),
-        DollarMvIconv(Kw!("$MVICONV"), Args<RR>),
-        DollarMvIconvs(Kw!("$MVICONVS"), Args<RR>),
-        DollarMvOconv(Kw!("$MVOCONV"), Args<RR>),
-        DollarMvOconvs(Kw!("$MVOCONVS"), Args<RR>),
-        DollarPiece(Kw!("$PIECE"), Args<RROO>),
-        DollarTranslate(Kw!("$TRANSLATE"), Args<RRO>),
-        TSqlDbName(Kw!("$TSQL_DB_NAME"), Args<()>),
-        TSqlError(Kw!("$TSQL_ERROR"), Args<()>),
-        TSqlFetchStatus(Kw!("$TSQL_FETCH_STATUS"), Args<()>),
-        TSqlGetUtcDate(Kw!("$TSQL_GETUTCDATE"), Args<()>),
-        TSqlHostName(Kw!("$TSQL_HOST_NAME"), Args<()>),
-        TSqlLockTimeout(Kw!("$TSQL_LOCK_TIMEOUT"), Args<()>),
-        TSqlNestLevel(Kw!("$TSQL_NESTLEVEL"), Args<()>),
-        TSqlServerName(Kw!("$TSQL_SERVERNAME"), Args<()>),
-        TSqlSpid(Kw!("$TSQL_SPID"), Args<()>),
-        TSqlSqlStatus(Kw!("$TSQL_SQLSTATUS"), Args<()>),
-        TSqlTranCount(Kw!("$TSQL_TRANCOUNT"), Args<()>),
-        TSqlVersion(Kw!("$TSQL_VERSION"), Args<()>),
-        TSqlNewId(Kw!("$TSQL_NEWID"), Args<()>),
-        TSqlObjectId(Kw!("$TSQL_OBJECT_ID"), Args<Scalx>),
-        TSqlObjectName(Kw!("$TSQL_OBJECT_NAME"), Args<Scalx>),
     }
 
     #[derive(Grammar, Clone)]
