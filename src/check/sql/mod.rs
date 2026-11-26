@@ -164,11 +164,6 @@ impl Walker<'_> {
         self.frames.last_mut().expect("the statement's frame stays")
     }
 
-    // Whether the current frame is a branch of a `SELECT` statement.
-    fn in_statement(&self) -> bool {
-        self.frames.len() >= 2 && self.frames[self.frames.len() - 2].branches
-    }
-
     // Walks `t` in the enclosing frame: the query feeding an `INSERT` does not see its target.
     fn outside<T: Walk + ?Sized>(&mut self, t: &T) {
         let frame = self.frames.pop().expect("a frame was pushed");
@@ -527,6 +522,8 @@ mod tests {
             "SELECT Name FROM T",
             // A trailing `ORDER BY` names the first branch's columns and aliases.
             "SELECT Name AS N FROM Demo.T UNION SELECT Name FROM Demo.U ORDER BY N",
+            // A branch with `TOP` orders its own rows first (measured on 2026.2).
+            "SELECT Name AS Nn FROM Demo.T UNION SELECT TOP 1 Title AS Tt FROM Demo.U ORDER BY Tt ORDER BY Nn",
             // A CTE's columns are not known, nor a view's.
             "WITH C AS (SELECT Name FROM Demo.T) SELECT Nope FROM C",
             "SELECT V.Nope FROM Demo.V",
@@ -561,6 +558,11 @@ mod tests {
             (
                 "SELECT Name AS N FROM Demo.T UNION SELECT Name FROM Demo.U ORDER BY Nope",
                 "Nope",
+                "A7340",
+            ),
+            (
+                "SELECT Name AS Nn FROM Demo.T UNION SELECT TOP 1 Title FROM Demo.U ORDER BY NN",
+                "NN",
                 "A7340",
             ),
             ("INSERT INTO Demo.T (Title) VALUES (1)", "Title", "A7340"),

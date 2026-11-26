@@ -72,15 +72,8 @@ impl Walk for Selex {
             option.walk(w)
         }
         self.selst.walk(w);
-        // A statement's trailing `ORDER BY` parses as its last branch's; it names the first
-        // branch's columns and aliases, which the statement's frame holds.
-        if w.in_statement() {
-            w.pop_frame();
-            self.tail.walk(w)
-        } else {
-            self.tail.walk(w);
-            w.pop_frame()
-        }
+        self.tail.walk(w);
+        w.pop_frame()
     }
 }
 

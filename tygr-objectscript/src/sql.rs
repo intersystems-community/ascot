@@ -2414,26 +2414,70 @@ pub mod leveled {
     }
 
     impl Query {
-        /// Whether the last operand is a SELECT with ORDER BY, which an enclosing statement reads as its own.
-        fn ends_ordered(&self) -> bool {
-            let last = self.0.items.last().expect("one term");
-            matches!(last, QTerm::Selex(s) if matches!(s.node.tail, Some((_, Either::Left(_)))))
+        /// Whether each of `terms` orders its rows only with TOP.
+        fn ordered_with_top(terms: &[QTerm]) -> bool {
+            terms.iter().all(|term| match term {
+                QTerm::Selex(selex) => {
+                    !matches!(selex.node.tail, Some((_, Either::Left(_))))
+                        || selex.node.selst.top.is_some()
+                }
+                QTerm::Query(_) => true,
+            })
         }
+
+        /// Whether the last operand's ORDER BY is the enclosing statement's: a SELECT with TOP orders its own rows
+        /// (2026.2 takes a second ORDER BY after SELECT TOP 1 a FROM t ORDER BY a DESC, and after a UNION's last
+        /// operand with TOP, whose ORDER BY sees that operand's aliases alone), one without TOP the whole's.
+        pub(super) fn ends_with_statement_order(&self) -> bool {
+            matches!(self.0.items.last(), Some(QTerm::Selex(selex))
+                if selex.node.selst.top.is_none() && matches!(selex.node.tail, Some((_, Either::Left(_)))))
+        }
+
+        /// Whether the operands order their rows as 2026.2 allows before a statement's own ORDER BY (`ordered`):
+        /// each but the last only with TOP (ORDER BY a UNION is refused, SQLCODE -25), the last also without, as the
+        /// statement's, which then orders no second time (ORDER BY a DESC ORDER BY a is refused, SQLCODE -25).
+        fn orders_once(&self, ordered: bool) -> bool {
+            let (_, rest) = self.0.items.split_last().expect("one term");
+            Self::ordered_with_top(rest) && !(self.ends_with_statement_order() && ordered)
+        }
+    }
+
+    /// Takes the statement's ORDER BY out of the core query's last operand (see `ends_with_statement_order`).
+    fn take_statement_order(query: &mut core::Query) -> Option<(Space, core::Order)> {
+        let is_statement = query.ends_with_statement_order();
+        let Some(core::QTerm::Selex(last)) = query.0.items.last_mut() else {
+            return None;
+        };
+        let Some((space, Either::Left(order))) = last.node.tail.take_if(|_| is_statement) else {
+            return None;
+        };
+        Some((space, order))
     }
 
     /// The query an INSERT or a CREATE TABLE AS reads: 2026.2 takes a row limit in its operands and ORDER BY once,
     /// last (LIMIT 1 ORDER BY a, not ORDER BY a LIMIT 1 or LIMIT 1 LIMIT 2, SQLCODE -25).
     #[derive(Grammar)]
     #[tygr(validated)]
+    #[sugar]
     pub struct SourceQuery {
         pub query: Query,
         pub order: Option<(Space, Order)>,
     }
 
     impl Validate for SourceQuery {
-        const REQUIREMENT: &'static str = "order its rows once";
+        const REQUIREMENT: &'static str = "order an operand only with TOP and its rows once";
         fn validate(&self) -> bool {
-            !(self.query.ends_ordered() && self.order.is_some())
+            self.query.orders_once(self.order.is_some())
+        }
+    }
+
+    /// The source's ORDER BY, parsed as its last operand's, stands in `order`.
+    impl Desugar for SourceQuery {
+        type Core = core::SourceQuery;
+        fn desugar(&self) -> Self::Core {
+            let mut query = self.query.desugar();
+            let order = take_statement_order(&mut query).or_else(|| self.order.desugar());
+            core::SourceQuery { query, order }
         }
     }
 
@@ -2446,13 +2490,7 @@ pub mod leveled {
     impl Validate for QueryExpr {
         const REQUIREMENT: &'static str = "order an operand only with TOP";
         fn validate(&self) -> bool {
-            self.0.0.items.iter().all(|term| match term {
-                QTerm::Selex(selex) => {
-                    !matches!(selex.node.tail, Some((_, Either::Left(_))))
-                        || selex.node.selst.top.is_some()
-                }
-                QTerm::Query(_) => true,
-            })
+            Query::ordered_with_top(&self.0.0.items)
         }
     }
 
@@ -3417,26 +3455,32 @@ pub mod leveled {
     }
 
     /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383), not a parenthesized later one, and
-    /// a second ORDER BY after a SELECT operand's, which is the statement's own.
+    /// orders the rows as `Query::orders_once` says.
     impl Validate for Selct {
-        const REQUIREMENT: &'static str = "begin with SELECT after WITH and order its rows once";
+        const REQUIREMENT: &'static str =
+            "begin with SELECT after WITH, order an operand only with TOP and its rows once";
         fn validate(&self) -> bool {
             (self.with_clause.is_none() || matches!(self.query.0.items[0], QTerm::Selex(_)))
-                && !(self.query.ends_ordered() && self.tail.order.is_some())
+                && self.query.orders_once(self.tail.order.is_some())
         }
     }
 
-    /// A lone SELECT's row limit before ORDER BY stands after it, reading the same (LIMIT 2 ORDER BY a DESC gives
-    /// the rows ORDER BY a DESC LIMIT 2 gives); in a union it limits its operand and stays.
+    /// The statement's ORDER BY, parsed as its last operand's, stands in the Tail, and a lone SELECT's row limit
+    /// before ORDER BY after it, reading the same (LIMIT 2 ORDER BY a DESC gives the rows ORDER BY a DESC LIMIT 2
+    /// gives); in a union a row limit limits its operand and stays.
     impl Desugar for Selct {
         type Core = core::Selct;
         fn desugar(&self) -> Self::Core {
             let mut query = self.query.desugar();
             let mut tail = self.tail.desugar();
+            if let Some(order) = take_statement_order(&mut query) {
+                tail.order = Some(order);
+            }
             if let [core::QTerm::Selex(selex)] = &mut query.0.items[..]
                 && tail.order.is_some()
                 && tail.limit.is_none()
-                && let Some((space, Either::Right(limit))) = selex.node.tail.take()
+                && let Some((space, Either::Right(limit))) =
+                    selex.node.tail.take_if(|(_, tail)| tail.is_right())
             {
                 tail.limit = Some((space, limit));
             }
