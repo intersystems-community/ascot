@@ -1,17 +1,22 @@
 //! A grammar-debugging binary (`tygr-objectscript <file>`): parses one class or routine with
 //! `cos.rs`, then separately parses each method body, since the class grammar captures bodies
-//! as raw text and would otherwise hide syntax errors inside them. Not part of the `ascot` CLI.
+//! as raw text and would otherwise hide syntax errors inside them. `tygr-objectscript desugar-sql`
+//! prints the core form of each SQL statement on stdin. Not part of the `ascot` CLI.
 
 use std::ops::Deref;
 use std::{env, fs, process::exit};
 use tygr::{OLC, Parse, Print};
 use tygr_objectscript::cos;
+use tygr_objectscript::sql::desugar::Desugar;
 
 fn main() {
     let path = env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("usage: tygr-objectscript <file>");
+        eprintln!("usage: tygr-objectscript <file> | desugar-sql");
         exit(1);
     });
+    if path == "desugar-sql" {
+        return desugar_sql();
+    }
     let content = match fs::read_to_string(&path) {
         Ok(content) => content,
         Err(err) => {
@@ -32,6 +37,27 @@ fn main() {
     };
     if had_error {
         exit(1);
+    }
+}
+
+/// Each SQL statement on stdin, one per line, in its core form, or `error: ` and the parser's message
+/// on one line.
+fn desugar_sql() {
+    for line in std::io::stdin().lines() {
+        let line = line.unwrap_or_else(|err| {
+            eprintln!("desugar-sql: {err}");
+            exit(1)
+        });
+        match tygr_objectscript::sql::SQL::parse(&line) {
+            Ok(sql) => println!("{}", sql.desugar().print()),
+            Err(err) => println!(
+                "error: {}",
+                err.to_string()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        }
     }
 }
 
