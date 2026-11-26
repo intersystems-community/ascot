@@ -23,6 +23,26 @@ macro_rules! Kw {
     ($word:literal) => { (StringEqCI!($word), NotFollowedBy<WordEnd>) };
 }
 
+/// A token in its canonical spelling or another, `Spellings!(Kw!("$HOROLOG"), Kw!("$H"))`; the core
+/// has the canonical one alone, which `Default` spells.
+macro_rules! Spellings {
+    ($canonical:ty, $other:ty $(,)?) => { Spellings<$canonical, $other> };
+    ($canonical:ty, $($other:ty),+ $(,)?) => { Spellings<$canonical, Spellings!($($other),+)> };
+}
+
+#[derive(Grammar, Clone)]
+#[tygr(inline)]
+pub enum Spellings<Canonical: Grammar, Other: Grammar> {
+    Canonical(Canonical),
+    Other(Other),
+}
+
+impl<Canonical: Grammar + Default, Other: Grammar> Default for Spellings<Canonical, Other> {
+    fn default() -> Self {
+        Spellings::Canonical(Default::default())
+    }
+}
+
 pub mod desugar;
 
 pub use full::*;
@@ -834,41 +854,11 @@ pub mod leveled {
     pub struct NonNegativeInteger(pub StringOf1<IsDigit>);
 
     #[derive(Grammar)]
-    pub enum NotEqualsOperation {
-        Diamond(StringEq!("<>")),
-        #[sugar]
-        BangEq(StringEq!("!=")),
-        #[sugar]
-        NotEq(StringEqCI!("NOT=")),
-    }
-
-    impl Desugar for NotEqualsOperationSugar<'_> {
-        type Core = core::NotEqualsOperation;
-        fn desugar(&self) -> Self::Core {
-            core::NotEqualsOperation::Diamond(Default::default())
-        }
-    }
-
-    #[derive(Grammar)]
     pub enum OrderPredicate {
-        Le(StringEq!("<=")),
-        #[sugar]
-        NotGt(StringEqCI!("NOT>")),
-        Ge(StringEq!(">=")),
-        #[sugar]
-        NotLt(StringEqCI!("NOT<")),
+        Le(Spellings!(StringEq!("<="), StringEqCI!("NOT>"))),
+        Ge(Spellings!(StringEq!(">="), StringEqCI!("NOT<"))),
         Gt(StringEq!(">")),
         Lt(StringEq!("<")),
-    }
-
-    impl Desugar for OrderPredicateSugar<'_> {
-        type Core = core::OrderPredicate;
-        fn desugar(&self) -> Self::Core {
-            match self {
-                Self::NotGt(_) => core::OrderPredicate::Le(Default::default()),
-                Self::NotLt(_) => core::OrderPredicate::Ge(Default::default()),
-            }
-        }
     }
 
     #[derive(Grammar)]
@@ -887,7 +877,7 @@ pub mod leveled {
     pub enum CmpOp {
         StartsWith(Kw!("%STARTSWITH")),
         Eq(StringEq!("=")),
-        Ne(NotEqualsOperation),
+        Ne(Spellings!(StringEq!("<>"), StringEq!("!="), StringEqCI!("NOT="))),
         Ord(OrderPredicate),
         Contains(ContainsPredicate),
         Follows(FollowsPredicate),
@@ -1043,53 +1033,17 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum SpecialSystemVariable {
-        Horolog(Kw!("$HOROLOG")),
-        #[sugar]
-        H(Kw!("$H")),
-        Job(Kw!("$JOB")),
-        #[sugar]
-        J(Kw!("$J")),
-        Namespace(Kw!("$NAMESPACE")),
-        TLevel(Kw!("$TLEVEL")),
-        #[sugar]
-        TL(Kw!("$TL")),
+        Horolog(Spellings!(Kw!("$HOROLOG"), Kw!("$H"))),
+        Job(Spellings!(Kw!("$JOB"), Kw!("$J"))),
+        Namespace(Spellings!(Kw!("$NAMESPACE"), Kw!("$ZNSPACE"))),
+        TLevel(Spellings!(Kw!("$TLEVEL"), Kw!("$TL"))),
         Username(Kw!("$USERNAME")),
-        ZHorolog(Kw!("$ZHOROLOG")),
-        #[sugar]
-        ZH(Kw!("$ZH")),
-        ZJob(Kw!("$ZJOB")),
-        #[sugar]
-        ZJ(Kw!("$ZJ")),
-        #[sugar]
-        ZNspace(Kw!("$ZNSPACE")),
+        ZHorolog(Spellings!(Kw!("$ZHOROLOG"), Kw!("$ZH"))),
+        ZJob(Spellings!(Kw!("$ZJOB"), Kw!("$ZJ"))),
         ZPi(Kw!("$ZPI")),
-        ZTimestamp(Kw!("$ZTIMESTAMP")),
-        ZTimezone(Kw!("$ZTIMEZONE")),
-        #[sugar]
-        ZTS(Kw!("$ZTS")),
-        #[sugar]
-        ZTZ(Kw!("$ZTZ")),
-        ZVersion(Kw!("$ZVERSION")),
-        #[sugar]
-        ZV(Kw!("$ZV")),
-    }
-
-    impl Desugar for SpecialSystemVariableSugar<'_> {
-        type Core = core::SpecialSystemVariable;
-        fn desugar(&self) -> Self::Core {
-            use core::SpecialSystemVariable::*;
-            match self {
-                Self::H(_) => Horolog(Default::default()),
-                Self::J(_) => Job(Default::default()),
-                Self::TL(_) => TLevel(Default::default()),
-                Self::ZH(_) => ZHorolog(Default::default()),
-                Self::ZJ(_) => ZJob(Default::default()),
-                Self::ZNspace(_) => Namespace(Default::default()),
-                Self::ZTS(_) => ZTimestamp(Default::default()),
-                Self::ZTZ(_) => ZTimezone(Default::default()),
-                Self::ZV(_) => ZVersion(Default::default()),
-            }
-        }
+        ZTimestamp(Spellings!(Kw!("$ZTIMESTAMP"), Kw!("$ZTS"))),
+        ZTimezone(Spellings!(Kw!("$ZTIMEZONE"), Kw!("$ZTZ"))),
+        ZVersion(Spellings!(Kw!("$ZVERSION"), Kw!("$ZV"))),
     }
 
     /// A function called by name, built-in or user-defined; a function with a syntax of its own cannot be
@@ -1200,22 +1154,13 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum Scalop {
-        Concat(StringEq!("||")),
+        Concat(Spellings!(StringEq!("||"), StringEq!("_"))),
         Mod(StringEq!("#")),
         Mul(StringEq!("*")),
         Add(StringEq!("+")),
         Sub(StringEq!("-")),
         Div(StringEq!("/")),
         IntDiv(StringEq!("\\")),
-        #[sugar]
-        Underscore(StringEq!("_")),
-    }
-
-    impl Desugar for ScalopSugar<'_> {
-        type Core = core::Scalop;
-        fn desugar(&self) -> Self::Core {
-            core::Scalop::Concat(Default::default())
-        }
     }
 
     #[derive(Grammar)]
@@ -1663,100 +1608,25 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum DatePartPartRaw {
-        SqlTimestamp(Kw!("SQLTIMESTAMP")),
-        #[sugar]
-        Sts(Kw!("STS")),
+        SqlTimestamp(Spellings!(Kw!("SQLTIMESTAMP"), Kw!("STS"))),
         Common(DatePartCommon),
-    }
-
-    impl Desugar for DatePartPartRawSugar<'_> {
-        type Core = core::DatePartPartRaw;
-        fn desugar(&self) -> Self::Core {
-            core::DatePartPartRaw::SqlTimestamp(Default::default())
-        }
     }
 
     #[derive(Grammar)]
     pub enum DatePartCommon {
-        Year(Kw!("YEAR")),
-        Quarter(Kw!("QUARTER")),
-        Month(Kw!("MONTH")),
-        Weekday(Kw!("WEEKDAY")),
-        Week(Kw!("WEEK")),
-        DayOfYear(Kw!("DAYOFYEAR")),
-        Day(Kw!("DAY")),
-        Hour(Kw!("HOUR")),
-        Minute(Kw!("MINUTE")),
-        Second(Kw!("SECOND")),
-        Millisecond(Kw!("MILLISECOND")),
-        Microsecond(Kw!("MICROSECOND")),
-        Nanosecond(Kw!("NANOSECOND")),
-        #[sugar]
-        Yyyy(Kw!("YYYY")),
-        #[sugar]
-        Yy(Kw!("YY")),
-        #[sugar]
-        Qq(Kw!("QQ")),
-        #[sugar]
-        Mm(Kw!("MM")),
-        #[sugar]
-        Wk(Kw!("WK")),
-        #[sugar]
-        Ww(Kw!("WW")),
-        #[sugar]
-        Dw(Kw!("DW")),
-        #[sugar]
-        Dy(Kw!("DY")),
-        #[sugar]
-        Dd(Kw!("DD")),
-        #[sugar]
-        Hh(Kw!("HH")),
-        #[sugar]
-        Mi(Kw!("MI")),
-        #[sugar]
-        Ss(Kw!("SS")),
-        #[sugar]
-        Mcs(Kw!("MCS")),
-        #[sugar]
-        Ms(Kw!("MS")),
-        #[sugar]
-        Ns(Kw!("NS")),
-        #[sugar]
-        Q(Kw!("Q")),
-        #[sugar]
-        M(Kw!("M")),
-        #[sugar]
-        W(Kw!("W")),
-        #[sugar]
-        Y(Kw!("Y")),
-        #[sugar]
-        D(Kw!("D")),
-        #[sugar]
-        N(Kw!("N")),
-        #[sugar]
-        S(Kw!("S")),
-    }
-
-    impl Desugar for DatePartCommonSugar<'_> {
-        type Core = core::DatePartCommon;
-        fn desugar(&self) -> Self::Core {
-            use core::DatePartCommon::*;
-            match self {
-                Self::Yyyy(_) | Self::Yy(_) => Year(Default::default()),
-                Self::Qq(_) | Self::Q(_) => Quarter(Default::default()),
-                Self::Mm(_) | Self::M(_) => Month(Default::default()),
-                Self::Wk(_) | Self::Ww(_) => Week(Default::default()),
-                Self::Dw(_) | Self::W(_) => Weekday(Default::default()),
-                Self::Dy(_) | Self::Y(_) => DayOfYear(Default::default()),
-                Self::Dd(_) | Self::D(_) => Day(Default::default()),
-                Self::Hh(_) => Hour(Default::default()),
-                Self::Mi(_) | Self::N(_) => Minute(Default::default()),
-                Self::Ss(_) | Self::S(_) => Second(Default::default()),
-                Self::Ms(_) => Millisecond(Default::default()),
-                Self::Mcs(_) => Microsecond(Default::default()),
-                Self::Ns(_) => Nanosecond(Default::default()),
-            }
-        }
+        Year(Spellings!(Kw!("YEAR"), Kw!("YYYY"), Kw!("YY"))),
+        Quarter(Spellings!(Kw!("QUARTER"), Kw!("QQ"), Kw!("Q"))),
+        Month(Spellings!(Kw!("MONTH"), Kw!("MM"), Kw!("M"))),
+        Weekday(Spellings!(Kw!("WEEKDAY"), Kw!("DW"), Kw!("W"))),
+        Week(Spellings!(Kw!("WEEK"), Kw!("WK"), Kw!("WW"))),
+        DayOfYear(Spellings!(Kw!("DAYOFYEAR"), Kw!("DY"), Kw!("Y"))),
+        Day(Spellings!(Kw!("DAY"), Kw!("DD"), Kw!("D"))),
+        Hour(Spellings!(Kw!("HOUR"), Kw!("HH"))),
+        Minute(Spellings!(Kw!("MINUTE"), Kw!("MI"), Kw!("N"))),
+        Second(Spellings!(Kw!("SECOND"), Kw!("SS"), Kw!("S"))),
+        Millisecond(Spellings!(Kw!("MILLISECOND"), Kw!("MS"))),
+        Microsecond(Spellings!(Kw!("MICROSECOND"), Kw!("MCS"))),
+        Nanosecond(Spellings!(Kw!("NANOSECOND"), Kw!("NS"))),
     }
 
     #[derive(Grammar)]
@@ -1930,54 +1800,14 @@ pub mod leveled {
             Space,
             Kw!("FOLLOWING"),
         ),
-        CurrentRow(Kw!("CURRENT"), Space1, Kw!("ROW")),
-        #[sugar]
-        CurrentRows(Kw!("CURRENT"), Space1, Kw!("ROWS")),
-    }
-
-    impl Desugar for WindowRowsBoundSugar<'_> {
-        type Core = core::WindowRowsBound;
-        fn desugar(&self) -> Self::Core {
-            core::WindowRowsBound::CurrentRow(
-                Default::default(),
-                Default::default(),
-                Default::default(),
-            )
-        }
-    }
-    #[derive(Grammar)]
-    pub struct Prdct(pub VecSep<And, (Space, OrOperator, Space)>);
-
-    #[derive(Grammar)]
-    pub enum OrOperator {
-        Or(Kw!("OR")),
-        #[sugar]
-        Exclamation(StringEq!("!")),
-    }
-
-    impl Desugar for OrOperatorSugar<'_> {
-        type Core = core::OrOperator;
-        fn desugar(&self) -> Self::Core {
-            core::OrOperator::Or(Default::default())
-        }
+        CurrentRow(Kw!("CURRENT"), Space1, Spellings!(Kw!("ROW"), Kw!("ROWS"))),
     }
 
     #[derive(Grammar)]
-    pub struct And(pub VecSep<Src<Cond>, (Space, AndOperator, Space)>);
+    pub struct Prdct(pub VecSep<And, (Space, Spellings!(Kw!("OR"), StringEq!("!")), Space)>);
 
     #[derive(Grammar)]
-    pub enum AndOperator {
-        And(Kw!("AND")),
-        #[sugar]
-        Ampersand(StringEq!("&")),
-    }
-
-    impl Desugar for AndOperatorSugar<'_> {
-        type Core = core::AndOperator;
-        fn desugar(&self) -> Self::Core {
-            core::AndOperator::And(Default::default())
-        }
-    }
+    pub struct And(pub VecSep<Src<Cond>, (Space, Spellings!(Kw!("AND"), StringEq!("&")), Space)>);
 
     pub type NoIndex = Option<(Kw!("%NOINDEX"), Space)>;
 
@@ -2247,16 +2077,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum Quantifier {
         All(Kw!("ALL")),
-        Any(Kw!("ANY")),
-        #[sugar]
-        Some(Kw!("SOME")),
-    }
-
-    impl Desugar for QuantifierSugar<'_> {
-        type Core = core::Quantifier;
-        fn desugar(&self) -> Self::Core {
-            core::Quantifier::Any(Default::default())
-        }
+        Any(Spellings!(Kw!("ANY"), Kw!("SOME"))),
     }
 
     #[derive(Grammar)]
@@ -3162,22 +2983,13 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum TPOption {
-        InTransaction(Kw!("%INTRANSACTION")),
+        InTransaction(Spellings!(Kw!("%INTRANSACTION"), Kw!("%INTRANS"))),
         BegTrans(Kw!("%BEGTRANS")),
-        #[sugar]
-        InTrans(Kw!("%INTRANS")),
         Commit {
             commit_kw: Kw!("COMMIT"),
             #[sugar]
             work: Option<(Space1, Kw!("WORK"))>,
         },
-    }
-
-    impl Desugar for TPOptionSugar<'_> {
-        type Core = core::TPOption;
-        fn desugar(&self) -> Self::Core {
-            core::TPOption::InTransaction(Default::default())
-        }
     }
 
     #[derive(Grammar)]
@@ -3271,18 +3083,8 @@ pub mod leveled {
     pub enum ExplainOption {
         Alt(Kw!("ALT")),
         All(Kw!("ALL")),
-        Stat(Kw!("STAT")),
-        #[sugar]
-        Stats(Kw!("STATS")),
+        Stat(Spellings!(Kw!("STAT"), Kw!("STATS"))),
         Into(Kw!("INTO"), Space, VecSep<Param, ArgSep>),
-    }
-
-    impl Desugar for ExplainOptionSugar<'_> {
-        type Core = core::ExplainOption;
-        fn desugar(&self) -> Self::Core {
-            let Self::Stats(_) = self;
-            core::ExplainOption::Stat(Default::default())
-        }
     }
 
     #[derive(Grammar)]
@@ -3480,7 +3282,7 @@ pub mod leveled {
             select_kw: Kw!("SELECT"),
             columns: Option<(Space, FList1)>,
             on_kw: (Space, Kw!("ON"), Space1),
-            cube_kw: CubeKw,
+            cube_kw: Spellings!(Kw!("CUBE"), Kw!("CUBES")),
             cubes: (Space, CubeList),
         },
         ObjectPrivileges {
@@ -3503,21 +3305,6 @@ pub mod leveled {
     }
 
     pub type WithOption<K> = Option<(Space, Kw!("WITH"), Space, K, Space, Kw!("OPTION"))>;
-
-    #[derive(Grammar)]
-    pub enum CubeKw {
-        Cube(Kw!("CUBE")),
-        #[sugar]
-        Cubes(Kw!("CUBES")),
-    }
-
-    impl Desugar for CubeKwSugar<'_> {
-        type Core = core::CubeKw;
-        fn desugar(&self) -> Self::Core {
-            let Self::Cubes(_) = self;
-            core::CubeKw::Cube(Default::default())
-        }
-    }
 
     pub type GrantOptionFor = Option<(
         Kw!("GRANT"),
@@ -3673,28 +3460,13 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct ForeignServerPrivilegeClause {
         pub foreign_kw: Option<(Kw!("FOREIGN"), Space1)>,
-        pub server_kw: ServersServer,
+        pub server_kw: Spellings!(Kw!("SERVER"), Kw!("SERVERS")),
         // A table named Servers: GRANT SELECT ON Servers TO u1 is a table grant on IRIS.
         pub servers: (
             Space1,
             NotFollowedBy<(Either<Kw!("TO"), Kw!("FROM")>, Space1)>,
             ForeignServerPrivilegeList,
         ),
-    }
-
-    #[derive(Grammar)]
-    pub enum ServersServer {
-        Server(Kw!("SERVER")),
-        #[sugar]
-        Servers(Kw!("SERVERS")),
-    }
-
-    impl Desugar for ServersServerSugar<'_> {
-        type Core = core::ServersServer;
-        fn desugar(&self) -> Self::Core {
-            let Self::Servers(_) = self;
-            core::ServersServer::Server(Default::default())
-        }
     }
 
     #[derive(Grammar)]
@@ -3730,42 +3502,43 @@ pub mod leveled {
     type OptParenScalx = Option<Parenthesized<Scalx>>;
     type OptParenScalx2 = Option<Parenthesized<(Scalx, Option<(ArgSep, Scalx)>)>>;
 
-    /// CAST's types, a second spelling the sugar of the first; 2026.2 takes NCHAR VARYING and refuses DOUBLE
-    /// PRECISION, INT(10) and VARCHAR(10, 2).
+    /// CAST's types, the varying ones before the types they begin with; 2026.2 takes NCHAR VARYING and refuses
+    /// DOUBLE PRECISION, INT(10) and VARCHAR(10, 2).
     #[derive(Grammar)]
     pub enum CastType {
         Bigint(Kw!("BIGINT")),
-        #[sugar]
-        BinaryVarying(Kw!("BINARY"), Space1, Kw!("VARYING"), OptParenScalx),
-        Binary(Kw!("BINARY"), OptParenScalx),
-        Bit(Kw!("BIT")),
-        #[sugar]
-        CharVarying(
-            Either<Kw!("CHARACTER"), Kw!("CHAR")>,
-            Space1,
-            Kw!("VARYING"),
+        Varbinary(
+            Spellings!(Kw!("VARBINARY"), (Kw!("BINARY"), Space1, Kw!("VARYING"))),
             OptParenScalx,
         ),
-        #[sugar]
-        Character(Kw!("CHARACTER"), OptParenScalx),
-        Char(Kw!("CHAR"), OptParenScalx),
+        Binary(Kw!("BINARY"), OptParenScalx),
+        Bit(Kw!("BIT")),
+        Varchar(
+            Spellings!(
+                Kw!("VARCHAR"),
+                (
+                    Spellings!(Kw!("CHARACTER"), Kw!("CHAR")),
+                    Space1,
+                    Kw!("VARYING")
+                )
+            ),
+            OptParenScalx,
+        ),
+        Char(Spellings!(Kw!("CHAR"), Kw!("CHARACTER")), OptParenScalx),
         Datetime(Kw!("DATETIME")),
         Date(Kw!("DATE")),
-        Decimal(Kw!("DECIMAL"), OptParenScalx2),
-        #[sugar]
-        Dec(Kw!("DEC"), OptParenScalx2),
+        Decimal(Spellings!(Kw!("DECIMAL"), Kw!("DEC")), OptParenScalx2),
         Double(Kw!("DOUBLE")),
         Float(Kw!("FLOAT")),
         Guid(Kw!("GUID")),
-        Integer(Kw!("INTEGER")),
-        #[sugar]
-        Int(Kw!("INT")),
+        Integer(Spellings!(Kw!("INTEGER"), Kw!("INT"))),
         Money(Kw!("MONEY")),
-        #[sugar]
-        NcharVarying(Kw!("NCHAR"), Space1, Kw!("VARYING"), OptParenScalx),
+        Nvarchar(
+            Spellings!(Kw!("NVARCHAR"), (Kw!("NCHAR"), Space1, Kw!("VARYING"))),
+            OptParenScalx,
+        ),
         Nchar(Kw!("NCHAR"), OptParenScalx),
         Numeric(Kw!("NUMERIC"), OptParenScalx2),
-        Nvarchar(Kw!("NVARCHAR"), OptParenScalx),
         Posixtime(Kw!("POSIXTIME")),
         Real(Kw!("REAL")),
         Smalldatetime(Kw!("SMALLDATETIME")),
@@ -3774,29 +3547,6 @@ pub mod leveled {
         Timestamp(Kw!("TIMESTAMP")),
         Time(Kw!("TIME")),
         Tinyint(Kw!("TINYINT")),
-        Varbinary(Kw!("VARBINARY"), OptParenScalx),
-        Varchar(Kw!("VARCHAR"), OptParenScalx),
-    }
-
-    impl Desugar for CastTypeSugar<'_> {
-        type Core = core::CastType;
-        fn desugar(&self) -> Self::Core {
-            use core::CastType::*;
-            match self {
-                Self::Int(_) => Integer(Default::default()),
-                Self::Dec(_, precision) => Decimal(Default::default(), precision.desugar()),
-                Self::Character(_, precision) => Char(Default::default(), precision.desugar()),
-                Self::CharVarying(.., precision) => {
-                    Varchar(Default::default(), precision.desugar())
-                }
-                Self::BinaryVarying(.., precision) => {
-                    Varbinary(Default::default(), precision.desugar())
-                }
-                Self::NcharVarying(.., precision) => {
-                    Nvarchar(Default::default(), precision.desugar())
-                }
-            }
-        }
     }
 
     pub type IfExists = Option<(Kw!("IF"), Space1, Kw!("EXISTS"), Space)>;
@@ -4279,20 +4029,7 @@ pub mod leveled {
         Query(Kw!("QUERY")),
     }
 
-    #[derive(Grammar)]
-    pub enum ProcedureKw {
-        Procedure(Kw!("PROCEDURE")),
-        #[sugar]
-        Proc(Kw!("PROC")),
-    }
-
-    impl Desugar for ProcedureKwSugar<'_> {
-        type Core = core::ProcedureKw;
-        fn desugar(&self) -> Self::Core {
-            let Self::Proc(_) = self;
-            core::ProcedureKw::Procedure(Default::default())
-        }
-    }
+    pub type ProcedureKw = Spellings!(Kw!("PROCEDURE"), Kw!("PROC"));
 
     #[derive(Grammar)]
     #[tygr(inline)]
@@ -4390,21 +4127,11 @@ pub mod leveled {
         NULL(Kw!("NULL")),
     }
 
-    #[derive(Grammar)]
-    pub enum PWPrefix {
-        IdentifyBy(Kw!("IDENTIFY"), Space1, Kw!("BY")),
-        #[sugar]
-        IdentifiedBy(Kw!("IDENTIFIED"), Space1, Kw!("BY")),
-        #[sugar]
-        WithPassword(Option<(Kw!("WITH"), Space1)>, Kw!("PASSWORD")),
-    }
-
-    impl Desugar for PWPrefixSugar<'_> {
-        type Core = core::PWPrefix;
-        fn desugar(&self) -> Self::Core {
-            core::PWPrefix::IdentifyBy(Default::default(), Default::default(), Default::default())
-        }
-    }
+    pub type PWPrefix = Spellings!(
+        (Kw!("IDENTIFY"), Space1, Kw!("BY")),
+        (Kw!("IDENTIFIED"), Space1, Kw!("BY")),
+        (Option<(Kw!("WITH"), Space1)>, Kw!("PASSWORD"))
+    );
 
     #[derive(Grammar)]
     pub enum BuildScope {
@@ -4696,18 +4423,8 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum LevelsClause {
-        Cascaded(Kw!("CASCADED")),
-        #[sugar]
-        Cascade(Kw!("CASCADE")),
+        Cascaded(Spellings!(Kw!("CASCADED"), Kw!("CASCADE"))),
         Local(Kw!("LOCAL")),
-    }
-
-    impl Desugar for LevelsClauseSugar<'_> {
-        type Core = core::LevelsClause;
-        fn desugar(&self) -> Self::Core {
-            let Self::Cascade(_) = self;
-            core::LevelsClause::Cascaded(Default::default())
-        }
     }
 
     #[derive(Grammar)]
@@ -4869,7 +4586,7 @@ pub mod leveled {
             kw: (
                 Kw!("LANGUAGE"),
                 Space1,
-                Either<Kw!("OBJECTSCRIPT"), Kw!("COS")>,
+                Spellings!(Kw!("OBJECTSCRIPT"), Kw!("COS")),
                 Space,
             ),
             body: Either<COSMethodBody, COSQueryBody>,
@@ -5126,7 +4843,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct ColumnStorageDefaultConversion {
-        pub kw: Either<Kw!("COLUMNS"), Kw!("COLUMN")>,
+        pub kw: Spellings!(Kw!("COLUMNS"), Kw!("COLUMN")),
         pub list: (Space, VecSep<Ident, ArgSep>),
         pub spec: (Space, StorageDefaultConversionTypeSpec),
     }
@@ -5239,20 +4956,7 @@ pub mod leveled {
         pub null: Kw!("NULL"),
     }
 
-    #[derive(Grammar)]
-    pub enum DropKeywd {
-        Drop(Kw!("DROP")),
-        #[sugar]
-        Delete(Kw!("DELETE")),
-    }
-
-    impl Desugar for DropKeywdSugar<'_> {
-        type Core = core::DropKeywd;
-        fn desugar(&self) -> Self::Core {
-            let Self::Delete(_) = self;
-            core::DropKeywd::Drop(Default::default())
-        }
-    }
+    pub type DropKeywd = Spellings!(Kw!("DROP"), Kw!("DELETE"));
 
     #[derive(Grammar)]
     pub enum DropAction {
@@ -5343,7 +5047,7 @@ pub mod leveled {
     /// `[CONSTRAINT name] INDEX|KEY name (components)`, a table element and an ALTER TABLE ADD action on 2026.2.
     #[derive(Grammar)]
     pub struct TblIndex {
-        pub kw: (Either<Kw!("INDEX"), Kw!("KEY")>, Space),
+        pub kw: (Spellings!(Kw!("INDEX"), Kw!("KEY")), Space),
         pub name: DottedIdent,
         pub components: Args<VecSep<ComponentSpec, ArgSep>>,
     }
@@ -5448,7 +5152,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct ExtentsizeClause {
-        pub kw: (Either<Kw!("%EXTENTSIZE"), Kw!("%NUMROWS")>, Space),
+        pub kw: (Spellings!(Kw!("%EXTENTSIZE"), Kw!("%NUMROWS")), Space),
         pub value: Literal,
     }
 
@@ -5556,35 +5260,11 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum PartitionDatetimeInterval {
-        Day(Kw!("DAY")),
-        #[sugar]
-        Days(Kw!("DAYS")),
-        Hour(Kw!("HOUR")),
-        #[sugar]
-        Hours(Kw!("HOURS")),
-        Minute(Kw!("MINUTE")),
-        #[sugar]
-        Minutes(Kw!("MINUTES")),
-        Month(Kw!("MONTH")),
-        #[sugar]
-        Months(Kw!("MONTHS")),
-        Year(Kw!("YEAR")),
-        #[sugar]
-        Years(Kw!("YEARS")),
-    }
-
-    impl Desugar for PartitionDatetimeIntervalSugar<'_> {
-        type Core = core::PartitionDatetimeInterval;
-        fn desugar(&self) -> Self::Core {
-            use core::PartitionDatetimeInterval::*;
-            match self {
-                Self::Days(_) => Day(Default::default()),
-                Self::Hours(_) => Hour(Default::default()),
-                Self::Minutes(_) => Minute(Default::default()),
-                Self::Months(_) => Month(Default::default()),
-                Self::Years(_) => Year(Default::default()),
-            }
-        }
+        Day(Spellings!(Kw!("DAY"), Kw!("DAYS"))),
+        Hour(Spellings!(Kw!("HOUR"), Kw!("HOURS"))),
+        Minute(Spellings!(Kw!("MINUTE"), Kw!("MINUTES"))),
+        Month(Spellings!(Kw!("MONTH"), Kw!("MONTHS"))),
+        Year(Spellings!(Kw!("YEAR"), Kw!("YEARS"))),
     }
 
     #[derive(Grammar)]
@@ -5772,7 +5452,7 @@ pub mod leveled {
             kw: Kw!("NATIONAL"),
             char_kw: Option<(
                 Space1,
-                Either<Kw!("CHARACTER"), Kw!("CHAR")>,
+                Spellings!(Kw!("CHARACTER"), Kw!("CHAR")),
                 Option<(Space1, Kw!("VARYING"))>,
             )>,
         },
@@ -6126,7 +5806,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct AlterServerAction {
-        pub kw: (Either<Kw!("ALTER"), Kw!("MODIFY")>, Space1),
+        pub kw: (Spellings!(Kw!("ALTER"), Kw!("MODIFY")), Space1),
         pub action: SubAlterServerAction,
     }
 
@@ -6150,33 +5830,11 @@ pub mod leveled {
         Decimal(Kw!("DECIMAL")),
         Double(Kw!("DOUBLE")),
         Float(Kw!("FLOAT")),
-        #[sugar]
-        Int(Kw!("INT")),
-        Integer(Kw!("INTEGER")),
+        Integer(Spellings!(Kw!("INTEGER"), Kw!("INT"))),
         String(Kw!("STRING")),
     }
 
-    impl Desugar for VectorDatypSugar<'_> {
-        type Core = core::VectorDatyp;
-        fn desugar(&self) -> Self::Core {
-            core::VectorDatyp::Integer(Default::default())
-        }
-    }
-
-    #[derive(Grammar)]
-    pub enum StatsClause {
-        Statistics(Kw!("STATISTICS")),
-        #[sugar]
-        Stats(Kw!("STATS")),
-    }
-
-    impl Desugar for StatsClauseSugar<'_> {
-        type Core = core::StatsClause;
-        fn desugar(&self) -> Self::Core {
-            let Self::Stats(_) = self;
-            core::StatsClause::Statistics(Default::default())
-        }
-    }
+    pub type StatsClause = Spellings!(Kw!("STATISTICS"), Kw!("STATS"));
 
     #[derive(Grammar)]
     pub enum StatsScope {

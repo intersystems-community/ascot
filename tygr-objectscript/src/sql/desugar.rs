@@ -131,6 +131,13 @@ impl<T: Desugar> Desugar for Box<T> {
     }
 }
 
+impl<Canonical: Grammar + Default, Other: Grammar> Desugar for Spellings<Canonical, Other> {
+    type Core = Canonical;
+    fn desugar(&self) -> Canonical {
+        Default::default()
+    }
+}
+
 impl<L: Desugar, R: Desugar> Desugar for Either<L, R> {
     type Core = Either<L::Core, R::Core>;
     fn desugar(&self) -> Self::Core {

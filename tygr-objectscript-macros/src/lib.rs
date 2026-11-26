@@ -1,7 +1,8 @@
 //! `#[levels]` on the inline module of the SQL grammar emits it twice: `full`, every spelling IRIS
 //! accepts, and `core`, the same minus its syntactic sugar, with an impl of `Desugar` per unmarked
-//! struct and enum and per literal, a keyword's core copy being its declared, upper-case spelling;
-//! fns, traits, macros, impls of `Desugar` and `#[sugar]` items go to `full` alone.
+//! struct and enum and per literal, a keyword's core copy being its declared, upper-case spelling
+//! and a `Spellings!(A, …)` type's its canonical `A`; fns, traits, macros, impls of `Desugar` and
+//! `#[sugar]` items go to `full` alone.
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
@@ -11,6 +12,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::visit::Visit;
+use syn::visit_mut::VisitMut;
 use syn::{
     Attribute, Error, Field, Fields, Generics, Ident, Index, Item, ItemEnum, ItemImpl, ItemMod,
     ItemStruct, LitStr, Macro, Meta, Token, Type, TypeMacro, Variant, WherePredicate, parse_quote,
@@ -70,7 +72,27 @@ fn is_desugar_impl(item: &ItemImpl) -> bool {
         .is_some_and(|(_, path, _)| path.segments.last().is_some_and(|s| s.ident == "Desugar"))
 }
 
-fn remove_fields(fields: &mut Fields, dropped: &[usize]) {
+/// `Spellings!(A, …)` in `ty` is `A`, the canonical spelling, in the core.
+fn canonical(ty: &mut Type) {
+    struct Canonical;
+    impl VisitMut for Canonical {
+        fn visit_type_mut(&mut self, ty: &mut Type) {
+            if let Type::Macro(TypeMacro { mac }) = ty
+                && mac.path.is_ident("Spellings")
+                && let Ok(spellings) =
+                    mac.parse_body_with(Punctuated::<Type, Token![,]>::parse_terminated)
+                && let Some(first) = spellings.into_iter().next()
+            {
+                *ty = first;
+            }
+            syn::visit_mut::visit_type_mut(self, ty);
+        }
+    }
+    Canonical.visit_type_mut(ty);
+}
+
+/// The fields kept in the core, each type in its canonical spelling.
+fn core_fields(fields: &mut Fields, dropped: &[usize]) {
     let keep = |fields: &mut Punctuated<Field, Token![,]>| {
         *fields = std::mem::take(fields)
             .into_iter()
@@ -83,6 +105,9 @@ fn remove_fields(fields: &mut Fields, dropped: &[usize]) {
         Fields::Named(named) => keep(&mut named.named),
         Fields::Unnamed(unnamed) => keep(&mut unnamed.unnamed),
         Fields::Unit => {}
+    }
+    for field in fields.iter_mut() {
+        canonical(&mut field.ty);
     }
 }
 
@@ -227,6 +252,9 @@ impl Output {
         };
         let marked = attrs.map_or(Ok(false), take_mark)?;
         self.full.push(item.to_token_stream());
+        if let Item::Type(alias) = &mut item {
+            canonical(&mut alias.ty);
+        }
         if !marked && !full_only {
             self.core.push(item.to_token_stream());
         }
@@ -246,7 +274,7 @@ impl Output {
                 quote!(&self.#index)
             }
         });
-        remove_fields(&mut item.fields, &dropped);
+        core_fields(&mut item.fields, &dropped);
         self.core.push(item.to_token_stream());
         if !marked {
             let (name, generics) = (&item.ident, &item.generics);
@@ -272,7 +300,7 @@ impl Output {
                 arms.push(sugar_arm(&sugar, variant));
             } else {
                 let mut core_variant = variant.clone();
-                remove_fields(&mut core_variant.fields, &dropped);
+                core_fields(&mut core_variant.fields, &dropped);
                 core_variants.push(core_variant);
                 arms.push(plain_arm(&item.ident, variant, &dropped));
             }
