@@ -1844,11 +1844,7 @@ pub mod leveled {
                 Implied::Spelled(before, keyword, after) => {
                     core::Implied::Spelled(before.desugar(), keyword.desugar(), after.desugar())
                 }
-                Implied::Omitted(_) => core::Implied::Spelled(
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                ),
+                Implied::Omitted(_) => Default::default(),
             }
         }
     }
@@ -2451,12 +2447,6 @@ pub mod leveled {
         Outer(Side, Implied<Kw!("OUTER")>),
     }
 
-    impl Default for JType {
-        fn default() -> Self {
-            JType::Inner(Default::default())
-        }
-    }
-
     #[derive(Grammar)]
     pub enum Side {
         Left(Kw!("LEFT")),
@@ -2588,10 +2578,9 @@ pub mod leveled {
             let count = |fetch: &Fetch| core::LimitSpec::Val(fetch.valspec.desugar());
             let (limit, offset) = match self {
                 Self::OffsetFetch { offset, fetch } => (
-                    fetch.as_ref().map_or_else(
-                        || core::LimitSpec::All(Default::default()),
-                        |(_, fetch)| count(fetch),
-                    ),
+                    fetch
+                        .as_ref()
+                        .map_or_else(Default::default, |(_, fetch)| count(fetch)),
                     Some((
                         Space::blank(),
                         core::Offset {

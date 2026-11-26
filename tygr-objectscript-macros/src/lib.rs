@@ -1,8 +1,9 @@
 //! `#[levels]` on the inline module of the SQL grammar emits it twice: `full`, every spelling IRIS
 //! accepts, and `core`, the same minus its syntactic sugar, with an impl of `Desugar` per unmarked
 //! struct and enum and per literal, a keyword's core copy being its declared, upper-case spelling
-//! and a `Spellings!(A, …)` type's its canonical `A`; fns, traits, macros, impls of `Desugar` and
-//! `#[sugar]` items go to `full` alone.
+//! and a `Spellings!(A, …)` type's its canonical `A`, and an impl of `Default` per struct and enum
+//! that builds from defaults, a struct's fields or an enum's first variant, unless written by hand;
+//! fns, traits, macros, impls of `Desugar` and `#[sugar]` items go to `full` alone.
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
@@ -14,8 +15,9 @@ use syn::punctuated::Punctuated;
 use syn::visit::Visit;
 use syn::visit_mut::VisitMut;
 use syn::{
-    Attribute, Error, Field, Fields, Generics, Ident, Index, Item, ItemEnum, ItemImpl, ItemMod,
-    ItemStruct, LitStr, Macro, Meta, Token, Type, TypeMacro, Variant, WherePredicate, parse_quote,
+    Attribute, Error, Field, Fields, GenericArgument, Generics, Ident, Index, Item, ItemEnum,
+    ItemImpl, ItemMod, ItemStruct, LitStr, Macro, Meta, PathArguments, Token, Type, TypeMacro,
+    Variant, WherePredicate, parse_quote,
 };
 
 /// `#[sugar]` on a variant leaves it out of the core, converted by the author's `impl Desugar` for
@@ -39,16 +41,18 @@ fn expand(module: ItemMod) -> syn::Result<TokenStream2> {
         out.item(item)?;
     }
     let vis = &module.vis;
+    let (full_defaults, core_defaults) = (out.full.defaults(&out), out.core.defaults(&out));
     let Output {
         full, core, impls, ..
     } = out;
+    let (full, core) = (full.items, core.items);
     Ok(quote! {
         #vis mod full {
             use super::core;
             use super::desugar::*;
-            #(#full)* #(#impls)*
+            #(#full)* #(#impls)* #(#full_defaults)*
         }
-        #vis mod core { #(#core)* }
+        #vis mod core { #(#core)* #(#core_defaults)* }
     })
 }
 
@@ -67,9 +71,56 @@ fn take_mark(attrs: &mut Vec<Attribute>) -> syn::Result<bool> {
     }
 }
 
-fn is_desugar_impl(item: &ItemImpl) -> bool {
+fn implements(item: &ItemImpl, name: &str) -> bool {
     (item.trait_.as_ref())
-        .is_some_and(|(_, path, _)| path.segments.last().is_some_and(|s| s.ident == "Desugar"))
+        .is_some_and(|(_, path, _)| path.segments.last().is_some_and(|s| s.ident == name))
+}
+
+fn spellings(mac: &Macro) -> Option<Punctuated<Type, Token![,]>> {
+    (mac.path.is_ident("Spellings"))
+        .then(|| mac.parse_body_with(Punctuated::parse_terminated).ok())
+        .flatten()
+}
+
+/// Whether `ty` builds from defaults: a literal, a blank, a type parameter, a type of the level found
+/// so, or tuples, options, vectors, boxes and tygr's wrappers of such.
+fn defaultable(ty: &Type, known: &BTreeSet<String>, params: &BTreeSet<String>) -> bool {
+    let each = |args: &PathArguments| match args {
+        PathArguments::None => true,
+        PathArguments::AngleBracketed(args) => args.args.iter().all(|arg| match arg {
+            GenericArgument::Type(ty) => defaultable(ty, known, params),
+            _ => true,
+        }),
+        PathArguments::Parenthesized(_) => false,
+    };
+    match ty {
+        Type::Tuple(tuple) => (tuple.elems.iter()).all(|ty| defaultable(ty, known, params)),
+        Type::Paren(paren) => defaultable(&paren.elem, known, params),
+        Type::Macro(TypeMacro { mac }) => match spellings(mac) {
+            Some(spellings) => (spellings.first()).is_some_and(|ty| defaultable(ty, known, params)),
+            None => (mac.path.get_ident()).is_some_and(|name| {
+                matches!(name.to_string().as_str(), "Kw" | "StringEq" | "StringEqCI")
+            }),
+        },
+        Type::Path(path) => {
+            let Some(last) = path.path.segments.last() else {
+                return false;
+            };
+            match last.ident.to_string() {
+                name if matches!(name.as_str(), "Option" | "Vec" | "NotFollowedBy") => true,
+                name if matches!(
+                    name.as_str(),
+                    "Box" | "Raw" | "Hidden" | "Wrap" | "Prefix" | "Suffix"
+                ) || params.contains(&name)
+                    || known.contains(&name) =>
+                {
+                    each(&last.arguments)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 /// `Spellings!(A, …)` in `ty` is `A`, the canonical spelling, in the core.
@@ -78,10 +129,7 @@ fn canonical(ty: &mut Type) {
     impl VisitMut for Canonical {
         fn visit_type_mut(&mut self, ty: &mut Type) {
             if let Type::Macro(TypeMacro { mac }) = ty
-                && mac.path.is_ident("Spellings")
-                && let Ok(spellings) =
-                    mac.parse_body_with(Punctuated::<Type, Token![,]>::parse_terminated)
-                && let Some(first) = spellings.into_iter().next()
+                && let Some(first) = spellings(mac).and_then(|s| s.into_iter().next())
             {
                 *ty = first;
             }
@@ -218,13 +266,114 @@ fn impl_of(name: &Ident, generics: &Generics, body: TokenStream2) -> TokenStream
     }
 }
 
+/// What a struct's or an enum's `Default` builds: its fields, or its first variant's.
+struct Shape {
+    name: Ident,
+    generics: Generics,
+    variant: Option<Ident>,
+    fields: Fields,
+}
+
+#[derive(Default)]
+struct Level {
+    items: Vec<TokenStream2>,
+    shapes: Vec<Shape>,
+    aliases: Vec<(Ident, Generics, Type)>,
+}
+
+impl Level {
+    fn shape(&mut self, item: &ItemStruct) {
+        self.shapes.push(Shape {
+            name: item.ident.clone(),
+            generics: item.generics.clone(),
+            variant: None,
+            fields: item.fields.clone(),
+        });
+    }
+
+    fn first_variant(&mut self, item: &ItemEnum) {
+        if let Some(variant) = item.variants.first() {
+            self.shapes.push(Shape {
+                name: item.ident.clone(),
+                generics: item.generics.clone(),
+                variant: Some(variant.ident.clone()),
+                fields: variant.fields.clone(),
+            });
+        }
+    }
+
+    /// `impl Default` for each shape that builds from defaults, found as a least fixpoint over the
+    /// level's shapes and aliases, the hand-written impls given.
+    fn defaults(&self, out: &Output) -> Vec<TokenStream2> {
+        let params = |generics: &Generics| -> BTreeSet<String> {
+            (generics.type_params())
+                .map(|param| param.ident.to_string())
+                .collect()
+        };
+        let mut known: BTreeSet<String> = out.defaults.clone();
+        known.extend(["Space", "Space1"].map(String::from));
+        loop {
+            let before = known.len();
+            for shape in &self.shapes {
+                let params = params(&shape.generics);
+                if (shape.fields.iter()).all(|field| defaultable(&field.ty, &known, &params)) {
+                    known.insert(shape.name.to_string());
+                }
+            }
+            for (name, generics, ty) in &self.aliases {
+                if defaultable(ty, &known, &params(generics)) {
+                    known.insert(name.to_string());
+                }
+            }
+            if known.len() == before {
+                break;
+            }
+        }
+        let derived = (self.shapes.iter())
+            .filter(|shape| known.contains(&shape.name.to_string()))
+            .filter(|shape| !out.defaults.contains(&shape.name.to_string()));
+        derived.map(Shape::default_impl).collect()
+    }
+}
+
+impl Shape {
+    fn default_impl(&self) -> TokenStream2 {
+        let default = quote!(::core::default::Default::default());
+        let fields = self.fields.iter().map(|field| match &field.ident {
+            Some(name) => quote!(#name: #default),
+            None => default.clone(),
+        });
+        let fields = match &self.fields {
+            Fields::Named(_) => quote!({ #(#fields,)* }),
+            Fields::Unnamed(_) => quote!(( #(#fields,)* )),
+            Fields::Unit => quote!(),
+        };
+        let variant = self.variant.iter();
+        let mut generics = self.generics.clone();
+        for param in generics.type_params_mut() {
+            param.eq_token = None;
+            param.default = None;
+            param.bounds.push(parse_quote!(::core::default::Default));
+        }
+        let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+        let name = &self.name;
+        quote! {
+            impl #impl_generics ::core::default::Default for #name #ty_generics #where_clause {
+                fn default() -> Self { Self #(::#variant)* #fields }
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct Output {
-    full: Vec<TokenStream2>,
-    core: Vec<TokenStream2>,
+    full: Level,
+    core: Level,
     impls: Vec<TokenStream2>,
     /// The literals given an impl, as `(has a cased char, text)`.
     literals: BTreeSet<(bool, String)>,
+    /// The types whose `Default` the author writes.
+    defaults: BTreeSet<String>,
 }
 
 impl Output {
@@ -238,7 +387,7 @@ impl Output {
             Item::Fn(_) | Item::Const(_) | Item::Static(_) | Item::Trait(_) | Item::Macro(_) => {
                 true
             }
-            Item::Impl(item) => is_desugar_impl(item),
+            Item::Impl(item) => implements(item, "Desugar"),
             _ => false,
         };
         let attrs = match &mut item {
@@ -246,17 +395,32 @@ impl Output {
                 self.literals(&alias.ty);
                 Some(&mut alias.attrs)
             }
-            Item::Impl(item) => Some(&mut item.attrs),
+            Item::Impl(item) => {
+                if implements(item, "Default")
+                    && let Type::Path(path) = &*item.self_ty
+                    && let Some(name) = path.path.segments.last()
+                {
+                    self.defaults.insert(name.ident.to_string());
+                }
+                Some(&mut item.attrs)
+            }
             Item::Use(item) => Some(&mut item.attrs),
             _ => None,
         };
         let marked = attrs.map_or(Ok(false), take_mark)?;
-        self.full.push(item.to_token_stream());
+        self.full.items.push(item.to_token_stream());
         if let Item::Type(alias) = &mut item {
+            let (name, generics) = (alias.ident.clone(), alias.generics.clone());
+            self.full
+                .aliases
+                .push((name.clone(), generics.clone(), (*alias.ty).clone()));
             canonical(&mut alias.ty);
+            self.core
+                .aliases
+                .push((name, generics, (*alias.ty).clone()));
         }
         if !marked && !full_only {
-            self.core.push(item.to_token_stream());
+            self.core.items.push(item.to_token_stream());
         }
         Ok(())
     }
@@ -266,7 +430,8 @@ impl Output {
         item.attrs
             .push(parse_quote!(#[derive(::core::clone::Clone)]));
         let dropped = self.fields(&mut item.fields)?;
-        self.full.push(item.to_token_stream());
+        self.full.items.push(item.to_token_stream());
+        self.full.shape(&item);
         let body = fields_desugar(&item.fields, &dropped, |i, field| match &field.ident {
             Some(name) => quote!(&self.#name),
             None => {
@@ -275,7 +440,8 @@ impl Output {
             }
         });
         core_fields(&mut item.fields, &dropped);
-        self.core.push(item.to_token_stream());
+        self.core.items.push(item.to_token_stream());
+        self.core.shape(&item);
         if !marked {
             let (name, generics) = (&item.ident, &item.generics);
             let body = quote!(super::core::#name #body);
@@ -305,9 +471,11 @@ impl Output {
                 arms.push(plain_arm(&item.ident, variant, &dropped));
             }
         }
-        self.full.push(item.to_token_stream());
+        self.full.items.push(item.to_token_stream());
+        self.full.first_variant(&item);
         item.variants = core_variants;
-        self.core.push(item.to_token_stream());
+        self.core.items.push(item.to_token_stream());
+        self.core.first_variant(&item);
         if marked {
             return Ok(());
         }
@@ -319,7 +487,7 @@ impl Output {
                 param.default = None;
             }
             let params = generics.params.iter();
-            self.full.push(quote! {
+            self.full.items.push(quote! {
                 #vis enum #sugar<'a, #(#params),*> { #sugar_variants }
             });
         }
