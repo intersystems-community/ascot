@@ -21,8 +21,8 @@ use syn::{
 };
 
 /// `#[sugar]` on a variant leaves it out of the core, converted by the author's `impl Desugar` for
-/// `XSugar<'a>`, the emitted enum of the marked variants holding their fields by reference; on a
-/// field, drops it; on a struct or enum, both levels keep it and the author writes the conversion.
+/// `XSugar`, the emitted enum of the marked variants owning their fields; on a field, drops it; on a
+/// struct or enum, both levels keep it and the author writes the conversion.
 #[proc_macro_attribute]
 pub fn levels(_: TokenStream, item: TokenStream) -> TokenStream {
     let module = syn::parse_macro_input!(item as ItemMod);
@@ -217,7 +217,7 @@ fn plain_arm(enum_name: &Ident, variant: &Variant, dropped: &[usize]) -> TokenSt
     quote!(#pattern => super::core::#enum_name::#name #body,)
 }
 
-/// `Self::V(a, b) => XSugar::V(a, b).desugar()`, the fields of the marked variant by reference.
+/// `Self::V(a, b) => XSugar::V(a, b).desugar()`.
 fn sugar_arm(sugar: &Ident, variant: &Variant) -> TokenStream2 {
     let desugar = desugar();
     let name = &variant.ident;
@@ -226,17 +226,13 @@ fn sugar_arm(sugar: &Ident, variant: &Variant) -> TokenStream2 {
         Fields::Named(_) => quote!(#sugar::#name { #(#binds),* }),
         _ => quote!(#sugar::#name(#(#binds),*)),
     };
-    quote!(#pattern => #desugar::desugar(&#value),)
+    quote!(#pattern => #desugar::desugar(#value),)
 }
 
-/// The marked variant with every field a reference, for the `XSugar<'a>` enum.
+/// The marked variant for the `XSugar` enum.
 fn sugar_variant(variant: &Variant) -> Variant {
     let mut variant = variant.clone();
     variant.attrs.clear();
-    for field in variant.fields.iter_mut() {
-        let ty = &field.ty;
-        field.ty = parse_quote!(&'a #ty);
-    }
     variant
 }
 
@@ -261,7 +257,7 @@ fn impl_of(name: &Ident, generics: &Generics, body: TokenStream2) -> TokenStream
     quote! {
         impl #impl_generics #desugar for #name #ty_generics #where_clause {
             type Core = super::core::#name #core_args;
-            fn desugar(&self) -> Self::Core { #body }
+            fn desugar(self) -> Self::Core { #body }
         }
     }
 }
@@ -433,10 +429,10 @@ impl Output {
         self.full.items.push(item.to_token_stream());
         self.full.shape(&item);
         let body = fields_desugar(&item.fields, &dropped, |i, field| match &field.ident {
-            Some(name) => quote!(&self.#name),
+            Some(name) => quote!(self.#name),
             None => {
                 let index = Index::from(i);
-                quote!(&self.#index)
+                quote!(self.#index)
             }
         });
         core_fields(&mut item.fields, &dropped);
@@ -486,9 +482,8 @@ impl Output {
                 param.eq_token = None;
                 param.default = None;
             }
-            let params = generics.params.iter();
             self.full.items.push(quote! {
-                #vis enum #sugar<'a, #(#params),*> { #sugar_variants }
+                #vis enum #sugar #generics { #sugar_variants }
             });
         }
         let body = quote!(match self { #(#arms)* });
@@ -543,7 +538,7 @@ impl Output {
             self.impls.push(quote! {
                 impl #desugar for #mac {
                     type Core = Self;
-                    fn desugar(&self) -> Self { ::core::default::Default::default() }
+                    fn desugar(self) -> Self { ::core::default::Default::default() }
                 }
             });
         }

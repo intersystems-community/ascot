@@ -5,7 +5,7 @@
 use std::cell::Cell;
 
 use either::Either;
-use tygr::{Grammar, Hidden, NotFollowedBy, Prefix, Ranged, Raw, Suffix, Vec1, Wrap};
+use tygr::{Grammar, Hidden, IntoInner, NotFollowedBy, Prefix, Ranged, Raw, Suffix, Vec1, Wrap};
 
 use super::{core, full, sugar, *};
 use crate::convert::VecSep;
@@ -13,7 +13,7 @@ use crate::cos::{MacroArgUnit, OSText};
 
 pub trait Desugar {
     type Core;
-    fn desugar(&self) -> Self::Core;
+    fn desugar(self) -> Self::Core;
 }
 
 /// The types both levels share, each its own core.
@@ -21,8 +21,8 @@ macro_rules! identity {
     ($($ty:ty),* $(,)?) => {
         $(impl Desugar for $ty {
             type Core = Self;
-            fn desugar(&self) -> Self {
-                self.clone()
+            fn desugar(self) -> Self {
+                self
             }
         })*
     };
@@ -82,7 +82,7 @@ macro_rules! tuples {
     ($(($($t:ident $i:tt),+))*) => {
         $(impl<$($t: Desugar),+> Desugar for ($($t,)+) {
             type Core = ($($t::Core,)+);
-            fn desugar(&self) -> Self::Core {
+            fn desugar(self) -> Self::Core {
                 ($(self.$i.desugar(),)+)
             }
         })*
@@ -104,22 +104,22 @@ tuples! {
 
 impl<T: Desugar> Desugar for Option<T> {
     type Core = Option<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        self.as_ref().map(Desugar::desugar)
+    fn desugar(self) -> Self::Core {
+        self.map(Desugar::desugar)
     }
 }
 
 impl<T: Desugar> Desugar for Vec<T> {
     type Core = Vec<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        self.iter().map(Desugar::desugar).collect()
+    fn desugar(self) -> Self::Core {
+        self.into_iter().map(Desugar::desugar).collect()
     }
 }
 
 impl<T: Desugar> Desugar for Vec1<T> {
     type Core = Vec1<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        Vec1::try_from((**self).desugar())
+    fn desugar(self) -> Self::Core {
+        Vec1::try_from(self.into_inner().desugar())
             .ok()
             .expect("one item or more")
     }
@@ -127,21 +127,21 @@ impl<T: Desugar> Desugar for Vec1<T> {
 
 impl<T: Desugar> Desugar for Box<T> {
     type Core = Box<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        Box::new((**self).desugar())
+    fn desugar(self) -> Self::Core {
+        Box::new((*self).desugar())
     }
 }
 
 impl<Canonical: Grammar + Default, Other: Grammar> Desugar for Spellings<Canonical, Other> {
     type Core = Canonical;
-    fn desugar(&self) -> Canonical {
+    fn desugar(self) -> Canonical {
         Default::default()
     }
 }
 
 impl<L: Desugar, R: Desugar> Desugar for Either<L, R> {
     type Core = Either<L::Core, R::Core>;
-    fn desugar(&self) -> Self::Core {
+    fn desugar(self) -> Self::Core {
         match self {
             Either::Left(left) => Either::Left(left.desugar()),
             Either::Right(right) => Either::Right(right.desugar()),
@@ -151,7 +151,7 @@ impl<L: Desugar, R: Desugar> Desugar for Either<L, R> {
 
 impl<T: Desugar, S: Desugar> Desugar for VecSep<T, S> {
     type Core = VecSep<T::Core, S::Core>;
-    fn desugar(&self) -> Self::Core {
+    fn desugar(self) -> Self::Core {
         VecSep {
             items: self.items.desugar(),
             seps: self.seps.desugar(),
@@ -161,7 +161,7 @@ impl<T: Desugar, S: Desugar> Desugar for VecSep<T, S> {
 
 impl<P: Desugar, T: Desugar, S: Desugar> Desugar for Wrap<P, T, S> {
     type Core = Wrap<P::Core, T::Core, S::Core>;
-    fn desugar(&self) -> Self::Core {
+    fn desugar(self) -> Self::Core {
         Wrap::new(
             self.prefix.desugar(),
             self.wrapped.desugar(),
@@ -172,14 +172,14 @@ impl<P: Desugar, T: Desugar, S: Desugar> Desugar for Wrap<P, T, S> {
 
 impl<P: Desugar, T: Desugar> Desugar for Prefix<P, T> {
     type Core = Prefix<P::Core, T::Core>;
-    fn desugar(&self) -> Self::Core {
+    fn desugar(self) -> Self::Core {
         Prefix::new(self.prefix.desugar(), self.prefixed.desugar())
     }
 }
 
 impl<T: Desugar, S: Desugar> Desugar for Suffix<T, S> {
     type Core = Suffix<T::Core, S::Core>;
-    fn desugar(&self) -> Self::Core {
+    fn desugar(self) -> Self::Core {
         Suffix::new(self.suffixed.desugar(), self.suffix.desugar())
     }
 }
@@ -187,14 +187,14 @@ impl<T: Desugar, S: Desugar> Desugar for Suffix<T, S> {
 /// Covers `StringOf` and `StringOf1`, aliases of `Raw`.
 impl<T: Desugar> Desugar for Raw<T> {
     type Core = Raw<T::Core>;
-    fn desugar(&self) -> Self::Core {
-        Raw::new(self.as_str())
+    fn desugar(self) -> Self::Core {
+        Raw::new(self.into_inner())
     }
 }
 
 impl<T: Desugar> Desugar for Hidden<T> {
     type Core = Hidden<T::Core>;
-    fn desugar(&self) -> Self::Core {
+    fn desugar(self) -> Self::Core {
         Hidden(self.0.desugar())
     }
 }
@@ -206,7 +206,7 @@ thread_local! {
 
 impl<T: Desugar> Desugar for Ranged<T> {
     type Core = Ranged<T::Core>;
-    fn desugar(&self) -> Self::Core {
+    fn desugar(self) -> Self::Core {
         let outer = REWRITING.replace((self.start, self.end));
         let ranged = self.ranged.desugar();
         REWRITING.set(outer);
@@ -222,7 +222,7 @@ pub fn synthesized<T>(node: T) -> Ranged<T> {
 
 impl<G: Desugar> Desugar for NotFollowedBy<G> {
     type Core = NotFollowedBy<G::Core>;
-    fn desugar(&self) -> Self::Core {
+    fn desugar(self) -> Self::Core {
         NotFollowedBy::default()
     }
 }
@@ -273,39 +273,39 @@ pub(super) fn call(name: &str, args: Vec<core::Scalx>) -> core::Term {
 
 /// The arguments a function's argument list gives the call, in order.
 pub(super) trait Arg {
-    fn args(&self, out: &mut Vec<core::Scalx>);
+    fn args(self, out: &mut Vec<core::Scalx>);
 }
 
-pub(super) fn args(shape: &impl Arg) -> Vec<core::Scalx> {
+pub(super) fn args(shape: impl Arg) -> Vec<core::Scalx> {
     let mut out = Vec::new();
     shape.args(&mut out);
     out
 }
 
 impl Arg for full::Scalx {
-    fn args(&self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::Scalx>) {
         out.push(self.desugar())
     }
 }
 
 impl Arg for Ranged<full::Term> {
-    fn args(&self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::Scalx>) {
         out.push(core::Scalx(VecSep::one(self.desugar())))
     }
 }
 
 impl Arg for VecSep<full::Scalx, ArgSep> {
-    fn args(&self, out: &mut Vec<core::Scalx>) {
-        out.extend(self.items.iter().map(Desugar::desugar))
+    fn args(self, out: &mut Vec<core::Scalx>) {
+        out.extend(self.items.into_iter().map(Desugar::desugar))
     }
 }
 
 impl Arg for () {
-    fn args(&self, _: &mut Vec<core::Scalx>) {}
+    fn args(self, _: &mut Vec<core::Scalx>) {}
 }
 
 impl<T: Arg> Arg for Option<T> {
-    fn args(&self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::Scalx>) {
         if let Some(arg) = self {
             arg.args(out)
         }
@@ -313,20 +313,20 @@ impl<T: Arg> Arg for Option<T> {
 }
 
 impl<K, T: Arg> Arg for (K, T) {
-    fn args(&self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::Scalx>) {
         self.1.args(out)
     }
 }
 
 impl<K, T: Arg, U: Arg> Arg for (K, T, U) {
-    fn args(&self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::Scalx>) {
         self.1.args(out);
         self.2.args(out)
     }
 }
 
 impl<T: Arg> Arg for Parenthesized<T> {
-    fn args(&self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::Scalx>) {
         self.wrapped.args(out)
     }
 }
@@ -335,7 +335,7 @@ impl<T: Arg> Arg for Parenthesized<T> {
 macro_rules! shapes {
     ($($Shape:ident<$($T:ident),*> { $($field:ident)* })*) => {$(
         impl<$($T: Arg + Grammar),*> Arg for full::$Shape<$($T),*> {
-            fn args(&self, out: &mut Vec<core::Scalx>) {
+            fn args(self, out: &mut Vec<core::Scalx>) {
                 $(self.$field.args(out);)*
             }
         }
@@ -354,21 +354,21 @@ shapes! {
 
 /// `POSITION(a IN b)` has the arguments of `CHARINDEX(a, b)`.
 impl Arg for sugar::SQLPositionArgs {
-    fn args(&self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::Scalx>) {
         self.needle.args(out);
         self.haystack.args(out)
     }
 }
 
 impl Arg for sugar::SubstringArgsInternal {
-    fn args(&self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::Scalx>) {
         self.expr.args(out);
         self.rest.args(out)
     }
 }
 
 impl<L: Arg, R: Arg> Arg for Either<L, R> {
-    fn args(&self, out: &mut Vec<core::Scalx>) {
+    fn args(self, out: &mut Vec<core::Scalx>) {
         match self {
             Either::Left(left) => left.args(out),
             Either::Right(right) => right.args(out),

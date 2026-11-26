@@ -838,14 +838,14 @@ pub mod leveled {
         Null(Kw!("NULL")),
     }
 
-    impl Desugar for TermSugar<'_> {
+    impl Desugar for TermSugar {
         type Core = core::Term;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             match self {
-                Self::ScalarFunction(f) => scalar_function(f),
-                Self::PercentUnary { op, term, .. } => percent_call(op, term),
-                Self::StringOperation(operation) => string_operation(operation),
-                Self::OdbcEscape(escape) => odbc_escape(escape),
+                Self::ScalarFunction(f) => scalar_function(*f),
+                Self::PercentUnary { op, term, .. } => percent_call(op, *term),
+                Self::StringOperation(operation) => string_operation(*operation),
+                Self::OdbcEscape(escape) => odbc_escape(*escape),
             }
         }
     }
@@ -861,7 +861,7 @@ pub mod leveled {
         };
     }
 
-    fn scalar_function(function: &ScalarFunction) -> core::Term {
+    fn scalar_function(function: ScalarFunction) -> core::Term {
         calls!(ScalarFunction: function;
             PercentObject PercentOid Similarity Abs Ascii Ceiling CharacterLength CharIndex CharLength Char
             Coalesce Concat Convert DataLength Date Day Decode
@@ -880,7 +880,7 @@ pub mod leveled {
         )
     }
 
-    fn odbc_function(function: &ODBCFunc) -> core::Term {
+    fn odbc_function(function: ODBCFunc) -> core::Term {
         calls!(ODBCFunc: function;
             Abs Acos Asin Atan2 Atan Ceiling Cos Cot Exp Floor Log Log10 Mod Power Sin Sqrt Tan Ascii Char
             Concat DayName DayOfMonth DayOfWeek DayOfYear Degrees Hour LCase Left Length LTrim Minute Month
@@ -896,15 +896,15 @@ pub mod leveled {
         )
     }
 
-    fn cast(value: &DTSVal) -> core::Term {
-        let cast_type = match &value.dts_type {
+    fn cast(value: DTSVal) -> core::Term {
+        let cast_type = match value.dts_type {
             DTSType::Date(_) => core::CastType::Date(Default::default()),
             DTSType::Time(_) => core::CastType::Time(Default::default()),
             DTSType::Timestamp(_) => core::CastType::Timestamp(Default::default()),
         };
-        let expr = term(match &value.val_spec {
-            DTSValSpec::Literal(literal) => core::Term::Literal(literal.clone()),
-            DTSValSpec::HostVar(host_var) => core::Term::HostVar(host_var.clone()),
+        let expr = term(match value.val_spec {
+            DTSValSpec::Literal(literal) => core::Term::Literal(literal),
+            DTSValSpec::HostVar(host_var) => core::Term::HostVar(host_var),
         });
         let cast = core::SQLCastExpression {
             expr,
@@ -917,29 +917,32 @@ pub mod leveled {
         )))
     }
 
-    fn odbc_escape(escape: &ODBCEscape) -> core::Term {
-        match &escape.wrapped {
+    fn odbc_escape(escape: ODBCEscape) -> core::Term {
+        match escape.wrapped {
             DTS::DateTime(value) => cast(value),
-            DTS::Function(function) => odbc_function(&function.prefixed),
+            DTS::Function(function) => odbc_function(function.prefixed),
         }
     }
 
-    fn percent_call(op: &PercentOp, term: &Ranged<Term>) -> core::Term {
-        let arg = match &term.ranged {
-            Term::Scalx(parens) => (*parens.wrapped).desugar(),
-            _ => core::Scalx(VecSep::one(term.desugar())),
+    fn percent_call(op: PercentOp, term: Ranged<Term>) -> core::Term {
+        let arg = match term {
+            Ranged {
+                ranged: Term::Scalx(parens),
+                ..
+            } => (*parens.wrapped).desugar(),
+            term => core::Scalx(VecSep::one(term.desugar())),
         };
         call(&op.print(), vec![arg])
     }
 
-    fn string_operation(operation: &StringOperation) -> core::Term {
-        let (expr, _, truncation) = &operation.args.1.wrapped;
+    fn string_operation(operation: StringOperation) -> core::Term {
+        let (expr, _, truncation) = operation.args.1.wrapped;
         let truncation = match truncation {
             ColTrun::Const(constant) => {
                 let core::PConst::Literal(literal) = constant.desugar();
                 core::Term::Literal(literal)
             }
-            ColTrun::HostVar(host_var) => core::Term::HostVar(host_var.clone()),
+            ColTrun::HostVar(host_var) => core::Term::HostVar(host_var),
         };
         let args = vec![expr.desugar(), term(truncation)];
         call(&operation.op.print(), args)
@@ -1271,16 +1274,14 @@ pub mod leveled {
         Chars(Option<(Scalx, Space, Kw!("FROM"), Space)>),
     }
 
-    impl Desugar for TrimHowSugar<'_> {
+    impl Desugar for TrimHowSugar {
         type Core = core::TrimHow;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let (spec, chars) = match self {
                 Self::Spec(spec, ..) => (spec.desugar(), string(" ")),
                 Self::Chars(chars) => (
                     core::TrimSpec::Both(Default::default()),
-                    chars
-                        .as_ref()
-                        .map_or_else(|| string(" "), |(chars, ..)| chars.desugar()),
+                    chars.map_or_else(|| string(" "), |(chars, ..)| chars.desugar()),
                 ),
             };
             core::TrimHow::SpecChars(
@@ -1446,12 +1447,12 @@ pub mod leveled {
         Quoted(Wrap<DQuote, K, DQuote>),
     }
 
-    impl<K: Grammar + Desugar> Desugar for DoubleQuotableSugar<'_, K>
+    impl<K: Grammar + Desugar> Desugar for DoubleQuotableSugar<K>
     where
         K::Core: Grammar,
     {
         type Core = core::DoubleQuotable<K::Core>;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let Self::Quoted(quoted) = self;
             core::DoubleQuotable::Bare(quoted.wrapped.desugar())
         }
@@ -1468,12 +1469,12 @@ pub mod leveled {
         Double(Wrap<DQuote, K, DQuote>),
     }
 
-    impl<K: Grammar + Desugar> Desugar for QuotableSugar<'_, K>
+    impl<K: Grammar + Desugar> Desugar for QuotableSugar<K>
     where
         K::Core: Grammar,
     {
         type Core = core::Quotable<K::Core>;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             match self {
                 Self::Single(quoted) => core::Quotable::Bare(quoted.wrapped.desugar()),
                 Self::Double(quoted) => core::Quotable::Bare(quoted.wrapped.desugar()),
@@ -1489,9 +1490,9 @@ pub mod leveled {
         Parenthesized(Parenthesized<Box<DatePart>>),
     }
 
-    impl Desugar for DatePartSugar<'_> {
+    impl Desugar for DatePartSugar {
         type Core = core::DatePart;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let Self::Parenthesized(parens) = self;
             (*parens.wrapped).desugar()
         }
@@ -1506,9 +1507,9 @@ pub mod leveled {
         Parenthesized(Parenthesized<Box<DatePartPart>>),
     }
 
-    impl Desugar for DatePartPartSugar<'_> {
+    impl Desugar for DatePartPartSugar {
         type Core = core::DatePartPart;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let Self::Parenthesized(parens) = self;
             (*parens.wrapped).desugar()
         }
@@ -1674,9 +1675,9 @@ pub mod leveled {
     }
 
     /// `ROWS n PRECEDING` is `ROWS BETWEEN n PRECEDING AND CURRENT ROW`, the standard's lone-bound reading.
-    impl Desugar for WindowRowsSugar<'_> {
+    impl Desugar for WindowRowsSugar {
         type Core = core::WindowRows;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let Self::Single(bound) = self;
             let current_row = core::WindowRowsBound::CurrentRow(
                 Default::default(),
@@ -1749,7 +1750,7 @@ pub mod leveled {
         After::Core: Grammar + Default,
     {
         type Core = core::Implied<K::Core, Before::Core, After::Core>;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             match self {
                 Implied::Spelled(before, keyword, after) => {
                     core::Implied::Spelled(before.desugar(), keyword.desugar(), after.desugar())
@@ -1775,16 +1776,16 @@ pub mod leveled {
 
     impl Desugar for QuantifiedOp {
         type Core = core::QuantifiedOp;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             match self {
                 QuantifiedOp::Op { op, sp, quantifier } => core::QuantifiedOp::Op {
-                    op: op.desugar(),
-                    sp: sp.desugar(),
                     quantifier: match (op.negated(), quantifier) {
                         (false, quantifier) => quantifier.desugar(),
                         (true, Quantifier::All(_)) => core::Quantifier::Any(Default::default()),
                         (true, Quantifier::Any(_)) => Default::default(),
                     },
+                    op: op.desugar(),
+                    sp: sp.desugar(),
                 },
                 QuantifiedOp::In { .. } => core::QuantifiedOp::Op {
                     op: core::CmpOp::Eq(Default::default()),
@@ -1814,7 +1815,7 @@ pub mod leveled {
     /// NULL rows (IRIS's own NOT (… ALL …) returns the rows of … ANY … there, not those of NOT[ ANY).
     impl Desugar for Cond {
         type Core = core::Cond;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let (noindex, predicate) = match self {
                 Cond::Not { not_kw, condition } => {
                     return core::Cond::Not {
@@ -1825,11 +1826,12 @@ pub mod leveled {
                 Cond::Paren(predicate) => return core::Cond::Paren(predicate.desugar()),
                 Cond::Predicate { noindex, predicate } => (noindex, predicate),
             };
+            let negated = negated(&predicate);
             let plain = core::Cond::Predicate {
                 noindex: noindex.desugar(),
                 predicate: predicate.desugar(),
             };
-            if !negated(predicate) {
+            if !negated {
                 return plain;
             }
             core::Cond::Not {
@@ -2016,9 +2018,9 @@ pub mod leveled {
         Literal(Literal),
     }
 
-    impl Desugar for PConstSugar<'_> {
+    impl Desugar for PConstSugar {
         type Core = core::PConst;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let Self::Nested(inner) = self;
             (*inner.wrapped).desugar()
         }
@@ -2123,7 +2125,7 @@ pub mod leveled {
 
     impl Desugar for SourceQuery {
         type Core = core::SourceQuery;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let mut query = self.query.desugar();
             let order = take_statement_order(&mut query).or_else(|| self.order.desugar());
             core::SourceQuery { query, order }
@@ -2265,9 +2267,9 @@ pub mod leveled {
     /// `t CROSS JOIN u LEFT JOIN v ON …`, the ON seeing u and v alone, the rows of `t CROSS JOIN (u LEFT JOIN v …)`.
     impl Desugar for Tables {
         type Core = core::Tables;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let core::Tref::Join(mut first) = self.first.desugar();
-            for (_, entry) in &self.rest {
+            for (_, entry) in self.rest {
                 let core::Tref::Join(core::JTab { formit, joins }) = entry.ranged.desugar();
                 let table = Box::new(core::JTab {
                     formit,
@@ -2300,9 +2302,9 @@ pub mod leveled {
         },
     }
 
-    impl Desugar for TrefSugar<'_> {
+    impl Desugar for TrefSugar {
         type Core = core::Tref;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let Self::OJSyntax { table, .. } = self;
             core::Tref::Join(table.desugar())
         }
@@ -2468,15 +2470,13 @@ pub mod leveled {
 
     /// `OFFSET m [ROWS] [FETCH … n …]` is `LIMIT n OFFSET m`, `LIMIT ALL OFFSET m` without the FETCH, and
     /// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` alone `LIMIT n`.
-    impl Desugar for RowLimitingClauseSugar<'_> {
+    impl Desugar for RowLimitingClauseSugar {
         type Core = core::RowLimitingClause;
-        fn desugar(&self) -> Self::Core {
-            let count = |fetch: &Fetch| core::LimitSpec::Val(fetch.valspec.desugar());
+        fn desugar(self) -> Self::Core {
+            let count = |fetch: Fetch| core::LimitSpec::Val(fetch.valspec.desugar());
             let (limit, offset) = match self {
                 Self::OffsetFetch { offset, fetch } => (
-                    fetch
-                        .as_ref()
-                        .map_or_else(Default::default, |(_, fetch)| count(fetch)),
+                    fetch.map_or_else(Default::default, |(_, fetch)| count(fetch)),
                     Some((
                         Space::blank(),
                         core::Offset {
@@ -2603,15 +2603,16 @@ pub mod leveled {
         },
     }
 
-    impl Desugar for AsignSugar<'_> {
+    impl Desugar for AsignSugar {
         type Core = core::Asign;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let Self::SetList {
                 assignments: (_, list),
                 ..
             } = self;
-            let columns = list.items.iter().map(|a| a.column.desugar()).collect();
-            let values = list.items.iter().map(|a| a.value.desugar()).collect();
+            let (columns, values) = (list.items.into_iter())
+                .map(|a| (a.ranged.column.desugar(), a.ranged.value.desugar()))
+                .unzip();
             core::Asign::ColumnList {
                 columns: Some((Space::default(), parenthesized(commas(columns)))),
                 values: (
@@ -2994,7 +2995,7 @@ pub mod leveled {
     /// gives); in a union a row limit limits its operand and stays.
     impl Desugar for Selct {
         type Core = core::Selct;
-        fn desugar(&self) -> Self::Core {
+        fn desugar(self) -> Self::Core {
             let mut query = self.query.desugar();
             let mut tail = self.tail.desugar();
             if let Some(order) = take_statement_order(&mut query) {

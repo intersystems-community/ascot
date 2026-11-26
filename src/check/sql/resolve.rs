@@ -619,7 +619,7 @@ impl Resolver for Checker<'_, '_> {
 }
 
 pub(in crate::check) fn check(code: &CodeEnv<'_>, flow: &mut Flow<'_>, statement: &SQL) -> Hosts {
-    super::analyze(&statement.desugar(), Some(&Checker { code, flow }))
+    super::analyze(&statement.clone().desugar(), Some(&Checker { code, flow }))
 }
 
 // A table's columns when they are known: not a CTE's, a view's, or a table nobody has, which is

@@ -795,7 +795,7 @@ fn sql_publics(body: &ProcedureBody) -> HashSet<String> {
     let mut names = HashSet::new();
     walk_blocks(body, &mut |it| {
         if let Left(Command::ESQL(_, statement, _)) = it {
-            let hosts = sql::analyze(&statement.desugar(), None);
+            let hosts = sql::analyze(&(**statement).clone().desugar(), None);
             names.insert("SQLCODE".to_string());
             names.extend(
                 (hosts.reads.into_iter().chain(hosts.writes))
