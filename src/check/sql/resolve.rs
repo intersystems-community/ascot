@@ -554,8 +554,8 @@ impl<'a> WorkspaceEnv<'a> {
     }
 }
 
-// `schema.name` as written; an unqualified name is the class's own schema's, else `SQLUser`'s
-// (measured on 2026.2: a class's `SELECT a FROM t` reads its package's t before SQLUser.t).
+// `schema.name` as written; an unqualified name is the class's own schema's, which 2026.2 searches
+// alone (a class's `SELECT Name FROM Guest` fails with SQLCODE -30 beside SQLUser.Guest), a routine's `SQLUser`'s.
 fn lookup<T>(
     check: &dyn Resolver,
     parts: &[String],
@@ -563,14 +563,8 @@ fn lookup<T>(
 ) -> Option<Lookup<T>> {
     match parts {
         [name] => {
-            let own = check.schema().map(|schema| find(&schema, name));
-            if let Some(found @ Lookup::Found(_)) = own {
-                return Some(found);
-            }
-            Some(match (own, find("SQLUser", name)) {
-                (Some(Lookup::Unconfirmed), Lookup::Missing) => Lookup::Unconfirmed,
-                (_, fallback) => fallback,
-            })
+            let own = check.schema().unwrap_or_else(|| "SQLUser".to_string());
+            Some(find(&own, name))
         }
         [schema, name] => Some(find(schema, name)),
         _ => None,
