@@ -5753,11 +5753,12 @@ pub mod leveled {
         },
     }
 
+    /// PARTITION [BY ... | OFF] as a table option; 2026.2 refuses PARTITION ON here and takes it after CONVERT.
     #[derive(Grammar)]
     #[tygr(name = "partition option")]
     pub struct PartitionOption {
-        pub kw: (Kw!("PARTITION"), Space1),
-        pub spec: Either<Prefix<(Kw!("BY"), Space1), PartitionSpecificationList>, Kw!("OFF")>,
+        pub kw: Kw!("PARTITION"),
+        pub spec: Option<(Space1, Either<Prefix<(Kw!("BY"), Space1), PartitionSpecificationList>, Kw!("OFF")>)>,
     }
 
     #[derive(Grammar)]
