@@ -150,7 +150,7 @@ impl Walk for Join {
             Join::Cross { table, .. } | Join::Natural { table, .. } => table.walk(w),
             Join::Qualified { table, spec, .. } => {
                 table.walk(w);
-                if let JSpec::On { condition, .. } = spec {
+                if let (_, JSpec::On { condition, .. }) = spec {
                     condition.walk(w)
                 }
             }

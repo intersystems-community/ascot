@@ -227,7 +227,7 @@ pub(super) fn list(args: Vec<core::Scalx>) -> core::ArgsN {
 
 /// A term as an expression of its own, standing for the node being rewritten.
 pub(super) fn term(term: core::Term) -> core::Scalx {
-    core::Scalx::Legacy(VecSep::one(Src::synthesized(term)))
+    core::Scalx(VecSep::one(Src::synthesized(term)))
 }
 
 /// `'text'`.
@@ -267,7 +267,7 @@ impl Arg for full::Scalx {
 
 impl Arg for Src<full::Term> {
     fn args(&self, out: &mut Vec<core::Scalx>) {
-        out.push(core::Scalx::Legacy(VecSep::one(self.desugar())))
+        out.push(core::Scalx(VecSep::one(self.desugar())))
     }
 }
 

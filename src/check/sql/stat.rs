@@ -11,7 +11,7 @@ impl Walk for Stat {
             Stat::Insert(stat) => stat.walk(w),
             Stat::Update(stat) => stat.walk(w),
             Stat::Delete(stat) => stat.walk(w),
-            Stat::Thr(thr) => w.unchecked(&thr.remote_statement),
+            Stat::Thr(thr) => w.unchecked(&thr.remote_statement.1),
             Stat::DDL(ddl) => w.unchecked(ddl),
             Stat::Declare(decl) => decl.walk(w),
             Stat::OFC(ofc) => ofc.walk(w),
@@ -47,7 +47,7 @@ impl Walk for Insrt {
 impl Walk for Updat {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
-        match &self.body {
+        match &self.body.1 {
             UpdatBody::Update {
                 target,
                 assignment,
@@ -55,7 +55,7 @@ impl Walk for Updat {
                 where_clause,
                 ..
             } => {
-                target.1.walk(w);
+                target.walk(w);
                 from.walk(w);
                 where_clause.walk(w);
                 assignment.1.walk(w)
@@ -235,7 +235,7 @@ impl Walk for DDL {
                 if let Some((_, scope)) = cancel_scope {
                     scope.walk(w)
                 }
-                if let Some((_, timeout)) = timeout {
+                if let Some((.., timeout)) = timeout {
                     timeout.walk(w)
                 }
             }
@@ -299,7 +299,7 @@ impl Walk for CodeBody {
             for (_, statement, _, _) in &body.wrapped {
                 match statement {
                     Either::Left(ret) => {
-                        if let Some(ReturnValue::HostRef(host_ref)) = &ret.value {
+                        if let Some((_, ReturnValue::HostRef(host_ref))) = &ret.value {
                             w.host(host_ref, false)
                         }
                     }
@@ -363,8 +363,7 @@ impl Walk for ModelSource {
 impl Walk for TrainWith {
     fn walk(&self, w: &mut Walker) {
         if let TrainWith::Assignment(assignment) = self {
-            assignment.first_val.walk(w);
-            for (_, _, _, value) in &assignment.rest {
+            for (_, _, value) in &assignment.0.items {
                 value.walk(w)
             }
         }

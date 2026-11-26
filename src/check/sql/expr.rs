@@ -5,7 +5,7 @@ use super::{SqlProcedureUse, Walk, Walker};
 
 impl Walk for Scalx {
     fn walk(&self, w: &mut Walker) {
-        let Scalx::Legacy(terms) = self;
+        let Scalx(terms) = self;
         terms.walk(w)
     }
 }
@@ -141,7 +141,7 @@ impl Walk for Builtin {
             TimestampAdd(_, a) => a.walk(w),
             TimestampDiff(_, a) => a.walk(w),
             ToVector(_, a) => a.walk(w),
-            Trim(_, _, a) => a.walk(w),
+            Trim(_, a) => a.walk(w),
             Odbc(a) => a.walk(w),
             CurrentTimestamp(_, a) | CurrentTime(_, a) => a.walk(w),
             DollarExtract(_, a)
@@ -213,9 +213,9 @@ impl Walk for PredictAssign {
 
 impl Walk for TrimArgs {
     fn walk(&self, w: &mut Walker) {
-        let TrimArgs::SpecScalxScalx(_, _, chars, _, _, _, scalx) = self;
+        let TrimHow::SpecChars(_, _, chars, _) = &self.how;
         chars.walk(w);
-        scalx.walk(w)
+        self.expr.walk(w)
     }
 }
 
@@ -224,16 +224,8 @@ impl Walk for SQLCastExpression {
         use CastType::*;
         self.expr.walk(w);
         match &self.cast_type {
-            BinaryVarying(_, _, _, a) | CharacterVarying(_, _, _, a) | CharVarying(_, _, _, a) => {
-                a.walk(w)
-            }
-            Binary(_, a)
-            | Character(_, a)
-            | Char(_, a)
-            | Nchar(_, a)
-            | Nvarchar(_, a)
-            | Varbinary(_, a)
-            | Varchar(_, a) => a.walk(w),
+            Binary(_, _, a) | Character(_, _, a) | Char(_, _, a) => a.walk(w),
+            Nchar(_, a) | Nvarchar(_, a) | Varbinary(_, a) | Varchar(_, a) => a.walk(w),
             Decimal(_, a) | Dec(_, a) | Numeric(_, a) => {
                 if let Some(a) = a {
                     a.wrapped.0.walk(w);
@@ -338,30 +330,20 @@ impl Walk for Ordir {
 
 impl Walk for Case {
     fn walk(&self, w: &mut Walker) {
-        match self {
-            Case::Searched(case) => {
-                case.when_clauses.walk(w);
-                case.else_clause.walk(w)
-            }
-            Case::Simple(case) => {
-                case.expr.walk(w);
-                case.when_clauses.walk(w);
-                case.else_clause.walk(w)
+        match &self.body {
+            CaseBody::Searched(whens) => whens.walk(w),
+            CaseBody::Simple(_, operand, whens) => {
+                operand.walk(w);
+                whens.walk(w)
             }
         }
+        self.else_clause.walk(w)
     }
 }
 
-impl Walk for SQLWhenClause {
+impl<T: Walk + tygr::Grammar> Walk for When<T> {
     fn walk(&self, w: &mut Walker) {
-        self.condition.walk(w);
-        self.result.walk(w)
-    }
-}
-
-impl Walk for SQLSimpleCaseWhen {
-    fn walk(&self, w: &mut Walker) {
-        self.value.walk(w);
+        self.operand.walk(w);
         self.result.walk(w)
     }
 }
@@ -456,10 +438,10 @@ impl Walk for Comparison {
 impl Walk for ForCnd {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ForCnd::Paren(predicate) => predicate.walk(w),
-            ForCnd::GroupHaving(parens) => {
-                parens.wrapped.0.walk(w);
-                parens.wrapped.1.walk(w)
+            ForCnd::Prdct(predicate) => predicate.walk(w),
+            ForCnd::GroupHaving(group, having) => {
+                group.walk(w);
+                having.walk(w)
             }
             ForCnd::GroupOnly(group) => group.walk(w),
         }

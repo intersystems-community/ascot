@@ -316,6 +316,12 @@ impl<T: Walk> Walk for (Space, T) {
     }
 }
 
+impl<T: Walk> Walk for (T, Space) {
+    fn walk(&self, w: &mut Walker) {
+        self.0.walk(w)
+    }
+}
+
 impl<T: Walk, S> Walk for VecSep<T, S> {
     fn walk(&self, w: &mut Walker) {
         self.items.walk(w)
@@ -409,11 +415,9 @@ impl Walk for DTSValSpec {
 
 impl Walk for Targt {
     fn walk(&self, w: &mut Walker) {
-        if let Some((_, targt)) = &self.0 {
-            match targt {
-                TargtEnum::Into(into) => w.written(into),
-                TargtEnum::IntoList(into) => w.written(&into.prefixed.1),
-            }
+        match &self.0 {
+            TargtEnum::Into(into) => w.written(into),
+            TargtEnum::IntoList(into) => w.written(&into.prefixed.1),
         }
     }
 }
