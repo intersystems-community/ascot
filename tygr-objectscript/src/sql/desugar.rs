@@ -71,6 +71,7 @@ identity!(
     HostIdentifierStart,
     HostIdentifierPart,
     Param,
+    Sign,
     Sub,
     MacroArgUnit,
     OSText,
@@ -218,12 +219,16 @@ pub(super) fn commas<T>(items: Vec<T>) -> VecSep<T, ArgSep> {
     VecSep { items, seps }
 }
 
+/// `(x)`.
+pub(super) fn parenthesized<T>(wrapped: T) -> Parenthesized<T> {
+    let open = (Default::default(), Space::default());
+    Wrap::new(open, wrapped, (Space::default(), Default::default()))
+}
+
 /// `(a, b)`.
 pub(super) fn list(args: Vec<core::Scalx>) -> core::ArgsN {
     let items = (!args.is_empty()).then(|| commas(args));
-    let open = (Default::default(), Space::default());
-    let list = Wrap::new(open, items, (Space::default(), Default::default()));
-    (Space::default(), list)
+    (Space::default(), parenthesized(items))
 }
 
 /// A term as an expression of its own, standing for the node being rewritten.

@@ -517,8 +517,14 @@ pub enum StringLiteral {
 }
 
 #[derive(Grammar, Clone)]
+pub enum Sign {
+    Plus(StringEq!("+")),
+    Minus(StringEq!("-")),
+}
+
+#[derive(Grammar, Clone)]
 pub struct Integer {
-    sign: Option<Either<StringEq!("+"), StringEq!("-")>>,
+    sign: Option<Sign>,
     integer: StringOf1<IsDigit>,
 }
 
@@ -526,7 +532,7 @@ pub struct Integer {
 #[tygr(inline)]
 pub struct SQLExponent {
     e: ExpoSymbol,
-    sign: Option<Either<StringEq!("+"), StringEq!("-")>>,
+    sign: Option<Sign>,
     digits: StringOf1<IsDigit>,
 }
 
@@ -912,12 +918,6 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum Sign {
-        Plus(StringEq!("+")),
-        Minus(StringEq!("-")),
-    }
-
-    #[derive(Grammar)]
     #[tygr(name = "term")]
     pub enum Term {
         Macro(
@@ -1037,14 +1037,9 @@ pub mod leveled {
             as_kw: (Space::blank(), Default::default(), Default::default()),
             cast_type,
         };
-        let args = Wrap::new(
-            (Default::default(), Space::default()),
-            Box::new(cast),
-            (Space::default(), Default::default()),
-        );
         core::Term::Builtin(Box::new(core::Builtin::Cast(
             Default::default(),
-            (Space::default(), args),
+            (Space::default(), parenthesized(Box::new(cast))),
         )))
     }
 
@@ -1263,7 +1258,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct Scalx(pub VecSep<Src<Term>, Wrap<Space, Scalop, Space>>);
+    pub struct Scalx(pub VecSep<Src<Term>, (Space, Scalop, Space)>);
     #[derive(Grammar)]
     #[tygr(name = "case")]
     pub struct Case {
@@ -1514,7 +1509,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "predict-with")]
     pub enum PredictWith {
-        Unnamed(Parenthesized<VecSep<Scalx, ArgSep>>),
+        Unnamed(List),
         Named(VecSep<PredictAssign, ArgSep>),
     }
 
@@ -1985,7 +1980,7 @@ pub mod leveled {
             let current_row = core::WindowRowsBound::CurrentRow(
                 Default::default(),
                 Default::default(),
-                Either::Right(Default::default()),
+                Default::default(),
             );
             core::WindowRows::Between {
                 between_kw: Default::default(),
@@ -2013,7 +2008,21 @@ pub mod leveled {
             Space,
             Kw!("FOLLOWING"),
         ),
-        CurrentRow(Kw!("CURRENT"), Space1, Either<Kw!("ROWS"), Kw!("ROW")>),
+        CurrentRow(Kw!("CURRENT"), Space1, Kw!("ROW")),
+        #[sugar]
+        CurrentRows(Kw!("CURRENT"), Space1, Kw!("ROWS")),
+    }
+
+    /// `CURRENT ROWS` is `CURRENT ROW`.
+    impl Desugar for WindowRowsBoundSugar<'_> {
+        type Core = core::WindowRowsBound;
+        fn desugar(&self) -> Self::Core {
+            core::WindowRowsBound::CurrentRow(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+        }
     }
     #[derive(Grammar)]
     #[tygr(name = "prdct")]
@@ -2153,12 +2162,10 @@ pub mod leveled {
             }
             core::Cond::Not {
                 not_kw: (Default::default(), Space::blank()),
-                condition: Box::new(Src::synthesized(core::Cond::Paren(Wrap::new(
-                    (Default::default(), Space::default()),
+                condition: Box::new(Src::synthesized(core::Cond::Paren(parenthesized(
                     Box::new(core::Prdct(VecSep::one(core::And(VecSep::one(
                         Src::synthesized(plain),
                     ))))),
-                    (Space::default(), Default::default()),
                 )))),
             }
         }
@@ -2204,7 +2211,7 @@ pub mod leveled {
                 Space,
             ),
             column: Parenthesized<Colmn>,
-            label: Option<(Space, Option<(Kw!("AS"), Space)>, Ident)>,
+            label: Option<Alias>,
             predicate: (Space, Parenthesized<Box<Prdct>>),
         },
         ForSome {
@@ -2276,7 +2283,7 @@ pub mod leveled {
             #[sugar]
             not: Not,
             in_kw: (Kw!("IN"), Space),
-            list: Parenthesized<VecSep<Scalx, ArgSep>>,
+            list: List,
         },
         InList {
             #[sugar]
@@ -2503,8 +2510,8 @@ pub mod leveled {
         ProfileAll(Kw!("%PROFILE_ALL")),
         NoRuntime(Kw!("%NORUNTIME")),
         DoRuntime(Kw!("%DORUNTIME")),
-        RowLimit(Kw!("%ROWLIMIT"), Space, ValSpec),
-        RowOffset(Kw!("%ROWOFFSET"), Space, ValSpec),
+        RowLimit(Kw!("%ROWLIMIT"), Space, Count),
+        RowOffset(Kw!("%ROWOFFSET"), Space, Count),
     }
 
     #[derive(Grammar)]
@@ -2514,8 +2521,8 @@ pub mod leveled {
     }
 
     /// A count: a literal, a host variable or `?`, in any parentheses; 2026.2 takes `TOP (1)`, `TOP(1)`,
-    /// `LIMIT ((10))`, `OFFSET (:n)`, `FETCH NEXT 'x' ROWS ONLY` and `DIAGNOSTICS SIZE (1)`, not `LIMIT 1 + 1`,
-    /// `LIMIT a`, `LIMIT -1` or `TOP (ALL)`.
+    /// `LIMIT ((10))`, `OFFSET (:n)`, `FETCH NEXT 'x' ROWS ONLY`, `DIAGNOSTICS SIZE (1)` and `%ROWLIMIT ((5))`, not
+    /// `LIMIT 1 + 1`, `LIMIT a`, `LIMIT -1`, `%ROWLIMIT (1, 2)` or `TOP (ALL)`.
     #[derive(Grammar)]
     pub enum Count {
         Paren(Parenthesized<Box<Count>>),
@@ -2606,14 +2613,11 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct TableRefs(pub VecSep<TableRef, ArgSep>);
 
+    /// `[schema.]table` or `[schema.]*`; 2026.2 takes blanks around the dot and refuses a third part.
     #[derive(Grammar)]
-    pub enum TableRef {
-        All(StringEq!("*")),
-        SchemaAll(Schema, Space, StringEq!(".*")),
-        SchemaTable {
-            schema: Option<(Schema, Space, StringEq!("."), Space)>,
-            table: TName,
-        },
+    pub struct TableRef {
+        pub schema: Option<(Schema, Space, StringEq!("."), Space)>,
+        pub table: Either<StringEq!("*"), Ident>,
     }
 
     #[derive(Grammar)]
@@ -2646,22 +2650,15 @@ pub mod leveled {
         fn desugar(&self) -> Self::Core {
             let core::Tref::Join(mut first) = self.first.desugar();
             for (_, tref) in &self.rest {
-                let (Tref::Join(jtab) | Tref::OJSyntax { table: jtab, .. }) = tref;
                 let core::Tref::Join(mut table) = tref.desugar();
-                let start = jtab.formit.range().start;
-                let end = jtab
-                    .joins
-                    .last()
-                    .map_or(jtab.formit.range().end, |(_, join)| join.range().end);
+                let start = table.formit.range().start;
+                let end = (table.joins.last())
+                    .map_or(table.formit.range().end, |(_, join)| join.range().end);
                 if !table.joins.is_empty() {
                     table = core::JTab {
                         formit: Src::new(
                             start..end,
-                            core::Frmit::JTab(Wrap::new(
-                                (Default::default(), Space::default()),
-                                Box::new(table),
-                                (Space::default(), Default::default()),
-                            )),
+                            core::Frmit::JTab(parenthesized(Box::new(table))),
                         ),
                         joins: Vec::new(),
                     };
@@ -3049,24 +3046,13 @@ pub mod leveled {
             let columns = list.items.iter().map(|a| a.column.desugar()).collect();
             let values = list.items.iter().map(|a| a.value.desugar()).collect();
             core::Asign::ColumnList {
-                columns: Some((
-                    Space::default(),
-                    Wrap::new(
-                        (Default::default(), Space::default()),
-                        commas(columns),
-                        (Space::default(), Default::default()),
-                    ),
-                )),
+                columns: Some((Space::default(), parenthesized(commas(columns)))),
                 values: (
                     Space::blank(),
                     core::ValueSource::ValSpec {
                         values_kw: Default::default(),
                         sp: Space::blank(),
-                        spec: core::ValSpec::Scalx(Wrap::new(
-                            (Default::default(), Space::default()),
-                            commas(values),
-                            (Space::default(), Default::default()),
-                        )),
+                        spec: core::ValSpec::Scalx(parenthesized(commas(values))),
                     },
                 ),
             }
@@ -3091,7 +3077,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "val spec")]
     pub enum ValSpec {
-        Scalx(Parenthesized<VecSep<Scalx, ArgSep>>),
+        Scalx(List),
         Var { var: Var, subs: SubList },
     }
 
@@ -3144,12 +3130,7 @@ pub mod leveled {
         },
     }
 
-    #[derive(Grammar)]
-    #[tygr(inline)]
-    pub struct WhereWerop {
-        pub kw: (Kw!("WHERE"), Space),
-        pub werop: Werop,
-    }
+    pub type WhereWerop = Prefix<(Kw!("WHERE"), Space), Werop>;
 
     #[derive(Grammar)]
     pub enum Werop {

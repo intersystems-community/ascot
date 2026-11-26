@@ -136,9 +136,9 @@ impl Walk for ValueSource {
     }
 }
 
-impl Walk for WhereWerop {
+impl Walk for Werop {
     fn walk(&self, w: &mut Walker) {
-        match &self.werop {
+        match self {
             Werop::Prdct(prdct) => prdct.walk(w),
             Werop::CurrentOf { prdct, .. } => prdct.walk(w),
         }
