@@ -229,7 +229,7 @@ const RULES: &[(&str, &str)] = &[
     ),
     (
         "SELECT DATEADD(dd, 1, d), DATEDIFF((yyyy), d, e), DATEPART(sts, d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
-        "SELECT DATEADD('day', 1, d), DATEDIFF('year', d, e), DATEPART('sqltimestamp', d), DATENAME('dw', d), DATE_TRUNC(:p, d) FROM t",
+        "SELECT DATEADD(DAY, 1, d), DATEDIFF(YEAR, d, e), DATEPART(SQLTIMESTAMP, d), DATENAME(WEEKDAY, d), DATE_TRUNC(:p, d) FROM t",
     ),
     (
         "SELECT TRIM(a), TRIM(x FROM a), TRIM(LEADING FROM a), TRIM(TRAILING a), TRIM(BOTH x FROM a) FROM t",

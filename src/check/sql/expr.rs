@@ -117,6 +117,9 @@ impl Walk for Builtin {
             XmlElement(x) => x.walk(w),
             XmlForest(x) => x.walk(w),
             Cast(_, cast) => cast.walk(w),
+            DateAdd(_, a) | DateDiff(_, a) => a.walk(w),
+            DateName(_, a) | DateTrunc(_, a) => a.walk(w),
+            DatePart(_, a) => a.walk(w),
             Convert(_, a) => a.walk(w),
             JSONArray(_, a) => {
                 if let Some((items, _)) = &a.1.wrapped {
@@ -177,6 +180,22 @@ impl Walk for ODBCOnlyFunc {
             ODBCOnlyFunc::Convert(_, a) => a.walk(w),
             ODBCOnlyFunc::IfNull(_, a) => a.walk(w),
             ODBCOnlyFunc::User(..) => {}
+        }
+    }
+}
+
+impl Walk for DatePart {
+    fn walk(&self, w: &mut Walker) {
+        if let DatePart::HostVar(host_var) = self {
+            host_var.walk(w)
+        }
+    }
+}
+
+impl Walk for DatePartPart {
+    fn walk(&self, w: &mut Walker) {
+        if let DatePartPart::HostVar(host_var) = self {
+            host_var.walk(w)
         }
     }
 }

@@ -270,8 +270,8 @@ macro_rules! leaf {
 leaf!(
     Integer,
     VectorDatyp,
-    TSAddInterval,
-    TSDiffInterval,
+    DoubleQuotable<TSAddInterval>,
+    DoubleQuotable<TSDiffInterval>,
     SQLConvertFunc
 );
 

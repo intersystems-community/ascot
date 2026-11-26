@@ -905,7 +905,7 @@ pub mod leveled {
     fn scalar_function(function: &ScalarFunction) -> core::Term {
         calls!(ScalarFunction: function;
             PercentObject PercentOid Similarity Abs Ascii Ceiling CharacterLength CharIndex CharLength
-            Coalesce Convert DataLength Date DateAdd DateDiff DateName DatePart DateTrunc Day Decode
+            Coalesce Convert DataLength Date Day Decode
             Embedding Floor GetDate GetUtcDate Greatest HashBytes IfNull Instr IsNull IsNumeric LastDay
             LastIdentity LCase Least Left Len Length Lower LPad LTrim Month Now NullIf Nvl PatIndex Power
             Repeat Replace Replicate Reverse Right Round RPad RTrim Sign Space Str String Stuff Substr
@@ -1231,6 +1231,11 @@ pub mod leveled {
         XmlElement(XMLElement),
         XmlForest(XMLForest),
         Cast(StringEqCI!("CAST"), Args<Box<SQLCastExpression>>),
+        DateAdd(StringEqCI!("DATEADD"), Args<RRR<DatePart>>),
+        DateDiff(StringEqCI!("DATEDIFF"), Args<RRR<DatePart>>),
+        DateName(StringEqCI!("DATENAME"), Args<RR<DatePart>>),
+        DatePart(StringEqCI!("DATEPART"), Args<RR<DatePartPart>>),
+        DateTrunc(StringEqCI!("DATE_TRUNC"), Args<RR<DatePart>>),
         Convert(StringEqCI!("CONVERT"), Args<RR<Scalx, SQLConvertFunc>>),
         JSONArray(StringEqCI!("JSON_ARRAY"), SQLJSONArrayArgs),
         JSONObject(StringEqCI!("JSON_OBJECT"), SQLJSONObjectArgs),
@@ -1239,11 +1244,11 @@ pub mod leveled {
         SearchIndex(StringEqCI!("SEARCH_INDEX"), Args<SQLSearchIndexArgs>),
         TimestampAdd(
             StringEqCI!("TIMESTAMPADD"),
-            Args<RRR<OptionallyQuoted<TSAddInterval>>>,
+            Args<RRR<DoubleQuotable<TSAddInterval>>>,
         ),
         TimestampDiff(
             StringEqCI!("TIMESTAMPDIFF"),
-            Args<RRR<OptionallyQuoted<TSDiffInterval>>>,
+            Args<RRR<DoubleQuotable<TSDiffInterval>>>,
         ),
         ToVector(
             StringEqCI!("TO_VECTOR"),
@@ -1497,7 +1502,195 @@ pub mod leveled {
         User(StringEqCI!("USER"), Option<StringEq!("()")>),
     }
 
-    pub type OptionallyQuoted<T> = Either<Wrap<StringEq!("\""), T, StringEq!("\"")>, T>;
+    pub type DQuote = StringEq!("\"");
+
+    pub type SQuote = StringEq!("'");
+
+    /// A keyword bare or in double quotes, as TIMESTAMPADD's interval (2026.2 rejects `'SQL_TSI_DAY'`).
+    #[derive(Grammar)]
+    pub enum DoubleQuotable<K: Grammar> {
+        Bare(K),
+        #[sugar]
+        Quoted(Wrap<DQuote, K, DQuote>),
+    }
+
+    impl<K: Grammar + Desugar> Desugar for DoubleQuotableSugar<'_, K>
+    where
+        K::Core: Grammar,
+    {
+        type Core = core::DoubleQuotable<K::Core>;
+        fn desugar(&self) -> Self::Core {
+            let Self::Quoted(quoted) = self;
+            core::DoubleQuotable::Bare(quoted.wrapped.desugar())
+        }
+    }
+
+    /// A keyword bare or in single or double quotes, as a date part (2026.2 takes `'day'` and `"day"`,
+    /// not `' day'` or any other literal).
+    #[derive(Grammar)]
+    pub enum Quotable<K: Grammar> {
+        Bare(K),
+        #[sugar]
+        Single(Wrap<SQuote, K, SQuote>),
+        #[sugar]
+        Double(Wrap<DQuote, K, DQuote>),
+    }
+
+    impl<K: Grammar + Desugar> Desugar for QuotableSugar<'_, K>
+    where
+        K::Core: Grammar,
+    {
+        type Core = core::Quotable<K::Core>;
+        fn desugar(&self) -> Self::Core {
+            match self {
+                Self::Single(quoted) => core::Quotable::Bare(quoted.wrapped.desugar()),
+                Self::Double(quoted) => core::Quotable::Bare(quoted.wrapped.desugar()),
+            }
+        }
+    }
+
+    /// The date part of DATEADD, DATEDIFF, DATENAME and DATE_TRUNC: a keyword, a host variable, or either in
+    /// parentheses.
+    #[derive(Grammar)]
+    pub enum DatePart {
+        Keyword(Quotable<DatePartCommon>),
+        HostVar(HostVar),
+        #[sugar]
+        Parenthesized(Parenthesized<Box<DatePart>>),
+    }
+
+    impl Desugar for DatePartSugar<'_> {
+        type Core = core::DatePart;
+        fn desugar(&self) -> Self::Core {
+            let Self::Parenthesized(parens) = self;
+            (*parens.wrapped).desugar()
+        }
+    }
+
+    /// DATEPART's date part, which SQLTIMESTAMP joins.
+    #[derive(Grammar)]
+    pub enum DatePartPart {
+        Keyword(Quotable<DatePartPartRaw>),
+        HostVar(HostVar),
+        #[sugar]
+        Parenthesized(Parenthesized<Box<DatePartPart>>),
+    }
+
+    impl Desugar for DatePartPartSugar<'_> {
+        type Core = core::DatePartPart;
+        fn desugar(&self) -> Self::Core {
+            let Self::Parenthesized(parens) = self;
+            (*parens.wrapped).desugar()
+        }
+    }
+
+    #[derive(Grammar)]
+    #[sugar]
+    pub enum DatePartPartRaw {
+        SqlTimestamp(StringEqCI!("SQLTIMESTAMP")),
+        #[sugar]
+        Sts(StringEqCI!("STS")),
+        Common(DatePartCommon),
+    }
+
+    /// The core spells SQLTIMESTAMP in upper case, as it does every date part.
+    impl Desugar for DatePartPartRaw {
+        type Core = core::DatePartPartRaw;
+        fn desugar(&self) -> Self::Core {
+            match self {
+                Self::SqlTimestamp(_) | Self::Sts(_) => {
+                    core::DatePartPartRaw::SqlTimestamp(Default::default())
+                }
+                Self::Common(common) => core::DatePartPartRaw::Common(common.desugar()),
+            }
+        }
+    }
+
+    /// The date part keywords, each full name before the abbreviations it prefixes.
+    #[derive(Grammar)]
+    #[sugar]
+    pub enum DatePartCommon {
+        Year(StringEqCI!("YEAR")),
+        Quarter(StringEqCI!("QUARTER")),
+        Month(StringEqCI!("MONTH")),
+        Weekday(StringEqCI!("WEEKDAY")),
+        Week(StringEqCI!("WEEK")),
+        DayOfYear(StringEqCI!("DAYOFYEAR")),
+        Day(StringEqCI!("DAY")),
+        Hour(StringEqCI!("HOUR")),
+        Minute(StringEqCI!("MINUTE")),
+        Second(StringEqCI!("SECOND")),
+        Millisecond(StringEqCI!("MILLISECOND")),
+        Microsecond(StringEqCI!("MICROSECOND")),
+        Nanosecond(StringEqCI!("NANOSECOND")),
+        #[sugar]
+        Yyyy(StringEqCI!("YYYY")),
+        #[sugar]
+        Yy(StringEqCI!("YY")),
+        #[sugar]
+        Qq(StringEqCI!("QQ")),
+        #[sugar]
+        Mm(StringEqCI!("MM")),
+        #[sugar]
+        Wk(StringEqCI!("WK")),
+        #[sugar]
+        Ww(StringEqCI!("WW")),
+        #[sugar]
+        Dw(StringEqCI!("DW")),
+        #[sugar]
+        Dy(StringEqCI!("DY")),
+        #[sugar]
+        Dd(StringEqCI!("DD")),
+        #[sugar]
+        Hh(StringEqCI!("HH")),
+        #[sugar]
+        Mi(StringEqCI!("MI")),
+        #[sugar]
+        Ss(StringEqCI!("SS")),
+        #[sugar]
+        Mcs(StringEqCI!("MCS")),
+        #[sugar]
+        Ms(StringEqCI!("MS")),
+        #[sugar]
+        Ns(StringEqCI!("NS")),
+        #[sugar]
+        Q(StringEqCI!("Q")),
+        #[sugar]
+        M(StringEqCI!("M")),
+        #[sugar]
+        W(StringEqCI!("W")),
+        #[sugar]
+        Y(StringEqCI!("Y")),
+        #[sugar]
+        D(StringEqCI!("D")),
+        #[sugar]
+        N(StringEqCI!("N")),
+        #[sugar]
+        S(StringEqCI!("S")),
+    }
+
+    /// A date part is its full name in upper case, whatever its spelling or abbreviation.
+    impl Desugar for DatePartCommon {
+        type Core = core::DatePartCommon;
+        fn desugar(&self) -> Self::Core {
+            use core::DatePartCommon::*;
+            match self {
+                Self::Year(_) | Self::Yyyy(_) | Self::Yy(_) => Year(Default::default()),
+                Self::Quarter(_) | Self::Qq(_) | Self::Q(_) => Quarter(Default::default()),
+                Self::Month(_) | Self::Mm(_) | Self::M(_) => Month(Default::default()),
+                Self::Week(_) | Self::Wk(_) | Self::Ww(_) => Week(Default::default()),
+                Self::Weekday(_) | Self::Dw(_) | Self::W(_) => Weekday(Default::default()),
+                Self::DayOfYear(_) | Self::Dy(_) | Self::Y(_) => DayOfYear(Default::default()),
+                Self::Day(_) | Self::Dd(_) | Self::D(_) => Day(Default::default()),
+                Self::Hour(_) | Self::Hh(_) => Hour(Default::default()),
+                Self::Minute(_) | Self::Mi(_) | Self::N(_) => Minute(Default::default()),
+                Self::Second(_) | Self::Ss(_) | Self::S(_) => Second(Default::default()),
+                Self::Millisecond(_) | Self::Ms(_) => Millisecond(Default::default()),
+                Self::Microsecond(_) | Self::Mcs(_) => Microsecond(Default::default()),
+                Self::Nanosecond(_) | Self::Ns(_) => Nanosecond(Default::default()),
+            }
+        }
+    }
 
     #[derive(Grammar)]
     #[tygr(name = "tsaddinterval")]
@@ -6205,11 +6398,6 @@ mod sugar {
         Convert(StringEqCI!("CONVERT"), Args<RRO>),
         DataLength(StringEqCI!("DATALENGTH"), Args<Scalx>),
         Date(StringEqCI!("DATE"), Args<Scalx>),
-        DateAdd(StringEqCI!("DATEADD"), Args<RRR<DatePart>>),
-        DateDiff(StringEqCI!("DATEDIFF"), Args<RRR<DatePart>>),
-        DateName(StringEqCI!("DATENAME"), Args<RR<DatePart>>),
-        DatePart(StringEqCI!("DATEPART"), Args<RR<DatePartPart>>),
-        DateTrunc(StringEqCI!("DATE_TRUNC"), Args<RR<DatePart>>),
         Day(StringEqCI!("DAY"), Args<Scalx>),
         Decode(StringEqCI!("DECODE"), Args1Plus),
         Embedding(StringEqCI!("EMBEDDING"), Args<RO>),
@@ -6265,39 +6453,6 @@ mod sugar {
         VectorCosine(StringEqCI!("VECTOR_COSINE"), Args<RR>),
         VectorDotProduct(StringEqCI!("VECTOR_DOT_PRODUCT"), Args<RR>),
         Year(StringEqCI!("YEAR"), Args<Scalx>),
-    }
-
-    pub type DatePart = OptionallyWrapped<DatePartCommon>;
-
-    #[derive(Grammar, Clone)]
-    #[tygr(name = "datepart_part")]
-    pub struct DatePartPart(pub OptionallyWrapped<DatePartPartRaw>);
-
-    #[derive(Grammar, Clone)]
-    #[tygr(inline)]
-    pub enum DatePartCommon {
-        Year(Either<StringEqCI!("YEAR"), Either<StringEqCI!("YYYY"), StringEqCI!("YY")>>),
-        Quarter(Either<StringEqCI!("QUARTER"), Either<StringEqCI!("QQ"), StringEqCI!("Q")>>),
-        Month(Either<StringEqCI!("MONTH"), Either<StringEqCI!("MM"), StringEqCI!("M")>>),
-        Week(Either<StringEqCI!("WEEK"), Either<StringEqCI!("WK"), StringEqCI!("WW")>>),
-        Weekday(Either<StringEqCI!("WEEKDAY"), Either<StringEqCI!("DW"), StringEqCI!("W")>>),
-        DayOfYear(Either<StringEqCI!("DAYOFYEAR"), Either<StringEqCI!("DY"), StringEqCI!("Y")>>),
-        Day(Either<StringEqCI!("DAY"), Either<StringEqCI!("DD"), StringEqCI!("D")>>),
-        Hour(Either<StringEqCI!("HOUR"), StringEqCI!("HH")>),
-        Minute(Either<StringEqCI!("MINUTE"), Either<StringEqCI!("MI"), StringEqCI!("N")>>),
-        Second(Either<StringEqCI!("SECOND"), Either<StringEqCI!("SS"), StringEqCI!("S")>>),
-        Millisecond(Either<StringEqCI!("MILLISECOND"), StringEqCI!("MS")>),
-        Microsecond(Either<StringEqCI!("MICROSECOND"), StringEqCI!("MCS")>),
-        Nanosecond(Either<StringEqCI!("NANOSECOND"), StringEqCI!("NS")>),
-        Literal(Literal),
-        HostVar(HostVar),
-    }
-
-    #[derive(Grammar, Clone)]
-    #[tygr(name = "datepart_part_raw")]
-    pub enum DatePartPartRaw {
-        SqlTimestamp(Either<StringEqCI!("SQLTIMESTAMP"), StringEqCI!("STS")>),
-        Common(DatePartCommon),
     }
 
     #[derive(Grammar, Clone)]
@@ -6383,11 +6538,11 @@ mod sugar {
         Substring(StringEqCI!("SUBSTRING"), SubstringArgs),
         TimestampAdd(
             StringEqCI!("TIMESTAMPADD"),
-            Args<RRR<OptionallyQuoted<TSAddInterval>>>,
+            Args<RRR<DoubleQuotable<TSAddInterval>>>,
         ),
         TimestampDiff(
             StringEqCI!("TIMESTAMPDIFF"),
-            Args<RRR<OptionallyQuoted<TSDiffInterval>>>,
+            Args<RRR<DoubleQuotable<TSDiffInterval>>>,
         ),
         Truncate(StringEqCI!("TRUNCATE"), Args<RR>),
         UCase(StringEqCI!("UCASE"), Args<Scalx>),
