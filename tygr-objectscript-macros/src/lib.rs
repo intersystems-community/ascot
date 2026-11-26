@@ -1,6 +1,7 @@
 //! `#[levels]` on the inline module of the SQL grammar emits it twice: `full`, every spelling IRIS
 //! accepts, and `core`, the same minus its syntactic sugar, with an impl of `Desugar` per unmarked
-//! struct and enum; fns, traits, macros, impls of `Desugar` and `#[sugar]` items go to `full` alone.
+//! struct and enum and per literal, a keyword's core copy being its declared, upper-case spelling;
+//! fns, traits, macros, impls of `Desugar` and `#[sugar]` items go to `full` alone.
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
@@ -346,7 +347,7 @@ impl Output {
             self.impls.push(quote! {
                 impl #desugar for #mac {
                     type Core = Self;
-                    fn desugar(&self) -> Self { ::core::clone::Clone::clone(self) }
+                    fn desugar(&self) -> Self { ::core::default::Default::default() }
                 }
             });
         }

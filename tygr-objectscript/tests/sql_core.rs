@@ -327,11 +327,7 @@ fn conditions_hold_their_operands() {
             Cond::Predicate {
                 predicate:
                     Predicate::Comparison {
-                        tail:
-                            Comparison::IsNull {
-                                null_kw: Negatable::Negated(..),
-                                ..
-                            },
+                        tail: Comparison::IsNull { not: Some(_), .. },
                         ..
                     },
                 ..
@@ -355,11 +351,7 @@ fn conditions_hold_their_operands() {
             Cond::Predicate {
                 predicate:
                     Predicate::Comparison {
-                        tail:
-                            Comparison::In {
-                                in_kw: Negatable::Negated(..),
-                                ..
-                            },
+                        tail: Comparison::In { not: Some(_), .. },
                         ..
                     },
                 ..

@@ -1650,9 +1650,10 @@ pub mod leveled {
 
     /// `{fn CONVERT(x, SQL_TYPE)}` and `{fn IFNULL(x, y)}`, which IRIS reads otherwise without the
     /// escape (CONVERT takes `SQL_TYPE` for a column, IFNULL(x, y) is NULL when x is not; measured on
-    /// 2026.2), and `{fn USER}`, whose niladic `USER` has no parentheses for the braces' comments.
+    /// 2026.2), and `{fn USER}`, whose niladic `USER` has no parentheses for the braces' comments; `fn`
+    /// is declared as ODBC spells the escape, so the core prints `{fn`.
     pub type ODBCOnly =
-        Wrap<(StringEq!("{"), Space, Kw!("FN"), Space1), ODBCOnlyFunc, (Space, StringEq!("}"))>;
+        Wrap<(StringEq!("{"), Space, Kw!("fn"), Space1), ODBCOnlyFunc, (Space, StringEq!("}"))>;
 
     #[derive(Grammar)]
     #[tygr(name = "odbc-only func")]
@@ -2077,28 +2078,8 @@ pub mod leveled {
 
     pub type NoIndex = Option<(Kw!("%NOINDEX"), Space)>;
 
-    pub type NotKw = Kw!("NOT");
-
-    /// A predicate's keyword or its negation, the keyword under the `NOT` the condition's impl adds.
-    #[derive(Grammar)]
-    #[tygr(inline)]
-    pub enum Negatable<K: Grammar> {
-        Plain(K),
-        #[sugar]
-        Negated(NotKw, Space1, K),
-    }
-
-    /// A negated keyword is the keyword; the condition's impl puts the `NOT` around the predicate.
-    impl<K: Grammar + Desugar> Desugar for NegatableSugar<'_, K>
-    where
-        K::Core: Grammar,
-    {
-        type Core = core::Negatable<K::Core>;
-        fn desugar(&self) -> Self::Core {
-            let Self::Negated(_, _, keyword) = self;
-            core::Negatable::Plain(keyword.desugar())
-        }
-    }
+    /// `NOT` before a predicate's keyword, which the condition's impl puts around the predicate in the core.
+    pub type Not = Option<(Kw!("NOT"), Space1)>;
 
     /// A keyword or clause read the same when omitted: spelled, or omitted and read as its default.
     #[derive(Grammar)]
@@ -2138,7 +2119,7 @@ pub mod leveled {
             quantifier: Quantifier,
         },
         #[sugar]
-        In(Negatable<Kw!("IN")>),
+        In { not: Not, in_kw: Kw!("IN") },
     }
 
     /// `IN (subquery)` is `= ANY (subquery)`; a `NOT IN` is `NOT (... = ANY ...)` by the condition's impl.
@@ -2188,11 +2169,11 @@ pub mod leveled {
                 noindex: noindex.desugar(),
                 predicate: predicate.desugar(),
             };
-            let Some(not_kw) = negation(predicate) else {
+            if !negation(predicate) {
                 return plain;
-            };
+            }
             core::Cond::Not {
-                not_kw: (not_kw, Space::blank()),
+                not_kw: (Default::default(), Space::blank()),
                 condition: Box::new(Src::synthesized(core::Cond::Paren(Wrap::new(
                     (Default::default(), Space::default()),
                     Box::new(core::Prdct(VecSep::one(core::And(VecSep::one(
@@ -2204,32 +2185,25 @@ pub mod leveled {
         }
     }
 
-    /// The `NOT` of the predicate's negated keyword.
-    fn negation(predicate: &Predicate) -> Option<NotKw> {
+    /// Whether the predicate's keyword is negated.
+    fn negation(predicate: &Predicate) -> bool {
         use Comparison::*;
         let Predicate::Comparison { tail, .. } = predicate else {
-            return None;
+            return false;
         };
         match tail {
-            IsNull { null_kw, .. } => negated(null_kw),
-            Between { between_kw, .. } => negated(between_kw),
-            Like { like_kw, .. } => negated(like_kw),
-            Matches { matches_kw, .. } => negated(matches_kw),
-            In { in_kw, .. } => negated(in_kw),
-            InList { inlist_kw, .. } => negated(inlist_kw),
-            IsJSON { json_kw, .. } => negated(json_kw),
-            Query {
-                op: QuantifiedOp::In(in_kw),
+            IsNull { not, .. }
+            | Between { not, .. }
+            | Like { not, .. }
+            | Matches { not, .. }
+            | In { not, .. }
+            | InList { not, .. }
+            | IsJSON { not, .. }
+            | Query {
+                op: QuantifiedOp::In { not, .. },
                 ..
-            } => negated(in_kw),
-            _ => None,
-        }
-    }
-
-    fn negated<K: Grammar>(keyword: &Negatable<K>) -> Option<NotKw> {
-        match keyword {
-            Negatable::Negated(not, ..) => Some(*not),
-            Negatable::Plain(_) => None,
+            } => not.is_some(),
+            _ => false,
         }
     }
 
@@ -2288,21 +2262,29 @@ pub mod leveled {
         },
         IsNull {
             is_kw: (Kw!("IS"), Space1),
-            null_kw: Negatable<Kw!("NULL")>,
+            #[sugar]
+            not: Not,
+            null_kw: Kw!("NULL"),
         },
         Between {
-            between_kw: Negatable<(Kw!("BETWEEN"), Space)>,
+            #[sugar]
+            not: Not,
+            between_kw: (Kw!("BETWEEN"), Space),
             lower: Scalx,
             and_kw: (Space, Kw!("AND"), Space),
             upper: Scalx,
         },
         Like {
-            like_kw: Negatable<(Kw!("LIKE"), Space)>,
+            #[sugar]
+            not: Not,
+            like_kw: (Kw!("LIKE"), Space),
             pattern: Scalx,
             escape: Option<(Space, EscapeScalx)>,
         },
         Matches {
-            matches_kw: Negatable<(Kw!("%MATCHES"), Space)>,
+            #[sugar]
+            not: Not,
+            matches_kw: (Kw!("%MATCHES"), Space),
             pattern: Scalx,
             escape: Option<(Space, EscapeScalx)>,
         },
@@ -2312,11 +2294,15 @@ pub mod leveled {
             expr: SQLSubquery,
         },
         In {
-            in_kw: Negatable<(Kw!("IN"), Space)>,
+            #[sugar]
+            not: Not,
+            in_kw: (Kw!("IN"), Space),
             list: Parenthesized<VecSep<Scalx, ArgSep>>,
         },
         InList {
-            inlist_kw: Negatable<(Kw!("%INLIST"), Space)>,
+            #[sugar]
+            not: Not,
+            inlist_kw: (Kw!("%INLIST"), Space),
             list_expr: Scalx,
             size_hint: Option<(Space, SizeHint)>,
         },
@@ -2332,7 +2318,9 @@ pub mod leveled {
         IsJSON {
             format: Option<(Kw!("FORMAT"), Space1, JSONRepresentation, Space1)>,
             is_kw: (Kw!("IS"), Space1),
-            json_kw: Negatable<Kw!("JSON")>,
+            #[sugar]
+            not: Not,
+            json_kw: Kw!("JSON"),
             constraint: Option<(Space1, JSONPredicateTypeConstraint)>,
         },
         Contains {
@@ -2577,25 +2565,25 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "from_opt")]
     pub enum FromOpt {
-        InOrder(Kw!("%inorder")),
-        Full(Kw!("%full")),
-        DbugFull(Kw!("%dbugfull")),
-        Flatten(Kw!("%flatten")),
-        NoBSL(Kw!("%nobsl")),
-        NoFixedStats(Kw!("%nofixedstats"), Space, TableRefs),
-        NoFlatten(Kw!("%noflatten")),
-        NoMerge(Kw!("%nomerge")),
-        NoReduce(Kw!("%noreduce")),
-        NoSVSO(Kw!("%nosvso")),
-        NoTopOpt(Kw!("%notopopt")),
-        IgnoreIndices(Kw!("%ignoreindices"), Space, IndexRefs),
-        IgnoreIndex(Kw!("%ignoreindex"), Space, IndexRefs),
-        StartTable(Kw!("%starttable")),
-        AllIndex(Kw!("%allindex")),
-        NoUnionOrOpt(Kw!("%nounionoropt")),
-        FirstTable(Kw!("%firsttable"), Space, Ident),
-        Parallel(Kw!("%parallel")),
-        NoParallel(Kw!("%noparallel")),
+        InOrder(Kw!("%INORDER")),
+        Full(Kw!("%FULL")),
+        DbugFull(Kw!("%DBUGFULL")),
+        Flatten(Kw!("%FLATTEN")),
+        NoBSL(Kw!("%NOBSL")),
+        NoFixedStats(Kw!("%NOFIXEDSTATS"), Space, TableRefs),
+        NoFlatten(Kw!("%NOFLATTEN")),
+        NoMerge(Kw!("%NOMERGE")),
+        NoReduce(Kw!("%NOREDUCE")),
+        NoSVSO(Kw!("%NOSVSO")),
+        NoTopOpt(Kw!("%NOTOPOPT")),
+        IgnoreIndices(Kw!("%IGNOREINDICES"), Space, IndexRefs),
+        IgnoreIndex(Kw!("%IGNOREINDEX"), Space, IndexRefs),
+        StartTable(Kw!("%STARTTABLE")),
+        AllIndex(Kw!("%ALLINDEX")),
+        NoUnionOrOpt(Kw!("%NOUNIONOROPT")),
+        FirstTable(Kw!("%FIRSTTABLE"), Space, Ident),
+        Parallel(Kw!("%PARALLEL")),
+        NoParallel(Kw!("%NOPARALLEL")),
     }
 
     #[derive(Grammar)]
@@ -2943,7 +2931,7 @@ pub mod leveled {
         Union {
             union_kw: Kw!("UNION"),
             all: Option<(Space1, Kw!("ALL"))>,
-            parallel: Option<(Space1, Kw!("%parallel"))>,
+            parallel: Option<(Space1, Kw!("%PARALLEL"))>,
         },
         Intersect(Kw!("INTERSECT")),
         Except(Kw!("EXCEPT")),
