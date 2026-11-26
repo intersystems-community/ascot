@@ -18,6 +18,11 @@ use tygr::*;
 use crate::convert::VecSep;
 use crate::cos;
 
+/// A keyword, not the start of a longer word: IRIS reads `NOTBETWEEN`, `BETWEEN1`, `TOP1` and `%NOINDEXa` as names.
+macro_rules! Kw {
+    ($word:literal) => { (StringEqCI!($word), NotFollowedBy<WordEnd>) };
+}
+
 pub mod desugar;
 
 pub use full::*;
@@ -429,6 +434,7 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
 #[tygr(name = "identifier start")]
 pub enum IdentifierStart {
     SimpleLatin(IsSimpleLatinLetter),
+    NonAscii(IsNonAsciiLetter),
     P(StringEq!("%")),
     U(StringEq!("_")),
 }
@@ -438,10 +444,17 @@ pub enum IdentifierStart {
 pub enum IdentifierPart {
     Digit(IsDigit),
     SimpleLatin(IsSimpleLatinLetter),
+    NonAscii(IsNonAsciiLetter),
     H(StringEq!("#")),
     A(StringEq!("@")),
     U(StringEq!("_")),
+    D(StringEq!("$")),
 }
+
+/// What a keyword must not run into; hidden, so a keyword's EBNF is the word alone.
+#[derive(Grammar, Clone)]
+#[tygr(hidden)]
+pub struct WordEnd(IdentifierPart);
 
 #[derive(Grammar, Clone)]
 #[tygr(inline)]
@@ -450,8 +463,17 @@ pub struct IdentifierStruct {
     rest: Vec<IdentifierPart>,
 }
 
+/// 2026.2 reads `a$b`, `ñ` and `Яа` as names and refuses `_` alone.
 #[derive(Grammar, Clone)]
+#[tygr(validated)]
 pub struct Identifier(Raw<IdentifierStruct>);
+
+impl Validate for Identifier {
+    const REQUIREMENT: &'static str = "not be underscores alone";
+    fn validate(&self) -> bool {
+        self.0.as_str().chars().any(|ch| ch != '_')
+    }
+}
 
 #[derive(Grammar, Clone)]
 #[tygr(inline)]
@@ -499,7 +521,6 @@ pub enum StdCharacterRepresentation {
 #[tygr(name = "string literal")]
 pub enum StringLiteral {
     SQLEmpty(StringEq!("''")),
-    COSEmpty(StringEq!("\"\"")),
     Std(Raw<StdStringLiteral>),
 }
 
@@ -552,11 +573,23 @@ pub enum Literal {
 #[tygr(name = "parameter marker")]
 pub struct ParameterMarker(pub StringEq!("?"));
 
+/// 2026.2 refuses `:i%Prop()`, an instance variable with an empty subscript list, and takes `:arr()`.
 #[derive(Grammar, Clone)]
-#[tygr(name = "host var")]
+#[tygr(name = "host var", validated)]
 pub struct HostVar {
     pub host_ref: HostRef,
     pub subs: Option<SubList>,
+}
+
+impl Validate for HostVar {
+    const REQUIREMENT: &'static str = "subscript an instance variable with something";
+    fn validate(&self) -> bool {
+        !(matches!(self.host_ref, HostRef::InstanceVariableHostRef(_))
+            && self
+                .subs
+                .as_ref()
+                .is_some_and(|subs| subs.wrapped.is_none()))
+    }
 }
 
 /// A part in parentheses, blanks allowed within.
@@ -601,7 +634,15 @@ pub enum HostRef {
 
 #[derive(Grammar, Clone)]
 #[tygr(name = "host identifier")]
-pub struct HostIdentifier(Raw<(IdentifierStart, Vec<HostIdentifierPart>)>);
+pub struct HostIdentifier(Raw<(HostIdentifierStart, Vec<HostIdentifierPart>)>);
+
+/// A letter or `%`: 2026.2 refuses `:_x` and `:1x`.
+#[derive(Grammar, Clone)]
+pub enum HostIdentifierStart {
+    SimpleLatin(IsSimpleLatinLetter),
+    Unicode(IsNonAsciiLetter),
+    P(StringEq!("%")),
+}
 
 #[derive(Grammar, Clone)]
 #[tygr(name = "host identifier part")]
@@ -820,7 +861,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "cmp op")]
     pub enum CmpOp {
-        StartsWith(StringEqCI!("%STARTSWITH")),
+        StartsWith(Kw!("%STARTSWITH")),
         Eq(StringEq!("=")),
         Ne(NotEqualsOperation),
         Ord(OrderPredicate),
@@ -868,12 +909,12 @@ pub mod leveled {
         OdbcEscape(Box<ODBCEscape>),
         Scalx(Parenthesized<Box<Scalx>>),
         Query(SQLSubquery),
-        Niladic(Niladic, NotFollowedBy<IdentifierPart>),
+        Niladic(Niladic),
         Call(Call),
         Column(Colmn),
         SpecialSystemVariable(SpecialSystemVariable),
         HostVar(HostVar),
-        Null(StringEqCI!("NULL")),
+        Null(Kw!("NULL")),
     }
 
     /// A scalar function is the call by its name, `%SQLUPPER x` the call `%SQLUPPER(x)`, `%TRUNCATE(x, n)`
@@ -924,10 +965,10 @@ pub mod leveled {
             Year;
             Pi CurDate CurTime Database Now;
             ODBCFunc::TimestampAdd(kw, a) => {
-                core::Term::Builtin(Box::new(core::Builtin::TimestampAdd(*kw, a.desugar())))
+                core::Term::Builtin(Box::new(core::Builtin::TimestampAdd(kw.desugar(), a.desugar())))
             }
             ODBCFunc::TimestampDiff(kw, a) => {
-                core::Term::Builtin(Box::new(core::Builtin::TimestampDiff(*kw, a.desugar())))
+                core::Term::Builtin(Box::new(core::Builtin::TimestampDiff(kw.desugar(), a.desugar())))
             }
         )
     }
@@ -993,35 +1034,35 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "special system variable")]
     pub enum SpecialSystemVariable {
-        Horolog(StringEqCI!("$HOROLOG")),
+        Horolog(Kw!("$HOROLOG")),
         #[sugar]
-        H(StringEqCI!("$H")),
-        Job(StringEqCI!("$JOB")),
+        H(Kw!("$H")),
+        Job(Kw!("$JOB")),
         #[sugar]
-        J(StringEqCI!("$J")),
-        Namespace(StringEqCI!("$NAMESPACE")),
-        TLevel(StringEqCI!("$TLEVEL")),
+        J(Kw!("$J")),
+        Namespace(Kw!("$NAMESPACE")),
+        TLevel(Kw!("$TLEVEL")),
         #[sugar]
-        TL(StringEqCI!("$TL")),
-        Username(StringEqCI!("$USERNAME")),
-        ZHorolog(StringEqCI!("$ZHOROLOG")),
+        TL(Kw!("$TL")),
+        Username(Kw!("$USERNAME")),
+        ZHorolog(Kw!("$ZHOROLOG")),
         #[sugar]
-        ZH(StringEqCI!("$ZH")),
-        ZJob(StringEqCI!("$ZJOB")),
+        ZH(Kw!("$ZH")),
+        ZJob(Kw!("$ZJOB")),
         #[sugar]
-        ZJ(StringEqCI!("$ZJ")),
+        ZJ(Kw!("$ZJ")),
         #[sugar]
-        ZNspace(StringEqCI!("$ZNSPACE")),
-        ZPi(StringEqCI!("$ZPI")),
-        ZTimestamp(StringEqCI!("$ZTIMESTAMP")),
-        ZTimezone(StringEqCI!("$ZTIMEZONE")),
+        ZNspace(Kw!("$ZNSPACE")),
+        ZPi(Kw!("$ZPI")),
+        ZTimestamp(Kw!("$ZTIMESTAMP")),
+        ZTimezone(Kw!("$ZTIMEZONE")),
         #[sugar]
-        ZTS(StringEqCI!("$ZTS")),
+        ZTS(Kw!("$ZTS")),
         #[sugar]
-        ZTZ(StringEqCI!("$ZTZ")),
-        ZVersion(StringEqCI!("$ZVERSION")),
+        ZTZ(Kw!("$ZTZ")),
+        ZVersion(Kw!("$ZVERSION")),
         #[sugar]
-        ZV(StringEqCI!("$ZV")),
+        ZV(Kw!("$ZV")),
     }
 
     /// `$H` is `$HOROLOG`, and so on: an alias is its full name.
@@ -1055,11 +1096,11 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "niladic")]
     pub enum Niladic {
-        CurrentDate(StringEqCI!("CURRENT_DATE")),
-        CurrentTimestamp(StringEqCI!("CURRENT_TIMESTAMP")),
-        CurrentTime(StringEqCI!("CURRENT_TIME")),
-        SysDate(StringEqCI!("SYSDATE")),
-        User(StringEqCI!("USER")),
+        CurrentDate(Kw!("CURRENT_DATE")),
+        CurrentTimestamp(Kw!("CURRENT_TIMESTAMP")),
+        CurrentTime(Kw!("CURRENT_TIME")),
+        SysDate(Kw!("SYSDATE")),
+        User(Kw!("USER")),
     }
 
     #[derive(Grammar)]
@@ -1088,10 +1129,10 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "case")]
     pub struct Case {
-        pub case_kw: StringEqCI!("CASE"),
+        pub case_kw: Kw!("CASE"),
         pub body: CaseBody,
         pub else_clause: Implied<SQLElseClause>,
-        pub end_kw: (Space, StringEqCI!("END")),
+        pub end_kw: (Space, Kw!("END")),
     }
 
     /// Searched, each WHEN a condition, or simple, each WHEN a value the operand is compared to; 2026.2
@@ -1102,9 +1143,9 @@ pub mod leveled {
         Simple(Space, Scalx, Vec<(Space, When<Scalx>)>),
     }
 
-    pub type WhenKw = StringEqCI!("WHEN");
+    pub type WhenKw = Kw!("WHEN");
 
-    pub type ThenKw = StringEqCI!("THEN");
+    pub type ThenKw = Kw!("THEN");
 
     #[derive(Grammar)]
     #[tygr(inline)]
@@ -1119,7 +1160,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct SQLElseClause {
-        pub else_kw: (StringEqCI!("ELSE"), Space),
+        pub else_kw: (Kw!("ELSE"), Space),
         pub result: Scalx,
     }
 
@@ -1138,7 +1179,7 @@ pub mod leveled {
     #[tygr(inline)]
     pub struct SQLCastExpression {
         pub expr: Scalx,
-        pub as_kw: (Space, StringEqCI!("AS"), Space1),
+        pub as_kw: (Space, Kw!("AS"), Space1),
         pub cast_type: CastType,
     }
 
@@ -1230,68 +1271,65 @@ pub mod leveled {
         XmlConcat(XMLConcat),
         XmlElement(XMLElement),
         XmlForest(XMLForest),
-        Cast(StringEqCI!("CAST"), Args<Box<SQLCastExpression>>),
-        DateAdd(StringEqCI!("DATEADD"), Args<RRR<DatePart>>),
-        DateDiff(StringEqCI!("DATEDIFF"), Args<RRR<DatePart>>),
-        DateName(StringEqCI!("DATENAME"), Args<RR<DatePart>>),
-        DatePart(StringEqCI!("DATEPART"), Args<RR<DatePartPart>>),
-        DateTrunc(StringEqCI!("DATE_TRUNC"), Args<RR<DatePart>>),
-        Convert(StringEqCI!("CONVERT"), Args<RR<Scalx, SQLConvertFunc>>),
-        JSONArray(StringEqCI!("JSON_ARRAY"), SQLJSONArrayArgs),
-        JSONObject(StringEqCI!("JSON_OBJECT"), SQLJSONObjectArgs),
-        Predict(StringEqCI!("PREDICT"), Args<SQLPredictArgs>),
-        Probability(StringEqCI!("PROBABILITY"), Args<SQLProbabilityArgs>),
-        SearchIndex(StringEqCI!("SEARCH_INDEX"), Args<SQLSearchIndexArgs>),
+        Cast(Kw!("CAST"), Args<Box<SQLCastExpression>>),
+        DateAdd(Kw!("DATEADD"), Args<RRR<DatePart>>),
+        DateDiff(Kw!("DATEDIFF"), Args<RRR<DatePart>>),
+        DateName(Kw!("DATENAME"), Args<RR<DatePart>>),
+        DatePart(Kw!("DATEPART"), Args<RR<DatePartPart>>),
+        DateTrunc(Kw!("DATE_TRUNC"), Args<RR<DatePart>>),
+        Convert(Kw!("CONVERT"), Args<RR<Scalx, SQLConvertFunc>>),
+        JSONArray(Kw!("JSON_ARRAY"), SQLJSONArrayArgs),
+        JSONObject(Kw!("JSON_OBJECT"), SQLJSONObjectArgs),
+        Predict(Kw!("PREDICT"), Args<SQLPredictArgs>),
+        Probability(Kw!("PROBABILITY"), Args<SQLProbabilityArgs>),
+        SearchIndex(Kw!("SEARCH_INDEX"), Args<SQLSearchIndexArgs>),
         TimestampAdd(
-            StringEqCI!("TIMESTAMPADD"),
+            Kw!("TIMESTAMPADD"),
             Args<RRR<DoubleQuotable<TSAddInterval>>>,
         ),
         TimestampDiff(
-            StringEqCI!("TIMESTAMPDIFF"),
+            Kw!("TIMESTAMPDIFF"),
             Args<RRR<DoubleQuotable<TSDiffInterval>>>,
         ),
-        ToVector(
-            StringEqCI!("TO_VECTOR"),
-            Args<ROO<Scalx, VectorDatyp, Integer>>,
-        ),
-        Trim(StringEqCI!("TRIM"), Args<TrimArgs>),
+        ToVector(Kw!("TO_VECTOR"), Args<ROO<Scalx, VectorDatyp, Integer>>),
+        Trim(Kw!("TRIM"), Args<TrimArgs>),
         Odbc(ODBCOnly),
-        CurrentTimestamp(StringEqCI!("CURRENT_TIMESTAMP"), Args<Scalx>),
-        CurrentTime(StringEqCI!("CURRENT_TIME"), Args<Scalx>),
-        DollarExtract(StringEqCI!("$EXTRACT"), Args<ROO>),
-        DollarFind(StringEqCI!("$FIND"), Args<ROO>),
-        DollarFNumber(StringEqCI!("$FNUMBER"), Args<ROO>),
-        DollarJustify(StringEqCI!("$JUSTIFY"), Args<RRO>),
-        DollarLength(StringEqCI!("$LENGTH"), Args<RO>),
-        DollarList(StringEqCI!("$LIST"), Args<ROO>),
-        DollarListBuild(StringEqCI!("$LISTBUILD"), ArgsN),
-        DollarListData(StringEqCI!("$LISTDATA"), Args<RO>),
-        DollarListFind(StringEqCI!("$LISTFIND"), Args<RRO>),
-        DollarListFromString(StringEqCI!("$LISTFROMSTRING"), Args<RO>),
-        DollarListGet(StringEqCI!("$LISTGET"), Args<ROO>),
-        DollarListLength(StringEqCI!("$LISTLENGTH"), Args<Scalx>),
-        DollarListSame(StringEqCI!("$LISTSAME"), Args<RR>),
-        DollarListToString(StringEqCI!("$LISTTOSTRING"), Args<RO>),
-        DollarMvFmt(StringEqCI!("$MVFMT"), Args<RR>),
-        DollarMvFmts(StringEqCI!("$MVFMTS"), Args<RR>),
-        DollarMvIconv(StringEqCI!("$MVICONV"), Args<RR>),
-        DollarMvIconvs(StringEqCI!("$MVICONVS"), Args<RR>),
-        DollarMvOconv(StringEqCI!("$MVOCONV"), Args<RR>),
-        DollarMvOconvs(StringEqCI!("$MVOCONVS"), Args<RR>),
-        DollarPiece(StringEqCI!("$PIECE"), Args<RROO>),
-        DollarTranslate(StringEqCI!("$TRANSLATE"), Args<RRO>),
-        TSqlDbName(StringEqCI!("$TSQL_DB_NAME"), Args<()>),
-        TSqlError(StringEqCI!("$TSQL_ERROR"), Args<()>),
-        TSqlFetchStatus(StringEqCI!("$TSQL_FETCH_STATUS"), Args<()>),
-        TSqlGetUtcDate(StringEqCI!("$TSQL_GETUTCDATE"), Args<()>),
-        TSqlHostName(StringEqCI!("$TSQL_HOST_NAME"), Args<()>),
-        TSqlLockTimeout(StringEqCI!("$TSQL_LOCK_TIMEOUT"), Args<()>),
-        TSqlNestLevel(StringEqCI!("$TSQL_NESTLEVEL"), Args<()>),
-        TSqlServerName(StringEqCI!("$TSQL_SERVERNAME"), Args<()>),
-        TSqlSpid(StringEqCI!("$TSQL_SPID"), Args<()>),
-        TSqlSqlStatus(StringEqCI!("$TSQL_SQLSTATUS"), Args<()>),
-        TSqlTranCount(StringEqCI!("$TSQL_TRANCOUNT"), Args<()>),
-        TSqlVersion(StringEqCI!("$TSQL_VERSION"), Args<()>),
+        CurrentTimestamp(Kw!("CURRENT_TIMESTAMP"), Args<Scalx>),
+        CurrentTime(Kw!("CURRENT_TIME"), Args<Scalx>),
+        DollarExtract(Kw!("$EXTRACT"), Args<ROO>),
+        DollarFind(Kw!("$FIND"), Args<ROO>),
+        DollarFNumber(Kw!("$FNUMBER"), Args<ROO>),
+        DollarJustify(Kw!("$JUSTIFY"), Args<RRO>),
+        DollarLength(Kw!("$LENGTH"), Args<RO>),
+        DollarList(Kw!("$LIST"), Args<ROO>),
+        DollarListBuild(Kw!("$LISTBUILD"), ArgsN),
+        DollarListData(Kw!("$LISTDATA"), Args<RO>),
+        DollarListFind(Kw!("$LISTFIND"), Args<RRO>),
+        DollarListFromString(Kw!("$LISTFROMSTRING"), Args<RO>),
+        DollarListGet(Kw!("$LISTGET"), Args<ROO>),
+        DollarListLength(Kw!("$LISTLENGTH"), Args<Scalx>),
+        DollarListSame(Kw!("$LISTSAME"), Args<RR>),
+        DollarListToString(Kw!("$LISTTOSTRING"), Args<RO>),
+        DollarMvFmt(Kw!("$MVFMT"), Args<RR>),
+        DollarMvFmts(Kw!("$MVFMTS"), Args<RR>),
+        DollarMvIconv(Kw!("$MVICONV"), Args<RR>),
+        DollarMvIconvs(Kw!("$MVICONVS"), Args<RR>),
+        DollarMvOconv(Kw!("$MVOCONV"), Args<RR>),
+        DollarMvOconvs(Kw!("$MVOCONVS"), Args<RR>),
+        DollarPiece(Kw!("$PIECE"), Args<RROO>),
+        DollarTranslate(Kw!("$TRANSLATE"), Args<RRO>),
+        TSqlDbName(Kw!("$TSQL_DB_NAME"), Args<()>),
+        TSqlError(Kw!("$TSQL_ERROR"), Args<()>),
+        TSqlFetchStatus(Kw!("$TSQL_FETCH_STATUS"), Args<()>),
+        TSqlGetUtcDate(Kw!("$TSQL_GETUTCDATE"), Args<()>),
+        TSqlHostName(Kw!("$TSQL_HOST_NAME"), Args<()>),
+        TSqlLockTimeout(Kw!("$TSQL_LOCK_TIMEOUT"), Args<()>),
+        TSqlNestLevel(Kw!("$TSQL_NESTLEVEL"), Args<()>),
+        TSqlServerName(Kw!("$TSQL_SERVERNAME"), Args<()>),
+        TSqlSpid(Kw!("$TSQL_SPID"), Args<()>),
+        TSqlSqlStatus(Kw!("$TSQL_SQLSTATUS"), Args<()>),
+        TSqlTranCount(Kw!("$TSQL_TRANCOUNT"), Args<()>),
+        TSqlVersion(Kw!("$TSQL_VERSION"), Args<()>),
     }
 
     #[derive(Grammar)]
@@ -1311,11 +1349,11 @@ pub mod leveled {
     /// `BOTH ' ' FROM` in the core: a lone spec trims blanks, lone chars both ends.
     #[derive(Grammar)]
     pub enum TrimHow {
-        SpecChars(TrimSpec, Space, Scalx, (Space, StringEqCI!("FROM"), Space)),
+        SpecChars(TrimSpec, Space, Scalx, (Space, Kw!("FROM"), Space)),
         #[sugar]
-        Spec(TrimSpec, Space, Option<(StringEqCI!("FROM"), Space)>),
+        Spec(TrimSpec, Space, Option<(Kw!("FROM"), Space)>),
         #[sugar]
-        Chars(Option<(Scalx, Space, StringEqCI!("FROM"), Space)>),
+        Chars(Option<(Scalx, Space, Kw!("FROM"), Space)>),
     }
 
     /// `TRIM(LEADING FROM x)` and `TRIM(LEADING x)` are `TRIM(LEADING ' ' FROM x)`, `TRIM(c FROM x)` is
@@ -1343,9 +1381,9 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum TrimSpec {
-        Leading(StringEqCI!("LEADING")),
-        Trailing(StringEqCI!("TRAILING")),
-        Both(StringEqCI!("BOTH")),
+        Leading(Kw!("LEADING")),
+        Trailing(Kw!("TRAILING")),
+        Both(Kw!("BOTH")),
     }
 
     #[derive(Grammar)]
@@ -1361,10 +1399,10 @@ pub mod leveled {
     pub struct SQLPredictArgs {
         pub model: ModelName,
         pub use_clause: Option<(Space, PredictProbabilityUse)>,
-        pub with_clause: Option<((Space, StringEqCI!("WITH"), Space), PredictWith)>,
+        pub with_clause: Option<((Space, Kw!("WITH"), Space), PredictWith)>,
     }
 
-    pub type PredictProbabilityUse = Prefix<(StringEqCI!("USE"), Space), TrainedModelName>;
+    pub type PredictProbabilityUse = Prefix<(Kw!("USE"), Space), TrainedModelName>;
 
     #[derive(Grammar)]
     #[tygr(name = "trained-model-name")]
@@ -1390,8 +1428,8 @@ pub mod leveled {
     pub struct SQLProbabilityArgs {
         pub model: ModelName,
         pub use_clause: Option<(Space, PredictProbabilityUse)>,
-        pub for_clause: Option<(Space, Prefix<(StringEqCI!("FOR"), Space), Scalx>)>,
-        pub with_clause: Option<((Space, StringEqCI!("WITH"), Space), PredictWith)>,
+        pub for_clause: Option<(Space, Prefix<(Kw!("FOR"), Space), Scalx>)>,
+        pub with_clause: Option<((Space, Kw!("WITH"), Space), PredictWith)>,
     }
 
     pub type SQLJSONArrayArgs =
@@ -1409,24 +1447,24 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "JSON null clause")]
     pub struct JSONNullClause(
-        pub Either<StringEqCI!("NULL"), StringEqCI!("ABSENT")>,
+        pub Either<Kw!("NULL"), Kw!("ABSENT")>,
         pub Space1,
-        pub StringEqCI!("ON"),
+        pub Kw!("ON"),
         pub Space1,
-        pub StringEqCI!("NULL"),
+        pub Kw!("NULL"),
     );
 
     #[derive(Grammar)]
     #[tygr(name = "xmlElement")]
     pub struct XMLElement {
-        pub keyword: StringEqCI!("XMLELEMENT"),
+        pub keyword: Kw!("XMLELEMENT"),
         pub args: Args<(Option<SQLXmlElementName>, Space, VecSep<XMLValue, ArgSep>)>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum SQLXmlElementName {
-        Name(StringEqCI!("NAME"), Option<(Space, Ident)>),
+        Name(Kw!("NAME"), Option<(Space, Ident)>),
         Ident(Ident),
     }
 
@@ -1454,7 +1492,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "xmlAttributes")]
     pub struct XMLAttributes {
-        pub keyword: StringEqCI!("XMLATTRIBUTES"),
+        pub keyword: Kw!("XMLATTRIBUTES"),
         pub attrs: Args<VecSep<SQLXmlAttribute, ArgSep>>,
     }
 
@@ -1462,20 +1500,20 @@ pub mod leveled {
     #[tygr(inline)]
     pub struct SQLXmlAttribute {
         pub expr: Scalx,
-        pub alias: Option<((Space, StringEqCI!("AS"), Space), Ident)>,
+        pub alias: Option<((Space, Kw!("AS"), Space), Ident)>,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "xmlForest")]
     pub struct XMLForest {
-        pub keyword: StringEqCI!("XMLFOREST"),
+        pub keyword: Kw!("XMLFOREST"),
         pub items: Args<VecSep<SQLXmlAttribute, ArgSep>>,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "xmlConcat")]
     pub struct XMLConcat {
-        pub keyword: StringEqCI!("XMLCONCAT"),
+        pub keyword: Kw!("XMLCONCAT"),
         pub values: Args<VecSep<XMLValue2, ArgSep>>,
     }
 
@@ -1488,18 +1526,15 @@ pub mod leveled {
     /// `{fn CONVERT(x, SQL_TYPE)}` and `{fn IFNULL(x, y)}`, which IRIS reads otherwise without the
     /// escape (CONVERT takes `SQL_TYPE` for a column, IFNULL(x, y) is NULL when x is not; measured on
     /// 2026.2), and `{fn USER}`, whose niladic `USER` has no parentheses for the braces' comments.
-    pub type ODBCOnly = Wrap<
-        (StringEq!("{"), Space, StringEqCI!("FN"), Space1),
-        ODBCOnlyFunc,
-        (Space, StringEq!("}")),
-    >;
+    pub type ODBCOnly =
+        Wrap<(StringEq!("{"), Space, Kw!("FN"), Space1), ODBCOnlyFunc, (Space, StringEq!("}"))>;
 
     #[derive(Grammar)]
     #[tygr(name = "odbc-only func")]
     pub enum ODBCOnlyFunc {
-        Convert(StringEqCI!("CONVERT"), Args<RR<Scalx, SQLConvertFunc>>),
-        IfNull(StringEqCI!("IFNULL"), Args<RR>),
-        User(StringEqCI!("USER"), Option<StringEq!("()")>),
+        Convert(Kw!("CONVERT"), Args<RR<Scalx, SQLConvertFunc>>),
+        IfNull(Kw!("IFNULL"), Args<RR>),
+        User(Kw!("USER"), Option<StringEq!("()")>),
     }
 
     pub type DQuote = StringEq!("\"");
@@ -1587,9 +1622,9 @@ pub mod leveled {
     #[derive(Grammar)]
     #[sugar]
     pub enum DatePartPartRaw {
-        SqlTimestamp(StringEqCI!("SQLTIMESTAMP")),
+        SqlTimestamp(Kw!("SQLTIMESTAMP")),
         #[sugar]
-        Sts(StringEqCI!("STS")),
+        Sts(Kw!("STS")),
         Common(DatePartCommon),
     }
 
@@ -1610,63 +1645,63 @@ pub mod leveled {
     #[derive(Grammar)]
     #[sugar]
     pub enum DatePartCommon {
-        Year(StringEqCI!("YEAR")),
-        Quarter(StringEqCI!("QUARTER")),
-        Month(StringEqCI!("MONTH")),
-        Weekday(StringEqCI!("WEEKDAY")),
-        Week(StringEqCI!("WEEK")),
-        DayOfYear(StringEqCI!("DAYOFYEAR")),
-        Day(StringEqCI!("DAY")),
-        Hour(StringEqCI!("HOUR")),
-        Minute(StringEqCI!("MINUTE")),
-        Second(StringEqCI!("SECOND")),
-        Millisecond(StringEqCI!("MILLISECOND")),
-        Microsecond(StringEqCI!("MICROSECOND")),
-        Nanosecond(StringEqCI!("NANOSECOND")),
+        Year(Kw!("YEAR")),
+        Quarter(Kw!("QUARTER")),
+        Month(Kw!("MONTH")),
+        Weekday(Kw!("WEEKDAY")),
+        Week(Kw!("WEEK")),
+        DayOfYear(Kw!("DAYOFYEAR")),
+        Day(Kw!("DAY")),
+        Hour(Kw!("HOUR")),
+        Minute(Kw!("MINUTE")),
+        Second(Kw!("SECOND")),
+        Millisecond(Kw!("MILLISECOND")),
+        Microsecond(Kw!("MICROSECOND")),
+        Nanosecond(Kw!("NANOSECOND")),
         #[sugar]
-        Yyyy(StringEqCI!("YYYY")),
+        Yyyy(Kw!("YYYY")),
         #[sugar]
-        Yy(StringEqCI!("YY")),
+        Yy(Kw!("YY")),
         #[sugar]
-        Qq(StringEqCI!("QQ")),
+        Qq(Kw!("QQ")),
         #[sugar]
-        Mm(StringEqCI!("MM")),
+        Mm(Kw!("MM")),
         #[sugar]
-        Wk(StringEqCI!("WK")),
+        Wk(Kw!("WK")),
         #[sugar]
-        Ww(StringEqCI!("WW")),
+        Ww(Kw!("WW")),
         #[sugar]
-        Dw(StringEqCI!("DW")),
+        Dw(Kw!("DW")),
         #[sugar]
-        Dy(StringEqCI!("DY")),
+        Dy(Kw!("DY")),
         #[sugar]
-        Dd(StringEqCI!("DD")),
+        Dd(Kw!("DD")),
         #[sugar]
-        Hh(StringEqCI!("HH")),
+        Hh(Kw!("HH")),
         #[sugar]
-        Mi(StringEqCI!("MI")),
+        Mi(Kw!("MI")),
         #[sugar]
-        Ss(StringEqCI!("SS")),
+        Ss(Kw!("SS")),
         #[sugar]
-        Mcs(StringEqCI!("MCS")),
+        Mcs(Kw!("MCS")),
         #[sugar]
-        Ms(StringEqCI!("MS")),
+        Ms(Kw!("MS")),
         #[sugar]
-        Ns(StringEqCI!("NS")),
+        Ns(Kw!("NS")),
         #[sugar]
-        Q(StringEqCI!("Q")),
+        Q(Kw!("Q")),
         #[sugar]
-        M(StringEqCI!("M")),
+        M(Kw!("M")),
         #[sugar]
-        W(StringEqCI!("W")),
+        W(Kw!("W")),
         #[sugar]
-        Y(StringEqCI!("Y")),
+        Y(Kw!("Y")),
         #[sugar]
-        D(StringEqCI!("D")),
+        D(Kw!("D")),
         #[sugar]
-        N(StringEqCI!("N")),
+        N(Kw!("N")),
         #[sugar]
-        S(StringEqCI!("S")),
+        S(Kw!("S")),
     }
 
     /// A date part is its full name in upper case, whatever its spelling or abbreviation.
@@ -1695,41 +1730,41 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "tsaddinterval")]
     pub enum TSAddInterval {
-        Year(StringEqCI!("SQL_TSI_YEAR")),
-        Quarter(StringEqCI!("SQL_TSI_QUARTER")),
-        Month(StringEqCI!("SQL_TSI_MONTH")),
-        Week(StringEqCI!("SQL_TSI_WEEK")),
-        Day(StringEqCI!("SQL_TSI_DAY")),
-        Hour(StringEqCI!("SQL_TSI_HOUR")),
-        Minute(StringEqCI!("SQL_TSI_MINUTE")),
-        Second(StringEqCI!("SQL_TSI_SECOND")),
-        FracSecond(StringEqCI!("SQL_TSI_FRAC_SECOND")),
+        Year(Kw!("SQL_TSI_YEAR")),
+        Quarter(Kw!("SQL_TSI_QUARTER")),
+        Month(Kw!("SQL_TSI_MONTH")),
+        Week(Kw!("SQL_TSI_WEEK")),
+        Day(Kw!("SQL_TSI_DAY")),
+        Hour(Kw!("SQL_TSI_HOUR")),
+        Minute(Kw!("SQL_TSI_MINUTE")),
+        Second(Kw!("SQL_TSI_SECOND")),
+        FracSecond(Kw!("SQL_TSI_FRAC_SECOND")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "tsdiffinterval")]
     pub enum TSDiffInterval {
-        Year(StringEqCI!("SQL_TSI_YEAR")),
-        Month(StringEqCI!("SQL_TSI_MONTH")),
-        Week(StringEqCI!("SQL_TSI_WEEK")),
-        Day(StringEqCI!("SQL_TSI_DAY")),
-        Hour(StringEqCI!("SQL_TSI_HOUR")),
-        Minute(StringEqCI!("SQL_TSI_MINUTE")),
-        Second(StringEqCI!("SQL_TSI_SECOND")),
-        FracSecond(StringEqCI!("SQL_TSI_FRAC_SECOND")),
+        Year(Kw!("SQL_TSI_YEAR")),
+        Month(Kw!("SQL_TSI_MONTH")),
+        Week(Kw!("SQL_TSI_WEEK")),
+        Day(Kw!("SQL_TSI_DAY")),
+        Hour(Kw!("SQL_TSI_HOUR")),
+        Minute(Kw!("SQL_TSI_MINUTE")),
+        Second(Kw!("SQL_TSI_SECOND")),
+        FracSecond(Kw!("SQL_TSI_FRAC_SECOND")),
     }
 
     #[derive(Grammar)]
     pub enum SQLConvertFunc {
-        SqlTimestamp(StringEqCI!("SQL_TIMESTAMP")),
-        SqlInteger(StringEqCI!("SQL_INTEGER")),
-        SqlBigInt(StringEqCI!("SQL_BIGINT")),
-        SqlSmallInt(StringEqCI!("SQL_SMALLINT")),
-        SqlTinyInt(StringEqCI!("SQL_TINYINT")),
-        SqlDate(StringEqCI!("SQL_DATE")),
-        SqlTime(StringEqCI!("SQL_TIME")),
-        SqlVarChar(StringEqCI!("SQL_VARCHAR")),
-        SqlDouble(StringEqCI!("SQL_DOUBLE")),
+        SqlTimestamp(Kw!("SQL_TIMESTAMP")),
+        SqlInteger(Kw!("SQL_INTEGER")),
+        SqlBigInt(Kw!("SQL_BIGINT")),
+        SqlSmallInt(Kw!("SQL_SMALLINT")),
+        SqlTinyInt(Kw!("SQL_TINYINT")),
+        SqlDate(Kw!("SQL_DATE")),
+        SqlTime(Kw!("SQL_TIME")),
+        SqlVarChar(Kw!("SQL_VARCHAR")),
+        SqlDouble(Kw!("SQL_DOUBLE")),
     }
 
     #[derive(Grammar)]
@@ -1743,28 +1778,28 @@ pub mod leveled {
     #[tygr(name = "agg")]
     pub enum Agg {
         AggFuncArgs { fun: AggFunc, arg: Args<AggArg> },
-        CountStar(StringEqCI!("COUNT"), Args<StringEq!("*")>),
+        CountStar(Kw!("COUNT"), Args<StringEq!("*")>),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "agg func")]
     pub enum AggFunc {
-        Avg(StringEqCI!("AVG")),
-        Count(StringEqCI!("COUNT")),
-        Sum(StringEqCI!("SUM")),
-        Max(StringEqCI!("MAX")),
-        Min(StringEqCI!("MIN")),
-        List(StringEqCI!("LIST")),
-        XmlAgg(StringEqCI!("XMLAGG")),
-        DList(StringEqCI!("%DLIST")),
-        StdDev(StringEqCI!("STDDEV")),
-        StdDevPop(StringEqCI!("STDDEV_POP")),
-        StdDevSamp(StringEqCI!("STDDEV_SAMP")),
-        Variance(StringEqCI!("VARIANCE")),
-        VarPop(StringEqCI!("VAR_POP")),
-        VarSamp(StringEqCI!("VAR_SAMP")),
-        JSONArrayAgg(StringEqCI!("JSON_ARRAYAGG")),
-        ApproxCountDistinct(StringEqCI!("APPROX_COUNT_DISTINCT")),
+        Avg(Kw!("AVG")),
+        Count(Kw!("COUNT")),
+        Sum(Kw!("SUM")),
+        Max(Kw!("MAX")),
+        Min(Kw!("MIN")),
+        List(Kw!("LIST")),
+        XmlAgg(Kw!("XMLAGG")),
+        DList(Kw!("%DLIST")),
+        StdDev(Kw!("STDDEV")),
+        StdDevPop(Kw!("STDDEV_POP")),
+        StdDevSamp(Kw!("STDDEV_SAMP")),
+        Variance(Kw!("VARIANCE")),
+        VarPop(Kw!("VAR_POP")),
+        VarSamp(Kw!("VAR_SAMP")),
+        JSONArrayAgg(Kw!("JSON_ARRAYAGG")),
+        ApproxCountDistinct(Kw!("APPROX_COUNT_DISTINCT")),
     }
 
     #[derive(Grammar)]
@@ -1774,15 +1809,15 @@ pub mod leveled {
         pub all: Option<(AllKw, Space)>,
         pub distinct: Option<(Dist, Space)>,
         pub expr: Scalx,
-        pub foreach: Option<(Space, Prefix<(StringEqCI!("%FOREACH"), Space), List>)>,
-        pub afterhaving: Option<(Space, StringEqCI!("%AFTERHAVING"))>,
+        pub foreach: Option<(Space, Prefix<(Kw!("%FOREACH"), Space), List>)>,
+        pub afterhaving: Option<(Space, Kw!("%AFTERHAVING"))>,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "dist")]
     pub struct Dist {
-        pub keyword: StringEqCI!("DISTINCT"),
-        pub by: Option<(Space1, Prefix<(StringEqCI!("BY"), Space), List>)>,
+        pub keyword: Kw!("DISTINCT"),
+        pub by: Option<(Space1, Prefix<(Kw!("BY"), Space), List>)>,
     }
 
     pub type List = Parenthesized<VecSep<Scalx, ArgSep>>;
@@ -1792,37 +1827,37 @@ pub mod leveled {
     pub struct Window {
         pub fun: WindowFunc,
         pub arg: Parenthesized<Option<Either<StringEq!("*"), VecSep<Scalx, ArgSep>>>>,
-        pub over_kw: (Space, StringEqCI!("OVER"), Space),
+        pub over_kw: (Space, Kw!("OVER"), Space),
         pub spec: Parenthesized<(
             Option<WindowPartition>,
             Option<(Space, Order)>,
-            Option<(Space, StringEqCI!("ROWS"), Space, WindowRows)>,
+            Option<(Space, Kw!("ROWS"), Space, WindowRows)>,
         )>,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "window func")]
     pub enum WindowFunc {
-        RowNumber(StringEqCI!("ROW_NUMBER")),
-        Rank(StringEqCI!("RANK")),
-        DenseRank(StringEqCI!("DENSE_RANK")),
-        PercentRank(StringEqCI!("PERCENT_RANK")),
-        CumeDist(StringEqCI!("CUME_DIST")),
-        NTile(StringEqCI!("NTILE")),
-        FirstValue(StringEqCI!("FIRST_VALUE")),
-        LastValue(StringEqCI!("LAST_VALUE")),
-        NthValue(StringEqCI!("NTH_VALUE")),
-        Lead(StringEqCI!("LEAD")),
-        Lag(StringEqCI!("LAG")),
-        Sum(StringEqCI!("SUM")),
-        Avg(StringEqCI!("AVG")),
-        Count(StringEqCI!("COUNT")),
-        Min(StringEqCI!("MIN")),
-        Max(StringEqCI!("MAX")),
+        RowNumber(Kw!("ROW_NUMBER")),
+        Rank(Kw!("RANK")),
+        DenseRank(Kw!("DENSE_RANK")),
+        PercentRank(Kw!("PERCENT_RANK")),
+        CumeDist(Kw!("CUME_DIST")),
+        NTile(Kw!("NTILE")),
+        FirstValue(Kw!("FIRST_VALUE")),
+        LastValue(Kw!("LAST_VALUE")),
+        NthValue(Kw!("NTH_VALUE")),
+        Lead(Kw!("LEAD")),
+        Lag(Kw!("LAG")),
+        Sum(Kw!("SUM")),
+        Avg(Kw!("AVG")),
+        Count(Kw!("COUNT")),
+        Min(Kw!("MIN")),
+        Max(Kw!("MAX")),
     }
 
     pub type WindowPartition =
-        Prefix<(StringEqCI!("PARTITION"), Space1, StringEqCI!("BY"), Space), VecSep<Scalx, ArgSep>>;
+        Prefix<(Kw!("PARTITION"), Space1, Kw!("BY"), Space), VecSep<Scalx, ArgSep>>;
 
     #[derive(Grammar)]
     #[tygr(name = "window rows")]
@@ -1830,7 +1865,7 @@ pub mod leveled {
         #[sugar]
         Single(WindowRowsBound),
         Between {
-            between_kw: StringEqCI!("BETWEEN"),
+            between_kw: Kw!("BETWEEN"),
             start: (Space, WindowRowsBound),
             end: (Space1, AndClause<WindowRowsBound>),
         },
@@ -1860,11 +1895,11 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "window rows bound")]
     pub enum WindowRowsBound {
-        UnboundedPreceding(StringEqCI!("UNBOUNDED"), Space1, StringEqCI!("PRECEDING")),
-        UnboundedFollowing(StringEqCI!("UNBOUNDED"), Space1, StringEqCI!("FOLLOWING")),
-        Preceding(Number, Space, StringEqCI!("PRECEDING")),
-        Following(Number, Space, StringEqCI!("FOLLOWING")),
-        CurrentRow(StringEqCI!("CURRENT"), Space1, StringEqCI!("ROW")),
+        UnboundedPreceding(Kw!("UNBOUNDED"), Space1, Kw!("PRECEDING")),
+        UnboundedFollowing(Kw!("UNBOUNDED"), Space1, Kw!("FOLLOWING")),
+        Preceding(Number, Space, Kw!("PRECEDING")),
+        Following(Number, Space, Kw!("FOLLOWING")),
+        CurrentRow(Kw!("CURRENT"), Space1, Kw!("ROW")),
     }
     #[derive(Grammar)]
     #[tygr(name = "prdct")]
@@ -1873,7 +1908,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "or operator")]
     pub enum OrOperator {
-        Or(StringEqCI!("OR")),
+        Or(Kw!("OR")),
         #[sugar]
         Exclamation(StringEq!("!")),
     }
@@ -1893,7 +1928,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "and operator")]
     pub enum AndOperator {
-        And(StringEqCI!("AND")),
+        And(Kw!("AND")),
         #[sugar]
         Ampersand(StringEq!("&")),
     }
@@ -1906,9 +1941,9 @@ pub mod leveled {
         }
     }
 
-    pub type NoIndex = Option<(StringEqCI!("%NOINDEX"), Space)>;
+    pub type NoIndex = Option<(Kw!("%NOINDEX"), Space)>;
 
-    pub type NotKw = StringEqCI!("NOT");
+    pub type NotKw = Kw!("NOT");
 
     /// A predicate's keyword or its negation, the keyword under the `NOT` the condition's impl adds.
     #[derive(Grammar)]
@@ -1969,7 +2004,7 @@ pub mod leveled {
             quantifier: Quantifier,
         },
         #[sugar]
-        In(Negatable<StringEqCI!("IN")>),
+        In(Negatable<Kw!("IN")>),
     }
 
     /// `IN (subquery)` is `= ANY (subquery)`; a `NOT IN` is `NOT (... = ANY ...)` by the condition's impl.
@@ -1989,7 +2024,7 @@ pub mod leveled {
     #[sugar]
     pub enum Cond {
         Not {
-            not_kw: (StringEqCI!("NOT"), Space),
+            not_kw: (Kw!("NOT"), Space),
             condition: Box<Src<Cond>>,
         },
         Paren(Parenthesized<Box<Prdct>>),
@@ -2069,24 +2104,24 @@ pub mod leveled {
     #[tygr(name = "predicate")]
     pub enum Predicate {
         Exists {
-            exists_kw: (StringEqCI!("EXISTS"), Space),
+            exists_kw: (Kw!("EXISTS"), Space),
             query: SQLSubquery,
         },
         ForSomeElement {
             kw: (
-                StringEqCI!("FOR"),
+                Kw!("FOR"),
                 Space1,
-                StringEqCI!("SOME"),
+                Kw!("SOME"),
                 Space1,
-                StringEqCI!("%ELEMENT"),
+                Kw!("%ELEMENT"),
                 Space,
             ),
             column: Parenthesized<Colmn>,
-            label: Option<(Space, Option<(StringEqCI!("AS"), Space)>, Ident)>,
+            label: Option<(Space, Option<(Kw!("AS"), Space)>, Ident)>,
             predicate: (Space, Parenthesized<Box<Prdct>>),
         },
         ForSome {
-            kw: (StringEqCI!("FOR"), Space1, StringEqCI!("SOME"), Space),
+            kw: (Kw!("FOR"), Space1, Kw!("SOME"), Space),
             tables: Parenthesized<Tables>,
             condition: Option<(Space, Parenthesized<Box<ForCnd>>)>,
         },
@@ -2104,7 +2139,7 @@ pub mod leveled {
         GroupOnly(Group),
     }
 
-    pub type AndClause<T> = Prefix<(StringEqCI!("AND"), Space), T>;
+    pub type AndClause<T> = Prefix<(Kw!("AND"), Space), T>;
 
     #[doc(hidden)]
     #[derive(Grammar)]
@@ -2119,22 +2154,22 @@ pub mod leveled {
             scalx: Scalx,
         },
         IsNull {
-            is_kw: (StringEqCI!("IS"), Space1),
-            null_kw: Negatable<StringEqCI!("NULL")>,
+            is_kw: (Kw!("IS"), Space1),
+            null_kw: Negatable<Kw!("NULL")>,
         },
         Between {
-            between_kw: Negatable<(StringEqCI!("BETWEEN"), Space)>,
+            between_kw: Negatable<(Kw!("BETWEEN"), Space)>,
             lower: Scalx,
-            and_kw: (Space, StringEqCI!("AND"), Space),
+            and_kw: (Space, Kw!("AND"), Space),
             upper: Scalx,
         },
         Like {
-            like_kw: Negatable<(StringEqCI!("LIKE"), Space)>,
+            like_kw: Negatable<(Kw!("LIKE"), Space)>,
             pattern: Scalx,
             escape: Option<(Space, EscapeScalx)>,
         },
         Matches {
-            matches_kw: Negatable<(StringEqCI!("%MATCHES"), Space)>,
+            matches_kw: Negatable<(Kw!("%MATCHES"), Space)>,
             pattern: Scalx,
             escape: Option<(Space, EscapeScalx)>,
         },
@@ -2144,31 +2179,31 @@ pub mod leveled {
             expr: SQLSubquery,
         },
         In {
-            in_kw: Negatable<(StringEqCI!("IN"), Space)>,
+            in_kw: Negatable<(Kw!("IN"), Space)>,
             list: Parenthesized<VecSep<Scalx, ArgSep>>,
         },
         InList {
-            inlist_kw: Negatable<(StringEqCI!("%INLIST"), Space)>,
+            inlist_kw: Negatable<(Kw!("%INLIST"), Space)>,
             list_expr: Scalx,
             size_hint: Option<(Space, SizeHint)>,
         },
         Find {
-            find_kw: (StringEqCI!("%FIND"), Space),
+            find_kw: (Kw!("%FIND"), Space),
             expr: Scalx,
             size_hint: Option<(Space, SizeHint)>,
         },
         Pattern {
-            pattern_kw: (StringEqCI!("%PATTERN"), Space),
+            pattern_kw: (Kw!("%PATTERN"), Space),
             pattern: Scalx,
         },
         IsJSON {
-            format: Option<(StringEqCI!("FORMAT"), Space1, JSONRepresentation, Space1)>,
-            is_kw: (StringEqCI!("IS"), Space1),
-            json_kw: Negatable<StringEqCI!("JSON")>,
+            format: Option<(Kw!("FORMAT"), Space1, JSONRepresentation, Space1)>,
+            is_kw: (Kw!("IS"), Space1),
+            json_kw: Negatable<Kw!("JSON")>,
             constraint: Option<(Space1, JSONPredicateTypeConstraint)>,
         },
         Contains {
-            kw: Either<StringEqCI!("%CONTAINSTERM"), StringEqCI!("%CONTAINS")>,
+            kw: Either<Kw!("%CONTAINSTERM"), Kw!("%CONTAINS")>,
             list: Args1Plus,
         },
         Scalx {
@@ -2178,17 +2213,17 @@ pub mod leveled {
         },
     }
 
-    pub type EscapeScalx = Prefix<(StringEqCI!("ESCAPE"), Space), Scalx>;
+    pub type EscapeScalx = Prefix<(Kw!("ESCAPE"), Space), Scalx>;
 
     pub type SQLSubquery = Parenthesized<Box<Query>>;
 
     #[derive(Grammar)]
     #[tygr(name = "quantifier")]
     pub enum Quantifier {
-        All(StringEqCI!("ALL")),
-        Any(StringEqCI!("ANY")),
+        All(Kw!("ALL")),
+        Any(Kw!("ANY")),
         #[sugar]
-        Some(StringEqCI!("SOME")),
+        Some(Kw!("SOME")),
     }
 
     /// `SOME` is `ANY`.
@@ -2202,7 +2237,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "size hint")]
     pub struct SizeHint {
-        pub kw: (StringEqCI!("SIZE"), Space),
+        pub kw: (Kw!("SIZE"), Space),
         /// Doubled, as IRIS requires: 2026.2 rejects `SIZE (n)` and `SIZE n`, takes deeper nesting and blanks.
         pub size: Parenthesized<Parenthesized<PConst>>,
     }
@@ -2225,29 +2260,29 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "JSON representation")]
-    pub struct JSONRepresentation(pub StringEqCI!("JSON"));
+    pub struct JSONRepresentation(pub Kw!("JSON"));
 
     #[derive(Grammar)]
     #[tygr(name = "JSON predicate type constraint")]
     pub enum JSONPredicateTypeConstraint {
-        Value(StringEqCI!("VALUE")),
-        Array(StringEqCI!("ARRAY")),
-        Object(StringEqCI!("OBJECT")),
-        Scalar(StringEqCI!("SCALAR")),
+        Value(Kw!("VALUE")),
+        Array(Kw!("ARRAY")),
+        Object(Kw!("OBJECT")),
+        Scalar(Kw!("SCALAR")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "with list")]
     pub struct WithList(pub VecSep<Src<WithListElement>, ArgSep>);
 
-    pub type WithClause = Prefix<(StringEqCI!("WITH"), Space), WithList>;
+    pub type WithClause = Prefix<(Kw!("WITH"), Space), WithList>;
 
     #[derive(Grammar)]
     #[tygr(name = "with list element")]
     pub struct WithListElement {
         pub name: Ident,
         pub columns: Option<(Space, FList1)>,
-        pub as_kw: (Space, StringEqCI!("AS"), Space),
+        pub as_kw: (Space, Kw!("AS"), Space),
         pub query: SQLSubquery,
     }
 
@@ -2257,7 +2292,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct Selex {
-        pub kw: (StringEqCI!("SELECT"), Space),
+        pub kw: (Kw!("SELECT"), Space),
         pub options: Vec<(SelectOption, Space)>,
         #[sugar]
         pub all: Option<(AllKw, Space)>,
@@ -2272,27 +2307,38 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "select option")]
     pub enum SelectOption {
-        NoFPlan(StringEqCI!("%NOFPLAN")),
-        NoLock(StringEqCI!("%NOLOCK")),
-        Profile(StringEqCI!("%PROFILE")),
-        ProfileAll(StringEqCI!("%PROFILE_ALL")),
-        NoRuntime(StringEqCI!("%NORUNTIME")),
-        DoRuntime(StringEqCI!("%DORUNTIME")),
-        RowLimit(StringEqCI!("%ROWLIMIT"), Space, ValSpec),
-        RowOffset(StringEqCI!("%ROWOFFSET"), Space, ValSpec),
+        NoFPlan(Kw!("%NOFPLAN")),
+        NoLock(Kw!("%NOLOCK")),
+        Profile(Kw!("%PROFILE")),
+        ProfileAll(Kw!("%PROFILE_ALL")),
+        NoRuntime(Kw!("%NORUNTIME")),
+        DoRuntime(Kw!("%DORUNTIME")),
+        RowLimit(Kw!("%ROWLIMIT"), Space, ValSpec),
+        RowOffset(Kw!("%ROWOFFSET"), Space, ValSpec),
     }
 
     #[derive(Grammar)]
     pub enum TopSpec {
-        ValSpec(DTSValSpec),
-        All(StringEqCI!("ALL")),
+        All(Kw!("ALL")),
+        Count(Count),
+    }
+
+    /// A count: a literal, a host variable or `?`, in any parentheses; 2026.2 takes `TOP (1)`, `TOP(1)`,
+    /// `LIMIT ((10))`, `OFFSET (:n)`, `FETCH NEXT 'x' ROWS ONLY` and `DIAGNOSTICS SIZE (1)`, not `LIMIT 1 + 1`,
+    /// `LIMIT a`, `LIMIT -1` or `TOP (ALL)`.
+    #[derive(Grammar)]
+    pub enum Count {
+        Paren(Parenthesized<Box<Count>>),
+        Literal(Literal),
+        HostVar(HostVar),
+        Marker(ParameterMarker),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "selst")]
     pub struct Selst {
         pub distinct: Option<(Dist, Space)>,
-        pub top: Option<(Prefix<(StringEqCI!("TOP"), Space1), TopSpec>, Space)>,
+        pub top: Option<(Kw!("TOP"), Space, TopSpec, Space)>,
         pub select_list: SelectList,
         pub targt: Option<(Space, Targt)>,
     }
@@ -2311,12 +2357,12 @@ pub mod leveled {
     // The blank stays inside the alias, so that a reference without one consumes nothing after it.
     #[derive(Grammar)]
     pub struct Alias {
-        pub as_kw: Implied<StringEqCI!("AS")>,
+        pub as_kw: Implied<Kw!("AS")>,
         pub sp: Space,
         pub name: SQLIdentNonKeyword,
     }
 
-    pub type Into = Prefix<(StringEqCI!("INTO"), Space), HostList>;
+    pub type Into = Prefix<(Kw!("INTO"), Space), HostList>;
 
     #[derive(Grammar)]
     #[tygr(name = "targt")]
@@ -2333,12 +2379,12 @@ pub mod leveled {
     #[tygr(name = "host list")]
     pub struct HostList(pub VecSep<Param, ArgSep>);
 
-    pub type IntoList = Prefix<StringEqCI!("%INTOLIST"), (Space, Param)>;
+    pub type IntoList = Prefix<Kw!("%INTOLIST"), (Space, Param)>;
 
     #[derive(Grammar)]
     #[tygr(name = "from")]
     pub struct FromClause {
-        pub keyword: (StringEqCI!("FROM"), Space),
+        pub keyword: (Kw!("FROM"), Space),
         pub options: Vec<(FromOpt, Space)>,
         pub tables: Tables,
     }
@@ -2346,28 +2392,28 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "from_opt")]
     pub enum FromOpt {
-        InOrder(StringEqCI!("%inorder")),
-        Full(StringEqCI!("%full")),
-        DbugFull(StringEqCI!("%dbugfull")),
-        Flatten(StringEqCI!("%flatten")),
-        NoBSL(StringEqCI!("%nobsl")),
-        NoFixedStats(StringEqCI!("%nofixedstats"), Space, TableRefs),
-        NoFlatten(StringEqCI!("%noflatten")),
-        NoMerge(StringEqCI!("%nomerge")),
-        NoReduce(StringEqCI!("%noreduce")),
-        NoSVSO(StringEqCI!("%nosvso")),
-        NoTopOpt(StringEqCI!("%notopopt")),
-        NoFactorOrderByOr(StringEqCI!("%nofactororderbyor")),
-        NoFactorAndFromOr(StringEqCI!("%nofactorandfromor")),
-        NoMergeEquiAgg(StringEqCI!("%nomergeequivagg")),
-        IgnoreIndices(StringEqCI!("%ignoreindices"), Space, IndexRefs),
-        IgnoreIndex(StringEqCI!("%ignoreindex"), Space, IndexRefs),
-        StartTable(StringEqCI!("%starttable")),
-        AllIndex(StringEqCI!("%allindex")),
-        NoUnionOrOpt(StringEqCI!("%nounionoropt")),
-        FirstTable(StringEqCI!("%firsttable"), Space, Ident),
-        Parallel(StringEqCI!("%parallel")),
-        NoParallel(StringEqCI!("%noparallel")),
+        InOrder(Kw!("%inorder")),
+        Full(Kw!("%full")),
+        DbugFull(Kw!("%dbugfull")),
+        Flatten(Kw!("%flatten")),
+        NoBSL(Kw!("%nobsl")),
+        NoFixedStats(Kw!("%nofixedstats"), Space, TableRefs),
+        NoFlatten(Kw!("%noflatten")),
+        NoMerge(Kw!("%nomerge")),
+        NoReduce(Kw!("%noreduce")),
+        NoSVSO(Kw!("%nosvso")),
+        NoTopOpt(Kw!("%notopopt")),
+        NoFactorOrderByOr(Kw!("%nofactororderbyor")),
+        NoFactorAndFromOr(Kw!("%nofactorandfromor")),
+        NoMergeEquiAgg(Kw!("%nomergeequivagg")),
+        IgnoreIndices(Kw!("%ignoreindices"), Space, IndexRefs),
+        IgnoreIndex(Kw!("%ignoreindex"), Space, IndexRefs),
+        StartTable(Kw!("%starttable")),
+        AllIndex(Kw!("%allindex")),
+        NoUnionOrOpt(Kw!("%nounionoropt")),
+        FirstTable(Kw!("%firsttable"), Space, Ident),
+        Parallel(Kw!("%parallel")),
+        NoParallel(Kw!("%noparallel")),
     }
 
     #[derive(Grammar)]
@@ -2484,11 +2530,11 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum Join {
         Cross {
-            cross_kw: (StringEqCI!("CROSS"), Space1, StringEqCI!("JOIN"), Space),
+            cross_kw: (Kw!("CROSS"), Space1, Kw!("JOIN"), Space),
             table: Box<JTab>,
         },
         Natural {
-            natural_kw: (StringEqCI!("NATURAL"), Space1),
+            natural_kw: (Kw!("NATURAL"), Space1),
             join_type: JOp,
             space: Space,
             table: Box<JTab>,
@@ -2507,10 +2553,10 @@ pub mod leveled {
         Typed {
             jtype: JType,
             sp: Space1,
-            join_kw: StringEqCI!("JOIN"),
+            join_kw: Kw!("JOIN"),
         },
         #[sugar]
-        Bare(StringEqCI!("JOIN")),
+        Bare(Kw!("JOIN")),
     }
 
     /// `JOIN` is `INNER JOIN`.
@@ -2528,25 +2574,25 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum JType {
-        Inner(StringEqCI!("INNER")),
-        Outer(Side, Implied<StringEqCI!("OUTER")>),
+        Inner(Kw!("INNER")),
+        Outer(Side, Implied<Kw!("OUTER")>),
     }
 
     #[derive(Grammar)]
     pub enum Side {
-        Left(StringEqCI!("LEFT")),
-        Right(StringEqCI!("RIGHT")),
-        Full(StringEqCI!("FULL")),
+        Left(Kw!("LEFT")),
+        Right(Kw!("RIGHT")),
+        Full(Kw!("FULL")),
     }
 
     #[derive(Grammar)]
     pub enum JSpec {
         On {
-            on_kw: (StringEqCI!("ON"), Space),
+            on_kw: (Kw!("ON"), Space),
             condition: Prdct,
         },
         Using {
-            using_kw: (StringEqCI!("USING"), Space),
+            using_kw: (Kw!("USING"), Space),
             flist1: FList1,
         },
     }
@@ -2566,7 +2612,7 @@ pub mod leveled {
             alias: Option<Alias>,
         },
         Query {
-            lateral: Option<(StringEqCI!("LATERAL"), Space)>,
+            lateral: Option<(Kw!("LATERAL"), Space)>,
             query: SQLSubquery,
             alias: Option<Alias>,
         },
@@ -2625,28 +2671,20 @@ pub mod leveled {
         pub args: Parenthesized<Option<VecSep<DTSValSpec, ArgSep>>>,
     }
 
-    pub type WhereClause = Prefix<(StringEqCI!("WHERE"), Space), Prdct>;
+    pub type WhereClause = Prefix<(Kw!("WHERE"), Space), Prdct>;
 
-    pub type Group =
-        Prefix<(StringEqCI!("GROUP"), Space1, StringEqCI!("BY"), Space), VecSep<Scalx, ArgSep>>;
+    pub type Group = Prefix<(Kw!("GROUP"), Space1, Kw!("BY"), Space), VecSep<Scalx, ArgSep>>;
 
-    pub type Having = Prefix<(StringEqCI!("HAVING"), Space), Prdct>;
+    pub type Having = Prefix<(Kw!("HAVING"), Space), Prdct>;
 
-    pub type Order = Prefix<
-        (StringEqCI!("ORDER"), Space1, StringEqCI!("BY"), Space),
-        VecSep<Src<Ordir>, ArgSep>,
-    >;
+    pub type Order = Prefix<(Kw!("ORDER"), Space1, Kw!("BY"), Space), VecSep<Src<Ordir>, ArgSep>>;
 
     #[derive(Grammar)]
     pub struct Ordir {
         pub expr: Ordit,
         #[sugar]
-        pub asc: Option<(
-            Space,
-            StringEqCI!("ASC"),
-            NotFollowedBy<(Space, StringEqCI!("DESC"))>,
-        )>,
-        pub desc: Option<(Space, StringEqCI!("DESC"))>,
+        pub asc: Option<(Space, Kw!("ASC"), NotFollowedBy<(Space, Kw!("DESC"))>)>,
+        pub desc: Option<(Space, Kw!("DESC"))>,
     }
 
     #[derive(Grammar)]
@@ -2659,7 +2697,7 @@ pub mod leveled {
     #[tygr(name = "row limiting clause")]
     pub enum RowLimitingClause {
         LimitOffset {
-            limit: Prefix<(StringEqCI!("LIMIT"), Space), LimitSpec>,
+            limit: Prefix<(Kw!("LIMIT"), Space), LimitSpec>,
             offset: Option<(Space, Offset)>,
         },
         #[sugar]
@@ -2680,7 +2718,7 @@ pub mod leveled {
             let (limit, offset) = match self {
                 Self::OffsetFetch { offset, fetch } => (
                     fetch.as_ref().map_or_else(
-                        || core::LimitSpec::All(Default::default(), Default::default()),
+                        || core::LimitSpec::All(Default::default()),
                         |(_, fetch)| count(fetch),
                     ),
                     Some((
@@ -2703,21 +2741,14 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "limit spec")]
     pub enum LimitSpec {
-        All(StringEqCI!("ALL"), NotFollowedBy<IdentifierPart>),
-        Val(RowCount),
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "row count")]
-    pub enum RowCount {
-        Val(ValSpec),
-        Scalx(Scalx),
+        All(Kw!("ALL")),
+        Val(Count),
     }
 
     #[derive(Grammar)]
     pub struct Offset {
-        pub kw: (StringEqCI!("OFFSET"), Space),
-        pub count: RowCount,
+        pub kw: (Kw!("OFFSET"), Space),
+        pub count: Count,
         #[sugar]
         pub rows: Option<(Space, RowRowsInline)>,
     }
@@ -2729,12 +2760,12 @@ pub mod leveled {
     #[tygr(name = "query op")]
     pub enum QueryOp {
         Union {
-            union_kw: StringEqCI!("UNION"),
-            all: Option<(Space1, StringEqCI!("ALL"))>,
-            parallel: Option<(Space1, StringEqCI!("%parallel"))>,
+            union_kw: Kw!("UNION"),
+            all: Option<(Space1, Kw!("ALL"))>,
+            parallel: Option<(Space1, Kw!("%parallel"))>,
         },
-        Intersect(StringEqCI!("INTERSECT")),
-        Except(StringEqCI!("EXCEPT")),
+        Intersect(Kw!("INTERSECT")),
+        Except(Kw!("EXCEPT")),
     }
 
     #[derive(Grammar)]
@@ -2745,10 +2776,10 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(validated)]
     pub struct Insrt {
-        pub insert_kw: StringEqCI!("INSERT"),
-        pub or_update: Option<(Space1, StringEqCI!("OR"), Space1, StringEqCI!("UPDATE"))>,
+        pub insert_kw: Kw!("INSERT"),
+        pub or_update: Option<(Space1, Kw!("OR"), Space1, Kw!("UPDATE"))>,
         pub options: Vec<(Space1, DmlOption)>,
-        pub into_kw: Implied<StringEqCI!("INTO")>,
+        pub into_kw: Implied<Kw!("INTO")>,
         pub target: (Space, IUDTarget),
         pub values: (Space, InsertValues),
     }
@@ -2767,19 +2798,19 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "dml option")]
     pub enum DmlOption {
-        NoCheck(StringEqCI!("%NOCHECK")),
-        NoFPlan(StringEqCI!("%NOFPLAN")),
-        NoLock(StringEqCI!("%NOLOCK")),
-        NoIndex(StringEqCI!("%NOINDEX")),
-        NoTrigger(StringEqCI!("%NOTRIGGER")),
-        NoStream(StringEqCI!("%NOSTREAM")),
-        NoJourn(StringEqCI!("%NOJOURN")),
-        ILock(StringEqCI!("%ILOCK")),
-        ObjectFiler(StringEqCI!("%OBJECTFILER")),
-        ProfileAll(StringEqCI!("%PROFILE_ALL")),
-        Profile(StringEqCI!("%PROFILE")),
-        NoRuntime(StringEqCI!("%NORUNTIME")),
-        DoRuntime(StringEqCI!("%DORUNTIME")),
+        NoCheck(Kw!("%NOCHECK")),
+        NoFPlan(Kw!("%NOFPLAN")),
+        NoLock(Kw!("%NOLOCK")),
+        NoIndex(Kw!("%NOINDEX")),
+        NoTrigger(Kw!("%NOTRIGGER")),
+        NoStream(Kw!("%NOSTREAM")),
+        NoJourn(Kw!("%NOJOURN")),
+        ILock(Kw!("%ILOCK")),
+        ObjectFiler(Kw!("%OBJECTFILER")),
+        ProfileAll(Kw!("%PROFILE_ALL")),
+        Profile(Kw!("%PROFILE")),
+        NoRuntime(Kw!("%NORUNTIME")),
+        DoRuntime(Kw!("%DORUNTIME")),
     }
 
     #[derive(Grammar)]
@@ -2800,14 +2831,14 @@ pub mod leveled {
     pub enum InsertValues {
         #[sugar]
         SetList {
-            set_kw: StringEqCI!("SET"),
+            set_kw: Kw!("SET"),
             assignments: (Space, VecSep<Src<SQLSetAssignment>, ArgSep>),
         },
         ColumnList {
             columns: Option<SQLColumnListParen>,
             values: (Space, ValueSource),
         },
-        DefaultValues(StringEqCI!("DEFAULT"), Space1, StringEqCI!("VALUES")),
+        DefaultValues(Kw!("DEFAULT"), Space1, Kw!("VALUES")),
     }
 
     /// `INSERT ... SET a = x, b = y` is `INSERT ... (a, b) VALUES (x, y)`.
@@ -2849,7 +2880,7 @@ pub mod leveled {
     #[sugar]
     pub enum Asign {
         SetList {
-            set_kw: StringEqCI!("SET"),
+            set_kw: Kw!("SET"),
             assignments: (Space, VecSep<Src<SQLSetAssignment>, ArgSep>),
         },
         ColumnList {
@@ -2921,7 +2952,7 @@ pub mod leveled {
             order: Option<(Space, Order)>,
         },
         ValSpec {
-            values_kw: StringEqCI!("VALUES"),
+            values_kw: Kw!("VALUES"),
             sp: Space,
             spec: ValSpec,
         },
@@ -2945,14 +2976,14 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "updat")]
     pub struct Updat {
-        pub update_kw: StringEqCI!("UPDATE"),
+        pub update_kw: Kw!("UPDATE"),
         pub body: (Space, UpdatBody),
     }
 
     #[derive(Grammar)]
     pub enum UpdatBody {
         UpdateStats {
-            stats_kw: (StringEqCI!("STATISTICS"), Space),
+            stats_kw: (Kw!("STATISTICS"), Space),
             table: TName,
         },
         Update {
@@ -2967,7 +2998,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct WhereWerop {
-        pub kw: (StringEqCI!("WHERE"), Space),
+        pub kw: (Kw!("WHERE"), Space),
         pub werop: Werop,
     }
 
@@ -2975,7 +3006,7 @@ pub mod leveled {
     pub enum Werop {
         Prdct(Prdct),
         CurrentOf {
-            current_of: (StringEqCI!("CURRENT"), Space1, StringEqCI!("OF"), Space),
+            current_of: (Kw!("CURRENT"), Space1, Kw!("OF"), Space),
             ident: Ident,
             prdct: Option<(Space, AndClause<Prdct>)>,
         },
@@ -2984,9 +3015,9 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "delet", validated)]
     pub struct Delet {
-        pub delete_kw: StringEqCI!("DELETE"),
+        pub delete_kw: Kw!("DELETE"),
         pub options: Vec<(Space1, DmlOption)>,
-        pub from_kw: Implied<StringEqCI!("FROM")>,
+        pub from_kw: Implied<Kw!("FROM")>,
         pub target: (Space, IUDTarget),
         pub where_clause: Option<(Space, WhereWerop)>,
     }
@@ -3004,7 +3035,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "truncate", validated)]
     pub struct Truncate {
-        pub kw: (StringEqCI!("TRUNCATE"), Space1, StringEqCI!("TABLE")),
+        pub kw: (Kw!("TRUNCATE"), Space1, Kw!("TABLE")),
         pub options: Vec<(Space1, DmlOption)>,
         pub table: (Space, TName),
     }
@@ -3033,12 +3064,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "starttp")]
     pub struct StartTP {
-        pub kw: (
-            StringEqCI!("START"),
-            Space1,
-            StringEqCI!("TRANSACTION"),
-            Space,
-        ),
+        pub kw: (Kw!("START"), Space1, Kw!("TRANSACTION"), Space),
         pub commit_mode: Option<(CommitModeSpec, Space)>,
         pub modes: VecSep<Option<TRMode>, ArgSep>,
     }
@@ -3046,82 +3072,68 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "settp")]
     pub struct SetTP {
-        pub start_kw: Option<(StringEqCI!("START"), Space1)>,
-        pub kw: (StringEqCI!("SET"), Space1, StringEqCI!("TRANSACTION")),
+        pub start_kw: Option<(Kw!("START"), Space1)>,
+        pub kw: (Kw!("SET"), Space1, Kw!("TRANSACTION")),
         pub commit_mode: Option<(Space1, CommitModeSpec)>,
         pub modes: VecSep<Option<(Space, TRMode)>, (Space, StringEq!(","))>,
     }
 
-    pub type CommitModeSpec = Prefix<StringEqCI!("%COMMITMODE"), (Space1, CommitMode)>;
+    pub type CommitModeSpec = Prefix<Kw!("%COMMITMODE"), (Space1, CommitMode)>;
 
     #[derive(Grammar)]
     pub enum CommitMode {
-        Implicit(StringEqCI!("IMPLICIT")),
-        Explicit(StringEqCI!("EXPLICIT")),
-        None(StringEqCI!("NONE")),
+        Implicit(Kw!("IMPLICIT")),
+        Explicit(Kw!("EXPLICIT")),
+        None(Kw!("NONE")),
     }
 
     #[derive(Grammar)]
     pub enum TRMode {
         IsolationLevel {
-            kw: (
-                StringEqCI!("ISOLATION"),
-                Space1,
-                StringEqCI!("LEVEL"),
-                Space1,
-            ),
+            kw: (Kw!("ISOLATION"), Space1, Kw!("LEVEL"), Space1),
             level: GetLevel,
         },
-        ReadOnly(StringEqCI!("READ"), Space1, StringEqCI!("ONLY")),
-        ReadWrite(StringEqCI!("READ"), Space1, StringEqCI!("WRITE")),
+        ReadOnly(Kw!("READ"), Space1, Kw!("ONLY")),
+        ReadWrite(Kw!("READ"), Space1, Kw!("WRITE")),
         DiagnosticsSize {
-            kw: (
-                StringEqCI!("DIAGNOSTICS"),
-                Space1,
-                StringEqCI!("SIZE"),
-                Space,
-            ),
-            size: Src<Term>,
+            kw: (Kw!("DIAGNOSTICS"), Space1, Kw!("SIZE"), Space),
+            size: Count,
         },
     }
 
     #[derive(Grammar)]
     pub enum GetLevel {
-        ReadUncommitted(StringEqCI!("READ"), Space1, StringEqCI!("UNCOMMITTED")),
-        ReadCommitted(StringEqCI!("READ"), Space1, StringEqCI!("COMMITTED")),
-        ReadVerified(StringEqCI!("READ"), Space1, StringEqCI!("VERIFIED")),
-        RepeatableRead(StringEqCI!("REPEATABLE"), Space1, StringEqCI!("READ")),
-        Serializable(StringEqCI!("SERIALIZABLE")),
+        ReadUncommitted(Kw!("READ"), Space1, Kw!("UNCOMMITTED")),
+        ReadCommitted(Kw!("READ"), Space1, Kw!("COMMITTED")),
+        ReadVerified(Kw!("READ"), Space1, Kw!("VERIFIED")),
+        RepeatableRead(Kw!("REPEATABLE"), Space1, Kw!("READ")),
+        Serializable(Kw!("SERIALIZABLE")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "rollb")]
     pub struct RollB {
-        pub rollback_kw: StringEqCI!("ROLLBACK"),
+        pub rollback_kw: Kw!("ROLLBACK"),
         #[sugar]
-        pub work: Option<(Space1, StringEqCI!("WORK"))>,
+        pub work: Option<(Space1, Kw!("WORK"))>,
     }
 
     /// `START [SET]`, which may precede a transaction option or GET.
-    pub type StartSet = Option<(
-        StringEqCI!("START"),
-        Space,
-        Option<(StringEqCI!("SET"), Space)>,
-    )>;
+    pub type StartSet = Option<(Kw!("START"), Space, Option<(Kw!("SET"), Space)>)>;
 
     pub type TP = Prefix<StartSet, TPOption>;
 
     #[derive(Grammar)]
     #[tygr(name = "tp option")]
     pub enum TPOption {
-        InTransaction(StringEqCI!("%INTRANSACTION")),
-        BegTrans(StringEqCI!("%BEGTRANS")),
+        InTransaction(Kw!("%INTRANSACTION")),
+        BegTrans(Kw!("%BEGTRANS")),
         #[sugar]
-        InTrans(StringEqCI!("%INTRANS")),
+        InTrans(Kw!("%INTRANS")),
         Commit {
-            commit_kw: StringEqCI!("COMMIT"),
+            commit_kw: Kw!("COMMIT"),
             #[sugar]
-            work: Option<(Space1, StringEqCI!("WORK"))>,
+            work: Option<(Space1, Kw!("WORK"))>,
         },
     }
 
@@ -3137,16 +3149,16 @@ pub mod leveled {
     #[tygr(name = "ofc")]
     pub enum OFC {
         Open {
-            open_kw: (StringEqCI!("OPEN"), Space),
+            open_kw: (Kw!("OPEN"), Space),
             cursor: Ident,
         },
         Fetch {
-            fetch_kw: (StringEqCI!("FETCH"), Space),
+            fetch_kw: (Kw!("FETCH"), Space),
             cursor: Ident,
             targt: Option<(Space, Targt)>,
         },
         Close {
-            close_kw: (StringEqCI!("CLOSE"), Space),
+            close_kw: (Kw!("CLOSE"), Space),
             cursor: Ident,
         },
     }
@@ -3154,17 +3166,11 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "decl")]
     pub struct Decl {
-        pub declare_kw: StringEqCI!("DECLARE"),
+        pub declare_kw: Kw!("DECLARE"),
         pub cursor_name: (Space, Ident),
-        pub cursor_kw: (
-            Space,
-            StringEqCI!("CURSOR"),
-            Space1,
-            StringEqCI!("FOR"),
-            Space,
-        ),
+        pub cursor_kw: (Space, Kw!("CURSOR"), Space1, Kw!("FOR"), Space),
         pub statement: DeclStatement,
-        pub for_clause: Option<(Space, Prefix<(StringEqCI!("FOR"), Space1), UpdtCls>)>,
+        pub for_clause: Option<(Space, Prefix<(Kw!("FOR"), Space1), UpdtCls>)>,
     }
 
     #[derive(Grammar)]
@@ -3175,15 +3181,15 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum UpdtCls {
-        ReadOnly(StringEqCI!("READ"), Space1, StringEqCI!("ONLY")),
-        Update(StringEqCI!("UPDATE")),
+        ReadOnly(Kw!("READ"), Space1, Kw!("ONLY")),
+        Update(Kw!("UPDATE")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "get")]
     pub struct Get {
         pub start_set: StartSet,
-        pub get_kw: StringEqCI!("GET"),
+        pub get_kw: Kw!("GET"),
         pub assignment: Option<(
             Space,
             Ident,
@@ -3192,7 +3198,7 @@ pub mod leveled {
             Space,
             StringEq!("="),
             Space,
-            StringEqCI!("%ROWCOUNT"),
+            Kw!("%ROWCOUNT"),
         )>,
     }
 
@@ -3200,16 +3206,10 @@ pub mod leveled {
     #[tygr(name = "call statement")]
     pub struct CallStatement {
         pub output: Option<(StringEq!(":"), HostIdentifier, Space, StringEq!("="), Space)>,
-        pub call_kw: StringEqCI!("CALL"),
+        pub call_kw: Kw!("CALL"),
         pub routine: (Space, RoutineName),
         pub args: ArgsN,
-        pub using: Option<(
-            Space,
-            StringEqCI!("USING"),
-            Space,
-            StringEq!(":"),
-            HostIdentifier,
-        )>,
+        pub using: Option<(Space, Kw!("USING"), Space, StringEq!(":"), HostIdentifier)>,
     }
 
     #[derive(Grammar)]
@@ -3219,9 +3219,9 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "explain")]
     pub struct Explain {
-        pub explain_kw: StringEqCI!("EXPLAIN"),
+        pub explain_kw: Kw!("EXPLAIN"),
         pub options: Option<ExplainOptionList>,
-        pub into: Option<(Space1, StringEqCI!("INTO"), Space, Param)>,
+        pub into: Option<(Space1, Kw!("INTO"), Space, Param)>,
         pub statement: (Space, Box<ExplainSQLStatement>),
     }
 
@@ -3235,15 +3235,15 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "alt option")]
     pub enum AltOption {
-        Alt(StringEqCI!("ALT")),
-        All(StringEqCI!("ALL")),
+        Alt(Kw!("ALT")),
+        All(Kw!("ALL")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "stat option")]
     pub enum StatOption {
-        Stat(StringEqCI!("STAT")),
-        Stats(StringEqCI!("STATS")),
+        Stat(Kw!("STAT")),
+        Stats(Kw!("STATS")),
     }
 
     #[derive(Grammar)]
@@ -3283,14 +3283,14 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "option")]
     pub struct SQLOption {
-        pub kw: (StringEqCI!("SET"), Space1, StringEqCI!("OPTION"), Space1),
+        pub kw: (Kw!("SET"), Space1, Kw!("OPTION"), Space1),
         pub setting: OptionSetting,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "compile option")]
     pub struct CompileOption {
-        pub compilemode_kw: StringEqCI!("COMPILEMODE"),
+        pub compilemode_kw: Kw!("COMPILEMODE"),
         pub eq: (Space, StringEq!("="), Space),
         pub mode: CompileMode,
     }
@@ -3300,37 +3300,37 @@ pub mod leveled {
     pub enum OptionSetting {
         CompileOption(CompileOption),
         LockTimeout {
-            lock_kw: StringEqCI!("LOCK_TIMEOUT"),
+            lock_kw: Kw!("LOCK_TIMEOUT"),
             eq: (Space, StringEq!("="), Space),
             value: PositivceNumericLiteralValue,
         },
         PkeyIsIdkey {
-            pkey_kw: StringEqCI!("PKEY_IS_IDKEY"),
+            pkey_kw: Kw!("PKEY_IS_IDKEY"),
             eq: (Space, StringEq!("="), Space),
             value: TrueFalse,
         },
         SupportDelimitedIdentifiers {
-            support_kw: StringEqCI!("SUPPORT_DELIMITED_IDENTIFIERS"),
+            support_kw: Kw!("SUPPORT_DELIMITED_IDENTIFIERS"),
             eq: (Space, StringEq!("="), Space),
             value: TrueFalse,
         },
         AutoParallelThreshold {
-            auto_kw: StringEqCI!("AUTO_PARALLEL_THRESHOLD"),
+            auto_kw: Kw!("AUTO_PARALLEL_THRESHOLD"),
             eq: (Space, StringEq!("="), Space),
             value: PositivceNumericLiteralValue,
         },
         DefaultSchema {
-            default_kw: StringEqCI!("DEFAULT_SCHEMA"),
+            default_kw: Kw!("DEFAULT_SCHEMA"),
             eq: (Space, StringEq!("="), Space),
             schema: Schema,
         },
         ExactDistinct {
-            exact_kw: StringEqCI!("EXACT_DISTINCT"),
+            exact_kw: Kw!("EXACT_DISTINCT"),
             eq: (Space, StringEq!("="), Space),
             value: TrueFalse,
         },
         LockEscalationThreshold {
-            lock_kw: StringEqCI!("LOCK_ESCALATION_THRESHOLD"),
+            lock_kw: Kw!("LOCK_ESCALATION_THRESHOLD"),
             eq: (Space, StringEq!("="), Space),
             value: PositivceNumericLiteralValue,
         },
@@ -3340,17 +3340,17 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "compile mode")]
     pub enum CompileMode {
-        Deferred(StringEqCI!("DEFERRED")),
-        Immediate(StringEqCI!("IMMEDIATE")),
-        Install(StringEqCI!("INSTALL")),
-        NoCheck(StringEqCI!("NOCHECK")),
+        Deferred(Kw!("DEFERRED")),
+        Immediate(Kw!("IMMEDIATE")),
+        Install(Kw!("INSTALL")),
+        NoCheck(Kw!("NOCHECK")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "TRUE/FALSE")]
     pub enum TrueFalse {
-        False(StringEqCI!("FALSE")),
-        True(StringEqCI!("TRUE")),
+        False(Kw!("FALSE")),
+        True(Kw!("TRUE")),
     }
 
     #[derive(Grammar)]
@@ -3364,38 +3364,38 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "locale setting")]
     pub enum LocaleSetting {
-        Am(StringEqCI!("AM")),
-        DateFormat(StringEqCI!("DATE_FORMAT")),
-        DateMaximum(StringEqCI!("DATE_MAXIMUM")),
-        DateMinimum(StringEqCI!("DATE_MINIMUM")),
-        DateSeparator(StringEqCI!("DATE_SEPARATOR")),
-        DecimalSeparator(StringEqCI!("DECIMAL_SEPARATOR")),
-        Midnight(StringEqCI!("MIDNIGHT")),
-        MinusSign(StringEqCI!("MINUS_SIGN")),
-        MonthAbbr(StringEqCI!("MONTH_ABBR")),
-        MonthName(StringEqCI!("MONTH_NAME")),
-        Noon(StringEqCI!("NOON")),
-        NumericGroupSeparator(StringEqCI!("NUMERIC_GROUP_SEPARATOR")),
-        NumericGroupSize(StringEqCI!("NUMERIC_GROUP_SIZE")),
-        Pm(StringEqCI!("PM")),
-        PlusSign(StringEqCI!("PLUS_SIGN")),
-        TimeFormat(StringEqCI!("TIME_FORMAT")),
-        TimePrecision(StringEqCI!("TIME_PRECISION")),
-        TimeSeparator(StringEqCI!("TIME_SEPARATOR")),
-        WeekdayAbbr(StringEqCI!("WEEKDAY_ABBR")),
-        WeekdayName(StringEqCI!("WEEKDAY_NAME")),
-        YearOption(StringEqCI!("YEAR_OPTION")),
+        Am(Kw!("AM")),
+        DateFormat(Kw!("DATE_FORMAT")),
+        DateMaximum(Kw!("DATE_MAXIMUM")),
+        DateMinimum(Kw!("DATE_MINIMUM")),
+        DateSeparator(Kw!("DATE_SEPARATOR")),
+        DecimalSeparator(Kw!("DECIMAL_SEPARATOR")),
+        Midnight(Kw!("MIDNIGHT")),
+        MinusSign(Kw!("MINUS_SIGN")),
+        MonthAbbr(Kw!("MONTH_ABBR")),
+        MonthName(Kw!("MONTH_NAME")),
+        Noon(Kw!("NOON")),
+        NumericGroupSeparator(Kw!("NUMERIC_GROUP_SEPARATOR")),
+        NumericGroupSize(Kw!("NUMERIC_GROUP_SIZE")),
+        Pm(Kw!("PM")),
+        PlusSign(Kw!("PLUS_SIGN")),
+        TimeFormat(Kw!("TIME_FORMAT")),
+        TimePrecision(Kw!("TIME_PRECISION")),
+        TimeSeparator(Kw!("TIME_SEPARATOR")),
+        WeekdayAbbr(Kw!("WEEKDAY_ABBR")),
+        WeekdayName(Kw!("WEEKDAY_NAME")),
+        YearOption(Kw!("YEAR_OPTION")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "setml")]
     pub struct Setml {
         pub kw: (
-            StringEqCI!("SET"),
+            Kw!("SET"),
             Space1,
-            StringEqCI!("ML"),
+            Kw!("ML"),
             Space1,
-            StringEqCI!("CONFIGURATION"),
+            Kw!("CONFIGURATION"),
             Space,
         ),
         pub name: MLConfigurationName,
@@ -3405,112 +3405,103 @@ pub mod leveled {
     #[tygr(name = "ml_configuration_name")]
     pub struct MLConfigurationName(pub Ident);
 
-    pub type Grant = Prefix<StringEqCI!("GRANT"), (Space, GrantCmd)>;
+    pub type Grant = Prefix<Kw!("GRANT"), (Space, GrantCmd)>;
 
     #[derive(Grammar)]
     #[tygr(name = "grant cmd")]
     pub enum GrantCmd {
         AdminPrivileges {
             privileges: VecSep<AdminPriv, ArgSep>,
-            to_kw: (Space1, StringEqCI!("TO"), Space),
+            to_kw: (Space1, Kw!("TO"), Space),
             grantees: Grntee,
-            with_admin: WithOption<StringEqCI!("ADMIN")>,
+            with_admin: WithOption<Kw!("ADMIN")>,
         },
         Roles {
             roles: VecSep<Role, ArgSep>,
-            to_kw: (Space, StringEqCI!("TO"), Space),
+            to_kw: (Space, Kw!("TO"), Space),
             grantees: Grntee,
-            with_admin: WithOption<StringEqCI!("ADMIN")>,
+            with_admin: WithOption<Kw!("ADMIN")>,
         },
         ObjectPrivileges {
             privileges: SimplePrivs,
-            on_kw: (Space, StringEqCI!("ON"), Space),
+            on_kw: (Space, Kw!("ON"), Space),
             objects: Objcts,
-            to_kw: (Space, StringEqCI!("TO"), Space),
+            to_kw: (Space, Kw!("TO"), Space),
             grantees: Grntee,
-            with_grant: WithOption<StringEqCI!("GRANT")>,
+            with_grant: WithOption<Kw!("GRANT")>,
         },
         Actions {
             actions: VecSep<Action, ArgSep>,
-            on_kw: (Space, StringEqCI!("ON"), Space),
+            on_kw: (Space, Kw!("ON"), Space),
             object: Object,
-            to_kw: (Space, StringEqCI!("TO"), Space),
+            to_kw: (Space, Kw!("TO"), Space),
             grantees: Grntee,
-            with_grant: WithOption<StringEqCI!("GRANT")>,
+            with_grant: WithOption<Kw!("GRANT")>,
         },
         CubeSelect {
-            select_kw: StringEqCI!("SELECT"),
-            on_kw: (Space1, StringEqCI!("ON"), Space1),
-            cube_kw: StringEqCI!("CUBE"),
-            cubes_suffix: Option<StringEqCI!("S")>,
+            select_kw: Kw!("SELECT"),
+            on_kw: (Space1, Kw!("ON"), Space1),
+            cube_kw: Either<Kw!("CUBES"), Kw!("CUBE")>,
             cubes: (Space, CubeList),
-            to_kw: (Space, StringEqCI!("TO"), Space),
+            to_kw: (Space, Kw!("TO"), Space),
             grantees: Grntee,
-            with_grant: WithOption<StringEqCI!("GRANT")>,
+            with_grant: WithOption<Kw!("GRANT")>,
         },
     }
 
-    pub type WithOption<K> = Option<(
-        Space,
-        StringEqCI!("WITH"),
-        Space,
-        K,
-        Space,
-        StringEqCI!("OPTION"),
-    )>;
+    pub type WithOption<K> = Option<(Space, Kw!("WITH"), Space, K, Space, Kw!("OPTION"))>;
 
     pub type GrantOptionFor = Option<(
-        StringEqCI!("GRANT"),
+        Kw!("GRANT"),
         Space1,
-        StringEqCI!("OPTION"),
+        Kw!("OPTION"),
         Space1,
-        StringEqCI!("FOR"),
+        Kw!("FOR"),
         Space,
     )>;
 
-    pub type Revok = Prefix<StringEqCI!("REVOKE"), (Space, RevokeCmd)>;
+    pub type Revok = Prefix<Kw!("REVOKE"), (Space, RevokeCmd)>;
 
     #[derive(Grammar)]
     #[tygr(name = "revoke cmd")]
     pub enum RevokeCmd {
         AdminPrivileges {
             privileges: VecSep<AdminPriv, ArgSep>,
-            from_kw: (Space1, StringEqCI!("FROM"), Space),
+            from_kw: (Space1, Kw!("FROM"), Space),
             grantees: Grntee,
         },
         Roles {
             roles: VecSep<Role, ArgSep>,
-            from_kw: (Space, StringEqCI!("FROM"), Space),
+            from_kw: (Space, Kw!("FROM"), Space),
             grantees: Grntee,
         },
         ObjectPrivileges {
             grant_option: GrantOptionFor,
             privileges: SimplePrivs,
-            on_kw: (Space, StringEqCI!("ON"), Space),
+            on_kw: (Space, Kw!("ON"), Space),
             objects: Objcts,
-            from_kw: (Space, StringEqCI!("FROM"), Space),
+            from_kw: (Space, Kw!("FROM"), Space),
             grantees: Grntee,
             behavior: Option<(Space, CascadeOpt)>,
-            as_clause: Option<(Space, StringEqCI!("AS"), Space, Grntee)>,
+            as_clause: Option<(Space, Kw!("AS"), Space, Grntee)>,
         },
         Actions {
             grant_option: GrantOptionFor,
             actions: VecSep<Action, ArgSep>,
-            on_kw: (Space, StringEqCI!("ON"), Space),
+            on_kw: (Space, Kw!("ON"), Space),
             object: Object,
-            from_kw: (Space, StringEqCI!("FROM"), Space),
+            from_kw: (Space, Kw!("FROM"), Space),
             grantees: Grntee,
             behavior: Option<(Space, CascadeOpt)>,
-            as_clause: Option<(Space, StringEqCI!("AS"), Space, Grntee)>,
+            as_clause: Option<(Space, Kw!("AS"), Space, Grntee)>,
         },
         CubeSelect {
             grant_option: GrantOptionFor,
-            select_kw: StringEqCI!("SELECT"),
-            on_kw: (Space1, StringEqCI!("ON"), Space1),
-            cube_kw: StringEqCI!("CUBE"),
-            cubes_suffix: Option<StringEqCI!("S")>,
+            select_kw: Kw!("SELECT"),
+            on_kw: (Space1, Kw!("ON"), Space1),
+            cube_kw: Either<Kw!("CUBES"), Kw!("CUBE")>,
             cubes: (Space, CubeList),
-            from_kw: (Space, StringEqCI!("FROM"), Space),
+            from_kw: (Space, Kw!("FROM"), Space),
             grantees: Grntee,
             behavior: Option<(Space, CascadeOpt)>,
         },
@@ -3520,20 +3511,20 @@ pub mod leveled {
     #[tygr(name = "simple privs")]
     pub enum SimplePrivs {
         All {
-            all_kw: StringEqCI!("ALL"),
-            privileges_kw: Option<(Space1, StringEqCI!("PRIVILEGES"))>,
+            all_kw: Kw!("ALL"),
+            privileges_kw: Option<(Space1, Kw!("PRIVILEGES"))>,
         },
         Star(StringEq!("*")),
         List(VecSep<SimplePriv, ArgSep>),
-        Execute(StringEqCI!("EXECUTE")),
-        Use(StringEqCI!("USE")),
+        Execute(Kw!("EXECUTE")),
+        Use(Kw!("USE")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "simple priv")]
     pub enum SimplePriv {
-        Alter(StringEqCI!("%ALTER")),
-        Delete(StringEqCI!("DELETE")),
+        Alter(Kw!("%ALTER")),
+        Delete(Kw!("DELETE")),
         OptCol(OptColPriv),
     }
 
@@ -3550,42 +3541,42 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "opt col priv")]
     pub enum OptColPriv {
-        Select(StringEqCI!("SELECT")),
-        Insert(StringEqCI!("INSERT")),
-        Update(StringEqCI!("UPDATE")),
-        References(StringEqCI!("REFERENCES")),
+        Select(Kw!("SELECT")),
+        Insert(Kw!("INSERT")),
+        Update(Kw!("UPDATE")),
+        References(Kw!("REFERENCES")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "admin priv")]
     pub enum AdminPriv {
-        CreateMethod(StringEqCI!("%CREATE_METHOD")),
-        DropMethod(StringEqCI!("%DROP_METHOD")),
-        CreateFunction(StringEqCI!("%CREATE_FUNCTION")),
-        DropFunction(StringEqCI!("%DROP_FUNCTION")),
-        CreateProcedure(StringEqCI!("%CREATE_PROCEDURE")),
-        DropProcedure(StringEqCI!("%DROP_PROCEDURE")),
-        CreateQuery(StringEqCI!("%CREATE_QUERY")),
-        DropQuery(StringEqCI!("%DROP_QUERY")),
-        CreateTable(StringEqCI!("%CREATE_TABLE")),
-        AlterTable(StringEqCI!("%ALTER_TABLE")),
-        DropTable(StringEqCI!("%DROP_TABLE")),
-        CreateView(StringEqCI!("%CREATE_VIEW")),
-        AlterView(StringEqCI!("%ALTER_VIEW")),
-        DropView(StringEqCI!("%DROP_VIEW")),
-        CreateTrigger(StringEqCI!("%CREATE_TRIGGER")),
-        DropTrigger(StringEqCI!("%DROP_TRIGGER")),
-        DBObjectDefinition(StringEqCI!("%DB_OBJECT_DEFINITION")),
-        NoCheck(StringEqCI!("%NOCHECK")),
-        NoTrigger(StringEqCI!("%NOTRIGGER")),
-        NoIndex(StringEqCI!("%NOINDEX")),
-        NoLock(StringEqCI!("%NOLOCK")),
-        CreateMLConfiguration(StringEqCI!("%CREATE_ML_CONFIGURATION")),
-        AlterMLConfiguration(StringEqCI!("%ALTER_ML_CONFIGURATION")),
-        DropMLConfiguration(StringEqCI!("%DROP_ML_CONFIGURATION")),
-        ManageModel(StringEqCI!("%MANAGE_MODEL")),
-        UseModel(StringEqCI!("%USE_MODEL")),
-        NoJourn(StringEqCI!("%NOJOURN")),
+        CreateMethod(Kw!("%CREATE_METHOD")),
+        DropMethod(Kw!("%DROP_METHOD")),
+        CreateFunction(Kw!("%CREATE_FUNCTION")),
+        DropFunction(Kw!("%DROP_FUNCTION")),
+        CreateProcedure(Kw!("%CREATE_PROCEDURE")),
+        DropProcedure(Kw!("%DROP_PROCEDURE")),
+        CreateQuery(Kw!("%CREATE_QUERY")),
+        DropQuery(Kw!("%DROP_QUERY")),
+        CreateTable(Kw!("%CREATE_TABLE")),
+        AlterTable(Kw!("%ALTER_TABLE")),
+        DropTable(Kw!("%DROP_TABLE")),
+        CreateView(Kw!("%CREATE_VIEW")),
+        AlterView(Kw!("%ALTER_VIEW")),
+        DropView(Kw!("%DROP_VIEW")),
+        CreateTrigger(Kw!("%CREATE_TRIGGER")),
+        DropTrigger(Kw!("%DROP_TRIGGER")),
+        DBObjectDefinition(Kw!("%DB_OBJECT_DEFINITION")),
+        NoCheck(Kw!("%NOCHECK")),
+        NoTrigger(Kw!("%NOTRIGGER")),
+        NoIndex(Kw!("%NOINDEX")),
+        NoLock(Kw!("%NOLOCK")),
+        CreateMLConfiguration(Kw!("%CREATE_ML_CONFIGURATION")),
+        AlterMLConfiguration(Kw!("%ALTER_ML_CONFIGURATION")),
+        DropMLConfiguration(Kw!("%DROP_ML_CONFIGURATION")),
+        ManageModel(Kw!("%MANAGE_MODEL")),
+        UseModel(Kw!("%USE_MODEL")),
+        NoJourn(Kw!("%NOJOURN")),
     }
 
     #[derive(Grammar)]
@@ -3596,7 +3587,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum User {
-        Public(StringEqCI!("PUBLIC")),
+        Public(Kw!("PUBLIC")),
         Ident(Option<StringEq!("_")>, Ident),
     }
 
@@ -3607,7 +3598,7 @@ pub mod leveled {
     pub enum Objcts {
         Star(StringEq!("*")),
         Schemas {
-            schema_kw: (StringEqCI!("SCHEMA"), Space),
+            schema_kw: (Kw!("SCHEMA"), Space),
             schemas: VecSep<Schema, ArgSep>,
         },
         ForeignServers(ForeignServerPrivilegeClause),
@@ -3635,12 +3626,12 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "foreign-server-privilege-clause")]
     pub struct ForeignServerPrivilegeClause {
-        pub foreign_kw: Option<(StringEqCI!("FOREIGN"), Space1)>,
+        pub foreign_kw: Option<(Kw!("FOREIGN"), Space1)>,
         pub server_kw: ServersServer,
         // A table named Servers: GRANT SELECT ON Servers TO u1 is a table grant on IRIS.
         pub servers: (
             Space1,
-            NotFollowedBy<(Either<StringEqCI!("TO"), StringEqCI!("FROM")>, Space1)>,
+            NotFollowedBy<(Either<Kw!("TO"), Kw!("FROM")>, Space1)>,
             ForeignServerPrivilegeList,
         ),
     }
@@ -3648,14 +3639,14 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "SERVERS/SERVER")]
     pub enum ServersServer {
-        Servers(StringEqCI!("SERVERS")),
-        Server(StringEqCI!("SERVER")),
+        Servers(Kw!("SERVERS")),
+        Server(Kw!("SERVER")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "chkprv")]
     pub struct ChkPrv {
-        pub checkpriv_kw: StringEqCI!("%CHECKPRIV"),
+        pub checkpriv_kw: Kw!("%CHECKPRIV"),
         pub grant_option: Option<(Space1, GrantOpt)>,
         pub command: (Space1, ChkPrvCmd),
     }
@@ -3663,8 +3654,8 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "grant opt")]
     pub struct GrantOpt {
-        pub kind: Either<StringEqCI!("GRANT"), StringEqCI!("ADMIN")>,
-        pub option_for: (Space1, StringEqCI!("OPTION"), Space1, StringEqCI!("FOR")),
+        pub kind: Either<Kw!("GRANT"), Kw!("ADMIN")>,
+        pub option_for: (Space1, Kw!("OPTION"), Space1, Kw!("FOR")),
     }
 
     #[derive(Grammar)]
@@ -3673,7 +3664,7 @@ pub mod leveled {
         Admin(VecSep<AdminPriv, ArgSep>),
         PrivSpec {
             priv_spec: PrivSpec,
-            on_kw: (Space, StringEqCI!("ON"), Space),
+            on_kw: (Space, Kw!("ON"), Space),
             object: Object,
         },
     }
@@ -3682,7 +3673,7 @@ pub mod leveled {
     #[tygr(name = "priv spec")]
     pub enum PrivSpec {
         Action(Action),
-        Threshold(StringEqCI!("%THRESHOLD")),
+        Threshold(Kw!("%THRESHOLD")),
     }
 
     type OptParenScalx = Option<Parenthesized<Scalx>>;
@@ -3691,81 +3682,62 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "cast type")]
     pub enum CastType {
-        Bigint(StringEqCI!("BIGINT")),
+        Bigint(Kw!("BIGINT")),
         Binary(
-            StringEqCI!("BINARY"),
-            Option<(Space1, StringEqCI!("VARYING"))>,
+            Kw!("BINARY"),
+            Option<(Space1, Kw!("VARYING"))>,
             OptParenScalx,
         ),
-        Bit(StringEqCI!("BIT")),
+        Bit(Kw!("BIT")),
         Character(
-            StringEqCI!("CHARACTER"),
-            Option<(Space1, StringEqCI!("VARYING"))>,
+            Kw!("CHARACTER"),
+            Option<(Space1, Kw!("VARYING"))>,
             OptParenScalx,
         ),
-        Char(
-            StringEqCI!("CHAR"),
-            Option<(Space1, StringEqCI!("VARYING"))>,
-            OptParenScalx,
-        ),
-        Datetime(StringEqCI!("DATETIME")),
-        Date(StringEqCI!("DATE")),
-        Decimal(StringEqCI!("DECIMAL"), OptParenScalx2),
-        Dec(StringEqCI!("DEC"), OptParenScalx2),
-        Double(StringEqCI!("DOUBLE")),
-        Float(StringEqCI!("FLOAT")),
-        Guid(StringEqCI!("GUID")),
-        Integer(StringEqCI!("INTEGER")),
-        Int(StringEqCI!("INT")),
-        Money(StringEqCI!("MONEY")),
-        Nchar(StringEqCI!("NCHAR"), OptParenScalx),
-        Numeric(StringEqCI!("NUMERIC"), OptParenScalx2),
-        Nvarchar(StringEqCI!("NVARCHAR"), OptParenScalx),
-        Posixtime(StringEqCI!("POSIXTIME")),
-        Real(StringEqCI!("REAL")),
-        Smalldatetime(StringEqCI!("SMALLDATETIME")),
-        Smallint(StringEqCI!("SMALLINT")),
-        Smallmoney(StringEqCI!("SMALLMONEY")),
-        Timestamp(StringEqCI!("TIMESTAMP")),
-        Time(StringEqCI!("TIME")),
-        Tinyint(StringEqCI!("TINYINT")),
-        Varbinary(StringEqCI!("VARBINARY"), OptParenScalx),
-        Varchar(StringEqCI!("VARCHAR"), OptParenScalx),
+        Char(Kw!("CHAR"), Option<(Space1, Kw!("VARYING"))>, OptParenScalx),
+        Datetime(Kw!("DATETIME")),
+        Date(Kw!("DATE")),
+        Decimal(Kw!("DECIMAL"), OptParenScalx2),
+        Dec(Kw!("DEC"), OptParenScalx2),
+        Double(Kw!("DOUBLE")),
+        Float(Kw!("FLOAT")),
+        Guid(Kw!("GUID")),
+        Integer(Kw!("INTEGER")),
+        Int(Kw!("INT")),
+        Money(Kw!("MONEY")),
+        Nchar(Kw!("NCHAR"), OptParenScalx),
+        Numeric(Kw!("NUMERIC"), OptParenScalx2),
+        Nvarchar(Kw!("NVARCHAR"), OptParenScalx),
+        Posixtime(Kw!("POSIXTIME")),
+        Real(Kw!("REAL")),
+        Smalldatetime(Kw!("SMALLDATETIME")),
+        Smallint(Kw!("SMALLINT")),
+        Smallmoney(Kw!("SMALLMONEY")),
+        Timestamp(Kw!("TIMESTAMP")),
+        Time(Kw!("TIME")),
+        Tinyint(Kw!("TINYINT")),
+        Varbinary(Kw!("VARBINARY"), OptParenScalx),
+        Varchar(Kw!("VARCHAR"), OptParenScalx),
     }
 
-    pub type IfExists = Option<(StringEqCI!("IF"), Space1, StringEqCI!("EXISTS"), Space)>;
-    pub type IfNotExists = Option<(
-        StringEqCI!("IF"),
-        Space1,
-        StringEqCI!("NOT"),
-        Space1,
-        StringEqCI!("EXISTS"),
-        Space,
-    )>;
-    pub type OrReplace = Option<(StringEqCI!("OR"), Space1, StringEqCI!("REPLACE"), Space)>;
+    pub type IfExists = Option<(Kw!("IF"), Space1, Kw!("EXISTS"), Space)>;
+    pub type IfNotExists = Option<(Kw!("IF"), Space1, Kw!("NOT"), Space1, Kw!("EXISTS"), Space)>;
+    pub type OrReplace = Option<(Kw!("OR"), Space1, Kw!("REPLACE"), Space)>;
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct UserSpec {
         pub name: Ident,
         pub password: Option<(Space, PWPrefix, Space, Password)>,
-        pub default: Option<(
-            (Space, StringEqCI!("DEFAULT"), Space),
-            Ident,
-            (Space, Ident),
-        )>,
-        pub temporary: Option<(
-            (Space, StringEqCI!("TEMPORARY"), Space),
-            Ident,
-            (Space, Ident),
-        )>,
+        pub default: Option<((Space, Kw!("DEFAULT"), Space), Ident, (Space, Ident))>,
+        pub temporary: Option<((Space, Kw!("TEMPORARY"), Space), Ident, (Space, Ident))>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct ServerKw {
-        pub foreign: Option<(StringEqCI!("FOREIGN"), Space1)>,
-        pub server_kw: (StringEqCI!("SERVER"), Space),
+        pub foreign: Option<(Kw!("FOREIGN"), Space1)>,
+        pub server_kw: (Kw!("SERVER"), Space),
     }
 
     #[derive(Grammar)]
@@ -3773,52 +3745,40 @@ pub mod leveled {
     pub enum DDL {
         CreOrAltView {
             cre_or_alt: CreOrAlt,
-            kw: (Space1, StringEqCI!("VIEW"), Space),
+            kw: (Space1, Kw!("VIEW"), Space),
             tname: TName,
             col_list: Option<(Space, FList1)>,
-            as_kw: (Space, StringEqCI!("AS"), Space),
+            as_kw: (Space, Kw!("AS"), Space),
             query: Query,
-            with_clause: Option<((Space, StringEqCI!("WITH"), Space1), ViewWith)>,
+            with_clause: Option<((Space, Kw!("WITH"), Space1), ViewWith)>,
         },
         AlterStatsDropFixed {
-            kw: (StringEqCI!("ALTER"), Space1),
+            kw: (Kw!("ALTER"), Space1),
             scope: StatsScope,
-            drop_fixed: (
-                Space,
-                StringEqCI!("DROP"),
-                Space1,
-                StringEqCI!("FIXED"),
-                Space1,
-            ),
+            drop_fixed: (Space, Kw!("DROP"), Space1, Kw!("FIXED"), Space1),
             clause: StatsClause,
         },
         AlterStatsFix {
-            kw: (StringEqCI!("ALTER"), Space1),
+            kw: (Kw!("ALTER"), Space1),
             scope: StatsScope,
-            fix: (Space, StringEqCI!("FIX"), Space1),
+            fix: (Space, Kw!("FIX"), Space1),
             clause: StatsClause,
         },
         AlterStatsSetRuntime {
-            kw: (StringEqCI!("ALTER"), Space1),
+            kw: (Kw!("ALTER"), Space1),
             scope: StatsScope,
-            set_runtime: (
-                Space,
-                StringEqCI!("SET"),
-                Space1,
-                StringEqCI!("RUNTIME"),
-                Space1,
-            ),
+            set_runtime: (Space, Kw!("SET"), Space1, Kw!("RUNTIME"), Space1),
             prop: StatsProperty,
             eq: (Space, StringEq!("="), Space),
             val: TrueFalse,
         },
         AlterForeignTable {
             kw: (
-                StringEqCI!("ALTER"),
+                Kw!("ALTER"),
                 Space1,
-                StringEqCI!("FOREIGN"),
+                Kw!("FOREIGN"),
                 Space1,
-                StringEqCI!("TABLE"),
+                Kw!("TABLE"),
                 Space,
             ),
             tname: TName,
@@ -3826,328 +3786,286 @@ pub mod leveled {
         },
         AlterMlConfiguration {
             kw: (
-                StringEqCI!("ALTER"),
+                Kw!("ALTER"),
                 Space1,
-                StringEqCI!("ML"),
+                Kw!("ML"),
                 Space1,
-                StringEqCI!("CONFIGURATION"),
+                Kw!("CONFIGURATION"),
                 Space,
             ),
             name: MLConfigurationName,
-            provider: Option<((Space, StringEqCI!("PROVIDER"), Space1), ProviderName)>,
-            desc: Option<((Space, StringEqCI!("%DESCRIPTION"), Space), LiteralOrNull)>,
+            provider: Option<((Space, Kw!("PROVIDER"), Space1), ProviderName)>,
+            desc: Option<((Space, Kw!("%DESCRIPTION"), Space), LiteralOrNull)>,
             using_clause: Option<(Space, MlconfigUsingClause)>,
             settings: Option<(Space, ProviderSpecificSettings)>,
         },
         AlterModel {
-            kw: (StringEqCI!("ALTER"), Space1, StringEqCI!("MODEL"), Space),
+            kw: (Kw!("ALTER"), Space1, Kw!("MODEL"), Space),
             name: ModelName,
             action: (Space, AlterModelAction),
         },
         AlterTable {
-            kw: (StringEqCI!("ALTER"), Space1, StringEqCI!("TABLE"), Space),
+            kw: (Kw!("ALTER"), Space1, Kw!("TABLE"), Space),
             tname: TName,
-            with_check: Option<((Space, StringEqCI!("WITH"), Space1), CheckSpec)>,
+            with_check: Option<((Space, Kw!("WITH"), Space1), CheckSpec)>,
             action: Option<(Space, AlterAction)>,
         },
         AlterUser {
-            kw: (StringEqCI!("ALTER"), Space1, StringEqCI!("USER"), Space),
+            kw: (Kw!("ALTER"), Space1, Kw!("USER"), Space),
             user: UserSpec,
         },
         AlterServer {
-            kw: (StringEqCI!("ALTER"), Space1),
+            kw: (Kw!("ALTER"), Space1),
             server_kw: ServerKw,
             tname: TName,
             action: (Space, AlterServerAction),
         },
         BuildIndex {
-            kw: (StringEqCI!("BUILD"), Space1, StringEqCI!("INDEX"), Space1),
+            kw: (Kw!("BUILD"), Space1, Kw!("INDEX"), Space1),
             options: Vec<(BuildOption, Space1)>,
-            for_kw: (StringEqCI!("FOR"), Space1),
+            for_kw: (Kw!("FOR"), Space1),
             scope: BuildScope,
         },
         CancelQuery {
-            kw: (StringEqCI!("CANCEL"), Space1, StringEqCI!("QUERY"), Space),
-            val: ValSpec,
+            kw: (Kw!("CANCEL"), Space1, Kw!("QUERY"), Space),
+            val: Count,
             cancel_scope: Option<(Space, CancelQueryScope)>,
-            timeout: Option<(Space, StringEqCI!("TIMEOUT"), Space, ValSpec)>,
+            timeout: Option<(Space, Kw!("TIMEOUT"), Space, Count)>,
         },
         Collect {
-            kw: (StringEqCI!("COLLECT"), Space1),
+            kw: (Kw!("COLLECT"), Space1),
             clause: StatsClause,
-            target: (Space1, StringEqCI!("FOR"), Space1, StatsScope),
-            sample: Option<((Space, StringEqCI!("%SAMPLE_PERCENT"), Space), PercentValue)>,
+            target: (Space1, Kw!("FOR"), Space1, StatsScope),
+            sample: Option<((Space, Kw!("%SAMPLE_PERCENT"), Space), PercentValue)>,
         },
         CreateBitmapextentIndex {
             kw: (
-                StringEqCI!("CREATE"),
+                Kw!("CREATE"),
                 Space1,
-                StringEqCI!("BITMAPEXTENT"),
+                Kw!("BITMAPEXTENT"),
                 Space1,
-                StringEqCI!("INDEX"),
+                Kw!("INDEX"),
                 Space,
             ),
             name: IndexName,
-            on_kw: (Space, StringEqCI!("ON"), Space),
-            table_kw: Option<(StringEqCI!("TABLE"), Space)>,
+            on_kw: (Space, Kw!("ON"), Space),
+            table_kw: Option<(Kw!("TABLE"), Space)>,
             tname: TName,
         },
         CreateDatabase {
-            kw: (
-                StringEqCI!("CREATE"),
-                Space1,
-                StringEqCI!("DATABASE"),
-                Space1,
-            ),
-            file: Option<(StringEqCI!("FILE"), Space1)>,
+            kw: (Kw!("CREATE"), Space1, Kw!("DATABASE"), Space1),
+            file: Option<(Kw!("FILE"), Space1)>,
             name: DatabaseName,
             on_dir: Option<(
-                (Space1, StringEqCI!("ON"), Space1, StringEqCI!("DIRECTORY")),
+                (Space1, Kw!("ON"), Space1, Kw!("DIRECTORY")),
                 Option<(Space, StringEq!("="))>,
                 (Space, DirectoryName),
             )>,
-            with_opts: Option<((Space, StringEqCI!("WITH")), Vec1<(Space, DBOption)>)>,
+            with_opts: Option<((Space, Kw!("WITH")), Vec1<(Space, DBOption)>)>,
         },
         CreateForeignTable {
             kw: (
-                StringEqCI!("CREATE"),
+                Kw!("CREATE"),
                 Space1,
-                StringEqCI!("FOREIGN"),
+                Kw!("FOREIGN"),
                 Space1,
-                StringEqCI!("TABLE"),
+                Kw!("TABLE"),
                 Space,
             ),
             if_not_exists: IfNotExists,
             tname: TName,
             columns: Option<Args<VecSep<(Ident, (Space, Datyp)), ArgSep>>>,
-            server: (Space, StringEqCI!("SERVER"), Space),
+            server: (Space, Kw!("SERVER"), Space),
             server_name: TName,
             ft_options: Option<(Space, FTOptions)>,
-            values: Option<(Space, StringEqCI!("VALUES"), Space, FList1)>,
-            using_json: Option<((Space, StringEqCI!("USING"), Space), JSONString)>,
-            novalidate: Option<(Space, StringEqCI!("NOVALIDATE"))>,
+            values: Option<(Space, Kw!("VALUES"), Space, FList1)>,
+            using_json: Option<((Space, Kw!("USING"), Space), JSONString)>,
+            novalidate: Option<(Space, Kw!("NOVALIDATE"))>,
         },
         CreateModel {
-            kw: (StringEqCI!("CREATE"), Space1, StringEqCI!("MODEL"), Space),
+            kw: (Kw!("CREATE"), Space1, Kw!("MODEL"), Space),
             if_not_exists: IfNotExists,
             name: ModelName,
-            predicting: (Space, StringEqCI!("PREDICTING"), Space),
+            predicting: (Space, Kw!("PREDICTING"), Space),
             pred: Parenthesized<(Ident, Option<(Space, Datyp)>)>,
             with_clause: Option<(Space, WithClauseCreate)>,
             source: Option<(Space, ModelSource)>,
             using_clause: Option<(Space, UsingClause)>,
         },
         CreateRole {
-            kw: (StringEqCI!("CREATE"), Space1, StringEqCI!("ROLE"), Space),
+            kw: (Kw!("CREATE"), Space1, Kw!("ROLE"), Space),
             name: Ident,
         },
         CreateSchema {
-            kw: (StringEqCI!("CREATE"), Space1, StringEqCI!("SCHEMA"), Space),
+            kw: (Kw!("CREATE"), Space1, Kw!("SCHEMA"), Space),
             if_not_exists: IfNotExists,
             name: Ident,
         },
         CreateTableAs {
-            kw: (StringEqCI!("CREATE"), Space1, StringEqCI!("TABLE"), Space),
+            kw: (Kw!("CREATE"), Space1, Kw!("TABLE"), Space),
             if_not_exists: IfNotExists,
-            nojourn: Option<(StringEqCI!("%NOJOURN"), Space)>,
+            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
             tname: TName,
-            as_kw: (Space, StringEqCI!("AS"), Space),
+            as_kw: (Space, Kw!("AS"), Space),
             with_clause: Option<(WithClause, Space)>,
             query: Query,
             options: Option<(Space, TableOptionList)>,
         },
         CreateUser {
-            kw: (StringEqCI!("CREATE"), Space1, StringEqCI!("USER"), Space),
+            kw: (Kw!("CREATE"), Space1, Kw!("USER"), Space),
             user: UserSpec,
         },
         CreateServer {
-            kw: (StringEqCI!("CREATE"), Space1),
+            kw: (Kw!("CREATE"), Space1),
             server_kw: ServerKw,
             tname: TName,
-            type_clause: Option<((Space, StringEqCI!("TYPE"), Space), ServerType)>,
+            type_clause: Option<((Space, Kw!("TYPE"), Space), ServerType)>,
             fdw: (
                 Space,
-                StringEqCI!("FOREIGN"),
+                Kw!("FOREIGN"),
                 Space1,
-                StringEqCI!("DATA"),
+                Kw!("DATA"),
                 Space1,
-                StringEqCI!("WRAPPER"),
+                Kw!("WRAPPER"),
                 Space,
             ),
             fdw_name: FDWName,
             connection: (Space, CreateServerConnection),
             delimited: Option<(Space, CreateServerDelimitedIds)>,
-            passthrough: Option<(Space, EnableDisable, Space1, StringEqCI!("PASSTHROUGH"))>,
+            passthrough: Option<(Space, EnableDisable, Space1, Kw!("PASSTHROUGH"))>,
             pushdown: Option<(Space, FTPushdownClause)>,
-            using_json: Option<((Space, StringEqCI!("USING"), Space), JSONString)>,
+            using_json: Option<((Space, Kw!("USING"), Space), JSONString)>,
         },
         CreateIndex {
-            kw: (StringEqCI!("CREATE"), Space1),
+            kw: (Kw!("CREATE"), Space1),
             partitioned: Option<(CreateIndexPartitioned, Space1)>,
             qualifiers: Option<(IndexQualifiers, Space)>,
-            index_kw: (StringEqCI!("INDEX"), Space),
+            index_kw: (Kw!("INDEX"), Space),
             name: IndexName,
-            on_kw: (Space, StringEqCI!("ON"), Space),
-            table_kw: Option<(StringEqCI!("TABLE"), Space)>,
+            on_kw: (Space, Kw!("ON"), Space),
+            table_kw: Option<(Kw!("TABLE"), Space)>,
             tname: TName,
             comp_list: Args<VecSep<ComponentSpec, ArgSep>>,
             as_clause: Option<(
-                (Space, StringEqCI!("AS"), Space),
+                (Space, Kw!("AS"), Space),
                 ClassName,
                 Option<(Space, CreateIndexAsParams)>,
             )>,
             with_clause: Option<(Space, CreateIndexWithClause)>,
             in_on: Option<(Space, InOn, (Space, Token))>,
-            defer_immediate: Option<(
-                Space,
-                ImmediateDefer,
-                Option<(Space1, StringEqCI!("BUILD"))>,
-            )>,
+            defer_immediate: Option<(Space, ImmediateDefer, Option<(Space1, Kw!("BUILD"))>)>,
         },
         CreateAggregate {
-            kw: (StringEqCI!("CREATE"), Space1),
+            kw: (Kw!("CREATE"), Space1),
             or_replace: OrReplace,
-            agg_kw: (StringEqCI!("AGGREGATE"), Space),
+            agg_kw: (Kw!("AGGREGATE"), Space),
             name: QualifiedSPName,
             params: Args<Option<ParameterList>>,
-            returns: Option<((Space, StringEqCI!("RETURNS"), Space), Datyp)>,
+            returns: Option<((Space, Kw!("RETURNS"), Space), Datyp)>,
             initialize: Option<(
-                (
-                    Space,
-                    StringEqCI!("INITIALIZE"),
-                    Space1,
-                    StringEqCI!("WITH"),
-                    Space,
-                ),
+                (Space, Kw!("INITIALIZE"), Space1, Kw!("WITH"), Space),
                 QualifiedSPName,
             )>,
             iterate: (
-                (
-                    Space,
-                    StringEqCI!("ITERATE"),
-                    Space1,
-                    StringEqCI!("WITH"),
-                    Space,
-                ),
+                (Space, Kw!("ITERATE"), Space1, Kw!("WITH"), Space),
                 QualifiedSPName,
             ),
             merge: Option<(
-                (
-                    Space,
-                    StringEqCI!("MERGE"),
-                    Space1,
-                    StringEqCI!("WITH"),
-                    Space,
-                ),
+                (Space, Kw!("MERGE"), Space1, Kw!("WITH"), Space),
                 QualifiedSPName,
             )>,
             finalize: Option<(
-                (
-                    Space,
-                    StringEqCI!("FINALIZE"),
-                    Space1,
-                    StringEqCI!("WITH"),
-                    Space,
-                ),
+                (Space, Kw!("FINALIZE"), Space1, Kw!("WITH"), Space),
                 QualifiedSPName,
             )>,
         },
         CreateFunction {
-            kw: (StringEqCI!("CREATE"), Space1),
+            kw: (Kw!("CREATE"), Space1),
             or_replace: OrReplace,
-            func_kw: (StringEqCI!("FUNCTION"), Space),
+            func_kw: (Kw!("FUNCTION"), Space),
             name: QualifiedSPName,
             spec: (Space, CodeSpecification),
         },
         CreateMlConfiguration {
-            kw: (StringEqCI!("CREATE"), Space1),
+            kw: (Kw!("CREATE"), Space1),
             or_replace: OrReplace,
-            ml_kw: (
-                StringEqCI!("ML"),
-                Space1,
-                StringEqCI!("CONFIGURATION"),
-                Space,
-            ),
+            ml_kw: (Kw!("ML"), Space1, Kw!("CONFIGURATION"), Space),
             name: MLConfigurationName,
-            provider: ((Space, StringEqCI!("PROVIDER"), Space1), ProviderName),
-            desc: Option<((Space1, StringEqCI!("%DESCRIPTION"), Space), LiteralOrNull)>,
+            provider: ((Space, Kw!("PROVIDER"), Space1), ProviderName),
+            desc: Option<((Space1, Kw!("%DESCRIPTION"), Space), LiteralOrNull)>,
             using_clause: Option<(Space, MlconfigUsingClause)>,
             settings: Option<(Space, ProviderSpecificSettings)>,
         },
         CreateProcedure {
-            kw: (StringEqCI!("CREATE"), Space1),
+            kw: (Kw!("CREATE"), Space1),
             or_replace: OrReplace,
-            proc_kw: (StringEqCI!("PROC"), Option<StringEqCI!("EDURE")>, Space),
+            proc_kw: (Either<Kw!("PROCEDURE"), Kw!("PROC")>, Space),
             name: QualifiedSPName,
             spec: (Space, CodeSpecification),
         },
         CreateTrigger {
-            kw: (StringEqCI!("CREATE"), Space1),
+            kw: (Kw!("CREATE"), Space1),
             or_replace: OrReplace,
-            trigger_kw: (StringEqCI!("TRIGGER"), Space),
+            trigger_kw: (Kw!("TRIGGER"), Space),
             name: TName,
             time: (Space, TriggerTime, Space1),
             events: VecSep<TriggerEvent, ArgSep>,
-            order: Option<(Space, StringEqCI!("ORDER"), Space1, NonNegativeInteger)>,
-            on: (Space, StringEqCI!("ON"), Space, TName),
-            referencing: Option<(
-                Space,
-                StringEqCI!("REFERENCING"),
-                Vec1<(Space, TriggerReferencing)>,
-            )>,
+            order: Option<(Space, Kw!("ORDER"), Space1, NonNegativeInteger)>,
+            on: (Space, Kw!("ON"), Space, TName),
+            referencing: Option<(Space, Kw!("REFERENCING"), Vec1<(Space, TriggerReferencing)>)>,
             for_each: Option<(
                 Space,
-                StringEqCI!("FOR"),
+                Kw!("FOR"),
                 Space1,
-                StringEqCI!("EACH"),
+                Kw!("EACH"),
                 Space1,
                 TriggerOrientation,
             )>,
-            when: Option<(Space, StringEqCI!("WHEN"), Space, Parenthesized<Prdct>)>,
+            when: Option<(Space, Kw!("WHEN"), Space, Parenthesized<Prdct>)>,
             body: (Space, TriggerBody),
         },
         DropTrigger {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("TRIGGER"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("TRIGGER"), Space),
             if_exists: IfExists,
             name: TName,
-            from: Option<((Space, StringEqCI!("FROM"), Space), TName)>,
+            from: Option<((Space, Kw!("FROM"), Space), TName)>,
         },
         CreateQuery {
-            kw: (StringEqCI!("CREATE"), Space1),
+            kw: (Kw!("CREATE"), Space1),
             or_replace: OrReplace,
-            query_kw: (StringEqCI!("QUERY"), Space),
+            query_kw: (Kw!("QUERY"), Space),
             name: QualifiedSPName,
             spec: (Space, CodeSpecification),
         },
         CreateMethod {
-            kw: (StringEqCI!("CREATE"), Space1),
-            static_kw: Option<(StringEqCI!("STATIC"), Space1)>,
-            method_kw: (StringEqCI!("METHOD"), Space),
+            kw: (Kw!("CREATE"), Space1),
+            static_kw: Option<(Kw!("STATIC"), Space1)>,
+            method_kw: (Kw!("METHOD"), Space),
             name: QualifiedSPName,
             spec: (Space, CodeSpecification),
         },
         CreateTable {
-            kw: (StringEqCI!("CREATE"), Space1),
+            kw: (Kw!("CREATE"), Space1),
             temp: Option<(CreateTableTemp, Space1)>,
-            table_kw: (StringEqCI!("TABLE"), Space),
+            table_kw: (Kw!("TABLE"), Space),
             if_not_exists: IfNotExists,
             tname: TName,
             elems: Args<VecSep<Telem, ArgSep>>,
             options: Option<(Space, TableOptionList)>,
         },
         DropDatabase {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("DATABASE"), Space1),
+            kw: (Kw!("DROP"), Space1, Kw!("DATABASE"), Space1),
             if_exists: IfExists,
             name: DatabaseName,
-            retain: Option<(Space1, StringEqCI!("RETAIN_FILES"))>,
+            retain: Option<(Space1, Kw!("RETAIN_FILES"))>,
         },
         DropForeignTable {
             kw: (
-                StringEqCI!("DROP"),
+                Kw!("DROP"),
                 Space1,
-                StringEqCI!("FOREIGN"),
+                Kw!("FOREIGN"),
                 Space1,
-                StringEqCI!("TABLE"),
+                Kw!("TABLE"),
                 Space,
             ),
             if_exists: IfExists,
@@ -4155,159 +4073,154 @@ pub mod leveled {
             cascade: Option<(Space, CascadeOpt)>,
         },
         DropFunction {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("FUNCTION"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("FUNCTION"), Space),
             if_exists: IfExists,
             name: QualifiedSPName,
-            from: Option<((Space, StringEqCI!("FROM"), Space), ClassName)>,
+            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
         },
         DropIndexDot {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("INDEX"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("INDEX"), Space),
             if_exists: IfExists,
-            nojourn: Option<(StringEqCI!("%NOJOURN"), Space)>,
+            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
             tname: Ident,
             name: Vec1<((Space, StringEq!("."), Space), Ident)>,
         },
         DropIndexOn {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("INDEX"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("INDEX"), Space),
             if_exists: IfExists,
             name: IndexName,
             on: Option<(
-                (Space, StringEqCI!("ON"), Space),
-                Option<(StringEqCI!("TABLE"), Space)>,
+                (Space, Kw!("ON"), Space),
+                Option<(Kw!("TABLE"), Space)>,
                 TName,
             )>,
         },
         DropMethod {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("METHOD"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("METHOD"), Space),
             if_exists: IfExists,
             name: QualifiedSPName,
-            from: Option<((Space, StringEqCI!("FROM"), Space), ClassName)>,
+            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
         },
         DropMlConfiguration {
             kw: (
-                StringEqCI!("DROP"),
+                Kw!("DROP"),
                 Space1,
-                StringEqCI!("ML"),
+                Kw!("ML"),
                 Space1,
-                StringEqCI!("CONFIGURATION"),
+                Kw!("CONFIGURATION"),
                 Space,
             ),
             if_exists: IfExists,
             name: MLConfigurationName,
         },
         DropModel {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("MODEL"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("MODEL"), Space),
             if_exists: IfExists,
             name: ModelName,
         },
         DropProcedure {
             kw: (
-                StringEqCI!("DROP"),
+                Kw!("DROP"),
                 Space1,
-                StringEqCI!("PROC"),
-                Option<StringEqCI!("EDURE")>,
+                Either<Kw!("PROCEDURE"), Kw!("PROC")>,
                 Space,
             ),
             if_exists: IfExists,
             name: QualifiedSPName,
-            from: Option<((Space, StringEqCI!("FROM"), Space), ClassName)>,
+            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
         },
         DropQuery {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("QUERY"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("QUERY"), Space),
             if_exists: IfExists,
             name: QualifiedSPName,
-            from: Option<((Space, StringEqCI!("FROM"), Space), ClassName)>,
+            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
         },
         DropRole {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("ROLE"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("ROLE"), Space),
             if_exists: IfExists,
             name: Ident,
         },
         DropSchema {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("SCHEMA"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("SCHEMA"), Space),
             if_exists: IfExists,
             name: Ident,
             cascade_restrict: Option<(Space, CascadeOpt)>,
         },
         DropTable {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("TABLE"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("TABLE"), Space),
             if_exists: IfExists,
-            nojourn: Option<(StringEqCI!("%NOJOURN"), Space)>,
+            nojourn: Option<(Kw!("%NOJOURN"), Space)>,
             tname: TName,
             cascade: Option<(Space, CascadeOpt)>,
             data: Option<(Space, DataOption)>,
         },
         DropUser {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("USER"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("USER"), Space),
             if_exists: IfExists,
             name: Ident,
-            cascade: Option<(Space, StringEqCI!("CASCADE"))>,
+            cascade: Option<(Space, Kw!("CASCADE"))>,
         },
         DropView {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("VIEW"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("VIEW"), Space),
             if_exists: IfExists,
             tname: TName,
             cascade: Option<(Space, CascadeOpt)>,
         },
         DropServer {
-            kw: (StringEqCI!("DROP"), Space1),
+            kw: (Kw!("DROP"), Space1),
             server_kw: ServerKw,
             tname: TName,
             cascade: Option<(Space, CascadeOpt)>,
         },
         DropAggregate {
-            kw: (StringEqCI!("DROP"), Space1, StringEqCI!("AGGREGATE"), Space),
+            kw: (Kw!("DROP"), Space1, Kw!("AGGREGATE"), Space),
             if_exists: IfExists,
             name: QualifiedSPName,
         },
         FreezePlans {
-            kw: (StringEqCI!("FREEZE"), Space1, StringEqCI!("PLANS")),
-            by: Option<((Space1, StringEqCI!("BY"), Space1), FreezeScope)>,
+            kw: (Kw!("FREEZE"), Space1, Kw!("PLANS")),
+            by: Option<((Space1, Kw!("BY"), Space1), FreezeScope)>,
         },
         Load {
-            kw: (StringEqCI!("LOAD"), Space),
+            kw: (Kw!("LOAD"), Space),
             spec: LoadSpec,
         },
         PurgeQueries {
-            kw: (StringEqCI!("PURGE"), Space1),
-            cached: Option<(StringEqCI!("CACHED"), Space1)>,
-            queries: StringEqCI!("QUERIES"),
-            by: Option<((Space1, StringEqCI!("BY"), Space1), PurgeScope)>,
+            kw: (Kw!("PURGE"), Space1),
+            cached: Option<(Kw!("CACHED"), Space1)>,
+            queries: Kw!("QUERIES"),
+            by: Option<((Space1, Kw!("BY"), Space1), PurgeScope)>,
         },
         TrainModel {
-            kw: (StringEqCI!("TRAIN"), Space1, StringEqCI!("MODEL"), Space),
+            kw: (Kw!("TRAIN"), Space1, Kw!("MODEL"), Space),
             name: ModelName,
-            as_name: Option<((Space, StringEqCI!("AS"), Space), ModelName)>,
-            not_default: Option<(Space, StringEqCI!("NOT"), Space1, StringEqCI!("DEFAULT"))>,
-            for_col: Option<((Space, StringEqCI!("FOR"), Space), ColumnDefItem)>,
+            as_name: Option<((Space, Kw!("AS"), Space), ModelName)>,
+            not_default: Option<(Space, Kw!("NOT"), Space1, Kw!("DEFAULT"))>,
+            for_col: Option<((Space, Kw!("FOR"), Space), ColumnDefItem)>,
             with_clause: Option<(Space, WithClauseTrain)>,
             source: Option<(Space, ModelSource)>,
             using_clause: Option<(Space, UsingClause)>,
         },
         TuneTable {
-            kw: (StringEqCI!("TUNE"), Space1, StringEqCI!("TABLE"), Space),
+            kw: (Kw!("TUNE"), Space1, Kw!("TABLE"), Space),
             tname: TName,
             options: Vec<(Space, TuneOption)>,
         },
         UnfreezePlans {
-            kw: (StringEqCI!("UNFREEZE"), Space1, StringEqCI!("PLANS")),
-            from_upgrade: Option<(
-                Space1,
-                Option<(StringEqCI!("FROM"), Space1)>,
-                StringEqCI!("UPGRADE"),
-            )>,
-            by: Option<((Space1, StringEqCI!("BY"), Space1), FreezeScope)>,
+            kw: (Kw!("UNFREEZE"), Space1, Kw!("PLANS")),
+            from_upgrade: Option<(Space1, Option<(Kw!("FROM"), Space1)>, Kw!("UPGRADE"))>,
+            by: Option<((Space1, Kw!("BY"), Space1), FreezeScope)>,
         },
         UseDatabase {
-            kw: (StringEqCI!("USE"), Space1),
-            database: Option<(StringEqCI!("DATABASE"), Space1)>,
+            kw: (Kw!("USE"), Space1),
+            database: Option<(Kw!("DATABASE"), Space1)>,
             name: DatabaseName,
         },
         ValidateModel {
-            kw: (StringEqCI!("VALIDATE"), Space1, StringEqCI!("MODEL"), Space),
+            kw: (Kw!("VALIDATE"), Space1, Kw!("MODEL"), Space),
             name: ModelName,
-            as_name: Option<((Space, StringEqCI!("AS"), Space), ModelName)>,
-            use_name: Option<((Space, StringEqCI!("USE"), Space), ModelName)>,
+            as_name: Option<((Space, Kw!("AS"), Space), ModelName)>,
+            use_name: Option<((Space, Kw!("USE"), Space), ModelName)>,
             with_clause: Option<(Space, WithClauseTrain)>,
             source: Option<(Space, ModelSource)>,
             using_clause: Option<(Space, UsingClause)>,
@@ -4319,29 +4232,29 @@ pub mod leveled {
     pub struct CreateTableTemp {
         pub private_global: PrivateGlobal,
         pub space: Space1,
-        pub temporary: StringEqCI!("TEMPORARY"),
+        pub temporary: Kw!("TEMPORARY"),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "PRIVATE/GLOBAL")]
     pub enum PrivateGlobal {
-        Global(StringEqCI!("GLOBAL")),
-        Private(StringEqCI!("PRIVATE")),
+        Global(Kw!("GLOBAL")),
+        Private(Kw!("PRIVATE")),
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum CreateIndexPartitioned {
-        NonPartitioned(StringEqCI!("NONPARTITIONED")),
-        Partitioned(StringEqCI!("PARTITIONED")),
+        NonPartitioned(Kw!("NONPARTITIONED")),
+        Partitioned(Kw!("PARTITIONED")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "create server connection")]
     pub enum CreateServerConnection {
-        Connection((StringEqCI!("CONNECTION"), Space), Literal),
+        Connection((Kw!("CONNECTION"), Space), Literal),
         Host {
-            kw: (StringEqCI!("HOST"), Space),
+            kw: (Kw!("HOST"), Space),
             host: Literal,
             options: Option<Args<DBServerOptions>>,
         },
@@ -4350,15 +4263,15 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum CreateServerDelimitedIds {
-        Delimited(StringEqCI!("DELIMITEDIDS")),
-        NoDelimited(StringEqCI!("NODELIMITEDIDS")),
+        Delimited(Kw!("DELIMITEDIDS")),
+        NoDelimited(Kw!("NODELIMITEDIDS")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "ENABLE/DISABLE")]
     pub enum EnableDisable {
-        Enable(StringEqCI!("ENABLE")),
-        Disable(StringEqCI!("DISABLE")),
+        Enable(Kw!("ENABLE")),
+        Disable(Kw!("DISABLE")),
     }
 
     #[derive(Grammar)]
@@ -4366,7 +4279,7 @@ pub mod leveled {
     pub enum CreateIndexAsParams {
         Parens(Parenthesized<VecSep<IndexParameterSpec, ArgSep>>),
         With {
-            kw: (StringEqCI!("WITH"), Space),
+            kw: (Kw!("WITH"), Space),
             params: VecSep<IndexParameterSpec, ArgSep>,
         },
     }
@@ -4374,17 +4287,13 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct CreateIndexWithClause {
-        pub kw: (StringEqCI!("WITH"), Space),
-        pub data: Option<(StringEqCI!("DATA"), Space, FList1)>,
-        pub pad_index: IndexWithItem<StringEqCI!("PAD_INDEX")>,
-        pub fillfactor: IndexWithItem<(
-            StringEqCI!("FILLFACTOR"),
-            (Space, StringEq!("="), Space),
-            Literal,
-        )>,
-        pub ignore_dup: IndexWithItem<StringEqCI!("IGNORE_DUP_KEY")>,
-        pub drop_existing: IndexWithItem<StringEqCI!("DROP_EXISTING")>,
-        pub stats_norecompute: IndexWithItem<StringEqCI!("STATISTICS_NORECOMPUTE")>,
+        pub kw: (Kw!("WITH"), Space),
+        pub data: Option<(Kw!("DATA"), Space, FList1)>,
+        pub pad_index: IndexWithItem<Kw!("PAD_INDEX")>,
+        pub fillfactor: IndexWithItem<(Kw!("FILLFACTOR"), (Space, StringEq!("="), Space), Literal)>,
+        pub ignore_dup: IndexWithItem<Kw!("IGNORE_DUP_KEY")>,
+        pub drop_existing: IndexWithItem<Kw!("DROP_EXISTING")>,
+        pub stats_norecompute: IndexWithItem<Kw!("STATISTICS_NORECOMPUTE")>,
     }
 
     /// An item of an index's WITH clause, after a blank and an optional comma.
@@ -4393,8 +4302,8 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "IMMEDIATE/DEFER")]
     pub enum ImmediateDefer {
-        Immediate(StringEqCI!("IMMEDIATE")),
-        Defer(StringEqCI!("DEFER")),
+        Immediate(Kw!("IMMEDIATE")),
+        Defer(Kw!("DEFER")),
     }
 
     #[derive(Grammar)]
@@ -4409,67 +4318,63 @@ pub mod leveled {
     pub enum Password {
         Ident(Ident),
         Literal(Literal),
-        NULL(StringEqCI!("NULL")),
+        NULL(Kw!("NULL")),
     }
 
     #[derive(Grammar)]
     pub enum PWPrefix {
-        IdentifiedBy(StringEqCI!("IDENTIFIED"), Space1, StringEqCI!("BY")),
-        IdentifyBy(StringEqCI!("IDENTIFY"), Space1, StringEqCI!("BY")),
-        WithPassword(
-            Option<(StringEqCI!("WITH"), Space1)>,
-            StringEqCI!("PASSWORD"),
-        ),
+        IdentifiedBy(Kw!("IDENTIFIED"), Space1, Kw!("BY")),
+        IdentifyBy(Kw!("IDENTIFY"), Space1, Kw!("BY")),
+        WithPassword(Option<(Kw!("WITH"), Space1)>, Kw!("PASSWORD")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "build scope")]
     pub enum BuildScope {
-        All(StringEqCI!("ALL")),
-        Schema((StringEqCI!("SCHEMA"), Space), Ident),
+        All(Kw!("ALL")),
+        Schema((Kw!("SCHEMA"), Space), Ident),
         Table {
-            table_kw: (StringEqCI!("TABLE"), Space),
+            table_kw: (Kw!("TABLE"), Space),
             name: VecSep<Ident, (Space, StringEq!("."), Space)>,
-            index: Option<((Space, StringEqCI!("INDEX"), Space), VecSep<Ident, ArgSep>)>,
+            index: Option<((Space, Kw!("INDEX"), Space), VecSep<Ident, ArgSep>)>,
         },
     }
 
     #[derive(Grammar)]
     #[tygr(name = "build option")]
     pub enum BuildOption {
-        NoJourn(StringEqCI!("%NOJOURN")),
-        NoLock(StringEqCI!("%NOLOCK")),
+        NoJourn(Kw!("%NOJOURN")),
+        NoLock(Kw!("%NOLOCK")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "purge scope")]
     pub enum PurgeScope {
-        Age((StringEqCI!("AGE"), Space), Literal),
+        Age((Kw!("AGE"), Space), Literal),
         Name {
-            name_kw: (StringEqCI!("NAME"), Space),
+            name_kw: (Kw!("NAME"), Space),
             names: VecSep<VecSep<Ident, (Space, StringEq!("."), Space)>, ArgSep>,
         },
-        Table((StringEqCI!("TABLE"), Space), TName),
+        Table((Kw!("TABLE"), Space), TName),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "freeze scope")]
     pub enum FreezeScope {
-        Id((StringEqCI!("ID"), Space), Literal),
-        Schema((StringEqCI!("SCHEMA"), Space), Schema),
-        Table((StringEqCI!("TABLE"), Space), TName),
+        Id((Kw!("ID"), Space), Literal),
+        Schema((Kw!("SCHEMA"), Space), Schema),
+        Table((Kw!("TABLE"), Space), TName),
     }
 
-    pub type CancelQueryScope =
-        Prefix<(StringEqCI!("IDENTIFIED"), Space1, StringEqCI!("BY"), Space), ValSpec>;
+    pub type CancelQueryScope = Prefix<(Kw!("IDENTIFIED"), Space1, Kw!("BY"), Space), Count>;
 
-    pub type WithClauseCreate = Prefix<(StringEqCI!("WITH"), Space), Parenthesized<ColumnDefList>>;
+    pub type WithClauseCreate = Prefix<(Kw!("WITH"), Space), Parenthesized<ColumnDefList>>;
 
     #[derive(Grammar)]
     #[tygr(name = "model-source")]
     pub enum ModelSource {
         Subquery {
-            kw: (StringEqCI!("FROM"), Space),
+            kw: (Kw!("FROM"), Space),
             selex: Parenthesized<Src<Selex>>,
         },
         Inline {
@@ -4481,13 +4386,13 @@ pub mod leveled {
         },
     }
 
-    pub type UsingClause = Prefix<(StringEqCI!("USING"), Space), AlgDescription>;
+    pub type UsingClause = Prefix<(Kw!("USING"), Space), AlgDescription>;
 
     #[derive(Grammar)]
     #[tygr(name = "alg description")]
     pub struct AlgDescription(pub JSONObject);
 
-    pub type WithClauseTrain = Prefix<(StringEqCI!("WITH"), Space), TrainWith>;
+    pub type WithClauseTrain = Prefix<(Kw!("WITH"), Space), TrainWith>;
 
     #[derive(Grammar)]
     #[tygr(name = "train-with")]
@@ -4514,47 +4419,47 @@ pub mod leveled {
     #[tygr(name = "alter-model-action")]
     pub enum AlterModelAction {
         Default(DefaultTrainedModel),
-        Purge(StringEqCI!("PURGE"), Option<(Space, Scope)>),
+        Purge(Kw!("PURGE"), Option<(Space, Scope)>),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "DefaultTrainedModel")]
     pub struct DefaultTrainedModel {
-        pub kw: StringEqCI!("DEFAULT"),
-        pub trained_model: Option<(Space1, StringEqCI!("TRAINED"), Space1, StringEqCI!("MODEL"))>,
+        pub kw: Kw!("DEFAULT"),
+        pub trained_model: Option<(Space1, Kw!("TRAINED"), Space1, Kw!("MODEL"))>,
         pub name: (Space, TrainedModelName),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "scope")]
     pub enum Scope {
-        Days(Integer, (Space1, StringEqCI!("DAYS"))),
-        All(StringEqCI!("ALL")),
+        Days(Integer, (Space1, Kw!("DAYS"))),
+        All(Kw!("ALL")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "provider_name")]
     pub enum ProviderName {
-        AutoML(StringEqCI!("AutoML")),
-        DataRobot(StringEqCI!("DataRobot")),
-        H2O(StringEqCI!("H2O")),
-        PMML(StringEqCI!("PMML")),
+        AutoML(Kw!("AutoML")),
+        DataRobot(Kw!("DataRobot")),
+        H2O(Kw!("H2O")),
+        PMML(Kw!("PMML")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "literal or NULL")]
     pub enum LiteralOrNull {
         Literal(Literal),
-        Null(StringEqCI!("NULL")),
+        Null(Kw!("NULL")),
     }
 
-    pub type MlconfigUsingClause = Prefix<(StringEqCI!("USING"), Space), MlconfigUsing>;
+    pub type MlconfigUsingClause = Prefix<(Kw!("USING"), Space), MlconfigUsing>;
 
     #[derive(Grammar)]
     #[tygr(name = "mlconfig-using")]
     pub enum MlconfigUsing {
         JSONString(JSONObject),
-        Null(StringEqCI!("NULL")),
+        Null(Kw!("NULL")),
     }
 
     #[derive(Grammar)]
@@ -4567,16 +4472,16 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "tune option")]
     pub enum TuneOption {
-        ClearValues(StringEqCI!("%CLEAR_VALUES")),
-        KeepUpToDate(StringEqCI!("%KEEP_UP_TO_DATE")),
-        RecompileCQ(StringEqCI!("%RECOMPILE_CQ")),
-        SamplePercent(StringEqCI!("%SAMPLE_PERCENT"), (Space, PercentValue)),
+        ClearValues(Kw!("%CLEAR_VALUES")),
+        KeepUpToDate(Kw!("%KEEP_UP_TO_DATE")),
+        RecompileCQ(Kw!("%RECOMPILE_CQ")),
+        SamplePercent(Kw!("%SAMPLE_PERCENT"), (Space, PercentValue)),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "DR option")]
     pub struct DROption {
-        pub name: Either<StringEqCI!("APITOKEN"), StringEqCI!("URL")>,
+        pub name: Either<Kw!("APITOKEN"), Kw!("URL")>,
         pub eq: Option<(Space, StringEq!("="))>,
         pub value: (Space, LiteralOrNull),
     }
@@ -4584,7 +4489,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "H2O option")]
     pub struct H2OOption {
-        pub kw: StringEqCI!("JAVATLSCONFIGFILE"),
+        pub kw: Kw!("JAVATLSCONFIGFILE"),
         pub eq: Option<(Space, StringEq!("="))>,
         pub val: (Space, LiteralOrNull),
     }
@@ -4596,8 +4501,8 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "ft-options")]
     pub enum FTOptions {
-        Table((StringEqCI!("TABLE"), Space), Literal),
-        Query((StringEqCI!("QUERY"), Space), Literal),
+        Table((Kw!("TABLE"), Space), Literal),
+        Query((Kw!("QUERY"), Space), Literal),
         File(FileSource),
     }
 
@@ -4622,15 +4527,15 @@ pub mod leveled {
     #[tygr(name = "db-server-options")]
     pub struct DBServerOptions(pub Ident);
 
-    pub type FTPushdownClause = Prefix<StringEqCI!("PUSHDOWN"), (Space1, FTPushdownType)>;
+    pub type FTPushdownClause = Prefix<Kw!("PUSHDOWN"), (Space1, FTPushdownType)>;
 
     #[derive(Grammar)]
     #[tygr(name = "ft-pushdown-type")]
     pub enum FTPushdownType {
-        Ansi92(StringEqCI!("ANSI92")),
-        Extended(StringEqCI!("EXTENDED")),
-        Iris(StringEqCI!("IRIS")),
-        Off(StringEqCI!("OFF")),
+        Ansi92(Kw!("ANSI92")),
+        Extended(Kw!("EXTENDED")),
+        Iris(Kw!("IRIS")),
+        Off(Kw!("OFF")),
     }
 
     #[derive(Grammar)]
@@ -4644,36 +4549,36 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "trigger time")]
     pub enum TriggerTime {
-        Before(StringEqCI!("BEFORE")),
-        After(StringEqCI!("AFTER")),
+        Before(Kw!("BEFORE")),
+        After(Kw!("AFTER")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "trigger event")]
     pub enum TriggerEvent {
-        Insert(StringEqCI!("INSERT")),
-        Delete(StringEqCI!("DELETE")),
+        Insert(Kw!("INSERT")),
+        Delete(Kw!("DELETE")),
         Update {
-            kw: StringEqCI!("UPDATE"),
-            of: Option<(Space1, StringEqCI!("OF"), Space, VecSep<Ident, ArgSep>)>,
+            kw: Kw!("UPDATE"),
+            of: Option<(Space1, Kw!("OF"), Space, VecSep<Ident, ArgSep>)>,
         },
     }
 
     #[derive(Grammar)]
     #[tygr(name = "trigger referencing")]
     pub struct TriggerReferencing {
-        pub old_new: Either<StringEqCI!("OLD"), StringEqCI!("NEW")>,
-        pub row: Option<(Space1, StringEqCI!("ROW"))>,
-        pub as_kw: Option<(Space1, StringEqCI!("AS"))>,
+        pub old_new: Either<Kw!("OLD"), Kw!("NEW")>,
+        pub row: Option<(Space1, Kw!("ROW"))>,
+        pub as_kw: Option<(Space1, Kw!("AS"))>,
         pub alias: (Space, Ident),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "trigger orientation")]
     pub enum TriggerOrientation {
-        RowAndObject(StringEqCI!("ROW_AND_OBJECT")),
-        Row(StringEqCI!("ROW")),
-        Statement(StringEqCI!("STATEMENT")),
+        RowAndObject(Kw!("ROW_AND_OBJECT")),
+        Row(Kw!("ROW")),
+        Statement(Kw!("STATEMENT")),
     }
 
     #[derive(Grammar)]
@@ -4681,7 +4586,7 @@ pub mod leveled {
     pub enum TriggerBody {
         Code(CodeBody),
         Stat {
-            lang: Option<(StringEqCI!("LANGUAGE"), Space1, StringEqCI!("SQL"), Space)>,
+            lang: Option<(Kw!("LANGUAGE"), Space1, Kw!("SQL"), Space)>,
             stat: Box<Src<Stat>>,
         },
     }
@@ -4689,29 +4594,29 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "lock spec")]
     pub enum LockSpec {
-        Row(StringEqCI!("ROW")),
-        Page(StringEqCI!("PAGE")),
+        Row(Kw!("ROW")),
+        Page(Kw!("PAGE")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "cascade opt")]
     pub enum CascadeOpt {
-        Restrict(StringEqCI!("RESTRICT")),
-        Cascade(StringEqCI!("CASCADE")),
+        Restrict(Kw!("RESTRICT")),
+        Cascade(Kw!("CASCADE")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "data option")]
     pub enum DataOption {
-        DelData(StringEqCI!("%DELDATA")),
-        NoDelData(StringEqCI!("%NODELDATA")),
+        DelData(Kw!("%DELDATA")),
+        NoDelData(Kw!("%NODELDATA")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "move spec")]
     pub struct MoveSpec {
         pub partition_range: Option<(PartitionRangeSpec, Space)>,
-        pub to_kw: StringEqCI!("TO"),
+        pub to_kw: Kw!("TO"),
         pub database: (Space1, DatabaseName),
         pub activate: Option<(Space1, SQLActivateSpec)>,
     }
@@ -4719,45 +4624,45 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "activate spec")]
     pub struct SQLActivateSpec {
-        pub force_or_defer: Option<(Either<StringEqCI!("FORCE"), StringEqCI!("DEFER")>, Space1)>,
-        pub activate_kw: StringEqCI!("ACTIVATE"),
-        pub mappings_kw: Option<(Space1, StringEqCI!("MAPPINGS"))>,
+        pub force_or_defer: Option<(Either<Kw!("FORCE"), Kw!("DEFER")>, Space1)>,
+        pub activate_kw: Kw!("ACTIVATE"),
+        pub mappings_kw: Option<(Space1, Kw!("MAPPINGS"))>,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "cre or alt")]
     pub enum CreOrAlt {
-        Alter(StringEqCI!("ALTER")),
+        Alter(Kw!("ALTER")),
         Create(
-            StringEqCI!("CREATE"),
-            Option<(Space1, StringEqCI!("OR"), Space1, StringEqCI!("REPLACE"))>,
+            Kw!("CREATE"),
+            Option<(Space1, Kw!("OR"), Space1, Kw!("REPLACE"))>,
         ),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "view with")]
     pub enum ViewWith {
-        ReadOnly(StringEqCI!("READ"), Space1, StringEqCI!("ONLY")),
+        ReadOnly(Kw!("READ"), Space1, Kw!("ONLY")),
         Check {
             levels: Option<(LevelsClause, Space1)>,
-            kw: (StringEqCI!("CHECK"), Space1, StringEqCI!("OPTION")),
-            constraint: Option<(Space1, StringEqCI!("CONSTRAINT"), Space, Ident)>,
+            kw: (Kw!("CHECK"), Space1, Kw!("OPTION")),
+            constraint: Option<(Space1, Kw!("CONSTRAINT"), Space, Ident)>,
         },
     }
 
     #[derive(Grammar)]
     #[tygr(name = "levels clause")]
     pub enum LevelsClause {
-        Cascaded(StringEqCI!("CASCADED")),
-        Cascade(StringEqCI!("CASCADE")),
-        Local(StringEqCI!("LOCAL")),
+        Cascaded(Kw!("CASCADED")),
+        Cascade(Kw!("CASCADE")),
+        Local(Kw!("LOCAL")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "sql")]
     pub struct SQL {
         pub space_before: Space,
-        pub view_column_list: Option<(FList1, Option<(Space, StringEqCI!("AS"))>, Space)>,
+        pub view_column_list: Option<(FList1, Option<(Space, Kw!("AS"))>, Space)>,
         pub stat: Src<Stat>,
         pub space_after: Space,
     }
@@ -4765,11 +4670,11 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct Thr {
         pub kw: (
-            StringEqCI!("THROUGH"),
+            Kw!("THROUGH"),
             Space1,
-            StringEqCI!("FOREIGN"),
+            Kw!("FOREIGN"),
             Space1,
-            StringEqCI!("SERVER"),
+            Kw!("SERVER"),
             Space,
         ),
         pub tname: TName,
@@ -4861,15 +4766,15 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum ParameterDirection {
-        In(StringEqCI!("IN")),
-        InOut(StringEqCI!("INOUT")),
-        Out(StringEqCI!("OUT")),
+        In(Kw!("IN")),
+        InOut(Kw!("INOUT")),
+        Out(Kw!("OUT")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "default clause")]
     pub struct DefaultClause {
-        pub default_kw: Option<(StringEqCI!("DEFAULT"), Space)>,
+        pub default_kw: Option<(Kw!("DEFAULT"), Space)>,
         pub value: Scalx,
     }
 
@@ -4877,34 +4782,31 @@ pub mod leveled {
     #[tygr(name = "method-query characteristics")]
     pub enum MethodQueryCharacteristics {
         ContainId {
-            kw: (StringEqCI!("CONTAINID"), Space),
+            kw: (Kw!("CONTAINID"), Space),
             value: Integer,
         },
-        Final(StringEqCI!("FINAL")),
+        Final(Kw!("FINAL")),
         For {
-            kw: (StringEqCI!("FOR"), Space),
+            kw: (Kw!("FOR"), Space),
             classname: Classname,
         },
-        Private(StringEqCI!("PRIVATE")),
-        Proc {
-            kw: StringEqCI!("PROC"),
-            edure: Option<StringEqCI!("EDURE")>,
-        },
+        Private(Kw!("PRIVATE")),
+        Proc(Either<Kw!("PROCEDURE"), Kw!("PROC")>),
         Results {
-            kw: (StringEqCI!("RESULTS"), Space),
+            kw: (Kw!("RESULTS"), Space),
             clause: ResultSetClause,
         },
         Returns {
-            kw: (StringEqCI!("RETURNS"), Space),
+            kw: (Kw!("RETURNS"), Space),
             datyp: Datyp,
         },
         SelectMode {
-            kw: (StringEqCI!("SELECTMODE"), Space1),
+            kw: (Kw!("SELECTMODE"), Space1),
             mode: SelectMode,
         },
         ResultSets {
-            dynamic: Option<(StringEqCI!("DYNAMIC"), Space1)>,
-            kw: (StringEqCI!("RESULT"), Space1, StringEqCI!("SETS")),
+            dynamic: Option<(Kw!("DYNAMIC"), Space1)>,
+            kw: (Kw!("RESULT"), Space1, Kw!("SETS")),
             count: Option<(Space, Integer)>,
         },
     }
@@ -4916,10 +4818,10 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "select mode")]
     pub enum SelectMode {
-        Display(StringEqCI!("DISPLAY")),
-        Logical(StringEqCI!("LOGICAL")),
-        Odbc(StringEqCI!("ODBC")),
-        Runtime(StringEqCI!("RUNTIME")),
+        Display(Kw!("DISPLAY")),
+        Logical(Kw!("LOGICAL")),
+        Odbc(Kw!("ODBC")),
+        Runtime(Kw!("RUNTIME")),
     }
 
     #[derive(Grammar)]
@@ -4927,43 +4829,38 @@ pub mod leveled {
     pub enum CodeBody {
         Cos {
             kw: (
-                StringEqCI!("LANGUAGE"),
+                Kw!("LANGUAGE"),
                 Space1,
-                Either<StringEqCI!("OBJECTSCRIPT"), StringEqCI!("COS")>,
+                Either<Kw!("OBJECTSCRIPT"), Kw!("COS")>,
                 Space,
             ),
             body: Either<COSMethodBody, COSQueryBody>,
         },
         Python {
-            kw: (
-                StringEqCI!("LANGUAGE"),
-                Space1,
-                StringEqCI!("PYTHON"),
-                Space,
-            ),
+            kw: (Kw!("LANGUAGE"), Space1, Kw!("PYTHON"), Space),
             body: Prefix<StringEq!("{"), StringEndsWith<StringEq!("}")>>,
         },
         Sql {
-            kw: Option<(StringEqCI!("LANGUAGE"), Space1, StringEqCI!("SQL"), Space1)>,
+            kw: Option<(Kw!("LANGUAGE"), Space1, Kw!("SQL"), Space1)>,
             body: SqlMethodBody,
         },
     }
 
     pub type SqlMethodBody = Wrap<
-        StringEqCI!("BEGIN"),
+        Kw!("BEGIN"),
         Vec<(
             Space,
             Either<ReturnStatement, Src<Stat>>,
             Space,
             StringEq!(";"),
         )>,
-        (Space, StringEqCI!("END")),
+        (Space, Kw!("END")),
     >;
 
     #[derive(Grammar)]
     #[tygr(name = "return statement")]
     pub struct ReturnStatement {
-        pub kw: StringEqCI!("RETURN"),
+        pub kw: Kw!("RETURN"),
         pub value: Option<(Space, ReturnValue)>,
     }
 
@@ -4988,12 +4885,12 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum QueryMethodKind {
-        Close(StringEqCI!("CLOSE")),
-        Execute(StringEqCI!("EXECUTE")),
-        FetchOdbc(StringEqCI!("FETCHODBC")),
-        FetchRows(StringEqCI!("FETCHROWS")),
-        Fetch(StringEqCI!("FETCH")),
-        GetInfo(StringEqCI!("GETINFO")),
+        Close(Kw!("CLOSE")),
+        Execute(Kw!("EXECUTE")),
+        FetchOdbc(Kw!("FETCHODBC")),
+        FetchRows(Kw!("FETCHROWS")),
+        Fetch(Kw!("FETCH")),
+        GetInfo(Kw!("GETINFO")),
     }
 
     pub type COSMethodBody = crate::cos::Brace<crate::cos::OSText>;
@@ -5005,11 +4902,11 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "index qualifiers")]
     pub enum IndexQualifiers {
-        Bitmap(StringEqCI!("BITMAP")),
-        Bitslice(StringEqCI!("BITSLICE")),
-        Columnar(StringEqCI!("COLUMNAR")),
+        Bitmap(Kw!("BITMAP")),
+        Bitslice(Kw!("BITSLICE")),
+        Columnar(Kw!("COLUMNAR")),
         Unique {
-            kw: (StringEqCI!("UNIQUE"), Space),
+            kw: (Kw!("UNIQUE"), Space),
             cluster: Cluster,
         },
         Cluster(Cluster),
@@ -5020,18 +4917,18 @@ pub mod leveled {
     pub struct ComponentSpec {
         pub name: Ident,
         pub collection: Option<(Space, CollectionSpec)>,
-        pub collate: Option<(Space, StringEqCI!("COLLATE"), Space1, SqlCollation)>,
+        pub collate: Option<(Space, Kw!("COLLATE"), Space1, SqlCollation)>,
         pub direction: Option<(Space, ComponentDirection)>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum ComponentDirection {
-        Asc(StringEqCI!("ASC")),
-        Desc(StringEqCI!("DESC")),
+        Asc(Kw!("ASC")),
+        Desc(Kw!("DESC")),
     }
 
-    pub type CollectionSpec = Parenthesized<Either<StringEqCI!("ELEMENTS"), StringEqCI!("KEYS")>>;
+    pub type CollectionSpec = Parenthesized<Either<Kw!("ELEMENTS"), Kw!("KEYS")>>;
 
     #[derive(Grammar)]
     #[tygr(name = "classname")]
@@ -5053,21 +4950,11 @@ pub mod leveled {
     pub enum AlterAction {
         CheckConstraintAll {
             check: CheckSpec,
-            kw: (
-                Space1,
-                StringEqCI!("CONSTRAINT"),
-                Space1,
-                StringEqCI!("ALL"),
-            ),
+            kw: (Space1, Kw!("CONSTRAINT"), Space1, Kw!("ALL")),
         },
         DropAllPartitions {
             drop_kw: DropKeywd,
-            kw: (
-                Space1,
-                StringEqCI!("ALL"),
-                Space1,
-                StringEqCI!("PARTITIONS"),
-            ),
+            kw: (Space1, Kw!("ALL"), Space1, Kw!("PARTITIONS")),
         },
         DropPartition {
             drop_kw: DropKeywd,
@@ -5078,38 +4965,38 @@ pub mod leveled {
             action: (Space, DropAction),
         },
         Add {
-            kw: (StringEqCI!("ADD"), Space),
+            kw: (Kw!("ADD"), Space),
             actions: Either<Parenthesized<AddActionList>, AddActionList>,
         },
         Alter {
-            kw: StringEqCI!("ALTER"),
-            column_kw: Option<(Space1, StringEqCI!("COLUMN"))>,
+            kw: Kw!("ALTER"),
+            column_kw: Option<(Space1, Kw!("COLUMN"))>,
             name: (Space, Ident),
             alter: (Space, AlterCol),
         },
-        Cleanup(StringEqCI!("CLEANUP")),
+        Cleanup(Kw!("CLEANUP")),
         Convert {
-            kw: (StringEqCI!("CONVERT"), Space1),
+            kw: (Kw!("CONVERT"), Space1),
             clause: ConvertClause,
         },
         LockMode {
-            kw: (StringEqCI!("LOCK"), Space1, StringEqCI!("MODE"), Space),
+            kw: (Kw!("LOCK"), Space1, Kw!("MODE"), Space),
             spec: Parenthesized<LockSpec>,
         },
         Modify {
-            kw: (StringEqCI!("MODIFY"), Space),
+            kw: (Kw!("MODIFY"), Space),
             specs: Either<Parenthesized<ModSpecList>, ModSpecList>,
         },
         Move {
-            kw: (StringEqCI!("MOVE"), Space1),
+            kw: (Kw!("MOVE"), Space1),
             spec: MoveSpec,
         },
         Rename {
-            kw: (StringEqCI!("RENAME"), Space),
+            kw: (Kw!("RENAME"), Space),
             name: Ident,
         },
         Truncate {
-            kw: (StringEqCI!("TRUNCATE"), Space1),
+            kw: (Kw!("TRUNCATE"), Space1),
             partition: PartitionRangeSpec,
         },
     }
@@ -5123,7 +5010,7 @@ pub mod leveled {
             del: Option<(Space1, DataOption)>,
         },
         Shard {
-            to: Option<(StringEqCI!("TO"), Space1)>,
+            to: Option<(Kw!("TO"), Space1)>,
             clause: ShardConvertClause,
             timing: Option<(Space, ImmediateDefer)>,
         },
@@ -5134,24 +5021,24 @@ pub mod leveled {
     pub enum ShardConvertClause {
         Sharded(Sharded),
         Shard(Shard),
-        NonSharded(StringEqCI!("NONSHARDED")),
+        NonSharded(Kw!("NONSHARDED")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "partition convert clause")]
     pub struct PartitionConvertClause {
-        pub kw: StringEqCI!("PARTITION"),
+        pub kw: Kw!("PARTITION"),
         pub spec: Option<(
             Space1,
-            Either<Prefix<(StringEqCI!("BY"), Space1), PartitionSpecificationList>, PartitionOnOff>,
+            Either<Prefix<(Kw!("BY"), Space1), PartitionSpecificationList>, PartitionOnOff>,
         )>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum PartitionOnOff {
-        On(StringEqCI!("ON")),
-        Off(StringEqCI!("OFF")),
+        On(Kw!("ON")),
+        Off(Kw!("OFF")),
     }
 
     #[derive(Grammar)]
@@ -5159,26 +5046,26 @@ pub mod leveled {
     pub enum AlterCol {
         DatypCollate {
             datyp: Datyp,
-            collate: Option<(Space, StringEqCI!("COLLATE"), Space1, SqlCollation)>,
+            collate: Option<(Space, Kw!("COLLATE"), Space1, SqlCollation)>,
         },
         SqlCollation(SqlCollation),
         Collate {
-            kw: (StringEqCI!("COLLATE"), Space),
+            kw: (Kw!("COLLATE"), Space),
             name: Ident,
         },
         Default {
-            kw: (StringEqCI!("DEFAULT"), Space),
+            kw: (Kw!("DEFAULT"), Space),
             value: Setdef,
         },
-        DropDefault(StringEqCI!("DROP"), Space1, StringEqCI!("DEFAULT")),
-        NotNull(StringEqCI!("NOT"), Space1, StringEqCI!("NULL")),
-        Null(StringEqCI!("NULL")),
+        DropDefault(Kw!("DROP"), Space1, Kw!("DEFAULT")),
+        NotNull(Kw!("NOT"), Space1, Kw!("NULL")),
+        Null(Kw!("NULL")),
         Rename {
-            kw: (StringEqCI!("RENAME"), Space),
+            kw: (Kw!("RENAME"), Space),
             name: Ident,
         },
         SetDefault {
-            kw: (StringEqCI!("SET"), Space1, StringEqCI!("DEFAULT"), Space),
+            kw: (Kw!("SET"), Space1, Kw!("DEFAULT"), Space),
             value: Setdef,
         },
     }
@@ -5193,16 +5080,15 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "storagedefault conversion type spec")]
     pub struct StorageDefaultConversionTypeSpec {
-        pub to: Option<(StringEqCI!("TO"), Space1)>,
-        pub kw: (StringEqCI!("STORAGETYPE"), Space, StringEq!("="), Space),
+        pub to: Option<(Kw!("TO"), Space1)>,
+        pub kw: (Kw!("STORAGETYPE"), Space, StringEq!("="), Space),
         pub typ: Storagetype,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "column storagedefault conversion")]
     pub struct ColumnStorageDefaultConversion {
-        pub kw: StringEqCI!("COLUMN"),
-        pub s: Option<Raw<StringEqCI!("S")>>,
+        pub kw: Either<Kw!("COLUMNS"), Kw!("COLUMN")>,
         pub list: (Space, VecSep<Ident, ArgSep>),
         pub spec: (Space, StorageDefaultConversionTypeSpec),
     }
@@ -5213,11 +5099,11 @@ pub mod leveled {
     #[tygr(name = "def spec")]
     pub enum DefSpec {
         Cos {
-            kw: (StringEqCI!("%COS"), Space),
+            kw: (Kw!("%COS"), Space),
             value: Literal,
         },
         MCode {
-            kw: (StringEqCI!("%MCODE"), Space),
+            kw: (Kw!("%MCODE"), Space),
             value: Literal,
         },
         Negative {
@@ -5225,32 +5111,32 @@ pub mod leveled {
             value: Number,
         },
         Literal(Literal),
-        CurrentDate(StringEqCI!("CURRENT_DATE")),
+        CurrentDate(Kw!("CURRENT_DATE")),
         CurrentTimestamp {
-            kw: StringEqCI!("CURRENT_TIMESTAMP"),
+            kw: Kw!("CURRENT_TIMESTAMP"),
             precision: Option<Parenthesized<Literal>>,
         },
         CurrentTime {
-            kw: StringEqCI!("CURRENT_TIME"),
+            kw: Kw!("CURRENT_TIME"),
             precision: Option<Parenthesized<Literal>>,
         },
-        CurrentUser(StringEqCI!("CURRENT_USER")),
+        CurrentUser(Kw!("CURRENT_USER")),
         GetDate {
-            kw: StringEqCI!("GETDATE"),
+            kw: Kw!("GETDATE"),
             value: Parenthesized<Option<Literal>>,
         },
         GetUtcDate {
-            kw: StringEqCI!("GETUTCDATE"),
+            kw: Kw!("GETUTCDATE"),
             value: Parenthesized<Option<Literal>>,
         },
-        Null(StringEqCI!("NULL")),
+        Null(Kw!("NULL")),
         ObjectScript {
-            kw: (StringEqCI!("OBJECTSCRIPT"), Space),
+            kw: (Kw!("OBJECTSCRIPT"), Space),
             value: Literal,
         },
-        SessionUser(StringEqCI!("SESSION_USER")),
-        SysDate(StringEqCI!("SYSDATE")),
-        SystemUser(StringEqCI!("SYSTEM_USER")),
+        SessionUser(Kw!("SESSION_USER")),
+        SysDate(Kw!("SYSDATE")),
+        SystemUser(Kw!("SYSTEM_USER")),
         ToDate {
             kw: (StringEqCI!("TO_DATE("), Space),
             arg1: Literal,
@@ -5263,7 +5149,7 @@ pub mod leveled {
             arg2: Option<(ArgSep, Literal)>,
             close: (Space, StringEq!(")")),
         },
-        User(StringEqCI!("USER")),
+        User(Kw!("USER")),
     }
 
     #[derive(Grammar)]
@@ -5276,7 +5162,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum ModChange {
         Rename {
-            kw: (StringEqCI!("RENAME"), Space),
+            kw: (Kw!("RENAME"), Space),
             new_name: Ident,
         },
         Modify {
@@ -5290,39 +5176,39 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "mod col")]
     pub struct ModCol {
-        pub default: Option<(StringEqCI!("DEFAULT"), Space, Setdef, Space)>,
-        pub constraint: Option<(StringEqCI!("CONSTRAINT"), Space, Ident, Space)>,
+        pub default: Option<(Kw!("DEFAULT"), Space, Setdef, Space)>,
+        pub constraint: Option<(Kw!("CONSTRAINT"), Space, Ident, Space)>,
         pub null: Option<NullSpec>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct NullSpec {
-        pub not: Option<(StringEqCI!("NOT"), Space1)>,
-        pub null: StringEqCI!("NULL"),
+        pub not: Option<(Kw!("NOT"), Space1)>,
+        pub null: Kw!("NULL"),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "drop keywd")]
     pub enum DropKeywd {
-        Delete(StringEqCI!("DELETE")),
-        Drop(StringEqCI!("DROP")),
+        Delete(Kw!("DELETE")),
+        Drop(Kw!("DROP")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "drop action")]
     pub enum DropAction {
         Constraint {
-            kw: (StringEqCI!("CONSTRAINT"), Space),
+            kw: (Kw!("CONSTRAINT"), Space),
             name: Ident,
         },
         ForeignKey {
-            kw: (StringEqCI!("FOREIGN"), Space1, StringEqCI!("KEY"), Space),
+            kw: (Kw!("FOREIGN"), Space1, Kw!("KEY"), Space),
             name: Ident,
         },
-        PrimaryKey(StringEqCI!("PRIMARY"), Space1, StringEqCI!("KEY")),
+        PrimaryKey(Kw!("PRIMARY"), Space1, Kw!("KEY")),
         Column {
-            column_kw: Option<(StringEqCI!("COLUMN"), Space)>,
+            column_kw: Option<(Kw!("COLUMN"), Space)>,
             items: VecSep<DropColumnItem, ArgSep>,
         },
     }
@@ -5338,7 +5224,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "add action")]
     pub struct AddAction {
-        pub constraint: Option<(StringEqCI!("CONSTRAINT"), Space, TName, Space)>,
+        pub constraint: Option<(Kw!("CONSTRAINT"), Space, TName, Space)>,
         pub body: AddBody,
     }
 
@@ -5349,44 +5235,44 @@ pub mod leveled {
     pub enum AddBody {
         ForeignKey {
             spec: OptionallyWrapped<AltFkeySpec>,
-            on: Option<(Space, StringEqCI!("ON"), Space, Token)>,
+            on: Option<(Space, Kw!("ON"), Space, Token)>,
         },
         PrimaryKey {
             spec: OptionallyWrapped<AltPkey>,
-            on: Option<(Space, StringEqCI!("ON"), Space, Token)>,
+            on: Option<(Space, Kw!("ON"), Space, Token)>,
         },
         Unique {
             spec: OptionallyWrapped<AltUnique>,
             fillfactor: FillFactor,
-            on: Option<(Space, StringEqCI!("ON"), Space, Token)>,
+            on: Option<(Space, Kw!("ON"), Space, Token)>,
         },
         ColDef(OptionallyWrapped<Coldef>),
         Check {
-            kw: (StringEqCI!("CHECK"), Space),
+            kw: (Kw!("CHECK"), Space),
             parse: Chkparse,
             informix: Informix,
         },
         Default {
-            kw: (StringEqCI!("DEFAULT"), Space),
+            kw: (Kw!("DEFAULT"), Space),
             value: Setdef,
-            for_kw: (Space, StringEqCI!("FOR"), Space),
+            for_kw: (Space, Kw!("FOR"), Space),
             name: Ident,
         },
     }
 
-    pub type Coldef = Prefix<Option<(StringEqCI!("COLUMN"), Space)>, OptionallyWrapped<Tecdef>>;
+    pub type Coldef = Prefix<Option<(Kw!("COLUMN"), Space)>, OptionallyWrapped<Tecdef>>;
 
     #[derive(Grammar)]
     #[tygr(name = "check spec")]
     pub enum CheckSpec {
-        Check(StringEqCI!("CHECK")),
-        NoCheck(StringEqCI!("NOCHECK")),
+        Check(Kw!("CHECK")),
+        NoCheck(Kw!("NOCHECK")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "alt pkey")]
     pub struct AltPkey {
-        pub kw: (StringEqCI!("PRIMARY"), Space1, StringEqCI!("KEY"), Space),
+        pub kw: (Kw!("PRIMARY"), Space1, Kw!("KEY"), Space),
         pub spec: PkeySpec,
         pub informix: Informix,
     }
@@ -5401,10 +5287,10 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "alt fkey spec")]
     pub struct AltFkeySpec {
-        pub kw: (StringEqCI!("FOREIGN"), Space1, StringEqCI!("KEY"), Space),
+        pub kw: (Kw!("FOREIGN"), Space1, Kw!("KEY"), Space),
         pub ident: Option<(Ident, Space)>,
         pub flist2: FList2,
-        pub references_kw: (Space, StringEqCI!("REFERENCES"), Space),
+        pub references_kw: (Space, Kw!("REFERENCES"), Space),
         pub ref_: Ref,
         pub informix: Informix,
     }
@@ -5412,7 +5298,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "alt unique")]
     pub struct AltUnique {
-        pub kw: (StringEqCI!("UNIQUE"), Space),
+        pub kw: (Kw!("UNIQUE"), Space),
         pub spec: UniqueSpec,
     }
 
@@ -5427,8 +5313,8 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "in_on")]
     pub enum InOn {
-        In(StringEqCI!("IN")),
-        On(StringEqCI!("ON")),
+        In(Kw!("IN")),
+        On(Kw!("ON")),
     }
 
     #[derive(Grammar)]
@@ -5438,7 +5324,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "telem")]
     pub struct Telem {
-        pub constraint: Option<(StringEqCI!("CONSTRAINT"), Space, Ident, Space)>,
+        pub constraint: Option<(Kw!("CONSTRAINT"), Space, Ident, Space)>,
         pub option: TelemOption,
     }
 
@@ -5446,16 +5332,16 @@ pub mod leveled {
     #[tygr(name = "telem option")]
     pub enum TelemOption {
         Description {
-            kw: (StringEqCI!("%DESCRIPTION"), Space),
+            kw: (Kw!("%DESCRIPTION"), Space),
             value: Literal,
         },
         File {
-            kw: (StringEqCI!("%FILE"), Space),
+            kw: (Kw!("%FILE"), Space),
             value: Literal,
         },
-        PublicRowId(StringEqCI!("%PUBLICROWID")),
+        PublicRowId(Kw!("%PUBLICROWID")),
         Routine {
-            kw: (StringEqCI!("%ROUTINE"), Space),
+            kw: (Kw!("%ROUTINE"), Space),
             value: Literal,
         },
         CheckCnstr(CheckCnstr),
@@ -5486,9 +5372,9 @@ pub mod leveled {
         },
     }
 
-    pub type Identity = Prefix<StringEqCI!("IDENTITY"), Option<Args<(Literal, ArgSep, Literal)>>>;
+    pub type Identity = Prefix<Kw!("IDENTITY"), Option<Args<(Literal, ArgSep, Literal)>>>;
 
-    pub type TblUnique = Prefix<(StringEqCI!("UNIQUE"), Space), TblUniqueSpec>;
+    pub type TblUnique = Prefix<(Kw!("UNIQUE"), Space), TblUniqueSpec>;
 
     #[derive(Grammar)]
     #[tygr(name = "tbl unique spec")]
@@ -5499,52 +5385,48 @@ pub mod leveled {
 
     pub type FillFactor = Option<(
         Space,
-        StringEqCI!("WITH"),
+        Kw!("WITH"),
         Space1,
-        StringEqCI!("FILLFACTOR"),
+        Kw!("FILLFACTOR"),
         Space,
         StringEq!("="),
         Space,
         Literal,
     )>;
 
-    pub type TblPrimaryKey =
-        Prefix<(StringEqCI!("PRIMARY"), Space1, StringEqCI!("KEY"), Space), TblUniqueSpec>;
+    pub type TblPrimaryKey = Prefix<(Kw!("PRIMARY"), Space1, Kw!("KEY"), Space), TblUniqueSpec>;
 
     #[derive(Grammar)]
     #[tygr(name = "extentsize clause")]
     pub struct ExtentsizeClause {
-        pub kw: (
-            Either<StringEqCI!("%EXTENTSIZE"), StringEqCI!("%NUMROWS")>,
-            Space,
-        ),
+        pub kw: (Either<Kw!("%EXTENTSIZE"), Kw!("%NUMROWS")>, Space),
         pub value: Literal,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "class parameter")]
     pub struct ClassParameter {
-        pub kw: (StringEqCI!("%CLASSPARAMETER"), Space),
+        pub kw: (Kw!("%CLASSPARAMETER"), Space),
         pub name: Ident,
         pub eq: Option<(Space, StringEq!("="))>,
         pub value: (Space, Literal),
     }
 
-    pub type Shard = Prefix<StringEqCI!("SHARD"), ShardSpec>;
-    pub type Sharded = Prefix<StringEqCI!("SHARDED"), ShardSpec>;
+    pub type Shard = Prefix<Kw!("SHARD"), ShardSpec>;
+    pub type Sharded = Prefix<Kw!("SHARDED"), ShardSpec>;
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct ShardSpec {
-        pub key: Option<(Space, StringEqCI!("KEY"), Space, FList1)>,
+        pub key: Option<(Space, Kw!("KEY"), Space, FList1)>,
         pub coshard: Option<(Space, CoshardClause)>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct CoshardClause {
-        pub kw: StringEqCI!("COSHARD"),
-        pub with: Option<(Space1, StringEqCI!("WITH"))>,
+        pub kw: Kw!("COSHARD"),
+        pub with: Option<(Space1, Kw!("WITH"))>,
         pub name: Either<Args<TName>, (Space, TName)>,
     }
 
@@ -5554,7 +5436,7 @@ pub mod leveled {
         WithOptions {
             shard: Option<(Shard, Space)>,
             partition: Option<(PartitionOption, Space)>,
-            with_kw: (StringEqCI!("WITH"), Space1),
+            with_kw: (Kw!("WITH"), Space1),
             options: VecSep<TableOption, ArgSep>,
         },
         Shard {
@@ -5569,27 +5451,13 @@ pub mod leveled {
     #[tygr(name = "informix compatability")]
     pub struct InformixCompatability {
         pub in_on: Option<(InOn, Space, Token)>,
-        pub extent_size: Option<(
-            Space,
-            StringEqCI!("EXTENT"),
-            Space1,
-            StringEqCI!("SIZE"),
-            Space,
-            Literal,
-        )>,
-        pub next_size: Option<(
-            Space,
-            StringEqCI!("NEXT"),
-            Space1,
-            StringEqCI!("SIZE"),
-            Space,
-            Literal,
-        )>,
+        pub extent_size: Option<(Space, Kw!("EXTENT"), Space1, Kw!("SIZE"), Space, Literal)>,
+        pub next_size: Option<(Space, Kw!("NEXT"), Space1, Kw!("SIZE"), Space, Literal)>,
         pub lock_mode: Option<(
             Space,
-            StringEqCI!("LOCK"),
+            Kw!("LOCK"),
             Space1,
-            StringEqCI!("MODE"),
+            Kw!("MODE"),
             Option<(Space1, LockSpec)>,
         )>,
     }
@@ -5599,7 +5467,7 @@ pub mod leveled {
     pub enum TableOption {
         ClassParam(ClassParameter),
         StorageType {
-            kw: StringEqCI!("STORAGETYPE"),
+            kw: Kw!("STORAGETYPE"),
             eq: Option<(Space, StringEq!("="))>,
             value: (Space, Storagetype),
         },
@@ -5608,11 +5476,8 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "partition option")]
     pub struct PartitionOption {
-        pub kw: (StringEqCI!("PARTITION"), Space1),
-        pub spec: Either<
-            Prefix<(StringEqCI!("BY"), Space1), PartitionSpecificationList>,
-            StringEqCI!("OFF"),
-        >,
+        pub kw: (Kw!("PARTITION"), Space1),
+        pub spec: Either<Prefix<(Kw!("BY"), Space1), PartitionSpecificationList>, Kw!("OFF")>,
     }
 
     #[derive(Grammar)]
@@ -5626,61 +5491,61 @@ pub mod leveled {
     #[tygr(name = "partition specification")]
     pub enum PartitionSpecification {
         Hash {
-            kw: (StringEqCI!("HASH"), Space),
+            kw: (Kw!("HASH"), Space),
             column: Parenthesized<ColumnName>,
-            in_kw: (Space, StringEqCI!("IN"), Space),
+            in_kw: (Space, Kw!("IN"), Space),
             count: PositiveInteger,
-            partitions_kw: (Space, StringEqCI!("PARTITIONS")),
+            partitions_kw: (Space, Kw!("PARTITIONS")),
         },
         List {
-            kw: (StringEqCI!("LIST"), Space),
+            kw: (Kw!("LIST"), Space),
             column: Parenthesized<ColumnName>,
         },
         Range {
-            kw: (StringEqCI!("RANGE"), Space),
+            kw: (Kw!("RANGE"), Space),
             column: Parenthesized<ColumnName>,
-            interval_kw: (Space, StringEqCI!("INTERVAL"), Space),
+            interval_kw: (Space, Kw!("INTERVAL"), Space),
             interval: PositiveInteger,
-            datetime_interval: Option<(Space, PartitionDatetimeInterval, Option<StringEqCI!("S")>)>,
+            datetime_interval: Option<(Space, PartitionDatetimeInterval)>,
         },
     }
 
     #[derive(Grammar)]
     #[tygr(name = "partition datetime interval")]
     pub enum PartitionDatetimeInterval {
-        Day(StringEqCI!("DAY")),
-        Hour(StringEqCI!("HOUR")),
-        Minute(StringEqCI!("MINUTE")),
-        Month(StringEqCI!("MONTH")),
-        Year(StringEqCI!("YEAR")),
+        Day(Either<Kw!("DAYS"), Kw!("DAY")>),
+        Hour(Either<Kw!("HOURS"), Kw!("HOUR")>),
+        Minute(Either<Kw!("MINUTES"), Kw!("MINUTE")>),
+        Month(Either<Kw!("MONTHS"), Kw!("MONTH")>),
+        Year(Either<Kw!("YEARS"), Kw!("YEAR")>),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "partition range spec")]
     pub struct PartitionRangeSpec {
-        pub kw: StringEqCI!("PARTITION"),
+        pub kw: Kw!("PARTITION"),
         pub range: PartitionRange,
     }
 
     #[derive(Grammar)]
     pub enum PartitionRange {
         Id {
-            kw: (Space, StringEqCI!("ID"), Space),
+            kw: (Space, Kw!("ID"), Space),
             prefix: Literal,
         },
         IdBetween {
-            kw: (Space, StringEqCI!("ID")),
+            kw: (Space, Kw!("ID")),
             prefix: Option<(Space, Literal)>,
-            between_kw: (Space, StringEqCI!("BETWEEN"), Space),
+            between_kw: (Space, Kw!("BETWEEN"), Space),
             from: Literal,
-            and_kw: (Space, StringEqCI!("AND"), Space),
+            and_kw: (Space, Kw!("AND"), Space),
             to: Literal,
         },
         Between {
             prefix: Option<(Space, PartitionPrefix)>,
-            between_kw: (Space, StringEqCI!("BETWEEN"), Space),
+            between_kw: (Space, Kw!("BETWEEN"), Space),
             from: Literal,
-            and_kw: (Space, StringEqCI!("AND"), Space),
+            and_kw: (Space, Kw!("AND"), Space),
             to: Literal,
         },
         Values(Space, PartitionPrefix),
@@ -5692,42 +5557,42 @@ pub mod leveled {
     #[tygr(name = "fld qualifier")]
     pub enum FldQualifier {
         Description {
-            kw: (StringEqCI!("%DESCRIPTION"), Space),
+            kw: (Kw!("%DESCRIPTION"), Space),
             value: Literal,
         },
         Fcon(Fcon),
         SqlCollation(SqlCollation),
-        Calculated(StringEqCI!("CALCULATED")),
+        Calculated(Kw!("CALCULATED")),
         CharacterSet {
-            kw: (StringEqCI!("CHARACTER"), Space1, StringEqCI!("SET"), Space),
+            kw: (Kw!("CHARACTER"), Space1, Kw!("SET"), Space),
             name: Ident,
         },
         CollateIdent {
-            kw: (StringEqCI!("COLLATE"), Space),
+            kw: (Kw!("COLLATE"), Space),
             value: CollateSpec,
         },
         ComputeCode {
-            kw: (StringEqCI!("COMPUTECODE"), Space),
+            kw: (Kw!("COMPUTECODE"), Space),
             body: COSMethodBody,
         },
         ComputeOnChange {
-            kw: (StringEqCI!("COMPUTEONCHANGE"), Space),
+            kw: (Kw!("COMPUTEONCHANGE"), Space),
             list: FList1,
         },
         Default {
-            kw: (StringEqCI!("DEFAULT"), Space),
+            kw: (Kw!("DEFAULT"), Space),
             value: Setdef,
         },
         OnUpdate {
-            kw: (StringEqCI!("ON"), Space1, StringEqCI!("UPDATE"), Space),
+            kw: (Kw!("ON"), Space1, Kw!("UPDATE"), Space),
             value: UpdateSpec,
         },
-        Private(StringEqCI!("PRIVATE")),
+        Private(Kw!("PRIVATE")),
         StorageType {
-            kw: (StringEqCI!("STORAGETYPE"), Space, StringEq!("="), Space),
+            kw: (Kw!("STORAGETYPE"), Space, StringEq!("="), Space),
             value: Storagetype,
         },
-        Transient(StringEqCI!("TRANSIENT")),
+        Transient(Kw!("TRANSIENT")),
     }
 
     #[derive(Grammar)]
@@ -5740,59 +5605,59 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "sqlcollation")]
     pub enum SqlCollation {
-        PctAlphaup(StringEqCI!("%ALPHAUP")),
-        PctExact(StringEqCI!("%EXACT")),
-        PctMinus(StringEqCI!("%MINUS")),
-        PctMvr(StringEqCI!("%MVR")),
-        PctPlus(StringEqCI!("%PLUS")),
-        PctSpace(StringEqCI!("%SPACE")),
+        PctAlphaup(Kw!("%ALPHAUP")),
+        PctExact(Kw!("%EXACT")),
+        PctMinus(Kw!("%MINUS")),
+        PctMvr(Kw!("%MVR")),
+        PctPlus(Kw!("%PLUS")),
+        PctSpace(Kw!("%SPACE")),
         PctSqlstring {
-            kw: StringEqCI!("%SQLSTRING"),
+            kw: Kw!("%SQLSTRING"),
             arg: Option<Args<Literal>>,
         },
         PctSqupper {
-            kw: StringEqCI!("%SQLUPPER"),
+            kw: Kw!("%SQLUPPER"),
             arg: Option<Args<Literal>>,
         },
         PctString {
-            kw: StringEqCI!("%STRING"),
+            kw: Kw!("%STRING"),
             arg: Option<Args<Literal>>,
         },
         PctTruncate {
-            kw: StringEqCI!("%TRUNCATE"),
+            kw: Kw!("%TRUNCATE"),
             arg: Option<Args<Literal>>,
-            alphaup: Option<(Space, StringEqCI!("ALPHAUP"))>,
+            alphaup: Option<(Space, Kw!("ALPHAUP"))>,
         },
-        PctUpper(StringEqCI!("%UPPER")),
-        Exact(StringEqCI!("EXACT")),
-        Minus(StringEqCI!("MINUS")),
-        Mvr(StringEqCI!("MVR")),
-        Plus(StringEqCI!("PLUS")),
-        Space(StringEqCI!("SPACE")),
+        PctUpper(Kw!("%UPPER")),
+        Exact(Kw!("EXACT")),
+        Minus(Kw!("MINUS")),
+        Mvr(Kw!("MVR")),
+        Plus(Kw!("PLUS")),
+        Space(Kw!("SPACE")),
         Sqlstring {
-            kw: StringEqCI!("SQLSTRING"),
+            kw: Kw!("SQLSTRING"),
             arg: Option<Args<Literal>>,
         },
         Sqlupper {
-            kw: StringEqCI!("SQLUPPER"),
+            kw: Kw!("SQLUPPER"),
             arg: Option<Args<Literal>>,
         },
         StringColl {
-            kw: StringEqCI!("STRING"),
+            kw: Kw!("STRING"),
             arg: Option<Args<Literal>>,
         },
         Truncate {
-            kw: StringEqCI!("TRUNCATE"),
+            kw: Kw!("TRUNCATE"),
             arg: Option<Args<Literal>>,
         },
-        Upper(StringEqCI!("UPPER")),
+        Upper(Kw!("UPPER")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "storagetype")]
     pub enum Storagetype {
-        Columnar(StringEqCI!("COLUMNAR")),
-        Row(StringEqCI!("ROW")),
+        Columnar(Kw!("COLUMNAR")),
+        Row(Kw!("ROW")),
     }
 
     #[derive(Grammar)]
@@ -5811,59 +5676,59 @@ pub mod leveled {
     pub enum DatypSpec {
         HashParen(Parenthesized<Vec<(StringEq!("#"), Space)>>),
         Binary {
-            kw: StringEqCI!("BINARY"),
-            varying: Option<(Space1, StringEqCI!("VARYING"))>,
+            kw: Kw!("BINARY"),
+            varying: Option<(Space1, Kw!("VARYING"))>,
         },
-        Bit(StringEqCI!("BIT")),
+        Bit(Kw!("BIT")),
         Character {
-            kw: StringEqCI!("CHARACTER"),
-            varying: Option<(Space1, StringEqCI!("VARYING"))>,
+            kw: Kw!("CHARACTER"),
+            varying: Option<(Space1, Kw!("VARYING"))>,
         },
         Char {
-            kw: StringEqCI!("CHAR"),
-            varying: Option<(Space1, StringEqCI!("VARYING"))>,
+            kw: Kw!("CHAR"),
+            varying: Option<(Space1, Kw!("VARYING"))>,
         },
-        Datetime(StringEqCI!("DATETIME")),
-        Date(StringEqCI!("DATE")),
-        Decimal(StringEqCI!("DECIMAL")),
-        Dec(StringEqCI!("DEC")),
+        Datetime(Kw!("DATETIME")),
+        Date(Kw!("DATE")),
+        Decimal(Kw!("DECIMAL")),
+        Dec(Kw!("DEC")),
         Double {
-            kw: StringEqCI!("DOUBLE"),
-            precision: Option<(Space1, StringEqCI!("PRECISION"))>,
+            kw: Kw!("DOUBLE"),
+            precision: Option<(Space1, Kw!("PRECISION"))>,
         },
-        Float(StringEqCI!("FLOAT")),
-        Image(StringEqCI!("IMAGE")),
-        Integer(StringEqCI!("INTEGER")),
-        Int(StringEqCI!("INT")),
-        LongVarchar(StringEqCI!("LONG"), Space1, StringEqCI!("VARCHAR")),
-        Longvarbinary(StringEqCI!("LONGVARBINARY")),
-        Longvarchar(StringEqCI!("LONGVARCHAR")),
-        Long(StringEqCI!("LONG")),
-        Money(StringEqCI!("MONEY")),
-        NationalVarchar(StringEqCI!("NATIONAL"), Space1, StringEqCI!("VARCHAR")),
+        Float(Kw!("FLOAT")),
+        Image(Kw!("IMAGE")),
+        Integer(Kw!("INTEGER")),
+        Int(Kw!("INT")),
+        LongVarchar(Kw!("LONG"), Space1, Kw!("VARCHAR")),
+        Longvarbinary(Kw!("LONGVARBINARY")),
+        Longvarchar(Kw!("LONGVARCHAR")),
+        Long(Kw!("LONG")),
+        Money(Kw!("MONEY")),
+        NationalVarchar(Kw!("NATIONAL"), Space1, Kw!("VARCHAR")),
         NationalChar {
-            kw: StringEqCI!("NATIONAL"),
+            kw: Kw!("NATIONAL"),
             char_kw: Option<(
                 Space1,
-                Either<StringEqCI!("CHARACTER"), StringEqCI!("CHAR")>,
-                Option<(Space1, StringEqCI!("VARYING"))>,
+                Either<Kw!("CHARACTER"), Kw!("CHAR")>,
+                Option<(Space1, Kw!("VARYING"))>,
             )>,
         },
-        Nchar(StringEqCI!("NCHAR")),
-        Ntext(StringEqCI!("NTEXT")),
-        Number(StringEqCI!("NUMBER")),
-        NumericRaw(StringEqCI!("NUMERIC"), Space1, StringEqCI!("RAW")),
-        Real(StringEqCI!("REAL")),
-        Smallint(StringEqCI!("SMALLINT")),
-        Smallmoney(StringEqCI!("SMALLMONEY")),
-        Text(StringEqCI!("TEXT")),
-        Timestamp(StringEqCI!("TIMESTAMP")),
-        Time(StringEqCI!("TIME")),
-        Tinyint(StringEqCI!("TINYINT")),
-        Varbinary(StringEqCI!("VARBINARY")),
-        Varchar2(StringEqCI!("VARCHAR2")),
-        Varchar(StringEqCI!("VARCHAR")),
-        Vector(StringEqCI!("VECTOR")),
+        Nchar(Kw!("NCHAR")),
+        Ntext(Kw!("NTEXT")),
+        Number(Kw!("NUMBER")),
+        NumericRaw(Kw!("NUMERIC"), Space1, Kw!("RAW")),
+        Real(Kw!("REAL")),
+        Smallint(Kw!("SMALLINT")),
+        Smallmoney(Kw!("SMALLMONEY")),
+        Text(Kw!("TEXT")),
+        Timestamp(Kw!("TIMESTAMP")),
+        Time(Kw!("TIME")),
+        Tinyint(Kw!("TINYINT")),
+        Varbinary(Kw!("VARBINARY")),
+        Varchar2(Kw!("VARCHAR2")),
+        Varchar(Kw!("VARCHAR")),
+        Vector(Kw!("VECTOR")),
         AnyToken {
             head: DatypName,
             rest: Vec<(StringEq!("."), Ident)>,
@@ -5889,35 +5754,31 @@ pub mod leveled {
     pub enum Fcon {
         CheckCnstr(CheckCnstr),
         Constraint {
-            kw: (StringEqCI!("CONSTRAINT"), Space),
+            kw: (Kw!("CONSTRAINT"), Space),
             name: TName,
             spec: (Space, NamedFconSpec),
         },
         Identity {
-            kw: StringEqCI!("IDENTITY"),
+            kw: Kw!("IDENTITY"),
             args: Option<Args<(Literal, Option<(ArgSep, Literal)>)>>,
         },
         NotNull {
-            kw: (StringEqCI!("NOT"), Space1, StringEqCI!("NULL")),
+            kw: (Kw!("NOT"), Space1, Kw!("NULL")),
             informix: Informix,
         },
-        Null(StringEqCI!("NULL")),
+        Null(Kw!("NULL")),
         Primary {
-            kw: (
-                StringEqCI!("PRIMARY"),
-                Option<(Space1, StringEqCI!("KEY"))>,
-                Space,
-            ),
+            kw: (Kw!("PRIMARY"), Option<(Space1, Kw!("KEY"))>, Space),
             cluster: Cluster,
             informix: Informix,
         },
         References {
-            kw: (StringEqCI!("REFERENCES"), Space),
+            kw: (Kw!("REFERENCES"), Space),
             reference: Ref,
             informix: Informix,
         },
         Unique {
-            kw: (StringEqCI!("UNIQUE"), Space),
+            kw: (Kw!("UNIQUE"), Space),
             cluster: Cluster,
             informix: Informix,
         },
@@ -5926,7 +5787,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "check cnstr")]
     pub struct CheckCnstr {
-        pub kw: (StringEqCI!("CHECK"), Space),
+        pub kw: (Kw!("CHECK"), Space),
         pub parse: Chkparse,
         pub informix: Informix,
     }
@@ -5935,24 +5796,24 @@ pub mod leveled {
     #[tygr(name = "named fcon spec")]
     pub enum NamedFconSpec {
         Check {
-            kw: (StringEqCI!("CHECK"), Space),
+            kw: (Kw!("CHECK"), Space),
             parse: Chkparse,
         },
         Default {
-            kw: (StringEqCI!("DEFAULT"), Space),
+            kw: (Kw!("DEFAULT"), Space),
             value: Setdef,
         },
-        NotNull(StringEqCI!("NOT"), Space1, StringEqCI!("NULL")),
+        NotNull(Kw!("NOT"), Space1, Kw!("NULL")),
         PrimaryKey {
-            kw: (StringEqCI!("PRIMARY"), Space1, StringEqCI!("KEY"), Space),
+            kw: (Kw!("PRIMARY"), Space1, Kw!("KEY"), Space),
             cluster: Cluster,
         },
         References {
-            kw: (StringEqCI!("REFERENCES"), Space),
+            kw: (Kw!("REFERENCES"), Space),
             reference: Ref,
         },
         Unique {
-            kw: (StringEqCI!("UNIQUE"), Space),
+            kw: (Kw!("UNIQUE"), Space),
             cluster: Cluster,
         },
     }
@@ -5965,29 +5826,29 @@ pub mod leveled {
             value: Number,
         },
         Literal(Literal),
-        CurrentDate(StringEqCI!("CURRENT_DATE")),
+        CurrentDate(Kw!("CURRENT_DATE")),
         CurrentTimestamp {
-            kw: StringEqCI!("CURRENT_TIMESTAMP"),
+            kw: Kw!("CURRENT_TIMESTAMP"),
             precision: Option<(Space, Parenthesized<Precision>)>,
         },
         CurrentTime {
-            kw: StringEqCI!("CURRENT_TIME"),
+            kw: Kw!("CURRENT_TIME"),
             precision: Option<(Space, Parenthesized<Precision>)>,
         },
-        CurrentUser(StringEqCI!("CURRENT_USER")),
+        CurrentUser(Kw!("CURRENT_USER")),
         GetDate {
-            kw: StringEqCI!("GETDATE"),
+            kw: Kw!("GETDATE"),
             prec: Parenthesized<Option<Precision>>,
         },
         GetUtcDate {
-            kw: StringEqCI!("GETUTCDATE"),
+            kw: Kw!("GETUTCDATE"),
             prec: Parenthesized<Option<Precision>>,
         },
-        Null(StringEqCI!("NULL")),
-        SessionUser(StringEqCI!("SESSION_USER")),
-        SysDate(StringEqCI!("SYSDATE")),
-        SystemUser(StringEqCI!("SYSTEM_USER")),
-        User(StringEqCI!("USER")),
+        Null(Kw!("NULL")),
+        SessionUser(Kw!("SESSION_USER")),
+        SysDate(Kw!("SYSDATE")),
+        SystemUser(Kw!("SYSTEM_USER")),
+        User(Kw!("USER")),
     }
 
     #[derive(Grammar)]
@@ -5997,8 +5858,8 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub enum ClusterType {
-        Clustered(StringEqCI!("CLUSTERED")),
-        NonClustered(StringEqCI!("NONCLUSTERED")),
+        Clustered(Kw!("CLUSTERED")),
+        NonClustered(Kw!("NONCLUSTERED")),
     }
 
     #[derive(Grammar)]
@@ -6006,9 +5867,9 @@ pub mod leveled {
     pub struct Ref {
         pub name: TName,
         pub flist: Option<(Space, FList1)>,
-        pub match_spec: Option<(Space, StringEqCI!("MATCH"), Space1, MatchSpec)>,
+        pub match_spec: Option<(Space, Kw!("MATCH"), Space1, MatchSpec)>,
         pub triggered_action: Option<(Space, TriggeredAction)>,
-        pub nocheck: Option<(Space, StringEqCI!("NOCHECK"))>,
+        pub nocheck: Option<(Space, Kw!("NOCHECK"))>,
     }
 
     /// `<triggered action> ::= <delete rule> [ <update rule> ] | <update rule> [ <delete rule> ]`
@@ -6040,31 +5901,29 @@ pub mod leveled {
         }
     }
 
-    pub type UpdateRule =
-        Prefix<(StringEqCI!("ON"), Space1, StringEqCI!("UPDATE"), Space1), RefAction>;
+    pub type UpdateRule = Prefix<(Kw!("ON"), Space1, Kw!("UPDATE"), Space1), RefAction>;
 
-    pub type DeleteRule =
-        Prefix<(StringEqCI!("ON"), Space1, StringEqCI!("DELETE"), Space1), RefAction>;
+    pub type DeleteRule = Prefix<(Kw!("ON"), Space1, Kw!("DELETE"), Space1), RefAction>;
 
     #[derive(Grammar)]
     #[tygr(name = "match spec")]
     pub enum MatchSpec {
-        Full(StringEqCI!("FULL")),
-        Partial(StringEqCI!("PARTIAL")),
+        Full(Kw!("FULL")),
+        Partial(Kw!("PARTIAL")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "ref action")]
     pub enum RefAction {
-        Cascade(StringEqCI!("CASCADE")),
-        NoAction(StringEqCI!("NO"), Space1, StringEqCI!("ACTION")),
-        SetDefault(StringEqCI!("SET"), Space1, StringEqCI!("DEFAULT")),
-        SetNull(StringEqCI!("SET"), Space1, StringEqCI!("NULL")),
+        Cascade(Kw!("CASCADE")),
+        NoAction(Kw!("NO"), Space1, Kw!("ACTION")),
+        SetDefault(Kw!("SET"), Space1, Kw!("DEFAULT")),
+        SetNull(Kw!("SET"), Space1, Kw!("NULL")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "informix")]
-    pub struct Informix(pub Option<(Space, StringEqCI!("CONSTRAINT"), Space, TName)>);
+    pub struct Informix(pub Option<(Space, Kw!("CONSTRAINT"), Space, TName)>);
 
     pub type Chkparse = Prefix<StringEq!("("), StringEndsWith<StringEq!(")")>>;
 
@@ -6082,12 +5941,12 @@ pub mod leveled {
     #[tygr(name = "load-spec")]
     pub enum LoadSpec {
         Sql {
-            kw: (StringEqCI!("SQL"), Space1),
+            kw: (Kw!("SQL"), Space1),
             spec: LoadSqlSpec,
         },
         Data {
             hints: Option<(LoadHints, Space)>,
-            kw: (StringEqCI!("DATA"), Space1),
+            kw: (Kw!("DATA"), Space1),
             spec: LoadDataSpec,
         },
     }
@@ -6099,11 +5958,11 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "load-hint")]
     pub enum LoadHint {
-        NoCheck(StringEqCI!("%NOCHECK")),
-        NoIndex(StringEqCI!("%NOINDEX")),
-        NoJourn(StringEqCI!("%NOJOURN")),
-        NoLock(StringEqCI!("%NOLOCK")),
-        Bulk(StringEqCI!("BULK")),
+        NoCheck(Kw!("%NOCHECK")),
+        NoIndex(Kw!("%NOINDEX")),
+        NoJourn(Kw!("%NOJOURN")),
+        NoLock(Kw!("%NOLOCK")),
+        Bulk(Kw!("BULK")),
     }
 
     #[derive(Grammar)]
@@ -6129,14 +5988,14 @@ pub mod leveled {
         pub using: LoadDataUsing,
     }
 
-    pub type LoadDataFrom = Prefix<(StringEqCI!("FROM"), Space1), DataSource>;
+    pub type LoadDataFrom = Prefix<(Kw!("FROM"), Space1), DataSource>;
 
     #[derive(Grammar)]
     #[tygr(name = "data-source")]
     pub enum DataSource {
         File(FileSource),
         Jdbc {
-            kw: (StringEqCI!("JDBC"), Space),
+            kw: (Kw!("JDBC"), Space),
             cnxn: JdbcCnxnSpec,
             data: (Space, JdbcDataSpec),
         },
@@ -6147,14 +6006,9 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct FileSource {
-        pub kw: (StringEqCI!("FILE"), Space),
+        pub kw: (Kw!("FILE"), Space),
         pub path: Literal,
-        pub columns: Option<(
-            Space,
-            StringEqCI!("COLUMNS"),
-            Space,
-            Parenthesized<ColumnDefList>,
-        )>,
+        pub columns: Option<(Space, Kw!("COLUMNS"), Space, Parenthesized<ColumnDefList>)>,
     }
 
     #[derive(Grammar)]
@@ -6168,11 +6022,11 @@ pub mod leveled {
     #[tygr(name = "jdbc-cnxn-spec")]
     pub enum JdbcCnxnSpec {
         Connection {
-            kw: Option<(StringEqCI!("CONNECTION"), Space)>,
+            kw: Option<(Kw!("CONNECTION"), Space)>,
             spec: CnxnSpec,
         },
         Url {
-            kw: Option<(StringEqCI!("URL"), Space)>,
+            kw: Option<(Kw!("URL"), Space)>,
             value: Literal,
         },
     }
@@ -6181,11 +6035,11 @@ pub mod leveled {
     #[tygr(name = "jdbc-data-spec")]
     pub enum JdbcDataSpec {
         Query {
-            kw: (StringEqCI!("QUERY"), Space),
+            kw: (Kw!("QUERY"), Space),
             value: Literal,
         },
         Table {
-            kw: (StringEqCI!("TABLE"), Space),
+            kw: (Kw!("TABLE"), Space),
             name: VecSep<Ident, StringEq!(".")>,
         },
     }
@@ -6200,13 +6054,13 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "load-data-into")]
     pub struct LoadDataInto {
-        pub kw: (StringEqCI!("INTO"), Space),
+        pub kw: (Kw!("INTO"), Space),
         pub table: TName,
         pub columns: Option<(Space, FList1)>,
-        pub values: Option<(Space, StringEqCI!("VALUES"), Space, FList1)>,
+        pub values: Option<(Space, Kw!("VALUES"), Space, FList1)>,
     }
 
-    pub type LoadDataUsing = Prefix<(StringEqCI!("USING"), Space), LoadOptions>;
+    pub type LoadDataUsing = Prefix<(Kw!("USING"), Space), LoadOptions>;
 
     #[derive(Grammar)]
     #[tygr(name = "load-options")]
@@ -6218,49 +6072,41 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "load-sql-spec")]
     pub struct LoadSqlSpec {
-        pub kw: (StringEqCI!("FROM"), Space1),
+        pub kw: (Kw!("FROM"), Space1),
         pub source: SqlSource,
-        pub dialect: Option<(Space, StringEqCI!("DIALECT"), Space, Literal)>,
-        pub delimiter: Option<(Space, StringEqCI!("DELIMITER"), Space, Literal)>,
-        pub verbose: Option<(Space, StringEqCI!("VERBOSE"))>,
+        pub dialect: Option<(Space, Kw!("DIALECT"), Space, Literal)>,
+        pub delimiter: Option<(Space, Kw!("DELIMITER"), Space, Literal)>,
+        pub verbose: Option<(Space, Kw!("VERBOSE"))>,
         pub log_to_file: Option<(Space, LoadSqlLogToFile)>,
-        pub ignore_errors: Option<(Space, StringEqCI!("IGNORE"), Space1, StringEqCI!("ERRORS"))>,
+        pub ignore_errors: Option<(Space, Kw!("IGNORE"), Space1, Kw!("ERRORS"))>,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "sql-source")]
     pub enum SqlSource {
         Directory {
-            kw: (StringEqCI!("DIRECTORY"), Space),
+            kw: (Kw!("DIRECTORY"), Space),
             path: Literal,
-            recurse: Option<(Space, StringEqCI!("RECURSE"))>,
+            recurse: Option<(Space, Kw!("RECURSE"))>,
         },
         File {
-            kw: (StringEqCI!("FILE"), Space),
+            kw: (Kw!("FILE"), Space),
             path: Literal,
         },
     }
 
-    pub type LoadSqlLogToFile = Prefix<
-        (
-            StringEqCI!("LOG"),
-            Space1,
-            StringEqCI!("TO"),
-            Space1,
-            StringEqCI!("FILE"),
-        ),
-        Option<(Space, Literal)>,
-    >;
+    pub type LoadSqlLogToFile =
+        Prefix<(Kw!("LOG"), Space1, Kw!("TO"), Space1, Kw!("FILE")), Option<(Space, Literal)>>;
 
     #[derive(Grammar)]
     #[tygr(name = "alter-server-action")]
     pub enum AlterServerAction {
         Alter {
-            kw: (StringEqCI!("ALTER"), Space1),
+            kw: (Kw!("ALTER"), Space1),
             action: SubAlterServerAction,
         },
         Modify {
-            kw: (StringEqCI!("MODIFY"), Space1),
+            kw: (Kw!("MODIFY"), Space1),
             actions: VecSep<SubAlterServerAction, ArgSep>,
         },
     }
@@ -6270,25 +6116,25 @@ pub mod leveled {
     pub enum SubAlterServerAction {
         FtPushdown(FTPushdownClause),
         Connection {
-            kw: (StringEqCI!("CONNECTION"), Space),
+            kw: (Kw!("CONNECTION"), Space),
             value: Literal,
         },
-        DelimitedIds(StringEqCI!("DELIMITEDIDS")),
+        DelimitedIds(Kw!("DELIMITEDIDS")),
         Host {
-            kw: (StringEqCI!("HOST"), Space),
+            kw: (Kw!("HOST"), Space),
             value: Literal,
         },
-        NoDelimitedIds(StringEqCI!("NODELIMITEDIDS")),
+        NoDelimitedIds(Kw!("NODELIMITEDIDS")),
         Password {
-            kw: (StringEqCI!("PASSWORD"), Space),
+            kw: (Kw!("PASSWORD"), Space),
             value: Literal,
         },
         Port {
-            kw: (StringEqCI!("PORT"), Space),
+            kw: (Kw!("PORT"), Space),
             value: Literal,
         },
         Username {
-            kw: (StringEqCI!("USERNAME"), Space),
+            kw: (Kw!("USERNAME"), Space),
             value: Literal,
         },
     }
@@ -6296,30 +6142,30 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "vector-datyp")]
     pub enum VectorDatyp {
-        Decimal(StringEqCI!("DECIMAL")),
-        Double(StringEqCI!("DOUBLE")),
-        Float(StringEqCI!("FLOAT")),
-        Int(StringEqCI!("INT")),
-        Integer(StringEqCI!("INTEGER")),
-        String(StringEqCI!("STRING")),
+        Decimal(Kw!("DECIMAL")),
+        Double(Kw!("DOUBLE")),
+        Float(Kw!("FLOAT")),
+        Int(Kw!("INT")),
+        Integer(Kw!("INTEGER")),
+        String(Kw!("STRING")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "stats clause")]
     pub enum StatsClause {
-        Statistics(StringEqCI!("STATISTICS")),
-        Stats(StringEqCI!("STATS")),
+        Statistics(Kw!("STATISTICS")),
+        Stats(Kw!("STATS")),
     }
 
     #[derive(Grammar)]
     #[tygr(name = "stats scope")]
     pub enum StatsScope {
         Schema {
-            kw: (StringEqCI!("SCHEMA"), Space),
+            kw: (Kw!("SCHEMA"), Space),
             schema: Schema,
         },
         Table {
-            kw: (StringEqCI!("TABLE"), Space),
+            kw: (Kw!("TABLE"), Space),
             table: TName,
         },
     }
@@ -6327,8 +6173,8 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "stats property")]
     pub enum StatsProperty {
-        IgnoreFixedStats(StringEqCI!("IGNOREFIXEDSTATS")),
-        SkipAutomaticStatsCollection(StringEqCI!("SKIPAUTOMATICSTATSCOLLECTION")),
+        IgnoreFixedStats(Kw!("IGNOREFIXEDSTATS")),
+        SkipAutomaticStatsCollection(Kw!("SKIPAUTOMATICSTATSCOLLECTION")),
     }
 }
 
@@ -6343,19 +6189,19 @@ mod sugar {
     #[derive(Grammar, Clone)]
     #[tygr(name = "percent op")]
     pub enum PercentOp {
-        AlphaUp(StringEqCI!("%ALPHAUP")),
-        Exact(StringEqCI!("%EXACT")),
-        External(StringEqCI!("%EXTERNAL")),
-        Internal(StringEqCI!("%INTERNAL")),
-        IntExt(StringEqCI!("%INTEXT")),
-        MinusOp(StringEqCI!("%MINUS")),
-        Mvr(StringEqCI!("%MVR")),
-        OdbcIn(StringEqCI!("%ODBCIN")),
-        OdbcOut(StringEqCI!("%ODBCOUT")),
-        PlusOp(StringEqCI!("%PLUS")),
-        RuntimeIn(StringEqCI!("%RUNTIMEIN")),
-        RuntimeOut(StringEqCI!("%RUNTIMEOUT")),
-        Upper(Either<StringEqCI!("%UPPER"), StringEqCI!("UPPER")>),
+        AlphaUp(Kw!("%ALPHAUP")),
+        Exact(Kw!("%EXACT")),
+        External(Kw!("%EXTERNAL")),
+        Internal(Kw!("%INTERNAL")),
+        IntExt(Kw!("%INTEXT")),
+        MinusOp(Kw!("%MINUS")),
+        Mvr(Kw!("%MVR")),
+        OdbcIn(Kw!("%ODBCIN")),
+        OdbcOut(Kw!("%ODBCOUT")),
+        PlusOp(Kw!("%PLUS")),
+        RuntimeIn(Kw!("%RUNTIMEIN")),
+        RuntimeOut(Kw!("%RUNTIMEOUT")),
+        Upper(Either<Kw!("%UPPER"), Kw!("UPPER")>),
         StringOperator(StringOperator),
     }
 
@@ -6369,10 +6215,10 @@ mod sugar {
     #[derive(Grammar, Clone)]
     #[tygr(name = "%string operator")]
     pub enum StringOperator {
-        String(StringEqCI!("%STRING")),
-        SqlString(StringEqCI!("%SQLSTRING")),
-        SqlUpper(StringEqCI!("%SQLUPPER")),
-        Truncate(StringEqCI!("%TRUNCATE")),
+        String(Kw!("%STRING")),
+        SqlString(Kw!("%SQLSTRING")),
+        SqlUpper(Kw!("%SQLUPPER")),
+        Truncate(Kw!("%TRUNCATE")),
     }
 
     #[derive(Grammar, Clone)]
@@ -6385,81 +6231,81 @@ mod sugar {
     #[derive(Grammar, Clone)]
     #[tygr(name = "scalar function")]
     pub enum ScalarFunction {
-        PercentObject(StringEqCI!("%OBJECT"), Args<Scalx>),
-        PercentOid(StringEqCI!("%OID"), Args<Scalx>),
-        Similarity(StringEqCI!("%SIMILARITY"), Args<RR>),
-        Abs(StringEqCI!("ABS"), Args<Scalx>),
-        Ascii(StringEqCI!("ASCII"), Args<Scalx>),
-        Ceiling(StringEqCI!("CEILING"), Args<Scalx>),
-        CharacterLength(StringEqCI!("CHARACTER_LENGTH"), Args<Scalx>),
-        CharIndex(StringEqCI!("CHARINDEX"), Args<RRO>),
-        CharLength(StringEqCI!("CHAR_LENGTH"), Args<Scalx>),
-        Coalesce(StringEqCI!("COALESCE"), Args1Plus),
-        Convert(StringEqCI!("CONVERT"), Args<RRO>),
-        DataLength(StringEqCI!("DATALENGTH"), Args<Scalx>),
-        Date(StringEqCI!("DATE"), Args<Scalx>),
-        Day(StringEqCI!("DAY"), Args<Scalx>),
-        Decode(StringEqCI!("DECODE"), Args1Plus),
-        Embedding(StringEqCI!("EMBEDDING"), Args<RO>),
-        Floor(StringEqCI!("FLOOR"), Args<Scalx>),
-        GetDate(StringEqCI!("GETDATE"), Args<Option<Scalx>>),
-        GetUtcDate(StringEqCI!("GETUTCDATE"), Args<Option<Scalx>>),
-        Greatest(StringEqCI!("GREATEST"), Args1Plus),
-        HashBytes(StringEqCI!("HASHBYTES"), Args<RR>),
-        IfNull(StringEqCI!("IFNULL"), Args<RRO>),
-        Instr(StringEqCI!("INSTR"), Args<RROO>),
-        IsNull(StringEqCI!("ISNULL"), Args<RR>),
-        IsNumeric(StringEqCI!("ISNUMERIC"), Args<Scalx>),
-        LastDay(StringEqCI!("LAST_DAY"), Args<Scalx>),
-        LastIdentity(StringEqCI!("LAST_IDENTITY"), Args<()>),
-        LCase(StringEqCI!("LCASE"), Args<Scalx>),
-        Least(StringEqCI!("LEAST"), Args1Plus),
-        Left(StringEqCI!("LEFT"), Args<RR>),
-        Len(StringEqCI!("LEN"), Args<Scalx>),
-        Length(StringEqCI!("LENGTH"), Args<Scalx>),
-        Lower(StringEqCI!("LOWER"), Args<Scalx>),
-        LPad(StringEqCI!("LPAD"), Args<RRO>),
-        LTrim(StringEqCI!("LTRIM"), Args<Scalx>),
-        Month(StringEqCI!("MONTH"), Args<Scalx>),
-        Now(StringEqCI!("NOW"), Args<()>),
-        NullIf(StringEqCI!("NULLIF"), Args<RR>),
-        Nvl(StringEqCI!("NVL"), Args<RR>),
-        PatIndex(StringEqCI!("PATINDEX"), Args<RR>),
-        Position(StringEqCI!("POSITION"), Args<SQLPositionArgs>),
-        Power(StringEqCI!("POWER"), Args<RR>),
-        Repeat(StringEqCI!("REPEAT"), Args<RR>),
-        Replace(StringEqCI!("REPLACE"), Args<RRR>),
-        Replicate(StringEqCI!("REPLICATE"), Args<RR>),
-        Reverse(StringEqCI!("REVERSE"), Args<Scalx>),
-        Right(StringEqCI!("RIGHT"), Args<RR>),
-        Round(StringEqCI!("ROUND"), Args<RR>),
-        RPad(StringEqCI!("RPAD"), Args<RRO>),
-        RTrim(StringEqCI!("RTRIM"), Args<Scalx>),
-        Sign(StringEqCI!("SIGN"), Args<Scalx>),
-        Space(StringEqCI!("SPACE"), Args<Scalx>),
-        Str(StringEqCI!("STR"), Args<ROO>),
-        String(StringEqCI!("STRING"), Args1Plus),
-        Stuff(StringEqCI!("STUFF"), Args<RRRR>),
-        Substr(StringEqCI!("SUBSTR"), Args<RRO>),
-        Substring(StringEqCI!("SUBSTRING"), SubstringArgs),
-        ToChar(StringEqCI!("TOCHAR"), Args<RO>),
-        ToDate(StringEqCI!("TODATE"), Args<RO>),
-        ToUSChar(StringEqCI!("TO_CHAR"), Args<RO>),
-        ToUSDate(StringEqCI!("TO_DATE"), Args<RO>),
-        ToNumber(StringEqCI!("TO_NUMBER"), Args<Src<Term>>),
-        ToTimestamp(StringEqCI!("TO_TIMESTAMP"), Args<RO>),
-        UCase(StringEqCI!("UCASE"), Args<Scalx>),
-        UnixTimestamp(StringEqCI!("UNIX_TIMESTAMP"), Args<Option<Scalx>>),
-        VectorCosine(StringEqCI!("VECTOR_COSINE"), Args<RR>),
-        VectorDotProduct(StringEqCI!("VECTOR_DOT_PRODUCT"), Args<RR>),
-        Year(StringEqCI!("YEAR"), Args<Scalx>),
+        PercentObject(Kw!("%OBJECT"), Args<Scalx>),
+        PercentOid(Kw!("%OID"), Args<Scalx>),
+        Similarity(Kw!("%SIMILARITY"), Args<RR>),
+        Abs(Kw!("ABS"), Args<Scalx>),
+        Ascii(Kw!("ASCII"), Args<Scalx>),
+        Ceiling(Kw!("CEILING"), Args<Scalx>),
+        CharacterLength(Kw!("CHARACTER_LENGTH"), Args<Scalx>),
+        CharIndex(Kw!("CHARINDEX"), Args<RRO>),
+        CharLength(Kw!("CHAR_LENGTH"), Args<Scalx>),
+        Coalesce(Kw!("COALESCE"), Args1Plus),
+        Convert(Kw!("CONVERT"), Args<RRO>),
+        DataLength(Kw!("DATALENGTH"), Args<Scalx>),
+        Date(Kw!("DATE"), Args<Scalx>),
+        Day(Kw!("DAY"), Args<Scalx>),
+        Decode(Kw!("DECODE"), Args1Plus),
+        Embedding(Kw!("EMBEDDING"), Args<RO>),
+        Floor(Kw!("FLOOR"), Args<Scalx>),
+        GetDate(Kw!("GETDATE"), Args<Option<Scalx>>),
+        GetUtcDate(Kw!("GETUTCDATE"), Args<Option<Scalx>>),
+        Greatest(Kw!("GREATEST"), Args1Plus),
+        HashBytes(Kw!("HASHBYTES"), Args<RR>),
+        IfNull(Kw!("IFNULL"), Args<RRO>),
+        Instr(Kw!("INSTR"), Args<RROO>),
+        IsNull(Kw!("ISNULL"), Args<RR>),
+        IsNumeric(Kw!("ISNUMERIC"), Args<Scalx>),
+        LastDay(Kw!("LAST_DAY"), Args<Scalx>),
+        LastIdentity(Kw!("LAST_IDENTITY"), Args<()>),
+        LCase(Kw!("LCASE"), Args<Scalx>),
+        Least(Kw!("LEAST"), Args1Plus),
+        Left(Kw!("LEFT"), Args<RR>),
+        Len(Kw!("LEN"), Args<Scalx>),
+        Length(Kw!("LENGTH"), Args<Scalx>),
+        Lower(Kw!("LOWER"), Args<Scalx>),
+        LPad(Kw!("LPAD"), Args<RRO>),
+        LTrim(Kw!("LTRIM"), Args<Scalx>),
+        Month(Kw!("MONTH"), Args<Scalx>),
+        Now(Kw!("NOW"), Args<()>),
+        NullIf(Kw!("NULLIF"), Args<RR>),
+        Nvl(Kw!("NVL"), Args<RR>),
+        PatIndex(Kw!("PATINDEX"), Args<RR>),
+        Position(Kw!("POSITION"), Args<SQLPositionArgs>),
+        Power(Kw!("POWER"), Args<RR>),
+        Repeat(Kw!("REPEAT"), Args<RR>),
+        Replace(Kw!("REPLACE"), Args<RRR>),
+        Replicate(Kw!("REPLICATE"), Args<RR>),
+        Reverse(Kw!("REVERSE"), Args<Scalx>),
+        Right(Kw!("RIGHT"), Args<RR>),
+        Round(Kw!("ROUND"), Args<RR>),
+        RPad(Kw!("RPAD"), Args<RRO>),
+        RTrim(Kw!("RTRIM"), Args<Scalx>),
+        Sign(Kw!("SIGN"), Args<Scalx>),
+        Space(Kw!("SPACE"), Args<Scalx>),
+        Str(Kw!("STR"), Args<ROO>),
+        String(Kw!("STRING"), Args1Plus),
+        Stuff(Kw!("STUFF"), Args<RRRR>),
+        Substr(Kw!("SUBSTR"), Args<RRO>),
+        Substring(Kw!("SUBSTRING"), SubstringArgs),
+        ToChar(Kw!("TOCHAR"), Args<RO>),
+        ToDate(Kw!("TODATE"), Args<RO>),
+        ToUSChar(Kw!("TO_CHAR"), Args<RO>),
+        ToUSDate(Kw!("TO_DATE"), Args<RO>),
+        ToNumber(Kw!("TO_NUMBER"), Args<Src<Term>>),
+        ToTimestamp(Kw!("TO_TIMESTAMP"), Args<RO>),
+        UCase(Kw!("UCASE"), Args<Scalx>),
+        UnixTimestamp(Kw!("UNIX_TIMESTAMP"), Args<Option<Scalx>>),
+        VectorCosine(Kw!("VECTOR_COSINE"), Args<RR>),
+        VectorDotProduct(Kw!("VECTOR_DOT_PRODUCT"), Args<RR>),
+        Year(Kw!("YEAR"), Args<Scalx>),
     }
 
     #[derive(Grammar, Clone)]
     #[tygr(inline)]
     pub struct SQLPositionArgs {
         pub needle: Scalx,
-        pub in_kw: (Space, StringEqCI!("IN"), Space),
+        pub in_kw: (Space, Kw!("IN"), Space),
         pub haystack: Scalx,
     }
 
@@ -6471,9 +6317,9 @@ mod sugar {
         pub expr: Scalx,
         pub rest: Either<
             (
-                (Space, StringEqCI!("FROM"), Space),
+                (Space, Kw!("FROM"), Space),
                 Scalx,
-                Option<((Space, StringEqCI!("FOR"), Space), Scalx)>,
+                Option<((Space, Kw!("FOR"), Space), Scalx)>,
             ),
             (ArgSep, Scalx, Option<(ArgSep, Scalx)>),
         >,
@@ -6483,7 +6329,7 @@ mod sugar {
 
     #[derive(Grammar, Clone)]
     pub enum DTS {
-        Function(Prefix<(StringEqCI!("FN"), Space1), ODBCFunc>),
+        Function(Prefix<(Kw!("FN"), Space1), ODBCFunc>),
         DateTime(DTSVal),
     }
 
@@ -6491,63 +6337,63 @@ mod sugar {
     #[tygr(name = "odbc func")]
     pub enum ODBCFunc {
         // Similar to SQLScalarFunction but in ODBC escape syntax
-        Abs(StringEqCI!("ABS"), Args<Scalx>),
-        Acos(StringEqCI!("ACOS"), Args<Scalx>),
-        Asin(StringEqCI!("ASIN"), Args<Scalx>),
-        Atan(StringEqCI!("ATAN"), Args<Scalx>),
-        Ceiling(StringEqCI!("CEILING"), Args<Scalx>),
-        Cos(StringEqCI!("COS"), Args<Scalx>),
-        Cot(StringEqCI!("COT"), Args<Scalx>),
-        Exp(StringEqCI!("EXP"), Args<Scalx>),
-        Floor(StringEqCI!("FLOOR"), Args<Scalx>),
-        Log(StringEqCI!("LOG"), Args<Scalx>),
-        Log10(StringEqCI!("LOG10"), Args<Scalx>),
-        Mod(StringEqCI!("MOD"), Args<RR>),
-        Pi(StringEqCI!("PI"), Option<StringEq!("()")>),
-        Power(StringEqCI!("POWER"), Args<RR>),
-        Sin(StringEqCI!("SIN"), Args<Scalx>),
-        Sqrt(StringEqCI!("SQRT"), Args<Scalx>),
-        Tan(StringEqCI!("TAN"), Args<Scalx>),
-        Ascii(StringEqCI!("ASCII"), Args<Scalx>),
-        Char(StringEqCI!("CHAR"), Args<Scalx>),
-        Concat(StringEqCI!("CONCAT"), Args<RR>),
-        CurDate(StringEqCI!("CURDATE"), Option<StringEq!("()")>),
-        CurTime(StringEqCI!("CURTIME"), Option<StringEq!("()")>),
-        Database(StringEqCI!("DATABASE"), Option<StringEq!("()")>),
-        DayName(StringEqCI!("DAYNAME"), Args<Scalx>),
-        DayOfMonth(StringEqCI!("DAYOFMONTH"), Args<Scalx>),
-        DayOfWeek(StringEqCI!("DAYOFWEEK"), Args<Scalx>),
-        DayOfYear(StringEqCI!("DAYOFYEAR"), Args<Scalx>),
-        Hour(StringEqCI!("HOUR"), Args<Scalx>),
-        LCase(StringEqCI!("LCASE"), Args<Scalx>),
-        Left(StringEqCI!("LEFT"), Args<RR>),
-        Length(StringEqCI!("LENGTH"), Args<Scalx>),
-        LTrim(StringEqCI!("LTRIM"), Args<Scalx>),
-        Minute(StringEqCI!("MINUTE"), Args<Scalx>),
-        Month(StringEqCI!("MONTH"), Args<Scalx>),
-        MonthName(StringEqCI!("MONTHNAME"), Args<Scalx>),
-        Now(StringEqCI!("NOW"), Option<StringEq!("()")>),
-        Quarter(StringEqCI!("QUARTER"), Args<Scalx>),
-        Repeat(StringEqCI!("REPEAT"), Args<RR>),
-        Right(StringEqCI!("RIGHT"), Args<RR>),
-        Round(StringEqCI!("ROUND"), Args<RR>),
-        RTrim(StringEqCI!("RTRIM"), Args<Scalx>),
-        Second(StringEqCI!("SECOND"), Args<Scalx>),
-        Sign(StringEqCI!("SIGN"), Args<Scalx>),
-        Space(StringEqCI!("SPACE"), Args<Scalx>),
-        Substring(StringEqCI!("SUBSTRING"), SubstringArgs),
+        Abs(Kw!("ABS"), Args<Scalx>),
+        Acos(Kw!("ACOS"), Args<Scalx>),
+        Asin(Kw!("ASIN"), Args<Scalx>),
+        Atan(Kw!("ATAN"), Args<Scalx>),
+        Ceiling(Kw!("CEILING"), Args<Scalx>),
+        Cos(Kw!("COS"), Args<Scalx>),
+        Cot(Kw!("COT"), Args<Scalx>),
+        Exp(Kw!("EXP"), Args<Scalx>),
+        Floor(Kw!("FLOOR"), Args<Scalx>),
+        Log(Kw!("LOG"), Args<Scalx>),
+        Log10(Kw!("LOG10"), Args<Scalx>),
+        Mod(Kw!("MOD"), Args<RR>),
+        Pi(Kw!("PI"), Option<StringEq!("()")>),
+        Power(Kw!("POWER"), Args<RR>),
+        Sin(Kw!("SIN"), Args<Scalx>),
+        Sqrt(Kw!("SQRT"), Args<Scalx>),
+        Tan(Kw!("TAN"), Args<Scalx>),
+        Ascii(Kw!("ASCII"), Args<Scalx>),
+        Char(Kw!("CHAR"), Args<Scalx>),
+        Concat(Kw!("CONCAT"), Args<RR>),
+        CurDate(Kw!("CURDATE"), Option<StringEq!("()")>),
+        CurTime(Kw!("CURTIME"), Option<StringEq!("()")>),
+        Database(Kw!("DATABASE"), Option<StringEq!("()")>),
+        DayName(Kw!("DAYNAME"), Args<Scalx>),
+        DayOfMonth(Kw!("DAYOFMONTH"), Args<Scalx>),
+        DayOfWeek(Kw!("DAYOFWEEK"), Args<Scalx>),
+        DayOfYear(Kw!("DAYOFYEAR"), Args<Scalx>),
+        Hour(Kw!("HOUR"), Args<Scalx>),
+        LCase(Kw!("LCASE"), Args<Scalx>),
+        Left(Kw!("LEFT"), Args<RR>),
+        Length(Kw!("LENGTH"), Args<Scalx>),
+        LTrim(Kw!("LTRIM"), Args<Scalx>),
+        Minute(Kw!("MINUTE"), Args<Scalx>),
+        Month(Kw!("MONTH"), Args<Scalx>),
+        MonthName(Kw!("MONTHNAME"), Args<Scalx>),
+        Now(Kw!("NOW"), Option<StringEq!("()")>),
+        Quarter(Kw!("QUARTER"), Args<Scalx>),
+        Repeat(Kw!("REPEAT"), Args<RR>),
+        Right(Kw!("RIGHT"), Args<RR>),
+        Round(Kw!("ROUND"), Args<RR>),
+        RTrim(Kw!("RTRIM"), Args<Scalx>),
+        Second(Kw!("SECOND"), Args<Scalx>),
+        Sign(Kw!("SIGN"), Args<Scalx>),
+        Space(Kw!("SPACE"), Args<Scalx>),
+        Substring(Kw!("SUBSTRING"), SubstringArgs),
         TimestampAdd(
-            StringEqCI!("TIMESTAMPADD"),
+            Kw!("TIMESTAMPADD"),
             Args<RRR<DoubleQuotable<TSAddInterval>>>,
         ),
         TimestampDiff(
-            StringEqCI!("TIMESTAMPDIFF"),
+            Kw!("TIMESTAMPDIFF"),
             Args<RRR<DoubleQuotable<TSDiffInterval>>>,
         ),
-        Truncate(StringEqCI!("TRUNCATE"), Args<RR>),
-        UCase(StringEqCI!("UCASE"), Args<Scalx>),
-        Week(StringEqCI!("WEEK"), Args<Scalx>),
-        Year(StringEqCI!("YEAR"), Args<Scalx>),
+        Truncate(Kw!("TRUNCATE"), Args<RR>),
+        UCase(Kw!("UCASE"), Args<Scalx>),
+        Week(Kw!("WEEK"), Args<Scalx>),
+        Year(Kw!("YEAR"), Args<Scalx>),
     }
 
     #[derive(Grammar, Clone)]
@@ -6561,27 +6407,27 @@ mod sugar {
     #[derive(Grammar, Clone)]
     #[tygr(name = "dts type")]
     pub enum DTSType {
-        Date(StringEqCI!("D")),
-        Timestamp(StringEqCI!("TS")),
-        Time(StringEqCI!("T")),
+        Date(Kw!("D")),
+        Timestamp(Kw!("TS")),
+        Time(Kw!("T")),
     }
 
     #[derive(Grammar, Clone)]
     pub struct Fetch {
-        pub keyword: (StringEqCI!("FETCH"), Space),
-        pub direction: Option<(Either<StringEqCI!("FIRST"), StringEqCI!("NEXT")>, Space)>,
-        pub valspec: RowCount,
+        pub keyword: (Kw!("FETCH"), Space),
+        pub direction: Option<(Either<Kw!("FIRST"), Kw!("NEXT")>, Space)>,
+        pub valspec: Count,
         pub row_keyword: Option<(Space, RowRowsInline)>,
-        pub only: Option<(Space, StringEqCI!("ONLY"))>,
+        pub only: Option<(Space, Kw!("ONLY"))>,
     }
 
     #[derive(Grammar, Clone)]
     #[tygr(inline)]
     pub enum RowRowsInline {
-        Rows(StringEqCI!("ROWS")),
-        Row(StringEqCI!("ROW")),
+        Rows(Kw!("ROWS")),
+        Row(Kw!("ROW")),
     }
 
     /// `ALL` where `DISTINCT` could stand: what a SELECT or an aggregate does without it.
-    pub type AllKw = (StringEqCI!("ALL"), NotFollowedBy<IdentifierPart>);
+    pub type AllKw = Kw!("ALL");
 }

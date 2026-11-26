@@ -82,7 +82,9 @@ impl Walk for Selex {
 impl Walk for Selst {
     fn walk(&self, w: &mut Walker) {
         self.distinct.walk(w);
-        self.top.walk(w);
+        if let Some((_, _, top, _)) = &self.top {
+            top.walk(w)
+        }
         self.select_list.0.walk(w);
         self.targt.walk(w)
     }
@@ -99,8 +101,8 @@ impl Walk for SelectOption {
 
 impl Walk for TopSpec {
     fn walk(&self, w: &mut Walker) {
-        if let TopSpec::ValSpec(val) = self {
-            val.walk(w)
+        if let TopSpec::Count(count) = self {
+            count.walk(w)
         }
     }
 }
@@ -194,11 +196,12 @@ impl Walk for LimitSpec {
     }
 }
 
-impl Walk for RowCount {
+impl Walk for Count {
     fn walk(&self, w: &mut Walker) {
         match self {
-            RowCount::Val(val) => val.walk(w),
-            RowCount::Scalx(scalx) => scalx.walk(w),
+            Count::Paren(count) => count.walk(w),
+            Count::HostVar(host_var) => host_var.walk(w),
+            Count::Literal(_) | Count::Marker(_) => {}
         }
     }
 }

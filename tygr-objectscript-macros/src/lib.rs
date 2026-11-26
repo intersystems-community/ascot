@@ -328,7 +328,7 @@ impl Output {
         };
         let case_insensitive = match name.ident.to_string().as_str() {
             "StringEq" => false,
-            "StringEqCI" => true,
+            "StringEqCI" | "Kw" => true,
             _ => return,
         };
         let Ok(text) = mac.parse_body::<LitStr>() else {
