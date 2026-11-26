@@ -290,6 +290,81 @@ fn sugar_variant(variant: &Variant) -> Variant {
     variant
 }
 
+/// `impl Clone` written out, as the derive refuses a generic item with a `Kw!` field.
+fn clone_impl(name: &Ident, generics: &Generics, body: TokenStream2) -> TokenStream2 {
+    let mut generics = generics.clone();
+    for param in generics.type_params_mut() {
+        param.bounds.push(parse_quote!(::core::clone::Clone));
+    }
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    quote! {
+        impl #impl_generics ::core::clone::Clone for #name #ty_generics #where_clause {
+            fn clone(&self) -> Self { #body }
+        }
+    }
+}
+
+/// `Path { f: f.clone(), … }`, `Path(a.clone(), …)` or `Path`, each field's value by `access`.
+fn clone_fields(
+    path: TokenStream2,
+    fields: &Fields,
+    access: impl Fn(usize, &Field) -> TokenStream2,
+) -> TokenStream2 {
+    let clone = quote!(::core::clone::Clone::clone);
+    let values = fields.iter().enumerate().map(|(i, field)| {
+        let value = access(i, field);
+        match &field.ident {
+            Some(name) => quote!(#name: #clone(#value)),
+            None => quote!(#clone(#value)),
+        }
+    });
+    match fields {
+        Fields::Named(_) => quote!(#path { #(#values),* }),
+        Fields::Unnamed(_) => quote!(#path(#(#values),*)),
+        Fields::Unit => path,
+    }
+}
+
+fn clone_struct(item: &ItemStruct) -> TokenStream2 {
+    let body = clone_fields(quote!(Self), &item.fields, |i, field| match &field.ident {
+        Some(name) => quote!(&self.#name),
+        None => {
+            let index = Index::from(i);
+            quote!(&self.#index)
+        }
+    });
+    clone_impl(&item.ident, &item.generics, body)
+}
+
+fn clone_enum(item: &ItemEnum) -> TokenStream2 {
+    let arms = item.variants.iter().map(|variant| {
+        let name = &variant.ident;
+        let binds: Vec<Ident> = (0..variant.fields.len())
+            .map(|i| format_ident!("f{i}"))
+            .collect();
+        let pattern = match &variant.fields {
+            Fields::Named(fields) => {
+                let fields = fields.named.iter().zip(&binds).map(|(field, bind)| {
+                    let name = &field.ident;
+                    quote!(#name: #bind)
+                });
+                quote!(Self::#name { #(#fields),* })
+            }
+            Fields::Unnamed(_) => quote!(Self::#name(#(#binds),*)),
+            Fields::Unit => quote!(Self::#name),
+        };
+        let value = clone_fields(quote!(Self::#name), &variant.fields, |i, _| {
+            binds[i].to_token_stream()
+        });
+        quote!(#pattern => #value,)
+    });
+    clone_impl(
+        &item.ident,
+        &item.generics,
+        quote!(match self { #(#arms)* }),
+    )
+}
+
 /// `impl<T: Desugar> Desugar for Name<T>`, `T`'s bounds carried to `T::Core`, converting by `body`.
 fn impl_of(name: &Ident, generics: &Generics, body: TokenStream2) -> TokenStream2 {
     let desugar = desugar();
@@ -477,10 +552,9 @@ impl Output {
 
     fn structure(&mut self, mut item: ItemStruct) -> syn::Result<()> {
         let marked = take_mark(&mut item.attrs)?;
-        item.attrs
-            .push(parse_quote!(#[derive(::core::clone::Clone)]));
         let dropped = self.fields(&mut item.fields)?;
         self.full.items.push(item.to_token_stream());
+        self.full.items.push(clone_struct(&item));
         self.full.shape(&item);
         let body = fields_desugar(&item.fields, &dropped, |i, field| match &field.ident {
             Some(name) => quote!(self.#name),
@@ -491,6 +565,7 @@ impl Output {
         });
         core_fields(&mut item.fields, &dropped);
         self.core.items.push(item.to_token_stream());
+        self.core.items.push(clone_struct(&item));
         self.core.shape(&item);
         if !marked {
             let (name, generics) = (&item.ident, &item.generics);
@@ -502,8 +577,6 @@ impl Output {
 
     fn enumeration(&mut self, mut item: ItemEnum) -> syn::Result<()> {
         let marked = take_mark(&mut item.attrs)?;
-        item.attrs
-            .push(parse_quote!(#[derive(::core::clone::Clone)]));
         let sugar = format_ident!("{}Sugar", item.ident);
         let mut core_variants = Punctuated::new();
         let mut sugar_variants: Punctuated<Variant, Token![,]> = Punctuated::new();
@@ -522,9 +595,11 @@ impl Output {
             }
         }
         self.full.items.push(item.to_token_stream());
+        self.full.items.push(clone_enum(&item));
         self.full.first_variant(&item);
         item.variants = core_variants;
         self.core.items.push(item.to_token_stream());
+        self.core.items.push(clone_enum(&item));
         self.core.first_variant(&item);
         if marked {
             return Ok(());
@@ -537,6 +612,7 @@ impl Output {
                 param.default = None;
             }
             self.full.items.push(quote! {
+                #[derive(::core::clone::Clone)]
                 #vis enum #sugar #generics { #sugar_variants }
             });
         }

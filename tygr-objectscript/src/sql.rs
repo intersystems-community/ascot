@@ -5,7 +5,7 @@
 //! checker reads.
 //!
 //! Its rules of placement: a rule describes its own text, the blank before or after it belonging to
-//! the sequence that places it, and a keyword run is one tuple; one wrapper per bracket kind,
+//! the sequence that places it, and a keyword run is one `Kw!`; one wrapper per bracket kind,
 //! `Parenthesized<T>` for every pair of parentheses; tygr's combinators before a hand-rolled shape,
 //! an alias only where it shortens; and two rules reading the same text are one.
 
@@ -472,12 +472,14 @@ fn is_sql_reserved_keyword(word: &str) -> bool {
     )
 }
 
+/// A letter or `%`, or `_` with a second character: 2026.2 reads `a$b`, `ñ`, `Яа`, `_1` and `__` as names and `_`
+/// alone as the concatenation operator.
 #[derive(Grammar, Clone)]
 pub enum IdentifierStart {
     SimpleLatin(IsSimpleLatinLetter),
     NonAscii(IsNonAsciiLetter),
     P(StringEq!("%")),
-    U(StringEq!("_")),
+    Underscored(StringEq!("_"), IdentifierPart),
 }
 
 #[derive(Grammar, Clone)]
@@ -496,17 +498,8 @@ pub enum IdentifierPart {
 #[tygr(hidden)]
 pub struct WordEnd(IdentifierPart);
 
-/// 2026.2 reads `a$b`, `ñ` and `Яа` as names and refuses `_` alone.
 #[derive(Grammar, Clone)]
-#[tygr(validated)]
 pub struct Identifier(Raw<(IdentifierStart, Vec<IdentifierPart>)>);
-
-impl Validate for Identifier {
-    const REQUIREMENT: &'static str = "not be underscores alone";
-    fn validate(&self) -> bool {
-        self.0.as_str().chars().any(|ch| ch != '_')
-    }
-}
 
 #[derive(Grammar, Clone)]
 pub enum DelimitedIdentifierPart {
@@ -591,23 +584,24 @@ pub enum Literal {
     Numeric(Number),
 }
 
-/// 2026.2 refuses `:i%Prop()`, an instance variable with an empty subscript list, and takes `:arr()`.
 #[derive(Grammar, Clone)]
-#[tygr(validated)]
 pub struct HostVar {
-    pub host_ref: HostRef,
-    pub subs: Option<SubList>,
+    pub colon: Option<StringEq!(":")>,
+    pub host: SubscriptedHost,
 }
 
-impl Validate for HostVar {
-    const REQUIREMENT: &'static str = "subscript an instance variable with something";
-    fn validate(&self) -> bool {
-        !(matches!(self.host_ref.host, Host::Instance { .. })
-            && self
-                .subs
-                .as_ref()
-                .is_some_and(|subs| subs.wrapped.is_none()))
-    }
+/// 2026.2 refuses `:i%Prop()`, an instance variable with an empty subscript list, and takes `:arr()`.
+#[derive(Grammar, Clone)]
+pub enum SubscriptedHost {
+    Instance {
+        kind: Either<StringEq!("i%"), StringEq!("r%")>,
+        name: HostIdentifier,
+        subs: Option<Parenthesized<VecSep<Sub, ArgSep>>>,
+    },
+    Variable {
+        host: Host,
+        subs: Option<SubList>,
+    },
 }
 
 pub type SubList = Parenthesized<Option<VecSep<Sub, ArgSep>>>;
@@ -626,10 +620,6 @@ pub struct HostRef {
 
 #[derive(Grammar, Clone)]
 pub enum Host {
-    Instance {
-        kind: Either<StringEq!("i%"), StringEq!("r%")>,
-        name: HostIdentifier,
-    },
     Property {
         name: HostIdentifier,
         parts: Vec1<(StringEq!("."), Either<HostIdentifier, DelimitedIdentifier>)>,
@@ -746,6 +736,11 @@ macro_rules! scalar_functions {
     };
     (@name $name:literal) => { $name };
     (@name $name:literal $core:literal) => { $core };
+}
+
+fn each_once(mut words: impl Iterator<Item = String>) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    words.all(|word| seen.insert(word.to_uppercase()))
 }
 
 #[tygr_objectscript_macros::levels]
@@ -2683,27 +2678,17 @@ pub mod leveled {
         Selex(Ranged<Selex>),
     }
     #[derive(Grammar)]
-    #[tygr(validated)]
     pub struct Insrt {
         pub insert_kw: Kw!("INSERT"),
         pub or_update: Option<(Space1, Kw!("OR UPDATE"))>,
-        pub options: Vec<(Space1, DmlOption)>,
+        pub options: Vec<(Space1, InsertOption)>,
         pub into_kw: Implied<Kw!("INTO")>,
         pub target: (Space, IUDTarget),
         pub values: (Space, InsertValues),
     }
 
-    impl Validate for Insrt {
-        const REQUIREMENT: &'static str = "not take %ILOCK";
-        fn validate(&self) -> bool {
-            !self
-                .options
-                .iter()
-                .any(|(_, option)| matches!(option, DmlOption::ILock(_)))
-        }
-    }
-
-    /// One option list for INSERT, UPDATE, DELETE and TRUNCATE TABLE, each validated against its own set.
+    /// The options INSERT, UPDATE and DELETE share, a repeated one allowed; INSERT adds %NOSTREAM, UPDATE %NOSTREAM
+    /// and %ILOCK.
     #[derive(Grammar)]
     pub enum DmlOption {
         NoCheck(Kw!("%NOCHECK")),
@@ -2711,9 +2696,7 @@ pub mod leveled {
         NoLock(Kw!("%NOLOCK")),
         NoIndex(Kw!("%NOINDEX")),
         NoTrigger(Kw!("%NOTRIGGER")),
-        NoStream(Kw!("%NOSTREAM")),
         NoJourn(Kw!("%NOJOURN")),
-        ILock(Kw!("%ILOCK")),
         ObjectFiler(Kw!("%OBJECTFILER")),
         ProfileAll(Kw!("%PROFILE_ALL")),
         Profile(Kw!("%PROFILE")),
@@ -2722,7 +2705,32 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
+    pub enum InsertOption {
+        Dml(DmlOption),
+        NoStream(Kw!("%NOSTREAM")),
+    }
+
+    #[derive(Grammar)]
+    pub enum UpdateOption {
+        Dml(DmlOption),
+        NoStream(Kw!("%NOSTREAM")),
+        ILock(Kw!("%ILOCK")),
+    }
+
+    #[derive(Grammar)]
+    pub enum TruncateOption {
+        NoCheck(Kw!("%NOCHECK")),
+        NoLock(Kw!("%NOLOCK")),
+        NoJourn(Kw!("%NOJOURN")),
+    }
+
+    /// Every option word, UPDATE's set; IRIS reserves them, so none names a table (`DELETE %ILOCK FROM t` is refused,
+    /// not a DELETE from %ILOCK).
+    pub type OptionWord = UpdateOption;
+
+    #[derive(Grammar)]
     pub struct IUDTarget {
+        pub not_option: NotFollowedBy<OptionWord>,
         pub target: TableOrSubquery,
         pub alias: Option<Alias>,
     }
@@ -2743,43 +2751,73 @@ pub mod leveled {
         },
     }
 
-    /// The values of an INSERT or UPDATE: a column list with VALUES, a query or a host array, or SET assignments,
-    /// which read as the column list with VALUES.
+    /// The values of an INSERT: a column list with VALUES, a query or a host array, or SET assignments, which read
+    /// as the column list with VALUES.
     #[derive(Grammar)]
     pub enum Asign {
         #[sugar]
-        SetList {
-            set_kw: Kw!("SET"),
-            assignments: (Space1, VecSep<Ranged<SQLSetAssignment>, ArgSep>),
-        },
-        ColumnList {
-            columns: Option<SQLColumnListParen>,
-            values: (Space, ValueSource),
-        },
+        SetList(SetList),
+        ColumnList(ColumnList<ValueSource>),
     }
 
     impl Desugar for AsignSugar {
         type Core = core::Asign;
         fn desugar(self) -> Self::Core {
-            let Self::SetList {
-                assignments: (_, list),
-                ..
-            } = self;
-            let (columns, values) = (list.items.into_iter())
+            let Self::SetList(list) = self;
+            let core::ColumnList { columns, values } = list.desugar();
+            core::Asign::ColumnList(core::ColumnList {
+                columns,
+                values: (values.0, core::ValueSource::Values(values.1)),
+            })
+        }
+    }
+
+    /// The values of an UPDATE: a column list with VALUES, or SET assignments reading the same.
+    #[derive(Grammar)]
+    pub enum UpdateAsign {
+        #[sugar]
+        SetList(SetList),
+        ColumnList(ColumnList<ValuesClause>),
+    }
+
+    impl Desugar for UpdateAsignSugar {
+        type Core = core::UpdateAsign;
+        fn desugar(self) -> Self::Core {
+            let Self::SetList(list) = self;
+            core::UpdateAsign::ColumnList(list.desugar())
+        }
+    }
+
+    /// `SET a = 1, b = 2` reads as `(a, b) VALUES (1, 2)`.
+    #[derive(Grammar)]
+    #[sugar]
+    pub struct SetList {
+        pub set_kw: Kw!("SET"),
+        pub assignments: (Space1, VecSep<Ranged<SQLSetAssignment>, ArgSep>),
+    }
+
+    impl Desugar for SetList {
+        type Core = core::ColumnList<core::ValuesClause>;
+        fn desugar(self) -> Self::Core {
+            let (columns, values) = (self.assignments.1.items.into_iter())
                 .map(|a| (a.ranged.column.desugar(), a.ranged.value.desugar()))
                 .unzip();
-            core::Asign::ColumnList {
+            let values = core::ValuesClause {
+                values_kw: Default::default(),
+                sp: Default::default(),
+                spec: core::ValSpec::Scalx(parenthesized(commas(values))),
+            };
+            core::ColumnList {
                 columns: Some((Default::default(), parenthesized(commas(columns)))),
-                values: (
-                    Default::default(),
-                    core::ValueSource::ValSpec {
-                        values_kw: Default::default(),
-                        sp: Default::default(),
-                        spec: core::ValSpec::Scalx(parenthesized(commas(values))),
-                    },
-                ),
+                values: (Default::default(), values),
             }
         }
+    }
+
+    #[derive(Grammar)]
+    pub struct ColumnList<Values: Grammar> {
+        pub columns: Option<SQLColumnListParen>,
+        pub values: (Space, Values),
     }
 
     pub type FList1 = Parenthesized<VecSep<Ident, ArgSep>>;
@@ -2789,11 +2827,14 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum ValueSource {
         Query(SourceQuery),
-        ValSpec {
-            values_kw: Kw!("VALUES"),
-            sp: Space,
-            spec: ValSpec,
-        },
+        Values(ValuesClause),
+    }
+
+    #[derive(Grammar)]
+    pub struct ValuesClause {
+        pub values_kw: Kw!("VALUES"),
+        pub sp: Space,
+        pub spec: ValSpec,
     }
 
     #[derive(Grammar)]
@@ -2811,29 +2852,9 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(validated)]
     pub struct Updat {
         pub update_kw: Kw!("UPDATE"),
         pub body: UpdatBody,
-    }
-
-    impl Validate for Updat {
-        const REQUIREMENT: &'static str = "take VALUES, not a query";
-        fn validate(&self) -> bool {
-            !matches!(
-                &self.body,
-                UpdatBody::Update {
-                    assignment: (
-                        _,
-                        Asign::ColumnList {
-                            values: (_, ValueSource::Query(_)),
-                            ..
-                        }
-                    ),
-                    ..
-                }
-            )
-        }
     }
 
     #[derive(Grammar)]
@@ -2843,9 +2864,9 @@ pub mod leveled {
             table: TName,
         },
         Update {
-            options: Vec<(Space1, DmlOption)>,
+            options: Vec<(Space1, UpdateOption)>,
             target: (Space, IUDTarget),
-            assignment: (Space, Asign),
+            assignment: (Space, UpdateAsign),
             from: Option<(Space1, FromClause)>,
             where_clause: Option<(Space1, WhereWerop)>,
         },
@@ -2864,7 +2885,6 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(validated)]
     pub struct Delet {
         pub delete_kw: Kw!("DELETE"),
         pub options: Vec<(Space1, DmlOption)>,
@@ -2874,40 +2894,20 @@ pub mod leveled {
         pub where_clause: Option<(Space1, WhereWerop)>,
     }
 
-    impl Validate for Delet {
-        const REQUIREMENT: &'static str = "not take %NOSTREAM or %ILOCK";
-        fn validate(&self) -> bool {
-            !self
-                .options
-                .iter()
-                .any(|(_, option)| matches!(option, DmlOption::NoStream(_) | DmlOption::ILock(_)))
-        }
-    }
-
+    /// 2026.2 refuses `TRUNCATE TABLE %NOLOCK %NOLOCK t` and takes the options in any order.
     #[derive(Grammar)]
     #[tygr(validated)]
     pub struct Truncate {
         pub kw: Kw!("TRUNCATE TABLE"),
-        pub options: Vec<(Space1, DmlOption)>,
-        pub table: (Space1, TName),
+        pub options: Vec<(Space1, TruncateOption)>,
+        pub table: (Space1, NotFollowedBy<OptionWord>, TName),
         pub alias: Option<Alias>,
     }
 
     impl Validate for Truncate {
-        const REQUIREMENT: &'static str = "take only %NOCHECK, %NOLOCK and %NOJOURN, each once";
+        const REQUIREMENT: &'static str = "take each option once";
         fn validate(&self) -> bool {
-            let names: Vec<String> = (self.options.iter())
-                .map(|(_, option)| option.print().to_uppercase())
-                .collect();
-            self.options.iter().all(|(_, option)| {
-                matches!(
-                    option,
-                    DmlOption::NoCheck(_) | DmlOption::NoLock(_) | DmlOption::NoJourn(_)
-                )
-            }) && names
-                .iter()
-                .enumerate()
-                .all(|(i, name)| !names[..i].contains(name))
+            super::each_once(self.options.iter().map(|(_, option)| option.print()))
         }
     }
 
@@ -2986,9 +2986,8 @@ pub mod leveled {
 
     /// LOCK [TABLE] t IN SHARE|EXCLUSIVE MODE [WAIT n] and UNLOCK [TABLE] t IN SHARE|EXCLUSIVE MODE [IMMEDIATE].
     #[derive(Grammar)]
-    #[tygr(validated)]
-    pub struct LockTable {
-        pub kw: Either<Kw!("UNLOCK"), Kw!("LOCK")>,
+    pub struct LockTable<Verb: Grammar, Tail: Grammar> {
+        pub kw: Verb,
         pub table_kw: Option<(Space1, Kw!("TABLE"))>,
         pub table: (Space, TName),
         pub mode: (
@@ -2999,25 +2998,10 @@ pub mod leveled {
             Space1,
             Kw!("MODE"),
         ),
-        pub tail: Option<(Space1, LockTail)>,
+        pub tail: Option<(Space1, Tail)>,
     }
 
-    #[derive(Grammar)]
-    pub enum LockTail {
-        Wait(Kw!("WAIT"), Space, Literal),
-        Immediate(Kw!("IMMEDIATE")),
-    }
-
-    impl Validate for LockTable {
-        const REQUIREMENT: &'static str = "take WAIT with LOCK and IMMEDIATE with UNLOCK";
-        fn validate(&self) -> bool {
-            !matches!(
-                (&self.kw, &self.tail),
-                (Either::Left(_), Some((_, LockTail::Wait(..))))
-                    | (Either::Right(_), Some((_, LockTail::Immediate(_))))
-            )
-        }
-    }
+    pub type Wait = (Kw!("WAIT"), Space, Literal);
 
     #[derive(Grammar)]
     pub enum TPOption {
@@ -3277,40 +3261,34 @@ pub mod leveled {
 
     pub type Grant = Prefix<Kw!("GRANT"), (Space, GrantCmd)>;
 
-    /// WITH ADMIN OPTION goes with roles and admin privileges, WITH GRANT OPTION with objects.
+    /// WITH GRANT OPTION goes with cubes and objects, WITH ADMIN OPTION with roles and admin privileges.
     #[derive(Grammar)]
-    #[tygr(validated)]
-    pub struct GrantCmd {
-        pub what: Granted,
+    pub enum GrantCmd {
+        Cube(Granting<CubeGranted, Kw!("GRANT")>),
+        Object(Granting<ObjectGranted, Kw!("GRANT")>),
+        Admin(Granting<AdminGranted, Kw!("ADMIN")>),
+    }
+
+    #[derive(Grammar)]
+    pub struct Granting<What: Grammar, With: Grammar> {
+        pub what: What,
         pub to_kw: (Space1, Kw!("TO"), Space),
         pub grantees: Grntee,
-        pub with: WithOption<Either<Kw!("ADMIN"), Kw!("GRANT")>>,
+        pub with: WithOption<With>,
     }
 
-    impl Validate for GrantCmd {
-        const REQUIREMENT: &'static str =
-            "take WITH ADMIN OPTION on roles and admin privileges, WITH GRANT OPTION on objects";
-        fn validate(&self) -> bool {
-            match &self.with {
-                None => true,
-                Some((.., Either::Left(_), _, _)) => self.what.is_admin(),
-                Some((.., Either::Right(_), _, _)) => !self.what.is_admin(),
-            }
-        }
-    }
-
-    /// What GRANT gives and REVOKE takes back; the roles last, since a privilege keyword is an identifier too.
     #[derive(Grammar)]
-    pub enum Granted {
-        AdminPrivileges(VecSep<AdminPriv, ArgSep>),
-        CubeSelect {
-            select_kw: Kw!("SELECT"),
-            columns: Option<(Space, FList1)>,
-            on_kw: (Space, Kw!("ON"), Space1),
-            cube_kw: Kw!("CUBE", "CUBES"),
-            cubes: (Space, VecSep<Ident, ArgSep>),
-        },
-        ObjectPrivileges {
+    pub struct CubeGranted {
+        pub select_kw: Kw!("SELECT"),
+        pub columns: Option<(Space, FList1)>,
+        pub on_kw: (Space, Kw!("ON"), Space1),
+        pub cube_kw: Kw!("CUBE", "CUBES"),
+        pub cubes: (Space, VecSep<Ident, ArgSep>),
+    }
+
+    #[derive(Grammar)]
+    pub enum ObjectGranted {
+        Privileges {
             privileges: SimplePrivs,
             on_kw: (Space1, Kw!("ON"), Space),
             objects: Objcts,
@@ -3320,13 +3298,13 @@ pub mod leveled {
             on_kw: (Space1, Kw!("ON"), Space1),
             object: TName,
         },
-        Roles(VecSep<Ident, ArgSep>),
     }
 
-    impl Granted {
-        fn is_admin(&self) -> bool {
-            matches!(self, Self::AdminPrivileges(_) | Self::Roles(_))
-        }
+    /// The roles last, since a privilege keyword is an identifier too.
+    #[derive(Grammar)]
+    pub enum AdminGranted {
+        Privileges(VecSep<AdminPriv, ArgSep>),
+        Roles(VecSep<Ident, ArgSep>),
     }
 
     pub type WithOption<K> = Option<(Space1, Kw!("WITH"), Space1, K, Space1, Kw!("OPTION"))>;
@@ -3335,29 +3313,25 @@ pub mod leveled {
 
     pub type Revok = Prefix<Kw!("REVOKE"), (Space, RevokeCmd)>;
 
-    /// GRANT OPTION FOR, CASCADE or RESTRICT and AS go with objects, AS not with cubes.
+    /// GRANT OPTION FOR, CASCADE or RESTRICT and AS go with objects, AS not with cubes, none with roles and admin
+    /// privileges (2026.2 refuses `REVOKE role FROM u CASCADE` and `REVOKE GRANT OPTION FOR role FROM u`).
     #[derive(Grammar)]
-    #[tygr(validated)]
-    pub struct RevokeCmd {
-        pub grant_option: GrantOptionFor,
-        pub what: Granted,
-        pub from_kw: (Space1, Kw!("FROM"), Space),
-        pub grantees: Grntee,
-        pub behavior: Option<(Space, CascadeOpt)>,
-        pub as_clause: Option<(Space1, Kw!("AS"), Space, Grntee)>,
+    pub enum RevokeCmd {
+        Cube(Revoking<GrantOptionFor, CubeGranted, Option<(Space, CascadeOpt)>>),
+        Object(Revoking<GrantOptionFor, ObjectGranted, (Option<(Space, CascadeOpt)>, AsGrantor)>),
+        Admin(Revoking<(), AdminGranted, ()>),
     }
 
-    impl Validate for RevokeCmd {
-        const REQUIREMENT: &'static str =
-            "take GRANT OPTION FOR, CASCADE, RESTRICT and AS on objects alone, AS not on cubes";
-        fn validate(&self) -> bool {
-            let object = !self.what.is_admin();
-            let plain =
-                self.grant_option.is_none() && self.behavior.is_none() && self.as_clause.is_none();
-            (object || plain)
-                && !(matches!(self.what, Granted::CubeSelect { .. }) && self.as_clause.is_some())
-        }
+    #[derive(Grammar)]
+    pub struct Revoking<Before: Grammar, What: Grammar, After: Grammar> {
+        pub grant_option: Before,
+        pub what: What,
+        pub from_kw: (Space1, Kw!("FROM"), Space),
+        pub grantees: Grntee,
+        pub tail: After,
     }
+
+    pub type AsGrantor = Option<(Space1, Kw!("AS"), Space, Grntee)>;
 
     #[derive(Grammar)]
     pub enum SimplePrivs {
@@ -3737,7 +3711,9 @@ pub mod leveled {
             or_replace: OrReplace,
             def: ViewDef,
         },
-        Routine(CreateRoutine),
+        Method(CreateRoutine<MethodPrefix, Kw!("METHOD"), MethodBody>),
+        Query(CreateRoutine<OrReplace, Kw!("QUERY"), QueryBody>),
+        Routine(CreateRoutine<OrReplace, Either<Kw!("FUNCTION"), ProcedureKw>, CodeBody>),
         Aggregate {
             or_replace: OrReplace,
             agg_kw: (Kw!("AGGREGATE"), Space1),
@@ -3953,36 +3929,17 @@ pub mod leveled {
         pub view_with: Option<((Space1, Kw!("WITH"), Space1), ViewWith)>,
     }
 
-    /// 2026.2 takes STATIC before METHOD alone ("METHOD expected" after CREATE STATIC PROCEDURE) and not with OR
-    /// REPLACE (-51), an external language for a FUNCTION or PROCEDURE alone ("'SQL', 'OBJECTSCRIPT', or 'PYTHON'
-    /// expected" for a METHOD) and SQL or OBJECTSCRIPT for a QUERY ("'SQL', or 'OBJECTSCRIPT' expected").
+    /// 2026.2 takes STATIC before METHOD alone and not with OR REPLACE (-51), an external language for a FUNCTION
+    /// or PROCEDURE alone, and SQL or OBJECTSCRIPT for a QUERY.
     #[derive(Grammar)]
-    #[tygr(validated)]
-    pub struct CreateRoutine {
-        pub or_replace: OrReplace,
-        pub static_kw: Option<(Kw!("STATIC"), Space1)>,
-        pub kind: (RoutineKind, Space),
+    pub struct CreateRoutine<Before: Grammar, Kind: Grammar, Body: Grammar> {
+        pub before: Before,
+        pub kind: (Kind, Space),
         pub name: DottedIdent,
-        pub spec: (Space, CodeSpecification),
+        pub spec: (Space, CodeSpecification<Body>),
     }
 
-    impl Validate for CreateRoutine {
-        const REQUIREMENT: &'static str =
-            "take STATIC on a METHOD without OR REPLACE, and a language its kind allows";
-        fn validate(&self) -> bool {
-            let (kind, body) = (&self.kind.0, &self.spec.1.body.1);
-            let static_ok = self.static_kw.is_none()
-                || (matches!(kind, RoutineKind::Method(_)) && self.or_replace.is_none());
-            let language_ok = match kind {
-                RoutineKind::Method(_) => !matches!(body, CodeBody::External { .. }),
-                RoutineKind::Query(_) => {
-                    matches!(body, CodeBody::Sql { .. } | CodeBody::Cos { .. })
-                }
-                _ => true,
-            };
-            static_ok && language_ok
-        }
-    }
+    pub type MethodPrefix = Option<Either<(Kw!("OR REPLACE"), Space), (Kw!("STATIC"), Space1)>>;
 
     #[derive(Grammar)]
     pub enum RoutineKind {
@@ -4044,34 +4001,46 @@ pub mod leveled {
         },
     }
 
-    /// 2026.2 takes `WITH DATA (b) PAD_INDEX, FILLFACTOR = 80`, not `WITH DATA (b), PAD_INDEX`.
+    /// 2026.2 takes `WITH DATA (b) PAD_INDEX, FILLFACTOR = 80` and `WITH PAD_INDEX FILLFACTOR = 80`, not
+    /// `WITH DATA (b), PAD_INDEX`, `WITH FILLFACTOR = 80, PAD_INDEX` or `WITH PAD_INDEX PAD_INDEX`.
     #[derive(Grammar)]
     #[tygr(inline, validated)]
     pub struct CreateIndexWithClause {
-        pub kw: (Kw!("WITH"), Space),
-        pub data: Option<(Kw!("DATA"), Space, FList1)>,
-        pub pad_index: IndexWithItem<Kw!("PAD_INDEX")>,
-        pub fillfactor: IndexWithItem<(Kw!("FILLFACTOR"), (Space, StringEq!("="), Space), Literal)>,
-        pub ignore_dup: IndexWithItem<Kw!("IGNORE_DUP_KEY")>,
-        pub drop_existing: IndexWithItem<Kw!("DROP_EXISTING")>,
-        pub stats_norecompute: IndexWithItem<Kw!("STATISTICS_NORECOMPUTE")>,
+        pub kw: Kw!("WITH"),
+        pub data: Option<(Space1, Kw!("DATA"), Space, FList1)>,
+        pub options: Option<(Space1, VecSep<IndexOption, Either<ArgSep, Space1>>)>,
     }
 
     impl Validate for CreateIndexWithClause {
-        const REQUIREMENT: &'static str = "put no comma before the first option";
+        const REQUIREMENT: &'static str = "list the index options in order, each once";
         fn validate(&self) -> bool {
-            let commas = [
-                self.pad_index.as_ref().map(|item| item.1.is_some()),
-                self.fillfactor.as_ref().map(|item| item.1.is_some()),
-                self.ignore_dup.as_ref().map(|item| item.1.is_some()),
-                self.drop_existing.as_ref().map(|item| item.1.is_some()),
-                self.stats_norecompute.as_ref().map(|item| item.1.is_some()),
-            ];
-            commas.iter().flatten().next() != Some(&true)
+            (self.options.iter()).all(|(_, options)| {
+                let ranks = options.items.iter().map(IndexOption::rank);
+                ranks.clone().zip(ranks.skip(1)).all(|(a, b)| a < b)
+            })
         }
     }
 
-    pub type IndexWithItem<K> = Option<(Space, Option<(StringEq!(","), Space)>, K)>;
+    #[derive(Grammar)]
+    pub enum IndexOption {
+        PadIndex(Kw!("PAD_INDEX")),
+        FillFactor(Kw!("FILLFACTOR"), (Space, StringEq!("="), Space), Literal),
+        IgnoreDupKey(Kw!("IGNORE_DUP_KEY")),
+        DropExisting(Kw!("DROP_EXISTING")),
+        StatisticsNoRecompute(Kw!("STATISTICS_NORECOMPUTE")),
+    }
+
+    impl IndexOption {
+        fn rank(&self) -> u8 {
+            match self {
+                Self::PadIndex(_) => 0,
+                Self::FillFactor(..) => 1,
+                Self::IgnoreDupKey(_) => 2,
+                Self::DropExisting(_) => 3,
+                Self::StatisticsNoRecompute(_) => 4,
+            }
+        }
+    }
 
     #[derive(Grammar)]
     pub enum ImmediateDefer {
@@ -4408,7 +4377,8 @@ pub mod leveled {
         Revok(Revok),
         TpRelated(TpRelated),
         Savepoint(Savepoint),
-        Lock(LockTable),
+        Lock(LockTable<Kw!("LOCK"), Wait>),
+        Unlock(LockTable<Kw!("UNLOCK"), Kw!("IMMEDIATE")>),
         Call(CallStatement),
         Explain(Explain),
         Setml(Setml),
@@ -4430,10 +4400,10 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct CodeSpecification {
+    pub struct CodeSpecification<Body: Grammar = CodeBody> {
         pub params: Parenthesized<Option<VecSep<ParameterDeclaration, ArgSep>>>,
         pub characteristics: Vec<(Space, MethodQueryCharacteristics)>,
-        pub body: (Space, CodeBody),
+        pub body: (Space, Body),
     }
 
     #[derive(Grammar)]
@@ -4507,29 +4477,54 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum CodeBody {
-        Cos {
-            kw: (Kw!("LANGUAGE OBJECTSCRIPT", "LANGUAGE COS"), Space),
-            body: Either<COSMethodBody, VecSep<QueryMethod, Space>>,
-        },
-        External {
-            kw: (
-                Kw!("LANGUAGE"),
-                Space1,
-                ExternalLanguage,
-                Space1,
-                Kw!("EXTERNAL NAME"),
-                Space,
-            ),
-            name: StringLiteral,
-        },
-        Python {
-            kw: (Kw!("LANGUAGE PYTHON"), Space),
-            body: Prefix<StringEq!("{"), StringEndsWith<StringEq!("}")>>,
-        },
-        Sql {
-            kw: Option<(Kw!("LANGUAGE SQL"), Space1)>,
-            body: SqlMethodBody,
-        },
+        Cos(CosBody),
+        External(ExternalBody),
+        Python(PythonBody),
+        Sql(SqlBody),
+    }
+
+    #[derive(Grammar)]
+    pub enum MethodBody {
+        Cos(CosBody),
+        Python(PythonBody),
+        Sql(SqlBody),
+    }
+
+    #[derive(Grammar)]
+    pub enum QueryBody {
+        Cos(CosBody),
+        Sql(SqlBody),
+    }
+
+    #[derive(Grammar)]
+    pub struct CosBody {
+        pub kw: (Kw!("LANGUAGE OBJECTSCRIPT", "LANGUAGE COS"), Space),
+        pub body: Either<COSMethodBody, VecSep<QueryMethod, Space>>,
+    }
+
+    #[derive(Grammar)]
+    pub struct ExternalBody {
+        pub kw: (
+            Kw!("LANGUAGE"),
+            Space1,
+            ExternalLanguage,
+            Space1,
+            Kw!("EXTERNAL NAME"),
+            Space,
+        ),
+        pub name: StringLiteral,
+    }
+
+    #[derive(Grammar)]
+    pub struct PythonBody {
+        pub kw: (Kw!("LANGUAGE PYTHON"), Space),
+        pub body: Prefix<StringEq!("{"), StringEndsWith<StringEq!("}")>>,
+    }
+
+    #[derive(Grammar)]
+    pub struct SqlBody {
+        pub kw: Option<(Kw!("LANGUAGE SQL"), Space1)>,
+        pub body: SqlMethodBody,
     }
 
     #[derive(Grammar)]
@@ -4817,48 +4812,45 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(validated)]
     pub struct ModSpec {
         pub name: Ident,
-        pub change: (Space, ModChange),
+        pub change: (Space1, ModChange),
     }
 
-    impl Validate for ModSpec {
-        const REQUIREMENT: &'static str = "give a type or a change";
-        fn validate(&self) -> bool {
-            !matches!(
-                &self.change.1,
-                ModChange::Modify {
-                    datyp: None,
-                    mod_col: ModCol {
-                        default: None,
-                        constraint: None,
-                        null: None
-                    },
-                }
-            )
-        }
-    }
-
+    /// 2026.2 takes `a INT DEFAULT 1 CONSTRAINT nn NOT NULL` in this order, at least one part, `a RENAME b` and
+    /// `a SET DEFAULT 1`, not `a NOT NULL DEFAULT 1`, `a COLLATE SQLUPPER` or `a` alone.
     #[derive(Grammar)]
     pub enum ModChange {
         Rename {
-            kw: (Kw!("RENAME"), Space),
+            kw: (Kw!("RENAME"), Space1),
             new_name: Ident,
         },
-        Modify {
-            datyp: Option<(Datyp, Space)>,
-            mod_col: ModCol,
+        SetDefault {
+            kw: (Kw!("SET DEFAULT"), Space),
+            value: Setdef,
+        },
+        Clauses(ModCol),
+        Typed {
+            datyp: Datyp,
+            clauses: Option<(Space1, ModCol)>,
         },
     }
 
     pub type ModSpecList = VecSep<ModSpec, ArgSep>;
 
     #[derive(Grammar)]
+    #[tygr(validated)]
     pub struct ModCol {
-        pub default: Option<(Kw!("DEFAULT"), Space, Setdef, Space)>,
-        pub constraint: Option<(Kw!("CONSTRAINT"), Space, Ident, Space)>,
-        pub null: Option<NullSpec>,
+        pub default: Option<(Kw!("DEFAULT"), Space, Setdef)>,
+        pub constraint: Option<(Space, Kw!("CONSTRAINT"), Space1, Ident)>,
+        pub null: Option<(Space, NullSpec)>,
+    }
+
+    impl Validate for ModCol {
+        const REQUIREMENT: &'static str = "name a default, a constraint or nullability";
+        fn validate(&self) -> bool {
+            self.default.is_some() || self.constraint.is_some() || self.null.is_some()
+        }
     }
 
     #[derive(Grammar)]
@@ -5488,28 +5480,21 @@ pub mod leveled {
         pub action: Option<(Space, Either<TriggeredAction, Kw!("NOCHECK")>)>,
     }
 
+    /// ON UPDATE and ON DELETE in either order, NOCHECK after both: 2026.2 refuses two ON DELETE rules,
+    /// `ON DELETE CASCADE NOCHECK` and `NOCHECK ON DELETE CASCADE`.
     #[derive(Grammar)]
-    #[tygr(validated)]
-    pub struct TriggeredAction {
-        pub first: RefRule,
-        pub second: Option<(Space1, RefRule, Option<(Space1, Kw!("NOCHECK"))>)>,
+    pub enum TriggeredAction {
+        UpdateFirst(TriggeredRules<Kw!("UPDATE"), Kw!("DELETE")>),
+        DeleteFirst(TriggeredRules<Kw!("DELETE"), Kw!("UPDATE")>),
     }
-
-    impl Validate for TriggeredAction {
-        const REQUIREMENT: &'static str = "name ON UPDATE and ON DELETE once each";
-        fn validate(&self) -> bool {
-            let event = |rule: &RefRule| matches!(rule.prefix.2, RefEvent::Update(_));
-            (self.second.as_ref()).is_none_or(|(_, rule, _)| event(rule) != event(&self.first))
-        }
-    }
-
-    pub type RefRule = Prefix<(Kw!("ON"), Space1, RefEvent, Space1), RefAction>;
 
     #[derive(Grammar)]
-    pub enum RefEvent {
-        Update(Kw!("UPDATE")),
-        Delete(Kw!("DELETE")),
+    pub struct TriggeredRules<First: Grammar, Second: Grammar> {
+        pub first: RefRule<First>,
+        pub second: Option<(Space1, RefRule<Second>, Option<(Space1, Kw!("NOCHECK"))>)>,
     }
+
+    pub type RefRule<Event> = Prefix<(Kw!("ON"), Space1, Event, Space1), RefAction>;
 
     #[derive(Grammar)]
     pub enum MatchSpec {
@@ -5563,15 +5548,7 @@ pub mod leveled {
     impl Validate for LoadHintSet {
         const REQUIREMENT: &'static str = "give each hint once";
         fn validate(&self) -> bool {
-            let names: Vec<String> = self
-                .0
-                .iter()
-                .map(|(hint, _)| hint.print().to_uppercase())
-                .collect();
-            names
-                .iter()
-                .enumerate()
-                .all(|(i, name)| !names[..i].contains(name))
+            super::each_once(self.0.iter().map(|(hint, _)| hint.print()))
         }
     }
 

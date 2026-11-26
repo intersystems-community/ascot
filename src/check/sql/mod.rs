@@ -13,8 +13,8 @@ use resolve::{Columns, Lookup, ProcInfo};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::sql::core::*;
 use tygr_objectscript::sql::{
-    DottedIdent, Host, HostRef, HostVar, Ident, Integer, Param, SQLIdentNonKeyword, Space, Space1,
-    Sub, Var,
+    DottedIdent, Host, HostVar, Ident, Integer, Param, SQLIdentNonKeyword, Space, Space1, Sub,
+    SubscriptedHost, Var,
 };
 
 mod expr;
@@ -237,9 +237,8 @@ impl Walker<'_> {
         self.access = was;
     }
 
-    fn host(&mut self, host_ref: &HostRef, subscripted: bool) {
-        match &host_ref.host {
-            Host::Instance { .. } => {}
+    fn host(&mut self, host: &Host, subscripted: bool) {
+        match host {
             Host::Property { name, .. } => self.hosts.reads.push((name.print(), false)),
             Host::Plain(name) => self.local(name.print(), subscripted),
         }
@@ -370,8 +369,13 @@ impl<A: Walk, B: Walk> Walk for Either<A, B> {
 
 impl Walk for HostVar {
     fn walk(&self, w: &mut Walker) {
-        w.host(&self.host_ref, self.subs.is_some());
-        w.read(&self.subs)
+        match &self.host {
+            SubscriptedHost::Instance { subs, .. } => w.read(subs),
+            SubscriptedHost::Variable { host, subs } => {
+                w.host(host, subs.is_some());
+                w.read(subs)
+            }
+        }
     }
 }
 
@@ -387,7 +391,7 @@ impl Walk for Sub {
 impl Walk for Var {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Var::HostRef(host_ref) => w.host(host_ref, false),
+            Var::HostRef(host_ref) => w.host(&host_ref.host, false),
             Var::Ident(ident) => w.ident(ident, false),
         }
     }

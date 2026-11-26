@@ -1,6 +1,6 @@
 use either::Either;
-use tygr::Print;
-use tygr_objectscript::sql::{Space, core::*};
+use tygr::{Grammar, Print};
+use tygr_objectscript::sql::core::*;
 
 use super::{SqlProcedureUse, Walk, Walker, name_of};
 
@@ -25,7 +25,8 @@ impl Walk for Stat {
             | Stat::Setml(_)
             | Stat::ChkPrv(_)
             | Stat::Savepoint(_)
-            | Stat::Lock(_) => {}
+            | Stat::Lock(_)
+            | Stat::Unlock(_) => {}
         }
     }
 }
@@ -101,22 +102,28 @@ impl Walk for InsertValues {
 
 impl Walk for Asign {
     fn walk(&self, w: &mut Walker) {
-        let Asign::ColumnList { columns, values } = self;
-        column_list(w, columns, values)
+        let Asign::ColumnList(list) = self;
+        list.walk(w)
     }
 }
 
-fn column_list(
-    w: &mut Walker,
-    columns: &Option<SQLColumnListParen>,
-    values: &(Space, ValueSource),
-) {
-    for column in columns.iter().flat_map(|list| list.1.wrapped.items.iter()) {
-        w.column(column)
+impl Walk for UpdateAsign {
+    fn walk(&self, w: &mut Walker) {
+        let UpdateAsign::ColumnList(list) = self;
+        list.walk(w)
     }
-    match &values.1 {
-        query @ ValueSource::Query(_) => w.outside(query),
-        values => values.walk(w),
+}
+
+impl<Values: Walk + Grammar> Walk for ColumnList<Values> {
+    fn walk(&self, w: &mut Walker) {
+        for column in self
+            .columns
+            .iter()
+            .flat_map(|list| list.1.wrapped.items.iter())
+        {
+            w.column(column)
+        }
+        self.values.1.walk(w)
     }
 }
 
@@ -130,9 +137,15 @@ impl Walk for SQLSetAssignment {
 impl Walk for ValueSource {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ValueSource::Query(query) => query.walk(w),
-            ValueSource::ValSpec { spec, .. } => spec.walk(w),
+            ValueSource::Query(query) => w.outside(query),
+            ValueSource::Values(values) => values.walk(w),
         }
+    }
+}
+
+impl Walk for ValuesClause {
+    fn walk(&self, w: &mut Walker) {
+        self.spec.walk(w)
     }
 }
 
@@ -288,6 +301,8 @@ impl Walk for Created {
                 source: Some((_, source)),
                 ..
             } => source.walk(w),
+            Created::Method(routine) => routine.spec.1.walk(w),
+            Created::Query(routine) => routine.spec.1.walk(w),
             Created::Routine(routine) => routine.spec.1.walk(w),
             _ => {}
         }
@@ -314,12 +329,34 @@ impl Walk for TriggerBody {
 
 impl Walk for CodeBody {
     fn walk(&self, w: &mut Walker) {
-        if let CodeBody::Sql { body, .. } = self {
-            for (_, statement, _, _) in body.wrapped.iter() {
-                match statement {
-                    Either::Left(ret) => ret.value.1.walk(w),
-                    Either::Right(stat) => stat.walk(w),
-                }
+        if let CodeBody::Sql(body) = self {
+            body.walk(w)
+        }
+    }
+}
+
+impl Walk for MethodBody {
+    fn walk(&self, w: &mut Walker) {
+        if let MethodBody::Sql(body) = self {
+            body.walk(w)
+        }
+    }
+}
+
+impl Walk for QueryBody {
+    fn walk(&self, w: &mut Walker) {
+        if let QueryBody::Sql(body) = self {
+            body.walk(w)
+        }
+    }
+}
+
+impl Walk for SqlBody {
+    fn walk(&self, w: &mut Walker) {
+        for (_, statement, _, _) in self.body.wrapped.iter() {
+            match statement {
+                Either::Left(ret) => ret.value.1.walk(w),
+                Either::Right(stat) => stat.walk(w),
             }
         }
     }
@@ -335,7 +372,7 @@ impl Walk for ReturnValue {
     }
 }
 
-impl Walk for CodeSpecification {
+impl<Body: Walk + Grammar> Walk for CodeSpecification<Body> {
     fn walk(&self, w: &mut Walker) {
         self.params.walk(w);
         self.body.1.walk(w)
