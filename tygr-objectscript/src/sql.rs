@@ -574,9 +574,6 @@ pub enum Literal {
     Numeric(Number),
 }
 
-#[derive(Grammar, Clone)]
-pub struct ParameterMarker(pub StringEq!("?"));
-
 /// 2026.2 refuses `:i%Prop()`, an instance variable with an empty subscript list, and takes `:arr()`.
 #[derive(Grammar, Clone)]
 #[tygr(validated)]
@@ -754,10 +751,7 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct Precision(pub NonNegativeInteger);
-
-    #[derive(Grammar)]
-    pub struct NonNegativeInteger(pub StringOf1<IsDigit>);
+    pub struct UnsignedInteger(pub StringOf1<IsDigit>);
 
     #[derive(Grammar)]
     pub enum OrderPredicate {
@@ -830,7 +824,7 @@ pub mod leveled {
         #[sugar]
         StringOperation(Box<StringOperation>),
         XTFun(Box<XTFun>),
-        ParameterMarker(ParameterMarker),
+        ParameterMarker(StringEq!("?")),
         Case(Box<Case>),
         #[sugar]
         OdbcEscape(Box<ODBCEscape>),
@@ -1309,22 +1303,19 @@ pub mod leveled {
     #[tygr(inline)]
     pub struct SQLSearchIndexArgs {
         pub table: Vec<(Ident, StringEq!("."))>,
-        pub index_name: IndexName,
+        pub index_name: Ident,
         pub scalx_list: Vec<(ArgSep, Scalx)>,
     }
 
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct SQLPredictArgs {
-        pub model: ModelName,
+        pub model: Ident,
         pub use_clause: Option<(Space, PredictProbabilityUse)>,
         pub with_clause: Option<((Space, Kw!("WITH"), Space), PredictWith)>,
     }
 
-    pub type PredictProbabilityUse = Prefix<(Kw!("USE"), Space), TrainedModelName>;
-
-    #[derive(Grammar)]
-    pub struct TrainedModelName(pub Ident);
+    pub type PredictProbabilityUse = Prefix<(Kw!("USE"), Space), Ident>;
 
     #[derive(Grammar)]
     pub enum PredictWith {
@@ -1343,7 +1334,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct SQLProbabilityArgs {
-        pub model: ModelName,
+        pub model: Ident,
         pub use_clause: Option<(Space, PredictProbabilityUse)>,
         pub for_clause: Option<(Space, Prefix<(Kw!("FOR"), Space), Scalx>)>,
         pub with_clause: Option<((Space, Kw!("WITH"), Space), PredictWith)>,
@@ -1396,11 +1387,8 @@ pub mod leveled {
     pub enum XMLValue2 {
         Element(Box<XMLElement>),
         Forest(Box<XMLForest>),
-        Comment(XMLComment),
+        Comment(StringEq!("<--"), StringEndsWith<StringEq!("-->")>),
     }
-
-    #[derive(Grammar)]
-    pub struct XMLComment(pub (StringEq!("<--"), StringEndsWith<StringEq!("-->")>));
 
     #[derive(Grammar)]
     pub struct XMLAttributes {
@@ -1711,12 +1699,12 @@ pub mod leveled {
         UnboundedPreceding(Kw!("UNBOUNDED"), Space1, Kw!("PRECEDING")),
         UnboundedFollowing(Kw!("UNBOUNDED"), Space1, Kw!("FOLLOWING")),
         Preceding(
-            Either<NonNegativeInteger, StringLiteral>,
+            Either<UnsignedInteger, StringLiteral>,
             Space,
             Kw!("PRECEDING"),
         ),
         Following(
-            Either<NonNegativeInteger, StringLiteral>,
+            Either<UnsignedInteger, StringLiteral>,
             Space,
             Kw!("FOLLOWING"),
         ),
@@ -1986,7 +1974,7 @@ pub mod leveled {
             pattern: Scalx,
         },
         IsJSON {
-            format: Option<(Kw!("FORMAT"), Space1, JSONRepresentation, Space1)>,
+            format: Option<(Kw!("FORMAT"), Space1, Kw!("JSON"), Space1)>,
             is_kw: (Kw!("IS"), Space1),
             #[sugar]
             not: Not,
@@ -2037,9 +2025,6 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct JSONRepresentation(pub Kw!("JSON"));
-
-    #[derive(Grammar)]
     pub enum JSONPredicateTypeConstraint {
         Value(Kw!("VALUE")),
         Array(Kw!("ARRAY")),
@@ -2047,10 +2032,7 @@ pub mod leveled {
         Scalar(Kw!("SCALAR")),
     }
 
-    #[derive(Grammar)]
-    pub struct WithList(pub VecSep<Ranged<WithListElement>, ArgSep>);
-
-    pub type WithClause = Prefix<(Kw!("WITH"), Space), WithList>;
+    pub type WithClause = Prefix<(Kw!("WITH"), Space), VecSep<Ranged<WithListElement>, ArgSep>>;
 
     #[derive(Grammar)]
     pub struct WithListElement {
@@ -2059,9 +2041,6 @@ pub mod leveled {
         pub as_kw: (Space, Kw!("AS"), Space),
         pub query: SQLSubquery,
     }
-
-    #[derive(Grammar)]
-    pub struct ColumnName(pub Ident);
 
     #[derive(Grammar)]
     pub struct Selex {
@@ -2190,19 +2169,16 @@ pub mod leveled {
         Paren(Parenthesized<Box<Count>>),
         Literal(Literal),
         HostVar(HostVar),
-        Marker(ParameterMarker),
+        Marker(StringEq!("?")),
     }
 
     #[derive(Grammar)]
     pub struct Selst {
         pub distinct: Option<(Dist, Space)>,
         pub top: Option<(Kw!("TOP"), Space, TopSpec, Space)>,
-        pub select_list: SelectList,
+        pub select_list: VecSep<Ranged<SelectItem>, ArgSep>,
         pub targt: Option<(Space, Targt)>,
     }
-
-    #[derive(Grammar)]
-    pub struct SelectList(pub VecSep<Ranged<SelectItem>, ArgSep>);
 
     #[derive(Grammar)]
     pub enum SelectItem {
@@ -2218,20 +2194,13 @@ pub mod leveled {
         pub name: SQLIdentNonKeyword,
     }
 
-    pub type Into = Prefix<(Kw!("INTO"), Space), HostList>;
+    pub type Into = Prefix<(Kw!("INTO"), Space), VecSep<Param, ArgSep>>;
 
     #[derive(Grammar)]
-    pub struct Targt(pub TargtEnum);
-
-    #[derive(Grammar)]
-    #[tygr(inline)]
-    pub enum TargtEnum {
+    pub enum Targt {
         Into(Into),
         IntoList(IntoList),
     }
-
-    #[derive(Grammar)]
-    pub struct HostList(pub VecSep<Param, ArgSep>);
 
     pub type IntoList = Prefix<Kw!("%INTOLIST"), (Space, Param)>;
 
@@ -2249,14 +2218,14 @@ pub mod leveled {
         DbugFull(Kw!("%DBUGFULL")),
         Flatten(Kw!("%FLATTEN")),
         NoBSL(Kw!("%NOBSL")),
-        NoFixedStats(Kw!("%NOFIXEDSTATS"), Space, TableRefs),
+        NoFixedStats(Kw!("%NOFIXEDSTATS"), Space, VecSep<TableRef, ArgSep>),
         NoFlatten(Kw!("%NOFLATTEN")),
         NoMerge(Kw!("%NOMERGE")),
         NoReduce(Kw!("%NOREDUCE")),
         NoSVSO(Kw!("%NOSVSO")),
         NoTopOpt(Kw!("%NOTOPOPT")),
-        IgnoreIndices(Kw!("%IGNOREINDICES"), Space, IndexRefs),
-        IgnoreIndex(Kw!("%IGNOREINDEX"), Space, IndexRefs),
+        IgnoreIndices(Kw!("%IGNOREINDICES"), Space, VecSep<IndexRef, ArgSep>),
+        IgnoreIndex(Kw!("%IGNOREINDEX"), Space, VecSep<IndexRef, ArgSep>),
         StartTable(Kw!("%STARTTABLE")),
         AllIndex(Kw!("%ALLINDEX")),
         NoUnionOrOpt(Kw!("%NOUNIONOROPT")),
@@ -2265,18 +2234,12 @@ pub mod leveled {
         NoParallel(Kw!("%NOPARALLEL")),
     }
 
-    #[derive(Grammar)]
-    pub struct TableRefs(pub VecSep<TableRef, ArgSep>);
-
     /// `[schema.]table` or `[schema.]*`; 2026.2 takes blanks around the dot and refuses a third part.
     #[derive(Grammar)]
     pub struct TableRef {
-        pub schema: Option<(Schema, Space, StringEq!("."), Space)>,
+        pub schema: Option<(Ident, Space, StringEq!("."), Space)>,
         pub table: Either<StringEq!("*"), Ident>,
     }
-
-    #[derive(Grammar)]
-    pub struct IndexRefs(pub VecSep<IndexRef, ArgSep>);
 
     #[derive(Grammar)]
     pub struct IndexRef {
@@ -2286,7 +2249,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum IndexSpec {
-        Name(IndexName),
+        Name(Ident),
         All(StringEq!("*")),
     }
 
@@ -2956,19 +2919,19 @@ pub mod leveled {
     #[tygr(validated)]
     pub struct CallStatement {
         pub output: Option<(
-            Either<HostVar, ParameterMarker>,
+            Either<HostVar, StringEq!("?")>,
             Space,
             StringEq!("="),
             Space,
         )>,
         pub call_kw: Kw!("CALL"),
-        pub routine: (Space, RoutineName),
+        pub routine: (Space, Ranged<DottedIdent>),
         pub args: ArgsN,
         pub using: Option<(
             Space1,
             Kw!("USING"),
             Space,
-            VecSep<Either<HostVar, ParameterMarker>, ArgSep>,
+            VecSep<Either<HostVar, StringEq!("?")>, ArgSep>,
         )>,
     }
 
@@ -2989,9 +2952,6 @@ pub mod leveled {
             })
         }
     }
-
-    #[derive(Grammar)]
-    pub struct RoutineName(pub Ranged<DottedIdent>);
 
     #[derive(Grammar)]
     pub struct Explain {
@@ -3095,7 +3055,7 @@ pub mod leveled {
         DefaultSchema {
             default_kw: Kw!("DEFAULT_SCHEMA"),
             eq: (Space, StringEq!("="), Space),
-            schema: Schema,
+            schema: Ident,
         },
         ExactDistinct {
             exact_kw: Kw!("EXACT_DISTINCT"),
@@ -3166,11 +3126,8 @@ pub mod leveled {
             Kw!("CONFIGURATION"),
             Space,
         ),
-        pub name: MLConfigurationName,
+        pub name: Ident,
     }
-
-    #[derive(Grammar)]
-    pub struct MLConfigurationName(pub Ident);
 
     pub type Grant = Prefix<Kw!("GRANT"), (Space, GrantCmd)>;
 
@@ -3205,7 +3162,7 @@ pub mod leveled {
             columns: Option<(Space, FList1)>,
             on_kw: (Space, Kw!("ON"), Space1),
             cube_kw: Spellings!(Kw!("CUBE"), Kw!("CUBES")),
-            cubes: (Space, CubeList),
+            cubes: (Space, VecSep<Ident, ArgSep>),
         },
         ObjectPrivileges {
             privileges: SimplePrivs,
@@ -3215,9 +3172,9 @@ pub mod leveled {
         Actions {
             actions: VecSep<Action, ArgSep>,
             on_kw: (Space, Kw!("ON"), Space),
-            object: Object,
+            object: TName,
         },
-        Roles(VecSep<Role, ArgSep>),
+        Roles(VecSep<Ident, ArgSep>),
     }
 
     impl Granted {
@@ -3348,30 +3305,15 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct Role(pub Ident);
-
-    #[derive(Grammar)]
     pub enum Objcts {
         Star(StringEq!("*")),
         Schemas {
             schema_kw: (Kw!("SCHEMA"), Space),
-            schemas: VecSep<Schema, ArgSep>,
+            schemas: VecSep<Ident, ArgSep>,
         },
         ForeignServers(ForeignServerPrivilegeClause),
-        Tables(VecSep<Object, ArgSep>),
+        Tables(VecSep<TName, ArgSep>),
     }
-
-    #[derive(Grammar)]
-    pub struct Object(pub TName);
-
-    #[derive(Grammar)]
-    pub struct Schema(pub Ident);
-
-    #[derive(Grammar)]
-    pub struct CubeList(pub VecSep<CubeName, ArgSep>);
-
-    #[derive(Grammar)]
-    pub struct CubeName(pub Ident);
 
     #[derive(Grammar)]
     pub enum ForeignServerPrivilegeList {
@@ -3410,7 +3352,7 @@ pub mod leveled {
         PrivSpec {
             priv_spec: PrivSpec,
             on_kw: (Space, Kw!("ON"), Space),
-            object: Object,
+            object: TName,
         },
     }
 
@@ -3539,8 +3481,8 @@ pub mod leveled {
         },
         TrainModel {
             kw: (Kw!("TRAIN"), Space1, Kw!("MODEL"), Space),
-            name: ModelName,
-            as_name: Option<((Space, Kw!("AS"), Space), ModelName)>,
+            name: Ident,
+            as_name: Option<((Space, Kw!("AS"), Space), Ident)>,
             not_default: Option<(Space, Kw!("NOT"), Space1, Kw!("DEFAULT"))>,
             for_col: Option<((Space, Kw!("FOR"), Space), DottedIdent)>,
             with_clause: Option<(Space, WithClauseTrain)>,
@@ -3560,13 +3502,13 @@ pub mod leveled {
         UseDatabase {
             kw: (Kw!("USE"), Space1),
             database: Option<(Kw!("DATABASE"), Space1)>,
-            name: DatabaseName,
+            name: Ident,
         },
         ValidateModel {
             kw: (Kw!("VALIDATE"), Space1, Kw!("MODEL"), Space),
-            name: ModelName,
-            as_name: Option<((Space, Kw!("AS"), Space), ModelName)>,
-            use_name: Option<((Space, Kw!("USE"), Space), ModelName)>,
+            name: Ident,
+            as_name: Option<((Space, Kw!("AS"), Space), Ident)>,
+            use_name: Option<((Space, Kw!("USE"), Space), Ident)>,
             with_clause: Option<(Space, WithClauseTrain)>,
             source: Option<(Space, ModelSource)>,
         },
@@ -3578,7 +3520,7 @@ pub mod leveled {
     pub enum Created {
         BitmapextentIndex {
             kw: (Kw!("BITMAPEXTENT"), Space1, Kw!("INDEX"), Space),
-            name: IndexName,
+            name: Ident,
             on_kw: (Space, Kw!("ON"), Space),
             table_kw: Option<(Kw!("TABLE"), Space)>,
             tname: TName,
@@ -3586,7 +3528,7 @@ pub mod leveled {
         Database {
             kw: (Kw!("DATABASE"), Space1),
             file: Option<(Kw!("FILE"), Space1)>,
-            name: DatabaseName,
+            name: Ident,
             on_dir: Option<OnDirectory>,
         },
         ForeignTable {
@@ -3604,7 +3546,7 @@ pub mod leveled {
         Model {
             kw: (Kw!("MODEL"), Space),
             if_not_exists: IfNotExists,
-            name: ModelName,
+            name: Ident,
             predicting: (Space, Kw!("PREDICTING"), Space),
             pred: Parenthesized<(Ident, Option<(Space, Datyp)>)>,
             source: Option<(Space, ModelSource)>,
@@ -3648,7 +3590,7 @@ pub mod leveled {
                 Kw!("WRAPPER"),
                 Space,
             ),
-            fdw_name: FDWName,
+            fdw_name: Ident,
             connection: (Space, CreateServerConnection),
             delimited: Option<(Space, CreateServerDelimitedIds)>,
             passthrough: Option<(Space, EnableDisable, Space1, Kw!("PASSTHROUGH"))>,
@@ -3659,14 +3601,14 @@ pub mod leveled {
             partitioned: Option<(CreateIndexPartitioned, Space1)>,
             qualifiers: Option<(IndexQualifiers, Space)>,
             index_kw: (Kw!("INDEX"), Space),
-            name: IndexName,
+            name: Ident,
             on_kw: (Space, Kw!("ON"), Space),
             table_kw: Option<(Kw!("TABLE"), Space)>,
             tname: TName,
             comp_list: Args<VecSep<ComponentSpec, ArgSep>>,
             as_clause: Option<(
                 (Space, Kw!("AS"), Space),
-                ClassName,
+                DottedIdent,
                 Option<(Space, CreateIndexAsParams)>,
             )>,
             with_clause: Option<(Space, CreateIndexWithClause)>,
@@ -3681,30 +3623,30 @@ pub mod leveled {
         Aggregate {
             or_replace: OrReplace,
             agg_kw: (Kw!("AGGREGATE"), Space),
-            name: QualifiedSPName,
+            name: DottedIdent,
             params: Args<VecSep<(Ident, Space1, Datyp), ArgSep>>,
             returns: Option<((Space, Kw!("RETURNS"), Space), Datyp)>,
             initialize: Option<(
                 (Space, Kw!("INITIALIZE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
+                DottedIdent,
             )>,
             iterate: (
                 (Space, Kw!("ITERATE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
+                DottedIdent,
             ),
             merge: Option<(
                 (Space, Kw!("MERGE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
+                DottedIdent,
             )>,
             finalize: Option<(
                 (Space, Kw!("FINALIZE"), Space1, Kw!("WITH"), Space),
-                QualifiedSPName,
+                DottedIdent,
             )>,
         },
         MlConfiguration {
             or_replace: OrReplace,
             ml_kw: (Kw!("ML"), Space1, Kw!("CONFIGURATION"), Space),
-            name: MLConfigurationName,
+            name: Ident,
             provider: ((Space, Kw!("PROVIDER"), Space1), ProviderName),
             desc: Option<((Space1, Kw!("%DESCRIPTION"), Space), LiteralOrNull)>,
             using_clause: Option<(Space, MlconfigUsingClause)>,
@@ -3757,12 +3699,12 @@ pub mod leveled {
         },
         MlConfiguration {
             kw: (Kw!("ML"), Space1, Kw!("CONFIGURATION"), Space),
-            name: MLConfigurationName,
+            name: Ident,
             clauses: Vec1<(Space, MlConfigClause)>,
         },
         Model {
             kw: (Kw!("MODEL"), Space),
-            name: ModelName,
+            name: Ident,
             action: (Space, AlterModelAction),
         },
         Table {
@@ -3813,7 +3755,7 @@ pub mod leveled {
         Database {
             kw: (Kw!("DATABASE"), Space1),
             if_exists: IfExists,
-            name: DatabaseName,
+            name: Ident,
             retain: Option<(Space1, Kw!("RETAIN_FILES"))>,
         },
         ForeignTable {
@@ -3825,8 +3767,8 @@ pub mod leveled {
         Routine {
             kind: (RoutineKind, Space),
             if_exists: IfExists,
-            name: QualifiedSPName,
-            from: Option<((Space, Kw!("FROM"), Space), ClassName)>,
+            name: DottedIdent,
+            from: Option<((Space, Kw!("FROM"), Space), DottedIdent)>,
         },
         Index {
             kw: (Kw!("INDEX"), Space),
@@ -3842,12 +3784,12 @@ pub mod leveled {
         MlConfiguration {
             kw: (Kw!("ML"), Space1, Kw!("CONFIGURATION"), Space),
             if_exists: IfExists,
-            name: MLConfigurationName,
+            name: Ident,
         },
         Model {
             kw: (Kw!("MODEL"), Space),
             if_exists: IfExists,
-            name: ModelName,
+            name: Ident,
         },
         Role {
             kw: (Kw!("ROLE"), Space),
@@ -3889,7 +3831,7 @@ pub mod leveled {
         Aggregate {
             kw: (Kw!("AGGREGATE"), Space),
             if_exists: IfExists,
-            name: QualifiedSPName,
+            name: DottedIdent,
         },
     }
 
@@ -3898,7 +3840,7 @@ pub mod leveled {
         pub kw: (Space1, Kw!("ON"), Space1, Kw!("DIRECTORY")),
         #[sugar]
         pub eq: Option<(Space, StringEq!("="))>,
-        pub dir: (Space, DirectoryName),
+        pub dir: (Space, Literal),
     }
 
     #[derive(Grammar)]
@@ -3921,7 +3863,7 @@ pub mod leveled {
         pub or_replace: OrReplace,
         pub static_kw: Option<(Kw!("STATIC"), Space1)>,
         pub kind: (RoutineKind, Space),
-        pub name: QualifiedSPName,
+        pub name: DottedIdent,
         pub spec: (Space, CodeSpecification),
     }
 
@@ -4039,9 +3981,6 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct ModelName(pub Ident);
-
-    #[derive(Grammar)]
     pub enum Password {
         HostVar(HostVar),
         Ident(Ident),
@@ -4113,23 +4052,15 @@ pub mod leveled {
         },
     }
 
-    pub type UsingClause = Prefix<(Kw!("USING"), Space), AlgDescription>;
-
-    #[derive(Grammar)]
-    pub struct AlgDescription(pub JSONObject);
+    pub type UsingClause = Prefix<(Kw!("USING"), Space), JSONObject>;
 
     pub type WithClauseTrain = Prefix<(Kw!("WITH"), Space), TrainWith>;
 
     #[derive(Grammar)]
     pub enum TrainWith {
         List(FList1),
-        Assignment(WithValueAssignment),
+        Assignment(VecSep<(Ident, (Space, StringEq!("="), Space), WithExpression), ArgSep>),
     }
-
-    #[derive(Grammar)]
-    pub struct WithValueAssignment(
-        pub VecSep<(Ident, (Space, StringEq!("="), Space), WithExpression), ArgSep>,
-    );
 
     #[derive(Grammar)]
     pub enum WithExpression {
@@ -4148,12 +4079,12 @@ pub mod leveled {
     pub struct DefaultTrainedModel {
         pub kw: Kw!("DEFAULT"),
         pub trained_model: Option<(Space1, Kw!("TRAINED"), Space1, Kw!("MODEL"))>,
-        pub name: (Space, TrainedModelName),
+        pub name: (Space, Ident),
     }
 
     #[derive(Grammar)]
     pub enum Scope {
-        Days(NonNegativeInteger, Space1, Kw!("DAYS")),
+        Days(UnsignedInteger, Space1, Kw!("DAYS")),
         All(Kw!("ALL")),
     }
 
@@ -4223,17 +4154,13 @@ pub mod leveled {
 
     pub type JSONObject = crate::cos::Brace<crate::cos::OSText>;
 
-    #[derive(Grammar)]
-    pub struct JSONString(pub Either<JSONObject, StringLiteral>);
+    pub type JSONString = Either<JSONObject, StringLiteral>;
 
     #[derive(Grammar)]
     pub enum ServerType {
         DB(StringEqCI!("'DB'")),
         FILE(StringEqCI!("'FILE'")),
     }
-
-    #[derive(Grammar)]
-    pub struct FDWName(pub Ident);
 
     pub type FTPushdownClause = Prefix<Kw!("PUSHDOWN"), (Space1, FTPushdownType)>;
 
@@ -4245,12 +4172,6 @@ pub mod leveled {
         Iris(Kw!("IRIS")),
         Off(Kw!("OFF")),
     }
-
-    #[derive(Grammar)]
-    pub struct QualifiedSPName(pub DottedIdent);
-
-    #[derive(Grammar)]
-    pub struct ClassName(pub DottedIdent);
 
     #[derive(Grammar)]
     pub enum TriggerTime {
@@ -4319,7 +4240,7 @@ pub mod leveled {
     pub struct MoveSpec {
         pub partition_range: Option<(PartitionRangeSpec, Space)>,
         pub to_kw: Kw!("TO"),
-        pub database: (Space1, DatabaseName),
+        pub database: (Space1, Ident),
         pub activate: Option<(Space1, SQLActivateSpec)>,
     }
 
@@ -4415,20 +4336,11 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub struct DirectoryName(pub Literal);
-
-    #[derive(Grammar)]
-    pub struct DatabaseName(pub Ident);
-
-    #[derive(Grammar)]
     pub struct CodeSpecification {
-        pub params: Parenthesized<ParameterList>,
+        pub params: Parenthesized<Option<VecSep<ParameterDeclaration, ArgSep>>>,
         pub characteristics: Vec<(Space, MethodQueryCharacteristics)>,
         pub body: (Space, CodeBody),
     }
-
-    #[derive(Grammar)]
-    pub struct ParameterList(pub Option<VecSep<ParameterDeclaration, ArgSep>>);
 
     #[derive(Grammar)]
     pub struct ParameterDeclaration {
@@ -4468,13 +4380,13 @@ pub mod leveled {
         Final(Kw!("FINAL")),
         For {
             kw: (Kw!("FOR"), Space),
-            classname: ClassName,
+            classname: DottedIdent,
         },
         Private(Kw!("PRIVATE")),
         Proc(ProcedureKw),
         Results {
             kw: (Kw!("RESULTS"), Space),
-            clause: ResultSetClause,
+            clause: Parenthesized<ColumnDefList>,
         },
         Returns {
             kw: (Kw!("RETURNS"), Space),
@@ -4490,9 +4402,6 @@ pub mod leveled {
         },
         ResultSets(Kw!("RESULT"), Space1, Kw!("SETS")),
     }
-
-    #[derive(Grammar)]
-    pub struct ResultSetClause(pub Parenthesized<ColumnDefList>);
 
     #[derive(Grammar)]
     pub enum SelectMode {
@@ -4511,7 +4420,7 @@ pub mod leveled {
                 Spellings!(Kw!("OBJECTSCRIPT"), Kw!("COS")),
                 Space,
             ),
-            body: Either<COSMethodBody, COSQueryBody>,
+            body: Either<COSMethodBody, VecSep<QueryMethod, Space>>,
         },
         External {
             kw: (
@@ -4566,16 +4475,13 @@ pub mod leveled {
         Paren(Parenthesized<Box<ReturnValue>>),
         Literal(Option<Sign>, Literal),
         HostVar(HostVar),
-        Marker(ParameterMarker),
+        Marker(StringEq!("?")),
     }
-
-    #[derive(Grammar)]
-    pub struct COSQueryBody(pub VecSep<QueryMethod, Space>);
 
     #[derive(Grammar)]
     pub struct QueryMethod {
         pub kind: QueryMethodKind,
-        pub params: Args<ParameterList>,
+        pub params: Args<Option<VecSep<ParameterDeclaration, ArgSep>>>,
         pub body: (Space, COSMethodBody),
     }
 
@@ -4590,9 +4496,6 @@ pub mod leveled {
     }
 
     pub type COSMethodBody = crate::cos::Brace<crate::cos::OSText>;
-
-    #[derive(Grammar)]
-    pub struct IndexName(pub Ident);
 
     #[derive(Grammar)]
     pub enum IndexQualifiers {
@@ -4795,20 +4698,20 @@ pub mod leveled {
         CurrentDate(Kw!("CURRENT_DATE")),
         CurrentTimestamp {
             kw: Kw!("CURRENT_TIMESTAMP"),
-            precision: Option<(Space, Parenthesized<Precision>)>,
+            precision: Option<(Space, Parenthesized<UnsignedInteger>)>,
         },
         CurrentTime {
             kw: Kw!("CURRENT_TIME"),
-            precision: Option<(Space, Parenthesized<Precision>)>,
+            precision: Option<(Space, Parenthesized<UnsignedInteger>)>,
         },
         CurrentUser(Kw!("CURRENT_USER")),
         GetDate {
             kw: Kw!("GETDATE"),
-            prec: Args<Option<Precision>>,
+            prec: Args<Option<UnsignedInteger>>,
         },
         GetUtcDate {
             kw: Kw!("GETUTCDATE"),
-            prec: Args<Option<Precision>>,
+            prec: Args<Option<UnsignedInteger>>,
         },
         Null(Kw!("NULL")),
         ObjectScript {
@@ -4993,8 +4896,7 @@ pub mod leveled {
         On(Kw!("ON")),
     }
 
-    #[derive(Grammar)]
-    pub struct Token(pub Either<Ident, Literal>);
+    pub type Token = Either<Ident, Literal>;
 
     #[derive(Grammar)]
     pub struct Telem {
@@ -5155,25 +5057,24 @@ pub mod leveled {
         )>,
     }
 
-    #[derive(Grammar)]
-    pub struct PartitionSpecificationList(pub VecSep<PartitionSpecification, ArgSep>);
+    pub type PartitionSpecificationList = VecSep<PartitionSpecification, ArgSep>;
 
     #[derive(Grammar)]
     pub enum PartitionSpecification {
         Hash {
             kw: (Kw!("HASH"), Space),
-            column: Parenthesized<ColumnName>,
+            column: Parenthesized<Ident>,
             in_kw: (Space, Kw!("IN"), Space),
             count: Literal,
             partitions_kw: (Space, Kw!("PARTITIONS")),
         },
         List {
             kw: (Kw!("LIST"), Space),
-            column: Parenthesized<ColumnName>,
+            column: Parenthesized<Ident>,
         },
         Range {
             kw: (Kw!("RANGE"), Space),
-            column: Parenthesized<ColumnName>,
+            column: Parenthesized<Ident>,
             interval_kw: (Space, Kw!("INTERVAL"), Space),
             interval: Literal,
             datetime_interval: Option<(Space, PartitionDatetimeInterval)>,
@@ -5470,20 +5371,20 @@ pub mod leveled {
         CurrentDate(Kw!("CURRENT_DATE")),
         CurrentTimestamp {
             kw: Kw!("CURRENT_TIMESTAMP"),
-            precision: Option<(Space, Parenthesized<Precision>)>,
+            precision: Option<(Space, Parenthesized<UnsignedInteger>)>,
         },
         CurrentTime {
             kw: Kw!("CURRENT_TIME"),
-            precision: Option<(Space, Parenthesized<Precision>)>,
+            precision: Option<(Space, Parenthesized<UnsignedInteger>)>,
         },
         CurrentUser(Kw!("CURRENT_USER")),
         GetDate {
             kw: Kw!("GETDATE"),
-            prec: Parenthesized<Option<Precision>>,
+            prec: Parenthesized<Option<UnsignedInteger>>,
         },
         GetUtcDate {
             kw: Kw!("GETUTCDATE"),
-            prec: Parenthesized<Option<Precision>>,
+            prec: Parenthesized<Option<UnsignedInteger>>,
         },
         Null(Kw!("NULL")),
         SessionUser(Kw!("SESSION_USER")),
@@ -5762,7 +5663,7 @@ pub mod leveled {
     pub enum StatsScope {
         Schema {
             kw: (Kw!("SCHEMA"), Space),
-            schema: Schema,
+            schema: Ident,
         },
         Table {
             kw: (Kw!("TABLE"), Space),

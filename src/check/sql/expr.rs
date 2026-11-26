@@ -264,7 +264,7 @@ impl Walk for XMLValue2 {
         match self {
             XMLValue2::Element(element) => element.walk(w),
             XMLValue2::Forest(forest) => forest.walk(w),
-            XMLValue2::Comment(_) => {}
+            XMLValue2::Comment(..) => {}
         }
     }
 }

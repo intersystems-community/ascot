@@ -63,7 +63,6 @@ identity!(
     Number,
     NumberBase,
     Literal,
-    ParameterMarker,
     HostVar,
     InstanceVariableHostRef,
     PropertyHostRef,

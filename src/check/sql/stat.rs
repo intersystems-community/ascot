@@ -172,7 +172,7 @@ impl Walk for CallStatement {
             .wrapped
             .as_ref()
             .map_or(0, |args| args.items.len());
-        w.call(&self.routine.1.0, args, SqlProcedureUse::Call);
+        w.call(&self.routine.1, args, SqlProcedureUse::Call);
         self.args.walk(w);
         if let Some((.., names)) = &self.using {
             for name in &names.items {
@@ -342,12 +342,6 @@ impl Walk for CodeSpecification {
     }
 }
 
-impl Walk for ParameterList {
-    fn walk(&self, w: &mut Walker) {
-        self.0.walk(w)
-    }
-}
-
 impl Walk for ParameterDeclaration {
     fn walk(&self, _: &mut Walker) {}
 }
@@ -382,7 +376,7 @@ impl Walk for ModelSource {
 impl Walk for TrainWith {
     fn walk(&self, w: &mut Walker) {
         if let TrainWith::Assignment(assignment) = self {
-            for (_, _, value) in &assignment.0.items {
+            for (_, _, value) in &assignment.items {
                 value.walk(w)
             }
         }

@@ -221,7 +221,7 @@ fn core_selex(text: &str) -> core::Selex {
 }
 
 fn first_term(selex: &core::Selex) -> &Ranged<core::Term> {
-    let core::SelectItem::Expr { expr, .. } = &selex.selst.select_list.0.items[0].ranged else {
+    let core::SelectItem::Expr { expr, .. } = &selex.selst.select_list.items[0].ranged else {
         panic!("a star")
     };
     &expr.0.items[0]
@@ -235,7 +235,7 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
     let text =
         "SELECT CASE WHEN a = 1 THEN 'x' END, TRIM(b), %SQLUPPER c FROM t, u WHERE d NOT IN (1, 2)";
     let selex = core_selex(text);
-    let items = &selex.selst.select_list.0.items;
+    let items = &selex.selst.select_list.items;
     let at = |node: &Ranged<core::Term>| &text[node.range()];
     let core::Term::Case(case) = &first_term(&selex).ranged else {
         panic!("{text}")
@@ -294,7 +294,6 @@ fn terms_take_their_core_shapes() {
     .ranged
     .selst
     .select_list
-    .0
     .items
     .iter()
     .map(|item| match &item.ranged {

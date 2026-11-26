@@ -14,12 +14,6 @@ impl<T: Walk + tygr::Grammar> Walk for WithStat<T> {
     }
 }
 
-impl Walk for WithList {
-    fn walk(&self, w: &mut Walker) {
-        self.0.walk(w)
-    }
-}
-
 impl Walk for WithListElement {
     fn walk(&self, w: &mut Walker) {
         let cte = super::text(&self.name);
@@ -83,7 +77,7 @@ impl Walk for Selst {
         if let Some((_, _, top, _)) = &self.top {
             top.walk(w)
         }
-        self.select_list.0.walk(w);
+        self.select_list.walk(w);
         self.targt.walk(w)
     }
 }

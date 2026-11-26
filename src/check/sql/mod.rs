@@ -421,16 +421,10 @@ impl Walk for DTSValSpec {
 
 impl Walk for Targt {
     fn walk(&self, w: &mut Walker) {
-        match &self.0 {
-            TargtEnum::Into(into) => w.written(into),
-            TargtEnum::IntoList(into) => w.written(&into.prefixed.1),
+        match self {
+            Targt::Into(into) => w.written(into),
+            Targt::IntoList(into) => w.written(&into.prefixed.1),
         }
-    }
-}
-
-impl Walk for HostList {
-    fn walk(&self, w: &mut Walker) {
-        self.0.walk(w)
     }
 }
 
