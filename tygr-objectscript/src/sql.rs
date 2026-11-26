@@ -4575,8 +4575,7 @@ pub mod leveled {
     #[tygr(name = "freeze scope")]
     pub enum FreezeScope {
         Id((Kw!("ID"), Space), Literal),
-        Schema((Kw!("SCHEMA"), Space), Schema),
-        Table((Kw!("TABLE"), Space), TName),
+        Scope(StatsScope),
     }
 
     pub type CancelQueryScope = Prefix<(Kw!("IDENTIFIED"), Space1, Kw!("BY"), Space), Count>;
