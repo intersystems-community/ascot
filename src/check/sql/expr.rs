@@ -128,10 +128,10 @@ impl Walk for Builtin {
                     pairs.walk(w)
                 }
             }
-            Predict(_, a) => a.1.wrapped.with_clause.walk(w),
+            Predict(_, a) => with(w, &a.1.wrapped.with_clause),
             Probability(_, a) => {
                 a.1.wrapped.for_clause.walk(w);
-                a.1.wrapped.with_clause.walk(w)
+                with(w, &a.1.wrapped.with_clause)
             }
             SearchIndex(_, a) => {
                 for (_, scalx) in &a.1.wrapped.scalx_list {
@@ -190,11 +190,17 @@ impl Walk for SQLJSONKeyValuePairs {
     }
 }
 
+fn with<K>(w: &mut Walker, clause: &Option<(K, PredictWith)>) {
+    if let Some((_, with)) = clause {
+        with.walk(w)
+    }
+}
+
 impl Walk for PredictWith {
     fn walk(&self, w: &mut Walker) {
         match self {
-            PredictWith::Unnamed { scalx_list, .. } => scalx_list.walk(w),
-            PredictWith::Named { assignments, .. } => assignments.walk(w),
+            PredictWith::Unnamed(list) => list.walk(w),
+            PredictWith::Named(assignments) => assignments.walk(w),
         }
     }
 }

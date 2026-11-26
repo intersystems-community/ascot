@@ -340,27 +340,16 @@ impl Arg for sugar::SQLPositionArgs {
 /// `SUBSTRING(x FROM s FOR l)` has the arguments of `SUBSTRING(x, s, l)`.
 impl Arg for sugar::SubstringArgsInternal {
     fn args(&self, out: &mut Vec<core::Scalx>) {
+        self.expr.args(out);
+        self.rest.args(out)
+    }
+}
+
+impl<L: Arg, R: Arg> Arg for Either<L, R> {
+    fn args(&self, out: &mut Vec<core::Scalx>) {
         match self {
-            Self::Keyword {
-                expr,
-                start,
-                for_clause,
-                ..
-            } => {
-                expr.args(out);
-                start.args(out);
-                for_clause.args(out)
-            }
-            Self::Position {
-                expr,
-                start,
-                length,
-                ..
-            } => {
-                expr.args(out);
-                start.args(out);
-                length.args(out)
-            }
+            Either::Left(left) => left.args(out),
+            Either::Right(right) => right.args(out),
         }
     }
 }

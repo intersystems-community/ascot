@@ -47,8 +47,8 @@ impl Walk for Insrt {
 impl Walk for Updat {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
-        match self {
-            Updat::Update {
+        match &self.body {
+            UpdatBody::Update {
                 target,
                 assignment,
                 from,
@@ -60,7 +60,7 @@ impl Walk for Updat {
                 where_clause.walk(w);
                 assignment.1.walk(w)
             }
-            Updat::UpdateStats { table, .. } => w.table(Some(name_of(&table.0)), None),
+            UpdatBody::UpdateStats { table, .. } => w.table(Some(name_of(&table.0)), None),
         }
         w.pop_frame()
     }
@@ -77,10 +77,11 @@ impl Walk for Delet {
 
 impl Walk for IUDTarget {
     fn walk(&self, w: &mut Walker) {
-        match self {
-            IUDTarget::Table { name, alias } => w.table(Some(name_of(&name.0)), alias.as_ref()),
-            IUDTarget::Subquery { query, alias } => {
-                w.table(None, alias.as_ref());
+        let alias = self.alias.as_ref();
+        match &self.target {
+            TableOrSubquery::Table(name) => w.table(Some(name_of(&name.0)), alias),
+            TableOrSubquery::Subquery(query) => {
+                w.table(None, alias);
                 query.walk(w)
             }
         }
@@ -149,23 +150,10 @@ impl Walk for WhereWerop {
 
 impl Walk for Decl {
     fn walk(&self, w: &mut Walker) {
-        match self {
-            Decl::Explain {
-                cursor_name,
-                statement,
-                ..
-            } => {
-                w.hosts.declares = Some(cursor_name.1.print());
-                statement.walk(w)
-            }
-            Decl::Selct {
-                cursor_name,
-                statement,
-                ..
-            } => {
-                w.hosts.declares = Some(cursor_name.1.print());
-                statement.walk(w)
-            }
+        w.hosts.declares = Some(self.cursor_name.1.print());
+        match &self.statement {
+            DeclStatement::Explain(statement) => statement.walk(w),
+            DeclStatement::Selct(statement) => statement.walk(w),
         }
     }
 }
@@ -337,10 +325,8 @@ impl Walk for ParameterList {
 
 impl Walk for ParameterDeclaration {
     fn walk(&self, w: &mut Walker) {
-        match &self.default {
-            Some((_, DefaultClause::Default { value, .. }))
-            | Some((_, DefaultClause::Expr(value))) => value.walk(w),
-            None => {}
+        if let Some((_, default)) = &self.default {
+            default.value.walk(w)
         }
     }
 }
