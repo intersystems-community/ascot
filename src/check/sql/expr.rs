@@ -372,7 +372,7 @@ impl<T: Walk + tygr::Grammar> Walk for When<T> {
 
 impl Walk for Implied<SQLElseClause> {
     fn walk(&self, w: &mut Walker) {
-        let Implied::Spelled(_, else_clause) = self;
+        let Implied::Spelled(_, else_clause, _) = self;
         else_clause.result.walk(w)
     }
 }

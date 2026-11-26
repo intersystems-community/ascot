@@ -1984,27 +1984,41 @@ pub mod leveled {
     /// `NOT` before a predicate's keyword, which the condition's impl puts around the predicate in the core.
     pub type Not = Option<(Kw!("NOT"), Space1)>;
 
-    /// A keyword or clause read the same when omitted: spelled, or omitted and read as its default.
+    /// A keyword or clause read the same when omitted: spelled, with the blank before or after it
+    /// that a synthesized one must bring, or omitted and read as its default.
     #[derive(Grammar)]
     #[tygr(inline)]
     #[sugar]
-    pub enum Implied<K: Grammar + Default> {
-        Spelled(Space, K),
+    pub enum Implied<
+        K: Grammar + Default,
+        Before: Grammar + Default = Space1,
+        After: Grammar + Default = (),
+    > {
+        Spelled(Before, K, After),
         #[sugar]
         Omitted(()),
     }
 
-    impl<K: Grammar + Default + Desugar> Desugar for Implied<K>
+    impl<K, Before, After> Desugar for Implied<K, Before, After>
     where
+        K: Grammar + Default + Desugar,
         K::Core: Grammar + Default,
+        Before: Grammar + Default + Desugar,
+        Before::Core: Grammar + Default,
+        After: Grammar + Default + Desugar,
+        After::Core: Grammar + Default,
     {
-        type Core = core::Implied<K::Core>;
+        type Core = core::Implied<K::Core, Before::Core, After::Core>;
         fn desugar(&self) -> Self::Core {
             match self {
-                Implied::Spelled(sp, keyword) => {
-                    core::Implied::Spelled(sp.desugar(), keyword.desugar())
+                Implied::Spelled(before, keyword, after) => {
+                    core::Implied::Spelled(before.desugar(), keyword.desugar(), after.desugar())
                 }
-                Implied::Omitted(_) => core::Implied::Spelled(Space::blank(), Default::default()),
+                Implied::Omitted(_) => core::Implied::Spelled(
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                ),
             }
         }
     }
@@ -2601,12 +2615,14 @@ pub mod leveled {
         },
         Natural {
             natural_kw: (Kw!("NATURAL"), Space1),
-            join_type: JOp,
+            jtype: Implied<JType, (), Space1>,
+            join_kw: Kw!("JOIN"),
             space: Space,
             table: Box<JTab>,
         },
         Qualified {
-            join_type: JOp,
+            jtype: Implied<JType, (), Space1>,
+            join_kw: Kw!("JOIN"),
             space: Space,
             table: Box<JTab>,
             spec: (Space, JSpec),
@@ -2614,32 +2630,15 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    pub enum JOp {
-        Typed {
-            jtype: JType,
-            sp: Space1,
-            join_kw: Kw!("JOIN"),
-        },
-        #[sugar]
-        Bare(Kw!("JOIN")),
-    }
-
-    impl Desugar for JOpSugar<'_> {
-        type Core = core::JOp;
-        fn desugar(&self) -> Self::Core {
-            let Self::Bare(join_kw) = self;
-            core::JOp::Typed {
-                jtype: core::JType::Inner(Default::default()),
-                sp: Default::default(),
-                join_kw: join_kw.desugar(),
-            }
-        }
-    }
-
-    #[derive(Grammar)]
     pub enum JType {
         Inner(Kw!("INNER")),
         Outer(Side, Implied<Kw!("OUTER")>),
+    }
+
+    impl Default for JType {
+        fn default() -> Self {
+            JType::Inner(Default::default())
+        }
     }
 
     #[derive(Grammar)]
