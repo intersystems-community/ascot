@@ -225,7 +225,14 @@ impl Walk for TRMode {
 impl Walk for DDL {
     fn walk(&self, w: &mut Walker) {
         match self {
-            DDL::CreOrAltView { query, .. } => query.walk(w),
+            DDL::CreOrAltView {
+                with_clause, query, ..
+            } => {
+                if let Some((with, _)) = with_clause {
+                    with.walk(w)
+                }
+                query.walk(w)
+            }
             DDL::CancelQuery {
                 val,
                 cancel_scope,

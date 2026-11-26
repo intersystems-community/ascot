@@ -194,6 +194,17 @@ impl Walk for Tail {
     }
 }
 
+// The query a statement reads, whose `ORDER BY` sees the first branch's names.
+impl Walk for SourceQuery {
+    fn walk(&self, w: &mut Walker) {
+        w.push_frame();
+        w.current().branches = true;
+        self.query.walk(w);
+        self.order.walk(w);
+        w.pop_frame()
+    }
+}
+
 impl Walk for QueryExpr {
     fn walk(&self, w: &mut Walker) {
         self.0.walk(w)

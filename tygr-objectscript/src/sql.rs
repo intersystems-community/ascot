@@ -584,9 +584,6 @@ impl Validate for HostVar {
     }
 }
 
-/// A part in parentheses, blanks allowed within.
-pub type Parenthesized<T> = Wrap<(StringEq!("("), Space), T, (Space, StringEq!(")"))>;
-
 pub type SubList = Parenthesized<Option<VecSep<Sub, ArgSep>>>;
 
 #[derive(Grammar, Clone)]
@@ -807,6 +804,9 @@ const SCALAR_FUNCTIONS: &[&str] = &[];
 
 #[tygr_objectscript_macros::levels]
 pub mod leveled {
+    /// A part in parentheses, blanks allowed within.
+    pub type Parenthesized<T> = Wrap<(StringEq!("("), Space), T, (Space, StringEq!(")"))>;
+
     use either::Either;
     use tygr::*;
 
@@ -2434,20 +2434,44 @@ pub mod leveled {
         pub where_clause: Option<(Space, WhereClause)>,
         pub group: Option<(Space, Group)>,
         pub having: Option<(Space, Having)>,
-        pub tail: Tail,
+        pub tail: Option<(Space, Either<Order, RowLimitingClause>)>,
     }
 
-    /// ORDER BY and a row limit, after a SELECT and again after the query: 2026.2 takes LIMIT 1 ORDER BY a LIMIT 2
-    /// and LIMIT 1 LIMIT 2 (the first limiting the SELECT, the second the whole), not ORDER BY a LIMIT 1 LIMIT 2,
-    /// LIMIT 1 LIMIT 2 ORDER BY a or LIMIT 1 ORDER BY a UNION (-25), and ORDER BY in an operand only with TOP.
+    /// ORDER BY and a row limit after the query, as a SELECT takes one of the two (ORDER BY with TOP alone, see
+    /// QueryExpr): 2026.2 reads LIMIT 1 ORDER BY a LIMIT 2 and LIMIT 1 LIMIT 2, the first limit the SELECT's and
+    /// the second the whole's, not ORDER BY a LIMIT 1 LIMIT 2, LIMIT 1 LIMIT 2 ORDER BY a or LIMIT 1 ORDER BY a UNION.
     #[derive(Grammar)]
     pub struct Tail {
         pub order: Option<(Space, Order)>,
         pub limit: Option<(Space, RowLimitingClause)>,
     }
 
-    /// A query inside a statement, as a subquery, a CTE body, a view, an INSERT's or a CREATE TABLE AS's source:
-    /// 2026.2 takes a row limit in every operand and ORDER BY only with TOP (SQLCODE -143 otherwise).
+    impl Query {
+        /// Whether the last operand is a SELECT with ORDER BY, which an enclosing statement reads as its own.
+        fn ends_ordered(&self) -> bool {
+            let last = self.0.items.last().expect("one term");
+            matches!(last, QTerm::Selex(s) if matches!(s.node.tail, Some((_, Either::Left(_)))))
+        }
+    }
+
+    /// The query an INSERT or a CREATE TABLE AS reads: 2026.2 takes a row limit in its operands and ORDER BY once,
+    /// last (LIMIT 1 ORDER BY a, not ORDER BY a LIMIT 1 or LIMIT 1 LIMIT 2, SQLCODE -25).
+    #[derive(Grammar)]
+    #[tygr(validated)]
+    pub struct SourceQuery {
+        pub query: Query,
+        pub order: Option<(Space, Order)>,
+    }
+
+    impl Validate for SourceQuery {
+        const REQUIREMENT: &'static str = "order its rows once";
+        fn validate(&self) -> bool {
+            !(self.query.ends_ordered() && self.order.is_some())
+        }
+    }
+
+    /// A query inside a statement, as a subquery, a CTE body or a view: 2026.2 takes a row limit in every operand
+    /// and ORDER BY only with TOP (SQLCODE -143 otherwise).
     #[derive(Grammar)]
     #[tygr(validated)]
     pub struct QueryExpr(pub Box<Query>);
@@ -2457,7 +2481,8 @@ pub mod leveled {
         fn validate(&self) -> bool {
             self.0.0.items.iter().all(|term| match term {
                 QTerm::Selex(selex) => {
-                    selex.node.tail.order.is_none() || selex.node.selst.top.is_some()
+                    !matches!(selex.node.tail, Some((_, Either::Left(_))))
+                        || selex.node.selst.top.is_some()
                 }
                 QTerm::Query(_) => true,
             })
@@ -3050,7 +3075,7 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "value source")]
     pub enum ValueSource {
-        Query(QueryExpr),
+        Query(SourceQuery),
         ValSpec {
             values_kw: Kw!("VALUES"),
             sp: Space,
@@ -3425,16 +3450,12 @@ pub mod leveled {
     }
 
     /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383), not a parenthesized later one, and
-    /// anything after a SELECT operand's ORDER BY, which is the statement's own.
+    /// a second ORDER BY after a SELECT operand's, which is the statement's own.
     impl Validate for Selct {
-        const REQUIREMENT: &'static str =
-            "begin with SELECT after WITH and end with its last SELECT's ORDER BY";
+        const REQUIREMENT: &'static str = "begin with SELECT after WITH and order its rows once";
         fn validate(&self) -> bool {
-            let items = &self.query.0.items;
-            let ordered =
-                |term: &QTerm| matches!(term, QTerm::Selex(s) if s.node.tail.order.is_some());
-            (self.with_clause.is_none() || matches!(items[0], QTerm::Selex(_)))
-                && (!ordered(items.last().expect("one term")) || self.tail.print().is_empty())
+            (self.with_clause.is_none() || matches!(self.query.0.items[0], QTerm::Selex(_)))
+                && !(self.query.ends_ordered() && self.tail.order.is_some())
         }
     }
 
@@ -3448,8 +3469,9 @@ pub mod leveled {
             if let [core::QTerm::Selex(selex)] = &mut query.0.items[..]
                 && tail.order.is_some()
                 && tail.limit.is_none()
+                && let Some((space, Either::Right(limit))) = selex.node.tail.take()
             {
-                tail.limit = selex.node.tail.limit.take();
+                tail.limit = Some((space, limit));
             }
             core::Selct {
                 with_clause: self.with_clause.desugar(),
@@ -3933,8 +3955,9 @@ pub mod leveled {
             tname: TName,
             col_list: Option<(Space, FList1)>,
             as_kw: (Space, Kw!("AS"), Space),
+            with_clause: Option<(WithClause, Space)>,
             query: QueryExpr,
-            with_clause: Option<((Space, Kw!("WITH"), Space1), ViewWith)>,
+            view_with: Option<((Space, Kw!("WITH"), Space1), ViewWith)>,
         },
         AlterStatsDropFixed {
             kw: (Kw!("ALTER"), Space1),
@@ -4092,7 +4115,7 @@ pub mod leveled {
             tname: TName,
             as_kw: (Space, Kw!("AS"), Space),
             with_clause: Option<(WithClause, Space)>,
-            query: QueryExpr,
+            query: SourceQuery,
             options: Option<(Space, TableOptionList)>,
         },
         CreateUser {
@@ -5226,7 +5249,7 @@ pub mod leveled {
         SqlCollation(SqlCollation),
         Collate {
             kw: (Kw!("COLLATE"), Space),
-            name: Ident,
+            name: SqlCollation,
         },
         Default {
             kw: (Kw!("DEFAULT"), Space),
@@ -5268,7 +5291,12 @@ pub mod leveled {
         pub spec: (Space, StorageDefaultConversionTypeSpec),
     }
 
-    pub type Setdef = OptionallyWrapped<DefSpec>;
+    /// A DEFAULT value, in parentheses to any depth (2026.2 takes ((1))).
+    #[derive(Grammar)]
+    pub enum Setdef {
+        Spec(DefSpec),
+        Paren(Parenthesized<Box<Setdef>>),
+    }
 
     #[derive(Grammar)]
     #[tygr(name = "def spec")]
@@ -5289,20 +5317,20 @@ pub mod leveled {
         CurrentDate(Kw!("CURRENT_DATE")),
         CurrentTimestamp {
             kw: Kw!("CURRENT_TIMESTAMP"),
-            precision: Option<Parenthesized<Literal>>,
+            precision: Option<(Space, Parenthesized<Precision>)>,
         },
         CurrentTime {
             kw: Kw!("CURRENT_TIME"),
-            precision: Option<Parenthesized<Literal>>,
+            precision: Option<(Space, Parenthesized<Precision>)>,
         },
         CurrentUser(Kw!("CURRENT_USER")),
         GetDate {
             kw: Kw!("GETDATE"),
-            value: Parenthesized<Option<Literal>>,
+            prec: Args<Option<Precision>>,
         },
         GetUtcDate {
             kw: Kw!("GETUTCDATE"),
-            value: Parenthesized<Option<Literal>>,
+            prec: Args<Option<Precision>>,
         },
         Null(Kw!("NULL")),
         ObjectScript {
@@ -5312,18 +5340,11 @@ pub mod leveled {
         SessionUser(Kw!("SESSION_USER")),
         SysDate(Kw!("SYSDATE")),
         SystemUser(Kw!("SYSTEM_USER")),
-        ToDate {
-            kw: (StringEqCI!("TO_DATE("), Space),
-            arg1: Literal,
-            arg2: Option<(ArgSep, Literal)>,
-            close: (Space, StringEq!(")")),
-        },
-        ToTimestamp {
-            kw: (StringEqCI!("TO_TIMESTAMP("), Space),
-            arg1: Literal,
-            arg2: Option<(ArgSep, Literal)>,
-            close: (Space, StringEq!(")")),
-        },
+        ToDate(Kw!("TO_DATE"), Args<(Literal, Option<(ArgSep, Literal)>)>),
+        ToTimestamp(
+            Kw!("TO_TIMESTAMP"),
+            Args<(Literal, Option<(ArgSep, Literal)>)>,
+        ),
         User(Kw!("USER")),
     }
 
@@ -5422,11 +5443,7 @@ pub mod leveled {
             on: Option<(Space, Kw!("ON"), Space, Token)>,
         },
         ColDef(OptionallyWrapped<Coldef>),
-        Check {
-            kw: (Kw!("CHECK"), Space),
-            parse: Chkparse,
-            informix: Informix,
-        },
+        Index(TblIndex),
         Default {
             kw: (Kw!("DEFAULT"), Space),
             value: Setdef,
@@ -5448,26 +5465,33 @@ pub mod leveled {
     #[tygr(name = "alt pkey")]
     pub struct AltPkey {
         pub kw: (Kw!("PRIMARY"), Space1, Kw!("KEY"), Space),
-        pub spec: PkeySpec,
-        pub informix: Informix,
+        pub spec: FList2,
     }
 
-    #[derive(Grammar)]
-    #[tygr(name = "pkey spec")]
-    pub enum PkeySpec {
-        FList1(FList1),
-        IdentFList2 { name: Ident, flist: (Space, FList2) },
-    }
-
+    /// FOREIGN KEY [name] (columns) REFERENCES ...: 2026.2 takes the name in ALTER TABLE ADD, not in CREATE TABLE.
     #[derive(Grammar)]
     #[tygr(name = "alt fkey spec")]
     pub struct AltFkeySpec {
         pub kw: (Kw!("FOREIGN"), Space1, Kw!("KEY"), Space),
-        pub ident: Option<(Ident, Space)>,
         pub flist2: FList2,
         pub references_kw: (Space, Kw!("REFERENCES"), Space),
         pub ref_: Ref,
-        pub informix: Informix,
+    }
+
+    #[derive(Grammar)]
+    pub struct TblForeign {
+        pub kw: (Kw!("FOREIGN"), Space1, Kw!("KEY"), Space),
+        pub columns: TblKeyColumns,
+        pub references_kw: (Space, Kw!("REFERENCES"), Space),
+        pub ref_: Ref,
+    }
+
+    /// `[CONSTRAINT name] INDEX|KEY name (components)`, a table element and an ALTER TABLE ADD action on 2026.2.
+    #[derive(Grammar)]
+    pub struct TblIndex {
+        pub kw: (Either<Kw!("INDEX"), Kw!("KEY")>, Space),
+        pub name: DottedIdent,
+        pub components: Args<VecSep<ComponentSpec, ArgSep>>,
     }
 
     #[derive(Grammar)]
@@ -5482,7 +5506,6 @@ pub mod leveled {
     pub struct UniqueSpec {
         pub cluster: Cluster,
         pub flist: (Space, FList2),
-        pub informix: Informix,
     }
 
     #[derive(Grammar)]
@@ -5494,7 +5517,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "token")]
-    pub struct Token(pub Ident);
+    pub struct Token(pub Either<Ident, Literal>);
 
     #[derive(Grammar)]
     #[tygr(name = "telem")]
@@ -5519,13 +5542,13 @@ pub mod leveled {
             kw: (Kw!("%ROUTINE"), Space),
             value: Literal,
         },
-        CheckCnstr(CheckCnstr),
         ClassParameter(ClassParameter),
         ExtentsizeClause(ExtentsizeClause),
         Shard(Shard),
-        TblForeign(AltFkeySpec),
+        TblForeign(TblForeign),
         TblPrimaryKey(TblPrimaryKey),
         TblUnique(TblUnique),
+        Index(TblIndex),
         Tecdef(Tecdef),
     }
 
@@ -5554,8 +5577,15 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "tbl unique spec")]
     pub struct TblUniqueSpec {
-        pub spec: UniqueSpec,
-        pub fillfactor: FillFactor,
+        pub cluster: Cluster,
+        pub columns: (Space, TblKeyColumns),
+    }
+
+    /// The columns of a CREATE TABLE key, in parentheses or bare.
+    #[derive(Grammar)]
+    pub enum TblKeyColumns {
+        Parens(FList1),
+        Bare(VecSep<Ident, ArgSep>),
     }
 
     pub type FillFactor = Option<(
@@ -5593,8 +5623,13 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct ShardSpec {
-        pub key: Option<(Space, Kw!("KEY"), Space, FList1)>,
-        pub coshard: Option<(Space, CoshardClause)>,
+        pub key: Option<(
+            Space,
+            Kw!("KEY"),
+            Space,
+            FList1,
+            Option<(Space, CoshardClause)>,
+        )>,
     }
 
     #[derive(Grammar)]
@@ -5613,6 +5648,7 @@ pub mod leveled {
             partition: Option<(PartitionOption, Space)>,
             with_kw: (Kw!("WITH"), Space1),
             options: VecSep<TableOption, ArgSep>,
+            informix: Option<(Space, InformixCompatability)>,
         },
         Shard {
             shard: Shard,
@@ -5628,13 +5664,6 @@ pub mod leveled {
         pub in_on: Option<(InOn, Space, Token)>,
         pub extent_size: Option<(Space, Kw!("EXTENT"), Space1, Kw!("SIZE"), Space, Literal)>,
         pub next_size: Option<(Space, Kw!("NEXT"), Space1, Kw!("SIZE"), Space, Literal)>,
-        pub lock_mode: Option<(
-            Space,
-            Kw!("LOCK"),
-            Space1,
-            Kw!("MODE"),
-            Option<(Space1, LockSpec)>,
-        )>,
     }
 
     #[derive(Grammar)]
@@ -5657,10 +5686,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(name = "partition specification list")]
-    pub struct PartitionSpecificationList {
-        pub first: PartitionSpecification,
-        pub second: Option<(ArgSep, PartitionSpecification)>,
-    }
+    pub struct PartitionSpecificationList(pub VecSep<PartitionSpecification, ArgSep>);
 
     #[derive(Grammar)]
     #[tygr(name = "partition specification")]
@@ -5669,7 +5695,7 @@ pub mod leveled {
             kw: (Kw!("HASH"), Space),
             column: Parenthesized<ColumnName>,
             in_kw: (Space, Kw!("IN"), Space),
-            count: PositiveInteger,
+            count: Literal,
             partitions_kw: (Space, Kw!("PARTITIONS")),
         },
         List {
@@ -5680,7 +5706,7 @@ pub mod leveled {
             kw: (Kw!("RANGE"), Space),
             column: Parenthesized<ColumnName>,
             interval_kw: (Space, Kw!("INTERVAL"), Space),
-            interval: PositiveInteger,
+            interval: Literal,
             datetime_interval: Option<(Space, PartitionDatetimeInterval)>,
         },
     }
@@ -5744,7 +5770,7 @@ pub mod leveled {
         },
         CollateIdent {
             kw: (Kw!("COLLATE"), Space),
-            value: CollateSpec,
+            value: SqlCollation,
         },
         ComputeCode {
             kw: (Kw!("COMPUTECODE"), Space),
@@ -5764,17 +5790,18 @@ pub mod leveled {
         },
         Private(Kw!("PRIVATE")),
         StorageType {
-            kw: (Kw!("STORAGETYPE"), Space, StringEq!("="), Space),
+            kw: (
+                Kw!("WITH"),
+                Space1,
+                Kw!("STORAGETYPE"),
+                Space,
+                StringEq!("="),
+                Space,
+            ),
             value: Storagetype,
         },
+        AutoIncrement(Kw!("AUTO_INCREMENT")),
         Transient(Kw!("TRANSIENT")),
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "collate spec")]
-    pub enum CollateSpec {
-        SqlCollation(SqlCollation),
-        Ident(Ident),
     }
 
     #[derive(Grammar)]
@@ -5801,9 +5828,9 @@ pub mod leveled {
         PctTruncate {
             kw: Kw!("%TRUNCATE"),
             arg: Option<Args<Literal>>,
-            alphaup: Option<(Space, Kw!("ALPHAUP"))>,
         },
         PctUpper(Kw!("%UPPER")),
+        Alphaup(Kw!("ALPHAUP")),
         Exact(Kw!("EXACT")),
         Minus(Kw!("MINUS")),
         Mvr(Kw!("MVR")),
@@ -5844,7 +5871,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct DatypArgs(pub StringOf<IsNotParen>);
+    pub struct DatypArgs(pub Vec<Either<Parenthesized<Box<DatypArgs>>, StringOf1<IsNotParen>>>);
 
     #[derive(Grammar)]
     #[tygr(name = "datyp spec")]
@@ -5892,7 +5919,6 @@ pub mod leveled {
         Nchar(Kw!("NCHAR")),
         Ntext(Kw!("NTEXT")),
         Number(Kw!("NUMBER")),
-        NumericRaw(Kw!("NUMERIC"), Space1, Kw!("RAW")),
         Real(Kw!("REAL")),
         Smallint(Kw!("SMALLINT")),
         Smallmoney(Kw!("SMALLMONEY")),
@@ -5927,7 +5953,6 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "fcon")]
     pub enum Fcon {
-        CheckCnstr(CheckCnstr),
         Constraint {
             kw: (Kw!("CONSTRAINT"), Space),
             name: TName,
@@ -5937,43 +5962,25 @@ pub mod leveled {
             kw: Kw!("IDENTITY"),
             args: Option<Args<(Literal, Option<(ArgSep, Literal)>)>>,
         },
-        NotNull {
-            kw: (Kw!("NOT"), Space1, Kw!("NULL")),
-            informix: Informix,
-        },
+        NotNull(Kw!("NOT"), Space1, Kw!("NULL")),
         Null(Kw!("NULL")),
         Primary {
             kw: (Kw!("PRIMARY"), Option<(Space1, Kw!("KEY"))>, Space),
             cluster: Cluster,
-            informix: Informix,
         },
         References {
             kw: (Kw!("REFERENCES"), Space),
             reference: Ref,
-            informix: Informix,
         },
         Unique {
             kw: (Kw!("UNIQUE"), Space),
             cluster: Cluster,
-            informix: Informix,
         },
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "check cnstr")]
-    pub struct CheckCnstr {
-        pub kw: (Kw!("CHECK"), Space),
-        pub parse: Chkparse,
-        pub informix: Informix,
     }
 
     #[derive(Grammar)]
     #[tygr(name = "named fcon spec")]
     pub enum NamedFconSpec {
-        Check {
-            kw: (Kw!("CHECK"), Space),
-            parse: Chkparse,
-        },
         Default {
             kw: (Kw!("DEFAULT"), Space),
             value: Setdef,
@@ -6043,8 +6050,7 @@ pub mod leveled {
         pub name: TName,
         pub flist: Option<(Space, FList1)>,
         pub match_spec: Option<(Space, Kw!("MATCH"), Space1, MatchSpec)>,
-        pub triggered_action: Option<(Space, TriggeredAction)>,
-        pub nocheck: Option<(Space, Kw!("NOCHECK"))>,
+        pub action: Option<(Space, Either<TriggeredAction, Kw!("NOCHECK")>)>,
     }
 
     /// `<triggered action> ::= <delete rule> [ <update rule> ] | <update rule> [ <delete rule> ]`
@@ -6053,27 +6059,12 @@ pub mod leveled {
     pub enum TriggeredAction {
         DeleteFirst {
             delete_rule: DeleteRule,
-            update_rule: Option<(Space1, UpdateRule)>,
+            update_rule: Option<(Space1, UpdateRule, Option<(Space, Kw!("NOCHECK"))>)>,
         },
         UpdateFirst {
             update_rule: UpdateRule,
-            delete_rule: Option<(Space1, DeleteRule)>,
+            delete_rule: Option<(Space1, DeleteRule, Option<(Space, Kw!("NOCHECK"))>)>,
         },
-    }
-
-    #[derive(Grammar)]
-    #[tygr(name = "positive integer", validated)]
-    pub struct PositiveInteger(pub Number);
-
-    impl Validate for PositiveInteger {
-        const REQUIREMENT: &'static str = "be a positive integer";
-        fn validate(&self) -> bool {
-            self.0
-                .print()
-                .parse::<i32>()
-                .map(|i| i > 0)
-                .unwrap_or(false)
-        }
     }
 
     pub type UpdateRule = Prefix<(Kw!("ON"), Space1, Kw!("UPDATE"), Space1), RefAction>;
@@ -6097,19 +6088,10 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[tygr(name = "informix")]
-    pub struct Informix(pub Option<(Space, Kw!("CONSTRAINT"), Space, TName)>);
-
-    pub type Chkparse = Prefix<StringEq!("("), StringEndsWith<StringEq!(")")>>;
-
-    #[derive(Grammar)]
     #[tygr(name = "flist 2")]
     pub enum FList2 {
-        FList1(FList1),
-        IdentList {
-            idents: VecSep<Ident, ArgSep>,
-            flist: Option<(Space, FList1)>,
-        },
+        Named { name: Ident, flist: (Space, FList1) },
+        Columns(TblKeyColumns),
     }
 
     #[derive(Grammar)]
