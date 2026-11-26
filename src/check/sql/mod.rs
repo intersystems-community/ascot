@@ -67,6 +67,8 @@ pub(crate) struct ColumnRef {
 pub(crate) trait Resolver {
     fn table(&self, schema: &str, table: &str) -> Lookup<Option<Columns>>;
     fn procedure(&self, schema: &str, name: &str) -> Lookup<ProcInfo>;
+    // The schema of the class around the statement, where IRIS looks for an unqualified name first.
+    fn schema(&self) -> Option<String>;
     fn report(&self, kind: TypeErrorKind, range: &Range<usize>);
 }
 
@@ -501,6 +503,10 @@ mod tests {
             }
         }
 
+        fn schema(&self) -> Option<String> {
+            Some("Demo".to_string())
+        }
+
         fn report(&self, kind: TypeErrorKind, range: &Range<usize>) {
             self.0
                 .borrow_mut()
@@ -517,6 +523,8 @@ mod tests {
         let fine = [
             // A correlated reference reaches the enclosing query's names.
             "SELECT Name INTO :n FROM Demo.T p WHERE EXISTS (SELECT 1 FROM Demo.U u WHERE u.Title = p.Name)",
+            // An unqualified table is the class's own schema's first.
+            "SELECT Name FROM T",
             // A trailing `ORDER BY` names the first branch's columns and aliases.
             "SELECT Name AS N FROM Demo.T UNION SELECT Name FROM Demo.U ORDER BY N",
             // A CTE's columns are not known, nor a view's.
@@ -537,6 +545,7 @@ mod tests {
         let wrong = [
             ("SELECT Name FROM Demo.Nope", "Demo.Nope", "A3261"),
             ("SELECT Nope FROM Demo.T", "Nope", "A7340"),
+            ("SELECT Age FROM U", "Age", "A7340"),
             ("SELECT p.Age FROM Demo.U p", "p.Age", "A7340"),
             (
                 "SELECT Name FROM Demo.T p WHERE EXISTS (SELECT 1 FROM Demo.U u WHERE q.Name = 1)",

@@ -554,11 +554,25 @@ impl<'a> WorkspaceEnv<'a> {
     }
 }
 
-// `schema.name` as written; an unqualified name is in `SQLUser`.
-fn qualified(parts: &[String]) -> Option<(String, String)> {
+// `schema.name` as written; an unqualified name is the class's own schema's, else `SQLUser`'s
+// (measured on 2026.2: a class's `SELECT a FROM t` reads its package's t before SQLUser.t).
+fn lookup<T>(
+    check: &dyn Resolver,
+    parts: &[String],
+    find: impl Fn(&str, &str) -> Lookup<T>,
+) -> Option<Lookup<T>> {
     match parts {
-        [name] => Some(("SQLUser".to_string(), name.clone())),
-        [schema, name] => Some((schema.clone(), name.clone())),
+        [name] => {
+            let own = check.schema().map(|schema| find(&schema, name));
+            if let Some(found @ Lookup::Found(_)) = own {
+                return Some(found);
+            }
+            Some(match (own, find("SQLUser", name)) {
+                (Some(Lookup::Unconfirmed), Lookup::Missing) => Lookup::Unconfirmed,
+                (_, fallback) => fallback,
+            })
+        }
+        [schema, name] => Some(find(schema, name)),
         _ => None,
     }
 }
@@ -603,6 +617,12 @@ impl Resolver for Checker<'_, '_> {
         self.code.sql_procedure(schema, name)
     }
 
+    fn schema(&self) -> Option<String> {
+        let this = self.code.this().ok()?;
+        let (package, _) = this.name().rsplit_once('.')?;
+        Some(sql_schema(package))
+    }
+
     fn report(&self, kind: TypeErrorKind, range: &std::ops::Range<usize>) {
         self.flow
             .add_soft_diagnostic(kind.at(self.code.span(range.start, range.end)).into())
@@ -621,9 +641,10 @@ pub(super) fn table(check: &dyn Resolver, frames: &[Frame], name: &Name) -> Opti
     {
         return None;
     }
-    let (schema, table) = qualified(&name.parts)?;
     let written = name.parts.join(".");
-    match check.table(&schema, &table) {
+    match lookup(check, &name.parts, |schema, table| {
+        check.table(schema, table)
+    })? {
         Lookup::Found(columns) => columns,
         Lookup::Missing => {
             check.report(
@@ -641,15 +662,17 @@ pub(super) fn table(check: &dyn Resolver, frames: &[Frame], name: &Name) -> Opti
 }
 
 pub(super) fn call(check: &dyn Resolver, name: &Name, args: usize, used: SqlProcedureUse) {
-    let Some((schema, procedure)) = qualified(&name.parts) else {
-        return;
-    };
     // A function without a schema may be a built-in the grammar doesn't list.
     if used == SqlProcedureUse::Function && name.parts.len() < 2 {
         return;
     }
+    let Some(found) = lookup(check, &name.parts, |schema, proc| {
+        check.procedure(schema, proc)
+    }) else {
+        return;
+    };
     let written = name.parts.join(".");
-    let kind = match check.procedure(&schema, &procedure) {
+    let kind = match found {
         Lookup::Missing => TypeErrorKind::SqlProcedureNotFound {
             name: written,
             used,
