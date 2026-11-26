@@ -212,37 +212,32 @@ impl<G: Desugar> Desugar for NotFollowedBy<G> {
     }
 }
 
-/// `a, b`.
 pub(super) fn commas<T>(items: Vec<T>) -> VecSep<T, ArgSep> {
     let sep = (Space::default(), Default::default(), Space::blank());
     let seps = vec![sep; items.len().saturating_sub(1)];
     VecSep { items, seps }
 }
 
-/// `(x)`.
 pub(super) fn parenthesized<T>(wrapped: T) -> Parenthesized<T> {
     let open = (Default::default(), Space::default());
     Wrap::new(open, wrapped, (Space::default(), Default::default()))
 }
 
-/// `(a, b)`.
 pub(super) fn list(args: Vec<core::Scalx>) -> core::ArgsN {
     let items = (!args.is_empty()).then(|| commas(args));
     (Space::default(), parenthesized(items))
 }
 
-/// A term as an expression of its own, standing for the node being rewritten.
+/// A term as the expression standing for the node being rewritten.
 pub(super) fn term(term: core::Term) -> core::Scalx {
     core::Scalx(VecSep::one(Src::synthesized(term)))
 }
 
-/// `'text'`.
 pub(super) fn string(text: &str) -> core::Scalx {
     let literal = StringLiteral::Std(Raw::new(format!("'{text}'")));
     term(core::Term::Literal(Literal::String(literal)))
 }
 
-/// `name(args)`, the call by name, `$` and all.
 pub(super) fn call(name: &str, args: Vec<core::Scalx>) -> core::Term {
     let (dollar, name) = match name.strip_prefix('$') {
         Some(name) => (Some(Default::default()), name),
@@ -350,7 +345,6 @@ impl Arg for sugar::SQLPositionArgs {
     }
 }
 
-/// `SUBSTRING(x FROM s FOR l)` has the arguments of `SUBSTRING(x, s, l)`.
 impl Arg for sugar::SubstringArgsInternal {
     fn args(&self, out: &mut Vec<core::Scalx>) {
         self.expr.args(out);

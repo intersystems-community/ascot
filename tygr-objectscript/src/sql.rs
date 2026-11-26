@@ -1,8 +1,8 @@
 //! The IRIS SQL grammar for `&sql(...)` blocks embedded in ObjectScript, reached from `cos.rs`.
-//! Syntax only: `ascot` reports parse errors here but does not type-check SQL yet.
 //!
 //! Written once under `#[levels]`, which makes it twice: `full`, every spelling IRIS accepts, is
-//! re-exported here; `core` lacks the syntactic sugar, which `desugar` rewrites into it.
+//! re-exported here; `core` lacks the syntactic sugar, which `desugar` rewrites into it and the
+//! checker reads.
 //!
 //! Its rules of placement: a rule describes its own text, the blank before or after it belonging to
 //! the sequence that places it, and a keyword run is one tuple; one wrapper per bracket kind,
@@ -48,7 +48,6 @@ char_class!(pub IsNotNL, "not_newline", |ch| ch != '\n');
 char_class!(pub IsNotStar, "not_star", |ch| ch != '*');
 char_class!(pub IsAnyChar, "any_char", |_ch| true);
 
-// tygr 0.2.0 dropped this helper; rebuilt from tygr's public building blocks.
 pub type StringEndsWith<T> = Raw<(Vec<(NotFollowedBy<T>, IsAnyChar)>, T)>;
 
 pub type SQLLineComment = Wrap<StringEq!("--"), StringOf<IsNotNL>, Option<StringEq!("\n")>>;
@@ -92,7 +91,6 @@ impl Default for Space1 {
 }
 
 impl Space {
-    /// One blank.
     pub fn blank() -> Space {
         Space(vec![SpaceUnit::Raw(Hidden(Raw::new(" ")))])
     }
@@ -105,7 +103,6 @@ pub enum Ident {
 }
 
 impl Ident {
-    /// A plain identifier, as a rule spells a name.
     pub fn simple(name: &str) -> Ident {
         Ident::Simple(Identifier(Raw::new(name)))
     }
@@ -678,7 +675,6 @@ impl<T> Src<T> {
         self.range.clone()
     }
 
-    /// Apply `f` to the node, keeping the same range.
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Src<U> {
         Src {
             range: self.range,
@@ -808,9 +804,12 @@ const OWN_SYNTAX: &[&str] = &[
 /// The functions the core calls by name; the full level, where they have their own syntax, shadows this.
 const SCALAR_FUNCTIONS: &[&str] = &[];
 
+/// Whether a call by name spells an ObjectScript function, `$EXTRACT(x, 1)`: the core's way; the full level,
+/// where each is a scalar function, shadows this.
+const DOLLAR_CALLS: bool = true;
+
 #[tygr_objectscript_macros::levels]
 pub mod leveled {
-    /// A part in parentheses, blanks allowed within.
     pub type Parenthesized<T> = Wrap<(StringEq!("("), Space), T, (Space, StringEq!(")"))>;
 
     use either::Either;
@@ -860,7 +859,6 @@ pub mod leveled {
         NotEq(StringEqCI!("NOT=")),
     }
 
-    /// `!=` and `NOT=` are `<>`.
     impl Desugar for NotEqualsOperationSugar<'_> {
         type Core = core::NotEqualsOperation;
         fn desugar(&self) -> Self::Core {
@@ -881,7 +879,6 @@ pub mod leveled {
         Lt(StringEq!("<")),
     }
 
-    /// `NOT>` is `<=` and `NOT<` is `>=`.
     impl Desugar for OrderPredicateSugar<'_> {
         type Core = core::OrderPredicate;
         fn desugar(&self) -> Self::Core {
@@ -959,8 +956,6 @@ pub mod leveled {
         Null(Kw!("NULL")),
     }
 
-    /// A scalar function is the call by its name, `%SQLUPPER x` the call `%SQLUPPER(x)`, `%TRUNCATE(x, n)`
-    /// the call, and an ODBC escape what it stands for (see the fns below).
     impl Desugar for TermSugar<'_> {
         type Core = core::Term;
         fn desugar(&self) -> Self::Core {
@@ -984,7 +979,6 @@ pub mod leveled {
         };
     }
 
-    /// A scalar function is the call by its name, `POSITION(a IN b)` the call `CHARINDEX(a, b)`.
     fn scalar_function(function: &ScalarFunction) -> core::Term {
         calls!(ScalarFunction: function;
             PercentObject PercentOid Similarity Abs Ascii Ceiling CharacterLength CharIndex CharLength Char
@@ -1004,7 +998,6 @@ pub mod leveled {
         )
     }
 
-    /// `{fn NAME(args)}` is `NAME(args)`, `{fn PI}` and its kin `PI()`, TIMESTAMPADD and TIMESTAMPDIFF builtins.
     fn odbc_function(function: &ODBCFunc) -> core::Term {
         calls!(ODBCFunc: function;
             Abs Acos Asin Atan2 Atan Ceiling Cos Cot Exp Floor Log Log10 Mod Power Sin Sqrt Tan Ascii Char
@@ -1021,7 +1014,6 @@ pub mod leveled {
         )
     }
 
-    /// `{d x}`, `{t x}` and `{ts x}` are `CAST(x AS DATE)`, `CAST(x AS TIME)` and `CAST(x AS TIMESTAMP)`.
     fn cast(value: &DTSVal) -> core::Term {
         let cast_type = match &value.dts_type {
             DTSType::Date(_) => core::CastType::Date(Default::default()),
@@ -1043,7 +1035,6 @@ pub mod leveled {
         )))
     }
 
-    /// An ODBC escape is what it stands for: see `odbc_function` and `cast`.
     fn odbc_escape(escape: &ODBCEscape) -> core::Term {
         match &escape.wrapped {
             DTS::DateTime(value) => cast(value),
@@ -1051,7 +1042,6 @@ pub mod leveled {
         }
     }
 
-    /// `%SQLUPPER x` is the call `%SQLUPPER(x)`; an `x` in parentheses gives the call its own.
     fn percent_call(op: &PercentOp, term: &Src<Term>) -> core::Term {
         let arg = match &term.node {
             Term::Scalx(parens) => (*parens.wrapped).desugar(),
@@ -1060,7 +1050,6 @@ pub mod leveled {
         call(&op.print(), vec![arg])
     }
 
-    /// `%TRUNCATE(x, n)` is the call, as `%STRING`, `%SQLSTRING` and `%SQLUPPER` with a truncation are.
     fn string_operation(operation: &StringOperation) -> core::Term {
         let (expr, _, truncation) = &operation.args.1.wrapped;
         let truncation = match truncation {
@@ -1108,7 +1097,6 @@ pub mod leveled {
         ZV(Kw!("$ZV")),
     }
 
-    /// `$H` is `$HOROLOG`, and so on: an alias is its full name.
     impl Desugar for SpecialSystemVariableSugar<'_> {
         type Core = core::SpecialSystemVariable;
         fn desugar(&self) -> Self::Core {
@@ -1142,16 +1130,14 @@ pub mod leveled {
             "not name a function with a syntax of its own or an unknown $ function";
         fn validate(&self) -> bool {
             let name = self.name.print().to_uppercase();
-            // The core's list is empty: it calls `$EXTRACT` and its kin by name, as it calls ABS.
-            let dollar = self.name.dollar.is_some() && !SCALAR_FUNCTIONS.is_empty();
-            !dollar
+            (DOLLAR_CALLS || self.name.dollar.is_none())
                 && !OWN_SYNTAX.contains(&name.as_str())
                 && !SCALAR_FUNCTIONS.contains(&name.as_str())
         }
     }
 
-    /// The scalar functions, which the full level spells and the core calls by name (a const stays in the full
-    /// level alone, so the core sees the empty list above).
+    /// The names the full level spells; a const stays in the full level alone, so the core sees the list above.
+    const DOLLAR_CALLS: bool = false;
     const SCALAR_FUNCTIONS: &[&str] = &[
         "%OBJECT",
         "%OID",
@@ -1225,7 +1211,7 @@ pub mod leveled {
         "YEAR",
     ];
 
-    /// A niladic function, which stands without parentheses.
+    /// A function without parentheses; `USER` takes an empty pair too (2026.2).
     #[derive(Grammar)]
     #[tygr(name = "niladic")]
     pub enum Niladic {
@@ -1249,7 +1235,6 @@ pub mod leveled {
         Underscore(StringEq!("_")),
     }
 
-    /// `_` is `||`.
     impl Desugar for ScalopSugar<'_> {
         type Core = core::Scalop;
         fn desugar(&self) -> Self::Core {
@@ -1289,7 +1274,7 @@ pub mod leveled {
         pub result: Scalx,
     }
 
-    /// `ELSE result`; omitted, a CASE reads `ELSE NULL`, what it returns when no WHEN matches.
+    /// Omitted, a CASE reads `ELSE NULL`.
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct SQLElseClause {
@@ -1437,7 +1422,6 @@ pub mod leveled {
         Scalar(T),
     }
 
-    /// TRIM's arguments: what to trim, then the string.
     #[derive(Grammar)]
     pub struct TrimArgs {
         pub how: TrimHow,
@@ -1454,8 +1438,6 @@ pub mod leveled {
         Chars(Option<(Scalx, Space, Kw!("FROM"), Space)>),
     }
 
-    /// `TRIM(LEADING FROM x)` and `TRIM(LEADING x)` are `TRIM(LEADING ' ' FROM x)`, `TRIM(c FROM x)` is
-    /// `TRIM(BOTH c FROM x)` and `TRIM(x)` `TRIM(BOTH ' ' FROM x)`.
     impl Desugar for TrimHowSugar<'_> {
         type Core = core::TrimHow;
         fn desugar(&self) -> Self::Core {
@@ -1622,10 +1604,9 @@ pub mod leveled {
         pub args: Parenthesized<Option<VecSep<Scalx, ArgSep>>>,
     }
 
-    /// `{fn CONVERT(x, SQL_TYPE)}` and `{fn IFNULL(x, y)}`, which IRIS reads otherwise without the
-    /// escape (CONVERT takes `SQL_TYPE` for a column, IFNULL(x, y) is NULL when x is not; measured on
-    /// 2026.2), and `{fn USER}`, whose niladic `USER` has no parentheses for the braces' comments; `fn`
-    /// is declared as ODBC spells the escape, so the core prints `{fn`.
+    /// `{fn CONVERT(x, SQL_TYPE)}` and `{fn IFNULL(x, y)}`, which IRIS reads otherwise without the escape (2026.2:
+    /// CONVERT takes `SQL_TYPE` for a column, IFNULL(x, y) is NULL when x is not), and `{fn USER}`; `fn` is declared
+    /// as ODBC spells it, so the core prints `{fn`.
     pub type ODBCOnly =
         Wrap<(StringEq!("{"), Space, Kw!("fn"), Space1), ODBCOnlyFunc, (Space, StringEq!("}"))>;
 
@@ -1684,8 +1665,6 @@ pub mod leveled {
         }
     }
 
-    /// The date part of DATEADD, DATEDIFF, DATENAME and DATE_TRUNC: a keyword, a host variable, or either in
-    /// parentheses.
     #[derive(Grammar)]
     pub enum DatePart {
         Keyword(Quotable<DatePartCommon>),
@@ -1720,7 +1699,6 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
-    #[sugar]
     pub enum DatePartPartRaw {
         SqlTimestamp(Kw!("SQLTIMESTAMP")),
         #[sugar]
@@ -1728,22 +1706,14 @@ pub mod leveled {
         Common(DatePartCommon),
     }
 
-    /// The core spells SQLTIMESTAMP in upper case, as it does every date part.
-    impl Desugar for DatePartPartRaw {
+    impl Desugar for DatePartPartRawSugar<'_> {
         type Core = core::DatePartPartRaw;
         fn desugar(&self) -> Self::Core {
-            match self {
-                Self::SqlTimestamp(_) | Self::Sts(_) => {
-                    core::DatePartPartRaw::SqlTimestamp(Default::default())
-                }
-                Self::Common(common) => core::DatePartPartRaw::Common(common.desugar()),
-            }
+            core::DatePartPartRaw::SqlTimestamp(Default::default())
         }
     }
 
-    /// The date part keywords, each full name before the abbreviations it prefixes.
     #[derive(Grammar)]
-    #[sugar]
     pub enum DatePartCommon {
         Year(Kw!("YEAR")),
         Quarter(Kw!("QUARTER")),
@@ -1804,25 +1774,24 @@ pub mod leveled {
         S(Kw!("S")),
     }
 
-    /// A date part is its full name in upper case, whatever its spelling or abbreviation.
-    impl Desugar for DatePartCommon {
+    impl Desugar for DatePartCommonSugar<'_> {
         type Core = core::DatePartCommon;
         fn desugar(&self) -> Self::Core {
             use core::DatePartCommon::*;
             match self {
-                Self::Year(_) | Self::Yyyy(_) | Self::Yy(_) => Year(Default::default()),
-                Self::Quarter(_) | Self::Qq(_) | Self::Q(_) => Quarter(Default::default()),
-                Self::Month(_) | Self::Mm(_) | Self::M(_) => Month(Default::default()),
-                Self::Week(_) | Self::Wk(_) | Self::Ww(_) => Week(Default::default()),
-                Self::Weekday(_) | Self::Dw(_) | Self::W(_) => Weekday(Default::default()),
-                Self::DayOfYear(_) | Self::Dy(_) | Self::Y(_) => DayOfYear(Default::default()),
-                Self::Day(_) | Self::Dd(_) | Self::D(_) => Day(Default::default()),
-                Self::Hour(_) | Self::Hh(_) => Hour(Default::default()),
-                Self::Minute(_) | Self::Mi(_) | Self::N(_) => Minute(Default::default()),
-                Self::Second(_) | Self::Ss(_) | Self::S(_) => Second(Default::default()),
-                Self::Millisecond(_) | Self::Ms(_) => Millisecond(Default::default()),
-                Self::Microsecond(_) | Self::Mcs(_) => Microsecond(Default::default()),
-                Self::Nanosecond(_) | Self::Ns(_) => Nanosecond(Default::default()),
+                Self::Yyyy(_) | Self::Yy(_) => Year(Default::default()),
+                Self::Qq(_) | Self::Q(_) => Quarter(Default::default()),
+                Self::Mm(_) | Self::M(_) => Month(Default::default()),
+                Self::Wk(_) | Self::Ww(_) => Week(Default::default()),
+                Self::Dw(_) | Self::W(_) => Weekday(Default::default()),
+                Self::Dy(_) | Self::Y(_) => DayOfYear(Default::default()),
+                Self::Dd(_) | Self::D(_) => Day(Default::default()),
+                Self::Hh(_) => Hour(Default::default()),
+                Self::Mi(_) | Self::N(_) => Minute(Default::default()),
+                Self::Ss(_) | Self::S(_) => Second(Default::default()),
+                Self::Ms(_) => Millisecond(Default::default()),
+                Self::Mcs(_) => Microsecond(Default::default()),
+                Self::Ns(_) => Nanosecond(Default::default()),
             }
         }
     }
@@ -2013,7 +1982,6 @@ pub mod leveled {
         CurrentRows(Kw!("CURRENT"), Space1, Kw!("ROWS")),
     }
 
-    /// `CURRENT ROWS` is `CURRENT ROW`.
     impl Desugar for WindowRowsBoundSugar<'_> {
         type Core = core::WindowRowsBound;
         fn desugar(&self) -> Self::Core {
@@ -2036,7 +2004,6 @@ pub mod leveled {
         Exclamation(StringEq!("!")),
     }
 
-    /// `!` is `OR`.
     impl Desugar for OrOperatorSugar<'_> {
         type Core = core::OrOperator;
         fn desugar(&self) -> Self::Core {
@@ -2056,7 +2023,6 @@ pub mod leveled {
         Ampersand(StringEq!("&")),
     }
 
-    /// `&` is `AND`.
     impl Desugar for AndOperatorSugar<'_> {
         type Core = core::AndOperator;
         fn desugar(&self) -> Self::Core {
@@ -2079,7 +2045,6 @@ pub mod leveled {
         Omitted(()),
     }
 
-    /// An omitted keyword stands as spelled, after a blank.
     impl<K: Grammar + Default + Desugar> Desugar for Implied<K>
     where
         K::Core: Grammar + Default,
@@ -2090,9 +2055,7 @@ pub mod leveled {
                 Implied::Spelled(sp, keyword) => {
                     core::Implied::Spelled(sp.desugar(), keyword.desugar())
                 }
-                Implied::Omitted(_) => {
-                    core::Implied::Spelled(Space::blank(), <K::Core as Default>::default())
-                }
+                Implied::Omitted(_) => core::Implied::Spelled(Space::blank(), Default::default()),
             }
         }
     }
@@ -2110,7 +2073,6 @@ pub mod leveled {
         In { not: Not, in_kw: Kw!("IN") },
     }
 
-    /// `IN (subquery)` is `= ANY (subquery)`; a `NOT IN` is `NOT (... = ANY ...)` by the condition's impl.
     impl Desugar for QuantifiedOpSugar<'_> {
         type Core = core::QuantifiedOp;
         fn desugar(&self) -> Self::Core {
@@ -2171,7 +2133,6 @@ pub mod leveled {
         }
     }
 
-    /// Whether the predicate's keyword is negated.
     fn negation(predicate: &Predicate) -> bool {
         use Comparison::*;
         let Predicate::Comparison { tail, .. } = predicate else {
@@ -2333,7 +2294,6 @@ pub mod leveled {
         Some(Kw!("SOME")),
     }
 
-    /// `SOME` is `ANY`.
     impl Desugar for QuantifierSugar<'_> {
         type Core = core::Quantifier;
         fn desugar(&self) -> Self::Core {
@@ -2356,7 +2316,6 @@ pub mod leveled {
         Literal(Literal),
     }
 
-    /// `SIZE ((n))` keeps one pair of parentheses: the ones within go.
     impl Desugar for PConstSugar<'_> {
         type Core = core::PConst;
         fn desugar(&self) -> Self::Core {
@@ -2421,7 +2380,6 @@ pub mod leveled {
     }
 
     impl Query {
-        /// Whether each of `terms` orders its rows only with TOP.
         fn ordered_with_top(terms: &[QTerm]) -> bool {
             terms.iter().all(|term| match term {
                 QTerm::Selex(selex) => {
@@ -2449,7 +2407,6 @@ pub mod leveled {
         }
     }
 
-    /// Takes the statement's ORDER BY out of the core query's last operand (see `ends_with_statement_order`).
     fn take_statement_order(query: &mut core::Query) -> Option<(Space, core::Order)> {
         let is_statement = query.ends_with_statement_order();
         let Some(core::QTerm::Selex(last)) = query.0.items.last_mut() else {
@@ -2478,7 +2435,6 @@ pub mod leveled {
         }
     }
 
-    /// The source's ORDER BY, parsed as its last operand's, stands in `order`.
     impl Desugar for SourceQuery {
         type Core = core::SourceQuery;
         fn desugar(&self) -> Self::Core {
@@ -2695,7 +2651,6 @@ pub mod leveled {
         },
     }
 
-    /// `{oj ...}` is the join inside it.
     impl Desugar for TrefSugar<'_> {
         type Core = core::Tref;
         fn desugar(&self) -> Self::Core {
@@ -2743,7 +2698,6 @@ pub mod leveled {
         Bare(Kw!("JOIN")),
     }
 
-    /// `JOIN` is `INNER JOIN`.
     impl Desugar for JOpSugar<'_> {
         type Core = core::JOp;
         fn desugar(&self) -> Self::Core {
@@ -3035,7 +2989,6 @@ pub mod leveled {
         },
     }
 
-    /// `SET a = x, b = y` is `(a, b) VALUES (x, y)`.
     impl Desugar for AsignSugar<'_> {
         type Core = core::Asign;
         fn desugar(&self) -> Self::Core {
@@ -3318,7 +3271,6 @@ pub mod leveled {
         },
     }
 
-    /// `%INTRANS` is `%INTRANSACTION`.
     impl Desugar for TPOptionSugar<'_> {
         type Core = core::TPOption;
         fn desugar(&self) -> Self::Core {
@@ -3706,8 +3658,10 @@ pub mod leveled {
             "take GRANT OPTION FOR, CASCADE, RESTRICT and AS on objects alone, AS not on cubes";
         fn validate(&self) -> bool {
             let object = !self.what.is_admin();
-            let plain = self.grant_option.is_none() && self.behavior.is_none() && self.as_clause.is_none();
-            (object || plain) && !(matches!(self.what, Granted::CubeSelect { .. }) && self.as_clause.is_some())
+            let plain =
+                self.grant_option.is_none() && self.behavior.is_none() && self.as_clause.is_none();
+            (object || plain)
+                && !(matches!(self.what, Granted::CubeSelect { .. }) && self.as_clause.is_some())
         }
     }
 
@@ -3949,8 +3903,6 @@ pub mod leveled {
         Varchar(Kw!("VARCHAR"), OptParenScalx),
     }
 
-    /// INT is INTEGER, DEC DECIMAL, CHARACTER CHAR, and CHAR[ACTER] VARYING, BINARY VARYING and NCHAR VARYING are
-    /// VARCHAR, VARBINARY and NVARCHAR.
     impl Desugar for CastTypeSugar<'_> {
         type Core = core::CastType;
         fn desugar(&self) -> Self::Core {
@@ -4079,12 +4031,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum Created {
         BitmapextentIndex {
-            kw: (
-                Kw!("BITMAPEXTENT"),
-                Space1,
-                Kw!("INDEX"),
-                Space,
-            ),
+            kw: (Kw!("BITMAPEXTENT"), Space1, Kw!("INDEX"), Space),
             name: IndexName,
             on_kw: (Space, Kw!("ON"), Space),
             table_kw: Option<(Kw!("TABLE"), Space)>,
@@ -4097,12 +4044,7 @@ pub mod leveled {
             on_dir: Option<OnDirectory>,
         },
         ForeignTable {
-            kw: (
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("TABLE"),
-                Space,
-            ),
+            kw: (Kw!("FOREIGN"), Space1, Kw!("TABLE"), Space),
             if_not_exists: IfNotExists,
             tname: TName,
             columns: Option<Args<VecSep<(Ident, (Space, Datyp)), ArgSep>>>,
@@ -4230,8 +4172,19 @@ pub mod leveled {
             events: VecSep<TriggerEvent, ArgSep>,
             order: Option<(Space1, Kw!("ORDER"), Space, Literal)>,
             on: (Space, Kw!("ON"), Space, TName),
-            referencing: Option<(Space1, Kw!("REFERENCING"), Vec1<(Space1, TriggerReferencing)>)>,
-            for_each: Option<(Space1, Kw!("FOR"), Space1, Kw!("EACH"), Space1, TriggerOrientation)>,
+            referencing: Option<(
+                Space1,
+                Kw!("REFERENCING"),
+                Vec1<(Space1, TriggerReferencing)>,
+            )>,
+            for_each: Option<(
+                Space1,
+                Kw!("FOR"),
+                Space1,
+                Kw!("EACH"),
+                Space1,
+                TriggerOrientation,
+            )>,
             when: Option<(Space, Kw!("WHEN"), Space, Parenthesized<Prdct>)>,
             body: (Space, TriggerBody),
         },
@@ -4253,21 +4206,11 @@ pub mod leveled {
             action: (Space, StatsAction),
         },
         ForeignTable {
-            kw: (
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("TABLE"),
-                Space,
-            ),
+            kw: (Kw!("FOREIGN"), Space1, Kw!("TABLE"), Space),
             tname: TName,
         },
         MlConfiguration {
-            kw: (
-                Kw!("ML"),
-                Space1,
-                Kw!("CONFIGURATION"),
-                Space,
-            ),
+            kw: (Kw!("ML"), Space1, Kw!("CONFIGURATION"), Space),
             name: MLConfigurationName,
             clauses: Vec1<(Space, MlConfigClause)>,
         },
@@ -4328,12 +4271,7 @@ pub mod leveled {
             retain: Option<(Space1, Kw!("RETAIN_FILES"))>,
         },
         ForeignTable {
-            kw: (
-                Kw!("FOREIGN"),
-                Space1,
-                Kw!("TABLE"),
-                Space,
-            ),
+            kw: (Kw!("FOREIGN"), Space1, Kw!("TABLE"), Space),
             if_exists: IfExists,
             tname: TName,
             cascade: Option<(Space, CascadeOpt)>,
@@ -4349,15 +4287,14 @@ pub mod leveled {
             if_exists: IfExists,
             nojourn: Option<(Kw!("%NOJOURN"), Space)>,
             name: VecSep<Ident, (Space, StringEq!("."), Space)>,
-            on: Option<((Space, Kw!("ON"), Space), Option<(Kw!("TABLE"), Space)>, TName)>,
+            on: Option<(
+                (Space, Kw!("ON"), Space),
+                Option<(Kw!("TABLE"), Space)>,
+                TName,
+            )>,
         },
         MlConfiguration {
-            kw: (
-                Kw!("ML"),
-                Space1,
-                Kw!("CONFIGURATION"),
-                Space,
-            ),
+            kw: (Kw!("ML"), Space1, Kw!("CONFIGURATION"), Space),
             if_exists: IfExists,
             name: MLConfigurationName,
         },
@@ -4451,7 +4388,9 @@ pub mod leveled {
                 || (matches!(kind, RoutineKind::Method(_)) && self.or_replace.is_none());
             let language_ok = match kind {
                 RoutineKind::Method(_) => !matches!(body, CodeBody::External { .. }),
-                RoutineKind::Query(_) => matches!(body, CodeBody::Sql { .. } | CodeBody::Cos { .. }),
+                RoutineKind::Query(_) => {
+                    matches!(body, CodeBody::Sql { .. } | CodeBody::Cos { .. })
+                }
                 _ => true,
             };
             static_ok && language_ok
@@ -4561,7 +4500,6 @@ pub mod leveled {
         }
     }
 
-    /// An item of an index's WITH clause, after a blank and an optional comma.
     pub type IndexWithItem<K> = Option<(Space, Option<(StringEq!(","), Space)>, K)>;
 
     #[derive(Grammar)]
@@ -5705,7 +5643,6 @@ pub mod leveled {
         pub columns: (Space, TblKeyColumns),
     }
 
-    /// The columns of a CREATE TABLE key, in parentheses or bare.
     #[derive(Grammar)]
     pub enum TblKeyColumns {
         Parens(FList1),
@@ -5808,7 +5745,10 @@ pub mod leveled {
     #[tygr(name = "partition option")]
     pub struct PartitionOption {
         pub kw: Kw!("PARTITION"),
-        pub spec: Option<(Space1, Either<Prefix<(Kw!("BY"), Space1), PartitionSpecificationList>, Kw!("OFF")>)>,
+        pub spec: Option<(
+            Space1,
+            Either<Prefix<(Kw!("BY"), Space1), PartitionSpecificationList>, Kw!("OFF")>,
+        )>,
     }
 
     #[derive(Grammar)]
@@ -6204,7 +6144,6 @@ pub mod leveled {
         pub action: Option<(Space, Either<TriggeredAction, Kw!("NOCHECK")>)>,
     }
 
-    /// `<triggered action> ::= <delete rule> [ <update rule> ] | <update rule> [ <delete rule> ]`
     #[derive(Grammar)]
     #[tygr(name = "triggered action")]
     pub enum TriggeredAction {
@@ -6468,7 +6407,6 @@ pub mod leveled {
         String(Kw!("STRING")),
     }
 
-    /// INT is INTEGER.
     impl Desugar for VectorDatypSugar<'_> {
         type Core = core::VectorDatyp;
         fn desugar(&self) -> Self::Core {
@@ -6711,7 +6649,6 @@ mod sugar {
     #[derive(Grammar, Clone)]
     #[tygr(name = "odbc func")]
     pub enum ODBCFunc {
-        // Similar to SQLScalarFunction but in ODBC escape syntax
         Abs(Kw!("ABS"), Args<Scalx>),
         Acos(Kw!("ACOS"), Args<Scalx>),
         Asin(Kw!("ASIN"), Args<Scalx>),
