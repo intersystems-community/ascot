@@ -132,10 +132,16 @@ impl<T: Desugar> Desugar for Box<T> {
     }
 }
 
-impl<Canonical: Grammar + Default, Other: Grammar> Desugar for Spellings<Canonical, Other> {
-    type Core = Canonical;
-    fn desugar(self) -> Canonical {
-        Default::default()
+impl<Canonical: Grammar + Default + Desugar, Other: Grammar> Desugar
+    for Spellings<Canonical, Other>
+{
+    type Core = Canonical::Core;
+    fn desugar(self) -> Self::Core {
+        match self {
+            Spellings::Canonical(canonical) => canonical,
+            Spellings::Other(_) => Default::default(),
+        }
+        .desugar()
     }
 }
 
@@ -189,6 +195,13 @@ impl<T: Desugar> Desugar for Raw<T> {
     type Core = Raw<T::Core>;
     fn desugar(self) -> Self::Core {
         Raw::new(self.into_inner())
+    }
+}
+
+impl<T: Desugar> Desugar for Phrase<T> {
+    type Core = Phrase<T::Core>;
+    fn desugar(self) -> Self::Core {
+        Phrase(self.0.desugar())
     }
 }
 

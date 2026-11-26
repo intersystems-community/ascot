@@ -1,7 +1,7 @@
 //! `#[levels]` on the inline module of the SQL grammar emits it twice: `full`, every spelling IRIS
 //! accepts, and `core`, the same minus its syntactic sugar, with an impl of `Desugar` per unmarked
 //! struct and enum and per literal, a keyword's core copy being its declared, upper-case spelling
-//! and a `Spellings!(A, …)` type's its canonical `A`, and an impl of `Default` per struct and enum
+//! and a `Spellings!(A, …)` or `Kw!("A", …)` type's its canonical `A`, and an impl of `Default` per struct and enum
 //! that builds from defaults, a struct's fields or an enum's first variant, unless written by hand;
 //! fns, traits, macros, impls of `Desugar` and `#[sugar]` items go to `full` alone.
 #![forbid(unsafe_code)]
@@ -23,6 +23,48 @@ use syn::{
 /// `#[sugar]` on a variant leaves it out of the core, converted by the author's `impl Desugar` for
 /// `XSugar`, the emitted enum of the marked variants owning their fields; on a field, drops it; on a
 /// struct or enum, both levels keep it and the author writes the conversion.
+/// `Kw!("READ ONLY", "READONLY")`: a keyword, its words a blank apart and none the start of a longer
+/// word, in its canonical spelling or others, a phrase one `Phrase` and the spellings one `Spellings`.
+#[proc_macro]
+#[allow(non_snake_case)]
+pub fn Kw(input: TokenStream) -> TokenStream {
+    let parser = Punctuated::<LitStr, Token![,]>::parse_terminated;
+    let spellings = match syn::parse::Parser::parse(parser, input) {
+        Ok(spellings) => spellings,
+        Err(error) => return error.into_compile_error().into(),
+    };
+    let mut keywords = spellings.iter().map(keyword).rev();
+    let last = keywords
+        .next()
+        .unwrap_or_else(|| quote!(::core::compile_error!("`Kw!` takes one spelling or more")));
+    keywords
+        .fold(
+            last,
+            |others, canonical| quote!(Spellings<#canonical, #others>),
+        )
+        .into()
+}
+
+/// `(StringEqCI!("READ"), NotFollowedBy<WordEnd>)`, a phrase's words a `Space1` apart in a `Phrase`.
+fn keyword(spelling: &LitStr) -> TokenStream2 {
+    let words: Vec<TokenStream2> = (spelling.value().split(' '))
+        .map(|word| {
+            let word = LitStr::new(word, spelling.span());
+            quote!((StringEqCI!(#word), NotFollowedBy<WordEnd>))
+        })
+        .collect();
+    match words.as_slice() {
+        [word] => word.clone(),
+        _ => {
+            let parts = words.iter().enumerate().map(|(i, word)| match i {
+                0 => word.clone(),
+                _ => quote!(Space1, #word),
+            });
+            quote!(Phrase<(#(#parts),*)>)
+        }
+    }
+}
+
 #[proc_macro_attribute]
 pub fn levels(_: TokenStream, item: TokenStream) -> TokenStream {
     let module = syn::parse_macro_input!(item as ItemMod);
@@ -123,20 +165,32 @@ fn defaultable(ty: &Type, known: &BTreeSet<String>, params: &BTreeSet<String>) -
     }
 }
 
-/// `Spellings!(A, …)` in `ty` is `A`, the canonical spelling, in the core.
+/// `Spellings!(A, …)` in `ty` is `A` and `Kw!("A", …)` is `Kw!("A")`, the canonical spelling, in the core.
 fn canonical(ty: &mut Type) {
     struct Canonical;
     impl VisitMut for Canonical {
         fn visit_type_mut(&mut self, ty: &mut Type) {
-            if let Type::Macro(TypeMacro { mac }) = ty
-                && let Some(first) = spellings(mac).and_then(|s| s.into_iter().next())
-            {
-                *ty = first;
+            if let Type::Macro(TypeMacro { mac }) = ty {
+                if let Some(first) = spellings(mac).and_then(|s| s.into_iter().next()) {
+                    *ty = first;
+                } else if let Some(first) =
+                    keyword_spellings(mac).and_then(|s| s.into_iter().next())
+                {
+                    *ty = parse_quote!(Kw!(#first));
+                }
             }
             syn::visit_mut::visit_type_mut(self, ty);
         }
     }
     Canonical.visit_type_mut(ty);
+}
+
+/// The spellings of a `Kw!("A", "B", …)` with more than one.
+fn keyword_spellings(mac: &Macro) -> Option<Punctuated<LitStr, Token![,]>> {
+    (mac.path.is_ident("Kw"))
+        .then(|| mac.parse_body_with(Punctuated::parse_terminated).ok())
+        .flatten()
+        .filter(|spellings| spellings.len() > 1)
 }
 
 /// The fields kept in the core, each type in its canonical spelling.
@@ -515,6 +569,12 @@ impl Output {
     }
 
     fn literal(&mut self, mac: &Macro) {
+        if let Some(spellings) = spellings(mac) {
+            for ty in &spellings {
+                self.literals(ty);
+            }
+            return;
+        }
         let Some(name) = mac.path.segments.last() else {
             return;
         };
@@ -523,24 +583,33 @@ impl Output {
             "StringEqCI" | "Kw" => true,
             _ => return,
         };
-        let Ok(text) = mac.parse_body::<LitStr>() else {
+        let Ok(words) = mac.parse_body_with(Punctuated::<LitStr, Token![,]>::parse_terminated)
+        else {
             return;
         };
-        let text = text.value();
-        // `StringEqCI!` of a text without cased chars is the `StringEq!` type.
-        let cased = case_insensitive
-            && text.chars().any(|ch| {
-                let ch = ch.to_string();
-                ch.to_lowercase() != ch || ch.to_uppercase() != ch
-            });
-        if self.literals.insert((cased, text)) {
-            let desugar = desugar();
-            self.impls.push(quote! {
-                impl #desugar for #mac {
-                    type Core = Self;
-                    fn desugar(self) -> Self { ::core::default::Default::default() }
-                }
-            });
+        for word in words.iter().flat_map(|phrase| {
+            (phrase
+                .value()
+                .split(' ')
+                .map(|word| LitStr::new(word, phrase.span())))
+            .collect::<Vec<_>>()
+        }) {
+            let text = word.value();
+            // `StringEqCI!` of a text without cased chars is the `StringEq!` type.
+            let cased = case_insensitive
+                && text.chars().any(|ch| {
+                    let ch = ch.to_string();
+                    ch.to_lowercase() != ch || ch.to_uppercase() != ch
+                });
+            if self.literals.insert((cased, text)) {
+                let (desugar, path) = (desugar(), &mac.path);
+                self.impls.push(quote! {
+                    impl #desugar for #path!(#word) {
+                        type Core = Self;
+                        fn desugar(self) -> Self { ::core::default::Default::default() }
+                    }
+                });
+            }
         }
     }
 }
