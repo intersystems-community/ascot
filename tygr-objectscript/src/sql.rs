@@ -3608,46 +3608,56 @@ pub mod leveled {
 
     pub type Grant = Prefix<Kw!("GRANT"), (Space, GrantCmd)>;
 
+    /// WITH ADMIN OPTION goes with roles and admin privileges, WITH GRANT OPTION with objects.
     #[derive(Grammar)]
-    #[tygr(name = "grant cmd")]
-    pub enum GrantCmd {
-        AdminPrivileges {
-            privileges: VecSep<AdminPriv, ArgSep>,
-            to_kw: (Space1, Kw!("TO"), Space),
-            grantees: Grntee,
-            with_admin: WithOption<Kw!("ADMIN")>,
-        },
-        Roles {
-            roles: VecSep<Role, ArgSep>,
-            to_kw: (Space, Kw!("TO"), Space),
-            grantees: Grntee,
-            with_admin: WithOption<Kw!("ADMIN")>,
+    #[tygr(name = "grant cmd", validated)]
+    pub struct GrantCmd {
+        pub what: Granted,
+        pub to_kw: (Space, Kw!("TO"), Space),
+        pub grantees: Grntee,
+        pub with: WithOption<Either<Kw!("ADMIN"), Kw!("GRANT")>>,
+    }
+
+    impl Validate for GrantCmd {
+        const REQUIREMENT: &'static str =
+            "take WITH ADMIN OPTION on roles and admin privileges, WITH GRANT OPTION on objects";
+        fn validate(&self) -> bool {
+            match &self.with {
+                None => true,
+                Some((.., Either::Left(_), _, _)) => self.what.is_admin(),
+                Some((.., Either::Right(_), _, _)) => !self.what.is_admin(),
+            }
+        }
+    }
+
+    /// What GRANT gives and REVOKE takes back; the roles last, since a privilege keyword is an identifier too.
+    #[derive(Grammar)]
+    pub enum Granted {
+        AdminPrivileges(VecSep<AdminPriv, ArgSep>),
+        CubeSelect {
+            select_kw: Kw!("SELECT"),
+            columns: Option<(Space, FList1)>,
+            on_kw: (Space, Kw!("ON"), Space1),
+            cube_kw: Either<Kw!("CUBES"), Kw!("CUBE")>,
+            cubes: (Space, CubeList),
         },
         ObjectPrivileges {
             privileges: SimplePrivs,
             on_kw: (Space, Kw!("ON"), Space),
             objects: Objcts,
-            to_kw: (Space, Kw!("TO"), Space),
-            grantees: Grntee,
-            with_grant: WithOption<Kw!("GRANT")>,
         },
         Actions {
             actions: VecSep<Action, ArgSep>,
             on_kw: (Space, Kw!("ON"), Space),
             object: Object,
-            to_kw: (Space, Kw!("TO"), Space),
-            grantees: Grntee,
-            with_grant: WithOption<Kw!("GRANT")>,
         },
-        CubeSelect {
-            select_kw: Kw!("SELECT"),
-            on_kw: (Space1, Kw!("ON"), Space1),
-            cube_kw: Either<Kw!("CUBES"), Kw!("CUBE")>,
-            cubes: (Space, CubeList),
-            to_kw: (Space, Kw!("TO"), Space),
-            grantees: Grntee,
-            with_grant: WithOption<Kw!("GRANT")>,
-        },
+        Roles(VecSep<Role, ArgSep>),
+    }
+
+    impl Granted {
+        fn is_admin(&self) -> bool {
+            matches!(self, Self::AdminPrivileges(_) | Self::Roles(_))
+        }
     }
 
     pub type WithOption<K> = Option<(Space, Kw!("WITH"), Space, K, Space, Kw!("OPTION"))>;
@@ -3663,49 +3673,26 @@ pub mod leveled {
 
     pub type Revok = Prefix<Kw!("REVOKE"), (Space, RevokeCmd)>;
 
+    /// GRANT OPTION FOR, CASCADE or RESTRICT and AS go with objects, AS not with cubes.
     #[derive(Grammar)]
-    #[tygr(name = "revoke cmd")]
-    pub enum RevokeCmd {
-        AdminPrivileges {
-            privileges: VecSep<AdminPriv, ArgSep>,
-            from_kw: (Space1, Kw!("FROM"), Space),
-            grantees: Grntee,
-        },
-        Roles {
-            roles: VecSep<Role, ArgSep>,
-            from_kw: (Space, Kw!("FROM"), Space),
-            grantees: Grntee,
-        },
-        ObjectPrivileges {
-            grant_option: GrantOptionFor,
-            privileges: SimplePrivs,
-            on_kw: (Space, Kw!("ON"), Space),
-            objects: Objcts,
-            from_kw: (Space, Kw!("FROM"), Space),
-            grantees: Grntee,
-            behavior: Option<(Space, CascadeOpt)>,
-            as_clause: Option<(Space, Kw!("AS"), Space, Grntee)>,
-        },
-        Actions {
-            grant_option: GrantOptionFor,
-            actions: VecSep<Action, ArgSep>,
-            on_kw: (Space, Kw!("ON"), Space),
-            object: Object,
-            from_kw: (Space, Kw!("FROM"), Space),
-            grantees: Grntee,
-            behavior: Option<(Space, CascadeOpt)>,
-            as_clause: Option<(Space, Kw!("AS"), Space, Grntee)>,
-        },
-        CubeSelect {
-            grant_option: GrantOptionFor,
-            select_kw: Kw!("SELECT"),
-            on_kw: (Space1, Kw!("ON"), Space1),
-            cube_kw: Either<Kw!("CUBES"), Kw!("CUBE")>,
-            cubes: (Space, CubeList),
-            from_kw: (Space, Kw!("FROM"), Space),
-            grantees: Grntee,
-            behavior: Option<(Space, CascadeOpt)>,
-        },
+    #[tygr(name = "revoke cmd", validated)]
+    pub struct RevokeCmd {
+        pub grant_option: GrantOptionFor,
+        pub what: Granted,
+        pub from_kw: (Space, Kw!("FROM"), Space),
+        pub grantees: Grntee,
+        pub behavior: Option<(Space, CascadeOpt)>,
+        pub as_clause: Option<(Space, Kw!("AS"), Space, Grntee)>,
+    }
+
+    impl Validate for RevokeCmd {
+        const REQUIREMENT: &'static str =
+            "take GRANT OPTION FOR, CASCADE, RESTRICT and AS on objects alone, AS not on cubes";
+        fn validate(&self) -> bool {
+            let object = !self.what.is_admin();
+            let plain = self.grant_option.is_none() && self.behavior.is_none() && self.as_clause.is_none();
+            (object || plain) && !(matches!(self.what, Granted::CubeSelect { .. }) && self.as_clause.is_some())
+        }
     }
 
     #[derive(Grammar)]
