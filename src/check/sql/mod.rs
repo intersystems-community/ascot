@@ -13,8 +13,8 @@ use resolve::{Columns, Lookup, ProcInfo};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::sql::core::*;
 use tygr_objectscript::sql::{
-    DottedIdent, HostRef, HostVar, Ident, Integer, Param, SQLIdentNonKeyword, Space, Space1, Sub,
-    Var,
+    DottedIdent, Host, HostRef, HostVar, Ident, Integer, Param, SQLIdentNonKeyword, Space, Space1,
+    Sub, Var,
 };
 
 mod expr;
@@ -238,10 +238,10 @@ impl Walker<'_> {
     }
 
     fn host(&mut self, host_ref: &HostRef, subscripted: bool) {
-        match host_ref {
-            HostRef::InstanceVariableHostRef(_) => {}
-            HostRef::PropertyHostRef(prop) => self.hosts.reads.push((prop.part1.print(), false)),
-            HostRef::Plain(_, name) => self.local(name.print(), subscripted),
+        match &host_ref.host {
+            Host::Instance { .. } => {}
+            Host::Property { name, .. } => self.hosts.reads.push((name.print(), false)),
+            Host::Plain(name) => self.local(name.print(), subscripted),
         }
     }
 
@@ -295,6 +295,13 @@ impl<T: Walk> Walk for Vec1<T> {
         for t in self.iter() {
             t.walk(w)
         }
+    }
+}
+
+impl<T: Walk + tygr::Grammar> Walk for Nested<T> {
+    fn walk(&self, w: &mut Walker) {
+        let Nested::Bare(t) = self;
+        t.walk(w)
     }
 }
 

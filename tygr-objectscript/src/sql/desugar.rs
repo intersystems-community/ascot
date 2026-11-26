@@ -49,9 +49,7 @@ identity!(
     IdentifierStart,
     IdentifierPart,
     WordEnd,
-    IdentifierStruct,
     Identifier,
-    SQLDelimitedIdentStruct,
     DelimitedIdentifierPart,
     DelimitedIdentifier,
     DottedIdent,
@@ -59,15 +57,13 @@ identity!(
     StringLiteral,
     Integer,
     SQLExponent,
-    ExpoSymbol,
     Number,
     NumberBase,
     Literal,
     HostVar,
-    InstanceVariableHostRef,
-    PropertyHostRef,
     Var,
     HostRef,
+    Host,
     HostIdentifier,
     HostIdentifierStart,
     HostIdentifierPart,
@@ -262,7 +258,7 @@ pub(super) fn term(term: core::Term) -> core::Scalx {
 }
 
 pub(super) fn string(text: &str) -> core::Scalx {
-    let literal = StringLiteral::Std(Raw::new(format!("'{text}'")));
+    let literal = StringLiteral(Raw::new(format!("'{text}'")));
     term(core::Term::Literal(Literal::String(literal)))
 }
 

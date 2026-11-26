@@ -220,7 +220,6 @@ impl Walk for LimitSpec {
 impl Walk for Count {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Count::Paren(count) => count.walk(w),
             Count::HostVar(host_var) => host_var.walk(w),
             Count::Literal(_) | Count::Marker(_) => {}
         }

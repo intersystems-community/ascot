@@ -502,17 +502,10 @@ pub enum IdentifierPart {
 #[tygr(hidden)]
 pub struct WordEnd(IdentifierPart);
 
-#[derive(Grammar, Clone)]
-#[tygr(inline)]
-pub struct IdentifierStruct {
-    first: IdentifierStart,
-    rest: Vec<IdentifierPart>,
-}
-
 /// 2026.2 reads `a$b`, `ñ` and `Яа` as names and refuses `_` alone.
 #[derive(Grammar, Clone)]
 #[tygr(validated)]
-pub struct Identifier(Raw<IdentifierStruct>);
+pub struct Identifier(Raw<(IdentifierStart, Vec<IdentifierPart>)>);
 
 impl Validate for Identifier {
     const REQUIREMENT: &'static str = "not be underscores alone";
@@ -522,22 +515,19 @@ impl Validate for Identifier {
 }
 
 #[derive(Grammar, Clone)]
-#[tygr(inline)]
-pub struct SQLDelimitedIdentStruct {
-    open: StringEq!("\""),
-    head: DelimitedIdentifierPart,
-    tail: Vec<DelimitedIdentifierPart>,
-    close: StringEq!("\""),
-}
-
-#[derive(Grammar, Clone)]
 pub enum DelimitedIdentifierPart {
     DDQ(StringEq!("\"\"")),
     Char(IsNotDQ),
 }
 
 #[derive(Grammar, Clone)]
-pub struct DelimitedIdentifier(Raw<SQLDelimitedIdentStruct>);
+pub struct DelimitedIdentifier(
+    Raw<(
+        StringEq!("\""),
+        Vec1<DelimitedIdentifierPart>,
+        StringEq!("\""),
+    )>,
+);
 
 #[derive(Grammar, Clone)]
 #[tygr(inline)]
@@ -561,10 +551,7 @@ pub enum StdCharacterRepresentation {
 }
 
 #[derive(Grammar, Clone)]
-pub enum StringLiteral {
-    SQLEmpty(StringEq!("''")),
-    Std(Raw<StdStringLiteral>),
-}
+pub struct StringLiteral(pub Raw<StdStringLiteral>);
 
 #[derive(Grammar, Clone)]
 pub enum Sign {
@@ -581,15 +568,9 @@ pub struct Integer {
 #[derive(Grammar, Clone)]
 #[tygr(inline)]
 pub struct SQLExponent {
-    e: ExpoSymbol,
+    e: StringEqCI!("E"),
     sign: Option<Sign>,
     digits: StringOf1<IsDigit>,
-}
-
-#[derive(Grammar, Clone)]
-pub enum ExpoSymbol {
-    U(StringEq!("E")),
-    L(StringEq!("e")),
 }
 
 #[derive(Grammar, Clone)]
@@ -627,7 +608,7 @@ pub struct HostVar {
 impl Validate for HostVar {
     const REQUIREMENT: &'static str = "subscript an instance variable with something";
     fn validate(&self) -> bool {
-        !(matches!(self.host_ref, HostRef::InstanceVariableHostRef(_))
+        !(matches!(self.host_ref.host, Host::Instance { .. })
             && self
                 .subs
                 .as_ref()
@@ -638,35 +619,28 @@ impl Validate for HostVar {
 pub type SubList = Parenthesized<Option<VecSep<Sub, ArgSep>>>;
 
 #[derive(Grammar, Clone)]
-pub enum InstanceVariableHostRef {
-    I {
-        preifx: (Option<StringEq!(":")>, StringEq!("i%")),
-        name: HostIdentifier,
-    },
-    R {
-        preifx: (Option<StringEq!(":")>, StringEq!("r%")),
-        name: HostIdentifier,
-    },
-}
-
-#[derive(Grammar, Clone)]
-pub struct PropertyHostRef {
-    colon: Option<StringEq!(":")>,
-    pub part1: HostIdentifier,
-    pub parts: Vec1<(StringEq!("."), Either<HostIdentifier, DelimitedIdentifier>)>,
-}
-
-#[derive(Grammar, Clone)]
 pub enum Var {
     HostRef(HostRef),
     Ident(Ident),
 }
 
 #[derive(Grammar, Clone)]
-pub enum HostRef {
-    InstanceVariableHostRef(InstanceVariableHostRef),
-    PropertyHostRef(PropertyHostRef),
-    Plain(Option<StringEq!(":")>, HostIdentifier),
+pub struct HostRef {
+    pub colon: Option<StringEq!(":")>,
+    pub host: Host,
+}
+
+#[derive(Grammar, Clone)]
+pub enum Host {
+    Instance {
+        kind: Either<StringEq!("i%"), StringEq!("r%")>,
+        name: HostIdentifier,
+    },
+    Property {
+        name: HostIdentifier,
+        parts: Vec1<(StringEq!("."), Either<HostIdentifier, DelimitedIdentifier>)>,
+    },
+    Plain(HostIdentifier),
 }
 
 #[derive(Grammar, Clone)]
@@ -722,7 +696,6 @@ const OWN_SYNTAX: &[&str] = &[
     "DATEADD",
     "DATEDIFF",
     "DATENAME",
-    "DATEPART",
     "DATE_TRUNC",
     "AVG",
     "COUNT",
@@ -981,7 +954,7 @@ pub mod leveled {
         let (expr, _, truncation) = operation.args.1.wrapped;
         let truncation = match truncation {
             ColTrun::Const(constant) => {
-                let core::PConst::Literal(literal) = constant.desugar();
+                let core::Nested::Bare(literal) = constant.desugar();
                 core::Term::Literal(literal)
             }
             ColTrun::HostVar(host_var) => core::Term::HostVar(host_var),
@@ -1140,10 +1113,6 @@ pub mod leveled {
         Simple(Space, Scalx, Vec<(Space, When<Scalx>)>),
     }
 
-    pub type WhenKw = Kw!("WHEN");
-
-    pub type ThenKw = Kw!("THEN");
-
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct When<T: Grammar> {
@@ -1152,6 +1121,11 @@ pub mod leveled {
         pub then_kw: (Space, ThenKw, Space),
         pub result: Scalx,
     }
+
+    // Aliases, since a derive on a generic struct cannot see through a type macro.
+    pub type WhenKw = Kw!("WHEN");
+
+    pub type ThenKw = Kw!("THEN");
 
     /// Omitted, a CASE reads `ELSE NULL`.
     #[derive(Grammar)]
@@ -1268,11 +1242,11 @@ pub mod leveled {
         XmlElement(XMLElement),
         XmlForest(XMLForest),
         Cast(Kw!("CAST"), Args<Box<SQLCastExpression>>),
-        DateAdd(Kw!("DATEADD"), Args<RRR<DatePart>>),
-        DateDiff(Kw!("DATEDIFF"), Args<RRR<DatePart>>),
-        DateName(Kw!("DATENAME"), Args<RR<DatePart>>),
-        DatePart(Kw!("DATEPART"), Args<RR<DatePartPart>>),
-        DateTrunc(Kw!("DATE_TRUNC"), Args<RR<DatePart>>),
+        DateAdd(Kw!("DATEADD"), Args<RRR<Nested<DatePart>>>),
+        DateDiff(Kw!("DATEDIFF"), Args<RRR<Nested<DatePart>>>),
+        DateName(Kw!("DATENAME"), Args<RR<Nested<DatePart>>>),
+        DatePart(Kw!("DATEPART"), Args<RR<Nested<DatePartPart>>>),
+        DateTrunc(Kw!("DATE_TRUNC"), Args<RR<Nested<DatePart>>>),
         JSONArray(Kw!("JSON_ARRAY"), SQLJSONArrayArgs),
         JSONObject(Kw!("JSON_OBJECT"), SQLJSONObjectArgs),
         Predict(Kw!("PREDICT"), Args<SQLPredictArgs>),
@@ -1524,20 +1498,30 @@ pub mod leveled {
         }
     }
 
+    /// `T` in parentheses to any depth: 2026.2 takes `TOP (1)`, `LIMIT ((10))`, `DATEADD((dd), 1, d)` and
+    /// `SIZE (((10)))`.
+    #[derive(Grammar)]
+    pub enum Nested<T: Grammar> {
+        Bare(T),
+        #[sugar]
+        Parens(Parenthesized<Box<Nested<T>>>),
+    }
+
+    impl<T: Grammar + Desugar> Desugar for NestedSugar<T>
+    where
+        T::Core: Grammar,
+    {
+        type Core = core::Nested<T::Core>;
+        fn desugar(self) -> Self::Core {
+            let Self::Parens(parens) = self;
+            (*parens.wrapped).desugar()
+        }
+    }
+
     #[derive(Grammar)]
     pub enum DatePart {
         Keyword(Quotable<DatePartCommon>),
         HostVar(HostVar),
-        #[sugar]
-        Parenthesized(Parenthesized<Box<DatePart>>),
-    }
-
-    impl Desugar for DatePartSugar {
-        type Core = core::DatePart;
-        fn desugar(self) -> Self::Core {
-            let Self::Parenthesized(parens) = self;
-            (*parens.wrapped).desugar()
-        }
     }
 
     /// DATEPART's date part, which SQLTIMESTAMP joins.
@@ -1545,16 +1529,6 @@ pub mod leveled {
     pub enum DatePartPart {
         Keyword(Quotable<DatePartPartRaw>),
         HostVar(HostVar),
-        #[sugar]
-        Parenthesized(Parenthesized<Box<DatePartPart>>),
-    }
-
-    impl Desugar for DatePartPartSugar {
-        type Core = core::DatePartPart;
-        fn desugar(self) -> Self::Core {
-            let Self::Parenthesized(parens) = self;
-            (*parens.wrapped).desugar()
-        }
     }
 
     #[derive(Grammar)]
@@ -1756,6 +1730,12 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct Prdct(pub VecSep<And, (Space, Spellings!(Kw!("OR"), StringEq!("!")), Space)>);
 
+    impl Prdct {
+        pub fn one(cond: Ranged<Cond>) -> Self {
+            Prdct(VecSep::one(And(VecSep::one(cond))))
+        }
+    }
+
     #[derive(Grammar)]
     pub struct And(
         pub VecSep<Ranged<Cond>, (Space, Spellings!(Kw!("AND"), StringEq!("&")), Space)>,
@@ -1878,7 +1858,7 @@ pub mod leveled {
             core::Cond::Not {
                 not_kw: (Default::default(), Space::blank()),
                 condition: Box::new(synthesized(core::Cond::Paren(parenthesized(Box::new(
-                    core::Prdct(VecSep::one(core::And(VecSep::one(synthesized(plain))))),
+                    core::Prdct::one(synthesized(plain)),
                 ))))),
             }
         }
@@ -2042,22 +2022,7 @@ pub mod leveled {
     pub struct SizeHint {
         pub kw: (Kw!("SIZE"), Space),
         /// Doubled, as IRIS requires: 2026.2 rejects `SIZE (n)` and `SIZE n`, takes deeper nesting and blanks.
-        pub size: Parenthesized<Parenthesized<PConst>>,
-    }
-
-    #[derive(Grammar)]
-    pub enum PConst {
-        #[sugar]
-        Nested(Parenthesized<Box<PConst>>),
-        Literal(Literal),
-    }
-
-    impl Desugar for PConstSugar {
-        type Core = core::PConst;
-        fn desugar(self) -> Self::Core {
-            let Self::Nested(inner) = self;
-            (*inner.wrapped).desugar()
-        }
+        pub size: Parenthesized<Parenthesized<Nested<Literal>>>,
     }
 
     #[derive(Grammar)]
@@ -2185,22 +2150,21 @@ pub mod leveled {
         ProfileAll(Kw!("%PROFILE_ALL")),
         NoRuntime(Kw!("%NORUNTIME")),
         DoRuntime(Kw!("%DORUNTIME")),
-        RowLimit(Kw!("%ROWLIMIT"), Space, Count),
-        RowOffset(Kw!("%ROWOFFSET"), Space, Count),
+        RowLimit(Kw!("%ROWLIMIT"), Space, Nested<Count>),
+        RowOffset(Kw!("%ROWOFFSET"), Space, Nested<Count>),
     }
 
     #[derive(Grammar)]
     pub enum TopSpec {
         All(Kw!("ALL")),
-        Count(Count),
+        Count(Nested<Count>),
     }
 
-    /// A count: a literal, a host variable or `?`, in any parentheses; 2026.2 takes `TOP (1)`, `TOP(1)`,
-    /// `LIMIT ((10))`, `OFFSET (:n)`, `FETCH NEXT 'x' ROWS ONLY`, `DIAGNOSTICS SIZE (1)` and `%ROWLIMIT ((5))`, not
-    /// `LIMIT 1 + 1`, `LIMIT a`, `LIMIT -1`, `%ROWLIMIT (1, 2)` or `TOP (ALL)`.
+    /// A count: a literal, a host variable or `?`; 2026.2 takes `OFFSET (:n)`, `FETCH NEXT 'x' ROWS ONLY`,
+    /// `DIAGNOSTICS SIZE (1)` and `%ROWLIMIT ((5))`, not `LIMIT 1 + 1`, `LIMIT a`, `LIMIT -1`, `%ROWLIMIT (1, 2)`
+    /// or `TOP (ALL)`.
     #[derive(Grammar)]
     pub enum Count {
-        Paren(Parenthesized<Box<Count>>),
         Literal(Literal),
         HostVar(HostVar),
         Marker(StringEq!("?")),
@@ -2534,13 +2498,13 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum LimitSpec {
         All(Kw!("ALL")),
-        Val(Count),
+        Val(Nested<Count>),
     }
 
     #[derive(Grammar)]
     pub struct Offset {
         pub kw: (Kw!("OFFSET"), Space),
-        pub count: Count,
+        pub count: Nested<Count>,
         #[sugar]
         pub rows: Option<(Space, RowRowsInline)>,
     }
@@ -2841,7 +2805,7 @@ pub mod leveled {
         ReadWrite(Kw!("READ WRITE")),
         DiagnosticsSize {
             kw: (Kw!("DIAGNOSTICS SIZE"), Space),
-            size: Count,
+            size: Nested<Count>,
         },
     }
 
@@ -3463,9 +3427,9 @@ pub mod leveled {
         },
         CancelQuery {
             kw: (Kw!("CANCEL QUERY"), Space),
-            val: Count,
+            val: Nested<Count>,
             cancel_scope: Option<(Space, CancelQueryScope)>,
-            timeout: Option<(Space, Kw!("TIMEOUT"), Space, Count)>,
+            timeout: Option<(Space, Kw!("TIMEOUT"), Space, Nested<Count>)>,
         },
         Collect {
             kw: (Kw!("COLLECT"), Space1),
@@ -4010,7 +3974,7 @@ pub mod leveled {
         Scope(StatsScope),
     }
 
-    pub type CancelQueryScope = Prefix<(Kw!("IDENTIFIED BY"), Space), Count>;
+    pub type CancelQueryScope = Prefix<(Kw!("IDENTIFIED BY"), Space), Nested<Count>>;
 
     pub type WithClauseCreate = Prefix<(Kw!("WITH"), Space), Parenthesized<ColumnDefList>>;
 
@@ -5678,7 +5642,7 @@ mod sugar {
 
     #[derive(Grammar, Clone)]
     pub enum ColTrun {
-        Const(PConst),
+        Const(Nested<Literal>),
         HostVar(HostVar),
     }
 
@@ -5908,7 +5872,7 @@ mod sugar {
     pub struct Fetch {
         pub keyword: (Kw!("FETCH"), Space),
         pub direction: Option<(Either<Kw!("FIRST"), Kw!("NEXT")>, Space)>,
-        pub valspec: Count,
+        pub valspec: Nested<Count>,
         pub row_keyword: Option<(Space, RowRowsInline)>,
         pub only: Option<(Space, Kw!("ONLY"))>,
     }
