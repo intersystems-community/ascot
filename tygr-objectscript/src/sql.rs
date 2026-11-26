@@ -1611,18 +1611,22 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct AggArg {
-        #[sugar]
-        pub all: Option<(AllKw, Space)>,
-        pub distinct: Option<(Dist, Space)>,
+        pub quantifier: SetQuantifier,
         pub expr: Scalx,
         pub foreach: Option<(Space, Prefix<(Kw!("%FOREACH"), Space), List>)>,
         pub afterhaving: Option<(Space, Kw!("%AFTERHAVING"))>,
     }
 
+    /// DISTINCT, DISTINCT BY (…), or ALL, what a SELECT or an aggregate does without a word; 2026.2 refuses
+    /// ALL DISTINCT and DISTINCT ALL.
     #[derive(Grammar)]
-    pub struct Dist {
-        pub keyword: Kw!("DISTINCT"),
-        pub by: Option<(Space1, Prefix<(Kw!("BY"), Space), List>)>,
+    pub enum SetQuantifier {
+        Distinct {
+            kw: Kw!("DISTINCT"),
+            by: Option<(Space1, Prefix<(Kw!("BY"), Space), List>)>,
+            sp: Space,
+        },
+        All(#[sugar] Option<(Kw!("ALL"), Space)>),
     }
 
     pub type List = Parenthesized<VecSep<Scalx, ArgSep>>;
@@ -2048,8 +2052,6 @@ pub mod leveled {
     pub struct Selex {
         pub kw: (Kw!("SELECT"), Space),
         pub options: Vec<(SelectOption, Space)>,
-        #[sugar]
-        pub all: Option<(AllKw, Space)>,
         pub selst: Selst,
         pub from: Option<(Space, FromClause)>,
         pub where_clause: Option<(Space, WhereClause)>,
@@ -2176,7 +2178,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub struct Selst {
-        pub distinct: Option<(Dist, Space)>,
+        pub quantifier: SetQuantifier,
         pub top: Option<(Kw!("TOP"), Space, TopSpec, Space)>,
         pub select_list: VecSep<Ranged<SelectItem>, ArgSep>,
         pub targt: Option<(Space, Targt)>,
@@ -2324,13 +2326,13 @@ pub mod leveled {
         },
         Natural {
             natural_kw: (Kw!("NATURAL"), Space1),
-            jtype: Implied<JType, (), Space1>,
+            jtype: JType,
             join_kw: Kw!("JOIN"),
             space: Space,
             table: Box<JTab>,
         },
         Qualified {
-            jtype: Implied<JType, (), Space1>,
+            jtype: JType,
             join_kw: Kw!("JOIN"),
             space: Space,
             table: Box<JTab>,
@@ -2338,10 +2340,11 @@ pub mod leveled {
         },
     }
 
+    /// LEFT, RIGHT or FULL, OUTER implied, or INNER, the join without a word.
     #[derive(Grammar)]
     pub enum JType {
-        Inner(Kw!("INNER")),
-        Outer(Side, Implied<Kw!("OUTER")>),
+        Outer(Side, Implied<Kw!("OUTER")>, Space1),
+        Inner(#[sugar] Option<(Kw!("INNER"), Space1)>),
     }
 
     #[derive(Grammar)]
@@ -2442,9 +2445,14 @@ pub mod leveled {
     #[derive(Grammar)]
     pub struct Ordir {
         pub expr: Ordit,
-        #[sugar]
-        pub asc: Option<(Space, Kw!("ASC"), NotFollowedBy<(Space, Kw!("DESC"))>)>,
-        pub desc: Option<(Space, Kw!("DESC"))>,
+        pub direction: Direction,
+    }
+
+    /// DESC, or ASC, the order without a word; 2026.2 takes `(a)DESC`.
+    #[derive(Grammar)]
+    pub enum Direction {
+        Desc(Space, Kw!("DESC")),
+        Asc(#[sugar] Option<(Space, Kw!("ASC"))>),
     }
 
     #[derive(Grammar)]
@@ -2765,22 +2773,27 @@ pub mod leveled {
         TPOption(TPOption),
     }
 
+    /// `START TRANSACTION [%COMMITMODE mode] [[,] modes]`: 2026.2 takes the comma before the modes with and
+    /// without a commit mode, and between two modes alone; omitted, %COMMITMODE keeps the process's.
     #[derive(Grammar)]
     pub struct StartTP {
-        pub kw: (Kw!("START"), Space1, Kw!("TRANSACTION"), Space),
-        pub commit_mode: Option<(CommitModeSpec, Option<(Space, StringEq!(","))>, Space)>,
-        pub modes: VecSep<Option<TRMode>, ArgSep>,
+        pub kw: (Kw!("START"), Space1, Kw!("TRANSACTION")),
+        pub commit_mode: Option<(Space1, CommitModeSpec)>,
+        pub modes: TransactionModes,
     }
 
+    /// `[START] SET TRANSACTION`, as START TRANSACTION (2026.2 takes START SET TRANSACTION).
     #[derive(Grammar)]
     pub struct SetTP {
         pub start_kw: Option<(Kw!("START"), Space1)>,
         pub kw: (Kw!("SET"), Space1, Kw!("TRANSACTION")),
         pub commit_mode: Option<(Space1, CommitModeSpec)>,
-        pub modes: VecSep<Option<(Space, TRMode)>, (Space, StringEq!(","))>,
+        pub modes: TransactionModes,
     }
 
     pub type CommitModeSpec = Prefix<Kw!("%COMMITMODE"), (Space1, CommitMode)>;
+
+    pub type TransactionModes = Option<(Either<ArgSep, Space1>, VecSep<TRMode, ArgSep>)>;
 
     #[derive(Grammar)]
     pub enum CommitMode {
@@ -5961,7 +5974,4 @@ mod sugar {
         Rows(Kw!("ROWS")),
         Row(Kw!("ROW")),
     }
-
-    /// `ALL` where `DISTINCT` could stand: what a SELECT or an aggregate does without it.
-    pub type AllKw = Kw!("ALL");
 }

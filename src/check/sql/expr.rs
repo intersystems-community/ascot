@@ -298,15 +298,17 @@ impl Walk for Agg {
 
 impl Walk for AggArg {
     fn walk(&self, w: &mut Walker) {
-        self.distinct.walk(w);
+        self.quantifier.walk(w);
         self.expr.walk(w);
         self.foreach.walk(w)
     }
 }
 
-impl Walk for Dist {
+impl Walk for SetQuantifier {
     fn walk(&self, w: &mut Walker) {
-        self.by.walk(w)
+        if let SetQuantifier::Distinct { by, .. } = self {
+            by.walk(w)
+        }
     }
 }
 

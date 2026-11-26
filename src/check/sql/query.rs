@@ -73,7 +73,7 @@ impl Walk for Selex {
 
 impl Walk for Selst {
     fn walk(&self, w: &mut Walker) {
-        self.distinct.walk(w);
+        self.quantifier.walk(w);
         if let Some((_, _, top, _)) = &self.top {
             top.walk(w)
         }

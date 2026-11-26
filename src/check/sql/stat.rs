@@ -203,10 +203,10 @@ impl Walk for Explain {
 impl Walk for TpRelated {
     fn walk(&self, w: &mut Walker) {
         match self {
-            TpRelated::StartTransaction(tp) => tp.modes.walk(w),
-            TpRelated::SetTransaction(tp) => {
-                for mode in tp.modes.items.iter().flatten() {
-                    mode.1.walk(w)
+            TpRelated::StartTransaction(StartTP { modes, .. })
+            | TpRelated::SetTransaction(SetTP { modes, .. }) => {
+                if let Some((_, modes)) = modes {
+                    modes.walk(w)
                 }
             }
             TpRelated::Rollback(_) | TpRelated::TPOption(_) => {}
