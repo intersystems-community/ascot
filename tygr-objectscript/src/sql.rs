@@ -3436,8 +3436,17 @@ pub mod leveled {
         Alt(Kw!("ALT")),
         All(Kw!("ALL")),
         Stat(Kw!("STAT")),
+        #[sugar]
         Stats(Kw!("STATS")),
         Into(Kw!("INTO"), Space, VecSep<Param, ArgSep>),
+    }
+
+    impl Desugar for ExplainOptionSugar<'_> {
+        type Core = core::ExplainOption;
+        fn desugar(&self) -> Self::Core {
+            let Self::Stats(_) = self;
+            core::ExplainOption::Stat(Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -3638,7 +3647,7 @@ pub mod leveled {
             select_kw: Kw!("SELECT"),
             columns: Option<(Space, FList1)>,
             on_kw: (Space, Kw!("ON"), Space1),
-            cube_kw: Either<Kw!("CUBES"), Kw!("CUBE")>,
+            cube_kw: CubeKw,
             cubes: (Space, CubeList),
         },
         ObjectPrivileges {
@@ -3661,6 +3670,21 @@ pub mod leveled {
     }
 
     pub type WithOption<K> = Option<(Space, Kw!("WITH"), Space, K, Space, Kw!("OPTION"))>;
+
+    #[derive(Grammar)]
+    pub enum CubeKw {
+        Cube(Kw!("CUBE")),
+        #[sugar]
+        Cubes(Kw!("CUBES")),
+    }
+
+    impl Desugar for CubeKwSugar<'_> {
+        type Core = core::CubeKw;
+        fn desugar(&self) -> Self::Core {
+            let Self::Cubes(_) = self;
+            core::CubeKw::Cube(Default::default())
+        }
+    }
 
     pub type GrantOptionFor = Option<(
         Kw!("GRANT"),
@@ -3834,8 +3858,17 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "SERVERS/SERVER")]
     pub enum ServersServer {
-        Servers(Kw!("SERVERS")),
         Server(Kw!("SERVER")),
+        #[sugar]
+        Servers(Kw!("SERVERS")),
+    }
+
+    impl Desugar for ServersServerSugar<'_> {
+        type Core = core::ServersServer;
+        fn desugar(&self) -> Self::Core {
+            let Self::Servers(_) = self;
+            core::ServersServer::Server(Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -4038,11 +4071,7 @@ pub mod leveled {
             kw: (Kw!("DATABASE"), Space1),
             file: Option<(Kw!("FILE"), Space1)>,
             name: DatabaseName,
-            on_dir: Option<(
-                (Space1, Kw!("ON"), Space1, Kw!("DIRECTORY")),
-                Option<(Space, StringEq!("="))>,
-                (Space, DirectoryName),
-            )>,
+            on_dir: Option<OnDirectory>,
         },
         ForeignTable {
             kw: (
@@ -4359,6 +4388,14 @@ pub mod leveled {
     }
 
     #[derive(Grammar)]
+    pub struct OnDirectory {
+        pub kw: (Space1, Kw!("ON"), Space1, Kw!("DIRECTORY")),
+        #[sugar]
+        pub eq: Option<(Space, StringEq!("="))>,
+        pub dir: (Space, DirectoryName),
+    }
+
+    #[derive(Grammar)]
     pub struct ViewDef {
         pub kw: (Kw!("VIEW"), Space),
         pub tname: TName,
@@ -4402,8 +4439,23 @@ pub mod leveled {
     pub enum RoutineKind {
         Function(Kw!("FUNCTION")),
         Method(Kw!("METHOD")),
-        Procedure(Either<Kw!("PROCEDURE"), Kw!("PROC")>),
+        Procedure(ProcedureKw),
         Query(Kw!("QUERY")),
+    }
+
+    #[derive(Grammar)]
+    pub enum ProcedureKw {
+        Procedure(Kw!("PROCEDURE")),
+        #[sugar]
+        Proc(Kw!("PROC")),
+    }
+
+    impl Desugar for ProcedureKwSugar<'_> {
+        type Core = core::ProcedureKw;
+        fn desugar(&self) -> Self::Core {
+            let Self::Proc(_) = self;
+            core::ProcedureKw::Procedure(Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -4510,9 +4562,18 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum PWPrefix {
-        IdentifiedBy(Kw!("IDENTIFIED"), Space1, Kw!("BY")),
         IdentifyBy(Kw!("IDENTIFY"), Space1, Kw!("BY")),
+        #[sugar]
+        IdentifiedBy(Kw!("IDENTIFIED"), Space1, Kw!("BY")),
+        #[sugar]
         WithPassword(Option<(Kw!("WITH"), Space1)>, Kw!("PASSWORD")),
+    }
+
+    impl Desugar for PWPrefixSugar<'_> {
+        type Core = core::PWPrefix;
+        fn desugar(&self) -> Self::Core {
+            core::PWPrefix::IdentifyBy(Default::default(), Default::default(), Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -4844,8 +4905,17 @@ pub mod leveled {
     #[tygr(name = "levels clause")]
     pub enum LevelsClause {
         Cascaded(Kw!("CASCADED")),
+        #[sugar]
         Cascade(Kw!("CASCADE")),
         Local(Kw!("LOCAL")),
+    }
+
+    impl Desugar for LevelsClauseSugar<'_> {
+        type Core = core::LevelsClause;
+        fn desugar(&self) -> Self::Core {
+            let Self::Cascade(_) = self;
+            core::LevelsClause::Cascaded(Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -4979,7 +5049,7 @@ pub mod leveled {
             classname: ClassName,
         },
         Private(Kw!("PRIVATE")),
-        Proc(Either<Kw!("PROCEDURE"), Kw!("PROC")>),
+        Proc(ProcedureKw),
         Results {
             kw: (Kw!("RESULTS"), Space),
             clause: ResultSetClause,
@@ -5412,8 +5482,17 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "drop keywd")]
     pub enum DropKeywd {
-        Delete(Kw!("DELETE")),
         Drop(Kw!("DROP")),
+        #[sugar]
+        Delete(Kw!("DELETE")),
+    }
+
+    impl Desugar for DropKeywdSugar<'_> {
+        type Core = core::DropKeywd;
+        fn desugar(&self) -> Self::Core {
+            let Self::Delete(_) = self;
+            core::DropKeywd::Drop(Default::default())
+        }
     }
 
     #[derive(Grammar)]
@@ -5635,6 +5714,7 @@ pub mod leveled {
     pub struct ClassParameter {
         pub kw: (Kw!("%CLASSPARAMETER"), Space),
         pub name: Ident,
+        #[sugar]
         pub eq: Option<(Space, StringEq!("="))>,
         pub value: (Space, Literal),
     }
@@ -5694,6 +5774,7 @@ pub mod leveled {
         ClassParam(ClassParameter),
         StorageType {
             kw: Kw!("STORAGETYPE"),
+            #[sugar]
             eq: Option<(Space, StringEq!("="))>,
             value: (Space, Storagetype),
         },
@@ -5737,11 +5818,35 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(name = "partition datetime interval")]
     pub enum PartitionDatetimeInterval {
-        Day(Either<Kw!("DAYS"), Kw!("DAY")>),
-        Hour(Either<Kw!("HOURS"), Kw!("HOUR")>),
-        Minute(Either<Kw!("MINUTES"), Kw!("MINUTE")>),
-        Month(Either<Kw!("MONTHS"), Kw!("MONTH")>),
-        Year(Either<Kw!("YEARS"), Kw!("YEAR")>),
+        Day(Kw!("DAY")),
+        #[sugar]
+        Days(Kw!("DAYS")),
+        Hour(Kw!("HOUR")),
+        #[sugar]
+        Hours(Kw!("HOURS")),
+        Minute(Kw!("MINUTE")),
+        #[sugar]
+        Minutes(Kw!("MINUTES")),
+        Month(Kw!("MONTH")),
+        #[sugar]
+        Months(Kw!("MONTHS")),
+        Year(Kw!("YEAR")),
+        #[sugar]
+        Years(Kw!("YEARS")),
+    }
+
+    impl Desugar for PartitionDatetimeIntervalSugar<'_> {
+        type Core = core::PartitionDatetimeInterval;
+        fn desugar(&self) -> Self::Core {
+            use core::PartitionDatetimeInterval::*;
+            match self {
+                Self::Days(_) => Day(Default::default()),
+                Self::Hours(_) => Hour(Default::default()),
+                Self::Minutes(_) => Minute(Default::default()),
+                Self::Months(_) => Month(Default::default()),
+                Self::Years(_) => Year(Default::default()),
+            }
+        }
     }
 
     #[derive(Grammar)]
@@ -6343,7 +6448,16 @@ pub mod leveled {
     #[tygr(name = "stats clause")]
     pub enum StatsClause {
         Statistics(Kw!("STATISTICS")),
+        #[sugar]
         Stats(Kw!("STATS")),
+    }
+
+    impl Desugar for StatsClauseSugar<'_> {
+        type Core = core::StatsClause;
+        fn desugar(&self) -> Self::Core {
+            let Self::Stats(_) = self;
+            core::StatsClause::Statistics(Default::default())
+        }
     }
 
     #[derive(Grammar)]
