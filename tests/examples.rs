@@ -36,15 +36,13 @@ fn examples(code: &'static str, doc: &str) -> Option<Example> {
     let mut no_environment = false;
     let mut lines = doc.lines();
     while let Some(line) = lines.next() {
-        let Some(info) = line.trim().strip_prefix("```objectscript") else {
+        let Some(mut info) = line.trim().strip_prefix("```objectscript") else {
             continue;
         };
         // `style=` ends the info string: its JSON may hold spaces.
-        let (info, json) = info
-            .split_once("style=")
-            .map_or((info, None), |(i, j)| (i, Some(j)));
-        if let Some(json) = json {
+        if let Some((before, json)) = info.split_once("style=") {
             style = Some(json.trim().to_string());
+            info = before;
         }
         no_environment |= info.split_whitespace().any(|word| word == "env=none");
         let mut text = Vec::new();
@@ -107,35 +105,12 @@ fn document_uri(text: &[String]) -> Option<String> {
 }
 
 /// One environment, loaded once, for every example.
-struct Shared(Arc<Box<dyn IrisContext>>);
-
-impl IrisContext for Shared {
-    fn get_cls(&self, name: &str) -> Result<Option<ascot::bindings::ClassInfo>, String> {
-        self.0.get_cls(name)
-    }
-    fn get_inc(&self, name: &str) -> Result<Option<ascot::bindings::Source>, String> {
-        self.0.get_inc(name)
-    }
-    fn get_rtn(&self, name: &str) -> Result<Option<ascot::bindings::RoutineInfo>, String> {
-        self.0.get_rtn(name)
-    }
-    fn sql_names_declared(&self) -> bool {
-        self.0.sql_names_declared()
-    }
-    fn find_cls_by_sql(&self, schema: &str, table: &str) -> Result<Option<String>, String> {
-        self.0.find_cls_by_sql(schema, table)
-    }
-    fn find_sql_proc(&self, schema: &str, name: &str) -> Result<Option<String>, String> {
-        self.0.find_sql_proc(schema, name)
-    }
-}
-
-fn environment() -> Arc<Box<dyn IrisContext>> {
+fn environment() -> Arc<dyn IrisContext> {
     let iris = std::env::var("ASCOT_TEST_IRIS").unwrap_or_else(|_| ascot::LATEST_IRIS.to_string());
     let context = ascot::open_iris(&iris, None)
         .unwrap_or_else(|e| panic!("{e}"))
         .unwrap_or_else(|| panic!("`{iris}` is no environment"));
-    Arc::new(context)
+    Arc::from(context)
 }
 
 fn all_examples() -> Vec<Example> {
@@ -155,7 +130,7 @@ fn the_examples_in_the_docs_hold() {
             ascot::style::parse(json).unwrap_or_else(|e| panic!("{}: {e}", example.code))
         });
         let iris: Option<Box<dyn IrisContext>> =
-            (!example.no_environment).then(|| Box::new(Shared(environment.clone())) as _);
+            (!example.no_environment).then(|| Box::new(environment.clone()) as _);
         let workspace = ascot::Workspace::native(iris, style);
         for document in &example.documents {
             workspace.open(document.uri.clone(), document.text.clone());
@@ -211,9 +186,7 @@ const NO_EXAMPLE: &[(&str, &str)] = &[
 #[test]
 fn every_kind_has_an_example_or_a_reason_not_to() {
     let with: BTreeSet<&str> = all_examples().iter().map(|e| e.code).collect();
-    let without: BTreeSet<&str> = TypeErrorKind::DOCS
-        .iter()
-        .map(|(code, _)| *code)
+    let without: BTreeSet<&str> = (TypeErrorKind::CODES.iter().copied())
         .filter(|code| !with.contains(code))
         .collect();
     let excused: BTreeSet<&str> = NO_EXAMPLE.iter().map(|(code, _)| *code).collect();
