@@ -210,12 +210,6 @@ impl Walk for SourceQuery {
     }
 }
 
-impl Walk for QueryExpression {
-    fn walk(&self, w: &mut Walker) {
-        self.0.walk(w)
-    }
-}
-
 impl Walk for RowLimitingClause {
     fn walk(&self, w: &mut Walker) {
         let RowLimitingClause::LimitOffset { limit, offset } = self;

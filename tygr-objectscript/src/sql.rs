@@ -1936,7 +1936,7 @@ pub mod leveled {
 
     pub type EscapeClause = Prefix<Kw!("ESCAPE"), ValueExpression<Space1>>;
 
-    pub type Subquery = Parenthesized<QueryExpression>;
+    pub type Subquery = Parenthesized<Box<Query>>;
 
     #[derive(Grammar)]
     pub enum Quantifier {
@@ -2018,10 +2018,6 @@ pub mod leveled {
         pub query: Query,
         pub order: Option<(Space1, OrderByClause)>,
     }
-
-    /// A query inside a statement, as a subquery, a CTE body or a view.
-    #[derive(Grammar)]
-    pub struct QueryExpression(pub Box<Query>);
 
     #[derive(Grammar)]
     pub enum SelectOption {
@@ -3616,7 +3612,7 @@ pub mod leveled {
         pub col_list: Option<(Space, ColumnNameList)>,
         pub as_kw: (Space1, Kw!("AS"), Space),
         pub with_clause: Option<(WithClause, Space1)>,
-        pub query: QueryExpression,
+        pub query: Query,
         pub view_with: Option<((Space1, Kw!("WITH"), Space1), ViewWithOption)>,
     }
 
