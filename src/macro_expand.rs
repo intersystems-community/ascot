@@ -679,36 +679,35 @@ impl WorkspaceStruct {
                         _ => dones.push(&unit.print(), &origin, precise),
                     },
                     MacroRedex::DDD(ddd) => {
-                        dones.note_invocation(&origin);
+                        if origin.uri.is_none() {
+                            dones.invocations.push(origin.range.clone());
+                        }
                         let MacroCallStruct { name, args } = ddd.deref();
                         // The unit's own offsets, counted from its `$$$`, mapped into `origin`.
                         let unit_start = name.0.start - 3;
                         let at = |offset: usize| origin.range.start + (offset - unit_start);
-                        let compile_time = definitions
-                            .get(&name.print())
-                            .is_some_and(|def| def.is_compile_time());
+                        let def = definitions.get(&name.print());
+                        let compile_time = def.is_some_and(MacroDefinition::is_compile_time);
                         if let Some(method) = dones.body_macros.get(&name.print()).cloned()
-                            && definitions.contains_key(&name.print())
+                            && def.is_some()
                         {
                             dones.note_unresolved(
-                                move |name| TypeErrorKind::MacroFromMethodBody {
-                                    name,
-                                    method: method.clone(),
+                                TypeErrorKind::MacroFromMethodBody {
+                                    name: name.print(),
+                                    method,
                                 },
-                                name.print(),
                                 &origin,
                             );
                         }
-                        let substituted = match definitions.get(&name.print()) {
+                        let items = match def {
                             Some(_) if origin.depth >= MAX_MACRO_DEPTH => {
                                 dones.note_unresolved(
-                                    |name| TypeErrorKind::MacroExpansionTooDeep { name },
-                                    name.print(),
+                                    TypeErrorKind::MacroExpansionTooDeep { name: name.print() },
                                     &origin,
                                 );
-                                false
+                                None
                             }
-                            Some(def) if def.is_compile_time() => false,
+                            Some(def) if def.is_compile_time() => None,
                             // `$$$M` for an `M()` declared with no parameters: the parentheses
                             // are optional at the call. `$$$M(args)` on a parameterless `M` keeps
                             // the argument list: the body is typically a method name the
@@ -733,8 +732,7 @@ impl WorkspaceStruct {
                                         items.push((Cow::Owned(unit.into_inner()), piece, precise));
                                     }
                                 }
-                                todos.push_items(items);
-                                true
+                                Some(items)
                             }
                             Some(MacroDefinition {
                                 params: Some(pars),
@@ -759,30 +757,21 @@ impl WorkspaceStruct {
                                     .chain(std::iter::once(&literal))
                                     .map(|par| (par, text.clone(), arg_origin.clone(), precise))
                                     .collect();
-                                let items =
-                                    substitute_macro_body(body, &param_map, &origin.deeper())?;
-                                todos.push_items(items);
-                                true
+                                Some(substitute_macro_body(body, &param_map, &origin.deeper())?)
                             }
                             Some(MacroDefinition {
                                 params: Some(pars), ..
                             }) if let Some(args) = args.as_deref()
                                 && args.items.len() != pars.len() =>
                             {
-                                let expected = pars.len();
-                                let too_many = args.items.len() > expected;
-                                dones.note_unresolved(
-                                    move |name| {
-                                        if too_many {
-                                            TypeErrorKind::MacroTooManyArguments { name, expected }
-                                        } else {
-                                            TypeErrorKind::MacroTooFewArguments { name, expected }
-                                        }
-                                    },
-                                    name.print(),
-                                    &origin,
-                                );
-                                false
+                                let (name, expected) = (name.print(), pars.len());
+                                let kind = if args.items.len() > expected {
+                                    TypeErrorKind::MacroTooManyArguments { name, expected }
+                                } else {
+                                    TypeErrorKind::MacroTooFewArguments { name, expected }
+                                };
+                                dones.note_unresolved(kind, &origin);
+                                None
                             }
                             Some(MacroDefinition {
                                 params: Some(pars),
@@ -799,19 +788,17 @@ impl WorkspaceStruct {
                                     })
                                     .collect();
                                 param_map.sort_by(|(k1, ..), (k2, ..)| k2.cmp(k1));
-                                let items =
-                                    substitute_macro_body(body, &param_map, &origin.deeper())?;
-                                todos.push_items(items);
-                                true
+                                Some(substitute_macro_body(body, &param_map, &origin.deeper())?)
                             }
-                            _ => false,
+                            _ => None,
                         };
                         // Not substituted -- `name` either isn't a `#define`d macro at all, is
                         // compile-time evaluated (e.g. `$$$ERROR`, resolved by `check::mod`
                         // instead) or its arity didn't match. Left as literal text, but its own
                         // arguments (e.g. `$$$GeneralError` inside `$$$ERROR(...)`) still expand.
-                        if !substituted {
-                            match args.as_deref() {
+                        match items {
+                            Some(items) => todos.push_items(items),
+                            None => match args.as_deref() {
                                 Some(args) => {
                                     let text = unit.print();
                                     let base = origin.range.start;
@@ -871,7 +858,7 @@ impl WorkspaceStruct {
                                     }
                                 }
                                 None => dones.push(&unit.print(), &origin, precise),
-                            }
+                            },
                         }
                     }
                     // Only `text` is pushed, so a precise origin is narrowed past the `##lit(`.
@@ -992,12 +979,11 @@ impl WorkspaceStruct {
             _ => {
                 let expansion = (expanded != written).then(|| expanded.to_string());
                 dones.note_unresolved(
-                    move |written| TypeErrorKind::UndecidedIf {
+                    TypeErrorKind::UndecidedIf {
                         directive,
-                        condition: written,
-                        expansion: Expansion(expansion.clone()),
+                        condition: written.to_string(),
+                        expansion: Expansion(expansion),
                     },
-                    written.to_string(),
                     &item.1,
                 );
                 true
@@ -1197,59 +1183,45 @@ fn substitute_macro_body<'a>(
                 continue;
             }
             let mut rest = span.text.as_str();
-            loop {
-                // Only the whole name: the `%m` that starts `%maps` is not the parameter. What
-                // precedes it doesn't matter, since a name can't contain `%`: `%New%args` is
-                // `%New` and then the parameter.
-                let whole = rest.match_indices(name.as_str()).find(|(idx, _)| {
-                    !rest[idx + name.len()..].starts_with(|c: char| c.is_alphanumeric())
-                });
-                match whole.map(|(idx, _)| idx) {
-                    None => {
-                        if !rest.is_empty() {
-                            next.push(Span {
-                                text: rest.to_string(),
-                                origin: span.origin.clone(),
-                                precise: span.precise,
-                                argument: false,
-                            });
-                        }
-                        break;
-                    }
-                    Some(idx) => {
-                        let (mut before, mut after) = (&rest[..idx], &rest[idx + name.len()..]);
-                        // IRIS's preprocessor pastes a quoted argument into `$g(%m)` as the string
-                        // alone: it drops the `$g(` and the one character after the parameter,
-                        // taken for the `)`. Its own classes rely on it. `$$g(` is a call.
-                        if replacement.starts_with('"')
-                            && before.len() >= 3
-                            && before.is_char_boundary(before.len() - 3)
-                            && before[before.len() - 3..].eq_ignore_ascii_case("$g(")
-                            && !before[..before.len() - 3].ends_with('$')
-                        {
-                            before = &before[..before.len() - 3];
-                            after = after
-                                .get(after.chars().next().map_or(0, char::len_utf8)..)
-                                .unwrap_or("");
-                        }
-                        if !before.is_empty() {
-                            next.push(Span {
-                                text: before.to_string(),
-                                origin: span.origin.clone(),
-                                precise: span.precise,
-                                argument: false,
-                            });
-                        }
-                        next.push(Span {
-                            text: replacement.clone(),
-                            origin: arg_origin.clone(),
-                            precise: *arg_precise,
-                            argument: true,
-                        });
-                        rest = after;
-                    }
+            let literal = |text: &str| {
+                (!text.is_empty()).then(|| Span {
+                    text: text.to_string(),
+                    origin: span.origin.clone(),
+                    precise: span.precise,
+                    argument: false,
+                })
+            };
+            // Only the whole name: the `%m` that starts `%maps` is not the parameter. What
+            // precedes it doesn't matter, since a name can't contain `%`: `%New%args` is
+            // `%New` and then the parameter.
+            while let Some((idx, _)) = rest.match_indices(name.as_str()).find(|(idx, _)| {
+                !rest[idx + name.len()..].starts_with(|c: char| c.is_alphanumeric())
+            }) {
+                let (mut before, mut after) = (&rest[..idx], &rest[idx + name.len()..]);
+                // IRIS's preprocessor pastes a quoted argument into `$g(%m)` as the string
+                // alone: it drops the `$g(` and the one character after the parameter,
+                // taken for the `)`. Its own classes rely on it. `$$g(` is a call.
+                if replacement.starts_with('"')
+                    && before.len() >= 3
+                    && before.is_char_boundary(before.len() - 3)
+                    && before[before.len() - 3..].eq_ignore_ascii_case("$g(")
+                    && !before[..before.len() - 3].ends_with('$')
+                {
+                    before = &before[..before.len() - 3];
+                    after = after
+                        .get(after.chars().next().map_or(0, char::len_utf8)..)
+                        .unwrap_or("");
                 }
+                next.extend(literal(before));
+                next.push(Span {
+                    text: replacement.clone(),
+                    origin: arg_origin.clone(),
+                    precise: *arg_precise,
+                    argument: true,
+                });
+                rest = after;
             }
+            next.extend(literal(rest));
         }
         spans = next;
     }
@@ -1303,19 +1275,19 @@ fn substitute_macro_body<'a>(
     Ok(items)
 }
 
-// Builds the diagnostic's kind for something left unresolved; `into_source_map` places it.
-type UnresolvedError = Box<dyn Fn(String) -> TypeErrorKind>;
-
 #[derive(Default)]
 struct DoneList {
     text: String,
     map: SourceMapVec,
     included: HashMap<String, OLC>,
+    // Each top-level macro call's own source span, for `macro_expansion_at_position`. Only a
+    // call visible directly in the routine's source — one nested inside another macro's
+    // `#define`d body has no source span of its own to record.
     invocations: Vec<std::ops::Range<usize>>,
     // `#include`s naming a file not open in the workspace — dropped rather than spliced back in
     // literally, since the raw `#include Name` text rarely re-parses and would otherwise mask
     // this diagnostic behind a generic syntax error.
-    unresolved: Vec<(UnresolvedError, String, Origin)>,
+    unresolved: Vec<(TypeErrorKind, Origin)>,
     // The `#include`s among them, for a class, whose `Include` line reports them itself.
     failed_includes: Vec<FailedInclude>,
     include_directives: Vec<(std::ops::Range<usize>, String)>,
@@ -1327,35 +1299,21 @@ struct DoneList {
 impl DoneList {
     fn note_failed_include(&mut self, name: String, reason: Option<String>, origin: &Origin) {
         self.failed_includes.push((name.clone(), reason.clone()));
-        let make = move |name| match &reason {
+        let kind = match reason {
             None => TypeErrorKind::CannotFindInclude { name },
             Some(reason) => TypeErrorKind::IrisLookupFailed {
                 lookup: IrisLookup {
                     kind: DocKind::Inc,
                     name,
                 },
-                reason: reason.clone(),
+                reason,
             },
         };
-        self.note_unresolved(make, name, origin);
+        self.note_unresolved(kind, origin);
     }
 
-    fn note_unresolved(
-        &mut self,
-        make: impl Fn(String) -> TypeErrorKind + 'static,
-        name: String,
-        origin: &Origin,
-    ) {
-        self.unresolved.push((Box::new(make), name, origin.clone()));
-    }
-
-    // Records a top-level macro call's own source span, for `macro_expansion_at_position`.
-    // Only meaningful for a call visible directly in the routine's source — one nested inside
-    // another macro's `#define`d body has no source span of its own to record.
-    fn note_invocation(&mut self, origin: &Origin) {
-        if origin.uri.is_none() {
-            self.invocations.push(origin.range.clone());
-        }
+    fn note_unresolved(&mut self, kind: TypeErrorKind, origin: &Origin) {
+        self.unresolved.push((kind, origin.clone()));
     }
 
     fn push(&mut self, text: &str, origin: &Origin, precise: bool) {
@@ -1427,12 +1385,12 @@ impl DoneList {
         map.unresolved = self
             .unresolved
             .into_iter()
-            .filter_map(|(make, name, origin)| {
+            .filter_map(|(kind, origin)| {
                 let mut chain: Vec<_> =
                     std::iter::successors(Some(&origin), |o| o.parent.as_deref()).collect();
                 let top = chain.pop()?;
                 let mut diagnostic: Diagnostic =
-                    make(name).at(map.range_in(&top.uri, &top.range)?).into();
+                    kind.at(map.range_in(&top.uri, &top.range)?).into();
                 for hop in chain.into_iter().rev() {
                     diagnostic
                         .related_information
