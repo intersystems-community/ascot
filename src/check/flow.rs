@@ -341,7 +341,6 @@ impl<'a> Flow<'a> {
         self.handle_void()
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_procedure(
         env: &'a CodeEnv<'a>,
         range: bindings::Range,
@@ -349,7 +348,6 @@ impl<'a> Flow<'a> {
         public_list: ProcedureBlock,
         output: WithRange<Option<Option<Ty>>>,
         handler: impl FnOnce(&mut Self) -> Result<(), TypeError>,
-        auto_return: bool,
         // Whether the signature can say `Output`: a method's can, a label's can't.
         output_keyword: bool,
     ) -> Result<Vec<String>, TypeError> {
@@ -364,7 +362,7 @@ impl<'a> Flow<'a> {
             output,
             None,
             handler,
-            auto_return,
+            true,
             output_keyword,
         )
         .map(|effects| effects.creates)
@@ -856,14 +854,9 @@ impl<'a> Flow<'a> {
         self.bindings.is_some()
     }
 
+    // `Throw`, `Halt`, a `Goto` out of the body: this path is done, with none of
+    // `handle_quit`/`handle_return`'s output-type/loop-context bookkeeping.
     pub(crate) fn handle_void(&mut self) -> Result<(), TypeError> {
-        self.bindings = None;
-        Ok(())
-    }
-
-    // `Throw` always transfers control away -- same "this path is done" effect as
-    // `handle_quit`/`handle_return`, minus their output-type/loop-context bookkeeping.
-    pub(crate) fn handle_throw(&mut self) -> Result<(), QuasiTypeError> {
         self.bindings = None;
         Ok(())
     }
@@ -876,7 +869,7 @@ impl<'a> Flow<'a> {
         {
             self.add_soft_diagnostic(TypeErrorKind::TrapReenters { var: var.name() }.into());
         }
-        self.handle_throw()
+        Ok(self.handle_void()?)
     }
 
     // `var` now names `label`, a handler of this body. A trap can fire anywhere from here on, so
