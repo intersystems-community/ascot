@@ -18,8 +18,10 @@ impl Walk for Statement {
             Statement::TransactionStatement(tp) => tp.walk(w),
             Statement::Call(call) => call.walk(w),
             Statement::ExplainStatement(explain) => explain.walk(w),
-            Statement::Truncate(_)
-            | Statement::SetOption(_)
+            Statement::Truncate(truncate) => {
+                w.each_once(truncate.options.iter().map(|(_, option)| option))
+            }
+            Statement::SetOption(_)
             | Statement::GrantStatement(_)
             | Statement::RevokeStatement(_)
             | Statement::SetMlConfigurationStatement(_)
@@ -248,6 +250,14 @@ impl Walk for DDL {
                     source.walk(w)
                 }
             }
+            DDL::Load {
+                spec:
+                    LoadSpecification::Data {
+                        hints: Some(LoadHints::Set(hints)),
+                        ..
+                    },
+                ..
+            } => w.each_once(hints.0.iter().map(|(hint, _)| hint)),
             _ => {}
         }
     }

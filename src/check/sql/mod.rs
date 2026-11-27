@@ -145,6 +145,22 @@ impl Walker<'_> {
         self.unchecked = was;
     }
 
+    // TRUNCATE TABLE's options and LOAD's hints, each taken once (measured on 2026.2).
+    fn each_once<'a, T: tygr::Grammar + Print + 'a>(
+        &self,
+        words: impl Iterator<Item = &'a Ranged<T>>,
+    ) {
+        let mut seen = std::collections::HashSet::new();
+        for word in words {
+            let option = word.ranged.print();
+            if !seen.insert(option.to_uppercase())
+                && let Some(check) = self.check
+            {
+                check.report(TypeErrorKind::SqlRepeatedOption { option }, &word.range());
+            }
+        }
+    }
+
     fn push_frame(&mut self) {
         self.frames.push(Frame::default());
     }

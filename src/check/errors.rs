@@ -1277,6 +1277,25 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Too many arguments: '{name}' takes {takes}; the statement fails when it runs"]
     SqlTooManyArguments { name: String, takes: ArgCount },
+    /// A `TRUNCATE TABLE` option or a `LOAD` hint written twice. INSERT, UPDATE, DELETE and SELECT
+    /// take an option twice; these two statements take each of theirs once, and IRIS refuses to
+    /// compile the statement (SQLCODE -1, `IDENTIFIER expected, reserved word %NOLOCK found`).
+    ///
+    /// ```objectscript env=none
+    /// Class Demo.SqlRepeatedOption
+    /// {
+    ///
+    /// ClassMethod Clear()
+    /// {
+    ///     &sql(TRUNCATE TABLE %NOLOCK %NOLOCK Demo.Person) //! A3825
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A3825"]
+    #[severity = Error]
+    #[message = "Option '{option}' is given twice; TRUNCATE TABLE and LOAD take each of theirs once"]
+    SqlRepeatedOption { option: String },
     /// A table, field or procedure of embedded SQL the workspace doesn't settle, checked against
     /// IRIS declarations from before ascot recorded SQL names (format 1.0): the schema's package
     /// has classes there, and any of them may project the name through a `SqlTableName`,

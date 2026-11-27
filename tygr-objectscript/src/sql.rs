@@ -739,11 +739,6 @@ macro_rules! scalar_functions {
     (@name $name:literal $core:literal) => { $core };
 }
 
-fn each_once(mut words: impl Iterator<Item = String>) -> bool {
-    let mut seen = std::collections::HashSet::new();
-    words.all(|word| seen.insert(word.to_uppercase()))
-}
-
 #[tygr_objectscript_macros::levels]
 pub mod leveled {
     pub type Parenthesized<T> = Wrap<(StringEq!("("), Space), T, (Space, StringEq!(")"))>;
@@ -2803,21 +2798,13 @@ pub mod leveled {
         pub where_clause: Option<(Space1, DmlWhereClause)>,
     }
 
-    /// 2026.2 refuses `TRUNCATE TABLE %NOLOCK %NOLOCK t` and takes the options in any order.
+    /// The options in any order; each once is the check's rule (A3825).
     #[derive(Grammar)]
-    #[tygr(validated)]
     pub struct Truncate {
         pub kw: Kw!("TRUNCATE TABLE"),
-        pub options: Vec<(Space1, TruncateOption)>,
+        pub options: Vec<(Space1, Ranged<TruncateOption>)>,
         pub table: (Space1, NotFollowedBy<OptionWord>, TableName),
         pub alias: Option<Alias>,
-    }
-
-    impl Validate for Truncate {
-        const REQUIREMENT: &'static str = "take each option once";
-        fn validate(&self) -> bool {
-            super::each_once(self.options.iter().map(|(_, option)| option.print()))
-        }
     }
 
     #[derive(Grammar)]
@@ -3015,44 +3002,13 @@ pub mod leveled {
         Into(Kw!("INTO"), Space, VecSep<TargetSpecification, ArgSep>),
     }
 
+    /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383, "CTE is only supported for SELECT…")
+    /// and takes a parenthesized later one; the grammar takes both.
     #[derive(Grammar)]
-    #[tygr(validated)]
-    #[sugar]
     pub struct SelectStatement {
         pub with_clause: Option<(WithClause, Space)>,
         pub query: Query,
         pub tail: Option<(Space1, Tail)>,
-    }
-
-    /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383), not a parenthesized later one.
-    impl Validate for SelectStatement {
-        const REQUIREMENT: &'static str = "begin with SELECT after WITH";
-        fn validate(&self) -> bool {
-            self.with_clause.is_none()
-                || matches!(self.query.0.items[0], QueryTerm::QuerySpecification(_))
-        }
-    }
-
-    /// A lone SELECT's row limit before ORDER BY stands after it in the core, reading the same (LIMIT 2 ORDER BY a
-    /// DESC gives the rows ORDER BY a DESC LIMIT 2 gives); in a union a row limit limits its operand and stays.
-    impl Desugar for SelectStatement {
-        type Core = core::SelectStatement;
-        fn desugar(self) -> Self::Core {
-            let mut query = self.query.desugar();
-            let mut tail = self.tail.desugar();
-            if let [core::QueryTerm::QuerySpecification(query)] = &mut query.0.items[..]
-                && let Some((_, tail)) = &mut tail
-                && tail.limit.is_none()
-                && let core::SelectBody::Plain(_, limit) = &mut query.ranged.body
-            {
-                tail.limit = limit.take();
-            }
-            core::SelectStatement {
-                with_clause: self.with_clause.desugar(),
-                query,
-                tail,
-            }
-        }
     }
 
     #[derive(Grammar)]
@@ -5447,28 +5403,21 @@ pub mod leveled {
         },
     }
 
+    /// BULK takes %NOJOURN then %NOINDEX: 2026.2 refuses `BULK %NOINDEX %NOJOURN`.
     #[derive(Grammar)]
     pub enum LoadHints {
         Bulk(
             Kw!("BULK"),
             Space1,
-            Option<(Kw!("%NOINDEX"), Space1)>,
             Option<(Kw!("%NOJOURN"), Space1)>,
+            Option<(Kw!("%NOINDEX"), Space1)>,
         ),
         Set(LoadHintSet),
     }
 
-    /// The % hints in any order, each once: 2026.2 rejects %NOJOURN %NOJOURN.
+    /// The % hints in any order; each once is the check's rule (A3825).
     #[derive(Grammar)]
-    #[tygr(validated)]
-    pub struct LoadHintSet(pub Vec1<(LoadHint, Space1)>);
-
-    impl Validate for LoadHintSet {
-        const REQUIREMENT: &'static str = "give each hint once";
-        fn validate(&self) -> bool {
-            super::each_once(self.0.iter().map(|(hint, _)| hint.print()))
-        }
-    }
+    pub struct LoadHintSet(pub Vec1<(Ranged<LoadHint>, Space1)>);
 
     #[derive(Grammar)]
     pub enum LoadHint {
