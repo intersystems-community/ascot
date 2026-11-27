@@ -3409,61 +3409,46 @@ fn collection_method(
 ) -> Option<std::sync::Arc<TyProcedure>> {
     let key = kind.key_ty();
     let element = element.clone();
-    let arg = |name: &str, ty: Ty, mode| NormalArg {
-        mode,
-        name: name.to_string(),
-        ty: Some(ty),
-        default: None,
-        declared_at: None,
-        variadic: false,
-    };
     let (normal_args, out) = match name {
         // The `*OfDT` classes default the key and take `RemoveAt(key)`; the `*OfObj` classes
         // require it and take `RemoveAt(key, Output success)`. An unknown element gets both.
         "GetAt" => {
-            let mut key = arg("key", key, None);
-            if datatype != Some(false) {
-                key.default = Some(
-                    match kind {
-                        CollectionClass::List => "0",
-                        CollectionClass::Array => "\"\"",
-                    }
-                    .into(),
-                );
-            }
-            (vec![key], element)
+            let default = (datatype != Some(false)).then_some(match kind {
+                CollectionClass::List => "0",
+                CollectionClass::Array => "\"\"",
+            });
+            (vec![arg(None, "key", key, default)], element)
         }
         "RemoveAt" => {
-            let mut args = vec![arg("key", key, None)];
+            let mut args = vec![arg(None, "key", key, None)];
             if datatype != Some(true) {
-                args.push(arg("success", Ty::from("%Boolean"), Some(RefMode::Output)));
+                args.push(arg(Some(RefMode::Output), "success", "%Boolean", None));
             }
             (args, element)
         }
-        "GetNext" | "GetPrevious" => (vec![arg("key", key, Some(RefMode::ByRef))], element),
+        "GetNext" | "GetPrevious" => (vec![arg(Some(RefMode::ByRef), "key", key, None)], element),
         "SetAt" => (
-            vec![arg("element", element, None), arg("key", key, None)],
+            vec![
+                arg(None, "element", element, None),
+                arg(None, "key", key, None),
+            ],
             Ty::from("%Status"),
         ),
-        "Insert" if kind == CollectionClass::List => {
-            (vec![arg("element", element, None)], Ty::from("%Status"))
-        }
+        "Insert" if kind == CollectionClass::List => (
+            vec![arg(None, "element", element, None)],
+            Ty::from("%Status"),
+        ),
         "InsertAt" if kind == CollectionClass::List => (
-            vec![arg("element", element, None), arg("key", key, None)],
+            vec![
+                arg(None, "element", element, None),
+                arg(None, "key", key, None),
+            ],
             Ty::from("%Status"),
         ),
         "Count" => (vec![], Ty::from("%Integer")),
         _ => return None,
     };
-    Some(std::sync::Arc::new(TyProcedure {
-        normal_args,
-        variadic_arg: None,
-        out: Some(out),
-        procedure_block: Some(vec![]),
-        formal_list: true,
-        uri: None,
-        declared_at: None,
-    }))
+    Some(generated_procedure(normal_args, None, out))
 }
 
 // `$SYSTEM.A.B` as the class `%SYSTEM.A.B`, however many parts: the `%SYSTEM` classes have no
@@ -3945,7 +3930,7 @@ fn check_macro_call<'a>(
             .args
             .iter()
             .flat_map(|args| args.items.iter())
-            .try_for_each(|arg| check_macro_arg_as_expr(arg, &Ty::Any, env, flow)),
+            .try_for_each(|arg| check_macro_arg_as_expr(arg, env, flow)),
         None => Err(TypeErrorKind::UndefinedMacro {
             name: name.clone(),
             suggestions: Suggestions(top_similar(&name, env.known_macro_names(), 20)),
@@ -3958,7 +3943,6 @@ fn check_macro_call<'a>(
 // is re-parsed as an expression here, which the env shifted to its start places in the document.
 fn check_macro_arg_as_expr<'a>(
     arg: &Ranged<cos::MacroArg>,
-    expected_ty: &Ty,
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
 ) -> Result<(), QuasiTypeError> {
@@ -3967,12 +3951,8 @@ fn check_macro_arg_as_expr<'a>(
             reason: "expected an expression".into(),
         })
     })?;
-    let ty = expr
-        .into_inner()
-        .into_inner()
-        .to_ty(&env.shifted(arg.start), flow)?;
-    env.assert_compatible(ty, expected_ty)
-        .map_err(Incompatible::general)
+    let expr = expr.into_inner().into_inner();
+    expr.to_ty(&env.shifted(arg.start), flow).map(drop)
 }
 
 impl CheckExprInner for Variable {

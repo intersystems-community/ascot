@@ -78,9 +78,7 @@ pub(crate) struct Methods;
 
 // How `..X` is used, which decides the `%Dispatch*` hook a missing property falls back to.
 pub(crate) trait Access {
-    fn hook() -> Option<&'static str> {
-        None
-    }
+    const HOOK: Option<&'static str> = None;
 }
 pub(crate) struct Read;
 pub(crate) struct Assign;
@@ -91,19 +89,13 @@ pub(crate) struct Called;
 // An index key: IRIS wants a declared property, hook or not.
 pub(crate) struct Indexed;
 impl Access for Read {
-    fn hook() -> Option<&'static str> {
-        Some("%DispatchGetProperty")
-    }
+    const HOOK: Option<&'static str> = Some("%DispatchGetProperty");
 }
 impl Access for Assign {
-    fn hook() -> Option<&'static str> {
-        Some("%DispatchSetProperty")
-    }
+    const HOOK: Option<&'static str> = Some("%DispatchSetProperty");
 }
 impl Access for AssignNode {
-    fn hook() -> Option<&'static str> {
-        Some("%DispatchSetMultidimProperty")
-    }
+    const HOOK: Option<&'static str> = Some("%DispatchSetMultidimProperty");
 }
 impl Access for Called {}
 impl Access for Indexed {}
@@ -199,7 +191,7 @@ impl<A: Access> Namespace for Properties<A> {
         mem: &str,
         find: impl FnOnce(&str) -> Option<TyProcedureOrAny>,
     ) -> Option<PropertyTy> {
-        let hook = find(A::hook()?)?;
+        let hook = find(A::HOOK?)?;
         let hook = hook.procedure();
         if hook.is_some_and(|hook| !serves(hook, 0, mem)) {
             return None;
@@ -305,15 +297,15 @@ impl<T> Member<T> {
     }
 }
 
-fn generated_procedure(
+pub(super) fn generated_procedure(
     normal_args: Vec<NormalArg>,
     variadic_arg: Option<VariadicArg>,
-    out: Option<Ty>,
+    out: Ty,
 ) -> Arc<TyProcedure> {
     Arc::new(TyProcedure {
         normal_args,
         variadic_arg,
-        out,
+        out: Some(out),
         procedure_block: Some(vec![]),
         formal_list: true,
         uri: None,
@@ -327,7 +319,12 @@ fn any_args() -> Option<VariadicArg> {
 }
 
 // A generated method's argument.
-fn arg(mode: Option<RefMode>, name: &str, ty: impl Into<Ty>, default: Option<&str>) -> NormalArg {
+pub(super) fn arg(
+    mode: Option<RefMode>,
+    name: &str,
+    ty: impl Into<Ty>,
+    default: Option<&str>,
+) -> NormalArg {
     NormalArg::new(
         mode,
         name.into(),
@@ -419,7 +416,7 @@ fn query_methods(
 ) -> Vec<(String, Generated)> {
     let (by_ref, output) = (Some(RefMode::ByRef), Some(RefMode::Output));
     let handle = |mode| arg(mode, "qHandle", "%Binary", None);
-    let status = || Some(Ty::from("%Status"));
+    let status = || Ty::from("%Status");
     let proc = generated_procedure;
     let execute = std::iter::once(handle(output))
         .chain(normal.iter().cloned())
@@ -427,11 +424,7 @@ fn query_methods(
     [
         (
             "Func",
-            proc(
-                normal,
-                variadic.clone(),
-                Some(Ty::from("%SQL.StatementResult")),
-            ),
+            proc(normal, variadic.clone(), Ty::from("%SQL.StatementResult")),
         ),
         ("Execute", proc(execute, variadic, status())),
         (
@@ -536,7 +529,7 @@ impl Shape {
             Out::Boolean => Ty::from("%Boolean"),
             Out::Oid => Ty::from("%ObjectIdentity"),
         };
-        (generated_procedure(args, None, Some(out)), is_instance_only)
+        (generated_procedure(args, None, out), is_instance_only)
     }
 }
 
@@ -566,7 +559,7 @@ const SERIAL_ACCESSORS: &[Shape] = &[Shape("IsEmpty", Arg::None, Out::Boolean, t
 fn collection_methods() -> Vec<(String, Generated)> {
     let val = || arg(None, "val", "%String", Some("\"\""));
     let delim = || arg(None, "delim", "%String", Some("\"\""));
-    let string = || Some(Ty::from("%String"));
+    let string = || Ty::from("%String");
     [
         (
             "BuildValueArray",
@@ -574,7 +567,7 @@ fn collection_methods() -> Vec<(String, Generated)> {
                 arg(None, "value", "%Binary", None),
                 arg(Some(RefMode::ByRef), "array", "%Binary", None),
             ],
-            Some(Ty::from("%Status")),
+            Ty::from("%Status"),
         ),
         ("CollectionToDisplay", vec![val(), delim()], string()),
         ("CollectionToOdbc", vec![val()], string()),
@@ -987,7 +980,7 @@ impl<'a> WorkspaceEnv<'a> {
                 let args = args.iter().cloned().chain(extra).collect();
                 (
                     suffix.to_string(),
-                    (generated_procedure(args, None, Some(out)), false),
+                    (generated_procedure(args, None, out), false),
                 )
             })
             .collect()
@@ -1184,7 +1177,7 @@ impl<'a> WorkspaceEnv<'a> {
                             TyProcedureOrAny::Procedure(generated_procedure(
                                 vec![],
                                 any_args(),
-                                Some(Ty::This),
+                                Ty::This,
                             ))
                         } else {
                             TyProcedureOrAny::Any
@@ -1203,8 +1196,7 @@ impl<'a> WorkspaceEnv<'a> {
                                             name: cls.clone(),
                                         },
                                         reason: reason.clone(),
-                                    }
-                                    .at(range),
+                                    },
                                     None => TypeErrorKind::UnconfirmedMember {
                                         cls: receiver.name.clone(),
                                         mem: mem.to_string(),
@@ -1214,10 +1206,9 @@ impl<'a> WorkspaceEnv<'a> {
                                         } else {
                                             UnseenClass::Missing(cls.clone())
                                         },
-                                    }
-                                    .at(range),
+                                    },
                                 };
-                                self.add_soft_diagnostic(err.into());
+                                self.add_soft_diagnostic(err.at(range).into());
                                 return Some(Ok(Some(Member::undeclared(N::Ty::default()))));
                             }
                         }
@@ -1555,20 +1546,17 @@ impl<'a> WorkspaceEnv<'a> {
                     name: cls.to_string(),
                 },
                 reason,
-            }
-            .at(range),
+            },
             // Its file is in the workspace; the parse error is reported there.
             Some(Class::Unknown(None)) => return,
             None if !has_iris => TypeErrorKind::CannotFindClass {
                 cls: cls.to_string(),
-            }
-            .at(range),
+            },
             None => TypeErrorKind::UnconfirmedClass {
                 cls: cls.to_string(),
-            }
-            .at(range),
+            },
         };
-        self.add_soft_diagnostic(diagnostic.into());
+        self.add_soft_diagnostic(diagnostic.at(range).into());
     }
 
     // Where the include file `name` is declared, for go-to-definition on an `Include`.
@@ -1689,10 +1677,7 @@ impl<'a> WorkspaceEnv<'a> {
             return Ok(());
         };
         let downcast = incompatible.downcast;
-        let err = match name {
-            Some(name) => incompatible.assign(name),
-            None => incompatible.general(),
-        };
+        let err = incompatible.error(name);
         if downcast {
             self.add_soft_error(err, range);
             return Ok(());
@@ -1917,38 +1902,27 @@ pub(crate) struct Incompatible {
 }
 
 impl Incompatible {
-    fn assign(self, name: String) -> QuasiTypeError {
-        if self.downcast {
-            TypeErrorKind::DowncastFromAbstract {
+    fn error(self, name: Option<String>) -> QuasiTypeError {
+        let Incompatible {
+            source,
+            target,
+            downcast,
+        } = self;
+        match (name, downcast) {
+            (Some(name), true) => TypeErrorKind::DowncastFromAbstract {
                 name,
-                source: self.source,
-                target: self.target,
-            }
-            .into()
-        } else {
-            TypeErrorKind::AssignIncompatible {
+                source,
+                target,
+            },
+            (Some(name), false) => TypeErrorKind::AssignIncompatible {
                 name,
-                source: self.source,
-                target: self.target,
-            }
-            .into()
+                source,
+                target,
+            },
+            (None, true) => TypeErrorKind::TypeDowncast { source, target },
+            (None, false) => TypeErrorKind::TypeIncompatible { source, target },
         }
-    }
-
-    pub(crate) fn general(self) -> QuasiTypeError {
-        if self.downcast {
-            TypeErrorKind::TypeDowncast {
-                source: self.source,
-                target: self.target,
-            }
-            .into()
-        } else {
-            TypeErrorKind::TypeIncompatible {
-                source: self.source,
-                target: self.target,
-            }
-            .into()
-        }
+        .into()
     }
 }
 
@@ -2323,11 +2297,8 @@ impl<'a> CodeEnv<'a> {
     }
 
     pub(crate) fn label_writes(&self, label: &str) -> Vec<String> {
-        self.label_writes
-            .borrow()
-            .get(label)
-            .map(|writes| writes.iter().cloned().collect())
-            .unwrap_or_default()
+        let writes = self.label_writes.borrow();
+        writes.get(label).into_iter().flatten().cloned().collect()
     }
 
     pub(crate) fn label_writes_total(&self) -> usize {
@@ -2502,28 +2473,14 @@ impl<'a> CodeEnv<'a> {
     }
 }
 
-impl<'a> Positions for DocumentEnv<'a> {
-    fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
-        self.olc
-            .offset_to_line_character(offset)
-            .unwrap_or_else(|e| e.bound)
-    }
-
-    fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize {
-        self.olc
-            .line_character_to_offset(line_character)
-            .unwrap_or_else(|e| e.bound)
-    }
-}
-
 // A method body's offsets, shifted to where the body sits in its class.
 impl<'a> Positions for CodeEnv<'a> {
     fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
-        self.base.offset_to_line_character(offset + self.offset)
+        Positions::offset_to_line_character(self.base.olc, offset + self.offset)
     }
 
     fn line_character_to_offset(&self, line_character: (usize, usize)) -> usize {
-        self.base.line_character_to_offset(line_character) - self.offset
+        Positions::line_character_to_offset(self.base.olc, line_character) - self.offset
     }
 }
 
