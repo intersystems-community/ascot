@@ -236,11 +236,8 @@ impl Namespace for Methods {
         let normal_args = hook.normal_args.get(skip..).unwrap_or_default().to_vec();
         // The compiler gives a hook declaring no more than its name arguments the canonical
         // `Args...`; one declared without a return type returns what it dispatches to: anything.
-        let variadic_arg = (hook.variadic_arg.clone()).or_else(|| {
-            normal_args
-                .is_empty()
-                .then(|| VariadicArg::new(None, "args".into(), None))
-        });
+        let variadic_arg =
+            (hook.variadic_arg.clone()).or_else(|| normal_args.is_empty().then(any_args).flatten());
         Some(TyProcedureOrAny::Procedure(Arc::new(TyProcedure {
             normal_args,
             variadic_arg,
@@ -277,7 +274,7 @@ impl Namespace for Methods {
     }
 
     fn reported(member: bindings::MemberInfo) -> Option<(TyProcedureOrAny, bool)> {
-        let location = location(&member);
+        let location = location(member.uri.as_deref());
         let (m, is_instance_only) = match member.kind {
             MemberKind::Method(m) => (m, true),
             MemberKind::ClassMethod(m) => (m, false),
@@ -294,23 +291,6 @@ impl Namespace for Methods {
 
     fn method(proc: TyProcedureOrAny) -> Option<TyProcedureOrAny> {
         Some(proc)
-    }
-}
-
-// Why `find` can't even say whether the member exists.
-enum FindError {
-    NoSuchClass(String),
-    InstanceOnly(String),
-}
-
-impl From<FindError> for QuasiTypeError {
-    fn from(err: FindError) -> Self {
-        match err {
-            FindError::NoSuchClass(cls) => TypeErrorKind::CannotFindClass { cls }.into(),
-            FindError::InstanceOnly(mem) => {
-                TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name: mem }.into()
-            }
-        }
     }
 }
 
@@ -356,13 +336,11 @@ fn arg(mode: Option<RefMode>, name: &str, ty: impl Into<Ty>, default: Option<&st
     )
 }
 
-// Where a host-reported member is declared: only known when the host could map it to a uri
-// (e.g. not a bare IRIS system class), and then only as far as the document.
-fn location(member: &bindings::MemberInfo) -> Option<bindings::Location> {
-    member
-        .uri
-        .clone()
-        .map(|uri| bindings::Location::new(uri, bindings::Range::default()))
+// Where a host-reported class or member is declared: only known when the host could map it to a
+// uri (e.g. not a bare IRIS system class), and then only as far as the document.
+fn location(uri: Option<&str>) -> Option<bindings::Location> {
+    let uri = uri?.to_string();
+    Some(bindings::Location::new(uri, bindings::Range::default()))
 }
 
 // The `IDKEY` index IRIS gives a persistent class that declares no id key: no `On` clause, so
@@ -392,10 +370,12 @@ fn iris_found<N: Namespace>(mut member: bindings::MemberInfo, cls: &str) -> Opti
     if crate::mask::dropped(&origin, &member.name) {
         return None;
     }
-    if let Some(masked) = crate::mask::replacement(&origin, &member.name, &member.kind) {
+    if let Some(masked) =
+        crate::mask::declared(&origin, &member.name, MemberNs::of_info(&member.kind))
+    {
         member.kind = masked.kind.clone();
     }
-    let location = location(&member);
+    let location = location(member.uri.as_deref());
     let final_ = member.final_;
     let (ty, is_instance_only) = N::reported(member)?;
     Some(Found {
@@ -414,13 +394,7 @@ fn location_of(class: &Class) -> Option<bindings::Location> {
         Class::Workspace(uri, details) => {
             Some(bindings::Location::new(uri.clone(), details.name.range))
         }
-        Class::Iris(info) => {
-            let zero = bindings::Range::point(bindings::Position {
-                line: 0,
-                character: 0,
-            });
-            Some(bindings::Location::new(info.uri.clone()?, zero))
-        }
+        Class::Iris(info) => location(info.uri.as_deref()),
         Class::Unknown(_) => None,
     }
 }
@@ -741,13 +715,10 @@ impl<'a> WorkspaceEnv<'a> {
         {
             Some(on_new) => {
                 let new = Arc::new(TyProcedure {
-                    normal_args: on_new.normal_args.clone(),
-                    variadic_arg: on_new.variadic_arg.clone(),
                     out: Some(Ty::This),
                     procedure_block: Some(vec![]),
                     formal_list: true,
-                    uri: on_new.uri.clone(),
-                    declared_at: on_new.declared_at,
+                    ..TyProcedure::clone(&on_new)
                 });
                 vec![("%New".to_string(), (new, false))]
             }
@@ -1107,8 +1078,8 @@ impl<'a> WorkspaceEnv<'a> {
         let Ty::OREF(obj) = ty else {
             return Ok(Some(Member::undeclared(N::Ty::default())));
         };
-        let at = |err: FindError| QuasiTypeError::from(err).into_error(|| range);
-        self.find::<N>(obj, mem, own, range).map_err(at)
+        self.find::<N>(obj, mem, own, range)
+            .map_err(|err| err.into_error(|| range))
     }
 
     // Dynamic dispatch: what a class overriding the hook makes of a member name no class has.
@@ -1183,11 +1154,12 @@ impl<'a> WorkspaceEnv<'a> {
         mem: &str,
         own: bool,
         range: bindings::Range,
-    ) -> Result<Option<Member<N::Ty>>, FindError> {
+    ) -> Result<Option<Member<N::Ty>>, QuasiTypeError> {
         let (ClsOrIns::Ins(receiver) | ClsOrIns::Cls(receiver)) = obj;
         // A missing superclass is reported where it is named; the receiver's class is for here.
         if own && self.resolve(&receiver.name).is_none() {
-            return Err(FindError::NoSuchClass(receiver.name.clone()));
+            let cls = receiver.name.clone();
+            return Err(TypeErrorKind::CannotFindClass { cls }.into());
         }
         let found = self
             .ancestry(&receiver.name)
@@ -1269,7 +1241,10 @@ impl<'a> WorkspaceEnv<'a> {
                     }
                 };
                 if found.is_instance_only && !obj.is_ins() {
-                    return Some(Err(FindError::InstanceOnly(mem.to_string())));
+                    let name = mem.to_string();
+                    return Some(Err(
+                        TypeErrorKind::AccessInstanceOnlyMemberFromClassContext { name }.into(),
+                    ));
                 }
                 let mut member = found.member;
                 let given = |param: &str| self.parameter_value(&receiver.name, param);
@@ -1689,12 +1664,17 @@ impl<'a> WorkspaceEnv<'a> {
     }
 
     // `""` is also the null OREF (`$$$NULLOREF`), so it goes wherever an object is expected:
-    // `Set`, `#Dim` defaults, arguments and return values alike.
-    pub(crate) fn assert_value_compatible(
+    // `Set`, `#Dim` defaults, arguments and return values alike. Any other incompatibility of a
+    // value assigned to or passed as `name`, or returned (none), is raised, except a downcast: a
+    // warning, reported softly so that checking goes on.
+    pub(crate) fn check_value(
         &self,
         source: &PowerTy,
         target: &Ty,
-    ) -> Result<(), Incompatible> {
+        range: bindings::Range,
+        name: Option<String>,
+    ) -> Result<(), QuasiTypeError> {
+        self.check_pattern(source, target, range, name.as_deref());
         if matches!(source, PowerTy::Const(Const::String(s)) if s.is_empty())
             && matches!(target, Ty::OREF(_))
         {
@@ -1705,7 +1685,19 @@ impl<'a> WorkspaceEnv<'a> {
             .maybe_defined()
             .cloned()
             .unwrap_or_default();
-        self.assert_compatible(source, target)
+        let Err(incompatible) = self.assert_compatible(source, target) else {
+            return Ok(());
+        };
+        let downcast = incompatible.downcast;
+        let err = match name {
+            Some(name) => incompatible.assign(name),
+            None => incompatible.general(),
+        };
+        if downcast {
+            self.add_soft_error(err, range);
+            return Ok(());
+        }
+        Err(err)
     }
 
     // A constant held to the PATTERN of the type it is assigned to or passed as `name`, or
@@ -1803,19 +1795,11 @@ impl<'a> WorkspaceEnv<'a> {
                 params,
             };
         }
-        let y_ancestors: HashSet<String> = self.ancestors(&y.name).into_iter().collect();
-        for a in self.ancestors(&x.name) {
-            if y_ancestors.contains(&a) {
-                return ClassTy::from(a);
-            }
-        }
-        ClassTy::from("%Any".to_string())
-    }
-
-    // `cls` and its ancestors, nearest first. Not IRIS's exact MRO, but any
-    // shared ancestor is a sound upper bound for merging.
-    fn ancestors(&self, cls: &str) -> Vec<String> {
-        self.ancestry(cls).map(|(cls, _)| cls).collect()
+        // Nearest first. Not IRIS's exact MRO, but any shared ancestor is a sound upper bound.
+        let y_ancestors: HashSet<String> = self.ancestry(&y.name).map(|(cls, _)| cls).collect();
+        let x_ancestors: Vec<String> = self.ancestry(&x.name).map(|(cls, _)| cls).collect();
+        let shared = x_ancestors.into_iter().find(|a| y_ancestors.contains(a));
+        ClassTy::from(shared.unwrap_or_else(|| "%Any".to_string()))
     }
 
     pub(super) fn is_persistent(&self, cls: &str) -> bool {
@@ -1933,26 +1917,6 @@ pub(crate) struct Incompatible {
 }
 
 impl Incompatible {
-    // Reports the incompatibility of a value assigned to or passed as `name`, or returned (none):
-    // a downcast is a warning, reported softly so that checking goes on; anything else is raised.
-    pub(crate) fn raise(
-        self,
-        env: &WorkspaceEnv<'_>,
-        range: bindings::Range,
-        name: Option<String>,
-    ) -> Result<(), QuasiTypeError> {
-        let downcast = self.downcast;
-        let err = match name {
-            Some(name) => self.assign(name),
-            None => self.general(),
-        };
-        if downcast {
-            env.add_soft_error(err, range);
-            return Ok(());
-        }
-        Err(err)
-    }
-
     fn assign(self, name: String) -> QuasiTypeError {
         if self.downcast {
             TypeErrorKind::DowncastFromAbstract {
@@ -2092,6 +2056,10 @@ impl<'a> DocumentEnv<'a> {
         self.olc
     }
 
+    pub fn uri(&self) -> &str {
+        self.uri
+    }
+
     pub fn for_routine<'b>(
         &'b self,
         labels: ScopedLabels,
@@ -2102,7 +2070,7 @@ impl<'a> DocumentEnv<'a> {
             is_instance: false,
             offset: 0,
             this: None,
-            labels: Some(Rc::new(labels)),
+            labels: Rc::new(labels),
             method_name: None,
             macro_definitions: Some(macro_definitions),
             procedure_block: false,
@@ -2126,7 +2094,7 @@ impl<'a> DocumentEnv<'a> {
             is_instance,
             offset,
             this: Some(&cls.class),
-            labels: (!cls.include_labels.is_empty()).then(|| cls.include_labels.clone()),
+            labels: cls.include_labels.clone(),
             method_name: Some(method_name),
             procedure_block,
             trap_joins: Default::default(),
@@ -2215,7 +2183,7 @@ pub struct CodeEnv<'a> {
     base: &'a DocumentEnv<'a>,
     is_instance: bool,
     offset: usize,
-    labels: Option<Rc<ScopedLabels>>,
+    labels: Rc<ScopedLabels>,
     // The enclosing method's name, when known — `##super(...)` calls the superclass's version
     // of this same method, so resolving it needs to know which method that is.
     method_name: Option<&'a str>,
@@ -2238,6 +2206,10 @@ pub struct CodeEnv<'a> {
 impl<'a> CodeEnv<'a> {
     pub(crate) fn style(&self) -> Option<&crate::style::Styles> {
         self.base.style()
+    }
+
+    pub(crate) fn uri(&self) -> &str {
+        self.base.uri()
     }
 
     pub(crate) fn inlay_hints(&self) -> &bindings::InlayHintOptions {
@@ -2281,10 +2253,7 @@ impl<'a> CodeEnv<'a> {
         nested: ScopedLabels,
         is_procedure: bool,
     ) -> CodeEnv<'a> {
-        let mut labels: ScopedLabels = self
-            .labels
-            .iter()
-            .flat_map(|labels| labels.iter())
+        let mut labels: ScopedLabels = (self.labels.iter())
             .map(|(name, label)| {
                 let label = LabelEntry {
                     outside_block: is_procedure || label.outside_block,
@@ -2298,7 +2267,7 @@ impl<'a> CodeEnv<'a> {
             (name, label)
         }));
         CodeEnv {
-            labels: Some(Rc::new(labels)),
+            labels: Rc::new(labels),
             procedure_block: is_procedure || self.procedure_block,
             trap_joins: Default::default(),
             ..self.clone()
@@ -2306,7 +2275,7 @@ impl<'a> CodeEnv<'a> {
     }
 
     pub(crate) fn label_entry(&self, label: &str) -> Option<&LabelEntry> {
-        self.labels.as_ref().and_then(|labels| labels.get(label))
+        self.labels.get(label)
     }
 
     pub(crate) fn goto_leaves_block(&self, label: &str) -> bool {
@@ -2449,7 +2418,7 @@ impl<'a> CodeEnv<'a> {
                 cls: this.name().to_string(),
             }
             .at(range)),
-            Err(err) => Err(QuasiTypeError::from(err).into_error(|| range)),
+            Err(err) => Err(err.into_error(|| range)),
         }
     }
 
@@ -2458,54 +2427,48 @@ impl<'a> CodeEnv<'a> {
         label: Option<String>,
         routine: Option<String>,
     ) -> Result<TyProcedureOrAny, QuasiTypeError> {
-        match routine {
+        match (routine, label) {
             // `label^routine`: resolved against that routine's own labels -- in the workspace,
             // or via IRIS (see `resolve_rtn_labels`).
-            Some(routine) => match label {
-                Some(label) => match self.resolve_rtn_labels(&routine) {
-                    // A routine IRIS has without source: the curated signatures still cover the
-                    // labels the system macros call.
-                    Err(
-                        err @ QuasiTypeError::WithoutRange(
-                            TypeErrorKind::RoutineWithoutSource { .. }
-                            | TypeErrorKind::IrisLookupFailed { .. },
-                            _,
-                        ),
-                    ) => crate::mask::curated_label(&routine, &label)
-                        .map(|signature| {
-                            TyProcedureOrAny::Procedure(Arc::new(TyProcedure::from_label(
-                                signature, None,
-                            )))
+            (Some(routine), Some(label)) => match self.resolve_rtn_labels(&routine) {
+                // A routine IRIS has without source: the curated signatures still cover the
+                // labels the system macros call.
+                Err(
+                    err @ QuasiTypeError::WithoutRange(
+                        TypeErrorKind::RoutineWithoutSource { .. }
+                        | TypeErrorKind::IrisLookupFailed { .. },
+                        _,
+                    ),
+                ) => crate::mask::curated_label(&routine, &label)
+                    .map(|signature| {
+                        TyProcedureOrAny::Procedure(Arc::new(TyProcedure::from_label(
+                            signature, None,
+                        )))
+                    })
+                    .ok_or(err),
+                labels => match labels? {
+                    Some(labels) => labels.get(&label).cloned().ok_or_else(|| {
+                        QuasiTypeError::from(TypeErrorKind::CannotFindLabel {
+                            label,
+                            routine: InRoutine(Some(routine)),
                         })
-                        .ok_or(err),
-                    labels => match labels? {
-                        Some(labels) => match labels.get(&label) {
-                            Some(proc) => Ok(proc.clone()),
-                            None => Err(TypeErrorKind::CannotFindLabel {
-                                label,
-                                routine: InRoutine(Some(routine)),
-                            }
-                            .into()),
-                        },
-                        None => Ok(TyProcedureOrAny::Any),
-                    },
+                    }),
+                    None => Ok(TyProcedureOrAny::Any),
                 },
-                None => self
-                    .resolve_rtn_labels(&routine)
-                    .map(|_| TyProcedureOrAny::Any),
             },
+            (Some(routine), None) => self
+                .resolve_rtn_labels(&routine)
+                .map(|_| TyProcedureOrAny::Any),
             // No explicit routine: the current one.
-            None => match label {
-                Some(label) => match self.labels.as_ref().and_then(|labels| labels.get(&label)) {
-                    Some(label) => Ok(TyProcedureOrAny::Procedure(label.proc.clone())),
-                    None => Err(TypeErrorKind::CannotFindLabel {
-                        label,
-                        routine: InRoutine(None),
-                    }
-                    .into()),
-                },
-                None => Ok(TyProcedureOrAny::Any),
+            (None, Some(label)) => match self.label_entry(&label) {
+                Some(label) => Ok(TyProcedureOrAny::Procedure(label.proc.clone())),
+                None => Err(TypeErrorKind::CannotFindLabel {
+                    label,
+                    routine: InRoutine(None),
+                }
+                .into()),
             },
+            (None, None) => Ok(TyProcedureOrAny::Any),
         }
     }
 
@@ -2539,16 +2502,6 @@ impl<'a> CodeEnv<'a> {
     }
 }
 
-pub trait Locator: Positions {
-    fn uri(&self) -> &str;
-}
-
-impl<'a> Locator for DocumentEnv<'a> {
-    fn uri(&self) -> &str {
-        self.uri
-    }
-}
-
 impl<'a> Positions for DocumentEnv<'a> {
     fn offset_to_line_character(&self, offset: usize) -> (usize, usize) {
         self.olc
@@ -2560,12 +2513,6 @@ impl<'a> Positions for DocumentEnv<'a> {
         self.olc
             .line_character_to_offset(line_character)
             .unwrap_or_else(|e| e.bound)
-    }
-}
-
-impl<'a> Locator for CodeEnv<'a> {
-    fn uri(&self) -> &str {
-        self.base.uri()
     }
 }
 

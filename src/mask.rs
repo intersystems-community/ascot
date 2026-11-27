@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-use crate::bindings::{MemberInfo, MemberKind, RoutineInfo, Signature};
+use crate::bindings::{MemberInfo, RoutineInfo, Signature};
 use crate::check::types::Ty;
 use crate::declared::DeclaredClass;
 use crate::details::MemberNs;
@@ -76,15 +76,6 @@ pub(crate) fn is_abstract(cls: &str) -> bool {
 // Whether the mask says `cls` has no member `member`, whatever the dictionary lists.
 pub(crate) fn dropped(cls: &str, member: &str) -> bool {
     (RAW.classes.get(cls)).is_some_and(|c| c.drop.iter().any(|d| d == member))
-}
-
-/// The member of `cls` named `member` in `kind`'s namespace as the mask declares it, if it does.
-pub(crate) fn replacement(
-    cls: &str,
-    member: &str,
-    kind: &MemberKind,
-) -> Option<&'static MemberInfo> {
-    declared(cls, member, MemberNs::of_info(kind))
 }
 
 /// The member of `cls` named `member` in namespace `ns` as the mask declares it, if it does.

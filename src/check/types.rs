@@ -360,16 +360,11 @@ impl PowerTy {
     pub(crate) fn union(mut rst: Vec<Const>) -> Self {
         rst.sort();
         rst.dedup();
-        rst.reverse();
-        if let Some(fst) = rst.pop() {
-            if let Some(snd) = rst.pop() {
-                rst.reverse();
-                Self::Union(fst, snd, rst)
-            } else {
-                Self::Const(fst)
-            }
-        } else {
-            Self::Never
+        let mut rst = rst.into_iter();
+        match (rst.next(), rst.next()) {
+            (Some(fst), Some(snd)) => Self::Union(fst, snd, rst.collect()),
+            (Some(fst), None) => Self::Const(fst),
+            (None, _) => Self::Never,
         }
     }
 
@@ -386,16 +381,12 @@ impl PowerTy {
         default: Option<Option<Ty>>,
     ) -> Self {
         match (cases.len(), default) {
-            (0, Some(default)) => default.map_or(Self::undefined(), Self::plain),
+            (0, Some(default)) => Self::Plain(default.into()),
             (0, None) => {
                 // Unreachable (bottom/never/absurd): all cases ruled out, no default possible.
                 Ty::Any.into()
             }
-            (1, None) => cases
-                .pop()
-                .unwrap()
-                .1
-                .map_or(Self::undefined(), Self::plain),
+            (1, None) => Self::Plain(cases.pop().unwrap().1.into()),
             (_, default) => Self::Case {
                 target,
                 cases,
@@ -408,18 +399,12 @@ impl PowerTy {
         match self {
             PowerTy::Plain(ty) => ty.clone(),
             PowerTy::Term { .. } | PowerTy::Union(..) => MaybeTy::Plain(Ty::from("%DataType")),
-            PowerTy::Case { cases, default, .. } => {
-                let mut default = default.clone().map(MaybeTy::from);
-                for (_, ty) in cases {
-                    let ty = MaybeTy::from(ty.clone());
-                    if let Some(lft) = default {
-                        default = Some(env.merge_maybe_ty(lft, ty))
-                    } else {
-                        default = Some(ty)
-                    }
-                }
-                default.unwrap_or(MaybeTy::Plain(Ty::Any))
-            }
+            PowerTy::Case { cases, default, .. } => default
+                .iter()
+                .chain(cases.iter().map(|(_, ty)| ty))
+                .map(|ty| MaybeTy::from(ty.clone()))
+                .reduce(|lft, rgt| env.merge_maybe_ty(lft, rgt))
+                .unwrap_or(MaybeTy::Plain(Ty::Any)),
             PowerTy::Const(Const::Integer(_)) => MaybeTy::Plain(Ty::from("%Integer")),
             PowerTy::Const(Const::String(..)) => MaybeTy::Plain(Ty::from("%String")),
             PowerTy::NullFreeList => MaybeTy::Plain(Ty::from("%List")),
@@ -438,22 +423,14 @@ impl PowerTy {
                 mut cases,
                 mut default,
             } if case_target == target => {
-                refine_case_cases(term, &mut cases, &mut default);
+                cases.retain(|(val, _)| term.filter(&Const::String(val.to_string())));
+                if term.exact() && !cases.is_empty() {
+                    default = None
+                }
                 PowerTy::case(target, cases, default)
             }
             _ => self,
         }
-    }
-}
-
-fn refine_case_cases(
-    term: &Term,
-    cases: &mut Vec<(&'static str, Option<Ty>)>,
-    default: &mut Option<Option<Ty>>,
-) {
-    cases.retain(|(val, _)| term.filter(&Const::String(val.to_string())));
-    if term.exact() && !cases.is_empty() {
-        *default = None
     }
 }
 
@@ -683,13 +660,6 @@ impl ClsOrIns {
     pub fn is_ins(&self) -> bool {
         matches!(self, Self::Ins(..))
     }
-
-    pub fn replace(&self, cty: ClassTy) -> ClsOrIns {
-        match self {
-            ClsOrIns::Ins(_) => Self::Ins(cty),
-            ClsOrIns::Cls(_) => Self::Cls(cty),
-        }
-    }
 }
 
 // A member as a lookup found it, with where it's declared when a workspace class declares it.
@@ -806,10 +776,8 @@ impl From<&Type> for Ty {
 impl From<&PropertyType> for Ty {
     fn from(value: &PropertyType) -> Self {
         match &value.collection {
-            Some(collection) => match collection {
-                CollectionKind::ListOf(..) => Self::from("%Collection.AbstractList"),
-                CollectionKind::ArrayOf(..) => Self::from("%Collection.AbstractArray"),
-            },
+            Some(CollectionKind::ListOf(..)) => CollectionClass::List.class(None),
+            Some(CollectionKind::ArrayOf(..)) => CollectionClass::Array.class(None),
             None => Self::from(&value.ty),
         }
     }
@@ -960,7 +928,8 @@ impl TyProcedure {
 impl std::fmt::Display for TyProcedure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "(")?;
-        for (i, arg) in self.normal_args.iter().enumerate() {
+        let variadic = self.variadic_arg.as_ref().map(NormalArg::from);
+        for (i, arg) in self.normal_args.iter().chain(&variadic).enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
@@ -968,16 +937,9 @@ impl std::fmt::Display for TyProcedure {
             if let Some(ty) = arg.ty.as_ref() {
                 write!(f, " As {}", ty)?;
             }
-        }
-        if let Some(variadic) = &self.variadic_arg {
-            if !self.normal_args.is_empty() {
-                write!(f, ", ")?;
+            if arg.variadic {
+                write!(f, "...")?;
             }
-            write!(f, "{}{}", mode_prefix(variadic.mode), variadic.name)?;
-            if let Some(ty) = variadic.ty.as_ref() {
-                write!(f, " As {}", ty)?;
-            }
-            write!(f, "...")?;
         }
         write!(f, ")")?;
         if let Some(out) = &self.out {
