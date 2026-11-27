@@ -12,14 +12,14 @@ use std::ops::Deref;
 
 use tygr::{Grammar, OLC, Parse, Ranged};
 use tygr_objectscript::cos::{
-    self, Block, Command, CommandLike, Conjunct, CurryBlock, GenericExpr, InfixOperation,
-    KeywordKind, Operator, PostCondition, ProcedureBody, RoutineMain,
+    self, Block, Command, CommandLike, Conjunct, CurryBlock, GenericExpr, InfixOperation, Operator,
+    PostCondition, ProcedureBody, RoutineMain,
 };
 
 use crate::{
     DocKind,
     bindings::{AndOperator, Diagnostic, Language, TextEdit},
-    check::{Break, TypeError, TypeErrorKind},
+    check::{Break, TypeError, TypeErrorKind, keyword_style},
     details::{ClassDetails, MemberKindSpecificDetails, Positions},
     style::Styles,
 };
@@ -55,9 +55,8 @@ impl Finding {
 
 impl Edit {
     pub(crate) fn text_edit(self, olc: &OLC) -> TextEdit {
-        let range = olc.span(self.start, self.end);
         TextEdit {
-            range,
+            range: olc.span(self.start, self.end),
             new_text: self.text,
         }
     }
@@ -214,26 +213,24 @@ impl Ctx {
 impl<'a> Pass<'a> {
     fn new(text: &'a str, base: usize, style: &'a Styles, indent: Option<&'a str>) -> Self {
         let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
-        let (findings, offsets) = (vec![], false);
         Pass {
             text,
             base,
             style,
             indent,
             newline,
-            findings,
-            offsets,
+            findings: vec![],
+            offsets: false,
         }
     }
 
     fn report(&mut self, kind: TypeErrorKind, at: Span, edit: Option<Edit>) {
-        let base = self.base;
         let edit = edit.map(|e| Edit {
-            start: base + e.start,
-            end: base + e.end,
+            start: self.base + e.start,
+            end: self.base + e.end,
             text: e.text,
         });
-        let range = base + at.start..base + at.end;
+        let range = self.base + at.start..self.base + at.end;
         self.findings.push(Finding { kind, range, edit });
     }
 
@@ -387,18 +384,7 @@ impl<'a> Pass<'a> {
             };
             let at = kw.start..kw.start + kw.text.len();
             let edit = self.edit(ctx, at.clone(), expected.clone());
-            let sigil = if kw.kind == KeywordKind::Function {
-                "$"
-            } else {
-                ""
-            };
-            let (found, expected) = (format!("{sigil}{}", kw.text), format!("{sigil}{expected}"));
-            let kind = TypeErrorKind::KeywordStyle {
-                kind: kw.kind,
-                found,
-                expected,
-            };
-            self.report(kind, at, edit);
+            self.report(keyword_style(&kw, &expected), at, edit);
         }
         let ctx = Ctx {
             anchor: command.start,
@@ -569,19 +555,15 @@ impl<'a> Pass<'a> {
         let commands: Vec<_> = body_commands(&curry.block.wrapped.main).collect();
         let (first, last) = (commands.first().copied(), commands.last().copied());
         let rules = &self.style.rules;
-        let (before, after) = rules
-            .open_brace
-            .map_or((None, None), |b| (b.newline_before, b.newline_after));
+        let before = rules.open_brace.and_then(|b| b.newline_before);
+        let after = rules.open_brace.and_then(|b| b.newline_after);
         let indent = self.level(ctx, ctx.depth);
         if let Some(wanted) = before {
-            let kind = TypeErrorKind::OpenBraceBreak {
-                wanted: Break(wanted),
-            };
             self.gap(
                 wanted,
                 curry.gap.start..open,
                 open..open + 1,
-                kind,
+                |wanted| TypeErrorKind::OpenBraceBreak { wanted },
                 Some(&indent),
                 ctx,
             );
@@ -595,16 +577,13 @@ impl<'a> Pass<'a> {
                 None if own_line => self.line_indent(last.start).to_string(),
                 None => format!("{indent}{}", self.indent.unwrap_or("\t")),
             };
-            let kind = TypeErrorKind::BodyBreak {
-                wanted: Break(wanted),
-            };
             let dim = matches!(**first, Command::Dim(_));
             let fix = (!dotted && !dim).then_some(body_indent.as_str());
             self.gap(
                 wanted,
                 open + 1..first.start,
                 first.start..first.end,
-                kind,
+                |wanted| TypeErrorKind::BodyBreak { wanted },
                 fix,
                 ctx,
             );
@@ -612,9 +591,7 @@ impl<'a> Pass<'a> {
         if let (Some(wanted), Some((last, dotted))) =
             (rules.close_brace.and_then(|b| b.newline_before), last)
         {
-            let kind = TypeErrorKind::CloseBraceBreak {
-                wanted: Break(wanted),
-            };
+            let kind = |wanted| TypeErrorKind::CloseBraceBreak { wanted };
             let fix = (!dotted && !matches!(**last, Command::Dim(_))).then_some(indent.as_str());
             self.gap(wanted, last.end..close, close..close + 1, kind, fix, ctx);
         }
@@ -627,16 +604,12 @@ impl<'a> Pass<'a> {
         let (Some(close), Some(wanted)) = (close, newline_after) else {
             return;
         };
-        let kind = TypeErrorKind::ChainBreak {
-            keyword,
-            wanted: Break(wanted),
-        };
         let indent = self.level(ctx, ctx.depth);
         self.gap(
             wanted,
             close + 1..kw.start,
             kw.start..kw.end,
-            kind,
+            |wanted| TypeErrorKind::ChainBreak { keyword, wanted },
             Some(&indent),
             ctx,
         );
@@ -651,7 +624,7 @@ impl<'a> Pass<'a> {
         wanted: bool,
         span: Span,
         at: Span,
-        kind: TypeErrorKind,
+        kind: impl FnOnce(Break) -> TypeErrorKind,
         fix: Option<&str>,
         ctx: Ctx,
     ) {
@@ -669,7 +642,7 @@ impl<'a> Pass<'a> {
                 };
                 self.edit(ctx, span, text)
             });
-        self.report(kind, at, edit);
+        self.report(kind(Break(wanted)), at, edit);
     }
 
     // Whether the line `offset` is on ends, before `offset`, in `$$$Name` or `$$$Name(...)`.

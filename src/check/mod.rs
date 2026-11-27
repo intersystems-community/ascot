@@ -1344,6 +1344,18 @@ pub(crate) fn report_style(
     }
 }
 
+pub(crate) fn keyword_style(kw: &KeywordUse, expected: &str) -> TypeErrorKind {
+    let sigil = match kw.kind {
+        KeywordKind::Command => "",
+        KeywordKind::Function | KeywordKind::Variable => "$",
+    };
+    TypeErrorKind::KeywordStyle {
+        kind: kw.kind,
+        found: format!("{sigil}{}", kw.text),
+        expected: format!("{sigil}{expected}"),
+    }
+}
+
 fn report_keyword_style(
     env: &CodeEnv,
     style: &crate::style::KeywordStyles,
@@ -1352,18 +1364,7 @@ fn report_keyword_style(
     for kw in keywords {
         if let Some(expected) = style.expected(&kw) {
             let range = env.span(kw.start, kw.start + kw.text.len());
-            let sigil = match kw.kind {
-                KeywordKind::Command => "",
-                KeywordKind::Function | KeywordKind::Variable => "$",
-            };
-            env.soft_diagnostic(
-                TypeErrorKind::KeywordStyle {
-                    kind: kw.kind,
-                    found: format!("{sigil}{}", kw.text),
-                    expected: format!("{sigil}{expected}"),
-                }
-                .at(range),
-            );
+            env.soft_diagnostic(keyword_style(&kw, &expected).at(range));
         }
     }
 }
