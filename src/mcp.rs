@@ -227,15 +227,10 @@ impl Server {
         let style = settings.style(self.shared_fs)?;
         let filter = settings.filter()?;
         let iris = settings.open_iris()?;
-        workspaces.insert(
-            workspace.clone(),
-            Arc::new(Mutex::new({
-                let native = Workspace::native(iris, style);
-                native.set_diagnostic_filter(filter);
-                native.set_inlay_hints(settings.inlay_hints.unwrap_or_default());
-                native
-            })),
-        );
+        let native = Workspace::native(iris, style);
+        native.set_diagnostic_filter(filter);
+        native.set_inlay_hints(settings.inlay_hints.unwrap_or_default());
+        workspaces.insert(workspace.clone(), Arc::new(Mutex::new(native)));
         Ok(format!("created workspace {workspace:?}"))
     }
 

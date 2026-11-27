@@ -99,24 +99,18 @@ struct RelatedLocation {
     message: Message,
 }
 
-impl From<&Range> for Region {
-    fn from(range: &Range) -> Self {
-        Self {
-            start_line: range.start.line + 1,
-            start_column: range.start.character + 1,
-            end_line: range.end.line + 1,
-            end_column: range.end.character + 1,
-        }
-    }
-}
-
 impl Physical {
     fn new(uri: &str, range: Range) -> Self {
         Self {
             artifact_location: ArtifactLocation {
                 uri: uri.to_string(),
             },
-            region: Region::from(&range),
+            region: Region {
+                start_line: range.start.line + 1,
+                start_column: range.start.character + 1,
+                end_line: range.end.line + 1,
+                end_column: range.end.character + 1,
+            },
         }
     }
 }

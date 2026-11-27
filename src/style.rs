@@ -111,22 +111,18 @@ impl KeywordStyles {
     }
 }
 
-// An abbreviation as `pascal` spells it: the full name's own casing where it's a prefix of it
-// (`Li` for `List`), capitals otherwise (`LB` for `ListBuild`).
-fn spell_abbr(full: &str, abbr: &str) -> String {
-    match full.get(..abbr.len()) {
-        Some(prefix) if prefix.eq_ignore_ascii_case(abbr) => prefix.to_string(),
-        _ => abbr.to_ascii_uppercase(),
-    }
-}
-
 fn expected(
     form: Option<KeywordForm>,
     case: Option<KeywordCase>,
     kw: &KeywordUse,
 ) -> Option<String> {
     let full = kw.full.to_string();
-    let abbr = kw.abbr.map(|abbr| spell_abbr(kw.full, abbr));
+    // An abbreviation as `pascal` spells it: the full name's own casing where it's a prefix of it
+    // (`Li` for `List`), capitals otherwise (`LB` for `ListBuild`).
+    let abbr = kw.abbr.map(|abbr| match kw.full.get(..abbr.len()) {
+        Some(prefix) if prefix.eq_ignore_ascii_case(abbr) => prefix.to_string(),
+        _ => abbr.to_ascii_uppercase(),
+    });
     let base = match form {
         Some(KeywordForm::Long) => full,
         None if kw.text.eq_ignore_ascii_case(kw.full) => full,

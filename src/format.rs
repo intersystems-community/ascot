@@ -19,7 +19,7 @@ use tygr_objectscript::cos::{
 use crate::{
     DocKind,
     bindings::{AndOperator, Diagnostic, Language, TextEdit},
-    check::{Break, TypeError, TypeErrorKind, keyword_style},
+    check::{Break, TypeErrorKind, keyword_style},
     details::{ClassDetails, MemberKindSpecificDetails, Positions},
     style::Styles,
 };
@@ -42,14 +42,8 @@ pub struct Edit {
 
 impl Finding {
     pub(crate) fn diagnostic(self, olc: &OLC) -> Diagnostic {
-        let (kind, range) = (self.kind, olc.span(self.range.start, self.range.end));
-        let related_information = vec![];
-        TypeError {
-            kind,
-            range,
-            related_information,
-        }
-        .into()
+        let range = olc.span(self.range.start, self.range.end);
+        self.kind.at(range).into()
     }
 }
 

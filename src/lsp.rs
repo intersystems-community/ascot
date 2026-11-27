@@ -119,10 +119,7 @@ fn serve(connection: &Connection, mut settings: Settings, shared_fs: bool) -> Fa
 
 // A setting that can't be applied is reported and left as it was, here as its default.
 fn applied<T: Default>(connection: &Connection, result: Result<T, String>) -> Fallible<T> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(err) => show_error(connection, err).map(|()| T::default()),
-    }
+    result.or_else(|err| show_error(connection, err).map(|()| T::default()))
 }
 
 fn show_error(connection: &Connection, message: String) -> Fallible {
@@ -447,11 +444,7 @@ fn publish_all(connection: &Connection, workspace: &Workspace, uris: Vec<String>
             .into_iter()
             .map(to_lsp_diagnostic)
             .collect();
-        let params = PublishDiagnosticsParams {
-            uri: lsp_uri,
-            diagnostics,
-            version: None,
-        };
+        let params = PublishDiagnosticsParams::new(lsp_uri, diagnostics, None);
         let notification = Notification::new("textDocument/publishDiagnostics".to_string(), params);
         connection.sender.send(notification.into())?;
     }
@@ -459,31 +452,20 @@ fn publish_all(connection: &Connection, workspace: &Workspace, uris: Vec<String>
 }
 
 fn to_lsp_position(position: Position) -> LspPosition {
-    LspPosition {
-        line: position.line,
-        character: position.character,
-    }
+    LspPosition::new(position.line, position.character)
 }
 
 fn to_lsp_range(range: Range) -> LspRange {
-    LspRange {
-        start: to_lsp_position(range.start),
-        end: to_lsp_position(range.end),
-    }
+    LspRange::new(to_lsp_position(range.start), to_lsp_position(range.end))
 }
 
 fn to_lsp_location(location: Location) -> Option<LspLocation> {
-    Some(LspLocation {
-        uri: location.uri.parse().ok()?,
-        range: to_lsp_range(location.range),
-    })
+    let uri = location.uri.parse().ok()?;
+    Some(LspLocation::new(uri, to_lsp_range(location.range)))
 }
 
 fn to_lsp_text_edit(edit: TextEdit) -> LspTextEdit {
-    LspTextEdit {
-        range: to_lsp_range(edit.range),
-        new_text: edit.new_text,
-    }
+    LspTextEdit::new(to_lsp_range(edit.range), edit.new_text)
 }
 
 fn to_lsp_document_symbol(info: &SymbolInfo) -> LspDocumentSymbol {

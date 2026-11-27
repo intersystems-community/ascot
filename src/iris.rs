@@ -72,9 +72,7 @@ pub fn open_all(
     irises: &[&str],
     namespace: Option<&str>,
 ) -> Result<Option<Box<dyn IrisContext>>, String> {
-    if irises.is_empty() {
-        return open(LATEST, namespace).map_err(|err| format!("{LATEST}: {err}"));
-    }
+    let irises: &[&str] = if irises.is_empty() { &[LATEST] } else { irises };
     let live = irises.iter().any(|iris| iris.contains("://"));
     let mut sources = Vec::new();
     for iris in irises {
