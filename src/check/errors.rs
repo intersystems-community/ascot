@@ -211,9 +211,6 @@ macro_rules! type_error_kinds {
                 )
             }
         }
-
-        #[cfg(test)]
-        const CODES: &[&str] = &[$($code),*];
     };
 }
 
@@ -3039,18 +3036,32 @@ impl std::fmt::Display for Available {
     }
 }
 
+// A `Display` over an `Option` newtype: the format of its value, or the text for `None`.
+macro_rules! option_fragment {
+    ($($t:ident => $some:literal, $none:literal;)*) => {$(
+        impl std::fmt::Display for $t {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match &self.0 {
+                    Some(value) => write!(f, $some, value),
+                    None => f.write_str($none),
+                }
+            }
+        }
+    )*};
+}
+
+option_fragment! {
+    Replacement => "; use {} instead", ", deprecated with no replacement";
+    DynamicGet => " (or, if it's a dynamic property, %Get(\"{}\"))", "";
+    InRoutine => "routine '{}'", "this routine";
+    Declared => "declared as '{}'", "undeclared";
+    Detail => ": {}", "";
+    Expansion => " (`{}`)", "";
+}
+
 /// What replaces a legacy `$ZUTIL` function, if anything.
 #[derive(Debug)]
 pub struct Replacement(pub Option<String>);
-
-impl std::fmt::Display for Replacement {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            Some(replacement) => write!(f, "; use {replacement} instead"),
-            None => f.write_str(", deprecated with no replacement"),
-        }
-    }
-}
 
 /// What a failed IRIS lookup was for.
 #[derive(Debug)]
@@ -3087,15 +3098,6 @@ impl std::fmt::Display for Mode {
     }
 }
 
-impl std::fmt::Display for DynamicGet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            Some(mem) => write!(f, " (or, if it's a dynamic property, %Get(\"{mem}\"))"),
-            None => Ok(()),
-        }
-    }
-}
-
 /// "a superclass of ", for a member found missing on a superclass.
 #[derive(Debug)]
 pub struct SuperclassOf(pub bool);
@@ -3121,24 +3123,9 @@ impl std::fmt::Display for UnseenClass {
     }
 }
 
-impl std::fmt::Display for SuperclassOf {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.0 { "a superclass of " } else { "" })
-    }
-}
-
 /// "routine '…'", or "this routine" for a label looked up locally.
 #[derive(Debug)]
 pub struct InRoutine(pub Option<String>);
-
-impl std::fmt::Display for InRoutine {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            Some(routine) => write!(f, "routine '{routine}'"),
-            None => f.write_str("this routine"),
-        }
-    }
-}
 
 /// What to say after an unrecognized type parameter.
 #[derive(Debug)]
@@ -3263,15 +3250,6 @@ impl std::fmt::Display for OverrideDifference {
 #[derive(Debug)]
 pub struct Declared(pub Option<Ty>);
 
-impl std::fmt::Display for Declared {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            Some(ty) => write!(f, "declared as '{ty}'"),
-            None => f.write_str("undeclared"),
-        }
-    }
-}
-
 /// ": …", the source text an undefined value came from, if known.
 #[derive(Debug)]
 pub struct Detail(pub Option<String>);
@@ -3320,55 +3298,34 @@ impl std::fmt::Display for SqlMemberKind {
     }
 }
 
-impl std::fmt::Display for Detail {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            Some(text) => write!(f, ": {text}"),
-            None => Ok(()),
-        }
-    }
-}
-
 /// Whether a brace style wants a line break at a spot (`true`) or none (`false`).
 #[derive(Debug)]
 pub struct Break(pub bool);
-
-impl std::fmt::Display for Break {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.0 {
-            "a line break"
-        } else {
-            "no line break"
-        })
-    }
-}
 
 /// The `space-after-comma` style: one space after and none before, or none on either side.
 #[derive(Debug)]
 pub struct CommaSpace(pub bool);
 
-impl std::fmt::Display for CommaSpace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.0 {
-            "one space after it and none before"
-        } else {
-            "no space on either side"
-        })
-    }
+// `Display` for a `bool` fragment: the first text when `true`, the second when `false`.
+macro_rules! bool_fragment {
+    ($($t:ident => $yes:literal, $no:literal;)*) => {$(
+        impl std::fmt::Display for $t {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(if self.0 { $yes } else { $no })
+            }
+        }
+    )*};
+}
+
+bool_fragment! {
+    SuperclassOf => "a superclass of ", "";
+    Break => "a line break", "no line break";
+    CommaSpace => "one space after it and none before", "no space on either side";
 }
 
 /// What an `#if` condition's macros expanded to, when that differs from what was written.
 #[derive(Debug)]
 pub struct Expansion(pub Option<String>);
-
-impl std::fmt::Display for Expansion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            Some(text) => write!(f, " (`{text}`)"),
-            None => Ok(()),
-        }
-    }
-}
 
 /// Where a syntax error sits, after "Syntax error": the document's own parse (A1727) or a method
 /// body's (A8073).
@@ -3681,12 +3638,12 @@ mod tests {
 
     #[test]
     fn codes_are_distinct_and_well_formed() {
-        let distinct: std::collections::HashSet<_> = CODES.iter().collect();
-        assert_eq!(distinct.len(), CODES.len(), "a code is used twice");
-        for code in CODES {
+        let codes = TypeErrorKind::CODES;
+        let distinct: std::collections::HashSet<_> = codes.iter().collect();
+        assert_eq!(distinct.len(), codes.len(), "a code is used twice");
+        for code in codes {
             // `S` is a style rule, `A` everything else.
-            let digits = (code.strip_prefix('A').or_else(|| code.strip_prefix('S')))
-                .unwrap_or_else(|| panic!("{code}"));
+            let digits = code.strip_prefix(['A', 'S']).expect(code);
             assert!(
                 digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit()),
                 "{code}"
