@@ -198,7 +198,7 @@ impl Walk for PredictAssignment {
 
 impl Walk for TrimArgs {
     fn walk(&self, w: &mut Walker) {
-        let TrimArgs::SpecChars(_, chars, _, _, expr) = self;
+        let TrimArgs::Full(_, chars, _, _, expr) = self;
         chars.walk(w);
         expr.walk(w)
     }

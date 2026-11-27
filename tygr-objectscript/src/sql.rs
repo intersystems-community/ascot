@@ -1136,31 +1136,31 @@ pub mod leveled {
     /// `BOTH ' ' FROM expr` in the core: a lone spec trims blanks, lone chars both ends.
     #[derive(Grammar)]
     pub enum TrimArgs {
-        SpecChars(
+        Full(
             TrimSpecification,
             ValueExpression<Space1>,
             Space1,
             Kw!("FROM"),
             ValueExpression<Space1>,
         ),
-        #[sugar(trim_spec)]
-        Spec(
+        #[sugar(trim_space)]
+        Space(
             TrimSpecification,
             Option<(Space1, Kw!("FROM"))>,
             ValueExpression<Space1>,
         ),
-        #[sugar(trim_chars)]
-        Chars(
+        #[sugar(trim_both)]
+        Both(
             ValueExpression,
             Space1,
             Kw!("FROM"),
             ValueExpression<Space1>,
         ),
-        #[sugar(trim_bare)]
-        Bare(ValueExpression),
+        #[sugar(trim_both_space)]
+        BothSpace(ValueExpression),
     }
 
-    fn trim_spec(
+    fn trim_space(
         spec: TrimSpecification,
         _: Option<(Space1, Kw!("FROM"))>,
         expr: ValueExpression<Space1>,
@@ -1168,7 +1168,7 @@ pub mod leveled {
         trim(spec.desugar(), string(" "), expr.desugar())
     }
 
-    fn trim_chars(
+    fn trim_both(
         chars: ValueExpression,
         _: Space1,
         _: Kw!("FROM"),
@@ -1177,7 +1177,7 @@ pub mod leveled {
         trim(Default::default(), chars.desugar().after(), expr.desugar())
     }
 
-    fn trim_bare(expr: ValueExpression) -> core::TrimArgs {
+    fn trim_both_space(expr: ValueExpression) -> core::TrimArgs {
         trim(Default::default(), string(" "), expr.desugar().after())
     }
 
@@ -1186,7 +1186,7 @@ pub mod leveled {
         chars: core::ValueExpression<Space1>,
         expr: core::ValueExpression<Space1>,
     ) -> core::TrimArgs {
-        core::TrimArgs::SpecChars(spec, chars, Default::default(), Default::default(), expr)
+        core::TrimArgs::Full(spec, chars, Default::default(), Default::default(), expr)
     }
 
     #[derive(Grammar)]

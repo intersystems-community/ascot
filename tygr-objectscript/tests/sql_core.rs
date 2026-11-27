@@ -56,7 +56,7 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
     let core::Builtin::Trim(_, (_, args)) = &**trim else {
         panic!("{text}")
     };
-    let core::TrimArgs::SpecChars(_, chars, ..) = &args.wrapped;
+    let core::TrimArgs::Full(_, chars, ..) = &args.wrapped;
     assert_eq!(at(term_of(chars)), "TRIM(b)");
     let core::ValueExpressionPrimary::Call(call) = &item_term(&query, 1).ranged else {
         panic!("{text}")
