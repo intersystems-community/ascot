@@ -32,7 +32,7 @@ pub fn open(iris: &str, namespace: Option<&str>) -> Result<Option<Box<dyn IrisCo
         ));
     }
     if let Some(release) = crate::release::Release::parse(iris) {
-        let file = release.cached_file()?;
+        let file = crate::release::cache_dir()?.join(release.asset());
         if !file.exists() {
             #[cfg(feature = "network")]
             crate::download::fetch(&release)?;
@@ -131,8 +131,6 @@ impl Declarations {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
     use crate::Chain;
     use crate::bindings::{ClassInfo, RoutineInfo, Source};
@@ -291,10 +289,6 @@ mod tests {
         let declarations = Declarations {
             version: DECLARATIONS_VERSION.to_string(),
             namespace: "USER".to_string(),
-            iris_version: String::new(),
-            classes: BTreeMap::new(),
-            includes: BTreeMap::new(),
-            routines: BTreeMap::new(),
             ..Default::default()
         };
         let path = declaration_file("open", &declarations);

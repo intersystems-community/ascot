@@ -112,13 +112,6 @@ impl std::fmt::Display for Release<'_> {
     }
 }
 
-impl Release<'_> {
-    /// Where `~/.ascot` keeps this release's declaration file, present or not.
-    pub fn cached_file(&self) -> Result<PathBuf, String> {
-        Ok(cache_dir()?.join(self.asset()))
-    }
-}
-
 /// `~/.ascot/<ascot version>`, where downloaded declaration files live: each release's own.
 pub fn cache_dir() -> Result<PathBuf, String> {
     Ok(std::env::home_dir()

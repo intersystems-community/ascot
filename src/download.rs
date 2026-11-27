@@ -151,22 +151,24 @@ mod tests {
         Release::parse(iris).unwrap()
     }
 
-    #[test]
-    fn a_release_is_downloaded_checked_unpacked_and_then_read_from_the_cache() {
+    fn serving(iris: &str) -> (String, Arc<Mutex<usize>>) {
         let declarations = Declarations {
             version: crate::declared::DECLARATIONS_VERSION.to_string(),
             namespace: "%SYS".to_string(),
             ..Default::default()
         };
         let gz = gzipped(&serde_json::to_string(&declarations).unwrap());
-        let sum = format!("{:x}  {}\n", Sha256::digest(&gz), release("2026.2").asset());
-        let (url, hits) = server(vec![
-            (format!("/{}", release("2026.2").asset()), gz),
-            (
-                format!("/{}.sha256", release("2026.2").asset()),
-                sum.into_bytes(),
-            ),
-        ]);
+        let asset = release(iris).asset();
+        let sum = format!("{:x}  {asset}\n", Sha256::digest(&gz));
+        server(vec![
+            (format!("/{asset}"), gz),
+            (format!("/{asset}.sha256"), sum.into_bytes()),
+        ])
+    }
+
+    #[test]
+    fn a_release_is_downloaded_checked_unpacked_and_then_read_from_the_cache() {
+        let (url, hits) = serving("2026.2");
         let dir = temp_dir("ok");
         let path = fetch_into(&release("2026.2"), &[&url], &dir).unwrap();
         assert_eq!(path, dir.join("iris-community-2026.2.ascot.decls"));
@@ -201,21 +203,8 @@ mod tests {
 
     #[test]
     fn a_release_without_the_file_falls_back_to_the_next_location() {
-        let declarations = Declarations {
-            version: crate::declared::DECLARATIONS_VERSION.to_string(),
-            namespace: "%SYS".to_string(),
-            ..Default::default()
-        };
-        let gz = gzipped(&serde_json::to_string(&declarations).unwrap());
-        let sum = format!("{:x}  {}\n", Sha256::digest(&gz), release("2026.2").asset());
         let (empty, empty_hits) = server(vec![]);
-        let (url, hits) = server(vec![
-            (format!("/{}", release("2026.2").asset()), gz),
-            (
-                format!("/{}.sha256", release("2026.2").asset()),
-                sum.into_bytes(),
-            ),
-        ]);
+        let (url, hits) = serving("2026.2");
         let dir = temp_dir("fallback");
         let path = fetch_into(&release("2026.2"), &[&empty, &url], &dir).unwrap();
         assert_eq!(path, dir.join("iris-community-2026.2.ascot.decls"));

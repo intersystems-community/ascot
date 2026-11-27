@@ -302,6 +302,7 @@ fn has_body(header: &str) -> bool {
 // definition, which no check reads and whose syntax needs more than the record holds.
 fn member_header(member: &MemberInfo) -> Option<String> {
     let name = member_name(&member.name);
+    let prefix = format!("{} {name}", crate::bindings::member_keyword(&member.kind));
     let mut keywords = vec![];
     if member.deprecated {
         keywords.push("Deprecated".to_string());
@@ -316,7 +317,7 @@ fn member_header(member: &MemberInfo) -> Option<String> {
                     .map(|v| format!(" = {v}"))
                     .unwrap_or_default();
             format!(
-                "Parameter {name}{}{}{value}",
+                "{prefix}{}{}{value}",
                 as_type(p.t.as_deref()),
                 keyword_list(&keywords)
             )
@@ -336,7 +337,7 @@ fn member_header(member: &MemberInfo) -> Option<String> {
             if let Some(n) = &p.sql_field_name {
                 keywords.push(format!("SqlFieldName = {n}"));
             }
-            format!("Property {name}{t}{}", keyword_list(&keywords))
+            format!("{prefix}{t}{}", keyword_list(&keywords))
         }
         MemberKind::Relationship(r) => {
             if let Some(c) = r.cardinality {
@@ -346,7 +347,7 @@ fn member_header(member: &MemberInfo) -> Option<String> {
                 keywords.push(format!("SqlFieldName = {n}"));
             }
             format!(
-                "Relationship {name}{}{}",
+                "{prefix}{}{}",
                 as_type(r.t.as_deref()),
                 keyword_list(&keywords)
             )
@@ -409,37 +410,21 @@ fn member_header(member: &MemberInfo) -> Option<String> {
             }
             keywords.sort();
             format!(
-                "Index {name}{}{}",
+                "{prefix}{}{}",
                 on.unwrap_or_default(),
                 keyword_list(&keywords)
             )
         }
-        MemberKind::Query(sig) => {
+        MemberKind::Query(sig) | MemberKind::Method(sig) | MemberKind::ClassMethod(sig) => {
             sql_keywords(sig, &mut keywords);
-            format!("Query {name}{}{}", signature(sig), keyword_list(&keywords))
-        }
-        MemberKind::Method(sig) => {
-            sql_keywords(sig, &mut keywords);
-            format!("Method {name}{}{}", signature(sig), keyword_list(&keywords))
-        }
-        MemberKind::ClassMethod(sig) => {
-            sql_keywords(sig, &mut keywords);
-            format!(
-                "ClassMethod {name}{}{}",
-                signature(sig),
-                keyword_list(&keywords)
-            )
+            format!("{prefix}{}{}", signature(sig), keyword_list(&keywords))
         }
         MemberKind::ClientMethod(sig) => {
-            format!(
-                "ClientMethod {name}{}{}",
-                signature(sig),
-                keyword_list(&keywords)
-            )
+            format!("{prefix}{}{}", signature(sig), keyword_list(&keywords))
         }
-        MemberKind::Projection => format!("Projection {name}{}", keyword_list(&keywords)),
-        MemberKind::Trigger => format!("Trigger {name}{}", keyword_list(&keywords)),
-        MemberKind::XData => format!("XData {name}{}", keyword_list(&keywords)),
+        MemberKind::Projection | MemberKind::Trigger | MemberKind::XData => {
+            format!("{prefix}{}", keyword_list(&keywords))
+        }
         MemberKind::ForeignKey | MemberKind::Storage => return None,
     };
     Some(header)

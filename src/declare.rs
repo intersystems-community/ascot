@@ -22,7 +22,7 @@ impl RawAtelier {
         self,
         mut progress: impl FnMut(DocKind, usize, usize),
     ) -> Result<Declarations, String> {
-        let namespace = self.namespace().to_string();
+        let namespace = self.namespace.clone();
         let iris_version = self.server_version()?;
         let ctx = AtelierContext::from(self);
         // `%sqlcq.*` and `%SYS.sqlcq.*` are cached SQL, which `declare`'s own queries add to, so
