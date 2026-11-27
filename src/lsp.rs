@@ -32,8 +32,8 @@ use lsp_types::{
 use crate::{
     Workspace,
     bindings::{
-        Diagnostic, DiagnosticSeverity, GuestWorkspace, InlayHint, Position, Range, SymbolInfo,
-        SymbolKind, TextEdit,
+        Diagnostic, DiagnosticSeverity, GuestWorkspace, InlayHint, Location, Position, Range,
+        SymbolInfo, SymbolKind, TextEdit,
     },
     settings::Settings,
 };
@@ -188,12 +188,11 @@ fn handle_request(server: &Server, req: Request) -> Response {
     match req.method.as_str() {
         "textDocument/inlayHint" => respond(req.id, req.params, |params: InlayHintParams| {
             let uri = workspace_key(&params.text_document.uri);
-            let hints = workspace
+            workspace
                 .inlay_hint(uri, params.range.into())
                 .into_iter()
                 .map(to_lsp_inlay_hint)
-                .collect::<Vec<_>>();
-            Some(hints)
+                .collect::<Vec<_>>()
         }),
         "textDocument/definition" => respond(req.id, req.params, |params: GotoDefinitionParams| {
             let text_document_position = params.text_document_position_params;
@@ -219,17 +218,11 @@ fn handle_request(server: &Server, req: Request) -> Response {
             let text_document_position = params.text_document_position;
             let uri = workspace_key(&text_document_position.text_document.uri);
             let position = text_document_position.position.into();
-            let locations = workspace
+            workspace
                 .references(uri, position, params.context.include_declaration)
                 .into_iter()
-                .filter_map(|location| {
-                    Some(LspLocation {
-                        uri: location.uri.parse().ok()?,
-                        range: to_lsp_range(location.range),
-                    })
-                })
-                .collect::<Vec<_>>();
-            Some(locations)
+                .filter_map(to_lsp_location)
+                .collect::<Vec<_>>()
         }),
         "textDocument/hover" => respond(req.id, req.params, |params: HoverParams| {
             let text_document_position = params.text_document_position_params;
@@ -247,11 +240,9 @@ fn handle_request(server: &Server, req: Request) -> Response {
         "textDocument/formatting" => {
             respond(req.id, req.params, |params: DocumentFormattingParams| {
                 let uri = workspace_key(&params.text_document.uri);
-                let (tab_size, insert_spaces) =
-                    (params.options.tab_size, params.options.insert_spaces);
                 let options = crate::bindings::FormattingOptions {
-                    tab_size,
-                    insert_spaces,
+                    tab_size: params.options.tab_size,
+                    insert_spaces: params.options.insert_spaces,
                 };
                 let edits = workspace.format(uri, options)?;
                 Some(edits.into_iter().map(to_lsp_text_edit).collect::<Vec<_>>())
@@ -259,7 +250,7 @@ fn handle_request(server: &Server, req: Request) -> Response {
         }
         "textDocument/codeAction" => respond(req.id, req.params, |params: CodeActionParams| {
             let uri = workspace_key(&params.text_document.uri);
-            let actions = workspace
+            workspace
                 .code_actions(uri, params.range.into())
                 .into_iter()
                 .map(|action| {
@@ -289,8 +280,7 @@ fn handle_request(server: &Server, req: Request) -> Response {
                         ..Default::default()
                     })
                 })
-                .collect::<Vec<_>>();
-            Some(actions)
+                .collect::<Vec<_>>()
         }),
         "textDocument/documentSymbol" => {
             respond(req.id, req.params, |params: DocumentSymbolParams| {
@@ -308,7 +298,7 @@ fn handle_request(server: &Server, req: Request) -> Response {
             })
         }
         "workspace/symbol" => respond(req.id, req.params, |params: WorkspaceSymbolParams| {
-            let symbols = workspace
+            workspace
                 .workspace_symbol(params.query)
                 .into_iter()
                 .filter_map(|symbol| {
@@ -318,15 +308,11 @@ fn handle_request(server: &Server, req: Request) -> Response {
                         tags: symbol.deprecated.then(|| vec![SymbolTag::DEPRECATED]),
                         #[allow(deprecated)]
                         deprecated: None,
-                        location: LspLocation {
-                            uri: symbol.location.uri.parse().ok()?,
-                            range: to_lsp_range(symbol.location.range),
-                        },
+                        location: to_lsp_location(symbol.location)?,
                         container_name: symbol.container_name,
                     })
                 })
-                .collect::<Vec<_>>();
-            Some(symbols)
+                .collect::<Vec<_>>()
         }),
         _ => Response::new_err(
             req.id,
@@ -342,7 +328,7 @@ fn handle_request(server: &Server, req: Request) -> Response {
 fn respond<P: serde::de::DeserializeOwned, R: serde::Serialize>(
     id: RequestId,
     params: serde_json::Value,
-    f: impl FnOnce(P) -> Option<R>,
+    f: impl FnOnce(P) -> R,
 ) -> Response {
     match serde_json::from_value::<P>(params) {
         Ok(params) => Response::new_ok(id, f(params)),
@@ -467,9 +453,7 @@ fn publish_all(connection: &Connection, workspace: &Workspace, uris: Vec<String>
             version: None,
         };
         let notification = Notification::new("textDocument/publishDiagnostics".to_string(), params);
-        connection
-            .sender
-            .send(Message::Notification(notification))?;
+        connection.sender.send(notification.into())?;
     }
     Ok(())
 }
@@ -486,6 +470,13 @@ fn to_lsp_range(range: Range) -> LspRange {
         start: to_lsp_position(range.start),
         end: to_lsp_position(range.end),
     }
+}
+
+fn to_lsp_location(location: Location) -> Option<LspLocation> {
+    Some(LspLocation {
+        uri: location.uri.parse().ok()?,
+        range: to_lsp_range(location.range),
+    })
 }
 
 fn to_lsp_text_edit(edit: TextEdit) -> LspTextEdit {
@@ -563,10 +554,7 @@ fn to_lsp_diagnostic(diagnostic: Diagnostic) -> LspDiagnostic {
         .into_iter()
         .filter_map(|info| {
             Some(LspDiagnosticRelatedInformation {
-                location: LspLocation {
-                    uri: info.location.uri.parse().ok()?,
-                    range: to_lsp_range(info.location.range),
-                },
+                location: to_lsp_location(info.location)?,
                 message: info.message,
             })
         })
@@ -588,8 +576,7 @@ fn to_lsp_diagnostic(diagnostic: Diagnostic) -> LspDiagnostic {
         source: Some("ascot".to_string()),
         message: diagnostic.message,
         related_information: (!related_information.is_empty()).then_some(related_information),
-        tags: None,
-        data: None,
+        ..Default::default()
     }
 }
 

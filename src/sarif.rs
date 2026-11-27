@@ -5,7 +5,7 @@ use std::fmt;
 
 use serde::Serialize;
 
-use crate::bindings::{Diagnostic, DiagnosticSeverity, Location, Range};
+use crate::bindings::{Diagnostic, DiagnosticSeverity, Range};
 use crate::report::FileDiagnostics;
 
 #[derive(Serialize)]
@@ -63,14 +63,6 @@ struct Message {
     text: String,
 }
 
-impl From<&str> for Message {
-    fn from(text: &str) -> Self {
-        Self {
-            text: text.to_string(),
-        }
-    }
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PhysicalLocation {
@@ -87,14 +79,6 @@ struct Physical {
 #[derive(Serialize)]
 struct ArtifactLocation {
     uri: String,
-}
-
-impl From<&Location> for PhysicalLocation {
-    fn from(location: &Location) -> Self {
-        Self {
-            physical_location: Physical::from(location),
-        }
-    }
 }
 
 // SARIF counts lines and columns from 1, with `end_column` just past the region.
@@ -126,23 +110,13 @@ impl From<&Range> for Region {
     }
 }
 
-impl From<&Location> for Physical {
-    fn from(location: &Location) -> Self {
+impl Physical {
+    fn new(uri: &str, range: Range) -> Self {
         Self {
             artifact_location: ArtifactLocation {
-                uri: location.uri.clone(),
+                uri: uri.to_string(),
             },
-            region: Region::from(&location.range),
-        }
-    }
-}
-
-impl From<DiagnosticSeverity> for &'static str {
-    fn from(severity: DiagnosticSeverity) -> Self {
-        match severity {
-            DiagnosticSeverity::Error => "error",
-            DiagnosticSeverity::Warning => "warning",
-            DiagnosticSeverity::Information | DiagnosticSeverity::Hint => "note",
+            region: Region::from(&range),
         }
     }
 }
@@ -167,20 +141,27 @@ impl Log {
         self.runs[0].results.push(Finding {
             rule_id: diagnostic.code.clone(),
             rule_index,
-            level: diagnostic.severity.into(),
-            message: diagnostic.message.as_str().into(),
-            locations: [PhysicalLocation::from(&Location {
-                uri: uri.to_string(),
-                range: diagnostic.range,
-            })],
+            level: match diagnostic.severity {
+                DiagnosticSeverity::Error => "error",
+                DiagnosticSeverity::Warning => "warning",
+                DiagnosticSeverity::Information | DiagnosticSeverity::Hint => "note",
+            },
+            message: Message {
+                text: diagnostic.message.clone(),
+            },
+            locations: [PhysicalLocation {
+                physical_location: Physical::new(uri, diagnostic.range),
+            }],
             related_locations: diagnostic
                 .related_information
                 .iter()
                 .enumerate()
                 .map(|(i, related)| RelatedLocation {
                     id: i + 1,
-                    physical_location: Physical::from(&related.location),
-                    message: related.message.as_str().into(),
+                    physical_location: Physical::new(&related.location.uri, related.location.range),
+                    message: Message {
+                        text: related.message.clone(),
+                    },
                 })
                 .collect(),
         });

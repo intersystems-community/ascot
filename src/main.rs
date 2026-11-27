@@ -58,8 +58,19 @@ enum Command {
         style: StyleArgs,
         #[command(flatten)]
         filter: FilterArgs,
-        #[command(flatten)]
-        output: OutputArgs,
+        /// How to print the diagnostics
+        ///
+        /// - `text`: one line per diagnostic, for reading.
+        ///
+        /// - `lsp`: JSON, the diagnostics of each file as the MCP `check` tool returns them:
+        ///   LSP-like records (range, severity, code, message, related information) in the WIT
+        ///   `diagnostic` record's spelling.
+        ///
+        /// - `sarif`: SARIF 2.1.0, for code scanning.
+        ///
+        /// The summary stays on stderr and the exit code is the same for all three.
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
         /// Load every file under this directory, and print only the diagnostics of the paths
         #[arg(long, value_name = "DIR")]
         root: Option<PathBuf>,
@@ -148,23 +159,6 @@ enum Command {
     },
 }
 
-#[derive(Args)]
-struct OutputArgs {
-    /// How to print the diagnostics
-    ///
-    /// - `text`: one line per diagnostic, for reading.
-    ///
-    /// - `lsp`: JSON, the diagnostics of each file as the MCP `check` tool returns them: LSP-like
-    ///   records (range, severity, code, message, related information) in the WIT `diagnostic`
-    ///   record's spelling.
-    ///
-    /// - `sarif`: SARIF 2.1.0, for code scanning.
-    ///
-    /// The summary stays on stderr and the exit code is the same for all three.
-    #[arg(long, value_enum, default_value_t = Format::Text)]
-    format: Format,
-}
-
 #[derive(Clone, Copy, ValueEnum)]
 enum Format {
     Text,
@@ -242,7 +236,7 @@ fn main() {
             iris,
             style,
             filter,
-            output,
+            format,
             root,
             paths,
         } => analyze(
@@ -251,12 +245,11 @@ fn main() {
             iris.open(),
             style.load(),
             filter.filter(),
-            output.format,
+            format,
         ),
         Command::Diagnostics { dir } => {
             if let Err(err) = ascot::reference::write(&dir) {
-                eprintln!("diagnostics: {}: {err}", dir.display());
-                exit(1);
+                die(format!("diagnostics: {}: {err}", dir.display()));
             }
         }
         #[cfg(feature = "declare")]
@@ -271,16 +264,12 @@ fn main() {
             indent,
             check,
             paths,
-        } => {
-            let style = StyleArgs {
-                style: Some(style.display().to_string()),
-            };
-            let Some(style) = style.load() else {
-                eprintln!("--style: a file is required");
-                exit(2)
-            };
-            format_files(&style, indent, check, &paths)
-        }
+        } => format_files(
+            &load_style(&style.display().to_string()),
+            indent,
+            check,
+            &paths,
+        ),
         #[cfg(feature = "mcp")]
         Command::Mcp { shared_fs } => {
             let rt = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
@@ -303,11 +292,21 @@ fn main() {
                 inlay_hints: None,
             };
             if let Err(err) = ascot::lsp::run(settings, shared_fs) {
-                eprintln!("LSP server error: {err}");
-                exit(1);
+                die(format!("LSP server error: {err}"));
             }
         }
     }
+}
+
+fn die(message: String) -> ! {
+    eprintln!("{message}");
+    exit(1)
+}
+
+fn load_style(path: &str) -> Style {
+    let fail = |err: String| -> ! { die(format!("--style: {path}: {err}")) };
+    let text = fs::read_to_string(path).unwrap_or_else(|err| fail(err.to_string()));
+    style::parse(&text).unwrap_or_else(|err| fail(err))
 }
 
 impl IrisArgs {
@@ -315,13 +314,8 @@ impl IrisArgs {
     /// environment. Whatever can't be opened or fetched ends the run.
     fn open(self) -> Option<Box<dyn IrisContext>> {
         let irises: Vec<&str> = self.iris.iter().map(String::as_str).collect();
-        match ascot::open_iris_all(&irises, self.iris_namespace.as_deref()) {
-            Ok(iris) => iris,
-            Err(err) => {
-                eprintln!("--iris {err}");
-                exit(1);
-            }
-        }
+        ascot::open_iris_all(&irises, self.iris_namespace.as_deref())
+            .unwrap_or_else(|err| die(format!("--iris {err}")))
     }
 }
 
@@ -330,12 +324,7 @@ impl StyleArgs {
     /// an error up front, not a silent fallback to no style.
     fn load(self) -> Option<Style> {
         let path = self.style.filter(|path| !path.is_empty())?;
-        let fail = |err: String| -> ! {
-            eprintln!("--style: {path}: {err}");
-            exit(1)
-        };
-        let text = fs::read_to_string(&path).unwrap_or_else(|err| fail(err.to_string()));
-        Some(style::parse(&text).unwrap_or_else(|err| fail(err)))
+        Some(load_style(&path))
     }
 }
 
@@ -343,26 +332,14 @@ impl StyleArgs {
 #[cfg(feature = "declare")]
 fn declare(url: &str, namespace: Option<&str>, out: Option<&Path>) {
     let namespace = namespace.unwrap_or(ascot::DEFAULT_IRIS_NAMESPACE);
-    let conn = match RawAtelier::connect(url, namespace) {
-        Ok(conn) => conn,
-        Err(err) => {
-            eprintln!("--iris: {err}");
-            exit(1);
-        }
-    };
-    let out = match out {
-        Some(out) => out.to_path_buf(),
-        None => match default_declaration_file(url, namespace) {
-            Ok(path) => {
-                eprintln!("declare: no file given; writing to {}", path.display());
-                path
-            }
-            Err(err) => {
-                eprintln!("declare: {err}");
-                exit(1);
-            }
-        },
-    };
+    let fail = |err: String| -> ! { die(format!("declare: {err}")) };
+    let conn =
+        RawAtelier::connect(url, namespace).unwrap_or_else(|err| die(format!("--iris: {err}")));
+    let out = out.map(Path::to_path_buf).unwrap_or_else(|| {
+        let path = default_declaration_file(url, namespace).unwrap_or_else(|err| fail(err));
+        eprintln!("declare: no file given; writing to {}", path.display());
+        path
+    });
     let started = Instant::now();
     let mut bars = std::io::stderr().is_terminal().then(ProgressBars::default);
     let declarations = conn.declarations(|kind, done, total| {
@@ -370,21 +347,18 @@ fn declare(url: &str, namespace: Option<&str>, out: Option<&Path>) {
             bars.update(kind, done, total);
         }
     });
-    match declarations.and_then(|decls| decls.save(&out).map(|()| decls)) {
-        Ok(decls) => eprintln!(
-            "{} class(es), {} include file(s), {} routine(s) of namespace {} written to {} in {}s",
-            decls.classes.len(),
-            decls.includes.len(),
-            decls.routines.len(),
-            decls.namespace,
-            out.display(),
-            started.elapsed().as_secs()
-        ),
-        Err(err) => {
-            eprintln!("declare: {err}");
-            exit(1);
-        }
-    }
+    let decls = declarations
+        .and_then(|decls| decls.save(&out).map(|()| decls))
+        .unwrap_or_else(|err| fail(err));
+    eprintln!(
+        "{} class(es), {} include file(s), {} routine(s) of namespace {} written to {} in {}s",
+        decls.classes.len(),
+        decls.includes.len(),
+        decls.routines.len(),
+        decls.namespace,
+        out.display(),
+        started.elapsed().as_secs()
+    );
 }
 
 /// `~/.ascot/<host>-<port>[-<prefix>]-<namespace>.ascot.decls`, its directory created.
@@ -423,16 +397,10 @@ async fn run_mcp_server(shared_fs: bool) {
     use ascot::mcp::Server;
     use rmcp::ServiceExt;
 
-    let server = match Server::new(shared_fs).serve(rmcp::transport::stdio()).await {
-        Ok(server) => server,
-        Err(err) => {
-            eprintln!("failed to start MCP server: {err:?}");
-            exit(1);
-        }
-    };
+    let server = (Server::new(shared_fs).serve(rmcp::transport::stdio()).await)
+        .unwrap_or_else(|err| die(format!("failed to start MCP server: {err:?}")));
     if let Err(err) = server.waiting().await {
-        eprintln!("MCP server error: {err:?}");
-        exit(1);
+        die(format!("MCP server error: {err:?}"));
     }
 }
 
@@ -450,30 +418,17 @@ fn analyze<'a>(
 ) {
     // Under a root, the paths are looked up among its files, so both are made canonical.
     let canonical = |path: &Path| {
-        fs::canonicalize(path).unwrap_or_else(|e| {
-            eprintln!("Error resolving {}: {}", path.display(), e);
-            exit(1)
-        })
+        fs::canonicalize(path)
+            .unwrap_or_else(|e| die(format!("Error resolving {}: {}", path.display(), e)))
     };
     let root = root.map(canonical);
-    let mut files = Vec::new();
-    for path in paths {
-        if root.is_some() {
-            collect_doc(&canonical(path), &mut files);
-        } else if path.exists() {
-            collect_doc(path, &mut files);
-        } else {
-            eprintln!("Error: {} does not exist", path.display());
-            exit(1);
-        }
-    }
-    files.sort();
-    files.dedup();
+    let mut files = match &root {
+        Some(_) => collect_docs(paths.map(canonical)),
+        None => collect_docs(paths),
+    };
     let loaded = match &root {
         Some(root) => {
-            let mut all = Vec::new();
-            collect_doc(root, &mut all);
-            all.sort();
+            let all = collect_docs([root]);
             files.retain(|file| {
                 let under_root = all.binary_search(file).is_ok();
                 if !under_root {
@@ -539,22 +494,12 @@ impl ProgressBars {
 fn format_files(style: &Style, indent: Option<u8>, check: bool, paths: &[PathBuf]) {
     let styles = ascot::style::Styles::new(style);
     let indent = indent.map_or("\t".to_string(), |n| " ".repeat(n as usize));
-    let mut files = Vec::new();
-    for path in paths {
-        if !path.exists() {
-            eprintln!("Error: {} does not exist", path.display());
-            exit(1);
-        }
-        collect_doc(path, &mut files);
-    }
+    let mut files = collect_docs(paths);
     files.retain(|file| file.extension().is_some_and(|ext| ext != "inc"));
-    files.sort();
-    files.dedup();
     let mut changed = 0;
     for file in &files {
         let fail = |what: &str, err: std::io::Error| -> ! {
-            eprintln!("Error {what} {}: {err}", file.display());
-            exit(1)
+            die(format!("Error {what} {}: {err}", file.display()))
         };
         let text = fs::read_to_string(file).unwrap_or_else(|err| fail("reading", err));
         let uri = file.display().to_string();
@@ -664,6 +609,20 @@ fn report_diagnostics(workspace: &Workspace, files: &[PathBuf], format: Format) 
     }
     let _ = std::io::stdout().flush();
     (total, failing)
+}
+
+fn collect_docs<P: AsRef<Path>>(paths: impl IntoIterator<Item = P>) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for path in paths {
+        let path = path.as_ref();
+        if !path.exists() {
+            die(format!("Error: {} does not exist", path.display()));
+        }
+        collect_doc(path, &mut files);
+    }
+    files.sort();
+    files.dedup();
+    files
 }
 
 fn collect_doc(path: &Path, out: &mut Vec<PathBuf>) {
