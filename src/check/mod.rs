@@ -282,37 +282,18 @@ fn relocate_method_hints(
         .collect()
 }
 
-impl MemberDetails {
-    fn check(&self, env: &DocumentEnv, cls: &ClassDocument) -> Result<(), TypeError> {
-        match &self.kind {
-            MemberKindSpecificDetails::MethodOrClassMethod(method_details) => {
-                if method_details.is_abstract {
-                    return Ok(());
-                }
-                if method_details.body.range.end.line - method_details.body.range.start.line > 10 {
-                    let mut position = method_details.body.range.end;
-                    position.character += 1;
-                    let kind = if method_details.is_class_method {
-                        "Class"
-                    } else {
-                        ""
-                    };
-                    let hint = trailing_hint(position, format!("{kind}Method {}", self.name.it));
-                    env.inlay_hints.borrow_mut().push(hint);
-                }
-                method_details.check(&self.name.it, env, cls)
-            }
-            _ => Ok(()),
-        }
-    }
-}
-
 impl MethodDetails {
-    fn args(&self) -> Vec<WithRange<NormalArg>> {
-        inputs_of(&self.normal_args, &self.variadic_arg)
-    }
-
     fn check(&self, name: &str, env: &DocumentEnv, cls: &ClassDocument) -> Result<(), TypeError> {
+        if self.is_abstract {
+            return Ok(());
+        }
+        if self.body.range.end.line - self.body.range.start.line > 10 {
+            let mut position = self.body.range.end;
+            position.character += 1;
+            let kind = if self.is_class_method { "Class" } else { "" };
+            let hint = trailing_hint(position, format!("{kind}Method {name}"));
+            env.inlay_hints.borrow_mut().push(hint);
+        }
         let language = self.language.or(cls.language);
         let mode = self.mode.as_ref();
         // The body isn't ObjectScript, so argument-usage tracking (e.g. "assigned but never
@@ -322,24 +303,19 @@ impl MethodDetails {
         }
         // Not a documented value of `Language`; the body is MultiValue Basic, unchecked.
         if language == Some(bindings::Language::Mvbasic) {
-            env.base.add_soft_diagnostic(
-                TypeErrorKind::UndocumentedSyntax {
-                    what: "`Language = mvbasic`".to_string(),
-                }
-                .at(self.body.range)
-                .into(),
-            );
+            undocumented_syntax(env.base, "`Language = mvbasic`", self.body.range);
             return Ok(());
         }
         let body_macros = cls.body_macros.borrow().clone();
-        let (expanded, source_map, definitions, body_macros) = match env.base.expand_method_body(
+        let expansion = env.base.workspace.expand_method_body(
             env.uri(),
             name,
             &self.header_text,
             self.body.it.as_str(),
             &cls.macro_definitions,
             &body_macros,
-        ) {
+        );
+        let (expanded, source_map, definitions, body_macros) = match expansion {
             Ok(result) => result,
             Err(diagnostic) => {
                 env.base.add_soft_diagnostic(diagnostic);
@@ -369,7 +345,8 @@ impl MethodDetails {
             }
             ty
         };
-        let local_args: Vec<WithRange<NormalArg>> = (self.args().into_iter())
+        let args = inputs_of(&self.normal_args, &self.variadic_arg);
+        let local_args: Vec<WithRange<NormalArg>> = (args.into_iter())
             .map(|mut arg| {
                 arg.it.ty = qualified(arg.it.ty.take());
                 WithRange::new(arg.it, shifter.unrange(arg.range))
@@ -434,8 +411,7 @@ impl MethodDetails {
                 for default in &self.brace_defaults {
                     let range = match &default.value {
                         DefaultValue::Expr(expr) => default_env.range(expr),
-                        DefaultValue::Braces(text) => text.range,
-                        DefaultValue::Unbraced(text) => text.range,
+                        DefaultValue::Braces(text) | DefaultValue::Unbraced(text) => text.range,
                     };
                     flow.with_range(range, |flow| {
                         let ty = match &default.value {
@@ -486,14 +462,12 @@ impl MethodDetails {
             },
             true,
         );
+        let relocate = |range: &mut bindings::Range,
+                        related: &mut Vec<DiagnosticRelatedInformation>| {
+            relocate_local(range, related, &source_map, env.uri(), &shifter)
+        };
         for mut diagnostic in env.base.soft_diagnostics_since(diagnostics_mark) {
-            let fidelity = relocate_local(
-                &mut diagnostic.range,
-                &mut diagnostic.related_information,
-                &source_map,
-                env.uri(),
-                &shifter,
-            );
+            let fidelity = relocate(&mut diagnostic.range, &mut diagnostic.related_information);
             // A style finding in a macro's own text is its spelling, not the document's.
             if fidelity == Some(Fidelity::Inexact) && diagnostic.code.starts_with('S') {
                 continue;
@@ -531,13 +505,7 @@ impl MethodDetails {
             env.base.reference(source, target);
         }
         let creates = result.map_err(|mut err| {
-            relocate_local(
-                &mut err.range,
-                &mut err.related_information,
-                &source_map,
-                env.uri(),
-                &shifter,
-            );
+            relocate(&mut err.range, &mut err.related_information);
             err
         })?;
         if let Some(hint) = creates_hint(self.body.range.start, creates) {
@@ -1278,22 +1246,6 @@ impl CheckCommandInner for cos::Block {
     }
 }
 
-// What a node spells out, against the style: how its keywords are written, how its commas are
-// spaced.
-pub(crate) fn report_style(
-    env: &CodeEnv,
-    keywords: impl IntoIterator<Item = KeywordUse>,
-    commas: &[CommaAt],
-) {
-    let Some(style) = env.style() else {
-        return;
-    };
-    report_keyword_style(env, &style.keywords, keywords);
-    if let Some(space_after) = style.rules.space_after_comma {
-        report_comma_style(env, space_after, commas);
-    }
-}
-
 pub(crate) fn keyword_style(kw: &KeywordUse, expected: &str) -> TypeErrorKind {
     let sigil = match kw.kind {
         KeywordKind::Command => "",
@@ -1306,22 +1258,27 @@ pub(crate) fn keyword_style(kw: &KeywordUse, expected: &str) -> TypeErrorKind {
     }
 }
 
-fn report_keyword_style(
+// What a node spells out, against the style: how its keywords are written, how its commas are
+// spaced.
+pub(crate) fn report_style(
     env: &CodeEnv,
-    style: &crate::style::KeywordStyles,
     keywords: impl IntoIterator<Item = KeywordUse>,
+    commas: &[CommaAt],
 ) {
+    let Some(style) = env.style() else {
+        return;
+    };
     for kw in keywords {
-        if let Some(expected) = style.expected(&kw) {
+        if let Some(expected) = style.keywords.expected(&kw) {
             let range = env.span(kw.start, kw.start + kw.text.len());
             env.soft_diagnostic(keyword_style(&kw, &expected).at(range));
         }
     }
-}
-
-// One space after and none before, or none on either side; a comma whose whitespace holds a
-// line break is layout, not spacing.
-fn report_comma_style(env: &CodeEnv, space_after: bool, commas: &[CommaAt]) {
+    // One space after and none before, or none on either side; a comma whose whitespace holds a
+    // line break is layout, not spacing.
+    let Some(space_after) = style.rules.space_after_comma else {
+        return;
+    };
     for comma in commas {
         let (start, end) = (comma.start - comma.before, comma.start + 1 + comma.after);
         if env.position(start).line != env.position(end).line {
@@ -1387,13 +1344,12 @@ impl CheckCommandInner for cos::Command {
                     && let Some(cos::IfBranches { thn, .. }) = branches
                     && let cos::Block::Curry(_) = thn.deref()
                 {
-                    env.soft_diagnostic(
-                        TypeErrorKind::NotAllowedIn {
-                            what: "A block in braces".into(),
-                            context: "an argumentless If",
-                            iris: "ERROR #1026",
-                        }
-                        .at(env.range(thn)),
+                    not_allowed_in(
+                        env,
+                        "A block in braces",
+                        "an argumentless If",
+                        "ERROR #1026",
+                        env.range(thn),
                     );
                 }
                 check_if(env, flow, cnds.as_ref(), branches)
@@ -1583,13 +1539,12 @@ impl CheckCommandInner for cos::Command {
                                             | SpecialVariable::NAMESPACE(_)
                                             | SpecialVariable::ROLES(_)
                                     ) {
-                                        env.soft_diagnostic(
-                                            TypeErrorKind::NotAllowedIn {
-                                                what: special.print(),
-                                                context: "a NEW command",
-                                                iris: "ERROR #1032; only $ESTACK, $ETRAP, $NAMESPACE and $ROLES can be NEWed",
-                                            }
-                                            .at(env.range(target)),
+                                        not_allowed_in(
+                                            env,
+                                            special.print(),
+                                            "a NEW command",
+                                            "ERROR #1032; only $ESTACK, $ETRAP, $NAMESPACE and $ROLES can be NEWed",
+                                            env.range(target),
                                         );
                                     }
                                 }
@@ -1655,13 +1610,12 @@ impl CheckCommandInner for cos::Command {
                 check_pc(pc, env, flow, |flow| {
                     if env.in_procedure_block() {
                         match flow.private_variables()? {
-                            Some(true) => env.soft_diagnostic(
-                                TypeErrorKind::NotAllowedIn {
-                                    what: "ZQUIT".into(),
-                                    context: "a procedure block with private variables",
-                                    iris: "<COMMAND> at run time",
-                                }
-                                .at(flow.range()),
+                            Some(true) => not_allowed_in(
+                                env,
+                                "ZQUIT",
+                                "a procedure block with private variables",
+                                "<COMMAND> at run time",
+                                flow.range(),
                             ),
                             Some(false) => env.soft_diagnostic(
                                 TypeErrorKind::ZQuitWithoutPrivates.at(flow.range()),
@@ -1670,6 +1624,9 @@ impl CheckCommandInner for cos::Command {
                         }
                     }
                     if let Some(exp) = exp {
+                        let clears_stack = |value: String, range| {
+                            env.soft_diagnostic(TypeErrorKind::ZQuitArgument { value }.at(range));
+                        };
                         match exp.to_power_ty(env, flow)? {
                             // Truncated: 1.5 unwinds like 1; 0, 0.5, a negative or a non-number
                             // act as a bare ZQUIT (measured).
@@ -1679,12 +1636,7 @@ impl CheckCommandInner for cos::Command {
                                     Const::String(s) => numeric_prefix(s).parse().unwrap_or(0.0),
                                 };
                                 if n < 1.0 {
-                                    env.soft_diagnostic(
-                                        TypeErrorKind::ZQuitArgument {
-                                            value: c.to_string(),
-                                        }
-                                        .at(flow.range()),
-                                    );
+                                    clears_stack(c.to_string(), flow.range());
                                 }
                             }
                             // A negative or decimal literal is no `Const`, but a literal still.
@@ -1693,12 +1645,7 @@ impl CheckCommandInner for cos::Command {
                                 let text = text.trim();
                                 if numeric_prefix(text) == text {
                                     if text.parse::<f64>().is_ok_and(|n| n < 1.0) {
-                                        env.soft_diagnostic(
-                                            TypeErrorKind::ZQuitArgument {
-                                                value: text.to_string(),
-                                            }
-                                            .at(flow.range()),
-                                        );
+                                        clears_stack(text.to_string(), flow.range());
                                     }
                                 } else {
                                     not_checked(env, "A non-literal ZQUIT argument", flow.range());
@@ -1866,12 +1813,8 @@ impl CheckCommandInner for cos::Command {
                                     }
                                 }
                                 Some(cos::AllowMacro::Plain(Right(namespace))) => {
-                                    env.soft_diagnostic(
-                                        TypeErrorKind::UndocumentedSyntax {
-                                            what: "A Job namespace without parentheses".to_string(),
-                                        }
-                                        .at(env.range(namespace)),
-                                    );
+                                    let what = "A Job namespace without parentheses";
+                                    undocumented_syntax(env, what, env.range(namespace));
                                     namespace.to_ty(env, flow)?;
                                 }
                                 _ => {}
@@ -1899,12 +1842,8 @@ impl CheckCommandInner for cos::Command {
                     for target in targets.items(env) {
                         target.check(env, flow)?;
                         if let Some((_, _, level)) = &target.level {
-                            env.soft_diagnostic(
-                                TypeErrorKind::UndocumentedSyntax {
-                                    what: "A `:` suffix on a ZKILL argument".to_string(),
-                                }
-                                .at(env.range(level)),
-                            );
+                            let what = "A `:` suffix on a ZKILL argument";
+                            undocumented_syntax(env, what, env.range(level));
                             let _ = level.to_ty(env, flow)?;
                         }
                     }
@@ -2396,22 +2335,35 @@ fn unimplemented(what: impl Into<String>) -> QuasiTypeError {
     TypeErrorKind::Unimplemented { what: what.into() }.into()
 }
 
+fn not_allowed_in(
+    env: &CodeEnv<'_>,
+    what: impl Into<String>,
+    context: &'static str,
+    iris: &'static str,
+    range: bindings::Range,
+) {
+    let kind = TypeErrorKind::NotAllowedIn {
+        what: what.into(),
+        context,
+        iris,
+    };
+    env.soft_diagnostic(kind.at(range));
+}
+
 // `what` is refused in a procedure block (IRIS: `iris`), reported when this is one.
 fn refused_in_block(env: &CodeEnv<'_>, what: &str, iris: &'static str, range: bindings::Range) {
     if env.in_procedure_block() {
-        env.soft_diagnostic(
-            TypeErrorKind::NotAllowedIn {
-                what: what.into(),
-                context: "a procedure block",
-                iris,
-            }
-            .at(range),
-        );
+        not_allowed_in(env, what, "a procedure block", iris, range);
     }
 }
 
 fn not_checked(env: &CodeEnv<'_>, what: &'static str, range: bindings::Range) {
     env.soft_diagnostic(TypeErrorKind::NotChecked { what }.at(range));
+}
+
+fn undocumented_syntax(env: &WorkspaceEnv<'_>, what: impl Into<String>, range: bindings::Range) {
+    let what = what.into();
+    env.add_soft_diagnostic(TypeErrorKind::UndocumentedSyntax { what }.at(range).into());
 }
 
 fn check_io_parameters<'a>(
@@ -2446,12 +2398,8 @@ fn check_cast_receiver<'a>(
             flow.read(&var.print())?;
         }
         cos::CastReceiver::Parenthesized(inner) => {
-            env.soft_diagnostic(
-                TypeErrorKind::UndocumentedSyntax {
-                    what: "A receiver in parentheses after `##class(C)`".to_string(),
-                }
-                .at(env.range(inner)),
-            );
+            let what = "A receiver in parentheses after `##class(C)`";
+            undocumented_syntax(env, what, env.range(inner));
             check_cast_receiver(env, flow, inner)?
         }
     }
@@ -2589,7 +2537,7 @@ impl CheckCommandInner for cos::SetArgument {
             }
         };
         if self.value.deref().type_unclear() {
-            let (label, padding_left) = match env.inlay_hints().type_annotation {
+            let (label, padding_left) = match env.workspace.inlay_hints.type_annotation {
                 Some(bindings::TypeAnnotation::Colon) => (format!(": {}", ty), false),
                 _ => (format!("As {}", ty), true),
             };
@@ -2614,14 +2562,8 @@ impl CheckCommandInner for cos::SetArgument {
                 SetTarget::Special(var)
                     if multi && matches!(var.deref(), SpecialVariable::ZTRAP(_)) =>
                 {
-                    env.soft_diagnostic(
-                        TypeErrorKind::NotAllowedIn {
-                            what: "$ZTRAP".into(),
-                            context: "a multiple Set target",
-                            iris: "<UNIMPLEMENTED>",
-                        }
-                        .at(target_range),
-                    );
+                    let context = "a multiple Set target";
+                    not_allowed_in(env, "$ZTRAP", context, "<UNIMPLEMENTED>", target_range);
                 }
                 SetTarget::Special(special) => {
                     let literal = cos::OSString::parse(&self.value.print()).is_ok();
@@ -2810,14 +2752,7 @@ fn check_trap_set<'a>(
     };
     // Clearing the trap is allowed there; a value IRIS can't read is invalid there (#1058).
     if env.in_try() && !matches!(value, PowerTy::Const(Const::String(text)) if text.is_empty()) {
-        env.soft_diagnostic(
-            TypeErrorKind::NotAllowedIn {
-                what: "An error trap".into(),
-                context: "a TRY block",
-                iris: "ERROR #1064",
-            }
-            .at(range),
-        );
+        not_allowed_in(env, "An error trap", "a TRY block", "ERROR #1064", range);
     }
     if var == TrapVar::ZTrap && !literal && env.in_procedure_block() {
         refused_in_block(env, "A non-literal trap value", "ERROR #1058", range);
@@ -2872,14 +2807,7 @@ fn check_ztrap_value<'a>(
         Err(_) => (None, false, None),
     };
     if offset {
-        env.soft_diagnostic(
-            TypeErrorKind::NotAllowedIn {
-                what: "A label offset".into(),
-                context: "a trap value",
-                iris: "ERROR #1059",
-            }
-            .at(range),
-        );
+        not_allowed_in(env, "A label offset", "a trap value", "ERROR #1059", range);
         return Ok(());
     }
     match (label, routine) {
@@ -2890,13 +2818,7 @@ fn check_ztrap_value<'a>(
             resolve_label_soft(env, label, routine, range)?;
         }
         (Some(label), None) => arm_handler(env, flow, TrapVar::ZTrap, label, range)?,
-        (None, None) => env.soft_diagnostic(
-            TypeErrorKind::CannotFindLabel {
-                label: text.to_string(),
-                routine: InRoutine(None),
-            }
-            .at(range),
-        ),
+        (None, None) => cannot_find_label(env, text.to_string(), range),
     }
     Ok(())
 }
@@ -2912,8 +2834,7 @@ fn check_etrap_command<'a>(
     let line = cos::CommandLine::<cos::SGap>::parse(text).ok();
     let commands: Vec<&Command> = line
         .iter()
-        .flat_map(|line| line.commands.iter())
-        .flat_map(|commands| commands.items.iter())
+        .flat_map(commands_of)
         .map(Deref::deref)
         .collect();
     if let [
@@ -2969,6 +2890,11 @@ fn sets_etrap(set: &SetCommand) -> bool {
     })
 }
 
+fn cannot_find_label(env: &CodeEnv<'_>, label: String, range: bindings::Range) {
+    let routine = InRoutine(None);
+    env.soft_diagnostic(TypeErrorKind::CannotFindLabel { label, routine }.at(range));
+}
+
 // `label` is a handler of this body, or missing. Once armed, its returns are the body's, and the
 // states from here on join into what it is checked from (see `check_label_body`). A `$ZTRAP` in
 // a procedure block can't name a label outside it; a `$ETRAP`'s GOTO can (measured).
@@ -2980,13 +2906,7 @@ fn arm_handler<'a>(
     range: bindings::Range,
 ) -> Result<(), QuasiTypeError> {
     let Some(entry) = env.label_entry(&label) else {
-        env.soft_diagnostic(
-            TypeErrorKind::CannotFindLabel {
-                label,
-                routine: InRoutine(None),
-            }
-            .at(range),
-        );
+        cannot_find_label(env, label, range);
         return Ok(());
     };
     if entry.outside_block && var == TrapVar::ZTrap {
@@ -3376,7 +3296,7 @@ fn base_property<'a, T: Print>(
     referenced(
         env,
         range,
-        env.resolve_mem::<Properties<Read>>(&obj, mem.id(), range, true),
+        env.resolve_mem::<Properties<Read>>(&obj, mem.id(), range),
     )
 }
 
@@ -3520,22 +3440,22 @@ fn check_member<'a>(
     let name = mem.id();
     match (mem.is_parameter(), args) {
         (true, None) => {
-            let parameter = env.resolve_mem::<Parameters>(&ty, name, range, true);
+            let parameter = env.resolve_mem::<Parameters>(&ty, name, range);
             Ok(Some(referenced(env, range, parameter)?))
         }
         (true, Some(_)) => parameter_is_constant(env, &ty, name, range),
         (false, None) => {
-            let property = env.resolve_mem::<Properties<Read>>(&ty, name, range, true);
+            let property = env.resolve_mem::<Properties<Read>>(&ty, name, range);
             Ok(Some(env.value_ty(&referenced(env, range, property)?)))
         }
         // A method anywhere in the chain before a property anywhere, as IRIS resolves it, and the
         // `%DispatchMethod` hook once neither has the name.
         (false, Some(args)) => {
-            let method = match env.find_mem::<Methods>(&ty, &name, range, true)? {
+            let method = match env.find_mem::<Methods>(&ty, &name, range)? {
                 Some(method) => Some(method),
                 // `..Prop(subs)`: a property, which IRIS requires to be multidimensional, its node
                 // typed like the property.
-                None => match env.lookup_mem::<Properties<Called>>(&ty, &name, range, true)? {
+                None => match env.lookup_mem::<Properties<Called>>(&ty, &name, range)? {
                     Some(property) => {
                         let property = referenced(env, range, Ok(property))?;
                         return match property {
@@ -3553,13 +3473,13 @@ fn check_member<'a>(
                             _ => Err(TypeErrorKind::NotMultidimensional { name }.into()),
                         };
                     }
-                    None => env.dispatched_mem::<Methods>(&ty, &name, range, true),
+                    None => env.dispatched_mem::<Methods>(&ty, &name, range),
                 },
             };
             let method = match method {
                 Some(method) => Ok(method),
                 // Neither: reported as a missing method.
-                None => env.resolve_mem::<Methods>(&ty, name.clone(), range, true),
+                None => env.resolve_mem::<Methods>(&ty, name.clone(), range),
             };
             let method = referenced(env, range, method)?;
             check_call(env, flow, method, args.items(env), range)
@@ -3583,7 +3503,7 @@ fn require_multidimensional<'a>(
     }
     let name = member.id();
     let property =
-        env.lookup_mem::<Properties<Read>>(&env.this_ty(flow), &name, env.range(member), true)?;
+        env.lookup_mem::<Properties<Read>>(&env.this_ty(flow), &name, env.range(member))?;
     match property.map(|property| property.ty) {
         None
         | Some(
@@ -3653,7 +3573,7 @@ fn parameter_is_constant<T>(
     name: String,
     range: bindings::Range,
 ) -> Result<T, QuasiTypeError> {
-    let parameter = env.resolve_mem::<Parameters>(ty, name.clone(), range, true);
+    let parameter = env.resolve_mem::<Parameters>(ty, name.clone(), range);
     referenced(env, range, parameter)?;
     Err(TypeErrorKind::ParameterIsConstant { name }.into())
 }
@@ -3674,9 +3594,9 @@ fn check_set_member<'a>(
     let property = match subs {
         Some(subs) => {
             builtins::check_args_any(env, flow, subs.items(env))?;
-            env.resolve_mem::<Properties<AssignNode>>(&obj, name.clone(), range, true)
+            env.resolve_mem::<Properties<AssignNode>>(&obj, name.clone(), range)
         }
-        None => env.resolve_mem::<Properties<Assign>>(&obj, name.clone(), range, true),
+        None => env.resolve_mem::<Properties<Assign>>(&obj, name.clone(), range),
     };
     let property = referenced(env, range, property)?;
     let Some(subs) = subs else {
@@ -3817,13 +3737,12 @@ fn check_dottable(env: &CodeEnv<'_>, target: &SetTarget, range: bindings::Range)
                 )
         });
     if !dottable {
-        env.soft_diagnostic(
-            TypeErrorKind::NotAllowedIn {
-                what: "Anything but a variable name or an indirection".into(),
-                context: "a by-reference argument",
-                iris: "ERROR #1010/#1011",
-            }
-            .at(range),
+        not_allowed_in(
+            env,
+            "Anything but a variable name or an indirection",
+            "a by-reference argument",
+            "ERROR #1010/#1011",
+            range,
         );
     }
 }
@@ -4440,12 +4359,8 @@ fn undocumented_instance<'a, P>(
     prefix: &str,
     var: &Ranged<Prefix<P, Ranged<QuotableClassMemberName>>>,
 ) -> Result<Either<Local, PowerTy>, QuasiTypeError> {
-    env.soft_diagnostic(
-        TypeErrorKind::UndocumentedSyntax {
-            what: format!("The `{prefix}` property prefix"),
-        }
-        .at(env.range(var)),
-    );
+    let what = format!("The `{prefix}` property prefix");
+    undocumented_syntax(env, what, env.range(var));
     let mem = &var.prefixed;
     check_instance_member(env, flow, env.range(mem), mem.name())
 }
@@ -4463,7 +4378,7 @@ fn check_instance_member(
         }
         Some(ClsOrIns::Ins(cty)) => {
             let obj = Ty::OREF(ClsOrIns::Ins(cty));
-            let member = env.resolve_mem::<Properties<Read>>(&obj, mem, mem_range, true);
+            let member = env.resolve_mem::<Properties<Read>>(&obj, mem, mem_range);
             Ok(Right(
                 env.value_ty(&referenced(env, mem_range, member)?).into(),
             ))
@@ -4494,11 +4409,7 @@ impl AsCommandLines<SGap1> for RoutineMain {
 
 // The span of `main`'s commands, for highlighting the whole body in a "missing QUIT" diagnostic.
 fn body_end_range(env: &CodeEnv<'_>, main: &RoutineMain) -> Option<bindings::Range> {
-    let mut commands = main.as_command_lines().flat_map(|line| {
-        line.commands
-            .iter()
-            .flat_map(|commands| commands.items.iter())
-    });
+    let mut commands = main.as_command_lines().flat_map(commands_of);
     let first = commands.next()?;
     let end = commands.last().map_or(first.end, |last| last.end);
     Some(env.span(first.start, end))
@@ -4708,14 +4619,14 @@ pub(crate) fn check_cls(
     // resolved silently (no diagnostic on failure, unlike an explicit `Include`).
     let mut macro_definitions = env.base.implicit_class_definitions();
     // An `Include` is inherited: a subclass sees every include file of its superclasses too.
-    let (inherited_definitions, _) = env
-        .base
-        .resolve_class_includes(&env.base.inherited_include_names(cls));
+    let inherited_includes = env.base.inherited_include_names(cls);
+    let (inherited_definitions, _) = env.base.resolve_class_includes(&inherited_includes);
     macro_definitions.extend(inherited_definitions);
     let include_names: Vec<String> = cls.include_names.iter().map(|i| i.it.clone()).collect();
     let (own_definitions, failed_includes) = env.base.resolve_class_includes(&include_names);
+    let workspace = env.base.workspace;
     for include in &cls.include_names {
-        if let Some(location) = env.base.include_definition(&include.it) {
+        if let Some(location) = workspace.inc_definition(&include.it) {
             env.base.reference(include.range, location);
         }
     }
@@ -4743,11 +4654,11 @@ pub(crate) fn check_cls(
     members.sort_by(|a, b| a.name.it.cmp(&b.name.it));
     let mut include_labels = Labels::new();
     let mut seen = HashSet::new();
-    for include in (env.base.inherited_include_names(cls).iter())
+    for include in (inherited_includes.iter())
         .chain(&include_names)
         .filter(|include| seen.insert(include.as_str()))
     {
-        let labels = env.base.include_labels(std::slice::from_ref(include));
+        let labels = workspace.include_labels(std::slice::from_ref(include));
         for member in &members {
             if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
                 && !method.is_abstract
@@ -4787,13 +4698,14 @@ pub(crate) fn check_cls(
             Location::new(env.uri().to_string(), kept.range),
         )));
     }
+    let style = env.base.style();
     for member in members {
         if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
             && !method.is_private
             && member.doc.is_empty()
         {
             let lines = body_lines(method.body.range, true);
-            diagnostics.extend(undescribed(env.style(), "method", lines, member.name.range));
+            diagnostics.extend(undescribed(style, "method", lines, member.name.range));
         }
         if let MemberKindSpecificDetails::Index(index) = &member.kind {
             let this = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.name.it.clone())));
@@ -4808,7 +4720,7 @@ pub(crate) fn check_cls(
                 let property = key.it.split('.').next().unwrap_or_default().to_string();
                 let property = env
                     .base
-                    .resolve_mem::<Properties<Indexed>>(&this, property, key_range, true);
+                    .resolve_mem::<Properties<Indexed>>(&this, property, key_range);
                 if let Err(err) = referenced(env.base, key_range, property) {
                     diagnostics.push(err.into_error(|| key_range).into());
                 }
@@ -4858,17 +4770,18 @@ pub(crate) fn check_cls(
         check_property_or_parameter_declaration(env, &cls.name.it, member, &mut diagnostics);
         match &member.kind {
             MemberKindSpecificDetails::MethodOrClassMethod(method) => {
-                check_argument_order(env.style(), &method.normal_args, &mut diagnostics)
+                check_argument_order(style, &method.normal_args, &mut diagnostics)
             }
             MemberKindSpecificDetails::Query { normal_args, .. } => {
-                check_argument_order(env.style(), normal_args, &mut diagnostics)
+                check_argument_order(style, normal_args, &mut diagnostics)
             }
             _ => {}
         }
         // A missing `Include` (already reported once above) commonly leaves some macro
         // unexpanded in a way that breaks a method body's parse -- don't also raise the
         // resulting generic syntax error, same reasoning as `expand_rtn`'s own fallback.
-        if let Err(err) = member.deref().check(env, &doc)
+        if let MemberKindSpecificDetails::MethodOrClassMethod(method) = &member.kind
+            && let Err(err) = method.check(&member.name.it, env, &doc)
             && !(has_unresolved_include && matches!(err.kind, TypeErrorKind::InvalidSyntax { .. }))
         {
             diagnostics.push(err.into());
@@ -5105,7 +5018,7 @@ fn declares_param<'c>(
     let (mut found, mut absent) = (false, vec![]);
     for cls in candidates {
         let ty = Ty::OREF(ClsOrIns::Ins(ClassTy::from(cls.clone())));
-        match env.base.lookup_mem::<Parameters>(&ty, name, range, true) {
+        match env.base.lookup_mem::<Parameters>(&ty, name, range) {
             Ok(Some(_)) => found = true,
             Ok(None) => absent.push(cls.as_str()),
             Err(_) => {}
