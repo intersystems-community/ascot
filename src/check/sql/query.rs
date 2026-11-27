@@ -58,27 +58,25 @@ impl Walk for QuerySpecification {
     // In the order SQL evaluates the clauses, so that each name is bound before it is used.
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
-        self.from.walk(w);
-        self.where_clause.walk(w);
-        self.group.walk(w);
-        self.having.walk(w);
+        let (top, clauses, tail): (_, _, &dyn Walk) = match &self.body {
+            SelectBody::Top(_, top, _, clauses, order) => (Some(top), clauses, order),
+            SelectBody::Plain(clauses, limit) => (None, clauses, limit),
+        };
+        clauses.from.walk(w);
+        clauses.where_clause.walk(w);
+        clauses.group.walk(w);
+        clauses.having.walk(w);
         for (_, option) in &self.options {
             option.walk(w)
         }
-        self.selst.walk(w);
-        self.tail.walk(w);
-        w.pop_frame()
-    }
-}
-
-impl Walk for SelectList {
-    fn walk(&self, w: &mut Walker) {
         self.quantifier.walk(w);
-        if let Some((_, top, _)) = &self.top {
+        if let Some(top) = top {
             top.walk(w)
         }
-        self.select_list.walk(w);
-        self.into.walk(w)
+        clauses.select_list.walk(w);
+        clauses.into.walk(w);
+        tail.walk(w);
+        w.pop_frame()
     }
 }
 

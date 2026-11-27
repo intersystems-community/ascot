@@ -29,8 +29,15 @@ fn term_of<B: tygr::Grammar + Default>(
     term
 }
 
+fn clauses(query: &core::QuerySpecification) -> &core::SelectClauses {
+    let core::SelectBody::Plain(clauses, _) = &query.body else {
+        panic!("TOP")
+    };
+    clauses
+}
+
 fn item_term(query: &core::QuerySpecification, i: usize) -> &Ranged<core::ValueExpressionPrimary> {
-    let core::SelectItem::Expr { expr, .. } = &query.selst.1.select_list.items[i].ranged else {
+    let core::SelectItem::Expr { expr, .. } = &clauses(query).select_list.items[i].ranged else {
         panic!("a star")
     };
     term_of(expr)
@@ -55,9 +62,17 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
         panic!("{text}")
     };
     assert_eq!(&text[call.name.name.range()], "%SQLUPPER c");
-    let core::TableReference::Join(tables) = &query.from.as_ref().unwrap().1.tables.first;
+    let clauses = clauses(&query);
+    let core::TableReference::Join(tables) = &clauses.from.as_ref().unwrap().1.tables.first;
     assert_eq!(&text[tables.joins[0].1.range()], "u");
-    let condition = &query.where_clause.as_ref().unwrap().1.prefixed.first.first;
+    let condition = &clauses
+        .where_clause
+        .as_ref()
+        .unwrap()
+        .1
+        .prefixed
+        .first
+        .first;
     let core::BooleanFactor::Not(_, _, inner) = condition else {
         panic!("{text}")
     };

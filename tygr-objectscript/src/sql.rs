@@ -2182,100 +2182,54 @@ pub mod leveled {
     pub struct QuerySpecification {
         pub kw: Kw!("SELECT"),
         pub options: Vec<(Space1, SelectOption)>,
-        pub selst: (Space1, SelectList),
+        pub space: Space1,
+        pub quantifier: SetQuantifier,
+        pub body: SelectBody,
+    }
+
+    /// With TOP a SELECT orders its own rows and takes no row limit (SQLCODE -386 with one); without TOP it takes a
+    /// row limit, and an ORDER BY after it is the statement's (-25 before UNION, -143 in a subquery).
+    #[derive(Grammar)]
+    pub enum SelectBody {
+        Top(
+            Kw!("TOP"),
+            TopSpecification,
+            Space1,
+            SelectClauses,
+            Option<(Space1, OrderByClause)>,
+        ),
+        Plain(SelectClauses, Option<(Space1, RowLimitingClause)>),
+    }
+
+    #[derive(Grammar)]
+    pub struct SelectClauses {
+        pub select_list: VecSep<Ranged<SelectItem>, ArgSep>,
+        pub into: Option<(Space1, IntoClause)>,
         pub from: Option<(Space1, FromClause)>,
         pub where_clause: Option<(Space1, WhereClause)>,
         pub group: Option<(Space1, GroupByClause)>,
         pub having: Option<(Space1, HavingClause)>,
-        pub tail: Option<(Space1, Either<OrderByClause, RowLimitingClause>)>,
     }
 
-    /// ORDER BY and a row limit after the query, as a SELECT takes one of the two (ORDER BY with TOP alone, see
-    /// QueryExpression): 2026.2 reads LIMIT 1 ORDER BY a LIMIT 2 and LIMIT 1 LIMIT 2, the first limit the SELECT's and
-    /// the second the whole's, not ORDER BY a LIMIT 1 LIMIT 2, LIMIT 1 LIMIT 2 ORDER BY a or LIMIT 1 ORDER BY a UNION.
+    /// ORDER BY and a row limit after the query: 2026.2 reads LIMIT 1 ORDER BY a LIMIT 2 and LIMIT 1 LIMIT 2, the
+    /// first limit the SELECT's and the second the whole's, not ORDER BY a LIMIT 1 LIMIT 2 or LIMIT 1 LIMIT 2 ORDER BY a.
     #[derive(Grammar)]
     pub struct Tail {
         pub order: Option<(Space1, OrderByClause)>,
         pub limit: Option<(Space1, RowLimitingClause)>,
     }
 
-    impl Query {
-        fn ordered_with_top(terms: &[QueryTerm]) -> bool {
-            terms.iter().all(|term| match term {
-                QueryTerm::QuerySpecification(query) => {
-                    !matches!(query.ranged.tail, Some((_, Either::Left(_))))
-                        || query.ranged.selst.1.top.is_some()
-                }
-                QueryTerm::Query(_) => true,
-            })
-        }
-
-        /// Whether the last operand's ORDER BY is the enclosing statement's: a SELECT with TOP orders its own rows
-        /// (2026.2 takes a second ORDER BY after SELECT TOP 1 a FROM t ORDER BY a DESC, and after a UNION's last
-        /// operand with TOP, whose ORDER BY sees that operand's aliases alone), one without TOP the whole's.
-        pub(super) fn ends_with_statement_order(&self) -> bool {
-            matches!(self.0.items.last(), Some(QueryTerm::QuerySpecification(query))
-                if query.ranged.selst.1.top.is_none() && matches!(query.ranged.tail, Some((_, Either::Left(_)))))
-        }
-
-        /// Whether the operands order their rows as 2026.2 allows before a statement's own ORDER BY (`ordered`):
-        /// each but the last only with TOP (ORDER BY a UNION is refused, SQLCODE -25), the last also without, as the
-        /// statement's, which then orders no second time (ORDER BY a DESC ORDER BY a is refused, SQLCODE -25).
-        fn orders_once(&self, ordered: bool) -> bool {
-            let (_, rest) = self.0.items.split_last().expect("one term");
-            Self::ordered_with_top(rest) && !(self.ends_with_statement_order() && ordered)
-        }
-    }
-
-    fn take_statement_order(query: &mut core::Query) -> Option<(Space1, core::OrderByClause)> {
-        let is_statement = query.ends_with_statement_order();
-        let Some(core::QueryTerm::QuerySpecification(last)) = query.0.items.last_mut() else {
-            return None;
-        };
-        let Some((space, Either::Left(order))) = last.ranged.tail.take_if(|_| is_statement) else {
-            return None;
-        };
-        Some((space, order))
-    }
-
-    /// The query an INSERT or a CREATE TABLE AS reads: 2026.2 takes a row limit in its operands and ORDER BY once,
-    /// last (LIMIT 1 ORDER BY a, not ORDER BY a LIMIT 1 or LIMIT 1 LIMIT 2, SQLCODE -25).
+    /// The query an INSERT or a CREATE TABLE AS reads, ordered once, last (2026.2 takes LIMIT 1 ORDER BY a, not
+    /// ORDER BY a LIMIT 1 or LIMIT 1 LIMIT 2, SQLCODE -25).
     #[derive(Grammar)]
-    #[tygr(validated)]
-    #[sugar]
     pub struct SourceQuery {
         pub query: Query,
         pub order: Option<(Space1, OrderByClause)>,
     }
 
-    impl Validate for SourceQuery {
-        const REQUIREMENT: &'static str = "order an operand only with TOP and its rows once";
-        fn validate(&self) -> bool {
-            self.query.orders_once(self.order.is_some())
-        }
-    }
-
-    impl Desugar for SourceQuery {
-        type Core = core::SourceQuery;
-        fn desugar(self) -> Self::Core {
-            let mut query = self.query.desugar();
-            let order = take_statement_order(&mut query).or_else(|| self.order.desugar());
-            core::SourceQuery { query, order }
-        }
-    }
-
-    /// A query inside a statement, as a subquery, a CTE body or a view: 2026.2 takes a row limit in every operand
-    /// and ORDER BY only with TOP (SQLCODE -143 otherwise).
+    /// A query inside a statement, as a subquery, a CTE body or a view.
     #[derive(Grammar)]
-    #[tygr(validated)]
     pub struct QueryExpression(pub Box<Query>);
-
-    impl Validate for QueryExpression {
-        const REQUIREMENT: &'static str = "order an operand only with TOP";
-        fn validate(&self) -> bool {
-            Query::ordered_with_top(&self.0.0.items)
-        }
-    }
 
     #[derive(Grammar)]
     pub enum SelectOption {
@@ -2303,14 +2257,6 @@ pub mod leveled {
         Literal(Literal),
         HostVariable(HostVariable),
         Marker(StringEq!("?")),
-    }
-
-    #[derive(Grammar)]
-    pub struct SelectList {
-        pub quantifier: SetQuantifier,
-        pub top: Option<(Kw!("TOP"), TopSpecification, Space1)>,
-        pub select_list: VecSep<Ranged<SelectItem>, ArgSep>,
-        pub into: Option<(Space1, IntoClause)>,
     }
 
     #[derive(Grammar)]
@@ -3122,36 +3068,33 @@ pub mod leveled {
         pub tail: Tail,
     }
 
-    /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383), not a parenthesized later one, and
-    /// orders the rows as `Query::orders_once` says.
+    /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383), not a parenthesized later one, and a
+    /// row limit over a lone SELECT with TOP (-386).
     impl Validate for SelectStatement {
         const REQUIREMENT: &'static str =
-            "begin with SELECT after WITH, order an operand only with TOP and its rows once";
+            "begin with SELECT after WITH, and cut a lone TOP SELECT no further";
         fn validate(&self) -> bool {
-            (self.with_clause.is_none()
-                || matches!(self.query.0.items[0], QueryTerm::QuerySpecification(_)))
-                && self.query.orders_once(self.tail.order.is_some())
+            let first = &self.query.0.items[0];
+            let lone_top = matches!(&self.query.0.items[..], [QueryTerm::QuerySpecification(query)]
+                if matches!(query.ranged.body, SelectBody::Top(..)));
+            (self.with_clause.is_none() || matches!(first, QueryTerm::QuerySpecification(_)))
+                && !(lone_top && self.tail.limit.is_some())
         }
     }
 
-    /// The statement's ORDER BY, parsed as its last operand's, stands in the Tail, and a lone SELECT's row limit
-    /// before ORDER BY after it, reading the same (LIMIT 2 ORDER BY a DESC gives the rows ORDER BY a DESC LIMIT 2
-    /// gives); in a union a row limit limits its operand and stays.
+    /// A lone SELECT's row limit before ORDER BY stands after it in the core, reading the same (LIMIT 2 ORDER BY a
+    /// DESC gives the rows ORDER BY a DESC LIMIT 2 gives); in a union a row limit limits its operand and stays.
     impl Desugar for SelectStatement {
         type Core = core::SelectStatement;
         fn desugar(self) -> Self::Core {
             let mut query = self.query.desugar();
             let mut tail = self.tail.desugar();
-            if let Some(order) = take_statement_order(&mut query) {
-                tail.order = Some(order);
-            }
             if let [core::QueryTerm::QuerySpecification(query)] = &mut query.0.items[..]
                 && tail.order.is_some()
                 && tail.limit.is_none()
-                && let Some((space, Either::Right(limit))) =
-                    query.ranged.tail.take_if(|(_, tail)| tail.is_right())
+                && let core::SelectBody::Plain(_, limit) = &mut query.ranged.body
             {
-                tail.limit = Some((space, limit));
+                tail.limit = limit.take();
             }
             core::SelectStatement {
                 with_clause: self.with_clause.desugar(),
