@@ -19,6 +19,7 @@ use crate::bindings::{
     MemberKind, NormalArg, ParameterInfo, PropertyInfo, RefMode, RelationshipInfo, RoutineInfo,
     Signature, Source, SqlProjection, VariadicArg,
 };
+use crate::check::types::{quoted, unquoted};
 use crate::cos::{self, LocalVariableName, OSString, Space, Type};
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
@@ -489,7 +490,7 @@ fn parameter_source(value: &str) -> Option<String> {
     {
         Some(value.to_string())
     } else {
-        Some(format!("\"{}\"", value.replace('"', "\"\"")))
+        Some(quoted(value))
     }
 }
 
@@ -584,10 +585,7 @@ fn member_rows(
 fn member_row_to_info(row: MemberRow) -> MemberInfo {
     // A dictionary may report a quoted name with its quotes, `"_isLabeled"`; the name is what
     // is between them, a doubled quote standing for one.
-    let name = match row.name.strip_prefix('"').and_then(|n| n.strip_suffix('"')) {
-        Some(quoted) => quoted.replace("\"\"", "\""),
-        None => row.name.clone(),
-    };
+    let name = unquoted(&row.name);
     MemberInfo {
         doc: row.description.clone().unwrap_or_default(),
         name,
