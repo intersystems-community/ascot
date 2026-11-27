@@ -194,8 +194,13 @@ impl Walk for ParenthesizedTable {
 
 impl Walk for Tail {
     fn walk(&self, w: &mut Walker) {
-        self.order.walk(w);
-        self.limit.walk(w)
+        match self {
+            Tail::Order(order, limit) => {
+                order.walk(w);
+                limit.walk(w)
+            }
+            Tail::Limit(limit) => limit.walk(w),
+        }
     }
 }
 

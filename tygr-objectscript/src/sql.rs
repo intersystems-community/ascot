@@ -2002,13 +2002,13 @@ pub mod leveled {
         pub having: Option<(Space1, HavingClause)>,
     }
 
-    /// The statement's ORDER BY and the row limit after it, the only place a LIMIT is the whole's: 2026.2 reads
-    /// LIMIT 1 ORDER BY a LIMIT 2 as the SELECT's limit, then the whole's order and limit, and refuses a numeric
-    /// LIMIT right after a lone SELECT with TOP (-386); LIMIT 1 LIMIT 2 without ORDER BY, which it takes, is not read.
+    /// The statement's ORDER BY with the row limit after it, or its row limit alone, the one place a LIMIT is the
+    /// whole's: 2026.2 reads A UNION B LIMIT 1 LIMIT 2 as B's limit then the whole's, refuses a third (-25), takes
+    /// (A UNION B) LIMIT 2, and merges a lone SELECT's two limits into the smaller count with the offsets summed.
     #[derive(Grammar)]
-    pub struct Tail {
-        pub order: OrderByClause,
-        pub limit: Option<(Space1, RowLimitingClause)>,
+    pub enum Tail {
+        Order(OrderByClause, Option<(Space1, RowLimitingClause)>),
+        Limit(RowLimitingClause),
     }
 
     /// The query an INSERT or a CREATE TABLE AS reads, ordered once, last (2026.2 takes LIMIT 1 ORDER BY a, not
