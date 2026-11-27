@@ -441,6 +441,7 @@ macro_rules! same_variants {
 same_variants! {
     ClassType { Datatype, Dynamic, Index, Literal, Persistent, Serial, Stream, View }
     Inheritance { Left, Right }
+    Cardinality { One, Many, Parent, Children }
 }
 
 impl From<&cos::MethodLanguage> for Language {

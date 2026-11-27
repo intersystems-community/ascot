@@ -23,13 +23,10 @@ use crate::cos::{self, LocalVariableName, OSString, Space, Type};
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
+#[derive(Default)]
 struct Cache<V: Clone>(Mutex<HashMap<String, (Option<Instant>, V)>>);
 
 impl<V: Clone> Cache<V> {
-    fn new() -> Self {
-        Self(Mutex::new(HashMap::new()))
-    }
-
     fn get_or_try_insert(
         &self,
         key: &str,
@@ -104,10 +101,10 @@ impl<A: Atelier + 'static> From<A> for AtelierContext {
         Self {
             atelier: Box::new(atelier),
             no_deferred_column: AtomicBool::new(false),
-            cls_cache: Cache::new(),
-            routine_cache: Cache::new(),
-            rtn_cache: Cache::new(),
-            sql_cache: Cache::new(),
+            cls_cache: Cache::default(),
+            routine_cache: Cache::default(),
+            rtn_cache: Cache::default(),
+            sql_cache: Cache::default(),
         }
     }
 }
@@ -247,7 +244,7 @@ fn index_key(key: &str) -> IndexKey {
     }
 }
 
-fn split_classes(s: &str) -> Vec<String> {
+pub(crate) fn split_classes(s: &str) -> Vec<String> {
     s.split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -584,18 +581,6 @@ fn member_rows(
     })
 }
 
-fn split_aliases(aliases: Option<&str>) -> Vec<String> {
-    aliases
-        .map(|aliases| {
-            aliases
-                .split(',')
-                .map(|alias| alias.chars().filter(|c| !c.is_whitespace()).collect())
-                .filter(|alias: &String| !alias.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn member_row_to_info(row: MemberRow) -> MemberInfo {
     // A dictionary may report a quoted name with its quotes, `"_isLabeled"`; the name is what
     // is between them, a doubled quote standing for one.
@@ -603,17 +588,22 @@ fn member_row_to_info(row: MemberRow) -> MemberInfo {
         Some(quoted) => quoted.replace("\"\"", "\""),
         None => row.name.clone(),
     };
-    let aliases = split_aliases(row.aliases.as_deref());
-    let origin = row.origin.clone();
     MemberInfo {
         doc: row.description.clone().unwrap_or_default(),
         name,
-        aliases,
+        aliases: row
+            .aliases
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .map(|alias| alias.chars().filter(|c| !c.is_whitespace()).collect())
+            .filter(|alias: &String| !alias.is_empty())
+            .collect(),
         deprecated: is_truthy(&row.deprecated),
         final_: is_truthy(&row.final_),
         kind: row_to_member_kind(&row),
         uri: None,
-        origin,
+        origin: row.origin.clone(),
     }
 }
 
@@ -709,17 +699,7 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
                 .and_then(|t| crate::details::index_type(&t)),
             unique: is_truthy(&row.index_unique),
         }),
-        "query" => {
-            let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
-            MemberKind::Query(Signature {
-                normal,
-                variadic,
-                t: row.return_type.clone(),
-                procedure_block: None,
-                sql: sql_projection(row),
-            })
-        }
-        _ => {
+        kind => {
             let (normal, variadic) = parse_formal_spec(row.formal_spec.as_deref().unwrap_or(""));
             let info = Signature {
                 normal,
@@ -728,10 +708,10 @@ fn row_to_member_kind(row: &MemberRow) -> MemberKind {
                 procedure_block: None,
                 sql: sql_projection(row),
             };
-            if is_truthy(&row.class_method) {
-                MemberKind::ClassMethod(info)
-            } else {
-                MemberKind::Method(info)
+            match kind {
+                "query" => MemberKind::Query(info),
+                _ if is_truthy(&row.class_method) => MemberKind::ClassMethod(info),
+                _ => MemberKind::Method(info),
             }
         }
     }
@@ -792,12 +772,9 @@ fn parse_formal_spec(spec: &str) -> (Vec<NormalArg>, Option<VariadicArg>) {
         };
         return (vec![], Some(any));
     };
-    let Some(formals) = formals else {
-        return (vec![], None);
-    };
     let mut normal = vec![];
     let mut variadic = None;
-    for formal in &formals.items {
+    for formal in formals.iter().flat_map(|formals| &formals.items) {
         let mode = match formal.call_type {
             Some(CompiledCallType::Output(_)) => Some(RefMode::Output),
             Some(CompiledCallType::ByRef(_)) => Some(RefMode::ByRef),

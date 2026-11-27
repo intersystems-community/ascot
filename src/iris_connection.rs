@@ -6,8 +6,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use base64::Engine;
-use percent_encoding::percent_decode_str;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde_json::Value;
+use ureq::{Body, Error, RequestBuilder, http::Response, typestate::WithoutBody};
 
 use crate::atelier::Atelier;
 
@@ -16,7 +17,8 @@ pub struct RawAtelier {
     base_url: String,
     // `scheme://host:port/prefix/api/atelier`, for the namespace listing in `check`'s message.
     api_root: String,
-    namespace: String,
+    /// The namespace this connection was opened on.
+    pub(crate) namespace: String,
     username: String,
     auth_header: String,
     // Why IRIS couldn't be reached, once it couldn't: later requests then fail at once instead of
@@ -40,10 +42,7 @@ impl RawAtelier {
         let port = parsed
             .port_or_known_default()
             .ok_or("--iris URL is missing a port")?;
-        let path_prefix = match parsed.path() {
-            "" | "/" => "",
-            path => path.trim_end_matches('/'),
-        };
+        let path_prefix = parsed.path().trim_end_matches('/');
         // `Url` hands these back still percent-encoded; IRIS wants the real characters.
         let username = percent_decode_str(parsed.username()).decode_utf8_lossy();
         let password = percent_decode_str(parsed.password().unwrap_or("")).decode_utf8_lossy();
@@ -79,18 +78,14 @@ impl RawAtelier {
     }
 
     fn check(&self) -> Result<(), String> {
-        let agent = self.agent()?;
-        let get = |url: &str| {
-            agent
-                .get(url)
-                .header("Authorization", &self.auth_header)
-                .call()
-        };
-        match get(&self.base_url) {
+        match self.get(&self.base_url)?.call() {
             Ok(_) => Ok(()),
             Err(ureq::Error::StatusCode(404)) => {
-                let namespaces: Option<Vec<String>> =
-                    get(&format!("{}/", self.api_root)).ok().and_then(|resp| {
+                let namespaces: Option<Vec<String>> = self
+                    .get(&format!("{}/", self.api_root))?
+                    .call()
+                    .ok()
+                    .and_then(|resp| {
                         let body: Value = resp.into_body().read_json().ok()?;
                         let names = body.get("result")?.get("content")?.get("namespaces")?;
                         serde_json::from_value(names.clone()).ok()
@@ -124,19 +119,21 @@ impl RawAtelier {
         self.agent.lock().unwrap().clone()
     }
 
+    fn get(&self, url: &str) -> Result<RequestBuilder<WithoutBody>, String> {
+        let agent = self.agent()?;
+        Ok(agent.get(url).header("Authorization", &self.auth_header))
+    }
+
+    fn body(&self, context: &str, resp: Result<Response<Body>, Error>) -> Result<Value, String> {
+        resp.and_then(|resp| resp.into_body().read_json())
+            .map_err(|err| self.failed(context, err))
+    }
+
     // The instance's `$ZVERSION`, from the API listing at `api_root/`.
     #[cfg(feature = "declare")]
     pub(crate) fn server_version(&self) -> Result<String, String> {
-        let resp = self
-            .agent()?
-            .get(&format!("{}/", self.api_root))
-            .header("Authorization", &self.auth_header)
-            .call()
-            .map_err(|err| self.failed("version", err))?;
-        let body: Value = resp
-            .into_body()
-            .read_json()
-            .map_err(|err| self.failed("version", err))?;
+        let resp = self.get(&format!("{}/", self.api_root))?.call();
+        let body = self.body("version", resp)?;
         body.get("result")
             .and_then(|r| r.get("content")?.get("version")?.as_str())
             .map(str::to_string)
@@ -153,12 +150,6 @@ impl RawAtelier {
             *self.agent.lock().unwrap() = Err(message.clone());
         }
         message
-    }
-
-    /// The namespace this connection was opened on.
-    #[cfg(feature = "declare")]
-    pub(crate) fn namespace(&self) -> &str {
-        &self.namespace
     }
 }
 
@@ -181,12 +172,8 @@ impl Atelier for RawAtelier {
             .post(&format!("{}/action/query", self.base_url))
             .header("Authorization", &self.auth_header)
             .header("Content-Type", "application/json")
-            .send_json(serde_json::json!({ "query": sql, "parameters": params }))
-            .map_err(|err| self.failed("query", err))?;
-        let body: Value = resp
-            .into_body()
-            .read_json()
-            .map_err(|err| self.failed("query", err))?;
+            .send_json(serde_json::json!({ "query": sql, "parameters": params }));
+        let body = self.body("query", resp)?;
         match body.get("result").and_then(|result| result.get("content")) {
             Some(rows) => Ok(rows.to_string()),
             None => Err(format!(
@@ -197,21 +184,14 @@ impl Atelier for RawAtelier {
     }
 
     fn get_doc(&self, name: &str) -> Result<Option<String>, String> {
-        let resp = match self
-            .agent()?
-            .get(&format!("{}/doc/{}", self.base_url, percent_encode(name)))
-            .header("Authorization", &self.auth_header)
+        let body = match self
+            .get(&format!("{}/doc/{}", self.base_url, percent_encode(name)))?
             .call()
         {
-            Ok(resp) => resp,
             // No such document (e.g. `Name.int` probed before `Name.mac`).
             Err(ureq::Error::StatusCode(404)) => return Ok(None),
-            Err(err) => return Err(self.failed("doc", err)),
+            resp => self.body("doc", resp)?,
         };
-        let body: Value = resp
-            .into_body()
-            .read_json()
-            .map_err(|err| self.failed("doc", err))?;
         let lines: Vec<&str> = body
             .get("result")
             .and_then(|result| result.get("content"))
@@ -224,16 +204,12 @@ impl Atelier for RawAtelier {
 }
 
 fn percent_encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
+    const ENCODED: &AsciiSet = &NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'_')
+        .remove(b'.')
+        .remove(b'~');
+    utf8_percent_encode(s, ENCODED).to_string()
 }
 
 #[cfg(test)]
@@ -259,23 +235,15 @@ mod tests {
     }
 
     #[test]
-    fn connect_percent_encodes_the_namespace() {
-        let url = stub_server(&[("", "200 OK", "{}")]);
-        let conn = RawAtelier::connect(&url, "%SYS").unwrap();
-        assert_eq!(
-            conn.base_url,
-            format!("{}/api/atelier/v8/%25SYS", host(&url))
-        );
-    }
-
-    #[test]
-    fn connect_keeps_a_path_prefix_before_api_atelier() {
-        let url = stub_server(&[("", "200 OK", "{}")]);
-        let conn = RawAtelier::connect(&format!("{url}/iris"), "%SYS").unwrap();
-        assert_eq!(
-            conn.base_url,
-            format!("{}/iris/api/atelier/v8/%25SYS", host(&url))
-        );
+    fn connect_builds_the_base_url_from_the_trimmed_prefix_and_the_encoded_namespace() {
+        for (prefix, trimmed) in [("", ""), ("/iris", "/iris"), ("/iris/", "/iris")] {
+            let url = stub_server(&[("", "200 OK", "{}")]);
+            let conn = RawAtelier::connect(&format!("{url}{prefix}"), "%SYS").unwrap();
+            assert_eq!(
+                conn.base_url,
+                format!("{}{trimmed}/api/atelier/v8/%25SYS", host(&url))
+            );
+        }
     }
 
     fn host(url: &str) -> String {
@@ -419,15 +387,5 @@ mod tests {
     fn check_passes_on_a_reachable_namespace() {
         let url = stub_server(&[("", "200 OK", r#"{"result":{"content":{"name":"USER"}}}"#)]);
         RawAtelier::connect(&url, "USER").unwrap();
-    }
-
-    #[test]
-    fn connect_strips_a_trailing_slash_from_the_path_prefix() {
-        let url = stub_server(&[("", "200 OK", "{}")]);
-        let conn = RawAtelier::connect(&format!("{url}/iris/"), "%SYS").unwrap();
-        assert_eq!(
-            conn.base_url,
-            format!("{}/iris/api/atelier/v8/%25SYS", host(&url))
-        );
     }
 }
