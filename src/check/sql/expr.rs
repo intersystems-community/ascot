@@ -382,10 +382,9 @@ impl<T: Walk + tygr::Grammar> Walk for When<T> {
     }
 }
 
-impl Walk for Implied<ElseClause> {
+impl Walk for ElseClause {
     fn walk(&self, w: &mut Walker) {
-        let Implied::Spelled(_, else_clause, _) = self;
-        else_clause.result.walk(w)
+        self.result.walk(w)
     }
 }
 

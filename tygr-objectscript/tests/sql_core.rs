@@ -36,23 +36,14 @@ fn item_term(query: &core::QuerySpecification, i: usize) -> &Ranged<core::ValueE
     term_of(expr)
 }
 
-/// The ELSE NULL of a CASE stands at its CASE, a call's name and TRIM's blank at their term, a lifted NOT
-/// and its parenthesized condition at the condition, and a comma's CROSS JOIN at the table entry.
+/// A call's name and TRIM's blank stand at their term, a lifted NOT and its parenthesized condition at
+/// the condition, and a comma's CROSS JOIN at the table entry.
 #[test]
 fn synthesized_nodes_stand_at_the_source_they_replace() {
-    let text =
-        "SELECT CASE WHEN a = 1 THEN 'x' END, TRIM(b), %SQLUPPER c FROM t, u WHERE d NOT IN (1, 2)";
+    let text = "SELECT TRIM(b), %SQLUPPER c FROM t, u WHERE d NOT IN (1, 2)";
     let query = core_query(text);
     let at = |node: &Ranged<core::ValueExpressionPrimary>| &text[node.range()];
-    let core::ValueExpressionPrimary::Case(case) = &item_term(&query, 0).ranged else {
-        panic!("{text}")
-    };
-    let core::Implied::Spelled(_, else_clause, _) = &case.else_clause;
-    assert_eq!(
-        at(term_of(&else_clause.result)),
-        "CASE WHEN a = 1 THEN 'x' END"
-    );
-    let core::ValueExpressionPrimary::Builtin(trim) = &item_term(&query, 1).ranged else {
+    let core::ValueExpressionPrimary::Builtin(trim) = &item_term(&query, 0).ranged else {
         panic!("{text}")
     };
     let core::Builtin::Trim(_, (_, args)) = &**trim else {
@@ -60,7 +51,7 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
     };
     let core::TrimArgs::SpecChars(_, chars, ..) = &args.wrapped;
     assert_eq!(at(term_of(chars)), "TRIM(b)");
-    let core::ValueExpressionPrimary::Call(call) = &item_term(&query, 2).ranged else {
+    let core::ValueExpressionPrimary::Call(call) = &item_term(&query, 1).ranged else {
         panic!("{text}")
     };
     assert_eq!(&text[call.name.name.range()], "%SQLUPPER c");

@@ -1163,7 +1163,7 @@ pub mod leveled {
     pub struct Case {
         pub case_kw: Kw!("CASE"),
         pub body: CaseBody,
-        pub else_clause: Implied<ElseClause>,
+        pub else_clause: Option<(Space1, ElseClause)>,
         pub end_kw: (Space1, Kw!("END")),
     }
 
@@ -1181,34 +1181,17 @@ pub mod leveled {
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct When<T: Grammar> {
-        pub when_kw: WhenKw,
+        pub when_kw: Kw!("WHEN"),
         pub operand: T,
-        pub then_kw: (Space1, ThenKw),
+        pub then_kw: (Space1, Kw!("THEN")),
         pub result: ValueExpression<Space1>,
     }
 
-    // Aliases, since a derive on a generic struct cannot see through a type macro.
-    pub type WhenKw = Kw!("WHEN");
-
-    pub type ThenKw = Kw!("THEN");
-
-    /// Omitted, a CASE reads `ELSE NULL`.
     #[derive(Grammar)]
     #[tygr(inline)]
     pub struct ElseClause {
         pub else_kw: Kw!("ELSE"),
         pub result: ValueExpression<Space1>,
-    }
-
-    impl Default for ElseClause {
-        fn default() -> Self {
-            ElseClause {
-                else_kw: Default::default(),
-                result: ValueExpression::one(desugar::synthesized(ValueExpressionPrimary::Null(
-                    Default::default(),
-                ))),
-            }
-        }
     }
 
     #[derive(Grammar)]
@@ -1913,41 +1896,6 @@ pub mod leveled {
     /// `NOT` before a predicate's keyword, which the condition's impl puts around the predicate in the core.
     pub type Not = Option<(Kw!("NOT"), Space1)>;
 
-    /// A keyword or clause read the same when omitted: spelled, with the blank before or after it
-    /// that a synthesized one must bring, or omitted and read as its default.
-    #[derive(Grammar)]
-    #[tygr(inline)]
-    #[sugar]
-    pub enum Implied<
-        K: Grammar + Default,
-        Before: Grammar + Default = Space1,
-        After: Grammar + Default = (),
-    > {
-        Spelled(Before, K, After),
-        #[sugar]
-        Omitted(()),
-    }
-
-    impl<K, Before, After> Desugar for Implied<K, Before, After>
-    where
-        K: Grammar + Default + Desugar,
-        K::Core: Grammar + Default,
-        Before: Grammar + Default + Desugar,
-        Before::Core: Grammar + Default,
-        After: Grammar + Default + Desugar,
-        After::Core: Grammar + Default,
-    {
-        type Core = core::Implied<K::Core, Before::Core, After::Core>;
-        fn desugar(self) -> Self::Core {
-            match self {
-                Implied::Spelled(before, keyword, after) => {
-                    core::Implied::Spelled(before.desugar(), keyword.desugar(), after.desugar())
-                }
-                Implied::Omitted(_) => Default::default(),
-            }
-        }
-    }
-
     /// An operator and a quantifier against a subquery; `IN` is `= ANY`, a `NOT IN` under the condition's NOT,
     /// and `NOT[`, negating each comparison, flips the quantifier under it: `a NOT[ ANY q` is `NOT (a [ ALL q)`.
     #[derive(Grammar)]
@@ -1989,13 +1937,12 @@ pub mod leveled {
     }
 
     // An alias, since a derive on a generic enum cannot see through a type macro.
-    pub type NotKw = Kw!("NOT");
 
     /// A condition after the blank `B` its place gives it: negated, in parentheses, or a predicate.
     #[derive(Grammar)]
     #[sugar]
     pub enum BooleanFactor<B: Grammar + Default = ()> {
-        Not(B, NotKw, Box<BooleanFactor<Space1>>),
+        Not(B, Kw!("NOT"), Box<BooleanFactor<Space1>>),
         Paren(Option<B>, Parenthesized<Box<BooleanValueExpression>>),
         Predicate(B, NoIndex, Ranged<Predicate>),
     }
@@ -2378,7 +2325,8 @@ pub mod leveled {
     // The blank stays inside the alias, so that a reference without one consumes nothing after it.
     #[derive(Grammar)]
     pub struct Alias {
-        pub as_kw: Implied<Kw!("AS")>,
+        #[sugar]
+        pub as_kw: Option<(Space1, Kw!("AS"))>,
         pub space: Space1,
         pub name: SQLIdentNonKeyword,
     }
@@ -2549,7 +2497,11 @@ pub mod leveled {
     /// LEFT, RIGHT or FULL, OUTER implied, or INNER, the join without a word.
     #[derive(Grammar)]
     pub enum JoinType {
-        Outer(OuterJoinType, Implied<Kw!("OUTER")>, Space1),
+        Outer(
+            OuterJoinType,
+            #[sugar] Option<(Space1, Kw!("OUTER"))>,
+            Space1,
+        ),
         Inner(#[sugar] Option<(Kw!("INNER"), Space1)>),
     }
 
@@ -2572,15 +2524,13 @@ pub mod leveled {
         },
     }
 
-    pub type LateralKw = Kw!("LATERAL");
-
     /// A table reference after the blank `B` its place gives it, which a parenthesis may do without.
     #[derive(Grammar)]
     pub enum TablePrimary<B: Grammar + Default = ()> {
         JSONTable(B, JSONTable, Option<Alias>),
         TableValuedFunction(B, TableValuedFunction, Option<Alias>),
         Table(B, TableName, Option<Alias>),
-        Lateral(B, LateralKw, Space, Subquery, Option<Alias>),
+        Lateral(B, Kw!("LATERAL"), Space, Subquery, Option<Alias>),
         Query(Option<B>, Subquery, Option<Alias>),
         JoinedTable(Option<B>, Parenthesized<Box<JoinedTable>>),
     }
@@ -2771,7 +2721,8 @@ pub mod leveled {
         pub insert_kw: Kw!("INSERT"),
         pub or_update: Option<(Space1, Kw!("OR UPDATE"))>,
         pub options: Vec<(Space1, InsertOption)>,
-        pub into_kw: Implied<Kw!("INTO")>,
+        #[sugar]
+        pub into_kw: Option<(Space1, Kw!("INTO"))>,
         pub target: (Space, TargetTable),
         pub values: (Space, InsertColumnsAndSource),
     }
@@ -2943,7 +2894,8 @@ pub mod leveled {
     pub struct DeleteStatement {
         pub delete_kw: Kw!("DELETE"),
         pub options: Vec<(Space1, DmlOption)>,
-        pub from_kw: Implied<Kw!("FROM")>,
+        #[sugar]
+        pub from_kw: Option<(Space1, Kw!("FROM"))>,
         pub target: (Space, TargetTable),
         pub from: Option<(Space1, FromClause)>,
         pub where_clause: Option<(Space1, DmlWhereClause)>,
