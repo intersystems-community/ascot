@@ -62,11 +62,6 @@ impl IrisSetting {
         };
         names.into_iter().filter(|name| !name.is_empty()).collect()
     }
-
-    /// `names` as a setting, none when there are none.
-    pub fn given(names: Vec<String>) -> Option<Self> {
-        (!names.is_empty()).then_some(IrisSetting::Many(names))
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]

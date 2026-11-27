@@ -247,11 +247,8 @@ fn main() {
             filter.filter(),
             format,
         ),
-        Command::Diagnostics { dir } => {
-            if let Err(err) = ascot::reference::write(&dir) {
-                die(format!("diagnostics: {}: {err}", dir.display()));
-            }
-        }
+        Command::Diagnostics { dir } => ascot::reference::write(&dir)
+            .unwrap_or_else(|err| die(format!("diagnostics: {}: {err}", dir.display()))),
         #[cfg(feature = "declare")]
         Command::Declare {
             iris,
@@ -283,7 +280,7 @@ fn main() {
             shared_fs,
         } => {
             let settings = Settings {
-                iris: IrisSetting::given(iris.iris),
+                iris: (!iris.iris.is_empty()).then_some(IrisSetting::Many(iris.iris)),
                 iris_namespace: iris.iris_namespace,
                 style: style.load().map(StyleSetting::from),
                 diagnostics: Some(Diagnostics::List(
@@ -291,9 +288,8 @@ fn main() {
                 )),
                 inlay_hints: None,
             };
-            if let Err(err) = ascot::lsp::run(settings, shared_fs) {
-                die(format!("LSP server error: {err}"));
-            }
+            ascot::lsp::run(settings, shared_fs)
+                .unwrap_or_else(|err| die(format!("LSP server error: {err}")));
         }
     }
 }
@@ -399,9 +395,7 @@ async fn run_mcp_server(shared_fs: bool) {
 
     let server = (Server::new(shared_fs).serve(rmcp::transport::stdio()).await)
         .unwrap_or_else(|err| die(format!("failed to start MCP server: {err:?}")));
-    if let Err(err) = server.waiting().await {
-        die(format!("MCP server error: {err:?}"));
-    }
+    (server.waiting().await).unwrap_or_else(|err| die(format!("MCP server error: {err:?}")));
 }
 
 /// Add every `.cls`/`.mac`/`.int`/`.inc` file under each of `paths` to a workspace and report
@@ -537,15 +531,12 @@ fn format_files(style: &Style, indent: Option<u8>, check: bool, paths: &[PathBuf
 
 fn insert_files(workspace: &Workspace, files: &[PathBuf]) {
     for file in files {
-        let src = match fs::read_to_string(file) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Error reading {}: {}", file.display(), e);
-                continue;
+        match fs::read_to_string(file) {
+            Ok(src) => {
+                workspace.open(file.display().to_string(), src);
             }
-        };
-        let uri = file.display().to_string();
-        workspace.open(uri, src);
+            Err(e) => eprintln!("Error reading {}: {}", file.display(), e),
+        }
     }
 }
 
@@ -627,14 +618,9 @@ fn collect_docs<P: AsRef<Path>>(paths: impl IntoIterator<Item = P>) -> Vec<PathB
 
 fn collect_doc(path: &Path, out: &mut Vec<PathBuf>) {
     if path.is_dir() {
-        let entries = match fs::read_dir(path) {
-            Ok(entries) => entries,
-            Err(e) => {
-                eprintln!("Error reading {}: {}", path.display(), e);
-                return;
-            }
-        };
-        for entry in entries.flatten() {
+        let entries = fs::read_dir(path)
+            .inspect_err(|e| eprintln!("Error reading {}: {}", path.display(), e));
+        for entry in entries.into_iter().flatten().flatten() {
             collect_doc(&entry.path(), out);
         }
     } else if path.to_str().and_then(ascot::DocKind::from_uri).is_some() {

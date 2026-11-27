@@ -174,13 +174,10 @@ impl Atelier for RawAtelier {
             .header("Content-Type", "application/json")
             .send_json(serde_json::json!({ "query": sql, "parameters": params }));
         let body = self.body("query", resp)?;
-        match body.get("result").and_then(|result| result.get("content")) {
-            Some(rows) => Ok(rows.to_string()),
-            None => Err(format!(
-                "query at {} failed: {}",
-                self.base_url, body["status"]
-            )),
-        }
+        body.get("result")
+            .and_then(|result| result.get("content"))
+            .map(Value::to_string)
+            .ok_or_else(|| format!("query at {} failed: {}", self.base_url, body["status"]))
     }
 
     fn get_doc(&self, name: &str) -> Result<Option<String>, String> {
