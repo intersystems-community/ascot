@@ -296,18 +296,12 @@ impl CheckExprInner for cos::FunctionCall {
                 ..
             } => check_get(env, flow, variable.deref(), arg(default)),
             FunctionCall::DText(dtext) => {
-                match &dtext.arg {
-                    cos::DTextArg::Label(AllowIndirection::Plain(label)) => {
-                        if let Some(offset) = label.offset.as_deref() {
-                            let _ = offset.to_ty(env, flow)?;
-                        }
-                    }
-                    cos::DTextArg::Offset(offset, _) => {
-                        let _ = offset.deref().to_ty(env, flow)?;
-                    }
-                    cos::DTextArg::Label(AllowIndirection::Indirection(_)) => {}
-                }
-                Ok(Ty::from("%String").into())
+                let offset = match &dtext.arg {
+                    DTextArg::Label(AllowIndirection::Plain(label)) => label.offset.as_deref(),
+                    DTextArg::Offset(offset, _) => Some(offset.deref()),
+                    DTextArg::Label(AllowIndirection::Indirection(_)) => None,
+                };
+                check_read_args(env, flow, [offset], "%String")
             }
             // Internal storage handle -- opaque, like `$ZUTIL`'s catch-all return.
             FunctionCall::ZObjRef {
@@ -420,7 +414,20 @@ impl CheckExprInner for cos::FunctionCall {
                         CaseArm::Default(value) => default = Some(value.deref()),
                     }
                 }
-                Ok(check_case(env, flow, target, branches, default)?.into())
+                let target = target.to_power_ty(env, flow)?;
+                if branches.is_empty() && default.is_none() {
+                    flow.add_soft_diagnostic(TypeErrorKind::CaseWithoutArms.into());
+                    return Ok(Ty::Any.into());
+                }
+                let branches = branches
+                    .iter()
+                    .map(|(value, then)| (Taken::Equal(&target, value), *then))
+                    .chain(default.map(|then| (Taken::Always, then)));
+                let (ty, exhaustive) = check_branches(env, flow, branches)?;
+                if !exhaustive {
+                    flow.add_soft_diagnostic(TypeErrorKind::CaseWithoutDefault.into());
+                }
+                Ok(ty.into())
             }
             FunctionCall::Bit(c) => check_bit_call(env, flow, c),
             FunctionCall::BitCount {
@@ -518,10 +525,7 @@ impl CheckExprInner for cos::FunctionCall {
                         TypeErrorKind::InvalidFNumberFormat { format, reason }
                     })?;
                 }
-                if let Some(decimal) = decimal {
-                    let _ = decimal.to_ty(env, flow)?;
-                }
-                Ok(Ty::from("%String").into())
+                check_read_args(env, flow, [arg(decimal)], "%String")
             }
             FunctionCall::Increment {
                 args: IncrementArgs {
@@ -533,7 +537,14 @@ impl CheckExprInner for cos::FunctionCall {
                 args: IsObjectArgs { expr, .. },
                 ..
             } => check_is_object(env, flow, expr),
-            FunctionCall::ListRange(c) => check_list_range_call(env, flow, c),
+            FunctionCall::ListRange(c) => {
+                let _ = c.list.deref().to_ty(env, flow)?;
+                for pair in std::iter::once(c.first.deref()).chain(c.rest.iter().map(|v| &**v)) {
+                    let _ = (&pair.e1).to_ty(env, flow)?;
+                    let _ = (&pair.e2).to_ty(env, flow)?;
+                }
+                Ok(Ty::from("%String").into())
+            }
             FunctionCall::ListPlain(c) => check_list_plain_call(env, flow, c),
             FunctionCall::ListBuild(ListBuild {
                 args: ListBuildArgs { first, rest, .. },
@@ -568,7 +579,11 @@ impl CheckExprInner for cos::FunctionCall {
                 check_out_var(env, flow, arg(var), "%String")?;
                 Ok(Ty::from("%Boolean").into())
             }
-            FunctionCall::ListGet(c) => check_listget_call(env, flow, c),
+            FunctionCall::ListGet(c) => {
+                check_read_args(env, flow, [Some(c.list.deref())], "%String")?;
+                check_read_args(env, flow, [opt_arg(&c.position)], "%String")?;
+                check_read_args(env, flow, [arg(&c.default)], "%String")
+            }
             FunctionCall::ListNext {
                 args: ListNextArgs {
                     list, ptr, value, ..
@@ -595,10 +610,7 @@ impl CheckExprInner for cos::FunctionCall {
                 let _ = list.deref().to_ty(env, flow)?;
                 let _ = position.deref().deref().to_ty(env, flow)?;
                 for v in std::iter::once(value.deref().deref()).chain(each_arg(rest)) {
-                    if let Some(cond) = &v.cond {
-                        let _ = cond.deref().to_ty(env, flow)?;
-                    }
-                    let _ = (&v.value).to_ty(env, flow)?;
+                    check_read_args(env, flow, [v.cond.as_deref(), Some(&v.value)], "%List")?;
                 }
                 Ok(Ty::from("%List").into())
             }
@@ -710,9 +722,7 @@ impl CheckExprInner for cos::FunctionCall {
                 if let Left(local) = target_as_local(env, flow, reference)? {
                     flow.handle_get(local)?;
                 }
-                if let Some(direction) = arg(direction) {
-                    let _ = direction.to_ty(env, flow)?;
-                }
+                check_read_args(env, flow, [arg(direction)], "%String")?;
                 check_out_var(env, flow, arg(target), "%String")?;
                 Ok(Ty::from("%String").into())
             }
@@ -850,8 +860,7 @@ fn check_set_fun<'a, C>(
     {
         flow.handle_set(local, Ty::from("%String").into(), range)?;
     }
-    let _ = check(env, flow, c)?;
-    Ok(())
+    check(env, flow, c).map(drop)
 }
 
 fn check_set_expr_fun<'a, C>(
@@ -942,19 +951,11 @@ pub(super) fn check_settarget_fun<'a>(
             )?;
         }
         WExtract(c) => check_set_expr_fun(env, flow, &c.string, c, check_wextract_call)?,
-        Property(c) => {
-            let _ = check_property_call(env, flow, c)?;
-        }
-        Sequence(c) => {
-            let _ = check_sequence_call(env, flow, c)?;
-        }
+        Property(c) => check_property_call(env, flow, c).map(drop)?,
+        Sequence(c) => check_sequence_call(env, flow, c).map(drop)?,
         ListBuild(c) => check_set_var_list(env, flow, &c.first, &c.rest)?,
-        MV(c) => {
-            let _ = check_mv_call(env, flow, c)?;
-        }
-        Undocumented(c) => {
-            let _ = check_unknown_call(env, flow, c)?;
-        }
+        MV(c) => check_mv_call(env, flow, c).map(drop)?,
+        Undocumented(c) => check_unknown_call(env, flow, c).map(drop)?,
         Simple(c) => {
             env.soft_diagnostic(
                 TypeErrorKind::UndocumentedSyntax {
@@ -1134,19 +1135,6 @@ fn check_wextract_call<'a>(
     check_read_args(env, flow, [arg(&c.from), opt_arg(&c.to)], "%String")
 }
 
-fn check_list_range_call<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    c: &ListRangeCall,
-) -> Result<PowerTy, QuasiTypeError> {
-    let _ = c.list.deref().to_ty(env, flow)?;
-    for pair in std::iter::once(c.first.deref()).chain(c.rest.iter().map(|v| &**v)) {
-        let _ = (&pair.e1).to_ty(env, flow)?;
-        let _ = (&pair.e2).to_ty(env, flow)?;
-    }
-    Ok(Ty::from("%String").into())
-}
-
 fn check_list_plain_call<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1161,16 +1149,6 @@ fn check_list_plain_call<'a>(
         (Some(_), _) => Ty::from("%List").into(),
         (None, _) => element,
     })
-}
-
-fn check_listget_call<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    c: &ListGetCall,
-) -> Result<PowerTy, QuasiTypeError> {
-    check_read_args(env, flow, [Some(c.list.deref())], "%String")?;
-    check_read_args(env, flow, [opt_arg(&c.position)], "%String")?;
-    check_read_args(env, flow, [arg(&c.default)], "%String")
 }
 
 fn check_vector_call<'a>(
@@ -1261,16 +1239,14 @@ fn check_simple_function<'a>(
         // takes nothing but a plain local there (measured: a subscript, a global or a literal is
         // a compile error).
         if function.names[0] == "ZConvert" && i == 3 {
-            let local = expr
-                .as_variable()
-                .map(|v| v.as_local(env, flow))
-                .transpose()?;
-            let Some(Left(local)) = local.filter(|l| matches!(l, Left(l) if l.subs.is_empty()))
-            else {
-                return Err(TypeErrorKind::HandleNotALocal.at(env.range(&expr)).into());
-            };
-            flow.invalidate(local, Ty::from("%String").into())?;
-            continue;
+            if let Some(variable) = expr.as_variable()
+                && let Left(local) = variable.as_local(env, flow)?
+                && local.subs.is_empty()
+            {
+                flow.invalidate(local, Ty::from("%String").into())?;
+                continue;
+            }
+            return Err(TypeErrorKind::HandleNotALocal.at(env.range(&expr)).into());
         }
         let _ = expr.to_ty(env, flow)?;
     }
@@ -1407,9 +1383,7 @@ fn check_increment<'a>(
     counter: &Ranged<GetTarget>,
     amount: Option<&Ranged<Expr>>,
 ) -> Result<PowerTy, QuasiTypeError> {
-    if let Some(amount) = amount {
-        let _ = amount.to_ty(env, flow)?;
-    }
+    check_read_args(env, flow, [amount], "%Integer")?;
     if let Left(local) = target_as_local(env, flow, counter)? {
         // $INCREMENT reads the counter's current value before writing the incremented one.
         flow.handle_get(local.clone())?;
@@ -1484,22 +1458,19 @@ fn check_zu_args<'a>(
             Some(Fidelity::Exact | Fidelity::AtBoundary)
         )
     {
-        let count = args.items.len();
-        let err = match super::zutil::lookup(&literals, count) {
+        let kind = match super::zutil::lookup(&literals, args.items.len()) {
             Some(legacy) => {
                 let call = legacy.args.iter().map(u32::to_string).collect::<Vec<_>>();
                 TypeErrorKind::LegacyZUtil {
                     call: format!("$ZU({})", call.join(",")),
                     replacement: Replacement(legacy.replacement.map(str::to_string)),
                 }
-                .into()
             }
             None => TypeErrorKind::UndocumentedZUtil {
                 call: format!("$ZU({first})"),
-            }
-            .into(),
+            },
         };
-        env.add_soft_error(err, env.range(kw));
+        env.add_soft_error(kind.into(), env.range(kw));
     }
     for arg in args.items(env) {
         let Some(fun_arg) = arg.deref() else { continue };
@@ -1563,29 +1534,6 @@ fn check_compile<'a>(
         arg.check(env, flow)?;
     }
     Ok(Ty::from("%Integer").into())
-}
-
-fn check_case<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    target: &Ranged<Expr>,
-    branches: Vec<(&Ranged<Expr>, &Ranged<Expr>)>,
-    default: Option<&Ranged<Expr>>,
-) -> Result<MaybeTy, QuasiTypeError> {
-    let target = target.to_power_ty(env, flow)?;
-    if branches.is_empty() && default.is_none() {
-        flow.add_soft_diagnostic(TypeErrorKind::CaseWithoutArms.into());
-        return Ok(MaybeTy::Plain(Ty::Any));
-    }
-    let branches = branches
-        .iter()
-        .map(|(value, then)| (Taken::Equal(&target, value), *then))
-        .chain(default.map(|then| (Taken::Always, then)));
-    let (ty, exhaustive) = check_branches(env, flow, branches)?;
-    if !exhaustive {
-        flow.add_soft_diagnostic(TypeErrorKind::CaseWithoutDefault.into());
-    }
-    Ok(MaybeTy::Plain(ty))
 }
 
 // What takes a branch of `$SELECT` or `$CASE`.
@@ -1669,42 +1617,32 @@ fn check_is_object<'a>(
     expr: &Ranged<Expr>,
 ) -> Result<PowerTy, QuasiTypeError> {
     let ty = check_read_args(env, flow, [Some(expr)], "%Boolean")?;
-    let Some(variable) = expr.as_variable().or_else(|| get_of_variable(expr)) else {
-        return Ok(ty);
-    };
-    let Left(local) = variable.as_local(env, flow)? else {
-        return Ok(ty);
-    };
-    if !local.subs.is_empty() {
-        return Ok(ty);
+    if let Some(variable) = expr.as_variable().or_else(|| get_of_variable(expr))
+        && let Left(local) = variable.as_local(env, flow)?
+        && local.subs.is_empty()
+    {
+        let old_ty = flow.handle_get(local.clone())?.to_ty(env).ok();
+        // A value already known to be of an object class keeps that (more precise) class.
+        let object_ty = match &old_ty {
+            Some(ty @ Ty::OREF(cls)) if env.is_datatype(cls.name()) == Some(false) => ty.clone(),
+            _ => Ty::Any,
+        };
+        let var = flow.fresh();
+        let cases = vec![("0", old_ty), ("1", Some(object_ty))];
+        flow.handle_refine(local, PowerTy::case(var, cases, None))?;
+        return Ok(PowerTy::bind(var));
     }
-    let old_ty = flow.handle_get(local.clone())?.to_ty(env).ok();
-    // A value already known to be of an object class keeps that (more precise) class.
-    let object_ty = match &old_ty {
-        Some(ty @ Ty::OREF(cls)) if env.is_datatype(cls.name()) == Some(false) => ty.clone(),
-        _ => Ty::Any,
-    };
-    let var = flow.fresh();
-    let cases = vec![("0", old_ty), ("1", Some(object_ty))];
-    flow.handle_refine(local, PowerTy::case(var, cases, None))?;
-    Ok(PowerTy::bind(var))
+    Ok(ty)
 }
 
 fn get_of_variable(expr: &Expr) -> Option<&Variable> {
-    let AtomicExpr::FunctionCall(call) = expr.as_atomic()? else {
-        return None;
-    };
-    let FunctionCall::Get {
-        args: GetArgs { variable, .. },
-        ..
-    } = call.deref()
-    else {
-        return None;
-    };
-    let GetTarget::Var(variable) = variable.deref().deref() else {
-        return None;
-    };
-    Some(variable)
+    if let AtomicExpr::FunctionCall(call) = expr.as_atomic()?
+        && let FunctionCall::Get { args, .. } = call.deref()
+        && let GetTarget::Var(variable) = args.variable.deref().deref()
+    {
+        return Some(variable);
+    }
+    None
 }
 
 fn check_get<'a>(
@@ -1958,15 +1896,13 @@ fn check_order<'a>(
         .maybe_defined()
         .cloned()
         .unwrap_or_default();
-    if let Some(direction) = direction {
-        let _ = direction.to_ty(env, flow)?;
-    }
-    if let Some(target) = target {
+    check_read_args(env, flow, [direction], "%DataType")?;
+    if let Some(target) = target
+        && let Left(local) = target.as_local(env, flow)?
+    {
         let target_range = env.range(target);
-        if let Left(local) = target.as_local(env, flow)? {
-            let cases = |old_ty| vec![("", old_ty)];
-            return bind_out_var(env, flow, local, target_range, cases, Some(Some(new_ty)));
-        }
+        let cases = |old_ty| vec![("", old_ty)];
+        return bind_out_var(env, flow, local, target_range, cases, Some(Some(new_ty)));
     }
     Ok(PowerTy::from("%DataType"))
 }

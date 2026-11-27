@@ -4,9 +4,10 @@ use std::cell::Cell;
 
 use tygr::{Parse, Print};
 use tygr_objectscript::cos::{
-    AllowIndirection, AllowMacro, Digits, OSString, PatternCode, PatternCount, PatternElement,
-    PatternItem,
+    AllowIndirection, AllowMacro, Digits, PatternCode, PatternCount, PatternElement, PatternItem,
 };
+
+use crate::check::types::unquoted;
 
 // The grammar's `Pattern`, which it doesn't export.
 type Pattern = Vec<AllowMacro<AllowIndirection<PatternElement>>>;
@@ -55,11 +56,6 @@ pub(crate) fn matches(pattern: &str, value: &str) -> Option<bool> {
     (steps.get() > 0).then_some(matched)
 }
 
-/// The text an ObjectScript string literal stands for.
-pub(super) fn unquote(literal: &OSString) -> String {
-    literal.wrapped.print().replace("\"\"", "\"")
-}
-
 fn atoms(pattern: &Pattern) -> Option<Vec<Atom>> {
     (pattern.iter())
         .map(|element| {
@@ -81,7 +77,7 @@ fn atoms(pattern: &Pattern) -> Option<Vec<Atom>> {
             };
             let item = match &element.item {
                 PatternItem::Literal(literal) => {
-                    Item::Literal(unquote(literal).encode_utf16().collect())
+                    Item::Literal(unquoted(&literal.print()).encode_utf16().collect())
                 }
                 PatternItem::Codes(codes) => {
                     Item::Codes(codes.iter().map(code).collect::<Option<_>>()?)
