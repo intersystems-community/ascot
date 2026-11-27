@@ -10,203 +10,105 @@ use super::*;
 
 // Which functions refuse an empty argument, by position, as measured on IRIS: the first, the
 // second, and any later one. A function not listed for a position isn't checked there.
-const NO_EMPTY_FIRST: &[&str] = &[
-    "Ascii",
-    "Bit",
-    "BitCount",
-    "BitFind",
-    "BitLogic",
-    "Char",
-    "Data",
-    "Decimal",
-    "Extract",
-    "FNumber",
-    "Factor",
-    "Find",
-    "Get",
-    "INumber",
-    "Increment",
-    "IsValidDouble",
-    "IsValidNum",
-    "Justify",
-    "Length",
-    "List",
-    "ListData",
-    "ListFind",
-    "ListFromString",
-    "ListGet",
-    "ListSame",
-    "ListToString",
-    "Locate",
-    "Lock",
-    "MV",
-    "Match",
-    "NConvert",
-    "Next",
-    "Normalize",
-    "Number",
-    "Piece",
-    "QSubscript",
-    "Replace",
-    "SConvert",
-    "Stack",
-    "Translate",
-    "Vector",
-    "VectorDefined",
-    "View",
-    "WAscii",
-    "WChar",
-    "WExtract",
-    "WFind",
-    "WLength",
-    "Xecute",
-    "ZBitAnd",
-    "ZBitFind",
-    "ZBitGet",
-    "ZBitOr",
-    "ZBitSet",
-    "ZBitStr",
-    "ZBitXor",
-    "ZBoolean",
-    "ZConvert",
-    "ZCrc",
-    "ZDAscii",
-    "ZDChar",
-    "ZDate",
-    "ZDateH",
-    "ZDateTime",
-    "ZDateTimeH",
-    "ZF",
-    "ZIncrement",
-    "ZLAscii",
-    "ZLChar",
-    "ZName",
-    "ZPosition",
-    "ZPower",
-    "ZQAscii",
-    "ZQChar",
-    "ZSeek",
-    "ZStrip",
-    "ZTime",
-    "ZTimeH",
-    "ZUtil",
-    "ZWAscii",
-    "ZWChar",
-    "ZWidth",
-    "ZZenkaku",
-];
+const FIRST: u8 = 1;
+const SECOND: u8 = 2;
+const LATER: u8 = 4;
 
-const NO_EMPTY_SECOND: &[&str] = &[
-    "Ascii",
-    "Bit",
-    "BitCount",
-    "BitFind",
-    "BitLogic",
-    "Change",
-    "Char",
-    "ClassMethod",
-    "Compile",
-    "Data",
-    "Decimal",
-    "Extract",
-    "Factor",
-    "Find",
-    "Get",
-    "INumber",
-    "Increment",
-    "Justify",
-    "Length",
-    "List",
-    "ListData",
-    "ListFind",
-    "ListGet",
-    "ListNext",
-    "ListSame",
-    "ListUpdate",
-    "Locate",
-    "Lock",
-    "Match",
-    "Method",
-    "NConvert",
-    "Next",
-    "Normalize",
-    "Parameter",
-    "Piece",
-    "Property",
-    "QSubscript",
-    "Replace",
-    "SConvert",
-    "Stack",
-    "Translate",
-    "Vector",
-    "VectorDefined",
-    "View",
-    "WAscii",
-    "WChar",
-    "WExtract",
-    "WFind",
-    "WLength",
-    "ZBitAnd",
-    "ZBitFind",
-    "ZBitGet",
-    "ZBitOr",
-    "ZBitSet",
-    "ZBitStr",
-    "ZBitXor",
-    "ZBoolean",
-    "ZConvert",
-    "ZCrc",
-    "ZDAscii",
-    "ZDChar",
-    "ZF",
-    "ZIncrement",
-    "ZLAscii",
-    "ZLChar",
-    "ZName",
-    "ZObjClassMethod",
-    "ZObjMethod",
-    "ZObjProperty",
-    "ZPosition",
-    "ZPower",
-    "ZQAscii",
-    "ZQChar",
-    "ZSeek",
-    "ZStrip",
-    "ZUtil",
-    "ZWAscii",
-    "ZWChar",
-    "ZWidth",
-    "ZZenkaku",
-];
-
-const NO_EMPTY_LATER: &[&str] = &[
-    "BitFind",
-    "Char",
-    "Find",
-    "INumber",
-    "Justify",
-    "ListFind",
-    "ListFromString",
-    "ListToString",
-    "Piece",
-    "Translate",
-    "View",
-    "WChar",
-    "WFind",
-    "ZBitFind",
-    "ZBitSet",
-    "ZBoolean",
-    "ZConvert",
-    "ZCrc",
-    "ZDChar",
-    "ZF",
-    "ZLChar",
-    "ZName",
-    "ZPosition",
-    "ZQChar",
-    "ZUtil",
-    "ZWChar",
-    "ZZenkaku",
+const NO_EMPTY: &[(&str, u8)] = &[
+    ("Ascii", FIRST | SECOND),
+    ("Bit", FIRST | SECOND),
+    ("BitCount", FIRST | SECOND),
+    ("BitFind", FIRST | SECOND | LATER),
+    ("BitLogic", FIRST | SECOND),
+    ("Change", SECOND),
+    ("Char", FIRST | SECOND | LATER),
+    ("ClassMethod", SECOND),
+    ("Compile", SECOND),
+    ("Data", FIRST | SECOND),
+    ("Decimal", FIRST | SECOND),
+    ("Extract", FIRST | SECOND),
+    ("FNumber", FIRST),
+    ("Factor", FIRST | SECOND),
+    ("Find", FIRST | SECOND | LATER),
+    ("Get", FIRST | SECOND),
+    ("INumber", FIRST | SECOND | LATER),
+    ("Increment", FIRST | SECOND),
+    ("IsValidDouble", FIRST),
+    ("IsValidNum", FIRST),
+    ("Justify", FIRST | SECOND | LATER),
+    ("Length", FIRST | SECOND),
+    ("List", FIRST | SECOND),
+    ("ListData", FIRST | SECOND),
+    ("ListFind", FIRST | SECOND | LATER),
+    ("ListFromString", FIRST | LATER),
+    ("ListGet", FIRST | SECOND),
+    ("ListNext", SECOND),
+    ("ListSame", FIRST | SECOND),
+    ("ListToString", FIRST | LATER),
+    ("ListUpdate", SECOND),
+    ("Locate", FIRST | SECOND),
+    ("Lock", FIRST | SECOND),
+    ("MV", FIRST),
+    ("Match", FIRST | SECOND),
+    ("Method", SECOND),
+    ("NConvert", FIRST | SECOND),
+    ("Next", FIRST | SECOND),
+    ("Normalize", FIRST | SECOND),
+    ("Number", FIRST),
+    ("Parameter", SECOND),
+    ("Piece", FIRST | SECOND | LATER),
+    ("Property", SECOND),
+    ("QSubscript", FIRST | SECOND),
+    ("Replace", FIRST | SECOND),
+    ("SConvert", FIRST | SECOND),
+    ("Stack", FIRST | SECOND),
+    ("Translate", FIRST | SECOND | LATER),
+    ("Vector", FIRST | SECOND),
+    ("VectorDefined", FIRST | SECOND),
+    ("View", FIRST | SECOND | LATER),
+    ("WAscii", FIRST | SECOND),
+    ("WChar", FIRST | SECOND | LATER),
+    ("WExtract", FIRST | SECOND),
+    ("WFind", FIRST | SECOND | LATER),
+    ("WLength", FIRST | SECOND),
+    ("Xecute", FIRST),
+    ("ZBitAnd", FIRST | SECOND),
+    ("ZBitFind", FIRST | SECOND | LATER),
+    ("ZBitGet", FIRST | SECOND),
+    ("ZBitOr", FIRST | SECOND),
+    ("ZBitSet", FIRST | SECOND | LATER),
+    ("ZBitStr", FIRST | SECOND),
+    ("ZBitXor", FIRST | SECOND),
+    ("ZBoolean", FIRST | SECOND | LATER),
+    ("ZConvert", FIRST | SECOND | LATER),
+    ("ZCrc", FIRST | SECOND | LATER),
+    ("ZDAscii", FIRST | SECOND),
+    ("ZDChar", FIRST | SECOND | LATER),
+    ("ZDate", FIRST),
+    ("ZDateH", FIRST),
+    ("ZDateTime", FIRST),
+    ("ZDateTimeH", FIRST),
+    ("ZF", FIRST | SECOND | LATER),
+    ("ZIncrement", FIRST | SECOND),
+    ("ZLAscii", FIRST | SECOND),
+    ("ZLChar", FIRST | SECOND | LATER),
+    ("ZName", FIRST | SECOND | LATER),
+    ("ZObjClassMethod", SECOND),
+    ("ZObjMethod", SECOND),
+    ("ZObjProperty", SECOND),
+    ("ZPosition", FIRST | SECOND | LATER),
+    ("ZPower", FIRST | SECOND),
+    ("ZQAscii", FIRST | SECOND),
+    ("ZQChar", FIRST | SECOND | LATER),
+    ("ZSeek", FIRST | SECOND),
+    ("ZStrip", FIRST | SECOND),
+    ("ZTime", FIRST),
+    ("ZTimeH", FIRST),
+    ("ZUtil", FIRST | SECOND | LATER),
+    ("ZWAscii", FIRST | SECOND),
+    ("ZWChar", FIRST | SECOND | LATER),
+    ("ZWidth", FIRST | SECOND),
+    ("ZZenkaku", FIRST | SECOND | LATER),
 ];
 
 // Any `$`-function call, to see which of its arguments are empty.
@@ -243,13 +145,17 @@ fn check_empty_args(call: &cos::FunctionCall) -> Result<(), QuasiTypeError> {
     {
         return Ok(());
     }
+    let positions = NO_EMPTY
+        .iter()
+        .find(|(f, _)| f.eq_ignore_ascii_case(name.full))
+        .map_or(0, |&(_, positions)| positions);
     for (i, arg) in args.items.iter().enumerate() {
-        let table = match i {
-            0 => NO_EMPTY_FIRST,
-            1 => NO_EMPTY_SECOND,
-            _ => NO_EMPTY_LATER,
+        let at = match i {
+            0 => FIRST,
+            1 => SECOND,
+            _ => LATER,
         };
-        if arg.is_none() && table.iter().any(|f| f.eq_ignore_ascii_case(name.full)) {
+        if arg.is_none() && positions & at != 0 {
             let function = format!("${}", name.full.to_uppercase());
             return Err(TypeErrorKind::OmittedArgument {
                 function,
@@ -426,11 +332,8 @@ impl CheckExprInner for cos::FunctionCall {
                 check_code_arg(env, flow, action, check_zstrip_action, |action, reason| {
                     TypeErrorKind::InvalidZStripAction { action, reason }
                 })?;
-                if let Some(remchar) = remchar {
-                    remchar.check(env, flow)?
-                }
-                if let Some(keepchar) = keepchar {
-                    keepchar.check(env, flow)?
+                for chars in [remchar, keepchar].into_iter().flatten() {
+                    chars.check(env, flow)?;
                 }
                 Ok(Ty::from("%String").into())
             }
@@ -547,7 +450,8 @@ impl CheckExprInner for cos::FunctionCall {
                 )
             }
             FunctionCall::BitLogic { expr, length, .. } => {
-                check_bitlogic(env, flow, expr.deref(), arg(length))
+                let _ = expr.deref().to_ty(env, flow)?;
+                check_read_args(env, flow, [arg(length)], "%DataType")
             }
             FunctionCall::Change {
                 args:
@@ -574,6 +478,10 @@ impl CheckExprInner for cos::FunctionCall {
             ),
             FunctionCall::Char {
                 args: CharArgs { first, rest, .. },
+                ..
+            }
+            | FunctionCall::WChar {
+                args: WCharArgs { first, rest, .. },
                 ..
             } => check_read_args(
                 env,
@@ -740,14 +648,11 @@ impl CheckExprInner for cos::FunctionCall {
                         ..
                     },
                 ..
-            } => Ok(check_classmethod(
-                env,
-                flow,
-                classname.deref(),
-                method.deref().deref(),
-                each_arg(args),
-            )?
-            .into()),
+            } => {
+                classname.check(env, flow)?;
+                let _ = method.to_ty(env, flow)?;
+                Ok(check_args_any(env, flow, each_arg(args))?.into())
+            }
             FunctionCall::Name {
                 args: NameArgs {
                     variable, integer, ..
@@ -871,15 +776,6 @@ impl CheckExprInner for cos::FunctionCall {
                     "%String",
                 )
             }
-            FunctionCall::WChar {
-                args: WCharArgs { first, rest, .. },
-                ..
-            } => check_read_args(
-                env,
-                flow,
-                std::iter::once(Some(first.deref())).chain(each_arg(rest).map(Some)),
-                "%String",
-            ),
             FunctionCall::WExtract(c) => check_wextract_call(env, flow, c),
             FunctionCall::Xecute {
                 args: XecuteArgs { code, params, .. },
@@ -903,30 +799,7 @@ impl CheckExprInner for cos::FunctionCall {
                 }
                 Ok(Ty::from("%String").into())
             }
-            FunctionCall::Compile {
-                args:
-                    CompileArgs {
-                        source,
-                        qspec,
-                        errors,
-                        object,
-                        arg5,
-                        arg6,
-                        rname,
-                        ..
-                    },
-                ..
-            } => check_compile(
-                env,
-                flow,
-                source.deref(),
-                qspec.deref().deref(),
-                errors.deref().deref(),
-                arg(object),
-                arg(arg5),
-                arg(arg6),
-                arg(rname),
-            ),
+            FunctionCall::Compile { args, .. } => check_compile(env, flow, args),
             FunctionCall::ZOrder {
                 args: ZOrderArgs { variable, .. },
                 ..
@@ -957,14 +830,17 @@ impl CheckExprInner for cos::FunctionCall {
 }
 
 // `Set $PIECE(x, ..) = v` (likewise `$EXTRACT`, `$LIST`, `$BIT`, ...) on an undefined `x` is fine:
-// it starts from the empty string, so the target is defined from here on rather than read.
-fn define_set_target_base<'a>(
+// it starts from the empty string, so the target is defined from here on rather than read; then
+// the call is checked as a read.
+fn check_set_fun<'a, C>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    variable: Option<&Variable>,
+    base: Option<&Variable>,
     range: bindings::Range,
+    c: &C,
+    check: impl FnOnce(&CodeEnv<'a>, &mut Flow<'a>, &C) -> Result<PowerTy, QuasiTypeError>,
 ) -> Result<(), QuasiTypeError> {
-    if let Some(variable) = variable
+    if let Some(variable) = base
         && let Left(local) = variable.as_local(env, flow)?
         && flow
             .handle_get(local.clone())?
@@ -974,34 +850,23 @@ fn define_set_target_base<'a>(
     {
         flow.handle_set(local, Ty::from("%String").into(), range)?;
     }
+    let _ = check(env, flow, c)?;
     Ok(())
 }
 
-// `SET $PIECE(..P, ...) = v` writes a node of the object, which a MultiDimensional property is;
-// any other property is `<OBJECT DISPATCH>` when it runs.
-fn require_variable_base<'a>(
+fn check_set_expr_fun<'a, C>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    base: Option<&AtomicExpr>,
-) -> Result<(), QuasiTypeError> {
-    if let Some(AtomicExpr::Member { member, args: None }) = base {
-        super::require_multidimensional(env, flow, member.deref())?;
-    }
-    Ok(())
-}
-
-// `Set $F(base, ..) = v`: the base is defined from here on, and the call checked as a read.
-fn check_set_fun<'a, C>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    base: Option<&Variable>,
-    range: bindings::Range,
+    base: &Ranged<Expr>,
     c: &C,
     check: impl FnOnce(&CodeEnv<'a>, &mut Flow<'a>, &C) -> Result<PowerTy, QuasiTypeError>,
 ) -> Result<(), QuasiTypeError> {
-    define_set_target_base(env, flow, base, range)?;
-    let _ = check(env, flow, c)?;
-    Ok(())
+    // `SET $PIECE(..P, ...) = v` writes a node of the object, which a MultiDimensional property
+    // is; any other property is `<OBJECT DISPATCH>` when it runs.
+    if let Some(AtomicExpr::Member { member, args: None }) = base.as_atomic() {
+        super::require_multidimensional(env, flow, member.deref())?;
+    }
+    check_set_fun(env, flow, base.as_variable(), env.range(base), c, check)
 }
 
 // A variable named alone is read leniently, an undefined one as absent; any other expression
@@ -1051,39 +916,9 @@ pub(super) fn check_settarget_fun<'a>(
     super::report_style(env, fun.name(), &[]);
     use cos::SetTargetFun::*;
     match fun {
-        Piece(c) => {
-            require_variable_base(env, flow, c.string.as_atomic())?;
-            check_set_fun(
-                env,
-                flow,
-                c.string.as_variable(),
-                env.range(c.string.deref()),
-                c,
-                check_piece_call,
-            )?
-        }
-        Extract(c) => {
-            require_variable_base(env, flow, c.string.as_atomic())?;
-            check_set_fun(
-                env,
-                flow,
-                c.string.as_variable(),
-                env.range(c.string.deref()),
-                c,
-                check_extract_call,
-            )?
-        }
-        List(c) => {
-            require_variable_base(env, flow, c.list.as_atomic())?;
-            check_set_fun(
-                env,
-                flow,
-                c.list.as_variable(),
-                env.range(c.list.deref()),
-                c,
-                check_list_plain_call,
-            )?
-        }
+        Piece(c) => check_set_expr_fun(env, flow, &c.string, c, check_piece_call)?,
+        Extract(c) => check_set_expr_fun(env, flow, &c.string, c, check_extract_call)?,
+        List(c) => check_set_expr_fun(env, flow, &c.list, c, check_list_plain_call)?,
         ListGet(c) => check_set_var_list(env, flow, &c.first, &c.rest)?,
         Bit(c) => check_set_fun(
             env,
@@ -1106,17 +941,7 @@ pub(super) fn check_settarget_fun<'a>(
                 check_vector_call,
             )?;
         }
-        WExtract(c) => {
-            require_variable_base(env, flow, c.string.as_atomic())?;
-            check_set_fun(
-                env,
-                flow,
-                c.string.as_variable(),
-                env.range(c.string.deref()),
-                c,
-                check_wextract_call,
-            )?
-        }
+        WExtract(c) => check_set_expr_fun(env, flow, &c.string, c, check_wextract_call)?,
         Property(c) => {
             let _ = check_property_call(env, flow, c)?;
         }
@@ -1362,31 +1187,20 @@ fn check_vector_call<'a>(
     )
 }
 
+/// `$PROPERTY(instance, propertyname, index...)` — the instance is optional
+/// (placeholder comma keeps the current object), followed by a property name
+/// and any number of multidimensional subscripts.
 fn check_property_call<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
     c: &PropertyCall,
 ) -> Result<PowerTy, QuasiTypeError> {
-    check_property(
-        env,
-        flow,
-        c.instance.deref(),
-        c.property.deref().deref(),
-        each_arg(&c.indexes),
-    )
-}
-
-fn check_bitlogic<'a>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    expr: &Ranged<cos::BitLogicExpr>,
-    length: Option<&Ranged<Expr>>,
-) -> Result<PowerTy, QuasiTypeError> {
-    let _ = expr.to_ty(env, flow)?;
-    if let Some(length) = length {
-        let _ = length.to_ty(env, flow)?;
+    c.instance.check(env, flow)?;
+    let _ = c.property.to_ty(env, flow)?;
+    for index in each_arg(&c.indexes) {
+        let _ = index.to_ty(env, flow)?;
     }
-    Ok(PowerTy::from("%DataType"))
+    Ok(PowerTy::from(Ty::Any))
 }
 
 impl CheckExprInner for cos::BitLogicExpr {
@@ -1396,19 +1210,9 @@ impl CheckExprInner for cos::BitLogicExpr {
         flow: &mut Flow<'a>,
     ) -> Result<PowerTy, QuasiTypeError> {
         for atom in self.items.iter() {
-            let _ = atom.to_power_ty(env, flow)?;
+            let _ = atom.operand.to_power_ty(env, flow)?;
         }
         Ok(PowerTy::from("%DataType"))
-    }
-}
-
-impl CheckExprInner for cos::BitLogicAtom {
-    fn to_power_ty<'a>(
-        &self,
-        env: &CodeEnv<'a>,
-        flow: &mut Flow<'a>,
-    ) -> Result<PowerTy, QuasiTypeError> {
-        Ok(self.operand.to_power_ty(env, flow)?)
     }
 }
 
@@ -1583,24 +1387,6 @@ fn bind_out_var<'a>(
     Ok(PowerTy::bind(var))
 }
 
-/// `$PROPERTY(instance, propertyname, index...)` — the instance is optional
-/// (placeholder comma keeps the current object), followed by a property name
-/// and any number of multidimensional subscripts.
-fn check_property<'a, 'b>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    instance: &Ranged<Option<Expr>>,
-    property: &Ranged<Expr>,
-    indexes: impl Iterator<Item = &'b Ranged<Expr>>,
-) -> Result<PowerTy, QuasiTypeError> {
-    instance.check(env, flow)?;
-    let _ = property.to_ty(env, flow)?;
-    for index in indexes {
-        let _ = index.to_ty(env, flow)?;
-    }
-    Ok(PowerTy::from(Ty::Any))
-}
-
 fn target_as_local<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
@@ -1658,22 +1444,13 @@ pub(super) fn check_args_any<'a, 'b>(
             // An unknown callee may set anything through a by-reference argument, subscripts
             // included.
             Some(cos::MthArg::ByRef { target, .. }) => {
-                check_dottable(env, target, env.range(arg));
-                let local = match target.as_variable() {
-                    Some(variable) => variable
-                        .as_local(env, flow)
-                        .map_err(|err| err.into_error(|| env.range(arg)))?
-                        .left(),
-                    None => None,
-                };
-                match local {
-                    Some(local) => flow
-                        .invalidate(local, Ty::Any.into())
-                        .map_err(|err| err.into_error(|| env.range(arg)))?,
-                    None => {
-                        check_set_target(target, PowerTy::from(Ty::Any), env.range(arg), env, flow)
-                            .map_err(|err| err.into_error(|| env.range(arg)))?
-                    }
+                let range = env.range(arg);
+                check_dottable(env, target, range);
+                let at = |err: QuasiTypeError| err.into_error(|| range);
+                let local = target.as_variable().map(|v| v.as_local(env, flow));
+                match local.transpose().map_err(at)? {
+                    Some(Left(local)) => flow.invalidate(local, Ty::Any.into()).map_err(at)?,
+                    _ => check_set_target(target, Ty::Any.into(), range, env, flow).map_err(at)?,
                 }
             }
             None => {}
@@ -1751,29 +1528,19 @@ fn check_zu_args<'a>(
     Ok(Ty::Any.into())
 }
 
-fn check_classmethod<'a, 'b>(
-    env: &CodeEnv<'a>,
-    flow: &mut Flow<'a>,
-    classname: &Ranged<Option<Expr>>,
-    method: &Ranged<Expr>,
-    args: impl Iterator<Item = &'b Ranged<Option<cos::MthArg>>>,
-) -> Result<Ty, QuasiTypeError> {
-    classname.check(env, flow)?;
-    let _ = method.to_ty(env, flow)?;
-    Ok(check_args_any(env, flow, args)?)
-}
-
-#[allow(clippy::too_many_arguments)]
 fn check_compile<'a>(
     env: &CodeEnv<'a>,
     flow: &mut Flow<'a>,
-    source: &Ranged<cos::AllowIndirection<Variable>>,
-    qspec: &Ranged<Expr>,
-    errors: &Ranged<Option<Variable>>,
-    object: Option<&Ranged<Option<cos::AllowIndirection<Variable>>>>,
-    arg5: Option<&Ranged<Option<Expr>>>,
-    arg6: Option<&Ranged<Option<Expr>>>,
-    rname: Option<&Ranged<Option<Expr>>>,
+    CompileArgs {
+        source,
+        qspec,
+        errors,
+        object,
+        arg5,
+        arg6,
+        rname,
+        ..
+    }: &CompileArgs,
 ) -> Result<PowerTy, QuasiTypeError> {
     // The array is handed over by reference, as `.source` would be; named by indirection, any may be.
     match source.as_local(env, flow)? {
@@ -1786,7 +1553,7 @@ fn check_compile<'a>(
     {
         flow.invalidate(local, Ty::from("%String").into())?;
     }
-    if let Some(ranged) = object.and_then(|o| o.as_ref().map(Option::as_ref).transpose()) {
+    if let Some(ranged) = arg(object).and_then(|o| o.as_ref().map(Option::as_ref).transpose()) {
         match ranged.as_local(env, flow)? {
             Left(local) => flow.invalidate(local, Ty::from("%String").into())?,
             Right(_) => flow.invalidate_all()?,
@@ -2121,25 +1888,14 @@ fn check_data<'a>(
     let maybe_subscript = flow.subscriptable(&variable.name)?;
     let var = flow.fresh();
     let mut cases = vec![];
-    if new_ty.maybe_undefined() {
-        cases.push(("0", None));
-    }
-    if let Some(ty) = new_ty.maybe_defined() {
-        cases.push(("1", Some(ty.clone())));
-    }
-    if maybe_subscript {
+    for (undefined, defined) in once(("0", "1")).chain(maybe_subscript.then_some(("10", "11"))) {
         if new_ty.maybe_undefined() {
-            cases.push(("10", None));
+            cases.push((undefined, None));
         }
         if let Some(ty) = new_ty.maybe_defined() {
-            cases.push(("11", Some(ty.clone())));
+            cases.push((defined, Some(ty.clone())));
         }
     }
-    let c = if cases.len() == 1 {
-        Some(PowerTy::Const(types::Const::String(cases[0].0.to_string())))
-    } else {
-        None
-    };
     flow.handle_refine(variable, PowerTy::case(var, cases.clone(), None))?;
     if let Some(target) = target {
         let target_range = env.range(target);
@@ -2155,11 +1911,10 @@ fn check_data<'a>(
             }
         }
     }
-    if let Some(c) = c {
-        Ok(c)
-    } else {
-        Ok(PowerTy::bind(var))
-    }
+    Ok(match cases.as_slice() {
+        [(value, _)] => PowerTy::Const(types::Const::String(value.to_string())),
+        _ => PowerTy::bind(var),
+    })
 }
 
 // `$DATA` of something nothing is known about: the value is only tied to `target` (when there

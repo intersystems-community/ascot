@@ -72,15 +72,11 @@ fn atoms(pattern: &Pattern) -> Option<Vec<Atom>> {
                     (n, Some(n))
                 }
                 PatternCount::Range { min, max, .. } => {
-                    let min = match min {
-                        Some(min) => digits(min)?,
-                        None => 0,
-                    };
                     let max = match max {
                         Some(max) => Some(digits(max)?),
                         None => None,
                     };
-                    (min, max)
+                    (min.as_ref().map_or(Some(0), digits)?, max)
                 }
             };
             let item = match &element.item {
