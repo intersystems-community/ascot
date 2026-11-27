@@ -21,8 +21,9 @@ use syn::{
 };
 
 /// `#[sugar(f)]` on a variant leaves it out of the core, `f` taking the variant's fields by value to the
-/// enclosing core type; `#[sugar]` on a field drops it; on a struct or enum, both levels keep it and the
-/// author writes the conversion, its variants' marks then bare.
+/// enclosing core type; with `#[sugar]` fields inside, the core keeps the variant without them and `f`
+/// takes those fields and the converted variant. `#[sugar]` on a field drops it; on a struct or enum,
+/// both levels keep it and the author writes the conversion, its variants' marks then bare.
 /// `Kw!("READ ONLY", "READONLY")`: a keyword, its words a blank apart and none the start of a longer
 /// word, in its canonical spelling or others, a phrase one `Phrase` and the spellings one `Spellings`.
 #[proc_macro]
@@ -282,6 +283,15 @@ fn plain_arm(enum_name: &Ident, variant: &Variant, dropped: &[usize]) -> TokenSt
     let (pattern, binds) = variant_pattern(variant, dropped);
     let body = fields_desugar(&variant.fields, dropped, |i, _| binds[i].to_token_stream());
     quote!(#pattern => super::core::#enum_name::#name #body,)
+}
+
+/// `Self::V(a, n, b) => f(n, core::E::V(a, b))`, `n` the dropped field, for a variant the core keeps.
+fn hook_arm(f: &Path, enum_name: &Ident, variant: &Variant, dropped: &[usize]) -> TokenStream2 {
+    let name = &variant.ident;
+    let (pattern, binds) = variant_pattern(variant, &[]);
+    let body = fields_desugar(&variant.fields, dropped, |i, _| binds[i].to_token_stream());
+    let passed = dropped.iter().map(|&i| &binds[i]);
+    quote!(#pattern => #f(#(#passed,)* super::core::#enum_name::#name #body),)
 }
 
 /// `Self::V(a, b) => f(a, b)`.
@@ -583,6 +593,12 @@ impl Output {
             let mark = take_mark(&mut variant.attrs)?;
             let dropped = self.fields(&mut variant.fields)?;
             match mark {
+                Some(Some(f)) if !dropped.is_empty() => {
+                    let mut core_variant = variant.clone();
+                    core_fields(&mut core_variant.fields, &dropped);
+                    core_variants.push(core_variant);
+                    arms.push(hook_arm(&f, &item.ident, variant, &dropped));
+                }
                 Some(Some(f)) => arms.push(sugar_arm(&f, variant)),
                 Some(None) if marked => {}
                 Some(None) => {

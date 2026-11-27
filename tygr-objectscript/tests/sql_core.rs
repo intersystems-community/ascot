@@ -73,16 +73,19 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
         .prefixed
         .first
         .first;
-    let core::BooleanFactor::Not(_, _, inner) = condition else {
+    let core::BooleanFactor::Factor(_, not) = condition else {
+        panic!("{text}")
+    };
+    let core::Factor::Not(_, inner) = &not.ranged else {
         panic!("{text}")
     };
     let core::BooleanFactor::Paren(_, paren) = &**inner else {
         panic!("{text}")
     };
-    let core::BooleanFactor::Predicate(_, _, predicate) = &paren.wrapped.first.first else {
+    let core::BooleanFactor::Factor(_, factor) = &paren.wrapped.first.first else {
         panic!("{text}")
     };
-    assert_eq!(&text[predicate.range()], "d NOT IN (1, 2)");
+    assert_eq!(&text[factor.range()], "d NOT IN (1, 2)");
 }
 
 // On a wide stack: a parenthesis recurses a frame per level, past a test thread's 2 MiB.

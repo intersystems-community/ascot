@@ -409,24 +409,25 @@ impl<B: tygr::Grammar + Default> Walk for BooleanTerm<B> {
 impl<B: tygr::Grammar + Default> Walk for BooleanFactor<B> {
     fn walk(&self, w: &mut Walker) {
         match self {
-            BooleanFactor::Not(_, _, condition) => condition.walk(w),
-            BooleanFactor::Paren(_, predicate) => predicate.walk(w),
-            BooleanFactor::Predicate(_, _, predicate) => predicate.walk(w),
+            BooleanFactor::Paren(_, condition) => condition.walk(w),
+            BooleanFactor::Factor(_, factor) => factor.walk(w),
         }
     }
 }
 
-impl Walk for Predicate {
+impl Walk for Factor {
     fn walk(&self, w: &mut Walker) {
+        use Factor::*;
         match self {
-            Predicate::Exists { query, .. } => query.walk(w),
-            Predicate::ForSomeElement {
+            Not(_, condition) => condition.walk(w),
+            Exists(_, _, _, query) => query.walk(w),
+            ForSomeElement {
                 column, predicate, ..
             } => {
                 w.column(&column.wrapped);
                 w.unchecked(&predicate.1)
             }
-            Predicate::ForSome {
+            ForSome {
                 tables, condition, ..
             } => {
                 w.push_frame();
@@ -436,44 +437,41 @@ impl Walk for Predicate {
                 }
                 w.pop_frame()
             }
-            Predicate::Comparison { lhs, tail, .. } => {
+            StarEq(_, lhs, _, _, _, rhs)
+            | EqStar(_, lhs, _, _, _, rhs)
+            | Compare(_, lhs, _, _, _, rhs) => {
                 lhs.walk(w);
-                tail.walk(w)
+                rhs.walk(w)
             }
-        }
-    }
-}
-
-impl Walk for Comparison {
-    fn walk(&self, w: &mut Walker) {
-        match self {
-            Comparison::ValueExpression { expr, .. }
-            | Comparison::StarEq {
-                expression: expr, ..
-            }
-            | Comparison::EqStar {
-                expression: expr, ..
-            } => expr.walk(w),
-            Comparison::Query { expr, .. } => expr.walk(w),
-            Comparison::IsNull { .. } | Comparison::IsJSON { .. } => {}
-            Comparison::Between { lower, upper, .. } => {
+            IsNull(_, lhs, ..) | IsJSON(_, lhs, ..) => lhs.walk(w),
+            Between(_, lhs, _, _, lower, _, _, upper) => {
+                lhs.walk(w);
                 lower.walk(w);
                 upper.walk(w)
             }
-            Comparison::Like {
-                pattern, escape, ..
-            }
-            | Comparison::Matches {
-                pattern, escape, ..
-            } => {
+            Like(_, lhs, _, _, pattern, escape) => {
+                lhs.walk(w);
                 pattern.walk(w);
                 escape.walk(w)
             }
-            Comparison::In { list, .. } => list.walk(w),
-            Comparison::InList { list_expr, .. } => list_expr.walk(w),
-            Comparison::Find { expr, .. } => expr.walk(w),
-            Comparison::Pattern { pattern, .. } => pattern.walk(w),
-            Comparison::Contains { list, .. } => list.walk(w),
+            In(_, lhs, _, _, _, list) => {
+                lhs.walk(w);
+                list.walk(w)
+            }
+            InList(_, lhs, _, _, expr, _)
+            | Find(_, lhs, _, _, expr, _)
+            | Pattern(_, lhs, _, _, expr) => {
+                lhs.walk(w);
+                expr.walk(w)
+            }
+            Contains(_, lhs, _, _, list) => {
+                lhs.walk(w);
+                list.walk(w)
+            }
+            Quantified(_, lhs, _, _, _, _, _, query) => {
+                lhs.walk(w);
+                query.walk(w)
+            }
         }
     }
 }

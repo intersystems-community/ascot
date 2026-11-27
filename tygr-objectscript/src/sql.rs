@@ -787,40 +787,14 @@ pub mod leveled {
         Lt(StringEq!("<")),
     }
 
-    /// `[` or `NOT[`, the NOT against the bracket: 2026.2 refuses `NOT [`.
-    #[derive(Grammar)]
-    pub struct ContainsOperator {
-        #[sugar]
-        pub not: Option<Kw!("NOT")>,
-        pub op: StringEq!("["),
-    }
-
-    #[derive(Grammar)]
-    pub struct FollowsOperator {
-        #[sugar]
-        pub not: Option<Kw!("NOT")>,
-        pub op: StringEq!("]"),
-    }
-
     #[derive(Grammar)]
     pub enum CompOp {
         StartsWith(Kw!("%STARTSWITH")),
         Eq(StringEq!("=")),
         Ne(Spellings!(StringEq!("<>"), StringEq!("!="), StringEqCI!("NOT="))),
         Ord(OrderingOperator),
-        Contains(ContainsOperator),
-        Follows(FollowsOperator),
-    }
-
-    #[sugar]
-    impl CompOp {
-        fn negated(&self) -> bool {
-            matches!(
-                self,
-                CompOp::Contains(ContainsOperator { not: Some(_), .. })
-                    | CompOp::Follows(FollowsOperator { not: Some(_), .. })
-            )
-        }
+        Contains(StringEq!("[")),
+        Follows(StringEq!("]")),
     }
 
     #[derive(Grammar)]
@@ -1893,245 +1867,262 @@ pub mod leveled {
 
     pub type NoIndex = Option<(Kw!("%NOINDEX"), Space1)>;
 
-    /// `NOT` before a predicate's keyword, which the condition's impl puts around the predicate in the core.
-    pub type Not = Option<(Kw!("NOT"), Space1)>;
-
-    /// An operator and a quantifier against a subquery; `IN` is `= ANY`, a `NOT IN` under the condition's NOT,
-    /// and `NOT[`, negating each comparison, flips the quantifier under it: `a NOT[ ANY q` is `NOT (a [ ALL q)`.
+    /// A condition after the blank `B` its place gives it: in parentheses, or a factor.
     #[derive(Grammar)]
-    #[sugar]
-    pub enum QuantifiedCompOp {
-        Op {
-            op: CompOp,
-            space: Space,
-            quantifier: Quantifier,
-        },
-        #[sugar]
-        In { not: Not, in_kw: Kw!("IN") },
-    }
-
-    impl Desugar for QuantifiedCompOp {
-        type Core = core::QuantifiedCompOp;
-        fn desugar(self) -> Self::Core {
-            match self {
-                QuantifiedCompOp::Op {
-                    op,
-                    space,
-                    quantifier,
-                } => core::QuantifiedCompOp::Op {
-                    quantifier: match (op.negated(), quantifier) {
-                        (false, quantifier) => quantifier.desugar(),
-                        (true, Quantifier::All(_)) => core::Quantifier::Any(Default::default()),
-                        (true, Quantifier::Any(_)) => Default::default(),
-                    },
-                    op: op.desugar(),
-                    space: space.desugar(),
-                },
-                QuantifiedCompOp::In { .. } => core::QuantifiedCompOp::Op {
-                    op: core::CompOp::Eq(Default::default()),
-                    space: Default::default(),
-                    quantifier: core::Quantifier::Any(Default::default()),
-                },
-            }
-        }
-    }
-
-    // An alias, since a derive on a generic enum cannot see through a type macro.
-
-    /// A condition after the blank `B` its place gives it: negated, in parentheses, or a predicate.
-    #[derive(Grammar)]
-    #[sugar]
     pub enum BooleanFactor<B: Grammar + Default = ()> {
-        Not(B, Kw!("NOT"), Box<BooleanFactor<Space1>>),
         Paren(Option<B>, Parenthesized<Box<BooleanValueExpression>>),
-        Predicate(B, NoIndex, Ranged<Predicate>),
+        Factor(B, Ranged<Factor>),
     }
 
     impl<B: Grammar + Default> BooleanFactor<B> {
         pub fn after<C: Grammar + Default>(self) -> BooleanFactor<C> {
             match self {
-                BooleanFactor::Not(_, not, cond) => {
-                    BooleanFactor::Not(Default::default(), not, cond)
-                }
                 BooleanFactor::Paren(_, condition) => BooleanFactor::Paren(None, condition),
-                BooleanFactor::Predicate(_, noindex, predicate) => {
-                    BooleanFactor::Predicate(Default::default(), noindex, predicate)
+                BooleanFactor::Factor(_, factor) => {
+                    BooleanFactor::Factor(Default::default(), factor)
                 }
             }
         }
     }
 
-    /// A negated predicate's NOT, dropped from it as a sugar field, is lifted around it: `a NOT BETWEEN 1 AND 2` is
-    /// `NOT(a BETWEEN 1 AND 2)`, for NOT IN, NOT LIKE, NOT %MATCHES, NOT %INLIST, IS NOT NULL, IS NOT JSON, NOT[ and
-    /// NOT] alike, each measured on 2026.2 with NULL rows.
-    impl<B: Grammar + Default + Desugar> Desugar for BooleanFactor<B>
-    where
-        B::Core: Grammar + Default,
-    {
-        type Core = core::BooleanFactor<B::Core>;
-        fn desugar(self) -> Self::Core {
-            use core::BooleanFactor::*;
-            match self {
-                Self::Not(before, not, cond) => {
-                    Not(before.desugar(), not.desugar(), cond.desugar())
-                }
-                Self::Paren(before, cond) => Paren(before.desugar(), cond.desugar()),
-                Self::Predicate(before, noindex, predicate) if negated(&predicate) => {
-                    let plain = Predicate((), noindex.desugar(), predicate.desugar());
-                    let plain = parenthesized(Box::new(core::BooleanValueExpression::one(plain)));
-                    Not(
-                        before.desugar(),
-                        Default::default(),
-                        Box::new(Paren(None, plain)),
-                    )
-                }
-                Self::Predicate(before, noindex, predicate) => {
-                    Predicate(before.desugar(), noindex.desugar(), predicate.desugar())
-                }
-            }
-        }
-    }
-
-    fn negated(predicate: &Predicate) -> bool {
-        use Comparison::*;
-        let Predicate::Comparison { tail, .. } = predicate else {
-            return false;
-        };
-        match tail {
-            IsNull { not, .. }
-            | Between { not, .. }
-            | Like { not, .. }
-            | Matches { not, .. }
-            | In { not, .. }
-            | InList { not, .. }
-            | IsJSON { not, .. }
-            | Query {
-                op: QuantifiedCompOp::In { not, .. },
-                ..
-            } => not.is_some(),
-            ValueExpression { op, .. }
-            | Query {
-                op: QuantifiedCompOp::Op { op, .. },
-                ..
-            } => op.negated(),
-            _ => false,
-        }
-    }
-
-    /// What a `%NOINDEX` hint may precede (measured on 2026.2: not a `NOT` or a parenthesis).
+    /// NOT, or a predicate after its `%NOINDEX` hint (2026.2 takes the hint before no NOT or parenthesis). A
+    /// predicate's own NOT, where IRIS writes it, is dropped and the predicate stands in `NOT(…)` in the core, each
+    /// form measured on 2026.2 with NULL rows; under a quantifier it negates each comparison, so the quantifier flips.
     #[derive(Grammar)]
-    pub enum Predicate {
-        Exists {
-            exists_kw: (Kw!("EXISTS"), Space),
-            query: Subquery,
-        },
+    pub enum Factor {
+        Not(Kw!("NOT"), Box<BooleanFactor<Space1>>),
+        Exists(NoIndex, Kw!("EXISTS"), Space, Subquery),
         ForSomeElement {
+            noindex: NoIndex,
             kw: (Kw!("FOR SOME %ELEMENT"), Space),
             column: Parenthesized<ColumnReference>,
             label: Option<Alias>,
             predicate: (Space, Parenthesized<Box<BooleanValueExpression>>),
         },
         ForSome {
+            noindex: NoIndex,
             kw: (Kw!("FOR SOME"), Space),
             tables: Parenthesized<TableReferenceList>,
             condition: Option<(Space, Parenthesized<Box<ForSomeCondition>>)>,
         },
-        Comparison {
-            lhs: ValueExpression,
-            space: Space,
-            tail: Comparison,
-        },
+        StarEq(
+            NoIndex,
+            ValueExpression,
+            Space,
+            StringEqCI!("*="),
+            Space,
+            ValueExpression,
+        ),
+        EqStar(
+            NoIndex,
+            ValueExpression,
+            Space,
+            StringEqCI!("=*"),
+            Space,
+            ValueExpression,
+        ),
+        #[sugar(negated)]
+        IsNull(
+            NoIndex,
+            ValueExpression,
+            Space1,
+            Kw!("IS"),
+            Space1,
+            #[sugar] Not,
+            Kw!("NULL"),
+        ),
+        #[sugar(negated)]
+        Between(
+            NoIndex,
+            ValueExpression,
+            Space1,
+            #[sugar] Not,
+            Kw!("BETWEEN"),
+            ValueExpression<Space1>,
+            Space1,
+            Kw!("AND"),
+            ValueExpression<Space1>,
+        ),
+        #[sugar(negated)]
+        Like(
+            NoIndex,
+            ValueExpression,
+            Space1,
+            #[sugar] Not,
+            LikeOperator,
+            ValueExpression<Space1>,
+            Option<(Space1, EscapeClause)>,
+        ),
+        #[sugar(in_query)]
+        InQuery(
+            NoIndex,
+            ValueExpression,
+            Space1,
+            Not,
+            Kw!("IN"),
+            Space,
+            Subquery,
+        ),
+        #[sugar(negated)]
+        In(
+            NoIndex,
+            ValueExpression,
+            Space1,
+            #[sugar] Not,
+            Kw!("IN"),
+            Space,
+            List,
+        ),
+        #[sugar(negated)]
+        InList(
+            NoIndex,
+            ValueExpression,
+            Space1,
+            #[sugar] Not,
+            Kw!("%INLIST"),
+            ValueExpression<Space1>,
+            Option<(Space1, SizeHint)>,
+        ),
+        Find(
+            NoIndex,
+            ValueExpression,
+            Space1,
+            Kw!("%FIND"),
+            ValueExpression<Space1>,
+            Option<(Space1, SizeHint)>,
+        ),
+        Pattern(
+            NoIndex,
+            ValueExpression,
+            Space1,
+            Kw!("%PATTERN"),
+            ValueExpression<Space1>,
+        ),
+        #[sugar(negated)]
+        IsJSON(
+            NoIndex,
+            ValueExpression,
+            Space1,
+            Option<(Kw!("FORMAT JSON"), Space1)>,
+            Kw!("IS"),
+            Space1,
+            #[sugar] Not,
+            Kw!("JSON"),
+            Option<(Space1, JSONPredicateTypeConstraint)>,
+        ),
+        Contains(
+            NoIndex,
+            ValueExpression,
+            Space1,
+            Either<Kw!("%CONTAINSTERM"), Kw!("%CONTAINS")>,
+            Args1Plus,
+        ),
+        #[sugar(negated_quantified)]
+        Quantified(
+            NoIndex,
+            ValueExpression,
+            Space,
+            #[sugar] BracketNot,
+            CompOp,
+            Space,
+            Quantifier,
+            Space,
+            Subquery,
+        ),
+        #[sugar(negated)]
+        Compare(
+            NoIndex,
+            ValueExpression,
+            Space,
+            #[sugar] BracketNot,
+            CompOp,
+            Space,
+            ValueExpression,
+        ),
+    }
+
+    /// `NOT` before a predicate's keyword.
+    pub type Not = Option<(Kw!("NOT"), Space1)>;
+
+    #[derive(Grammar)]
+    pub enum LikeOperator {
+        Like(Kw!("LIKE")),
+        Matches(Kw!("%MATCHES")),
+    }
+
+    /// `NOT` against a bracket, `NOT[` and `NOT]`, which 2026.2 takes with no blank between; `NOT<`, `NOT>` and
+    /// `NOT=` are spellings of the operators themselves.
+    pub type BracketNot = Option<(
+        Kw!("NOT"),
+        FollowedBy<Either<StringEq!("["), StringEq!("]")>>,
+    )>;
+
+    fn negated<N>(not: Option<N>, plain: core::Factor) -> core::Factor {
+        match not {
+            Some(_) => negation(plain),
+            None => plain,
+        }
+    }
+
+    fn negated_quantified(not: BracketNot, plain: core::Factor) -> core::Factor {
+        match (not, plain) {
+            (
+                Some(_),
+                core::Factor::Quantified(noindex, lhs, sp, op, sp2, quantifier, sp3, query),
+            ) => {
+                let quantifier = match quantifier {
+                    core::Quantifier::All(_) => core::Quantifier::Any(Default::default()),
+                    core::Quantifier::Any(_) => Default::default(),
+                };
+                negation(core::Factor::Quantified(
+                    noindex, lhs, sp, op, sp2, quantifier, sp3, query,
+                ))
+            }
+            (_, plain) => plain,
+        }
+    }
+
+    /// `IN (q)` is `= ANY (q)`.
+    fn in_query(
+        noindex: NoIndex,
+        lhs: ValueExpression,
+        _: Space1,
+        not: Not,
+        _: Kw!("IN"),
+        sp: Space,
+        query: Subquery,
+    ) -> core::Factor {
+        let (eq, any) = (
+            core::CompOp::Eq(Default::default()),
+            core::Quantifier::Any(Default::default()),
+        );
+        let plain = core::Factor::Quantified(
+            noindex.desugar(),
+            lhs.desugar(),
+            Default::default(),
+            eq,
+            Default::default(),
+            any,
+            sp.desugar(),
+            query.desugar(),
+        );
+        negated(not, plain)
+    }
+
+    /// `NOT(…)` around a factor, standing at the negated predicate's range.
+    fn negation(factor: core::Factor) -> core::Factor {
+        let factor = core::BooleanFactor::Factor((), desugar::synthesized(factor));
+        let condition = parenthesized(Box::new(core::BooleanValueExpression::one(factor)));
+        core::Factor::Not(
+            Default::default(),
+            Box::new(core::BooleanFactor::Paren(None, condition)),
+        )
     }
 
     #[derive(Grammar)]
     pub enum ForSomeCondition {
         BooleanValueExpression(BooleanValueExpression),
         GroupHaving(Option<(GroupByClause, Space1)>, HavingClause),
-    }
-
-    #[doc(hidden)]
-    #[derive(Grammar)]
-    pub enum Comparison {
-        StarEq {
-            op: (StringEqCI!("*="), Space),
-            expression: ValueExpression,
-        },
-        EqStar {
-            op: (StringEqCI!("=*"), Space),
-            expression: ValueExpression,
-        },
-        IsNull {
-            is_kw: (Kw!("IS"), Space1),
-            #[sugar]
-            not: Not,
-            null_kw: Kw!("NULL"),
-        },
-        Between {
-            #[sugar]
-            not: Not,
-            between_kw: Kw!("BETWEEN"),
-            lower: ValueExpression<Space1>,
-            and_kw: (Space1, Kw!("AND")),
-            upper: ValueExpression<Space1>,
-        },
-        Like {
-            #[sugar]
-            not: Not,
-            like_kw: Kw!("LIKE"),
-            pattern: ValueExpression<Space1>,
-            escape: Option<(Space1, EscapeClause)>,
-        },
-        Matches {
-            #[sugar]
-            not: Not,
-            matches_kw: Kw!("%MATCHES"),
-            pattern: ValueExpression<Space1>,
-            escape: Option<(Space1, EscapeClause)>,
-        },
-        Query {
-            op: QuantifiedCompOp,
-            space: Space,
-            expr: Subquery,
-        },
-        In {
-            #[sugar]
-            not: Not,
-            in_kw: (Kw!("IN"), Space),
-            list: List,
-        },
-        InList {
-            #[sugar]
-            not: Not,
-            inlist_kw: Kw!("%INLIST"),
-            list_expr: ValueExpression<Space1>,
-            size_hint: Option<(Space1, SizeHint)>,
-        },
-        Find {
-            find_kw: Kw!("%FIND"),
-            expr: ValueExpression<Space1>,
-            size_hint: Option<(Space1, SizeHint)>,
-        },
-        Pattern {
-            pattern_kw: Kw!("%PATTERN"),
-            pattern: ValueExpression<Space1>,
-        },
-        IsJSON {
-            format: Option<(Kw!("FORMAT JSON"), Space1)>,
-            is_kw: (Kw!("IS"), Space1),
-            #[sugar]
-            not: Not,
-            json_kw: Kw!("JSON"),
-            constraint: Option<(Space1, JSONPredicateTypeConstraint)>,
-        },
-        Contains {
-            kw: Either<Kw!("%CONTAINSTERM"), Kw!("%CONTAINS")>,
-            list: Args1Plus,
-        },
-        ValueExpression {
-            op: CompOp,
-            space: Space,
-            expr: ValueExpression,
-        },
     }
 
     pub type EscapeClause = Prefix<Kw!("ESCAPE"), ValueExpression<Space1>>;
