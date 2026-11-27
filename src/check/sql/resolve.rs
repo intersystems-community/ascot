@@ -553,10 +553,10 @@ impl<'a> WorkspaceEnv<'a> {
     }
 }
 
-// `schema.name` as written; an unqualified name is in `SQLUser`.
-fn qualified(parts: &[String]) -> Option<(String, String)> {
+// `schema.name` as written; an unqualified name is in the resolver's default schema.
+fn qualified(check: &dyn Resolver, parts: &[String]) -> Option<(String, String)> {
     match parts {
-        [name] => Some(("SQLUser".to_string(), name.clone())),
+        [name] => Some((check.default_schema(), name.clone())),
         [schema, name] => Some((schema.clone(), name.clone())),
         _ => None,
     }
@@ -594,6 +594,15 @@ struct Checker<'c, 'a> {
 }
 
 impl Resolver for Checker<'_, '_> {
+    // The class's package's schema, which IRIS 2026.2 searches alone: not `SQLUser` after it, nor a
+    // parent package's schema, whatever `SqlSchemaName` the class has. A routine's is `SQLUser`.
+    fn default_schema(&self) -> String {
+        match self.code.this() {
+            Ok(this) => sql_schema(this.name().rsplit_once('.').map_or("User", |(p, _)| p)),
+            Err(_) => "SQLUser".to_string(),
+        }
+    }
+
     fn table(&self, schema: &str, table: &str) -> Lookup<Option<Columns>> {
         self.code.sql_table(schema, table)
     }
@@ -621,7 +630,7 @@ pub(super) fn table(check: &dyn Resolver, frames: &[Frame], name: &Name) -> Opti
     {
         return None;
     }
-    let (schema, table) = qualified(&name.parts)?;
+    let (schema, table) = qualified(check, &name.parts)?;
     let written = name.parts.join(".");
     match check.table(&schema, &table) {
         Lookup::Found(columns) => columns,
@@ -641,7 +650,7 @@ pub(super) fn table(check: &dyn Resolver, frames: &[Frame], name: &Name) -> Opti
 }
 
 pub(super) fn call(check: &dyn Resolver, name: &Name, args: usize, used: SqlProcedureUse) {
-    let Some((schema, procedure)) = qualified(&name.parts) else {
+    let Some((schema, procedure)) = qualified(check, &name.parts) else {
         return;
     };
     // A function without a schema may be a built-in the grammar doesn't list.
