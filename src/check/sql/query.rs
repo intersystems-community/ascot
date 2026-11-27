@@ -24,7 +24,7 @@ impl Walk for WithListElement {
 
 // The CTEs are tables of every query under the `WITH`; the statement around its branches, whose
 // `ORDER BY` and row limit see the first branch's names.
-impl Walk for SelectStatement {
+impl Walk for QueryExpression {
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
         if let Some((with, _)) = &self.with_clause {
@@ -39,7 +39,7 @@ impl Walk for SelectStatement {
     }
 }
 
-impl Walk for Query {
+impl Walk for QueryExpressionBody {
     fn walk(&self, w: &mut Walker) {
         self.0.walk(w)
     }

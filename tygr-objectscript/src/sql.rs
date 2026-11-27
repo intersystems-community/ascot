@@ -1936,7 +1936,7 @@ pub mod leveled {
 
     pub type EscapeClause = Prefix<Kw!("ESCAPE"), ValueExpression<Space1>>;
 
-    pub type Subquery = Parenthesized<Box<Query>>;
+    pub type Subquery = Parenthesized<Box<QueryExpressionBody>>;
 
     #[derive(Grammar)]
     pub enum Quantifier {
@@ -2015,7 +2015,7 @@ pub mod leveled {
     /// ORDER BY a LIMIT 1 or LIMIT 1 LIMIT 2, SQLCODE -25).
     #[derive(Grammar)]
     pub struct SourceQuery {
-        pub query: Query,
+        pub query: QueryExpressionBody,
         pub order: Option<(Space1, OrderByClause)>,
     }
 
@@ -2417,8 +2417,9 @@ pub mod leveled {
         pub rows: Option<(Space1, RowOrRows)>,
     }
 
+    /// ISO's query expression body: the operands and the set operators between them.
     #[derive(Grammar)]
-    pub struct Query(pub VecSep<QueryTerm, (Space, QueryOperator, Space)>);
+    pub struct QueryExpressionBody(pub VecSep<QueryTerm, (Space, QueryOperator, Space)>);
 
     #[derive(Grammar)]
     pub enum QueryOperator {
@@ -2762,7 +2763,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum DeclaredStatement {
         ExplainStatement(ExplainStatement),
-        SelectStatement(SelectStatement),
+        SelectStatement(QueryExpression),
     }
 
     #[derive(Grammar)]
@@ -2825,12 +2826,13 @@ pub mod leveled {
         Into(Kw!("INTO"), Space, VecSep<TargetSpecification, ArgSep>),
     }
 
-    /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383, "CTE is only supported for SELECT…")
-    /// and takes a parenthesized later one; the grammar takes both.
+    /// ISO's query expression, the root query: WITH, the body and the Tail, which no nested query takes. 2026.2
+    /// refuses a parenthesized first operand after WITH (SQLCODE -383, "CTE is only supported for SELECT…") and
+    /// takes a parenthesized later one; the grammar takes both.
     #[derive(Grammar)]
-    pub struct SelectStatement {
+    pub struct QueryExpression {
         pub with_clause: Option<(WithClause, Space)>,
-        pub query: Query,
+        pub query: QueryExpressionBody,
         pub tail: Option<(Space1, Tail)>,
     }
 
@@ -3612,7 +3614,7 @@ pub mod leveled {
         pub col_list: Option<(Space, ColumnNameList)>,
         pub as_kw: (Space1, Kw!("AS"), Space),
         pub with_clause: Option<(WithClause, Space1)>,
-        pub query: Query,
+        pub query: QueryExpressionBody,
         pub view_with: Option<((Space1, Kw!("WITH"), Space1), ViewWithOption)>,
     }
 
@@ -4050,7 +4052,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum Statement {
-        SelectStatement(SelectStatement),
+        SelectStatement(QueryExpression),
         Insert(WithStatement<InsertStatement>),
         Update(WithStatement<UpdateStatement>),
         Delete(WithStatement<DeleteStatement>),
