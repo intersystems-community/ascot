@@ -32,11 +32,6 @@ use crate::{
 // IRIS instance): a class, even one with no superclass, gets the whole %systemInclude closure
 // (%occInclude, %msql, %cspInclude, ...) but not %occErrors; a routine gets nothing.
 pub(crate) const CLASS_IMPLICIT_INCLUDES: &[&str] = &["%systemInclude"];
-pub(crate) const ROUTINE_IMPLICIT_INCLUDES: &[&str] = &[];
-
-pub(crate) fn implicit_includes(names: &[&str]) -> Vec<String> {
-    names.iter().map(|name| name.to_string()).collect()
-}
 
 // Macro name -> (arg list, if any; body text).
 #[derive(Clone)]
@@ -77,6 +72,7 @@ pub(crate) struct BodyMacros {
 
 // The definitions in force while expanding: a layer of its own, where `#define`s land, over the
 // base a class shares with every method body, read and never copied.
+#[derive(Default)]
 pub(crate) struct Definitions<'b> {
     base: Option<&'b MacroDefinitions>,
     // `None` is an `#undef` of a base definition.
@@ -84,10 +80,6 @@ pub(crate) struct Definitions<'b> {
 }
 
 impl<'b> Definitions<'b> {
-    fn new() -> Self {
-        Self::from(MacroDefinitions::new())
-    }
-
     pub(crate) fn over(base: &'b MacroDefinitions) -> Self {
         Definitions {
             base: Some(base),
@@ -127,12 +119,8 @@ impl<'b> Definitions<'b> {
 
     pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
         let base = self.base.into_iter().flat_map(|base| base.keys());
-        let own = self
-            .own
-            .keys()
-            .filter(|name| !self.base.is_some_and(|base| base.contains_key(*name)));
-        base.chain(own)
-            .filter(move |name| self.contains_key(name))
+        base.filter(move |name| !self.own.contains_key(*name))
+            .chain(self.own().map(|(name, _)| name))
             .map(String::as_str)
     }
 
@@ -141,15 +129,6 @@ impl<'b> Definitions<'b> {
             .into_iter()
             .filter_map(|(name, definition)| Some((name, definition?)))
             .collect()
-    }
-}
-
-impl From<MacroDefinitions> for Definitions<'_> {
-    fn from(own: MacroDefinitions) -> Self {
-        Definitions {
-            base: None,
-            own: own.into_iter().map(|(k, v)| (k, Some(v))).collect(),
-        }
     }
 }
 
@@ -182,6 +161,14 @@ impl Origin {
         Origin {
             range,
             ..self.clone()
+        }
+    }
+
+    fn narrowed(&self, precise: bool, range: std::ops::Range<usize>) -> Self {
+        if precise {
+            self.with_range(range)
+        } else {
+            self.clone()
         }
     }
 
@@ -286,21 +273,15 @@ impl SourceMap {
             .iter()
             .rev()
             .find(|span| offset < span.end)?;
-        let mut pieces: Vec<&(std::ops::Range<usize>, Origin, bool)> = self
-            .vec
-            .iter()
+        // The pieces tile the expansion, so a gap starts another copy of an argument the body
+        // pastes more than once.
+        let mut end = None;
+        let text: String = (self.vec.iter())
             .filter(|(_, origin, _)| {
                 origin.uri.is_none()
                     && origin.range.start >= span.start
                     && origin.range.end <= span.end
             })
-            .collect();
-        pieces.sort_by_key(|(expanded, ..)| expanded.start);
-        // The pieces tile the expansion, so a gap starts another copy of an argument the body
-        // pastes more than once.
-        let mut end = None;
-        let text: String = pieces
-            .iter()
             .take_while(|(expanded, ..)| {
                 let next = end.is_none_or(|end| end == expanded.start);
                 end = Some(expanded.end);
@@ -473,11 +454,8 @@ impl SourceMap {
         let expanded = self.offset(range.start)?..self.offset(range.end)?;
         let (origin, leaf, fidelity) = self.locate_range(expanded)?;
         let mut chain = vec![(&origin.uri, leaf)];
-        let mut ancestor = origin.parent.as_deref();
-        while let Some(origin) = ancestor {
-            chain.push((&origin.uri, origin.range.clone()));
-            ancestor = origin.parent.as_deref();
-        }
+        let ancestors = std::iter::successors(origin.parent.as_deref(), |o| o.parent.as_deref());
+        chain.extend(ancestors.map(|o| (&o.uri, o.range.clone())));
         let (top_uri, top) = chain.pop()?;
         debug_assert!(top_uri.is_none());
         let mut hops: Vec<_> = (chain.iter().rev())
@@ -494,26 +472,6 @@ impl SourceMap {
             hops.extend(self.expansion_info(range.start, uri));
         }
         Some((self.source_olc.span(top.start, top.end), fidelity, hops))
-    }
-
-    fn relocate_related(
-        &self,
-        mut info: bindings::DiagnosticRelatedInformation,
-        uri: &str,
-    ) -> Vec<bindings::DiagnosticRelatedInformation> {
-        if info.location.uri != uri {
-            return vec![info];
-        }
-        let hops = match self.relocate_range(&info.location.range, uri) {
-            Some((range, _, hops)) => {
-                info.location.range = range;
-                hops
-            }
-            None => vec![],
-        };
-        let mut result = vec![info];
-        result.extend(hops);
-        result
     }
 
     pub(crate) fn expanded_text(&self) -> &str {
@@ -540,8 +498,18 @@ impl SourceMap {
                     }
                     None => vec![],
                 };
-                for info in std::mem::take(&mut diagnostic.related_information) {
-                    related_information.extend(self.relocate_related(info, uri));
+                for mut info in std::mem::take(&mut diagnostic.related_information) {
+                    let hops = if info.location.uri == uri
+                        && let Some((range, _, hops)) =
+                            self.relocate_range(&info.location.range, uri)
+                    {
+                        info.location.range = range;
+                        hops
+                    } else {
+                        vec![]
+                    };
+                    related_information.push(info);
+                    related_information.extend(hops);
                 }
                 diagnostic.related_information = related_information;
                 Some(diagnostic)
@@ -602,9 +570,7 @@ impl WorkspaceStruct {
         src: &str,
         dones: &mut DoneList,
     ) -> Result<(Routine, MacroDefinitions), tygr::Error> {
-        let (definitions, _, _) =
-            self.resolve_class_includes(&implicit_includes(ROUTINE_IMPLICIT_INCLUDES));
-        let mut definitions = Definitions::from(definitions);
+        let mut definitions = Definitions::default();
         let RoutineWithMacro {
             header,
             macroed_units,
@@ -688,12 +654,11 @@ impl WorkspaceStruct {
                                         .collect();
                                     todos.push_items(items);
                                 }
-                                Ok(None) => {
-                                    dones.note_unresolved_include(included_name.print(), &origin)
-                                }
-                                Err(reason) => {
-                                    dones.note_lookup_failed(included_name.print(), reason, &origin)
-                                }
+                                other => dones.note_failed_include(
+                                    included_name.print(),
+                                    other.err(),
+                                    &origin,
+                                ),
                             }
                         }
                         HMacroCommand::Noshow(..) | HMacroCommand::Show(..) => (),
@@ -726,12 +691,9 @@ impl WorkspaceStruct {
                             && definitions.contains_key(&name.print())
                         {
                             dones.note_unresolved(
-                                move |name, range| {
-                                    TypeErrorKind::MacroFromMethodBody {
-                                        name,
-                                        method: method.clone(),
-                                    }
-                                    .at(range)
+                                move |name| TypeErrorKind::MacroFromMethodBody {
+                                    name,
+                                    method: method.clone(),
                                 },
                                 name.print(),
                                 &origin,
@@ -740,9 +702,7 @@ impl WorkspaceStruct {
                         let substituted = match definitions.get(&name.print()) {
                             Some(_) if origin.depth >= MAX_MACRO_DEPTH => {
                                 dones.note_unresolved(
-                                    |name, range| {
-                                        TypeErrorKind::MacroExpansionTooDeep { name }.at(range)
-                                    },
+                                    |name| TypeErrorKind::MacroExpansionTooDeep { name },
                                     name.print(),
                                     &origin,
                                 );
@@ -750,20 +710,14 @@ impl WorkspaceStruct {
                             }
                             Some(def) if def.is_compile_time() => false,
                             // `$$$M` for an `M()` declared with no parameters: the parentheses
-                            // are optional at the call.
-                            Some(MacroDefinition {
-                                params: Some(pars),
-                                body,
-                                ..
-                            }) if pars.is_empty() && args.is_none() => {
-                                todos.push(<Vec<MacroedUnit>>::parse(body)?, origin.deeper());
-                                true
-                            }
-                            // `$$$M(args)` on a parameterless `M` keeps the argument list: the
-                            // body is typically a method name the arguments then call.
-                            Some(MacroDefinition {
-                                params: None, body, ..
-                            }) => {
+                            // are optional at the call. `$$$M(args)` on a parameterless `M` keeps
+                            // the argument list: the body is typically a method name the
+                            // arguments then call.
+                            Some(MacroDefinition { params, body, .. })
+                                if params.is_none()
+                                    || (args.is_none()
+                                        && matches!(params.as_deref(), Some([]))) =>
+                            {
                                 let deeper = origin.deeper();
                                 let mut items: Vec<TodoItem> = <Vec<MacroedUnit>>::parse(body)?
                                     .into_iter()
@@ -772,11 +726,10 @@ impl WorkspaceStruct {
                                 if let Some(args) = args.as_ref() {
                                     let start = at(name.0.end);
                                     for unit in <Vec<Ranged<MacroedUnit>>>::parse(&args.print())? {
-                                        let piece = if precise {
-                                            origin.with_range(start + unit.start..start + unit.end)
-                                        } else {
-                                            origin.clone()
-                                        };
+                                        let piece = origin.narrowed(
+                                            precise,
+                                            start + unit.start..start + unit.end,
+                                        );
                                         items.push((Cow::Owned(unit.into_inner()), piece, precise));
                                     }
                                 }
@@ -787,8 +740,7 @@ impl WorkspaceStruct {
                                 params: Some(pars),
                                 literal_args: true,
                                 body,
-                            }) if args.is_some() => {
-                                let args = args.as_deref().unwrap();
+                            }) if let Some(args) = args.as_deref() => {
                                 let text = args
                                     .items
                                     .iter()
@@ -814,20 +766,18 @@ impl WorkspaceStruct {
                             }
                             Some(MacroDefinition {
                                 params: Some(pars), ..
-                            }) if args
-                                .as_ref()
-                                .is_some_and(|args| args.items.len() != pars.len()) =>
+                            }) if let Some(args) = args.as_deref()
+                                && args.items.len() != pars.len() =>
                             {
                                 let expected = pars.len();
-                                let too_many = args.as_ref().unwrap().items.len() > expected;
+                                let too_many = args.items.len() > expected;
                                 dones.note_unresolved(
-                                    move |name, range| {
+                                    move |name| {
                                         if too_many {
                                             TypeErrorKind::MacroTooManyArguments { name, expected }
                                         } else {
                                             TypeErrorKind::MacroTooFewArguments { name, expected }
                                         }
-                                        .at(range)
                                     },
                                     name.print(),
                                     &origin,
@@ -838,17 +788,13 @@ impl WorkspaceStruct {
                                 params: Some(pars),
                                 body,
                                 ..
-                            }) if args.is_some() => {
-                                let args = args.as_deref().unwrap();
+                            }) if let Some(args) = args.as_deref() => {
                                 let mut param_map: Vec<(&String, String, Origin, bool)> = pars
                                     .iter()
                                     .zip(args.items.iter())
                                     .map(|(par, arg)| {
-                                        let arg_origin = if precise {
-                                            origin.with_range(at(arg.start)..at(arg.end))
-                                        } else {
-                                            origin.clone()
-                                        };
+                                        let arg_origin =
+                                            origin.narrowed(precise, at(arg.start)..at(arg.end));
                                         (par, arg.print(), arg_origin, precise)
                                     })
                                     .collect();
@@ -930,21 +876,13 @@ impl WorkspaceStruct {
                     }
                     // Only `text` is pushed, so a precise origin is narrowed past the `##lit(`.
                     MacroRedex::Lit(open, text, _) => {
-                        let piece = if precise {
-                            let start = origin.range.start + open.print().len();
-                            origin.with_range(start..start + text.print().len())
-                        } else {
-                            origin.clone()
-                        };
+                        let start = origin.range.start + open.print().len();
+                        let piece = origin.narrowed(precise, start..start + text.print().len());
                         dones.push(&text.print(), &piece, precise)
                     }
                     MacroRedex::BeginLit(open, text, _) => {
-                        let piece = if precise {
-                            let start = origin.range.start + open.print().len();
-                            origin.with_range(start..start + text.print().len())
-                        } else {
-                            origin.clone()
-                        };
+                        let start = origin.range.start + open.print().len();
+                        let piece = origin.narrowed(precise, start..start + text.print().len());
                         dones.push(&text.print(), &piece, precise)
                     }
                     // A comment included: matched whole, nothing in it expands, and a check may
@@ -973,7 +911,7 @@ impl WorkspaceStruct {
             return self.expand_text(definitions, text, origin);
         }
         if self.error_names.borrow().is_none() {
-            let (names, _, _) = self.resolve_class_includes(&["%occErrors".to_string()]);
+            let (names, _, _) = self.resolve_class_includes(&["%occErrors"]);
             *self.error_names.borrow_mut() = Some(names);
         }
         let error_names = self.error_names.borrow();
@@ -1004,7 +942,7 @@ impl WorkspaceStruct {
         text: &str,
         origin: Option<&Origin>,
     ) -> Result<DoneList, tygr::Error> {
-        let mut dones = DoneList::new();
+        let mut dones = DoneList::default();
         let units = <Vec<Ranged<MacroedUnit>>>::parse(text)?;
         let mut todos = TodoList::new(match origin {
             Some(origin) => precise_items(&units, |range| {
@@ -1054,13 +992,10 @@ impl WorkspaceStruct {
             _ => {
                 let expansion = (expanded != written).then(|| expanded.to_string());
                 dones.note_unresolved(
-                    move |written, range| {
-                        TypeErrorKind::UndecidedIf {
-                            directive,
-                            condition: written,
-                            expansion: Expansion(expansion.clone()),
-                        }
-                        .at(range)
+                    move |written| TypeErrorKind::UndecidedIf {
+                        directive,
+                        condition: written,
+                        expansion: Expansion(expansion.clone()),
                     },
                     written.to_string(),
                     &item.1,
@@ -1071,7 +1006,7 @@ impl WorkspaceStruct {
         self.resolve_branch(definitions, todos, dones, decided)
     }
 
-    // Keeps a taken branch (discarding the rest of the chain via take_branch+skip_branch); drops
+    // Keeps a taken branch (discarding the rest of the chain); drops
     // a dropped one and tries the closing `#elseif` in turn.
     fn resolve_branch(
         &self,
@@ -1081,14 +1016,15 @@ impl WorkspaceStruct {
         taken: bool,
     ) -> Result<(), tygr::Error> {
         if taken {
-            let (branch, mut end) = take_branch(todos);
+            let mut branch = Vec::new();
+            let mut end = scan_branch(todos, |item| branch.push(item));
             while !matches!(end, BranchEnd::EndIf) {
-                end = skip_branch(todos);
+                end = scan_branch(todos, |_| {});
             }
             todos.push_items(branch);
             return Ok(());
         }
-        match skip_branch(todos) {
+        match scan_branch(todos, |_| {}) {
             BranchEnd::EndIf | BranchEnd::Else => Ok(()),
             BranchEnd::Elseif(elseif) => self.resolve_if(definitions, todos, dones, *elseif),
         }
@@ -1099,14 +1035,14 @@ impl WorkspaceStruct {
         uri: &str,
         src: &str,
     ) -> Result<(Routine, SourceMap, MacroDefinitions), Vec<Diagnostic>> {
-        let mut dones = DoneList::new();
+        let mut dones = DoneList::default();
         let result = self.expand_rtn_helper(src, &mut dones);
         let failed_include = !dones.failed_includes.is_empty();
         let map = dones.into_source_map(src);
         match result {
             Ok((routine, definitions)) => Ok((routine, map, definitions)),
             // A macro left unexpanded by an unresolved `#include` often doesn't re-parse (same
-            // failure mode `note_unresolved_include` already calls out for `#include` itself) --
+            // failure mode `note_failed_include` already calls out for `#include` itself) --
             // report the missing include(s), the actionable root cause, instead of the resulting
             // generic parse error. Anything else noted (an undecided `#if`, a call's arity) leaves
             // the text as written, so the parse error is the routine's own.
@@ -1120,17 +1056,18 @@ impl WorkspaceStruct {
 
     pub(crate) fn resolve_class_includes(
         &self,
-        names: &[String],
+        names: &[impl AsRef<str>],
     ) -> (MacroDefinitions, Vec<FailedInclude>, HashSet<String>) {
-        let mut definitions = Definitions::new();
+        let mut definitions = Definitions::default();
         let mut failed = Vec::new();
         let mut include_names = HashSet::new();
         for name in names {
-            include_names.insert(name.clone());
+            let name = name.as_ref();
+            include_names.insert(name.to_string());
             match self.resolve_include(name) {
                 Ok(Some(include)) => {
                     let (inc_uri, inc_text, inc_units) = &*include;
-                    let mut dones = DoneList::new();
+                    let mut dones = DoneList::default();
                     dones.note_included_file(inc_uri.clone(), inc_text);
                     let mut todos = TodoList::new(precise_items(inc_units, |range| {
                         Origin::top_level(0..0).for_included_file(inc_uri.clone(), range)
@@ -1140,8 +1077,7 @@ impl WorkspaceStruct {
                     include_names.extend(dones.include_names);
                     failed.extend(dones.failed_includes);
                 }
-                Ok(None) => failed.push((name.clone(), None)),
-                Err(reason) => failed.push((name.clone(), Some(reason))),
+                other => failed.push((name.to_string(), other.err())),
             }
         }
         (definitions.into_own(), failed, include_names)
@@ -1166,8 +1102,7 @@ impl WorkspaceStruct {
         self.implicit_definitions
             .borrow_mut()
             .get_or_insert_with(|| {
-                let (definitions, _, names) =
-                    self.resolve_class_includes(&implicit_includes(CLASS_IMPLICIT_INCLUDES));
+                let (definitions, _, names) = self.resolve_class_includes(CLASS_IMPLICIT_INCLUDES);
                 (definitions, names)
             })
             .clone()
@@ -1184,8 +1119,10 @@ impl WorkspaceStruct {
         base_definitions: &'b MacroDefinitions,
         body_macros: &BodyMacros,
     ) -> Result<(String, SourceMap, Definitions<'b>, BodyMacros), Diagnostic> {
-        let mut dones = DoneList::new();
-        dones.body_macros = body_macros.methods.clone();
+        let mut dones = DoneList {
+            body_macros: body_macros.methods.clone(),
+            ..Default::default()
+        };
         // Carried definitions join the layer; its final state is what the next method inherits.
         let mut definitions = Definitions::over(base_definitions);
         for (name, definition) in &body_macros.definitions {
@@ -1330,7 +1267,7 @@ fn substitute_macro_body<'a>(
     }
     let mut items = Vec::new();
     for unit in <Vec<Ranged<MacroedUnit>>>::parse(&text)? {
-        let overlapping = bounds
+        let mut overlapping = bounds
             .iter()
             .filter(|(start, end, _)| *start < unit.end && unit.start < *end);
         match unit.deref() {
@@ -1341,19 +1278,16 @@ fn substitute_macro_body<'a>(
                     for part in <Vec<Ranged<MacroedUnit>>>::parse(piece)? {
                         // A precise span's text sits at its origin, so a part of it is at the
                         // same offset into the origin.
-                        let origin = if span.precise {
-                            let at = span.origin.range.start + (piece_start - start);
-                            span.origin.with_range(at + part.start..at + part.end)
-                        } else {
-                            span.origin.clone()
-                        };
+                        let at = span.origin.range.start + (piece_start - start);
+                        let origin = span
+                            .origin
+                            .narrowed(span.precise, at + part.start..at + part.end);
                         items.push((Cow::Owned(part.into_inner()), origin, span.precise));
                     }
                 }
             }
             // Inside one precise span, as precise as a part of it; across spans, the call's.
             MacroedUnit::Redex(_) => {
-                let mut overlapping = overlapping;
                 let (origin, precise) = match (overlapping.next(), overlapping.next()) {
                     (Some((start, _, span)), None) if span.precise => {
                         let at = span.origin.range.start + (unit.start - start);
@@ -1369,9 +1303,10 @@ fn substitute_macro_body<'a>(
     Ok(items)
 }
 
-// Builds the diagnostic for something left unresolved, once its source range is known.
-type UnresolvedError = Box<dyn Fn(String, bindings::Range) -> crate::check::TypeError>;
+// Builds the diagnostic's kind for something left unresolved; `into_source_map` places it.
+type UnresolvedError = Box<dyn Fn(String) -> TypeErrorKind>;
 
+#[derive(Default)]
 struct DoneList {
     text: String,
     map: SourceMapVec,
@@ -1390,48 +1325,24 @@ struct DoneList {
 }
 
 impl DoneList {
-    fn new() -> Self {
-        Self {
-            text: String::new(),
-            map: Vec::new(),
-            included: HashMap::new(),
-            invocations: Vec::new(),
-            unresolved: Vec::new(),
-            failed_includes: Vec::new(),
-            include_directives: Vec::new(),
-            include_names: HashSet::new(),
-            body_macros: HashMap::new(),
-        }
-    }
-
-    fn note_unresolved_include(&mut self, name: String, origin: &Origin) {
-        self.failed_includes.push((name.clone(), None));
-        self.note_unresolved(
-            |name, range| TypeErrorKind::CannotFindInclude { name }.at(range),
-            name,
-            origin,
-        );
-    }
-
-    fn note_lookup_failed(&mut self, name: String, reason: String, origin: &Origin) {
-        self.failed_includes
-            .push((name.clone(), Some(reason.clone())));
-        let make = move |name, range| {
-            TypeErrorKind::IrisLookupFailed {
+    fn note_failed_include(&mut self, name: String, reason: Option<String>, origin: &Origin) {
+        self.failed_includes.push((name.clone(), reason.clone()));
+        let make = move |name| match &reason {
+            None => TypeErrorKind::CannotFindInclude { name },
+            Some(reason) => TypeErrorKind::IrisLookupFailed {
                 lookup: IrisLookup {
                     kind: DocKind::Inc,
                     name,
                 },
                 reason: reason.clone(),
-            }
-            .at(range)
+            },
         };
         self.note_unresolved(make, name, origin);
     }
 
     fn note_unresolved(
         &mut self,
-        make: impl Fn(String, bindings::Range) -> crate::check::TypeError + 'static,
+        make: impl Fn(String) -> TypeErrorKind + 'static,
         name: String,
         origin: &Origin,
     ) {
@@ -1478,22 +1389,15 @@ impl DoneList {
                     .get(..4)
                     .is_some_and(|w| w.eq_ignore_ascii_case("#dim"))
             {
-                let piece = if precise {
-                    origin.with_range(origin.range.start + done..origin.range.start + i)
-                } else {
-                    origin.clone()
-                };
+                let piece =
+                    origin.narrowed(precise, origin.range.start + done..origin.range.start + i);
                 self.push(&text[done..i], &piece, precise);
                 self.push(" ", origin, false);
                 done = i;
             }
             at_line_start = ch == '\n';
         }
-        let piece = if precise {
-            origin.with_range(origin.range.start + done..origin.range.end)
-        } else {
-            origin.clone()
-        };
+        let piece = origin.narrowed(precise, origin.range.start + done..origin.range.end);
         self.push(&text[done..], &piece, precise);
     }
 
@@ -1524,13 +1428,11 @@ impl DoneList {
             .unresolved
             .into_iter()
             .filter_map(|(make, name, origin)| {
-                let mut chain = vec![&origin];
-                while let Some(parent) = chain.last()?.parent.as_deref() {
-                    chain.push(parent);
-                }
+                let mut chain: Vec<_> =
+                    std::iter::successors(Some(&origin), |o| o.parent.as_deref()).collect();
                 let top = chain.pop()?;
                 let mut diagnostic: Diagnostic =
-                    make(name, map.range_in(&top.uri, &top.range)?).into();
+                    make(name).at(map.range_in(&top.uri, &top.range)?).into();
                 for hop in chain.into_iter().rev() {
                     diagnostic
                         .related_information
@@ -1564,17 +1466,6 @@ impl<'a> TodoList<'a> {
         self.0.pop()
     }
 
-    // Pushes `included`, all sharing `origin` and marked imprecise (no finer-grained source to
-    // point at within it).
-    fn push(&mut self, included: Vec<MacroedUnit>, origin: Origin) {
-        self.0.extend(
-            included
-                .into_iter()
-                .map(|x| (Cow::Owned(x), origin.clone(), false))
-                .rev(),
-        );
-    }
-
     fn push_items(&mut self, items: Vec<TodoItem<'a>>) {
         self.0.extend(items.into_iter().rev());
     }
@@ -1590,7 +1481,7 @@ fn precise_items<'a>(
         .collect()
 }
 
-// What closes a decided-false `#if`/`#elseif` branch, as found by `skip_branch`.
+// What closes a decided-false `#if`/`#elseif` branch, as found by `scan_branch`.
 enum BranchEnd<'a> {
     EndIf,
     // Its body is left in `todos` to flow normally.
@@ -1623,16 +1514,6 @@ fn scan_branch<'a>(todos: &mut TodoList<'a>, mut keep: impl FnMut(TodoItem<'a>))
         keep(item);
     }
     BranchEnd::EndIf
-}
-
-fn skip_branch<'a>(todos: &mut TodoList<'a>) -> BranchEnd<'a> {
-    scan_branch(todos, |_| {})
-}
-
-fn take_branch<'a>(todos: &mut TodoList<'a>) -> (Vec<TodoItem<'a>>, BranchEnd<'a>) {
-    let mut taken = Vec::new();
-    let end = scan_branch(todos, |item| taken.push(item));
-    (taken, end)
 }
 
 fn define(
