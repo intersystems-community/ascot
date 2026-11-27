@@ -257,10 +257,7 @@ fn relocate_method_ranged<T>(
 ) -> Vec<(bindings::Range, T)> {
     entries
         .into_iter()
-        .filter_map(|(range, it)| {
-            let (range, fidelity) = source_map.map_lsp_range(range)?;
-            (fidelity != Fidelity::Inexact).then(|| (shifter.range(range), it))
-        })
+        .filter_map(|(range, it)| Some((shifter.range(source_map.map_in_source(range)?), it)))
         .collect()
 }
 

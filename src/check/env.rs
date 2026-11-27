@@ -2165,10 +2165,7 @@ pub(crate) fn labels_of(map: &SourceMap, routine: &cos::Routine, uri: Option<&st
         .filter_map(|elem| crate::details::routine_element_kind(&map.expanded_olc, elem))
         .map(|details| {
             let mut proc = details.to_ty_procedure(uri);
-            proc.declared_at = proc.declared_at.and_then(|range| {
-                let (range, fidelity) = map.map_lsp_range(range)?;
-                (fidelity != Fidelity::Inexact).then_some(range)
-            });
+            proc.declared_at = proc.declared_at.and_then(|range| map.map_in_source(range));
             (
                 details.name.it.clone(),
                 TyProcedureOrAny::Procedure(Arc::new(proc)),
