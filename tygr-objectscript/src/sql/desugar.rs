@@ -339,6 +339,12 @@ impl<K, T: Arg, U: Arg> Arg for (K, T, U) {
     }
 }
 
+impl<T: Arg> Arg for Box<T> {
+    fn args(self, out: &mut Vec<core::ValueExpression>) {
+        (*self).args(out)
+    }
+}
+
 impl<T: Arg> Arg for Parenthesized<T> {
     fn args(self, out: &mut Vec<core::ValueExpression>) {
         self.wrapped.args(out)
@@ -359,11 +365,9 @@ macro_rules! shapes {
 shapes! {
     RR<T1, T2> { arg1 arg2 }
     RRR<T1, T2, T3> { arg1 arg2 arg3 }
-    RRRR<T1, T2, T3, T4> { arg1 arg2 arg3 arg4 }
     RO<T1, T2> { arg1 arg2 }
     ROO<T1, T2, T3> { arg1 rest }
     RRO<T1, T2, T3> { arg1 arg2 arg3 }
-    RROO<T1, T2, T3, T4> { arg1 arg2 rest }
 }
 
 /// `POSITION(a IN b)` has the arguments of `CHARINDEX(a, b)`.
@@ -374,10 +378,11 @@ impl Arg for sugar::PositionArgs {
     }
 }
 
-impl Arg for sugar::SubstringArgsInternal {
+impl Arg for sugar::SubstringFrom {
     fn args(self, out: &mut Vec<core::ValueExpression>) {
         self.expr.args(out);
-        self.rest.args(out)
+        self.from.args(out);
+        self.length.args(out)
     }
 }
 

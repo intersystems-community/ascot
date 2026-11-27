@@ -672,6 +672,7 @@ const OWN_SYNTAX: &[&str] = &[
     "TIMESTAMPDIFF",
     "TO_VECTOR",
     "TRIM",
+    "POSITION",
     "CURRENT_TIMESTAMP",
     "CURRENT_TIME",
     "XMLCONCAT",
@@ -711,34 +712,8 @@ const OWN_SYNTAX: &[&str] = &[
     "LAG",
 ];
 
-/// The functions the core calls by name; the full level, where they have their own syntax, shadows this.
-const SCALAR_FUNCTIONS: &[&str] = &[];
-
-/// Whether a call by name spells an ObjectScript function, `$EXTRACT(x, 1)`: the core's way; the full level,
-/// where each is a scalar function, shadows this.
-const DOLLAR_CALLS: bool = true;
-
 /// The functions called by name, the ObjectScript `$` functions among them (2026.2 takes these and no other
 /// `$` name): each its variant, keyword and argument shape, and the name the core calls where another.
-macro_rules! scalar_functions {
-    ($($Variant:ident $name:literal $Args:ty $(=> $core:literal)?;)*) => {
-        #[derive(Grammar, Clone)]
-        pub enum ScalarFunction {
-            $($Variant(Kw!($name), $Args),)*
-        }
-
-        const SCALAR_FUNCTIONS: &[&str] = &[$($name,)*];
-
-        fn scalar_function(function: Box<ScalarFunction>) -> core::ValueExpressionPrimary {
-            match *function {
-                $(ScalarFunction::$Variant(_, a) => call(scalar_functions!(@name $name $($core)?), args(a)),)*
-            }
-        }
-    };
-    (@name $name:literal) => { $name };
-    (@name $name:literal $core:literal) => { $core };
-}
-
 #[tygr_objectscript_macros::levels]
 pub mod leveled {
     pub type Parenthesized<T> = Wrap<(StringEq!("("), Space), T, (Space, StringEq!(")"))>;
@@ -801,8 +776,6 @@ pub mod leveled {
         ),
         Literal(Literal),
         Builtin(Box<Builtin>),
-        #[sugar(scalar_function)]
-        ScalarFunction(Box<ScalarFunction>),
         WindowFunction(Box<WindowFunction>),
         AggregateFunction(Box<AggregateFunction>),
         Unary {
@@ -815,8 +788,10 @@ pub mod leveled {
             op: PercentOperator,
             term: Box<Operand<Space1>>,
         },
-        #[sugar(string_operation)]
-        StringOperation(Box<StringOperation>),
+        #[sugar(position)]
+        Position(Kw!("POSITION"), Args<Box<PositionArgs>>),
+        #[sugar(substring_from)]
+        Substring(Kw!("SUBSTRING"), Args<Box<SubstringFrom>>),
         ExtrinsicFunction(Box<ExtrinsicFunction>),
         ParameterMarker(StringEq!("?")),
         Case(Box<Case>),
@@ -899,19 +874,15 @@ pub mod leveled {
         call(&op.print(), vec![arg])
     }
 
-    fn string_operation(operation: Box<StringOperation>) -> core::ValueExpressionPrimary {
-        let StringOperation { op, args } = *operation;
-        let (expr, _, truncation) = args.1.wrapped;
-        let truncation = match truncation {
-            TruncationLength::Const(constant) => {
-                let core::Nested::Bare(_, literal) = constant.desugar();
-                core::ValueExpressionPrimary::Literal(literal)
-            }
-            TruncationLength::HostVariable(host_var) => {
-                core::ValueExpressionPrimary::HostVariable(host_var)
-            }
-        };
-        call(&op.print(), vec![expr.desugar(), term(truncation)])
+    fn position(_: Kw!("POSITION"), args: Args<Box<PositionArgs>>) -> core::ValueExpressionPrimary {
+        call("CHARINDEX", desugar::args(args))
+    }
+
+    fn substring_from(
+        kw: Kw!("SUBSTRING"),
+        args: Args<Box<SubstringFrom>>,
+    ) -> core::ValueExpressionPrimary {
+        call(&kw.print(), desugar::args(args))
     }
 
     #[derive(Grammar)]
@@ -929,9 +900,10 @@ pub mod leveled {
         ZVersion(Kw!("$ZVERSION", "$ZV")),
     }
 
-    /// A function called by name, built-in or user-defined; a function with a syntax of its own cannot be
-    /// called otherwise (2026.2 rejects TIMESTAMPADD(:u, 1, a), CONCAT(b, b, b), ROUND(a) and COUNT(a, b)),
-    /// and a `$` name is a scalar function's or nothing (2026.2 rejects $ASCII(x)).
+    /// A function called by name: built-in, ObjectScript's (`$LENGTH`) or user-defined, in the default schema when
+    /// unqualified (2026.2 takes `Thrice(2)` for SQLUser.Thrice); what a built-in takes is the check's (A6071). A
+    /// function with a syntax of its own cannot be called otherwise (2026.2 rejects TIMESTAMPADD(:u, 1, a),
+    /// POSITION(a, b) and COUNT(a, b)).
     #[derive(Grammar)]
     #[tygr(validated)]
     pub struct Call {
@@ -940,127 +912,10 @@ pub mod leveled {
     }
 
     impl Validate for Call {
-        const REQUIREMENT: &'static str =
-            "not name a function with a syntax of its own or an unknown $ function";
+        const REQUIREMENT: &'static str = "not name a function with a syntax of its own";
         fn validate(&self) -> bool {
-            let name = self.name.print().to_uppercase();
-            (DOLLAR_CALLS || self.name.dollar.is_none())
-                && !OWN_SYNTAX.contains(&name.as_str())
-                && !SCALAR_FUNCTIONS.contains(&name.as_str())
+            !OWN_SYNTAX.contains(&self.name.print().to_uppercase().as_str())
         }
-    }
-
-    /// The names the full level spells; a const stays in the full level alone, so the core sees the list above.
-    const DOLLAR_CALLS: bool = false;
-
-    scalar_functions! {
-        PercentObject "%OBJECT" Args<ValueExpression>;
-        PercentOid "%OID" Args<ValueExpression>;
-        Similarity "%SIMILARITY" Args<RR>;
-        Abs "ABS" Args<ValueExpression>;
-        Ascii "ASCII" Args<ValueExpression>;
-        Ceiling "CEILING" Args<ValueExpression>;
-        CharacterLength "CHARACTER_LENGTH" Args<ValueExpression>;
-        CharIndex "CHARINDEX" Args<RRO>;
-        CharLength "CHAR_LENGTH" Args<ValueExpression>;
-        Char "CHAR" Args<ValueExpression>;
-        Coalesce "COALESCE" Args1Plus;
-        Concat "CONCAT" Args<RR>;
-        Convert "CONVERT" Args<RRO>;
-        DataLength "DATALENGTH" Args<ValueExpression>;
-        Date "DATE" Args<ValueExpression>;
-        Day "DAY" Args<ValueExpression>;
-        Decode "DECODE" Args1Plus;
-        Embedding "EMBEDDING" Args<RO>;
-        Floor "FLOOR" Args<ValueExpression>;
-        GetDate "GETDATE" Args<Option<ValueExpression>>;
-        GetUtcDate "GETUTCDATE" Args<Option<ValueExpression>>;
-        Greatest "GREATEST" Args1Plus;
-        HashBytes "HASHBYTES" Args<RR>;
-        IfNull "IFNULL" Args<RRO>;
-        Instr "INSTR" Args<RROO>;
-        IsNull "ISNULL" Args<RR>;
-        IsNumeric "ISNUMERIC" Args<ValueExpression>;
-        LastDay "LAST_DAY" Args<ValueExpression>;
-        LastIdentity "LAST_IDENTITY" Args<()>;
-        LCase "LCASE" Args<ValueExpression>;
-        Least "LEAST" Args1Plus;
-        Left "LEFT" Args<RR>;
-        Len "LEN" Args<ValueExpression>;
-        Length "LENGTH" Args<ValueExpression>;
-        Lower "LOWER" Args<ValueExpression>;
-        LPad "LPAD" Args<RRO>;
-        LTrim "LTRIM" Args<ValueExpression>;
-        Month "MONTH" Args<ValueExpression>;
-        Now "NOW" Args<()>;
-        NullIf "NULLIF" Args<RR>;
-        Nvl "NVL" Args<RR>;
-        PatIndex "PATINDEX" Args<RR>;
-        Position "POSITION" Args<PositionArgs> => "CHARINDEX";
-        Power "POWER" Args<RR>;
-        Repeat "REPEAT" Args<RR>;
-        Replace "REPLACE" Args<RRR>;
-        Replicate "REPLICATE" Args<RR>;
-        Reverse "REVERSE" Args<ValueExpression>;
-        Right "RIGHT" Args<RR>;
-        Round "ROUND" Args<RRO>;
-        RPad "RPAD" Args<RRO>;
-        RTrim "RTRIM" Args<ValueExpression>;
-        Sign "SIGN" Args<ValueExpression>;
-        Space "SPACE" Args<ValueExpression>;
-        Str "STR" Args<ROO>;
-        String "STRING" Args1Plus;
-        Stuff "STUFF" Args<RRRR>;
-        Substr "SUBSTR" Args<RRO>;
-        Substring "SUBSTRING" SubstringArgs;
-        ToChar "TOCHAR" Args<RO>;
-        ToDate "TODATE" Args<RO>;
-        ToUSChar "TO_CHAR" Args<RO>;
-        ToUSDate "TO_DATE" Args<RO>;
-        ToNumber "TO_NUMBER" Args<Operand>;
-        ToTimestamp "TO_TIMESTAMP" Args<RO>;
-        UCase "UCASE" Args<ValueExpression>;
-        UnixTimestamp "UNIX_TIMESTAMP" Args<Option<ValueExpression>>;
-        VectorCosine "VECTOR_COSINE" Args<RR>;
-        VectorDotProduct "VECTOR_DOT_PRODUCT" Args<RR>;
-        Year "YEAR" Args<ValueExpression>;
-        DollarExtract "$EXTRACT" Args<ROO>;
-        DollarFind "$FIND" Args<RRO>;
-        DollarFNumber "$FNUMBER" Args<ROO>;
-        DollarJustify "$JUSTIFY" Args<RRO>;
-        DollarLength "$LENGTH" Args<RO>;
-        DollarList "$LIST" Args<ROO>;
-        DollarListBuild "$LISTBUILD" ArgsN;
-        DollarListData "$LISTDATA" Args<RO>;
-        DollarListFind "$LISTFIND" Args<RRO>;
-        DollarListFromString "$LISTFROMSTRING" Args<RO>;
-        DollarListGet "$LISTGET" Args<ROO>;
-        DollarListLength "$LISTLENGTH" Args<ValueExpression>;
-        DollarListSame "$LISTSAME" Args<RR>;
-        DollarListToString "$LISTTOSTRING" Args<RO>;
-        DollarMvFmt "$MVFMT" Args<RR>;
-        DollarMvFmts "$MVFMTS" Args<RR>;
-        DollarMvIconv "$MVICONV" Args<RR>;
-        DollarMvIconvs "$MVICONVS" Args<RR>;
-        DollarMvOconv "$MVOCONV" Args<RR>;
-        DollarMvOconvs "$MVOCONVS" Args<RR>;
-        DollarPiece "$PIECE" Args<RROO>;
-        DollarTranslate "$TRANSLATE" Args<RRO>;
-        TSqlDbName "$TSQL_DB_NAME" Args<()>;
-        TSqlError "$TSQL_ERROR" Args<()>;
-        TSqlFetchStatus "$TSQL_FETCH_STATUS" Args<()>;
-        TSqlGetUtcDate "$TSQL_GETUTCDATE" Args<()>;
-        TSqlHostName "$TSQL_HOST_NAME" Args<()>;
-        TSqlLockTimeout "$TSQL_LOCK_TIMEOUT" Args<()>;
-        TSqlNestLevel "$TSQL_NESTLEVEL" Args<()>;
-        TSqlServerName "$TSQL_SERVERNAME" Args<()>;
-        TSqlSpid "$TSQL_SPID" Args<()>;
-        TSqlSqlStatus "$TSQL_SQLSTATUS" Args<()>;
-        TSqlTranCount "$TSQL_TRANCOUNT" Args<()>;
-        TSqlVersion "$TSQL_VERSION" Args<()>;
-        TSqlNewId "$TSQL_NEWID" Args<()>;
-        TSqlObjectId "$TSQL_OBJECT_ID" Args<ValueExpression>;
-        TSqlObjectName "$TSQL_OBJECT_NAME" Args<ValueExpression>;
     }
 
     /// A function without parentheses; `USER` takes an empty pair too (2026.2).
@@ -1202,23 +1057,6 @@ pub mod leveled {
 
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub struct RRRR<
-        T1: Grammar = ValueExpression,
-        T2: Grammar = ValueExpression,
-        T3: Grammar = ValueExpression,
-        T4: Grammar = ValueExpression,
-    > {
-        pub arg1: T1,
-        pub sep1: ArgSep,
-        pub arg2: T2,
-        pub sep2: ArgSep,
-        pub arg3: T3,
-        pub sep3: ArgSep,
-        pub arg4: T4,
-    }
-
-    #[derive(Grammar)]
-    #[tygr(inline)]
     pub struct RO<T1: Grammar = ValueExpression, T2: Grammar = ValueExpression> {
         pub arg1: T1,
         pub arg2: Option<(ArgSep, T2)>,
@@ -1246,20 +1084,6 @@ pub mod leveled {
         pub sep1: ArgSep,
         pub arg2: T2,
         pub arg3: Option<(ArgSep, T3)>,
-    }
-
-    #[derive(Grammar)]
-    #[tygr(inline)]
-    pub struct RROO<
-        T1: Grammar = ValueExpression,
-        T2: Grammar = ValueExpression,
-        T3: Grammar = ValueExpression,
-        T4: Grammar = ValueExpression,
-    > {
-        pub arg1: T1,
-        pub sep1: ArgSep,
-        pub arg2: T2,
-        pub rest: Option<(ArgSep, T3, Option<(ArgSep, T4)>)>,
     }
 
     pub type ArgsN = Args<Option<VecSep<ValueExpression, ArgSep>>>;
@@ -5626,27 +5450,10 @@ mod sugar {
         RuntimeIn(Kw!("%RUNTIMEIN")),
         RuntimeOut(Kw!("%RUNTIMEOUT")),
         Upper(Either<Kw!("%UPPER"), Kw!("UPPER")>),
-        StringOperator(StringOperator),
-    }
-
-    #[derive(Grammar, Clone)]
-    pub struct StringOperation {
-        pub op: StringOperator,
-        pub args: Args<(ValueExpression, ArgSep, TruncationLength)>,
-    }
-
-    #[derive(Grammar, Clone)]
-    pub enum StringOperator {
         String(Kw!("%STRING")),
         SqlString(Kw!("%SQLSTRING")),
         SqlUpper(Kw!("%SQLUPPER")),
         Truncate(Kw!("%TRUNCATE")),
-    }
-
-    #[derive(Grammar, Clone)]
-    pub enum TruncationLength {
-        Const(Nested<Literal>),
-        HostVariable(HostVariable),
     }
 
     #[derive(Grammar, Clone)]
@@ -5657,19 +5464,15 @@ mod sugar {
         pub haystack: ValueExpression,
     }
 
-    pub type SubstringArgs = Args<SubstringArgsInternal>;
+    /// The escape's SUBSTRING takes the FROM form or the comma form; called by name, the comma form is a Call.
+    pub type SubstringArgs = Args<Either<SubstringFrom, RRO>>;
 
+    /// `SUBSTRING(a FROM 1 FOR 2)`, the arguments of `SUBSTRING(a, 1, 2)`.
     #[derive(Grammar, Clone)]
-    pub struct SubstringArgsInternal {
+    pub struct SubstringFrom {
         pub expr: ValueExpression,
-        pub rest: Either<
-            (
-                (Space, Kw!("FROM"), Space),
-                ValueExpression,
-                Option<((Space, Kw!("FOR"), Space), ValueExpression)>,
-            ),
-            (ArgSep, ValueExpression, Option<(ArgSep, ValueExpression)>),
-        >,
+        pub from: ((Space, Kw!("FROM"), Space), ValueExpression),
+        pub length: Option<((Space, Kw!("FOR"), Space), ValueExpression)>,
     }
 
     pub type ODBCEscape = Wrap<(StringEq!("{"), Space), ODBCEscapeContent, (Space, StringEq!("}"))>;

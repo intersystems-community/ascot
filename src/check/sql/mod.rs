@@ -8,7 +8,7 @@ use either::Either;
 use tygr::{Prefix, Print, Ranged, Suffix, Vec1, Wrap};
 
 use crate::bindings::{ClassInfo, MemberKind, SqlProjection};
-use crate::check::errors::{SqlProcedureUse, TypeErrorKind};
+use crate::check::errors::{Arity, SqlProcedureUse, TypeErrorKind};
 use resolve::{Columns, Lookup, ProcInfo};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::sql::core::*;
@@ -18,6 +18,7 @@ use tygr_objectscript::sql::{
 };
 
 mod expr;
+mod functions;
 mod query;
 pub(crate) mod resolve;
 mod stat;
@@ -72,6 +73,21 @@ pub(crate) trait Resolver {
     fn table(&self, schema: &str, table: &str) -> Lookup<Option<Columns>>;
     fn procedure(&self, schema: &str, name: &str) -> Lookup<ProcInfo>;
     fn report(&self, kind: TypeErrorKind, range: &Range<usize>);
+}
+
+// A literal, host variable, parameter marker or macro, in parentheses or not.
+fn literal_or_host(expr: &ValueExpression) -> bool {
+    expr.rest.is_empty()
+        && match &expr.first {
+            Operand::Paren(_, inner) => literal_or_host(&inner.wrapped),
+            Operand::Plain(_, term) => matches!(
+                term.ranged,
+                ValueExpressionPrimary::Literal(_)
+                    | ValueExpressionPrimary::HostVariable(_)
+                    | ValueExpressionPrimary::ParameterMarker(_)
+                    | ValueExpressionPrimary::Macro(..)
+            ),
+        }
 }
 
 // An identifier's text, a delimited one without its quotes.
@@ -243,6 +259,45 @@ impl Walker<'_> {
         if let Some(check) = self.check.filter(|_| !self.unchecked) {
             resolve::call(check, &name_of(name), args, used);
         }
+    }
+
+    // A call by name: a function IRIS provides is held to what it takes, a `$` name must be one of
+    // those, a qualified name is a stored procedure's, and any other is a user-defined function's.
+    fn function(&mut self, call: &Call) {
+        let name = &call.name.name;
+        let args = call.args.1.wrapped.as_ref();
+        let count = args.map_or(0, |args| args.items.len());
+        if call.name.dollar.is_none() && !name.ranged.rest.is_empty() {
+            return self.call(name, count, SqlProcedureUse::Function);
+        }
+        let Some(check) = self.check.filter(|_| !self.unchecked) else {
+            return;
+        };
+        let dollar = if call.name.dollar.is_some() { "$" } else { "" };
+        let written = format!("{dollar}{}", text(&name.ranged.head));
+        let upper = written.to_uppercase();
+        let kind = match functions::signature(&upper) {
+            Some((min, max)) if count < min || max.is_some_and(|max| count > max) => {
+                let takes = Arity(min, max);
+                TypeErrorKind::SqlArgumentCount {
+                    name: written,
+                    takes,
+                }
+            }
+            Some(_)
+                if functions::LITERAL_LENGTH.contains(&upper.as_str())
+                    && args
+                        .and_then(|args| args.items.get(1))
+                        .is_some_and(|l| !literal_or_host(l)) =>
+            {
+                TypeErrorKind::SqlLengthNotLiteral { name: written }
+            }
+            None if !dollar.is_empty() => {
+                TypeErrorKind::SqlDollarFunctionNotFound { name: written }
+            }
+            _ => return,
+        };
+        check.report(kind, &name.range())
     }
 
     fn written<T: Walk + ?Sized>(&mut self, t: &T) {

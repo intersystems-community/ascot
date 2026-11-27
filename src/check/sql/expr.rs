@@ -1,7 +1,7 @@
 use either::Either;
 use tygr_objectscript::sql::core::*;
 
-use super::{SqlProcedureUse, Walk, Walker};
+use super::{Walk, Walker};
 
 impl<B: tygr::Grammar + Default> Walk for ValueExpression<B> {
     fn walk(&self, w: &mut Walker) {
@@ -32,8 +32,7 @@ impl Walk for ValueExpressionPrimary {
             ValueExpressionPrimary::Case(case) => case.walk(w),
             ValueExpressionPrimary::Query(query) => query.walk(w),
             ValueExpressionPrimary::Call(f) => {
-                let args = f.args.1.wrapped.as_ref().map_or(0, |args| args.items.len());
-                w.call(&f.name.name, args, SqlProcedureUse::Function);
+                w.function(f);
                 f.args.walk(w)
             }
             ValueExpressionPrimary::HostVariable(host_var) => host_var.walk(w),
@@ -96,25 +95,6 @@ impl<T1: Walk + tygr::Grammar, T2: Walk + tygr::Grammar, T3: Walk + tygr::Gramma
         self.arg2.walk(w);
         if let Some((_, arg3)) = &self.arg3 {
             arg3.walk(w)
-        }
-    }
-}
-
-impl<
-    T1: Walk + tygr::Grammar,
-    T2: Walk + tygr::Grammar,
-    T3: Walk + tygr::Grammar,
-    T4: Walk + tygr::Grammar,
-> Walk for RROO<T1, T2, T3, T4>
-{
-    fn walk(&self, w: &mut Walker) {
-        self.arg1.walk(w);
-        self.arg2.walk(w);
-        if let Some((_, arg3, arg4)) = &self.rest {
-            arg3.walk(w);
-            if let Some((_, arg4)) = arg4 {
-                arg4.walk(w)
-            }
         }
     }
 }
