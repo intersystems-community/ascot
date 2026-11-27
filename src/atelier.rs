@@ -162,10 +162,7 @@ impl IrisContext for AtelierContext {
                 // Without source, its OBJ says whether it exists.
                 None => routine_names(self, &format!("{name}.obj"))?
                     .contains(name)
-                    .then_some(RoutineInfo {
-                        labels: None,
-                        uri: None,
-                    }),
+                    .then_some(RoutineInfo::default()),
             })
         })
     }

@@ -213,13 +213,7 @@ mod tests {
                     "Unparsed".to_string(),
                     crate::routine_info("ROUTINE Unparsed [Type=INT]\n{\n", None),
                 ),
-                (
-                    "Compiled".to_string(),
-                    RoutineInfo {
-                        labels: None,
-                        uri: None,
-                    },
-                ),
+                ("Compiled".to_string(), RoutineInfo::default()),
             ]
             .into(),
             ..Default::default()

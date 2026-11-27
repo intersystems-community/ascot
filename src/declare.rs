@@ -56,13 +56,7 @@ impl RawAtelier {
         let routines = Mutex::new(
             all_rtn_names
                 .into_iter()
-                .map(|name| {
-                    let info = RoutineInfo {
-                        labels: None,
-                        uri: None,
-                    };
-                    (name, info)
-                })
+                .map(|name| (name, RoutineInfo::default()))
                 .collect::<BTreeMap<_, _>>(),
         );
         let failed = Mutex::new(None);

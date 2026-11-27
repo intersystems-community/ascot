@@ -26,7 +26,7 @@ mod wit_bind {
             "iris:ascot/common/variable-style": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/brace-breaks": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/require-description": [#[serde(rename_all = "camelCase")]],
-            "iris:ascot/common/inlay-hint-options": [#[serde(rename_all = "camelCase", deny_unknown_fields)]],
+            "iris:ascot/common/inlay-hint-options": [#[serde(rename_all = "camelCase", deny_unknown_fields)] #[derive(Default)]],
             "iris:ascot/common/keyword-form": [#[serde(rename_all = "kebab-case")]],
             "iris:ascot/common/keyword-case": [#[serde(rename_all = "kebab-case")]],
             "iris:ascot/common/and-operator": [#[serde(rename_all = "kebab-case")]],
@@ -34,6 +34,12 @@ mod wit_bind {
             "iris:ascot/common/workspace-edit": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/code-action": [#[serde(rename_all = "camelCase")]],
             "iris:ascot/common/type-annotation": [#[serde(rename_all = "kebab-case")]],
+            // Default goes record by record: additional_derives would reach the enums, which can't derive it.
+            "iris:ascot/common/position": [#[derive(Default, PartialOrd, Ord)]],
+            "iris:ascot/common/range": [#[derive(Default)]],
+            "iris:ascot/common/class-info": [#[derive(Default)]],
+            "iris:ascot/common/routine-info": [#[derive(Default)]],
+            "iris:ascot/common/sql-projection": [#[derive(Default)]],
         },
     });
 
@@ -375,54 +381,6 @@ impl From<&details::ClassDetails> for wit_bind::ClassInfo {
             property_class: k.property_class.clone(),
             sql_table_name: k.sql_table_name.clone(),
             sql_row_id_name: k.sql_row_id_name.clone(),
-        }
-    }
-}
-
-// Generated records take only the derives `additional_derives` gives them all, and an enum can't derive Default.
-#[allow(clippy::derivable_impls)]
-impl Default for wit_bind::ClassInfo {
-    fn default() -> Self {
-        Self {
-            doc: String::new(),
-            name: String::new(),
-            extends: vec![],
-            storage: None,
-            members: vec![],
-            include: vec![],
-            import: None,
-            uri: None,
-            class_type: None,
-            deprecated: false,
-            final_: false,
-            abstract_: false,
-            inheritance: None,
-            language: None,
-            procedure_block: None,
-            property_class: vec![],
-            sql_table_name: None,
-            sql_row_id_name: None,
-        }
-    }
-}
-
-#[allow(clippy::derivable_impls)]
-impl Default for wit_bind::InlayHintOptions {
-    fn default() -> Self {
-        Self {
-            type_annotation: None,
-        }
-    }
-}
-
-#[allow(clippy::derivable_impls)]
-impl Default for wit_bind::SqlProjection {
-    fn default() -> Self {
-        Self {
-            procedure: false,
-            name: None,
-            view: false,
-            view_name: None,
         }
     }
 }
