@@ -2211,11 +2211,12 @@ pub mod leveled {
         pub having: Option<(Space1, HavingClause)>,
     }
 
-    /// ORDER BY and a row limit after the query: 2026.2 reads LIMIT 1 ORDER BY a LIMIT 2 and LIMIT 1 LIMIT 2, the
-    /// first limit the SELECT's and the second the whole's, not ORDER BY a LIMIT 1 LIMIT 2 or LIMIT 1 LIMIT 2 ORDER BY a.
+    /// The statement's ORDER BY and the row limit after it, the only place a LIMIT is the whole's: 2026.2 reads
+    /// LIMIT 1 ORDER BY a LIMIT 2 as the SELECT's limit, then the whole's order and limit, and refuses a numeric
+    /// LIMIT right after a lone SELECT with TOP (-386); LIMIT 1 LIMIT 2 without ORDER BY, which it takes, is not read.
     #[derive(Grammar)]
     pub struct Tail {
-        pub order: Option<(Space1, OrderByClause)>,
+        pub order: OrderByClause,
         pub limit: Option<(Space1, RowLimitingClause)>,
     }
 
@@ -3065,20 +3066,15 @@ pub mod leveled {
     pub struct SelectStatement {
         pub with_clause: Option<(WithClause, Space)>,
         pub query: Query,
-        pub tail: Tail,
+        pub tail: Option<(Space1, Tail)>,
     }
 
-    /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383), not a parenthesized later one, and a
-    /// row limit over a lone SELECT with TOP (-386).
+    /// 2026.2 refuses a parenthesized first operand after WITH (SQLCODE -383), not a parenthesized later one.
     impl Validate for SelectStatement {
-        const REQUIREMENT: &'static str =
-            "begin with SELECT after WITH, and cut a lone TOP SELECT no further";
+        const REQUIREMENT: &'static str = "begin with SELECT after WITH";
         fn validate(&self) -> bool {
-            let first = &self.query.0.items[0];
-            let lone_top = matches!(&self.query.0.items[..], [QueryTerm::QuerySpecification(query)]
-                if matches!(query.ranged.body, SelectBody::Top(..)));
-            (self.with_clause.is_none() || matches!(first, QueryTerm::QuerySpecification(_)))
-                && !(lone_top && self.tail.limit.is_some())
+            self.with_clause.is_none()
+                || matches!(self.query.0.items[0], QueryTerm::QuerySpecification(_))
         }
     }
 
@@ -3090,7 +3086,7 @@ pub mod leveled {
             let mut query = self.query.desugar();
             let mut tail = self.tail.desugar();
             if let [core::QueryTerm::QuerySpecification(query)] = &mut query.0.items[..]
-                && tail.order.is_some()
+                && let Some((_, tail)) = &mut tail
                 && tail.limit.is_none()
                 && let core::SelectBody::Plain(_, limit) = &mut query.ranged.body
             {
@@ -4069,7 +4065,7 @@ pub mod leveled {
             where_clause: Option<(Space, WhereClause)>,
             group: Option<(Space, GroupByClause)>,
             having: Option<(Space, HavingClause)>,
-            tail: Tail,
+            tail: Option<(Space, Tail)>,
         },
     }
 
