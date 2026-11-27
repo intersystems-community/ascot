@@ -30,7 +30,7 @@ fn term_of<B: tygr::Grammar + Default>(
 }
 
 fn clauses(query: &core::QuerySpecification) -> &core::SelectClauses {
-    let core::SelectBody::Plain(clauses, _) = &query.body else {
+    let core::QuerySpecification::Plain { clauses, .. } = query else {
         panic!("TOP")
     };
     clauses

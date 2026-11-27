@@ -58,21 +58,28 @@ impl Walk for QuerySpecification {
     // In the order SQL evaluates the clauses, so that each name is bound before it is used.
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
-        let (top, clauses, tail): (_, _, &dyn Walk) = match &self.body {
-            SelectBody::Top(_, top, _, clauses, order) => (Some(top), clauses, order),
-            SelectBody::Plain(clauses, limit) => (None, clauses, limit),
+        let (select, clauses, tail): (_, _, &dyn Walk) = match self {
+            QuerySpecification::Top {
+                select,
+                clauses,
+                order,
+                ..
+            } => (select, clauses, order),
+            QuerySpecification::Plain {
+                select,
+                clauses,
+                limit,
+                ..
+            } => (select, clauses, limit),
         };
         clauses.from.walk(w);
         clauses.where_clause.walk(w);
         clauses.group.walk(w);
         clauses.having.walk(w);
-        for (_, option) in &self.options {
+        for (_, option) in &select.options {
             option.walk(w)
         }
-        self.quantifier.walk(w);
-        if let Some(top) = top {
-            top.walk(w)
-        }
+        select.quantifier.walk(w);
         clauses.select_list.walk(w);
         clauses.into.walk(w);
         tail.walk(w);
@@ -85,14 +92,6 @@ impl Walk for SelectOption {
         match self {
             SelectOption::RowLimit(_, value) | SelectOption::RowOffset(_, value) => value.walk(w),
             _ => {}
-        }
-    }
-}
-
-impl Walk for TopSpecification {
-    fn walk(&self, w: &mut Walker) {
-        if let TopSpecification::Count(count) = self {
-            count.walk(w)
         }
     }
 }
@@ -183,9 +182,10 @@ impl Walk for NamedTable {
 impl Walk for ParenthesizedTable {
     fn walk(&self, w: &mut Walker) {
         match self {
+            // The query first: a derived table is not in its own scope.
             ParenthesizedTable::Query(query, alias) => {
-                w.table(None, alias.as_ref());
-                query.walk(w)
+                query.walk(w);
+                w.table(None, alias.as_ref())
             }
             ParenthesizedTable::JoinedTable(joined) => joined.walk(w),
         }
@@ -217,16 +217,12 @@ impl Walk for SourceQuery {
 
 impl Walk for RowLimitingClause {
     fn walk(&self, w: &mut Walker) {
-        let RowLimitingClause::LimitOffset { limit, offset } = self;
-        limit.walk(w);
-        offset.walk(w)
-    }
-}
-
-impl Walk for LimitSpecification {
-    fn walk(&self, w: &mut Walker) {
-        if let LimitSpecification::Val(count) = self {
-            count.walk(w)
+        match self {
+            RowLimitingClause::LimitOffset { limit, offset } => {
+                limit.walk(w);
+                offset.walk(w)
+            }
+            RowLimitingClause::Offset(offset) => offset.walk(w),
         }
     }
 }
