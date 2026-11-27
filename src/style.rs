@@ -45,18 +45,14 @@ impl<T: DeserializeOwned> Kind<T> {
         let by_name = fields
             .iter()
             .filter_map(|(key, value)| {
-                let name = key.strip_prefix(prefix)?;
-                name.chars().next().filter(char::is_ascii_uppercase)?;
+                let name = named(key, prefix)?;
                 let mut merged = default.as_object().cloned().unwrap_or_default();
                 for (field, value) in value.as_object()? {
                     if !value.is_null() {
                         merged.insert(field.clone(), value.clone());
                     }
                 }
-                Some((
-                    name.to_ascii_lowercase(),
-                    serde_json::from_value(Value::Object(merged)).ok()?,
-                ))
+                Some((name, serde_json::from_value(Value::Object(merged)).ok()?))
             })
             .collect();
         let default = serde_json::from_value(default)
@@ -68,6 +64,13 @@ impl<T: DeserializeOwned> Kind<T> {
     fn of(&self, name: &str) -> &T {
         self.by_name.get(name).unwrap_or(&self.default)
     }
+}
+
+// `do` for `commandDo`: `None` for a key that names no keyword, `command` itself included.
+fn named(key: &str, prefix: &str) -> Option<String> {
+    let name = key.strip_prefix(prefix)?;
+    name.chars().next().filter(char::is_ascii_uppercase)?;
+    Some(name.to_ascii_lowercase())
 }
 
 impl KeywordStyles {
@@ -194,16 +197,11 @@ mod tests {
         }
     }
 
-    struct Spelling(Option<KeywordForm>, Option<KeywordCase>);
-
-    impl Spelling {
-        fn expected(&self, kw: &KeywordUse) -> Option<String> {
-            expected(self.0, self.1, kw)
-        }
-    }
-
-    fn style(form: Option<KeywordForm>, case: Option<KeywordCase>) -> Spelling {
-        Spelling(form, case)
+    fn style(
+        form: Option<KeywordForm>,
+        case: Option<KeywordCase>,
+    ) -> impl Fn(&KeywordUse) -> Option<String> {
+        move |kw| expected(form, case, kw)
     }
 
     fn function(text: &str, full: &'static str, abbr: Option<&'static str>) -> KeywordUse {
@@ -216,36 +214,25 @@ mod tests {
     #[test]
     fn form_alone_accepts_any_casing_and_suggests_the_documented_one() {
         let long = style(Some(KeywordForm::Long), None);
-        assert_eq!(long.expected(&kw("SET", "Set", Some("S"))), None);
-        assert_eq!(
-            long.expected(&kw("s", "Set", Some("S"))).as_deref(),
-            Some("Set")
-        );
+        assert_eq!(long(&kw("SET", "Set", Some("S"))), None);
+        assert_eq!(long(&kw("s", "Set", Some("S"))).as_deref(), Some("Set"));
         let short = style(Some(KeywordForm::Short), None);
-        assert_eq!(
-            short.expected(&kw("Set", "Set", Some("S"))).as_deref(),
-            Some("S")
-        );
-        assert_eq!(short.expected(&kw("while", "While", None)), None);
+        assert_eq!(short(&kw("Set", "Set", Some("S"))).as_deref(), Some("S"));
+        assert_eq!(short(&kw("while", "While", None)), None);
     }
 
     #[test]
     fn case_alone_keeps_the_form_written() {
         let lower = style(None, Some(KeywordCase::Lower));
-        assert_eq!(
-            lower.expected(&kw("S", "Set", Some("S"))).as_deref(),
-            Some("s")
-        );
-        assert_eq!(lower.expected(&kw("set", "Set", Some("S"))), None);
+        assert_eq!(lower(&kw("S", "Set", Some("S"))).as_deref(), Some("s"));
+        assert_eq!(lower(&kw("set", "Set", Some("S"))), None);
         let pascal = style(None, Some(KeywordCase::Pascal));
         assert_eq!(
-            pascal
-                .expected(&kw("tstart", "TStart", Some("Ts")))
-                .as_deref(),
+            pascal(&kw("tstart", "TStart", Some("Ts"))).as_deref(),
             Some("TStart")
         );
         assert_eq!(
-            pascal.expected(&kw("ts", "TStart", Some("Ts"))).as_deref(),
+            pascal(&kw("ts", "TStart", Some("Ts"))).as_deref(),
             Some("TS")
         );
     }
@@ -253,7 +240,7 @@ mod tests {
     #[test]
     fn pascal_spells_an_abbreviation_from_its_full_name() {
         let short = style(Some(KeywordForm::Short), Some(KeywordCase::Pascal));
-        let expected = |text, full, abbr| short.expected(&function(text, full, Some(abbr)));
+        let expected = |text, full, abbr| short(&function(text, full, Some(abbr)));
         assert_eq!(expected("list", "List", "LI").as_deref(), Some("Li"));
         assert_eq!(
             expected("ListBuild", "ListBuild", "LB").as_deref(),
@@ -266,24 +253,29 @@ mod tests {
         assert_eq!(expected("ZIncr", "ZIncrement", "ZINCR"), None);
     }
 
-    // `commandDo` for `do`, and back: `None` for a key that names no keyword, `command` itself included.
+    // `commandDo` for `do`.
     fn field(prefix: &str, name: &str) -> String {
         let (head, tail) = name.split_at(1);
         format!("{prefix}{}{tail}", head.to_ascii_uppercase())
     }
 
-    fn named(key: &str, prefix: &str) -> Option<String> {
-        let name = key.strip_prefix(prefix)?;
-        name.chars().next().filter(char::is_ascii_uppercase)?;
-        Some(name.to_ascii_lowercase())
+    fn fields_match(prefix: &str, names: &[String]) {
+        let json: serde_json::Map<String, Value> = names
+            .iter()
+            .map(|name| (field(prefix, name), serde_json::json!({})))
+            .collect();
+        parse(&Value::Object(json).to_string()).expect("every name has a field");
+        let Value::Object(fields) = serde_json::to_value(parse("{}").unwrap()).unwrap() else {
+            unreachable!()
+        };
+        for name in fields.keys().filter_map(|key| named(key, prefix)) {
+            assert!(names.contains(&name), "{name} names no {prefix}");
+        }
     }
 
     #[test]
     fn unset_style_accepts_everything() {
-        assert_eq!(
-            style(None, None).expected(&kw("sEt", "Set", Some("S"))),
-            None
-        );
+        assert_eq!(expected(None, None, &kw("sEt", "Set", Some("S"))), None);
     }
 
     #[test]
@@ -321,17 +313,7 @@ mod tests {
             .filter(|name| name.chars().all(|ch| ch.is_ascii_alphabetic()) && name.len() > 1)
             .map(|name| name.to_ascii_lowercase())
             .collect();
-        let json: serde_json::Map<String, Value> = names
-            .iter()
-            .map(|name| (field("command", name), serde_json::json!({})))
-            .collect();
-        parse(&Value::Object(json).to_string()).expect("every command has a field");
-        let Value::Object(fields) = serde_json::to_value(parse("{}").unwrap()).unwrap() else {
-            unreachable!()
-        };
-        for name in fields.keys().filter_map(|key| named(key, "command")) {
-            assert!(names.contains(&name), "{name} names no command");
-        }
+        fields_match("command", &names);
     }
 
     // The functions with a spelling (`FUNCTION_KEYWORDS` and `SIMPLE_FUNCTIONS`) are exactly
@@ -369,17 +351,7 @@ mod tests {
             );
         }
         let names: Vec<String> = spelled.iter().map(|f| f.to_ascii_lowercase()).collect();
-        let json: serde_json::Map<String, Value> = names
-            .iter()
-            .map(|name| (field("function", name), serde_json::json!({})))
-            .collect();
-        parse(&Value::Object(json).to_string()).expect("every function has a field");
-        let Value::Object(fields) = serde_json::to_value(parse("{}").unwrap()).unwrap() else {
-            unreachable!()
-        };
-        for name in fields.keys().filter_map(|key| named(key, "function")) {
-            assert!(names.contains(&name), "{name} names no function");
-        }
+        fields_match("function", &names);
     }
 
     #[test]
