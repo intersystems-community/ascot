@@ -83,9 +83,7 @@ pub enum SGapUnit {
 #[tygr(inline)]
 pub struct SGap(Raw<Vec<SGapUnit>>);
 
-#[derive(Grammar, Clone)]
-#[tygr(inline)]
-pub struct SGap1(Raw<Vec1<SGapUnit>>);
+pub type SGap1 = Raw<Vec1<SGapUnit>>;
 
 #[derive(Grammar, Clone)]
 pub struct LineComment {
@@ -131,9 +129,7 @@ impl SGap {
     }
 }
 
-#[derive(Grammar)]
-#[tygr(inline)]
-pub struct MGap(Raw<Vec<MGapUnit>>);
+pub type MGap = Raw<Vec<MGapUnit>>;
 
 #[derive(Grammar)]
 #[tygr(inline)]
@@ -159,13 +155,9 @@ pub enum LGap1Enum {
     Inline(SGap1),
 }
 
-#[derive(Grammar)]
-#[tygr(inline)]
-pub struct LGap1(Raw<LGap1Enum>);
+pub type LGap1 = Raw<LGap1Enum>;
 
-#[derive(Grammar)]
-#[tygr(inline)]
-pub struct LGap(Option<LGap1>);
+pub type LGap = Option<LGap1>;
 
 #[derive(Grammar, Clone)]
 #[tygr(inline)]
@@ -264,21 +256,6 @@ pub struct SGap1X<T> {
 
 impl<T> Deref for SGap1X<T> {
     type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.it
-    }
-}
-
-#[derive(Grammar)]
-#[tygr(inline)]
-pub struct XMGap<T> {
-    pub it: T,
-    after: MGap,
-}
-
-impl<T> Deref for XMGap<T> {
-    type Target = T;
-
     fn deref(&self) -> &Self::Target {
         &self.it
     }
@@ -490,6 +467,7 @@ pub enum SetTarget {
     CacheDirectCallback(CacheDirectCallback),
 }
 
+#[derive(Print)]
 pub enum SetTargetFun {
     Piece(PieceCall),
     Extract(ExtractCall),
@@ -526,7 +504,10 @@ impl Print for SetTarget {
                 args.print_to(buf);
             }
             SetTarget::Indirection(ind) => ind.print_to(buf),
-            SetTarget::Fun(fun) => fun.print_to(buf),
+            SetTarget::Fun(fun) => {
+                buf.push('$');
+                fun.print_to(buf);
+            }
             SetTarget::Special(var) => {
                 buf.push('$');
                 var.print_to(buf);
@@ -651,27 +632,6 @@ fn exp_arg_to_var_arg(
         })
         .transpose()?;
     Ok(arg)
-}
-
-impl SetTargetFun {
-    fn print_to(&self, buf: &mut String) {
-        buf.push('$');
-        match self {
-            SetTargetFun::Piece(c) => c.print_to(buf),
-            SetTargetFun::Extract(c) => c.print_to(buf),
-            SetTargetFun::List(c) => c.print_to(buf),
-            SetTargetFun::ListGet(c) => c.print_to(buf),
-            SetTargetFun::Bit(c) => c.print_to(buf),
-            SetTargetFun::Vector(c) => c.print_to(buf),
-            SetTargetFun::WExtract(c) => c.print_to(buf),
-            SetTargetFun::Property(c) => c.print_to(buf),
-            SetTargetFun::Sequence(c) => c.print_to(buf),
-            SetTargetFun::MV(c) => c.print_to(buf),
-            SetTargetFun::ListBuild(c) => c.print_to(buf),
-            SetTargetFun::Undocumented(c) => c.print_to(buf),
-            SetTargetFun::Simple(c) => c.print_to(buf),
-        }
-    }
 }
 
 impl SetTarget {
@@ -1731,8 +1691,6 @@ pub enum Block {
     Command(SGap1X<VecSep<Ranged<Command>, SGap1>>),
 }
 
-char_class!(pub IsNotSpaceChar, "not_space", |ch| ch != ' ');
-
 #[derive(Grammar)]
 pub struct ElseIfBranch {
     pub kw: Ranged<KwElseIf>,
@@ -1925,8 +1883,7 @@ pub struct GlobalVariableNameStruct {
         StringOf1<IsLetterOrNumberIncludingUnicode>,
     )>,
 }
-char_class!(pub IsGlobalVariableNameFirst, "letter or percent sign", |c| is_letter(c)
-    || c == '%');
+type IsGlobalVariableNameFirst = IsLocalVariableNameFirst;
 char_class!(pub IsLetterOrNumber, "letter or number", |c| c
     .is_ascii_alphanumeric());
 
@@ -1935,13 +1892,9 @@ char_class!(pub IsLetterOrNumber, "letter or number", |c| c
 pub struct ClassMemberName(Raw<ClassMemberNameStruct>);
 #[derive(Grammar)]
 pub struct ClassMemberNameStruct {
-    first: IsClassMemberNameFirst,
-    remaining: StringOf<IsClassMemberNameRemaining>,
+    first: IsLetterOrPercent,
+    remaining: StringOf<IsLetterOrNumberIncludingUnicode>,
 }
-char_class!(pub IsClassMemberNameFirst, "letter or percent sign", |c| c
-    .is_ascii_alphabetic()
-    || c == '%');
-char_class!(pub IsClassMemberNameRemaining, "letter or number", |c| is_letter(c) || c.is_ascii_digit());
 
 #[derive(Grammar)]
 #[tygr(inline)]
@@ -2003,8 +1956,6 @@ pub struct BitLogicAtom {
 
 pub type BitLogicExpr = VecSep<Ranged<BitLogicAtom>, MGapXMGap<BitLogicOp>>;
 
-char_class!(pub IsAny, "any", |_c| true);
-
 char_class!(pub IsSymbolFirst, "ObjectScript symbols (i.e., letters or %)", |ch| is_letter(ch) || ch == '%');
 char_class!(pub IsSymbolRest, "letter/digit/%", |ch| {
     is_letter(ch) || ch.is_ascii_digit() || ch == '%'
@@ -2012,7 +1963,6 @@ char_class!(pub IsSymbolRest, "letter/digit/%", |ch| {
 char_class!(pub IsKeywordValue, "keyword name (i.e., letters, digits, or one of \"_%./-\")", |ch| is_letter(ch) || ch.is_ascii_digit() || matches!(ch, '_' | '/' | '-' | '%' | '.'));
 char_class!(pub IsWhitespace, "whitespace", |ch| ch.is_whitespace());
 char_class!(pub IsNotNL, "not_newline", |ch| ch != '\n');
-char_class!(pub IsNotStar, "not_star", |ch| ch != '*');
 
 pub type Space = Hidden<StringOf<IsWhitespace>>;
 pub type Space1 = Hidden<StringOf1<IsWhitespace>>;
@@ -2048,21 +1998,21 @@ type BT = StringEq!("`");
 #[derive(Grammar)]
 pub struct JSDQStringStruct<Embeded: Grammar> {
     open: DQ,
-    content: Vec<Either<(BS, IsAny), Either<Embeded, IsJSDQStringSafe>>>,
+    content: Vec<Either<(BS, AnyChar), Either<Embeded, IsJSDQStringSafe>>>,
     close: DQ,
 }
 
 #[derive(Grammar)]
 pub struct JSSQStringStruct<Embeded: Grammar> {
     open: SQ,
-    content: Vec<Either<(BS, IsAny), Either<Embeded, IsJSSQStringSafe>>>,
+    content: Vec<Either<(BS, AnyChar), Either<Embeded, IsJSSQStringSafe>>>,
     close: SQ,
 }
 
 #[derive(Grammar)]
 pub struct JSBTStringStruct<Embeded: Grammar> {
     open: BT,
-    content: Vec<Either<(BS, IsAny), Either<Embeded, IsJSBTStringSafe>>>,
+    content: Vec<Either<(BS, AnyChar), Either<Embeded, IsJSBTStringSafe>>>,
     close: BT,
 }
 
@@ -2155,7 +2105,6 @@ impl Deref for PackageAndClassName {
     }
 }
 
-pub type PackageName = PackageAndClassName;
 pub type ClassName = PackageAndClassName;
 
 #[derive(Grammar)]
@@ -2512,9 +2461,7 @@ impl<Entry: Grammar> KeywordList<Entry> {
     }
 }
 
-#[derive(Grammar)]
-#[tygr(inline)]
-pub struct CommaWithSpace(Raw<(StringEq!(","), Space)>);
+pub type CommaWithSpace = Raw<(StringEq!(","), Space)>;
 
 // Ranged so a diagnostic about one keyword (`[ CompileAfter = , ... ]`) can point at it.
 pub type KeywordEntryWithSpace<Entry = KeywordEntry> = Ranged<Suffix<Entry, Space>>;
@@ -2550,9 +2497,7 @@ impl KeywordEntry {
 
 // Where a keyword's name or value ends: before anything but another name character, so that
 // `Final` doesn't match the start of `FinalFoo`, nor `persistent` of `persistentfoo`.
-#[derive(Grammar)]
-#[tygr(hidden)]
-pub struct KeywordEnd(NotFollowedBy<IsKeywordValue>);
+pub type KeywordEnd = Hidden<NotFollowedBy<IsKeywordValue>>;
 
 /// A flag keyword: `Name` sets it, `Not Name` clears it. `Name = 1` is no flag: IRIS refuses it on a
 /// member, and takes it on a class as a bare `Name` whatever the value.
@@ -2578,9 +2523,7 @@ impl<Name: Grammar> Flag<Name> {
     }
 }
 
-#[derive(Grammar)]
-#[tygr(hidden)]
-pub struct NoAssign(NotFollowedBy<Raw<(Space, StringEq!("="))>>);
+pub type NoAssign = Hidden<NotFollowedBy<Raw<(Space, StringEq!("="))>>>;
 
 /// The `0` or `1` of `ProcedureBlock = 1` and `ServerOnly = 0`.
 #[derive(Grammar)]
@@ -2884,11 +2827,7 @@ pub enum ProjectionKeyword {
     Member(MemberKeyword),
 }
 
-#[derive(Grammar)]
-#[tygr(inline)]
-pub enum ImportIncludeLCPrefix {
-    SS(StringEq!("//")),
-}
+pub type ImportIncludeLCPrefix = StringEq!("//");
 
 #[derive(Grammar)]
 pub enum DocumentLevelWhitespace {
@@ -2897,9 +2836,7 @@ pub enum DocumentLevelWhitespace {
     R(RangeComment),
 }
 
-#[derive(Grammar)]
-#[tygr(hidden)]
-pub struct ImportIncludeGap(pub Raw<Vec<DocumentLevelWhitespace>>);
+pub type ImportIncludeGap = Hidden<Raw<Vec<DocumentLevelWhitespace>>>;
 
 #[derive(Grammar)]
 pub struct Import {
@@ -3132,12 +3069,6 @@ pub enum CodeMode {
     Generator(StringEqCI!("Generator")),
 }
 
-impl Default for CodeMode {
-    fn default() -> Self {
-        Self::parse("Code").unwrap()
-    }
-}
-
 #[derive(Grammar, Clone)]
 pub enum MethodLanguage {
     Python(StringEqCI!("Python")),
@@ -3151,12 +3082,7 @@ pub enum MethodLanguage {
     MVBasic(StringEqCI!("MVBasic")),
 }
 
-impl Default for MethodLanguage {
-    fn default() -> Self {
-        Self::parse("objectscript").unwrap()
-    }
-}
-
+#[derive(Print)]
 pub struct Method {
     pub header: MethodHeader,
     pub body: Prefix<Space, Brace<Ranged<OSText>>>,
@@ -3276,13 +3202,6 @@ impl Parse for Method {
     }
 }
 
-impl Print for Method {
-    fn print_to(&self, buf: &mut String) {
-        self.header.print_to(buf);
-        self.body.print_to(buf);
-    }
-}
-
 impl Deref for Method {
     type Target = MethodHeader;
 
@@ -3381,12 +3300,6 @@ pub enum CallType {
     Output(StringEqCI!("Output")),
     ByRef(StringEqCI!("ByRef")),
     ByVal(StringEqCI!("ByVal")),
-}
-
-impl Default for CallType {
-    fn default() -> Self {
-        CallType::parse("ByVal").unwrap()
-    }
 }
 
 #[derive(Grammar)]
@@ -3762,13 +3675,6 @@ pub struct DoWhileCommand {
 }
 
 #[derive(Grammar)]
-pub struct DoCommand {
-    pub kw: KwDo,
-    pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<VecSep<DoArgument, CommaSep<LGap>>>>,
-}
-
-#[derive(Grammar)]
 pub struct IfCommand {
     pub kw: KwIf,
     pub cnds: Option<IfConditions>,
@@ -3788,47 +3694,6 @@ pub struct ForCommand {
     pub iter: Option<SGap1X<ForIterator>>,
     // Some older code does not have an assoicated block
     pub bdy: Option<Ranged<Block>>,
-}
-
-#[derive(Grammar)]
-pub struct GotoCommand {
-    pub kw: KwGoto,
-    pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<VecSep<GoToArg, CommaSep<LGap>>>>,
-}
-
-#[derive(Grammar)]
-pub struct BreakCommand {
-    pub kw: KwBreak,
-    pub pc: Option<PostCondition>,
-    pub exp: Option<CommandArgument<Expr>>,
-}
-
-#[derive(Grammar)]
-pub struct QuitCommand {
-    pub kw: KwQuit,
-    pub pc: Option<PostCondition>,
-    pub exp: Ranged<Option<CommandArgument<Expr>>>,
-}
-
-#[derive(Grammar)]
-pub struct ZQuitCommand {
-    pub kw: KwZQuit,
-    pub pc: Option<PostCondition>,
-    pub exp: Option<CommandArgument<Expr>>,
-}
-
-#[derive(Grammar)]
-pub struct ReturnCommand {
-    pub kw: KwReturn,
-    pub pc: Option<PostCondition>,
-    pub exp: Ranged<Option<CommandArgument<Expr>>>,
-}
-
-#[derive(Grammar)]
-pub struct ContinueCommand {
-    pub kw: KwContinue,
-    pub pc: Option<PostCondition>,
 }
 
 #[derive(Grammar)]
@@ -3853,34 +3718,6 @@ pub struct DimDeclaration {
 }
 
 #[derive(Grammar)]
-pub struct SetCommand {
-    pub kw: KwSet,
-    pub pc: Option<PostCondition>,
-    pub assignments: CommandArgument<VecSep<Ranged<AllowIndirection<SetArgument>>, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
-pub struct KillCommand {
-    pub kw: KwKill,
-    pub pc: Option<PostCondition>,
-    pub targets: Option<CommandArgument<VecSep<Ranged<AllowMacro<KillArgument>>, CommaSep<LGap>>>>,
-}
-
-#[derive(Grammar)]
-pub struct NewCommand {
-    pub kw: KwNew,
-    pub pc: Option<PostCondition>,
-    pub targets: Option<CommandArgument<VecSep<Ranged<NewArgument>, CommaSep<LGap>>>>,
-}
-
-#[derive(Grammar)]
-pub struct MergeCommand {
-    pub kw: KwMerge,
-    pub pc: Option<PostCondition>,
-    pub merge_arguments: CommandArgument<VecSep<Ranged<MergeArgument>, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
 pub struct TryCommand {
     pub kw_try: KwTry,
     pub b1: Ranged<Block>,
@@ -3893,187 +3730,10 @@ pub struct TryCommand {
 }
 
 #[derive(Grammar)]
-pub struct ThrowCommand {
-    pub kw: KwThrow,
-    pub pc: Option<PostCondition>,
-    pub e: Option<CommandArgument<Expr>>,
-}
-
-#[derive(Grammar)]
-pub struct ZTrapCommand {
-    pub kw: KwZTrap,
-    pub pc: Option<PostCondition>,
-    pub exp: Option<CommandArgument<Expr>>,
-}
-
-#[derive(Grammar)]
-pub struct ZZDumpCommand {
-    pub kw: KwZZDump,
-    pub pc: Option<PostCondition>,
-    pub exp: CommandArgument<VecSep<Expr, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
-pub struct WriteCommand {
-    pub kw: KwWrite,
-    pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<VecSep<WriteArg, CommaSep<LGap>>>>,
-}
-
-#[derive(Grammar)]
-pub struct ReadCommand {
-    pub kw: KwRead,
-    pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<ReadArg, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
-pub struct OpenCommand {
-    pub kw: KwOpen,
-    pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<OpenArg, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
-pub struct CloseCommand {
-    pub kw: KwClose,
-    pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<CloseArg, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
-pub struct UseCommand {
-    pub kw: KwUse,
-    pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<UseArg, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
-pub struct LockCommand {
-    pub kw: KwLock,
-    pub pc: Option<PostCondition>,
-    pub args: Option<
-        CommandArgument<
-            VecSep<AllowMacro<(AllowMacro<LockArg>, Option<ReadTimeout>)>, CommaSep<LGap>>,
-        >,
-    >,
-}
-
-#[derive(Grammar)]
-pub struct HaltCommand {
-    pub kw: KwHalt,
-    pub pc: Option<PostCondition>,
-}
-
-#[derive(Grammar)]
-pub struct HangCommand {
-    pub kw: KwHang,
-    pub pc: Option<PostCondition>,
-    pub e: CommandArgument<Expr>,
-}
-
-#[derive(Grammar)]
 pub struct HCommand {
     pub kw: KwH,
     pub pc: Option<PostCondition>,
     pub e: Option<CommandArgument<Expr>>,
-}
-
-#[derive(Grammar)]
-pub struct JobCommand {
-    pub kw: KwJob,
-    pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<JobArgument, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
-pub struct TStartCommand {
-    pub kw: KwTStart,
-    pub pc: Option<PostCondition>,
-}
-
-#[derive(Grammar)]
-pub struct TCommitCommand {
-    pub kw: KwTCommit,
-    pub pc: Option<PostCondition>,
-}
-
-#[derive(Grammar)]
-pub struct TRollbackCommand {
-    pub kw: KwTRollback,
-    pub pc: Option<PostCondition>,
-    pub one: Option<CommandArgument<StringEq!("1")>>,
-}
-
-#[derive(Grammar)]
-pub struct ZWriteCommand {
-    pub kw: KwZWrite,
-    pub pc: Option<PostCondition>,
-    pub exp: Option<CommandArgument<VecSep<Expr, CommaSep<LGap>>>>,
-}
-
-#[derive(Grammar)]
-pub struct ZKillCommand {
-    pub kw: KwZKill,
-    pub pc: Option<PostCondition>,
-    pub targets: CommandArgument<VecSep<Ranged<ZKillTarget>, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
-pub struct ZNspaceCommand {
-    pub kw: KwZNspace,
-    pub pc: Option<PostCondition>,
-    pub e: CommandArgument<Expr>,
-}
-
-#[derive(Grammar)]
-pub struct XecuteCommand {
-    pub kw: KwXecute,
-    pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<XecuteArg, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
-pub struct ViewCommand {
-    pub kw: KwView,
-    pub pc: Option<PostCondition>,
-    pub exp: Option<CommandArgument<VecSep<ViewArgument, CommaSep<LGap>>>>,
-}
-
-#[derive(Grammar)]
-pub struct ZPrintCommand {
-    pub kw: KwZPrint,
-    pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<PrintArgs>>,
-}
-
-#[derive(Grammar)]
-pub struct PrintCommand {
-    pub kw: KwPrint,
-    pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<PrintArgs>>,
-}
-
-#[derive(Grammar)]
-pub struct ZBreakCommand {
-    pub kw: KwZBreak,
-    pub pc: Option<PostCondition>,
-    pub args: Option<CommandArgument<VecSep<ZBreakArg, CommaSep<LGap>>>>,
-}
-
-// MVP and MVC are undocumented commands
-#[derive(Grammar)]
-pub struct MVPCommand {
-    pub kw: KwMVPrint,
-    pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<WriteArg, CommaSep<LGap>>>,
-}
-
-#[derive(Grammar)]
-pub struct MVCCommand {
-    pub kw: KwMVCrt,
-    pub pc: Option<PostCondition>,
-    pub args: CommandArgument<VecSep<WriteArg, CommaSep<LGap>>>,
 }
 
 #[derive(Grammar)]
@@ -4180,8 +3840,25 @@ impl Validate for UserCommandName {
     }
 }
 
+// `Parse` and a written `Print` rather than `Grammar`: the derived `Print` binds a field at its
+// type's span, which a macro argument's hygiene hides.
 macro_rules! keyword_command {
-    ($($name:ident),* $(,)?) => { $(
+    ($($name:ident: $kw:ident $(, $field:ident: $args:ty)?;)*) => { $(
+        #[derive(Parse)]
+        pub struct $name {
+            pub kw: $kw,
+            pub pc: Option<PostCondition>,
+            $(pub $field: $args,)?
+        }
+
+        impl Print for $name {
+            fn print_to(&self, buf: &mut String) {
+                self.kw.print_to(buf);
+                self.pc.print_to(buf);
+                $(self.$field.print_to(buf);)?
+            }
+        }
+
         impl CommandLike for $name {
             fn keywords(&self, start: usize) -> Vec<KeywordUse> {
                 vec![KeywordUse::of(&self.kw, start)]
@@ -4195,42 +3872,51 @@ macro_rules! keyword_command {
 }
 
 keyword_command! {
-    DoCommand,
-    GotoCommand,
-    BreakCommand,
-    QuitCommand,
-    ZQuitCommand,
-    ReturnCommand,
-    ContinueCommand,
-    SetCommand,
-    KillCommand,
-    NewCommand,
-    MergeCommand,
-    ThrowCommand,
-    ZTrapCommand,
-    ZZDumpCommand,
-    WriteCommand,
-    ReadCommand,
-    OpenCommand,
-    CloseCommand,
-    UseCommand,
-    LockCommand,
-    HaltCommand,
-    HangCommand,
-    JobCommand,
-    TStartCommand,
-    TCommitCommand,
-    TRollbackCommand,
-    ZWriteCommand,
-    ZKillCommand,
-    ZNspaceCommand,
-    XecuteCommand,
-    ViewCommand,
-    ZPrintCommand,
-    PrintCommand,
-    ZBreakCommand,
-    MVPCommand,
-    MVCCommand,
+    DoCommand: KwDo, args: Option<CommandArgument<VecSep<DoArgument, CommaSep<LGap>>>>;
+    GotoCommand: KwGoto, args: Option<CommandArgument<VecSep<GoToArg, CommaSep<LGap>>>>;
+    BreakCommand: KwBreak, exp: Option<CommandArgument<Expr>>;
+    QuitCommand: KwQuit, exp: Ranged<Option<CommandArgument<Expr>>>;
+    ZQuitCommand: KwZQuit, exp: Option<CommandArgument<Expr>>;
+    ReturnCommand: KwReturn, exp: Ranged<Option<CommandArgument<Expr>>>;
+    ContinueCommand: KwContinue;
+    SetCommand: KwSet, assignments:
+        CommandArgument<VecSep<Ranged<AllowIndirection<SetArgument>>, CommaSep<LGap>>>;
+    KillCommand: KwKill, targets:
+        Option<CommandArgument<VecSep<Ranged<AllowMacro<KillArgument>>, CommaSep<LGap>>>>;
+    NewCommand: KwNew, targets:
+        Option<CommandArgument<VecSep<Ranged<NewArgument>, CommaSep<LGap>>>>;
+    MergeCommand: KwMerge, merge_arguments:
+        CommandArgument<VecSep<Ranged<MergeArgument>, CommaSep<LGap>>>;
+    ThrowCommand: KwThrow, e: Option<CommandArgument<Expr>>;
+    ZTrapCommand: KwZTrap, exp: Option<CommandArgument<Expr>>;
+    ZZDumpCommand: KwZZDump, exp: CommandArgument<VecSep<Expr, CommaSep<LGap>>>;
+    WriteCommand: KwWrite, args: Option<CommandArgument<VecSep<WriteArg, CommaSep<LGap>>>>;
+    ReadCommand: KwRead, args: CommandArgument<VecSep<ReadArg, CommaSep<LGap>>>;
+    OpenCommand: KwOpen, args: CommandArgument<VecSep<OpenArg, CommaSep<LGap>>>;
+    CloseCommand: KwClose, args: CommandArgument<VecSep<CloseArg, CommaSep<LGap>>>;
+    UseCommand: KwUse, args: CommandArgument<VecSep<UseArg, CommaSep<LGap>>>;
+    LockCommand: KwLock, args: Option<
+        CommandArgument<
+            VecSep<AllowMacro<(AllowMacro<LockArg>, Option<ReadTimeout>)>, CommaSep<LGap>>,
+        >,
+    >;
+    HaltCommand: KwHalt;
+    HangCommand: KwHang, e: CommandArgument<Expr>;
+    JobCommand: KwJob, args: CommandArgument<VecSep<JobArgument, CommaSep<LGap>>>;
+    TStartCommand: KwTStart;
+    TCommitCommand: KwTCommit;
+    TRollbackCommand: KwTRollback, one: Option<CommandArgument<StringEq!("1")>>;
+    ZWriteCommand: KwZWrite, exp: Option<CommandArgument<VecSep<Expr, CommaSep<LGap>>>>;
+    ZKillCommand: KwZKill, targets: CommandArgument<VecSep<Ranged<ZKillTarget>, CommaSep<LGap>>>;
+    ZNspaceCommand: KwZNspace, e: CommandArgument<Expr>;
+    XecuteCommand: KwXecute, args: CommandArgument<VecSep<XecuteArg, CommaSep<LGap>>>;
+    ViewCommand: KwView, exp: Option<CommandArgument<VecSep<ViewArgument, CommaSep<LGap>>>>;
+    ZPrintCommand: KwZPrint, args: Option<CommandArgument<PrintArgs>>;
+    PrintCommand: KwPrint, args: Option<CommandArgument<PrintArgs>>;
+    ZBreakCommand: KwZBreak, args: Option<CommandArgument<VecSep<ZBreakArg, CommaSep<LGap>>>>;
+    // MVP and MVC are undocumented commands
+    MVPCommand: KwMVPrint, args: CommandArgument<VecSep<WriteArg, CommaSep<LGap>>>;
+    MVCCommand: KwMVCrt, args: CommandArgument<VecSep<WriteArg, CommaSep<LGap>>>;
 }
 
 impl CommandLike for WhileCommand {
@@ -4763,6 +4449,7 @@ impl FromFunArg for AllowIndirection<Variable> {
 
 // An argument the function reads leniently when it names a variable, taking an undefined one as
 // absent (`$LISTBUILD`'s null element, `$BIT`'s empty bit string), and needs otherwise.
+#[derive(Print)]
 pub enum VarOrExpr {
     Var(AllowIndirection<Variable>),
     Expr(Expr),
@@ -4773,15 +4460,6 @@ impl VarOrExpr {
         match self {
             VarOrExpr::Var(AllowIndirection::Plain(variable)) => Some(variable),
             _ => None,
-        }
-    }
-}
-
-impl Print for VarOrExpr {
-    fn print_to(&self, buf: &mut String) {
-        match self {
-            VarOrExpr::Var(var) => var.print_to(buf),
-            VarOrExpr::Expr(expr) => expr.print_to(buf),
         }
     }
 }
@@ -5090,6 +4768,37 @@ macro_rules! fun_args {
     };
 }
 
+// The settable functions, named structs so both `FunctionCall` and `SetTargetFun` can hold them,
+// each dereferencing to its arguments; `Parse` and a written `Print` as in `keyword_command!`.
+macro_rules! fun_call {
+    ($($(#[$doc:meta])* $name:ident: $kw:ty, $args:ty;)*) => { $(
+        $(#[$doc])*
+        #[derive(Parse)]
+        pub struct $name {
+            pub kw: $kw,
+            pub lp: StringEq!("("),
+            pub args: $args,
+            pub rp: StringEq!(")"),
+        }
+
+        impl Print for $name {
+            fn print_to(&self, buf: &mut String) {
+                self.kw.print_to(buf);
+                self.lp.print_to(buf);
+                self.args.print_to(buf);
+                self.rp.print_to(buf);
+            }
+        }
+
+        impl Deref for $name {
+            type Target = $args;
+            fn deref(&self) -> &$args {
+                &self.args
+            }
+        }
+    )* };
+}
+
 #[derive(Grammar)]
 pub struct CondValue {
     pub cond: Option<CondPrefix>,
@@ -5104,43 +4813,11 @@ fun_args!("$LIST" ListRangeCallArgs {
     rest: Vec<More<ArgOf<ExpColExp>>>,
 });
 
-/// `$LIST(list, start1:end1, ...)` -- read-only, not a valid SET target.
-#[derive(Grammar)]
-pub struct ListRangeCall {
-    pub kw: Ranged<FnList>,
-    pub lp: StringEq!("("),
-    pub args: ListRangeCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for ListRangeCall {
-    type Target = ListRangeCallArgs;
-    fn deref(&self) -> &ListRangeCallArgs {
-        &self.args
-    }
-}
-
 fun_args!("$LIST" ListPlainCallArgs {
     list: ArgOf<Expr>,
     position: Option<More<ArgOf<PositionArg>>>,
     end: Option<More<ArgOf<PositionArg>>>,
 });
-
-/// `$LIST(list, position, end)` -- the plain form, settable via `SET`.
-#[derive(Grammar)]
-pub struct ListPlainCall {
-    pub kw: Ranged<FnList>,
-    pub lp: StringEq!("("),
-    pub args: ListPlainCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for ListPlainCall {
-    type Target = ListPlainCallArgs;
-    fn deref(&self) -> &ListPlainCallArgs {
-        &self.args
-    }
-}
 
 fun_args!("$PIECE" PieceCallArgs {
     string: ArgOf<Expr>,
@@ -5148,23 +4825,6 @@ fun_args!("$PIECE" PieceCallArgs {
     from: Option<More<ArgOf<PositionArg>>>,
     to: Option<More<OptArgOf<PositionArg>>>,
 });
-
-/// The settable functions, extracted into named structs so both [`FunctionCall`]
-/// and [`SetTargetFun`] can hold them.
-#[derive(Grammar)]
-pub struct PieceCall {
-    pub kw: Ranged<FnPiece>,
-    pub lp: StringEq!("("),
-    pub args: PieceCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for PieceCall {
-    type Target = PieceCallArgs;
-    fn deref(&self) -> &PieceCallArgs {
-        &self.args
-    }
-}
 
 // `$MV(record, field, value, subvalue, ...)`: undocumented (not found in InterSystems docs),
 // but used throughout the corpus for MultiValue-BASIC field/value/subvalue addressing, both as
@@ -5185,21 +4845,6 @@ pub struct MVPosition {
 }
 
 #[derive(Grammar)]
-pub struct MVCall {
-    pub kw: Ranged<FnMV>,
-    pub lp: StringEq!("("),
-    pub args: MVCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for MVCall {
-    type Target = MVCallArgs;
-    fn deref(&self) -> &MVCallArgs {
-        &self.args
-    }
-}
-
-#[derive(Grammar)]
 pub enum PositionArg {
     Rel {
         star: StringEq!("*"),
@@ -5214,61 +4859,16 @@ fun_args!("$EXTRACT" ExtractCallArgs {
     to: Option<More<OptArgOf<PositionArg>>>,
 });
 
-#[derive(Grammar)]
-pub struct ExtractCall {
-    pub kw: Ranged<FnExtract>,
-    pub lp: StringEq!("("),
-    pub args: ExtractCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for ExtractCall {
-    type Target = ExtractCallArgs;
-    fn deref(&self) -> &ExtractCallArgs {
-        &self.args
-    }
-}
-
 fun_args!("$LISTGET" ListGetCallArgs {
     list: ArgOf<Expr>,
     position: Option<More<OptArgOf<PositionArg>>>,
     default: Option<More<ArgOf<Expr>>>,
 });
 
-#[derive(Grammar)]
-pub struct ListGetCall {
-    pub kw: Ranged<FnListGet>,
-    pub lp: StringEq!("("),
-    pub args: ListGetCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for ListGetCall {
-    type Target = ListGetCallArgs;
-    fn deref(&self) -> &ListGetCallArgs {
-        &self.args
-    }
-}
-
 fun_args!("$BIT" BitCallArgs {
     bits: ArgOf<VarOrExpr>,
     position: More<ArgOf<Expr>>,
 });
-
-#[derive(Grammar)]
-pub struct BitCall {
-    pub kw: Ranged<FnBit>,
-    pub lp: StringEq!("("),
-    pub args: BitCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for BitCall {
-    type Target = BitCallArgs;
-    fn deref(&self) -> &BitCallArgs {
-        &self.args
-    }
-}
 
 fun_args!("$VECTOR" VectorCallArgs {
     vector: ArgOf<VarOrExpr>,
@@ -5276,41 +4876,11 @@ fun_args!("$VECTOR" VectorCallArgs {
     third: Option<More<ArgOf<Expr>>>,
 });
 
-#[derive(Grammar)]
-pub struct VectorCall {
-    pub kw: Ranged<FnVector>,
-    pub lp: StringEq!("("),
-    pub args: VectorCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for VectorCall {
-    type Target = VectorCallArgs;
-    fn deref(&self) -> &VectorCallArgs {
-        &self.args
-    }
-}
-
 fun_args!("$WEXTRACT" WExtractCallArgs {
     string: ArgOf<Expr>,
     from: Option<More<ArgOf<PositionArg>>>,
     to: Option<More<OptArgOf<PositionArg>>>,
 });
-
-#[derive(Grammar)]
-pub struct WExtractCall {
-    pub kw: Ranged<FnWExtract>,
-    pub lp: StringEq!("("),
-    pub args: WExtractCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for WExtractCall {
-    type Target = WExtractCallArgs;
-    fn deref(&self) -> &WExtractCallArgs {
-        &self.args
-    }
-}
 
 fun_args!("$PROPERTY" PropertyCallArgs {
     instance: ArgOf<Option<Expr>>,
@@ -5318,58 +4888,30 @@ fun_args!("$PROPERTY" PropertyCallArgs {
     indexes: Vec<More<ArgOf<Expr>>>,
 });
 
-#[derive(Grammar)]
-pub struct PropertyCall {
-    pub kw: Either<Ranged<FnProperty>, Ranged<FnZObjProperty>>,
-    pub lp: StringEq!("("),
-    pub args: PropertyCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for PropertyCall {
-    type Target = PropertyCallArgs;
-    fn deref(&self) -> &PropertyCallArgs {
-        &self.args
-    }
-}
-
 fun_args!("$SEQUENCE" SequenceCallArgs {
     gvar: ArgOf<GetTarget>,
 });
-
-#[derive(Grammar)]
-pub struct SequenceCall {
-    pub kw: Ranged<FnSequence>,
-    pub lp: StringEq!("("),
-    pub args: SequenceCallArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for SequenceCall {
-    type Target = SequenceCallArgs;
-    fn deref(&self) -> &SequenceCallArgs {
-        &self.args
-    }
-}
 
 fun_args!("$LISTBUILD" ListBuildArgs {
     first: ArgOf<Option<VarOrExpr>>,
     rest: Vec<More<ArgOf<Option<VarOrExpr>>>>,
 });
 
-#[derive(Grammar)]
-pub struct ListBuild {
-    pub kw: Ranged<FnListBuild>,
-    pub lp: StringEq!("("),
-    pub args: ListBuildArgs,
-    pub rp: StringEq!(")"),
-}
-
-impl Deref for ListBuild {
-    type Target = ListBuildArgs;
-    fn deref(&self) -> &ListBuildArgs {
-        &self.args
-    }
+fun_call! {
+    /// `$LIST(list, start1:end1, ...)` -- read-only, not a valid SET target.
+    ListRangeCall: Ranged<FnList>, ListRangeCallArgs;
+    /// `$LIST(list, position, end)` -- the plain form, settable via `SET`.
+    ListPlainCall: Ranged<FnList>, ListPlainCallArgs;
+    PieceCall: Ranged<FnPiece>, PieceCallArgs;
+    MVCall: Ranged<FnMV>, MVCallArgs;
+    ExtractCall: Ranged<FnExtract>, ExtractCallArgs;
+    ListGetCall: Ranged<FnListGet>, ListGetCallArgs;
+    BitCall: Ranged<FnBit>, BitCallArgs;
+    VectorCall: Ranged<FnVector>, VectorCallArgs;
+    WExtractCall: Ranged<FnWExtract>, WExtractCallArgs;
+    PropertyCall: Either<Ranged<FnProperty>, Ranged<FnZObjProperty>>, PropertyCallArgs;
+    SequenceCall: Ranged<FnSequence>, SequenceCallArgs;
+    ListBuild: Ranged<FnListBuild>, ListBuildArgs;
 }
 
 #[derive(Grammar)]
@@ -7146,12 +6688,6 @@ pub enum OpsExpr<BeforeFirst = ()> {
 #[tygr(name = "Expression")]
 pub struct Expr(GenericExpr);
 
-impl std::ops::DerefMut for Expr {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl Deref for Expr {
     type Target = GenericExpr;
 
@@ -7262,16 +6798,8 @@ pub type FunArgList = ParenList<Ranged<Option<FunArg>>>;
 
 char_class!(pub IsSpaceOrTab, "space", |ch| matches!(ch, ' ' | '\t'));
 
-#[derive(Grammar)]
-#[tygr(hidden)]
-pub struct SpaceOrTab(StringOf<IsSpaceOrTab>);
-#[derive(Grammar)]
-#[tygr(hidden)]
-pub struct SpaceOrTab1(StringOf1<IsSpaceOrTab>);
-
-char_class!(pub IsRoutineNamePart, "routine_name_part", |ch| {
-    is_letter(ch) || ch.is_ascii_digit() || ch == '.'
-});
+pub type SpaceOrTab = Hidden<StringOf<IsSpaceOrTab>>;
+pub type SpaceOrTab1 = Hidden<StringOf1<IsSpaceOrTab>>;
 
 // https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=RCOS_appx_identifiers#RCOS_appx_identifiers_cos_routines
 #[derive(Grammar, Clone, PartialEq, Eq)]
