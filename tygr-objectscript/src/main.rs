@@ -22,13 +22,9 @@ fn main() {
     let had_error = if path.ends_with(".cls") {
         check_class(&path, &content)
     } else {
-        match cos::Routine::parse(&content) {
-            Ok(_) => false,
-            Err(err) => {
-                eprintln!("{err}");
-                true
-            }
-        }
+        cos::Routine::parse(&content)
+            .map_err(|err| eprintln!("{err}"))
+            .is_err()
     };
     if had_error {
         exit(1);
@@ -40,68 +36,53 @@ fn main() {
 // error inside one is otherwise invisible until the body is separately parsed here, dispatching
 // on `Language`/`CodeMode` the same way `check::mod::MethodBody` does.
 fn check_class(path: &str, content: &str) -> bool {
-    let cls = match cos::ClassDefinition::parse(content) {
-        Ok(cls) => cls,
-        Err(err) => {
-            eprintln!("{err}");
-            return true;
-        }
+    let Ok(cls) = cos::ClassDefinition::parse(content).map_err(|err| eprintln!("{err}")) else {
+        return true;
     };
     let olc = OLC::new(content);
     let mut had_error = false;
     for member in cls.member_list.members.seps.iter() {
         if let cos::Member::Method(method) = member.deref()
-            && let Err((body_start, err)) = check_method_body(method)
+            && let Err(err) = check_method_body(method)
         {
             had_error = true;
-            report(path, &olc, &method.header.name.print(), body_start, &err);
+            // `err.pos()` is relative to the method body's own text, so it's offset by the
+            // body's position within the whole file to land on the right line/column.
+            let (line, character) = olc
+                .offset_to_line_character(method.body.prefixed.wrapped.start + err.pos())
+                .unwrap_or_else(|e| e.bound);
+            let name = method.header.name.print();
+            eprintln!(
+                "{path}:{}:{}: in method {name}: {err}",
+                line + 1,
+                character + 1
+            );
         }
     }
     had_error
 }
 
-fn check_method_body(method: &cos::Method) -> Result<(), (usize, tygr::Error)> {
+fn check_method_body(method: &cos::Method) -> Result<(), tygr::Error> {
     let (mut language, mut mode) = (None, None);
-    for entry in method
-        .header
-        .keywords
-        .iter()
-        .flat_map(cos::KeywordList::items)
-    {
+    for entry in (method.header.keywords.iter()).flat_map(cos::KeywordList::items) {
         match (***entry).as_ref().left() {
             Some(cos::MethodKeyword::Language(v)) => language = Some(&v.value),
             Some(cos::MethodKeyword::CodeMode(v)) => mode = Some(&v.value),
             _ => {}
         }
     }
-    let body = &method.body.prefixed.wrapped;
-    let text = body.print();
+    let text = method.body.prefixed.wrapped.print();
 
-    match (language, mode) {
-        (
-            None | Some(cos::MethodLanguage::ObjectScript(..) | cos::MethodLanguage::Cache(..)),
-            None | Some(cos::CodeMode::Code(..)),
-        ) => cos::ProcedureBody::parse(&text).map(drop),
-        (
-            None | Some(cos::MethodLanguage::ObjectScript(..) | cos::MethodLanguage::Cache(..)),
-            Some(cos::CodeMode::Expression(..)),
-        ) => <cos::ExprBody>::parse(&text).map(drop),
+    let objectscript = matches!(
+        language,
+        None | Some(cos::MethodLanguage::ObjectScript(..) | cos::MethodLanguage::Cache(..))
+    );
+    match mode {
+        _ if !objectscript => Ok(()),
+        None | Some(cos::CodeMode::Code(..)) => cos::ProcedureBody::parse(&text).map(drop),
+        Some(cos::CodeMode::Expression(..)) => <cos::ExprBody>::parse(&text).map(drop),
         // Other languages (Python, ...) and modes (Call, Generator, ...) aren't ObjectScript,
         // so there's nothing here to parse.
         _ => Ok(()),
     }
-    .map_err(|err| (body.start, err))
-}
-
-// `err.pos()` is relative to the method body's own text, so it's offset by `body_start` (the
-// body's position within the whole file) to land on the right line/column.
-fn report(path: &str, olc: &OLC, method_name: &str, body_start: usize, err: &tygr::Error) {
-    let (line, character) = olc
-        .offset_to_line_character(body_start + err.pos())
-        .unwrap_or_else(|e| e.bound);
-    eprintln!(
-        "{path}:{}:{}: in method {method_name}: {err}",
-        line + 1,
-        character + 1
-    );
 }

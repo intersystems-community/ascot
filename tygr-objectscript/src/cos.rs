@@ -79,9 +79,7 @@ pub enum SGapUnit {
     HMacro(HMacro),
 }
 
-#[derive(Grammar, Clone)]
-#[tygr(inline)]
-pub struct SGap(Raw<Vec<SGapUnit>>);
+pub type SGap = Raw<Vec<SGapUnit>>;
 
 pub type SGap1 = Raw<Vec1<SGapUnit>>;
 
@@ -110,23 +108,20 @@ pub fn line_comments(gap: &str) -> Vec<String> {
     (lines.iter().skip(1))
         .filter_map(|nl| match &nl.comment {
             Some(comment) => Some(comment.content.print()),
-            None => nl.gap.range_comment(),
+            None => range_comment(&nl.gap),
         })
         .collect()
 }
 
-impl SGap {
-    // The text inside a one-line range comment that is all this gap holds beside spaces.
-    fn range_comment(&self) -> Option<String> {
-        let units = Vec::<SGapUnit>::parse(&self.0).ok()?;
-        let mut comments = (units.iter()).filter(|unit| !matches!(unit, SGapUnit::Space(_)));
-        let (Some(SGapUnit::RangeComment(comment)), None) = (comments.next(), comments.next())
-        else {
-            return None;
-        };
-        let text = comment.0.strip_prefix("/*")?.strip_suffix("*/")?;
-        (!text.contains('\n')).then(|| text.to_string())
-    }
+// The text inside a one-line range comment that is all this gap holds beside spaces.
+fn range_comment(gap: &SGap) -> Option<String> {
+    let units = Vec::<SGapUnit>::parse(gap).ok()?;
+    let mut comments = (units.iter()).filter(|unit| !matches!(unit, SGapUnit::Space(_)));
+    let (Some(SGapUnit::RangeComment(comment)), None) = (comments.next(), comments.next()) else {
+        return None;
+    };
+    let text = comment.0.strip_prefix("/*")?.strip_suffix("*/")?;
+    (!text.contains('\n')).then(|| text.to_string())
 }
 
 pub type MGap = Raw<Vec<MGapUnit>>;
@@ -543,12 +538,9 @@ impl TryFrom<SetTargetSource> for SetTarget {
                     AtomicExpr::CacheDirectCallback(callback) => {
                         Ok(SetTarget::CacheDirectCallback(callback))
                     }
-                    AtomicExpr::FunctionCall(call) => {
-                        match SetTargetFun::try_from(call.into_inner()) {
-                            Ok(fun) => Ok(SetTarget::Fun(fun)),
-                            Err(_) => Err(err),
-                        }
-                    }
+                    AtomicExpr::FunctionCall(call) => SetTargetFun::try_from(call.into_inner())
+                        .map(SetTarget::Fun)
+                        .map_err(|_| err),
                     _ => Err(err),
                 },
                 ParenedExpr::Paren(..) => Err(err),
@@ -609,29 +601,23 @@ impl TryFrom<ListBuild> for ListBuildForSet {
 }
 
 // `SET $LISTBUILD(a, ..M, @x) = list`: each element a variable, a property or an indirection.
-fn exp_arg_to_var_arg(
-    arg: Wrap<MGap, Ranged<Option<VarOrExpr>>, MGap>,
-) -> Result<Wrap<MGap, Ranged<Option<GetTarget>>, MGap>, ()> {
-    let arg = arg
-        .map(|arg| {
-            arg.map(|arg| {
-                arg.map(|arg| match arg {
-                    VarOrExpr::Var(AllowIndirection::Plain(variable)) => {
-                        Ok(GetTarget::Var(variable))
-                    }
-                    VarOrExpr::Var(AllowIndirection::Indirection(ind)) => {
-                        Ok(GetTarget::Indirection(ind.map(|ind| *ind)))
-                    }
-                    VarOrExpr::Expr(expr) => {
-                        GetTarget::try_from(into_ops(expr).ok_or(())?).map_err(|_| ())
-                    }
-                })
-                .transpose()
+fn exp_arg_to_var_arg(arg: ArgOf<Option<VarOrExpr>>) -> Result<ArgOf<Option<GetTarget>>, ()> {
+    arg.map(|arg| {
+        arg.map(|arg| {
+            arg.map(|arg| match arg {
+                VarOrExpr::Var(AllowIndirection::Plain(variable)) => Ok(GetTarget::Var(variable)),
+                VarOrExpr::Var(AllowIndirection::Indirection(ind)) => {
+                    Ok(GetTarget::Indirection(ind.map(|ind| *ind)))
+                }
+                VarOrExpr::Expr(expr) => {
+                    GetTarget::try_from(into_ops(expr).ok_or(())?).map_err(|_| ())
+                }
             })
             .transpose()
         })
-        .transpose()?;
-    Ok(arg)
+        .transpose()
+    })
+    .transpose()
 }
 
 impl SetTarget {
@@ -1119,11 +1105,7 @@ keywords! {
 }
 
 // `H` alone halts; with an argument it hangs -- so only `HCommand` knows its full name.
-#[derive(Grammar)]
-#[tygr(inline)]
-pub enum KwH {
-    Abbr(StringEqCI!("H")),
-}
+pub type KwH = StringEqCI!("H");
 
 // One command keyword as written in the source.
 pub struct KeywordUse {
@@ -1856,16 +1838,10 @@ pub struct Variable {
 }
 
 // https://docs.intersystems.com/iris20262/csp/docbook/DocBook.UI.Page.cls?KEY=RCOS_appx_identifiers#RCOS_appx_identifiers_cos_localvars
-#[derive(Grammar, Clone)]
-#[tygr(inline)]
-pub struct LocalVariableName(Raw<LocalVariableNameStruct>);
-
-#[derive(Grammar)]
-#[tygr(inline)]
-pub struct LocalVariableNameStruct {
-    first: IsLocalVariableNameFirst,
-    rest: StringOf<IsLocalVariableNameRemaining>,
-}
+pub type LocalVariableName = Raw<(
+    IsLocalVariableNameFirst,
+    StringOf<IsLocalVariableNameRemaining>,
+)>;
 char_class!(pub IsLocalVariableNameFirst, "letter or percent sign", |c| {
     is_letter(c) || c == '%'
 });
@@ -3933,10 +3909,7 @@ impl CommandLike for ForCommand {
 
 impl CommandLike for DoWhileCommand {
     fn keywords(&self, start: usize) -> Vec<KeywordUse> {
-        vec![
-            KeywordUse::of(&self.kw, start),
-            KeywordUse::of(&*self.kw_while, self.kw_while.start),
-        ]
+        vec![KeywordUse::of(&self.kw, start), self.kw_while.spelled()]
     }
 }
 
@@ -3957,22 +3930,19 @@ impl CommandLike for IfCommand {
 
 impl CommandLike for ElseIfBranch {
     fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
-        vec![KeywordUse::of(&*self.kw, self.kw.start)]
+        vec![self.kw.spelled()]
     }
 }
 
 impl CommandLike for ElseBranch {
     fn keywords(&self, _start: usize) -> Vec<KeywordUse> {
-        vec![KeywordUse::of(&*self.kw, self.kw.start)]
+        vec![self.kw.spelled()]
     }
 }
 
 impl CommandLike for TryCommand {
     fn keywords(&self, start: usize) -> Vec<KeywordUse> {
-        vec![
-            KeywordUse::of(&self.kw_try, start),
-            KeywordUse::of(&*self.kw_catch, self.kw_catch.start),
-        ]
+        vec![KeywordUse::of(&self.kw_try, start), self.kw_catch.spelled()]
     }
 }
 
@@ -4633,17 +4603,15 @@ impl ArgCursor {
         item: ArgOf<Option<FunArg>>,
     ) -> Result<Wrap<MGap, P, MGap>, FunArgError> {
         self.index += 1;
-        match item
-            .map(|arg| P::from_opt_fun_arg(arg).ok_or(()))
+        item.map(|arg| P::from_opt_fun_arg(arg).ok_or(()))
             .transpose()
-        {
-            Ok(v) => Ok(v),
-            Err(()) if self.given == 0 => Err(self.too_few()),
-            Err(()) => Err(FunArgError::WrongKind {
-                index: self.index,
-                expected: P::EXPECTED,
-            }),
-        }
+            .map_err(|()| match self.given {
+                0 => self.too_few(),
+                _ => FunArgError::WrongKind {
+                    index: self.index,
+                    expected: P::EXPECTED,
+                },
+            })
     }
 
     fn finish(self) -> Result<(), FunArgError> {
@@ -4682,13 +4650,10 @@ impl<P: FromOptFunArg> FunArgField for Option<Wrap<MGap, P, MGap>> {
     const SLOTS: usize = 1;
     const ACCEPTS_EMPTY: bool = P::ACCEPTS_EMPTY;
     fn take(cursor: &mut ArgCursor) -> Result<Self, FunArgError> {
-        let Some((_, item)) = cursor.args.pop_front() else {
-            return Ok(None);
-        };
-        if cursor.given == 0 {
-            return Ok(None);
+        match cursor.args.pop_front() {
+            Some((_, item)) if cursor.given > 0 => cursor.convert(item).map(Some),
+            _ => Ok(None),
         }
-        cursor.convert(item).map(Some)
     }
 }
 
@@ -6699,12 +6664,6 @@ impl Deref for Expr {
 #[derive(Grammar)]
 pub struct ExpressionAfterIf(GenericExpr<StringEq!(" ")>);
 
-impl std::ops::DerefMut for ExpressionAfterIf {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl Deref for ExpressionAfterIf {
     type Target = GenericExpr<StringEq!(" ")>;
 
@@ -6730,12 +6689,6 @@ impl Deref for ExpressionAfterElseIf {
 #[derive(Grammar)]
 pub struct ExpressionAfterWhile(GenericExpr<LGap>);
 
-impl std::ops::DerefMut for ExpressionAfterWhile {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl Deref for ExpressionAfterWhile {
     type Target = GenericExpr<LGap>;
 
@@ -6746,12 +6699,6 @@ impl Deref for ExpressionAfterWhile {
 
 #[derive(Grammar)]
 pub struct ExpressionAfterColon(GenericExpr<(), ()>);
-
-impl std::ops::DerefMut for ExpressionAfterColon {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
 
 impl Deref for ExpressionAfterColon {
     type Target = GenericExpr<(), ()>;
@@ -6836,10 +6783,7 @@ pub struct LabelDefault {
     pub ops: ConstOps,
 }
 
-pub type ConstOps = Vec<(
-    Wrap<MGap, Either<PlusMinus, StringEq!("_")>, MGap>,
-    ConstOperand,
-)>;
+pub type ConstOps = Vec<(MGapXMGap<Either<PlusMinus, StringEq!("_")>>, ConstOperand)>;
 
 #[derive(Grammar)]
 #[tygr(name = "constant")]
