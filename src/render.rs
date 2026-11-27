@@ -2,15 +2,17 @@
 //! Server gives its own: `(**Class**) Kind <u>**Name**</u>(*arg* As **Type**) As **Type**`, a
 //! rule, the description as written. Used by `Workspace::hover` in `lib.rs`.
 
-use crate::bindings::{CollectionKind, MemberInfo, MemberKind, RefMode, Signature};
+use crate::bindings::{CollectionKind, MemberInfo, MemberKind, Signature, member_keyword};
+use crate::check::types::mode_prefix;
 
 pub(crate) fn format_member_hover(member: &MemberInfo, class: Option<&str>) -> String {
     let name = &member.name;
-    let (kind, rest) = match &member.kind {
-        MemberKind::Method(info) => ("Method", format_method_signature(info)),
-        MemberKind::ClassMethod(info) => ("ClassMethod", format_method_signature(info)),
-        MemberKind::ClientMethod(info) => ("ClientMethod", format_method_signature(info)),
-        MemberKind::Query(info) => ("Query", format_method_signature(info)),
+    let kind = member_keyword(&member.kind);
+    let rest = match &member.kind {
+        MemberKind::Method(info)
+        | MemberKind::ClassMethod(info)
+        | MemberKind::ClientMethod(info)
+        | MemberKind::Query(info) => format_method_signature(info),
         MemberKind::Property(info) => {
             let of = match info.collection {
                 Some(CollectionKind::List) => "list Of ",
@@ -18,26 +20,18 @@ pub(crate) fn format_member_hover(member: &MemberInfo, class: Option<&str>) -> S
                 None => "",
             };
             let t = info.t.as_deref().map(|t| format!("{of}{t}"));
-            ("Property", format_as(t.as_deref()))
+            format_as(t.as_deref())
         }
-        MemberKind::Relationship(info) => ("Relationship", format_as(info.t.as_deref())),
+        MemberKind::Relationship(info) => format_as(info.t.as_deref()),
         MemberKind::Parameter(info) => {
             let default = info
                 .v
                 .as_deref()
                 .map(|v| format!(" = {v}"))
                 .unwrap_or_default();
-            (
-                "Parameter",
-                format!("{}{default}", format_as(info.t.as_deref())),
-            )
+            format!("{}{default}", format_as(info.t.as_deref()))
         }
-        MemberKind::ForeignKey => ("ForeignKey", String::new()),
-        MemberKind::Index(_) => ("Index", String::new()),
-        MemberKind::Projection => ("Projection", String::new()),
-        MemberKind::Trigger => ("Trigger", String::new()),
-        MemberKind::XData => ("XData", String::new()),
-        MemberKind::Storage => ("Storage", String::new()),
+        _ => String::new(),
     };
     let class = class.map(|c| format!("(**{c}**) ")).unwrap_or_default();
     let header = format!("{class}{kind} <u>**{name}**</u>{rest}");
@@ -73,7 +67,7 @@ fn format_method_signature(info: &Signature) -> String {
                 .unwrap_or_default();
             format!(
                 "{}*{}*{}{default}",
-                arg_mode_prefix(arg.mode),
+                mode_prefix(arg.mode),
                 arg.name,
                 format_as(arg.t.as_deref())
             )
@@ -82,18 +76,10 @@ fn format_method_signature(info: &Signature) -> String {
     if let Some(variadic) = &info.variadic {
         args.push(format!(
             "{}*{}*...{}",
-            arg_mode_prefix(variadic.mode),
+            mode_prefix(variadic.mode),
             variadic.name,
             format_as(variadic.t.as_deref())
         ));
     }
     format!("({}){}", args.join(", "), format_as(info.t.as_deref()))
-}
-
-fn arg_mode_prefix(mode: Option<RefMode>) -> &'static str {
-    match mode {
-        Some(RefMode::ByRef) => "ByRef ",
-        Some(RefMode::Output) => "Output ",
-        None => "",
-    }
 }

@@ -110,7 +110,7 @@ impl Settings {
     }
 
     pub fn iris_namespace(&self) -> Option<&str> {
-        given(&self.iris_namespace)
+        self.iris_namespace.as_deref().filter(|ns| !ns.is_empty())
     }
 
     pub fn has_style(&self) -> bool {
@@ -171,10 +171,6 @@ impl Settings {
         };
         text.parse().map_err(|err| format!("diagnostics: {err}"))
     }
-}
-
-fn given(value: &Option<String>) -> Option<&str> {
-    value.as_deref().filter(|value| !value.is_empty())
 }
 
 impl From<Style> for StyleSetting {

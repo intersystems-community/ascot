@@ -21,7 +21,7 @@ use rmcp::{
     schemars, tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 use tygr::OLC;
 
 use crate::{
@@ -157,12 +157,6 @@ pub struct Server {
     shared_fs: bool,
 }
 
-impl Default for Server {
-    fn default() -> Self {
-        Self::new(false)
-    }
-}
-
 impl Server {
     pub fn new(shared_fs: bool) -> Self {
         Self {
@@ -206,13 +200,10 @@ impl Server {
         Ok(affected)
     }
 
-    async fn get_workspace(&self, id: &str) -> Result<Arc<Mutex<Workspace>>, String> {
-        self.workspaces
-            .read()
-            .await
-            .get(id)
-            .cloned()
-            .ok_or_else(|| format!("no such workspace: {id:?}"))
+    async fn get_workspace(&self, id: &str) -> Result<OwnedMutexGuard<Workspace>, String> {
+        let workspace = self.workspaces.read().await.get(id).cloned();
+        let workspace = workspace.ok_or_else(|| format!("no such workspace: {id:?}"))?;
+        Ok(workspace.lock_owned().await)
     }
 }
 
@@ -274,7 +265,6 @@ impl Server {
         Parameters(InsertRequest { workspace, files }): Parameters<InsertRequest>,
     ) -> Result<Json<InsertResult>, String> {
         let workspace = self.get_workspace(&workspace).await?;
-        let workspace = workspace.lock().await;
         let mut affected = std::collections::HashSet::new();
         for FileToInsert { uri, src } in files {
             affected.extend(match src {
@@ -296,7 +286,6 @@ impl Server {
         Parameters(UriRequest { workspace, uri }): Parameters<UriRequest>,
     ) -> Result<Json<InsertResult>, String> {
         let workspace = self.get_workspace(&workspace).await?;
-        let workspace = workspace.lock().await;
         Ok(Json(InsertResult {
             affected: workspace.close(uri),
         }))
@@ -312,7 +301,6 @@ impl Server {
         Parameters(UrisRequest { workspace, uris }): Parameters<UrisRequest>,
     ) -> Result<Json<DiagnosticsResult>, String> {
         let workspace = self.get_workspace(&workspace).await?;
-        let workspace = workspace.lock().await;
         let files = uris
             .into_iter()
             .map(|uri| {
@@ -335,7 +323,6 @@ impl Server {
         }): Parameters<InlayHintRequest>,
     ) -> Result<Json<InlayHintsResult>, String> {
         let workspace = self.get_workspace(&workspace).await?;
-        let workspace = workspace.lock().await;
         Ok(Json(InlayHintsResult {
             hints: workspace.inlay_hint(uri, range),
         }))
@@ -356,7 +343,6 @@ impl Server {
         }): Parameters<PositionRequest>,
     ) -> Result<Json<HoverResult>, String> {
         let workspace = self.get_workspace(&workspace).await?;
-        let workspace = workspace.lock().await;
         Ok(Json(HoverResult {
             hover: workspace.hover(uri, position),
         }))
@@ -377,7 +363,6 @@ impl Server {
         }): Parameters<PositionRequest>,
     ) -> Result<Json<DefinitionResult>, String> {
         let workspace = self.get_workspace(&workspace).await?;
-        let workspace = workspace.lock().await;
         Ok(Json(DefinitionResult {
             link: workspace.definition(uri, position),
         }))
@@ -397,7 +382,6 @@ impl Server {
         }): Parameters<PositionRequest>,
     ) -> Result<Json<ReferencesResult>, String> {
         let workspace = self.get_workspace(&workspace).await?;
-        let workspace = workspace.lock().await;
         Ok(Json(ReferencesResult {
             locations: workspace.references(uri, position, true),
         }))
@@ -421,7 +405,6 @@ impl Server {
         }): Parameters<FormatRequest>,
     ) -> Result<Json<FormatResult>, String> {
         let workspace = self.get_workspace(&workspace).await?;
-        let workspace = workspace.lock().await;
         let workspace = workspace.borrow();
         let unparsed = || format!("{uri}: does not parse as written, so nothing is formatted");
         let text = workspace.doc_text(&uri).ok_or_else(|| {
