@@ -3210,11 +3210,11 @@ fn mode_words(mode: Option<RefMode>) -> &'static str {
     }
 }
 
-fn formal_arguments(n: usize) -> String {
+fn counted(n: usize, noun: &str) -> String {
     match n {
-        0 => "no formal arguments".into(),
-        1 => "1 formal argument".into(),
-        n => format!("{n} formal arguments"),
+        0 => format!("no {noun}s"),
+        1 => format!("1 {noun}"),
+        n => format!("{n} {noun}s"),
     }
 }
 
@@ -3224,8 +3224,8 @@ impl std::fmt::Display for OverrideDifference {
             Self::Count { has, declares } => write!(
                 f,
                 "with {} where it declares {}",
-                formal_arguments(*has),
-                formal_arguments(*declares)
+                counted(*has, "formal argument"),
+                counted(*declares, "formal argument")
             ),
             Self::Mode { arg, has, declares } => write!(
                 f,
@@ -3282,11 +3282,7 @@ pub struct ArgCount(pub usize);
 
 impl std::fmt::Display for ArgCount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            0 => f.write_str("no arguments"),
-            1 => f.write_str("1 argument"),
-            n => write!(f, "{n} arguments"),
-        }
+        f.write_str(&counted(self.0, "argument"))
     }
 }
 

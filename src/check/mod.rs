@@ -1082,11 +1082,7 @@ fn check_override(
         ty => ty.clone(),
     };
     // A value of `from` serves as one of `to`.
-    let serves = |from: &Ty, to: &Ty| {
-        env.base
-            .assert_value_compatible(&PowerTy::plain(from.clone()), to)
-            .is_ok()
-    };
+    let serves = |from: &Ty, to: &Ty| env.base.assert_compatible(from.clone(), to).is_ok();
     // `args` ends with the `args...` entry, which has a default: a caller holding the superclass
     // fills what it declares, so the override may drop nothing and require nothing past it.
     let (normal, variadic) = (method.normal_args.len(), method.variadic_arg.is_some());
@@ -2734,11 +2730,7 @@ fn check_set_target<'a>(
 ) -> Result<(), QuasiTypeError> {
     match check_target(target, env, flow)? {
         Some(Left(local)) => flow.handle_set(local, source, range),
-        Some(Right((name, declared))) => {
-            env.check_pattern(&source, &declared, range, Some(&name));
-            (env.assert_value_compatible(&source, &declared))
-                .or_else(|err| err.raise(env, range, Some(name)))
-        }
+        Some(Right((name, declared))) => env.check_value(&source, &declared, range, Some(name)),
         None => Ok(()),
     }
 }
@@ -3783,9 +3775,7 @@ fn check_param_arg<'a>(
                 return Ok(());
             }
             flow.with_range(env.range(arg), |flow| flow.value(&source, || expr.print()))?;
-            env.check_pattern(&source, &target, env.range(arg), Some(&par.name));
-            (env.assert_value_compatible(&source, &target))
-                .or_else(|err| err.raise(env, env.range(arg), Some(par.name)))?;
+            env.check_value(&source, &target, env.range(arg), Some(par.name))?;
         }
         Some(cos::MthArg::ByRef { target, .. }) => {
             check_dottable(env, target, env.range(arg));

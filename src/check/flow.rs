@@ -17,10 +17,7 @@ use crate::details::WithRange;
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::collections::{BTreeSet, HashSet};
-use std::iter::once;
 use std::rc::Rc;
-
-use super::errors::IntoTypeError;
 
 // Its `bool` in `Shared::reading_list` is `false` until read, then `true`.
 #[derive(PartialEq, Eq, Hash)]
@@ -246,19 +243,12 @@ impl<'a> Flow<'a> {
         ty: &PowerTy,
         text: impl FnOnce() -> String,
     ) -> Result<Ty, QuasiTypeError> {
-        match ty.to_maybe_ty(self.shared.env) {
-            MaybeTy::Undefined => {
-                self.add_soft_diagnostic(QuasiTypeError::undefined().with_expr_text(text));
-                Ok(Ty::Any)
-            }
-            MaybeTy::Maybe(ty) => {
-                self.add_soft_diagnostic(
-                    QuasiTypeError::maybe_undefined(ty.clone()).with_expr_text(text),
-                );
-                Ok(ty)
-            }
-            MaybeTy::Plain(ty) => Ok(ty),
-        }
+        let maybe = ty.to_maybe_ty(self.shared.env);
+        let defined = maybe.maybe_defined().cloned().unwrap_or_default();
+        maybe.to_ty().or_else(|err| {
+            self.add_soft_diagnostic(err.with_expr_text(text));
+            Ok(defined)
+        })
     }
 
     pub(crate) fn mark_incomplete(&self) {
@@ -410,16 +400,14 @@ impl<'a> Flow<'a> {
             {
                 env.check_pattern(&PowerTy::Const(constant), ty, range, Some(&name));
             }
+            let ty = ty.unwrap_or_default();
             let binding = {
                 let (assigned, subscript_assigned, new) = match mode {
                     None => {
                         reading_list.insert(Written::new(name.clone(), range), false);
-                        let subscripts = variadic.then_some(());
-                        (ty.clone().unwrap_or_default().into(), subscripts, true)
+                        (ty.clone().into(), variadic.then_some(()), true)
                     }
-                    Some(RefMode::ByRef) => {
-                        (ty.clone().unwrap_or_default().into(), Some(()), false)
-                    }
+                    Some(RefMode::ByRef) => (ty.clone().into(), Some(()), false),
                     // The caller need not pass a value, so there is none until the body assigns
                     // one.
                     Some(RefMode::Output) => (PowerTy::undefined(), Some(()), false),
@@ -441,7 +429,7 @@ impl<'a> Flow<'a> {
                     new_at: None,
                     incoming: mode.is_some(),
                     private: procedure_block,
-                    declared: Some(WithRange::new(ty.clone().unwrap_or_default(), range)),
+                    declared: Some(WithRange::new(ty, range)),
                     assigned_at: HashSet::from([range]),
                 }
             };
@@ -518,13 +506,9 @@ impl<'a> Flow<'a> {
         }
         // Deferred until every split flow has run: still `false` means never read.
         if !flow.shared.incomplete.get() {
-            let unread: Vec<(String, bindings::Range)> = {
-                let list = flow.shared.reading_list.borrow();
-                let unread = list.iter().filter(|(_, read)| !**read);
-                unread.map(|(w, _)| (w.name.clone(), w.range)).collect()
-            };
-            for (name, range) in unread {
-                flow.add_soft_diagnostic(flow.unread(name, range).into());
+            let list = flow.shared.reading_list.borrow();
+            for (w, _) in list.iter().filter(|(_, read)| !**read) {
+                flow.add_soft_diagnostic(flow.unread(w.name.clone(), w.range).into());
             }
             // The caller reads a by-reference parameter, and need not set an `Output` one, so the
             // body's own use says which mode fits: a `ByRef` written without its incoming value
@@ -544,21 +528,17 @@ impl<'a> Flow<'a> {
                 };
                 flow.add_soft_diagnostic(err.into());
             }
-        }
-        // Likewise deferred: an `Output` parameter never assigned on any path leaves its caller an
-        // undefined value.
-        let ref_params = flow.shared.ref_params.borrow();
-        if !flow.shared.incomplete.get()
-            && let Some(param) = ref_params
-                .iter()
+            // Likewise deferred: an `Output` parameter never assigned on any path leaves its
+            // caller an undefined value.
+            if let Some(param) = (flow.shared.ref_params.borrow().iter())
                 .find(|param| param.mode == RefMode::Output && !param.written)
-        {
-            return Err(TypeErrorKind::OutputNeverAssigned {
-                name: param.name.clone(),
+            {
+                return Err(TypeErrorKind::OutputNeverAssigned {
+                    name: param.name.clone(),
+                }
+                .at(param.range));
             }
-            .at(param.range));
         }
-        drop(ref_params);
         let mut creates: Vec<String> = flow
             .shared
             .creates
@@ -638,10 +618,8 @@ impl<'a> Flow<'a> {
         };
         self.merge_states(context.quits)?;
         if !context.continues.is_empty() {
-            match &mut self.loop_context {
-                Some(outer) => outer.continues.extend(context.continues),
-                None => return Err(TypeErrorKind::ContinueNotInLoop.into()),
-            }
+            let outer = (self.loop_context.as_mut()).ok_or(TypeErrorKind::ContinueNotInLoop)?;
+            outer.continues.extend(context.continues);
         }
         Ok(())
     }
@@ -710,14 +688,11 @@ impl<'a> Flow<'a> {
                 self.settle(c.truthy(), report)
             }
             PowerTy::Union(fst, snd, rst) if !self.shared.env.soft_diagnostics_suppressed() => {
-                let cases: HashSet<bool> = once(fst)
-                    .chain(once(snd))
-                    .chain(rst.iter())
-                    .map(Const::truthy)
-                    .collect();
-                match Vec::from_iter(cases)[..] {
-                    [always] => self.settle(always, report),
-                    _ => self.split(),
+                let always = fst.truthy();
+                if snd.truthy() == always && rst.iter().all(|c| c.truthy() == always) {
+                    self.settle(always, report)
+                } else {
+                    self.split()
                 }
             }
             _ => self.split(),
@@ -769,14 +744,9 @@ impl<'a> Flow<'a> {
     }
 
     pub(crate) fn handle_continue(&mut self) -> Result<(), QuasiTypeError> {
-        let bindings = self.bindings()?.clone();
-        match &mut self.loop_context {
-            Some(context) => {
-                context.continues.push(bindings);
-            }
-            None => return Err(TypeErrorKind::ContinueNotInLoop.into()),
-        }
-        self.bindings = None;
+        self.bindings()?;
+        let context = (self.loop_context.as_mut()).ok_or(TypeErrorKind::ContinueNotInLoop)?;
+        context.continues.push(self.bindings.take().unwrap());
         Ok(())
     }
 
@@ -784,7 +754,7 @@ impl<'a> Flow<'a> {
         &mut self,
         val: WithRange<Option<PowerTy>>,
     ) -> Result<(), QuasiTypeError> {
-        let bindings = self.bindings()?.clone();
+        self.bindings()?;
         let WithRange { it, range } = val;
         match (&mut self.loop_context, it) {
             // Not inside any loop: a quit is just a return.
@@ -798,8 +768,8 @@ impl<'a> Flow<'a> {
             // Breaking a loop hands control to whatever follows it, still within this same
             // procedure — our caller hasn't seen anything yet.
             (Some(context), None) => {
+                let bindings = self.bindings.take().unwrap();
                 context.quits.push(WithRange::new(bindings, range));
-                self.bindings = None;
                 Ok(())
             }
         }
@@ -817,17 +787,12 @@ impl<'a> Flow<'a> {
         }
         // A lazily-established kind uses `%Any`: we only need every branch to agree on
         // *whether* a value comes back, not on one exact type.
-        let established = self.shared.output.borrow().clone();
-        let established = established.unwrap_or_else(|| {
-            let established = WithRange::new(it.as_ref().map(|_| Ty::Any), range);
-            *self.shared.output.borrow_mut() = Some(established.clone());
-            established
-        });
+        let established = (self.shared.output.borrow_mut())
+            .get_or_insert_with(|| WithRange::new(it.as_ref().map(|_| Ty::Any), range))
+            .clone();
         let checked = match (&established.it, it) {
             (Some(wanted), Some(actual)) => {
-                self.shared.env.check_pattern(&actual, wanted, range, None);
-                (self.shared.env.assert_value_compatible(&actual, wanted))
-                    .or_else(|err| err.raise(self.shared.env, range, None))
+                self.shared.env.check_value(&actual, wanted, range, None)
             }
             (Some(wanted), None) => Err(QuasiTypeError::return_nothing_for_x(
                 wanted.clone(),
@@ -936,7 +901,7 @@ impl<'a> Flow<'a> {
 
     fn lookup(&mut self, name: String) -> Result<&mut Binding, QuasiTypeError> {
         let undeclared = self.undeclared();
-        Ok(self.bindings()?.entry(name, || undeclared))
+        Ok(self.bindings()?.bindings.entry(name).or_insert(undeclared))
     }
 
     // The binding of a name this flow has not seen: private in a procedure block, public outside
@@ -1111,9 +1076,7 @@ impl<'a> Flow<'a> {
                 .declared
                 .as_ref()
                 .map_or(&Ty::Any, |declared| &declared.it);
-            env.check_pattern(&ty, declared, range, Some(&name));
-            (env.assert_value_compatible(&ty, declared))
-                .or_else(|err| err.raise(env, range, Some(name.clone())))?;
+            env.check_value(&ty, declared, range, Some(name.clone()))?;
             binding.assigned = ty;
             binding.assigned_at = HashSet::from([range]);
             binding.incoming = false;
@@ -1124,10 +1087,7 @@ impl<'a> Flow<'a> {
             self.shared
                 .reading_list
                 .borrow_mut()
-                .entry(Written {
-                    name: name.clone(),
-                    range,
-                })
+                .entry(Written::new(name.clone(), range))
                 .or_insert(false);
         } else {
             binding.subscript_assigned = Some(());
@@ -1250,14 +1210,14 @@ impl<'a> Flow<'a> {
     }
 
     pub(crate) fn read_write_publics(&mut self) -> Result<(), QuasiTypeError> {
-        for name in self.bindings()?.publics() {
+        for name in self.bindings()?.names_where(|b| !b.private) {
             self.invalidate(Local::bare(name), Ty::Any.into())?;
         }
         Ok(())
     }
 
     fn read_olds(&mut self) -> Result<(), QuasiTypeError> {
-        for name in self.bindings()?.olds() {
+        for name in self.bindings()?.names_where(|b| b.new != Some(true)) {
             self.read(&name)?
         }
         Ok(())
@@ -1293,10 +1253,8 @@ impl<'a> Flow<'a> {
     pub(crate) fn read(&mut self, name: &str) -> Result<(), QuasiTypeError> {
         let binding = self.lookup(name.to_string())?;
         for pending in std::mem::take(&mut binding.assigned_at) {
-            if let Some(read) = self.shared.reading_list.borrow_mut().get_mut(&Written {
-                name: name.to_string(),
-                range: pending,
-            }) {
+            let written = Written::new(name.to_string(), pending);
+            if let Some(read) = self.shared.reading_list.borrow_mut().get_mut(&written) {
                 *read = true;
             }
         }
@@ -1383,14 +1341,8 @@ pub(crate) fn is_percent_variable(name: &str) -> bool {
 impl Binding {
     fn public(range: bindings::Range) -> Binding {
         Binding {
-            assigned: Ty::Any.into(),
-            subscript_assigned: Some(()),
-            new: Some(false),
-            new_at: None,
-            incoming: false,
-            private: false,
-            declared: None,
             assigned_at: HashSet::from([range]),
+            ..Binding::undeclared(false, true, false)
         }
     }
 
@@ -1432,16 +1384,10 @@ impl Binding {
                 .into());
             }
         };
-        let new = match (self.new, that.new) {
-            (Some(this_new), Some(that_new)) if this_new == that_new => Some(this_new),
-            _ => None,
-        };
+        let new = self.new.filter(|&n| that.new == Some(n));
         // Ambiguous after a merge either way — which branch's `New` (if any) "most recently"
         // scoped this is no longer a single, reportable fact.
-        let new_at = match (self.new_at, that.new_at) {
-            (Some(this_at), Some(that_at)) if this_at == that_at => Some(this_at),
-            _ => None,
-        };
+        let new_at = self.new_at.filter(|&at| that.new_at == Some(at));
         let mut pending = self.assigned_at;
         pending.extend(that.assigned_at);
         Ok(Self {
@@ -1463,25 +1409,12 @@ pub struct Bindings {
 }
 
 impl Bindings {
-    pub fn publics(&self) -> Vec<String> {
-        self.names_where(|binding| !binding.private)
-    }
-
-    pub fn olds(&self) -> Vec<String> {
-        self.names_where(|binding| binding.new != Some(true))
-    }
-
     fn names_where(&self, keep: impl Fn(&Binding) -> bool) -> Vec<String> {
         self.bindings
             .iter()
             .filter(|(_, binding)| keep(binding))
             .map(|(name, _)| name.clone())
             .collect()
-    }
-
-    // Default is a closure, not a stored `procedure_block`, since only `Flow::lookup` knows it.
-    fn entry(&mut self, name: String, default: impl FnOnce() -> Binding) -> &mut Binding {
-        self.bindings.entry(name).or_insert_with(default)
     }
 
     // Merges another path's state in: a name bound on one side only is undeclared on the other.
