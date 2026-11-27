@@ -572,9 +572,7 @@ pub(crate) fn with_range_name<T: Grammar>(
 // A member's name without the quotes of a quoted one: `Method "_isLabeled"()` declares `_isLabeled`.
 fn type_names(member: &cos::Member, olc: &OLC) -> Vec<WithRange<String>> {
     let class = |class_name: &Ranged<cos::SignatureType>| match class_name.deref() {
-        cos::SignatureType::Class(name) => {
-            Some(WithRange::new(name.print(), olc.range(class_name)))
-        }
+        cos::SignatureType::Class(_) => Some(with_range_name(class_name, olc)),
         cos::SignatureType::Parameter(..) => None,
     };
     let of_type = |ty: Option<&cos::Type>| ty.and_then(|t| class(&t.class_name));
@@ -611,10 +609,7 @@ fn with_range_member_name(
 
 fn extract_document_comments(doc: &str) -> String {
     doc.split('\n')
-        .filter_map(|line| {
-            let line = line.trim_start();
-            line.strip_prefix("///")
-        })
+        .filter_map(|line| line.trim_start().strip_prefix("///"))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -654,9 +649,7 @@ fn is_final(member: &cos::Member) -> bool {
     match member {
         cos::Member::Method(m) => typed(m.keywords.as_ref())
             .any(|k| matches!(k, cos::MethodKeyword::Final(flag) if flag.is_set())),
-        cos::Member::Property(
-            cos::Property::Simple { keywords, .. } | cos::Property::Relationship { keywords, .. },
-        ) => typed(keywords.as_ref())
+        cos::Member::Property(p) => typed(p.keywords().as_ref())
             .any(|k| matches!(k, cos::PropertyKeyword::Final(flag) if flag.is_set())),
         cos::Member::Parameter(p) => typed(p.keywords.as_ref())
             .any(|k| matches!(k, cos::ParameterKeyword::Final(flag) if flag.is_set())),
@@ -708,12 +701,13 @@ pub(crate) fn index_type(type_: &cos::IndexType) -> Option<bindings::IndexType> 
 
 // A `(a, b)` or single-item list value.
 fn class_list_text(value: &str) -> Vec<String> {
-    let value = value.trim();
-    let value = value
-        .strip_prefix('(')
-        .and_then(|v| v.strip_suffix(')'))
-        .unwrap_or(value);
-    crate::atelier::split_classes(value)
+    crate::atelier::split_classes(unbracketed(value, '(', ')'))
+}
+
+// `s` trimmed, without one `open`...`close` pair around it when there is one.
+fn unbracketed(s: &str, open: char, close: char) -> &str {
+    let s = s.trim();
+    (s.strip_prefix(open).and_then(|t| t.strip_suffix(close))).unwrap_or(s)
 }
 
 // `[ InitialExpression = v ]` with `v` a constant, a quoted string or a number; an expression in
@@ -904,16 +898,8 @@ fn process_member(
                     Member(_) => {}
                     Abstract(flag) => details.abstract_ = flag.is_set(),
                     Condition(v) => {
-                        let condition = v.value.print();
-                        let condition = condition.trim();
-                        details.condition = Some(
-                            condition
-                                .strip_prefix('{')
-                                .and_then(|c| c.strip_suffix('}'))
-                                .unwrap_or(condition)
-                                .trim()
-                                .to_string(),
-                        )
+                        details.condition =
+                            Some(unbracketed(&v.value.print(), '{', '}').trim().to_string())
                     }
                     CoshardWith(v) => details.coshard_with = Some(v.value.print()),
                     Data(v) => details.data = class_list_text(&v.value.print()),
@@ -946,11 +932,9 @@ fn process_member(
         }
         cos::Member::Parameter(parameter) => {
             let as_type = parameter.as_type.as_deref().map(Print::print);
-            let ty = as_type.as_deref().map(parameter_ty);
-            let default = parameter.default.as_ref().map(|v| v.deref().print());
             MemberKindSpecificDetails::Parameter {
-                ty,
-                default,
+                ty: as_type.as_deref().map(parameter_ty),
+                default: parameter.default.as_ref().map(|v| v.deref().print()),
                 as_type,
             }
         }

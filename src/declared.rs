@@ -12,6 +12,7 @@ use crate::IrisContext;
 use crate::bindings::{
     ClassInfo, IndexSubscript, MemberInfo, MemberKind, RefMode, RoutineInfo, Signature, Source,
 };
+use crate::check::types::{Const, mode_prefix, quoted};
 use crate::details::ClassDetails;
 
 /// The declaration format's version, semver: a file is readable while its major part matches.
@@ -188,7 +189,7 @@ fn member_name(name: &str) -> String {
     if plain {
         name.to_string()
     } else {
-        format!("\"{}\"", name.replace('"', "\"\""))
+        quoted(name)
     }
 }
 
@@ -198,6 +199,10 @@ fn keyword_list(entries: &[String]) -> String {
     } else {
         format!(" [ {} ]", entries.join(", "))
     }
+}
+
+fn valued(keyword: &str, value: Option<impl std::fmt::Display>) -> Option<String> {
+    value.map(|v| format!("{keyword} = {v}"))
 }
 
 fn as_type(t: Option<&str>) -> String {
@@ -217,8 +222,6 @@ fn spelled<T: std::fmt::Debug>(value: &T) -> String {
 
 fn formal(mode: Option<RefMode>, name: &str, t: Option<&str>, default: Option<&str>) -> String {
     let mode = match mode {
-        Some(RefMode::ByRef) => "ByRef ",
-        Some(RefMode::Output) => "Output ",
         // IRIS drops the default mode from what it reports; a parameter named like a mode keyword
         // (`SetOutput(ByVal Output As ...)`) needs it back to parse, as it did in its source.
         None if ["ByVal", "ByRef", "Output"]
@@ -227,7 +230,7 @@ fn formal(mode: Option<RefMode>, name: &str, t: Option<&str>, default: Option<&s
         {
             "ByVal "
         }
-        None => "",
+        mode => mode_prefix(mode),
     };
     let default = default
         .map(|d| {
@@ -245,13 +248,10 @@ fn formal(mode: Option<RefMode>, name: &str, t: Option<&str>, default: Option<&s
 // already in the `{}` any other default needs in class syntax (IRIS reports some with their braces
 // and some without).
 fn literal(d: &str) -> bool {
-    if d == "…" || d.parse::<f64>().is_ok() || (d.starts_with('{') && d.ends_with('}')) {
-        return true;
-    }
-    let Some(body) = d.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
-        return false;
-    };
-    body.split("\"\"").all(|part| !part.contains('"'))
+    d == "…"
+        || d.parse::<f64>().is_ok()
+        || (d.starts_with('{') && d.ends_with('}'))
+        || Const::from_literal(d).is_some()
 }
 
 // `(args) As Type` of a method or query.
@@ -276,18 +276,10 @@ fn sql_keywords(sig: &Signature, keywords: &mut Vec<String>) {
     let Some(sql) = &sig.sql else {
         return;
     };
-    if let Some(n) = &sql.name {
-        keywords.push(format!("SqlName = {n}"));
-    }
-    if sql.procedure {
-        keywords.push("SqlProc".to_string());
-    }
-    if sql.view {
-        keywords.push("SqlView".to_string());
-    }
-    if let Some(n) = &sql.view_name {
-        keywords.push(format!("SqlViewName = {n}"));
-    }
+    keywords.extend(valued("SqlName", sql.name.as_ref()));
+    keywords.extend(sql.procedure.then(|| "SqlProc".to_string()));
+    keywords.extend(sql.view.then(|| "SqlView".to_string()));
+    keywords.extend(valued("SqlViewName", sql.view_name.as_ref()));
 }
 
 // Whether a member of this header has a `{ }` body in the class syntax.
@@ -304,12 +296,8 @@ fn member_header(member: &MemberInfo) -> Option<String> {
     let name = member_name(&member.name);
     let prefix = format!("{} {name}", crate::bindings::member_keyword(&member.kind));
     let mut keywords = vec![];
-    if member.deprecated {
-        keywords.push("Deprecated".to_string());
-    }
-    if member.final_ {
-        keywords.push("Final".to_string());
-    }
+    keywords.extend(member.deprecated.then(|| "Deprecated".to_string()));
+    keywords.extend(member.final_.then(|| "Final".to_string()));
     let header = match &member.kind {
         MemberKind::Parameter(p) => {
             let value =
@@ -331,21 +319,13 @@ fn member_header(member: &MemberInfo) -> Option<String> {
                 p.t.as_deref()
                     .map(|t| format!(" As {of}{}", short(t)))
                     .unwrap_or_default();
-            if p.multidimensional {
-                keywords.push("MultiDimensional".to_string());
-            }
-            if let Some(n) = &p.sql_field_name {
-                keywords.push(format!("SqlFieldName = {n}"));
-            }
+            keywords.extend(p.multidimensional.then(|| "MultiDimensional".to_string()));
+            keywords.extend(valued("SqlFieldName", p.sql_field_name.as_ref()));
             format!("{prefix}{t}{}", keyword_list(&keywords))
         }
         MemberKind::Relationship(r) => {
-            if let Some(c) = r.cardinality {
-                keywords.push(format!("Cardinality = {}", spelled(&c)));
-            }
-            if let Some(n) = &r.sql_field_name {
-                keywords.push(format!("SqlFieldName = {n}"));
-            }
+            keywords.extend(valued("Cardinality", r.cardinality.map(|c| spelled(&c))));
+            keywords.extend(valued("SqlFieldName", r.sql_field_name.as_ref()));
             format!(
                 "{prefix}{}{}",
                 as_type(r.t.as_deref()),
@@ -396,18 +376,12 @@ fn member_header(member: &MemberInfo) -> Option<String> {
             if let Some(c) = &i.condition {
                 keywords.push(format!("Condition = {{{c}}}"));
             }
-            if let Some(c) = &i.coshard_with {
-                keywords.push(format!("CoshardWith = {c}"));
-            }
+            keywords.extend(valued("CoshardWith", i.coshard_with.as_ref()));
             if !i.data.is_empty() {
                 keywords.push(format!("Data = ({})", i.data.join(", ")));
             }
-            if let Some(n) = &i.sql_name {
-                keywords.push(format!("SqlName = {n}"));
-            }
-            if let Some(t) = i.type_ {
-                keywords.push(format!("Type = {}", spelled(&t)));
-            }
+            keywords.extend(valued("SqlName", i.sql_name.as_ref()));
+            keywords.extend(valued("Type", i.type_.map(|t| spelled(&t))));
             keywords.sort();
             format!(
                 "{prefix}{}{}",
@@ -437,42 +411,27 @@ impl From<&ClassInfo> for DeclaredClass {
             [one] => format!(" Extends {}", short(one)),
             many => format!(" Extends ({})", short(&many.join(", "))),
         };
-        let mut keywords = vec![];
-        if info.abstract_ {
-            keywords.push("Abstract".to_string());
-        }
-        if let Some(t) = info.class_type {
-            keywords.push(format!("ClassType = {}", spelled(&t)));
-        }
-        if info.deprecated {
-            keywords.push("Deprecated".to_string());
-        }
-        if info.final_ {
-            keywords.push("Final".to_string());
-        }
-        if let Some(i) = info.inheritance {
-            keywords.push(format!("Inheritance = {}", spelled(&i)));
-        }
-        if let Some(l) = info.language {
-            keywords.push(format!("Language = {}", spelled(&l)));
-        }
-        match info.procedure_block {
-            Some(true) => keywords.push("ProcedureBlock".to_string()),
-            Some(false) => keywords.push("Not ProcedureBlock".to_string()),
-            None => {}
-        }
-        if !info.property_class.is_empty() {
-            keywords.push(format!(
-                "PropertyClass = ({})",
-                short(&info.property_class.join(", "))
-            ));
-        }
-        if let Some(n) = &info.sql_row_id_name {
-            keywords.push(format!("SqlRowIdName = {n}"));
-        }
-        if let Some(n) = &info.sql_table_name {
-            keywords.push(format!("SqlTableName = {n}"));
-        }
+        let keywords: Vec<String> = [
+            info.abstract_.then(|| "Abstract".to_string()),
+            valued("ClassType", info.class_type.map(|t| spelled(&t))),
+            info.deprecated.then(|| "Deprecated".to_string()),
+            info.final_.then(|| "Final".to_string()),
+            valued("Inheritance", info.inheritance.map(|i| spelled(&i))),
+            valued("Language", info.language.map(|l| spelled(&l))),
+            info.procedure_block
+                .map(|on| format!("{}ProcedureBlock", if on { "" } else { "Not " })),
+            (!info.property_class.is_empty()).then(|| {
+                format!(
+                    "PropertyClass = ({})",
+                    short(&info.property_class.join(", "))
+                )
+            }),
+            valued("SqlRowIdName", info.sql_row_id_name.as_ref()),
+            valued("SqlTableName", info.sql_table_name.as_ref()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         Self {
             doc: info.doc.clone(),
             header: format!(
@@ -500,11 +459,7 @@ impl From<&ClassInfo> for DeclaredClass {
 
 fn doc_lines(doc: &str, out: &mut String) {
     if !doc.is_empty() {
-        for line in doc.split('\n') {
-            out.push_str("///");
-            out.push_str(line);
-            out.push('\n');
-        }
+        out.extend(doc.split('\n').flat_map(|line| ["///", line, "\n"]));
     }
 }
 
