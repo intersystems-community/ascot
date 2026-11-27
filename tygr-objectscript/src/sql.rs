@@ -1961,43 +1961,34 @@ pub mod leveled {
         }
     }
 
-    /// A negated predicate is `NOT(predicate)`: NOT BETWEEN, NOT IN, NOT LIKE, NOT %MATCHES, NOT %INLIST,
-    /// IS NOT NULL, IS NOT JSON, NOT IN (subquery), as NOT (= ANY), NOT[ and NOT], each measured on 2026.2 with
-    /// NULL rows (IRIS's own NOT (… ALL …) returns the rows of … ANY … there, not those of NOT[ ANY).
+    /// A negated predicate's NOT, dropped from it as a sugar field, is lifted around it: `a NOT BETWEEN 1 AND 2` is
+    /// `NOT(a BETWEEN 1 AND 2)`, for NOT IN, NOT LIKE, NOT %MATCHES, NOT %INLIST, IS NOT NULL, IS NOT JSON, NOT[ and
+    /// NOT] alike, each measured on 2026.2 with NULL rows.
     impl<B: Grammar + Default + Desugar> Desugar for BooleanFactor<B>
     where
         B::Core: Grammar + Default,
     {
         type Core = core::BooleanFactor<B::Core>;
         fn desugar(self) -> Self::Core {
-            let (before, noindex, predicate) = match self {
-                BooleanFactor::Not(before, not, cond) => {
-                    return core::BooleanFactor::Not(
+            use core::BooleanFactor::*;
+            match self {
+                Self::Not(before, not, cond) => {
+                    Not(before.desugar(), not.desugar(), cond.desugar())
+                }
+                Self::Paren(before, cond) => Paren(before.desugar(), cond.desugar()),
+                Self::Predicate(before, noindex, predicate) if negated(&predicate) => {
+                    let plain = Predicate((), noindex.desugar(), predicate.desugar());
+                    let plain = parenthesized(Box::new(core::BooleanValueExpression::one(plain)));
+                    Not(
                         before.desugar(),
-                        not.desugar(),
-                        cond.desugar(),
-                    );
+                        Default::default(),
+                        Box::new(Paren(None, plain)),
+                    )
                 }
-                BooleanFactor::Paren(before, condition) => {
-                    return core::BooleanFactor::Paren(before.desugar(), condition.desugar());
+                Self::Predicate(before, noindex, predicate) => {
+                    Predicate(before.desugar(), noindex.desugar(), predicate.desugar())
                 }
-                BooleanFactor::Predicate(before, noindex, predicate) => {
-                    (before, noindex, predicate)
-                }
-            };
-            let negated = negated(&predicate);
-            let (before, noindex, predicate) =
-                (before.desugar(), noindex.desugar(), predicate.desugar());
-            if !negated {
-                return core::BooleanFactor::Predicate(before, noindex, predicate);
             }
-            let plain = core::BooleanFactor::Predicate((), noindex, predicate);
-            let parenthesized = parenthesized(Box::new(core::BooleanValueExpression::one(plain)));
-            core::BooleanFactor::Not(
-                before,
-                Default::default(),
-                Box::new(core::BooleanFactor::Paren(None, parenthesized)),
-            )
         }
     }
 
