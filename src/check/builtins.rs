@@ -1879,7 +1879,7 @@ fn check_branches<'a, 'e>(
             .iter()
             .all(|v| covered.iter().any(|c| c.same_value(v)));
     }
-    flow.handle_throw()?;
+    flow.handle_void()?;
     for branch in taken {
         flow.merge(branch)?;
     }
