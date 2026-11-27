@@ -20,7 +20,7 @@ use tygr::{IntoInner, OLC, Parse, Print, Ranged};
 use tygr_objectscript::cos::{HMacro, MacroArg, MacroCallStruct, MacroedUnit};
 
 use crate::{
-    DocDetails, DocKind, WorkspaceStruct,
+    DocDetails, DocKind, RtnDetails, WorkspaceStruct,
     bindings::{self, Diagnostic, Location, Position},
     check::{Expansion, IrisLookup, SyntaxScope, TypeErrorKind},
     cos::{self, HMacroCommand, MacroRedex, Routine, RoutineWithMacro},
@@ -211,7 +211,7 @@ pub struct SourceMap {
     source_olc: OLC,
     source_lines: usize,
     pub(crate) expanded_olc: OLC,
-    expanded_text: String,
+    pub(crate) expanded_text: String,
     // OLC for each uri that ever appears as an `Origin::uri`.
     included: HashMap<String, OLC>,
     // Every top-level macro invocation's own source span, sorted by start — lets `hover` answer
@@ -221,7 +221,8 @@ pub struct SourceMap {
     pub(crate) unresolved: Vec<Diagnostic>,
     // The top-level file's own `#include` directives: source span and the include's name.
     include_directives: Vec<(std::ops::Range<usize>, String)>,
-    include_names: HashSet<String>,
+    // Every `#include` name this expansion asked for, resolved or not, nested ones included.
+    pub(crate) include_names: HashSet<String>,
 }
 
 impl SourceMap {
@@ -229,11 +230,6 @@ impl SourceMap {
         self.include_directives
             .iter()
             .map(|(span, name)| (self.source_olc.span(span.start, span.end), name.as_str()))
-    }
-
-    // Every `#include` name this expansion asked for, resolved or not, nested ones included.
-    pub(crate) fn include_names(&self) -> impl Iterator<Item = &String> {
-        self.include_names.iter()
     }
 
     // `None` past the expanded text, e.g. another member's declaration sharing this uri.
@@ -254,6 +250,12 @@ impl SourceMap {
         let expanded = self.offset(range.start)?..self.offset(range.end)?;
         let (source, fidelity) = self.map_range(expanded)?;
         Some((self.source_olc.span(source.start, source.end), fidelity))
+    }
+
+    // `range` in the source, when it maps there without covering a macro's expansion.
+    pub(crate) fn map_in_source(&self, range: bindings::Range) -> Option<bindings::Range> {
+        let (range, fidelity) = self.map_lsp_range(range)?;
+        (fidelity != Fidelity::Inexact).then_some(range)
     }
 
     // What the macro invocation at `position` (in the routine's original, unexpanded text)
@@ -472,10 +474,6 @@ impl SourceMap {
             hops.extend(self.expansion_info(range.start, uri));
         }
         Some((self.source_olc.span(top.start, top.end), fidelity, hops))
-    }
-
-    pub(crate) fn expanded_text(&self) -> &str {
-        &self.expanded_text
     }
 
     // An `Inexact` range goes to the invocation holding it; an `S` finding there is the macro's
@@ -1030,17 +1028,17 @@ impl WorkspaceStruct {
         }
     }
 
-    pub fn expand_rtn(
-        &self,
-        uri: &str,
-        src: &str,
-    ) -> Result<(Routine, SourceMap, MacroDefinitions), Vec<Diagnostic>> {
+    pub(crate) fn expand_rtn(&self, uri: &str, src: &str) -> Result<RtnDetails, Vec<Diagnostic>> {
         let mut dones = DoneList::default();
         let result = self.expand_rtn_helper(src, &mut dones);
         let failed_include = !dones.failed_includes.is_empty();
         let map = dones.into_source_map(src);
         match result {
-            Ok((routine, definitions)) => Ok((routine, map, definitions)),
+            Ok((routine, definitions)) => Ok(RtnDetails {
+                routine,
+                map,
+                definitions,
+            }),
             // A macro left unexpanded by an unresolved `#include` often doesn't re-parse (same
             // failure mode `note_failed_include` already calls out for `#include` itself) --
             // report the missing include(s), the actionable root cause, instead of the resulting
@@ -1090,8 +1088,8 @@ impl WorkspaceStruct {
         for name in names {
             if let Ok(Some(include)) = self.resolve_include(name) {
                 let (uri, text, _) = &*include;
-                if let Ok((routine, map, _)) = self.expand_rtn(uri, text) {
-                    labels.extend(crate::check::labels_of(&map, &routine, Some(uri)));
+                if let Ok(rtn) = self.expand_rtn(uri, text) {
+                    labels.extend(crate::check::labels_of(&rtn.map, &rtn.routine, Some(uri)));
                 }
             }
         }
@@ -1574,13 +1572,13 @@ mod tests {
     const SRC: &str = "ROUTINE X\n#define SETIT(%a) Set %a = $$Bar()\n#define CALLFOO Do Foo(1)\n $$$SETIT(yy)\n $$$CALLFOO\nFoo(a)\n Quit\nBar()\n Quit 1\n";
 
     fn map() -> SourceMap {
-        let workspace = crate::build_workspace_struct(None, None);
-        workspace.expand_rtn("X.mac", SRC).unwrap().1
+        let workspace = WorkspaceStruct::default();
+        workspace.expand_rtn("X.mac", SRC).unwrap().map
     }
 
     // Where `text` is in the expanded text and in the source.
     fn find(map: &SourceMap, text: &str) -> (usize, usize) {
-        let expanded = map.expanded_text().find(text).unwrap();
+        let expanded = map.expanded_text.find(text).unwrap();
         (expanded, SRC.find(text).unwrap())
     }
 
@@ -1605,7 +1603,7 @@ mod tests {
     #[test]
     fn a_macro_body_is_inexact_and_stands_for_its_invocation() {
         let map = map();
-        let set = map.expanded_text().find("Set yy").unwrap();
+        let set = map.expanded_text.find("Set yy").unwrap();
         let setit = invocation("$$$SETIT(yy)");
         assert_eq!(
             map.map_point(set + 1),
@@ -1621,7 +1619,7 @@ mod tests {
             map.map_range(set - 1..set + 3),
             Some((covering, Fidelity::Inexact))
         );
-        let foo = map.expanded_text().find("Foo(1)").unwrap();
+        let foo = map.expanded_text.find("Foo(1)").unwrap();
         let callfoo = invocation("$$$CALLFOO");
         assert_eq!(
             map.map_range(foo + 1..foo + 1),
@@ -1635,10 +1633,10 @@ mod tests {
         assert_eq!(map.map_point(0), Some((0, Fidelity::Exact)));
         let (e, s) = find(&map, "Quit 1");
         assert_eq!(map.map_range(e..e + 6), Some((s..s + 6, Fidelity::Exact)));
-        let end = map.expanded_text().len();
+        let end = map.expanded_text.len();
         assert_eq!(map.map_point(end), Some((SRC.len(), Fidelity::Exact)));
         // A dropped `#define` line is a macro's edge, not the document's.
-        let line = map.expanded_text().find("\n Set yy").unwrap();
+        let line = map.expanded_text.find("\n Set yy").unwrap();
         let invocation = invocation("\n $$$SETIT(yy)");
         assert_eq!(
             map.map_point(line),
