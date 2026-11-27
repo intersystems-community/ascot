@@ -1174,11 +1174,13 @@ pub mod leveled {
         _: Kw!("FROM"),
         expr: ValueExpression<Space1>,
     ) -> core::TrimArgs {
-        trim(Default::default(), chars.desugar().after(), expr.desugar())
+        let both = core::TrimSpecification::Both(Default::default());
+        trim(both, chars.desugar().after(), expr.desugar())
     }
 
     fn trim_both_space(expr: ValueExpression) -> core::TrimArgs {
-        trim(Default::default(), string(" "), expr.desugar().after())
+        let both = core::TrimSpecification::Both(Default::default());
+        trim(both, string(" "), expr.desugar().after())
     }
 
     fn trim(
@@ -1879,7 +1881,7 @@ pub mod leveled {
             ) => {
                 let quantifier = match quantifier {
                     core::Quantifier::All(_) => core::Quantifier::Any(Default::default()),
-                    core::Quantifier::Any(_) => Default::default(),
+                    core::Quantifier::Any(_) => core::Quantifier::All(Default::default()),
                 };
                 negation(core::Factor::Quantified(
                     noindex, lhs, sp, op, sp2, quantifier, sp3, query,
@@ -2381,7 +2383,8 @@ pub mod leveled {
             kw: Default::default(),
             count: offset.count.desugar(),
         };
-        let limit = fetch.map_or_else(Default::default, |(_, fetch)| fetch_count(fetch));
+        let all = || core::LimitSpecification::All(Default::default(), Default::default());
+        let limit = fetch.map_or_else(all, |(_, fetch)| fetch_count(fetch));
         limit_offset(limit, Some((Default::default(), offset)))
     }
 
