@@ -681,9 +681,7 @@ fn check_block_body<'a>(
     // IRIS reaches a label inside a block from the whole body, so a `Goto` to one resolves; the
     // label itself is reported where its block is checked.
     if is_body {
-        let mut inside = vec![];
-        labels_in_blocks(body, &mut inside);
-        let inside: Vec<_> = (inside.into_iter())
+        let inside: Vec<_> = labels_in_blocks(body)
             .filter_map(|elem| details::routine_element_kind(env, elem))
             .collect();
         let inside: Vec<_> = inside.iter().map(|d| (d, false)).collect();
@@ -759,55 +757,70 @@ fn check_element_body<'a>(
 }
 
 // The labels inside the blocks of `body`, at any depth.
-fn labels_in_blocks<'b>(body: &'b ProcedureBody, out: &mut Vec<&'b cos::RoutineElement>) {
-    walk_blocks(body, &mut |it| {
-        if let Right(body) = it {
-            out.extend(body.subroutines.iter().flat_map(|subs| subs.items.iter()));
-        }
-    });
+fn labels_in_blocks(body: &ProcedureBody) -> impl Iterator<Item = &cos::RoutineElement> {
+    walk_blocks(body).filter_map(Either::right)
 }
 
 // IRIS makes SQLCODE and a class method's SQL host variables public, not a routine's (2026.2).
 fn sql_publics(body: &ProcedureBody) -> HashSet<String> {
-    let mut names = HashSet::new();
-    walk_blocks(body, &mut |it| {
-        if let Left(Command::ESQL(_, statement, _)) = it {
-            let hosts = sql::analyze(statement, None);
-            names.insert("SQLCODE".to_string());
-            names.extend(
-                (hosts.reads.into_iter().chain(hosts.writes))
-                    .map(|(name, _)| name)
-                    .filter(|name| !flow::is_percent_variable(name)),
-            );
-        }
+    let statements = walk_blocks(body).filter_map(|it| match it {
+        Left(Command::ESQL(_, statement, _)) => Some(statement),
+        _ => None,
     });
+    let mut names = HashSet::new();
+    for statement in statements {
+        let hosts = sql::analyze(statement, None);
+        names.insert("SQLCODE".to_string());
+        names.extend(
+            (hosts.reads.into_iter().chain(hosts.writes))
+                .map(|(name, _)| name)
+                .filter(|name| !flow::is_percent_variable(name)),
+        );
+    }
     names
 }
 
-// Every command of `body`, its labels' and its blocks' included, and every body a block nests.
+// Every command of `body` at any depth, and every label a nested block declares, before its lines.
 fn walk_blocks<'b>(
     body: &'b ProcedureBody,
-    visit: &mut dyn FnMut(Either<&'b Command, &'b ProcedureBody>),
-) {
-    let labels = body.subroutines.iter().flat_map(|subs| subs.items.iter());
-    let in_labels = labels.filter_map(|elem| match elem {
+) -> impl Iterator<Item = Either<&'b Command, &'b cos::RoutineElement>> + 'b {
+    body_commands(body).flat_map(walk_command)
+}
+
+// Boxed, as a recursive `impl Iterator` cannot be named.
+fn walk_command<'b>(
+    command: &'b Command,
+) -> Box<dyn Iterator<Item = Either<&'b Command, &'b cos::RoutineElement>> + 'b> {
+    let (bodies, commands) = nested(command);
+    let in_bodies = bodies.into_iter().flat_map(|body| {
+        (labels_in(body).map(Right)).chain(body_commands(body).flat_map(walk_command))
+    });
+    Box::new(
+        (once(Left(command)))
+            .chain(commands.into_iter().flat_map(walk_command))
+            .chain(in_bodies),
+    )
+}
+
+fn labels_in(body: &ProcedureBody) -> impl Iterator<Item = &cos::RoutineElement> {
+    body.subroutines.iter().flat_map(|subs| subs.items.iter())
+}
+
+// The body's main commands, then its labels' lines'.
+fn body_commands(body: &ProcedureBody) -> impl Iterator<Item = &Command> {
+    let in_labels = labels_in(body).filter_map(|elem| match elem {
         cos::RoutineElement::Subroutine(sub) => Some(sub.body.as_command_lines()),
         cos::RoutineElement::Procedure(p) => Some(p.trailer.as_ref()?.lines.as_command_lines()),
     });
-    let commands =
-        (procedure_commands(&body.main)).chain(in_labels.flatten().flat_map(commands_of));
-    for command in commands {
-        walk_command(command, visit);
-    }
+    (procedure_commands(&body.main))
+        .chain(in_labels.flatten().flat_map(commands_of))
+        .map(|command| &**command)
 }
 
-fn walk_command<'b>(
-    command: &'b Command,
-    visit: &mut dyn FnMut(Either<&'b Command, &'b ProcedureBody>),
-) {
-    visit(Left(command));
-    let mut blocks: Vec<&'b cos::Block> = vec![];
-    let mut bodies: Vec<&'b ProcedureBody> = vec![];
+// The bodies a command's blocks nest, and the commands of its same-line blocks.
+fn nested(command: &Command) -> (Vec<&ProcedureBody>, Vec<&Command>) {
+    let mut blocks: Vec<&cos::Block> = vec![];
+    let mut bodies: Vec<&ProcedureBody> = vec![];
     match command {
         Command::If(cos::IfCommand {
             branches: Some(branches),
@@ -833,20 +846,14 @@ fn walk_command<'b>(
         Command::DoWhile(do_while) => bodies.push(&do_while.iter.block.wrapped),
         _ => {}
     }
+    let mut commands = vec![];
     for block in blocks {
         match block {
             cos::Block::Curry(block) => bodies.push(&block.block.wrapped),
-            cos::Block::Command(commands) => {
-                for command in &commands.items {
-                    walk_command(command, visit);
-                }
-            }
+            cos::Block::Command(cmds) => commands.extend(cmds.items.iter().map(|c| &**c)),
         }
     }
-    for body in bodies {
-        visit(Right(body));
-        walk_blocks(body, visit);
-    }
+    (bodies, commands)
 }
 
 fn check_label_body<'a>(
