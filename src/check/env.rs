@@ -32,7 +32,7 @@ use crate::details::{
 use crate::diagnostic_filter::Filter;
 use crate::{
     Definitions, DocKind, MacroDefinitions, Name, SourceMap, WorkspaceStruct, bindings, cos,
-    macro_expand::{BodyMacros, Fidelity},
+    macro_expand::Fidelity,
 };
 use std::marker::PhantomData;
 
@@ -993,12 +993,11 @@ impl<'a> WorkspaceEnv<'a> {
         ty: &Ty,
         mem: String,
         range: bindings::Range,
-        own: bool,
     ) -> Result<Member<N::Ty>, TypeError> {
         let Ty::OREF(obj) = ty else {
             return Ok(Member::undeclared(N::Ty::default()));
         };
-        if let Some(found) = self.lookup_mem::<N>(ty, &mem, range, own)? {
+        if let Some(found) = self.lookup_mem::<N>(ty, &mem, range)? {
             return Ok(found);
         }
         // No class declares it: reported softly, and taken as present and untyped, so every such
@@ -1052,12 +1051,9 @@ impl<'a> WorkspaceEnv<'a> {
         ty: &Ty,
         mem: &str,
         range: bindings::Range,
-        own: bool,
     ) -> Result<Option<Member<N::Ty>>, TypeError> {
-        match self.find_mem::<N>(ty, mem, range, own)? {
-            Some(found) => Ok(Some(found)),
-            None => Ok(self.dispatched_mem::<N>(ty, mem, range, own)),
-        }
+        let found = self.find_mem::<N>(ty, mem, range)?;
+        Ok(found.or_else(|| self.dispatched_mem::<N>(ty, mem, range)))
     }
 
     // `lookup_mem` short of the dispatch: what a class declares.
@@ -1066,12 +1062,11 @@ impl<'a> WorkspaceEnv<'a> {
         ty: &Ty,
         mem: &str,
         range: bindings::Range,
-        own: bool,
     ) -> Result<Option<Member<N::Ty>>, TypeError> {
         let Ty::OREF(obj) = ty else {
             return Ok(Some(Member::undeclared(N::Ty::default())));
         };
-        self.find::<N>(obj, mem, own, range)
+        self.find::<N>(obj, mem, true, range)
             .map_err(|err| err.into_error(|| range))
     }
 
@@ -1081,12 +1076,11 @@ impl<'a> WorkspaceEnv<'a> {
         ty: &Ty,
         mem: &str,
         range: bindings::Range,
-        own: bool,
     ) -> Option<Member<N::Ty>> {
         let Ty::OREF(obj) = ty else {
             return None;
         };
-        let hook = |hook: &str| Some(self.find::<Methods>(obj, hook, own, range).ok()??.ty);
+        let hook = |hook: &str| Some(self.find::<Methods>(obj, hook, true, range).ok()??.ty);
         N::dispatched(obj, mem, hook).map(Member::undeclared)
     }
 
@@ -1559,11 +1553,6 @@ impl<'a> WorkspaceEnv<'a> {
         self.add_soft_diagnostic(diagnostic.at(range).into());
     }
 
-    // Where the include file `name` is declared, for go-to-definition on an `Include`.
-    pub(crate) fn include_definition(&self, name: &str) -> Option<bindings::Location> {
-        self.workspace.inc_definition(name)
-    }
-
     pub(crate) fn resolve_class_includes(
         &self,
         names: &[String],
@@ -1571,10 +1560,6 @@ impl<'a> WorkspaceEnv<'a> {
         let (definitions, failed, include_names) = self.workspace.resolve_class_includes(names);
         self.touch_includes(include_names);
         (definitions, failed)
-    }
-
-    pub(crate) fn include_labels(&self, names: &[String]) -> Labels {
-        self.workspace.include_labels(names)
     }
 
     pub(crate) fn implicit_class_definitions(&self) -> MacroDefinitions {
@@ -1587,19 +1572,6 @@ impl<'a> WorkspaceEnv<'a> {
         self.touched
             .borrow_mut()
             .extend(include_names.into_iter().map(|name| (DocKind::Inc, name)));
-    }
-
-    pub(crate) fn expand_method_body<'b>(
-        &self,
-        uri: &str,
-        method: &str,
-        header: &str,
-        body: &str,
-        base_definitions: &'b MacroDefinitions,
-        body_macros: &BodyMacros,
-    ) -> Result<(String, SourceMap, Definitions<'b>, BodyMacros), bindings::Diagnostic> {
-        self.workspace
-            .expand_method_body(uri, method, header, body, base_definitions, body_macros)
     }
 
     // A workspace-wide routine's label -> signature map, for a cross-routine label call
@@ -1804,6 +1776,11 @@ impl<'a> WorkspaceEnv<'a> {
             qualifying: RefCell::new(HashSet::new()),
             sql: RefCell::new(Default::default()),
         }
+    }
+
+    // The workspace's style rules, if a style was given.
+    pub(crate) fn style(&self) -> Option<&crate::style::Styles> {
+        self.workspace.style.as_ref()
     }
 
     pub(crate) fn touched_names(&self) -> HashSet<Name> {
@@ -2016,11 +1993,6 @@ impl<'a> DocumentEnv<'a> {
         }
     }
 
-    // The workspace's style rules, if a style was given.
-    pub(crate) fn style(&self) -> Option<&crate::style::Styles> {
-        self.base.workspace.style.as_ref()
-    }
-
     pub fn with_source_map(mut self, source_map: &'a SourceMap) -> Self {
         self.source_map = Some(source_map);
         self
@@ -2175,20 +2147,12 @@ pub struct CodeEnv<'a> {
 }
 
 impl<'a> CodeEnv<'a> {
-    pub(crate) fn style(&self) -> Option<&crate::style::Styles> {
-        self.base.style()
-    }
-
     pub(crate) fn uri(&self) -> &str {
         self.base.uri()
     }
 
-    pub(crate) fn inlay_hints(&self) -> &bindings::InlayHintOptions {
-        &self.base.base.workspace.inlay_hints
-    }
-
     pub(crate) fn soft_diagnostic(&self, err: TypeError) {
-        self.base.base.add_soft_diagnostic(err.into())
+        self.add_soft_diagnostic(err.into())
     }
 
     /// Whether a collection's element class is a datatype; `None` while it is unresolved.
