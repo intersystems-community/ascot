@@ -35,23 +35,15 @@ impl<T: Parse, Sep: Parse> Parse for VecSep<T, Sep> {
                 seps: Vec::new(),
             })
         });
-        loop {
-            let Some((sep, after_sep)) = Sep::parse_at::<S, L>(input, pos, state.reborrow()) else {
-                break;
-            };
-            let Some((item, end)) = T::parse_at::<S, L>(input, after_sep, state.reborrow()) else {
-                break;
-            };
-            if end == pos {
-                break; // a pair matching empty would loop forever
-            }
+        // a pair matching empty would loop forever
+        while let Some((pair, end)) = <(Sep, T)>::parse_at::<S, L>(input, pos, state.reborrow())
+            && end != pos
+        {
             vec_sep = S::and_then(vec_sep, |mut vec_sep| {
-                S::and_then(sep, |sep| {
-                    S::and_then(item, |item| {
-                        vec_sep.seps.push(sep);
-                        vec_sep.items.push(item);
-                        S::output(|| vec_sep)
-                    })
+                S::and_then(pair, |(sep, item)| {
+                    vec_sep.seps.push(sep);
+                    vec_sep.items.push(item);
+                    S::output(|| vec_sep)
                 })
             });
             pos = end;
