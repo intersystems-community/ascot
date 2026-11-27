@@ -143,14 +143,11 @@ impl DocKind {
     // Purely a function of the extension of `uri`'s path -- known even for a uri that failed
     // tier A (or was never opened at all), unlike anything actually stored in `doc_cache`.
     pub fn from_uri(uri: &str) -> Option<Self> {
-        let ext = uri_path(uri)
-            .rsplit('.')
-            .next()
-            .map(str::to_ascii_lowercase);
-        match ext.as_deref() {
-            Some("cls") => Some(DocKind::Cls),
-            Some("inc") => Some(DocKind::Inc),
-            Some("mac" | "int") => Some(DocKind::Rtn),
+        let ext = uri_path(uri).rsplit('.').next()?.to_ascii_lowercase();
+        match ext.as_str() {
+            "cls" => Some(DocKind::Cls),
+            "inc" => Some(DocKind::Inc),
+            "mac" | "int" => Some(DocKind::Rtn),
             _ => None,
         }
     }
@@ -210,7 +207,7 @@ impl DocCache {
 
 // The output of actually running the checker: diagnostics, inlay hints, and go-to-definition
 // references all come from the same traversal, so they're computed and cached together.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct CachedCheck {
     diagnostics: Vec<Diagnostic>,
     hints: Vec<InlayHint>,
@@ -219,6 +216,7 @@ struct CachedCheck {
     line_filters: diagnostic_filter::LineFilters,
 }
 
+#[derive(Default)]
 pub struct WorkspaceStruct {
     // `RefCell` wraps only the `Ok` side -- per-entry, not around the whole map, so mutating
     // one uri's cached tiers (e.g. resolving a `#include` mid-expansion) can't conflict with
@@ -428,6 +426,15 @@ impl WorkspaceStruct {
         Some((kind, cell.borrow().name(uri)))
     }
 
+    // Every parsed document: its uri, kind and cell.
+    fn docs(&self) -> impl Iterator<Item = (&str, DocKind, &RefCell<DocCache>)> {
+        self.doc_cache.iter().filter_map(|(uri, entry)| {
+            let kind = DocKind::from_uri(uri)
+                .expect("a uri in doc_cache always has a recognized extension");
+            Some((uri.as_str(), kind, entry.as_ref().ok()?))
+        })
+    }
+
     fn invalidate(&self, uri: &str) -> Vec<String> {
         let mut affected = vec![uri.to_string()];
         if let Some(name) = self.name_of(uri) {
@@ -450,20 +457,13 @@ impl WorkspaceStruct {
                 }
             }
         }
-        let mut affected = vec![];
-        for (uri, entry) in &self.doc_cache {
-            let Ok(cell) = entry else {
-                continue;
-            };
-            let kind = DocKind::from_uri(uri)
-                .expect("a uri in doc_cache always has a recognized extension");
-            if !seen.contains(&(kind, cell.borrow().name(uri))) {
-                continue;
-            }
-            drop_derived(cell, kind == DocKind::Rtn);
-            affected.push(uri.clone());
-        }
-        affected
+        self.docs()
+            .filter(|&(uri, kind, cell)| seen.contains(&(kind, cell.borrow().name(uri))))
+            .map(|(uri, kind, cell)| {
+                drop_derived(cell, kind == DocKind::Rtn);
+                uri.to_string()
+            })
+            .collect()
     }
 
     fn forget_include_definitions(&self) {
@@ -478,12 +478,10 @@ impl WorkspaceStruct {
             self.forget_include_definitions();
             self.iris_includes.borrow_mut().clear();
         }
-        self.doc_cache
-            .iter()
-            .filter_map(|(uri, entry)| {
-                let expansion = server && DocKind::from_uri(uri) == Some(DocKind::Rtn);
-                drop_derived(entry.as_ref().ok()?, expansion);
-                Some(uri.clone())
+        self.docs()
+            .map(|(uri, kind, cell)| {
+                drop_derived(cell, server && kind == DocKind::Rtn);
+                uri.to_string()
             })
             .collect()
     }
@@ -606,9 +604,7 @@ impl WorkspaceStruct {
         name: String,
     ) -> Vec<String> {
         let mut affected = vec![];
-        if old_name.as_deref() != Some(name.as_str())
-            && let Some(old_name) = old_name
-        {
+        if let Some(old_name) = old_name.filter(|old| *old != name) {
             affected.extend(self.unindex(kind, uri, &old_name));
         }
         // `open` then invalidates by name, reaching a previous owner (checked before this one
@@ -623,13 +619,11 @@ impl WorkspaceStruct {
     // remembers one owner per name (whichever claimed it last), so it can't answer this -- scan
     // `doc_cache`'s own tier-A names instead, same O(workspace) cost as a reverse index would be.
     fn others_named(&self, kind: DocKind, uri: &str, name: &str) -> impl Iterator<Item = String> {
-        self.doc_cache.iter().filter_map(move |(other, entry)| {
-            let cell = entry.as_ref().ok()?;
-            (other != uri
-                && DocKind::from_uri(other) == Some(kind)
-                && cell.borrow().name(other) == name)
-                .then(|| other.clone())
-        })
+        self.docs()
+            .filter(move |&(other, other_kind, cell)| {
+                other != uri && other_kind == kind && cell.borrow().name(other) == name
+            })
+            .map(|(other, ..)| other.to_string())
     }
 
     // Drops `uri`'s claim on `name`, handing it to another document of that kind still declaring
@@ -658,10 +652,6 @@ impl WorkspaceStruct {
         Some(check::TypeError::duplicate_class_name(range, name.to_string(), other).into())
     }
 
-    fn workspace_env(&self) -> WorkspaceEnv<'_> {
-        WorkspaceEnv::new(self)
-    }
-
     pub(crate) fn rtn_details(&self, uri: &str) -> Result<Arc<RtnDetails>, Vec<Diagnostic>> {
         match self.ensure_details(uri)? {
             DocDetails::Rtn(details, _) => Ok(details),
@@ -684,41 +674,30 @@ impl WorkspaceStruct {
         let doc = &mut *entry;
         let text = doc.text.as_str();
         let fresh = doc.details.is_none();
+        let kind =
+            DocKind::from_uri(uri).expect("a uri in doc_cache always has a recognized extension");
+        let syntax_error = |err| vec![tygr_error_to_diagnostics(err, text, kind.syntax_scope())];
         let details = doc
             .details
-            .get_or_insert_with(|| match DocKind::from_uri(uri) {
-                Some(DocKind::Cls) => ClassDetails::try_from(text)
+            .get_or_insert_with(|| match kind {
+                DocKind::Cls => ClassDetails::try_from(text)
                     .map(|details| DocDetails::Cls(Arc::new(details), None))
-                    .map_err(|err| {
-                        vec![tygr_error_to_diagnostics(
-                            err,
-                            text,
-                            check::SyntaxScope::ClassDefinition,
-                        )]
+                    .map_err(syntax_error),
+                DocKind::Rtn => self
+                    .expand_rtn(uri, text)
+                    .map(|(routine, map, definitions)| {
+                        DocDetails::Rtn(
+                            Arc::new(RtnDetails {
+                                routine,
+                                map,
+                                definitions,
+                            }),
+                            None,
+                        )
                     }),
-                Some(DocKind::Rtn) => {
-                    self.expand_rtn(uri, text)
-                        .map(|(routine, map, definitions)| {
-                            DocDetails::Rtn(
-                                Arc::new(RtnDetails {
-                                    routine,
-                                    map,
-                                    definitions,
-                                }),
-                                None,
-                            )
-                        })
-                }
-                Some(DocKind::Inc) => cos::RoutineWithMacro::parse(text)
+                DocKind::Inc => cos::RoutineWithMacro::parse(text)
                     .map(|parsed| DocDetails::Inc(Arc::new(parsed)))
-                    .map_err(|err| {
-                        vec![tygr_error_to_diagnostics(
-                            err,
-                            text,
-                            check::SyntaxScope::IncludeFile,
-                        )]
-                    }),
-                None => unreachable!("a uri in doc_cache always has a recognized extension"),
+                    .map_err(syntax_error),
             })
             .clone();
         // `rtn_details` (symbols, another routine's label lookup) may get here before
@@ -734,13 +713,9 @@ impl WorkspaceStruct {
     // Every open document of `kind` whose header name starts with `prefix`. Tier A alone decides
     // the matches, so only they pay for a full (tier B) parse.
     fn uris_with_prefix(&self, kind: DocKind, prefix: &str) -> Vec<String> {
-        self.doc_cache
-            .iter()
-            .filter_map(|(uri, entry)| {
-                let doc = entry.as_ref().ok()?.borrow();
-                (DocKind::from_uri(uri) == Some(kind) && doc.name.it.starts_with(prefix))
-                    .then(|| uri.clone())
-            })
+        self.docs()
+            .filter(|&(_, k, cell)| k == kind && cell.borrow().name.it.starts_with(prefix))
+            .map(|(uri, ..)| uri.to_string())
             .collect()
     }
 
@@ -800,29 +775,22 @@ impl WorkspaceStruct {
     // `ensure_details` already returned -- no separate lookup needed) before computing a fresh
     // one from its tier-B payload.
     fn ensure_checked(&self, uri: &str) -> CachedCheck {
-        let empty = CachedCheck {
-            diagnostics: vec![],
-            hints: vec![],
-            references: vec![],
-            hover_types: vec![],
-            line_filters: Default::default(),
-        };
         if !self.doc_cache.contains_key(uri) {
-            return empty;
+            return CachedCheck::default();
         }
         let details = match self.ensure_details(uri) {
             Ok(details) => details,
             Err(diagnostics) => {
                 return CachedCheck {
                     diagnostics,
-                    ..empty
+                    ..Default::default()
                 };
             }
         };
         let mut result = match details {
             DocDetails::Cls(_, Some(check)) | DocDetails::Rtn(_, Some(check)) => return check,
             DocDetails::Cls(cls, None) => {
-                let env = self.workspace_env();
+                let env = WorkspaceEnv::new(self);
                 let text = self.doc_text(uri).unwrap_or_default();
                 let olc = OLC::new(&text);
                 let doc_env = check::DocumentEnv::new(&env, &olc, uri);
@@ -853,7 +821,7 @@ impl WorkspaceStruct {
                 }
             }
             DocDetails::Rtn(rtn, None) => {
-                let env = self.workspace_env();
+                let env = WorkspaceEnv::new(self);
                 let doc_env = check::DocumentEnv::new(&env, &rtn.map.expanded_olc, uri)
                     .with_source_map(&rtn.map);
                 let mut diagnostics = check::check_rtn(&doc_env, &rtn.routine, &rtn.definitions);
@@ -933,7 +901,7 @@ impl WorkspaceStruct {
                 }
             }
             // An include that parses has nothing to check on its own -- see `DocDetails::Inc`.
-            DocDetails::Inc(_) => return empty,
+            DocDetails::Inc(_) => return CachedCheck::default(),
         };
         // Recorded twice over, as for an argument a macro body pastes twice.
         dedup(&mut result.diagnostics, |d| {
@@ -1073,19 +1041,9 @@ fn iris_handle(env: Vec<bindings::Env>) -> Result<Option<IrisHandle>, String> {
 
 fn build_workspace_struct(iris: Option<IrisHandle>, style: Option<Style>) -> WorkspaceStruct {
     WorkspaceStruct {
-        doc_cache: HashMap::new(),
-        depends_on: RefCell::new(HashMap::new()),
-        dependents: RefCell::new(HashMap::new()),
-        class_index: RefCell::new(HashMap::new()),
-        inc_index: RefCell::new(HashMap::new()),
-        rtn_index: RefCell::new(HashMap::new()),
         iris,
         style: style.as_ref().map(style::Styles::new),
-        inlay_hints: bindings::InlayHintOptions::default(),
-        diagnostic_filter: diagnostic_filter::Filter::default(),
-        error_names: RefCell::new(None),
-        iris_includes: RefCell::new(HashMap::new()),
-        implicit_definitions: RefCell::new(None),
+        ..Default::default()
     }
 }
 
@@ -1146,47 +1104,39 @@ impl Workspace {
 }
 
 impl bindings::GuestWorkspace for Workspace {
-    #[allow(async_fn_in_trait)]
     fn new() -> Self {
         Workspace(RefCell::new(build_workspace_struct(None, None)))
     }
 
-    #[allow(async_fn_in_trait)]
     fn open(&self, uri: String, text: String) -> Vec<String> {
         self.borrow_mut().open(uri, text)
     }
 
-    #[allow(async_fn_in_trait)]
     fn close(&self, uri: String) -> Vec<String> {
         self.borrow_mut().remove_uri(&uri)
     }
 
-    #[allow(async_fn_in_trait)]
     fn set_env(&self, env: Vec<bindings::Env>) -> Result<Vec<String>, String> {
         Ok(self.set_iris(iris_handle(env)?))
     }
 
-    #[allow(async_fn_in_trait)]
     fn set_style(&self, style: Option<Style>) -> Vec<String> {
         let mut this = self.borrow_mut();
         this.style = style.as_ref().map(style::Styles::new);
         this.forget(false)
     }
 
-    #[allow(async_fn_in_trait)]
     fn set_inlay_hints(&self, options: bindings::InlayHintOptions) -> Vec<String> {
         let mut this = self.borrow_mut();
         this.inlay_hints = options;
         this.forget(false)
     }
 
-    #[allow(async_fn_in_trait)]
     fn set_diagnostics(&self, diagnostics: Vec<String>) -> Result<Vec<String>, String> {
         self.set_diagnostic_filter(diagnostics.join(" ").parse()?);
         Ok(self.uris())
     }
 
-    #[allow(async_fn_in_trait)]
     fn diagnostics(&self, uri: String) -> Vec<bindings::Diagnostic> {
         let this = self.borrow();
         if this.generated(&uri) {
@@ -1199,7 +1149,6 @@ impl bindings::GuestWorkspace for Workspace {
             .collect()
     }
 
-    #[allow(async_fn_in_trait)]
     fn inlay_hint(&self, uri: String, _range: bindings::Range) -> Vec<InlayHint> {
         let this = self.borrow();
         if this.generated(&uri) {
@@ -1208,7 +1157,6 @@ impl bindings::GuestWorkspace for Workspace {
         this.ensure_checked(&uri).hints
     }
 
-    #[allow(async_fn_in_trait)]
     fn format(
         &self,
         uri: String,
@@ -1233,7 +1181,6 @@ impl bindings::GuestWorkspace for Workspace {
         Some(edits.into_iter().map(|edit| edit.text_edit(&olc)).collect())
     }
 
-    #[allow(async_fn_in_trait)]
     fn code_actions(&self, uri: String, range: bindings::Range) -> Vec<bindings::CodeAction> {
         let this = self.borrow();
         if this.generated(&uri) {
@@ -1274,7 +1221,6 @@ impl bindings::GuestWorkspace for Workspace {
     // `Include`/`#include` names. Doesn't cover anything the checker resolves to no location
     // (e.g. `%New`, unmapped IRIS system classes), computed/indirect `Goto`, or anything in SQL
     // (which isn't type-checked yet).
-    #[allow(async_fn_in_trait)]
     fn definition(
         &self,
         uri: String,
@@ -1298,7 +1244,6 @@ impl bindings::GuestWorkspace for Workspace {
     // of `definition`. `position` may be on a reference itself (same lookup `definition` does)
     // or on the declaration site (found by checking every recorded reference's target instead of
     // its source), so this works whether invoked from a call site or from the declaration.
-    #[allow(async_fn_in_trait)]
     fn references(
         &self,
         uri: String,
@@ -1306,28 +1251,21 @@ impl bindings::GuestWorkspace for Workspace {
         include_declaration: bool,
     ) -> Vec<bindings::Location> {
         let this = self.borrow();
-        let uris: Vec<String> = this.doc_cache.keys().cloned().collect();
-        let all: Vec<(String, bindings::Range, bindings::Location)> = uris
-            .iter()
+        let all: Vec<(String, bindings::Range, bindings::Location)> = (this.doc_cache.keys())
             .flat_map(|doc_uri| {
-                this.ensure_checked(doc_uri)
-                    .references
-                    .into_iter()
-                    .map(|(range, location)| (doc_uri.clone(), range, location))
-                    .collect::<Vec<_>>()
+                (this.ensure_checked(doc_uri).references.into_iter())
+                    .map(move |(range, location)| (doc_uri.clone(), range, location))
             })
             .collect();
         let Some(target) = all
             .iter()
             .find(|(src_uri, range, _)| *src_uri == uri && position_in_range(position, *range))
-            .map(|(_, _, location)| location.clone())
             .or_else(|| {
-                all.iter()
-                    .find(|(_, _, location)| {
-                        location.uri == uri && position_in_range(position, location.range)
-                    })
-                    .map(|(_, _, location)| location.clone())
+                all.iter().find(|(_, _, location)| {
+                    location.uri == uri && position_in_range(position, location.range)
+                })
             })
+            .map(|(_, _, location)| location.clone())
         else {
             return vec![];
         };
@@ -1347,7 +1285,6 @@ impl bindings::GuestWorkspace for Workspace {
     // not a subscripted one — see `hover_type`) and/or what the macro invocation there
     // expanded to — both shown together when both apply (e.g. a variable passed as a macro
     // argument), since they answer different questions.
-    #[allow(async_fn_in_trait)]
     fn hover(&self, uri: String, position: bindings::Position) -> Option<String> {
         if let Some(member) = self.hover_member(uri.clone(), position) {
             let this = self.borrow();
@@ -1370,7 +1307,6 @@ impl bindings::GuestWorkspace for Workspace {
 
     // Classes in the workspace whose name starts with `query`, e.g. for a completion dropdown
     // or workspace-symbol search.
-    #[allow(async_fn_in_trait)]
     fn query_cls(&self, query: String) -> Vec<(String, bindings::ClassInfo)> {
         let this = self.borrow();
         this.uris_with_prefix(DocKind::Cls, &query)
@@ -1387,7 +1323,6 @@ impl bindings::GuestWorkspace for Workspace {
     }
 
     // Members of `cls` whose name starts with `query`.
-    #[allow(async_fn_in_trait)]
     fn query_mem(&self, cls: String, query: String) -> Vec<(String, MemberInfo)> {
         self.query_cls(cls.clone())
             .into_iter()
@@ -1397,14 +1332,12 @@ impl bindings::GuestWorkspace for Workspace {
                     .into_iter()
                     .filter(|member| member.name.starts_with(&query))
                     .map(move |member| (uri.clone(), member))
-                    .collect::<Vec<_>>()
             })
             .collect()
     }
 
     // The class declared in `uri` and its members, or (in a `.mac`/`.int` routine) its labels,
     // as a `textDocument/documentSymbol` outline.
-    #[allow(async_fn_in_trait)]
     fn document_symbol(&self, uri: String) -> Option<bindings::DocumentSymbol> {
         let this = self.borrow();
         this.doc_cache.get(&uri)?;
@@ -1445,7 +1378,6 @@ impl bindings::GuestWorkspace for Workspace {
     // `query`, as a `workspace/symbol` result. Tier A alone decides which classes/routines match
     // (see `uris_with_prefix`); only matches pay for the full (tier B) parse needed to list
     // their members/labels.
-    #[allow(async_fn_in_trait)]
     fn workspace_symbol(&self, query: String) -> Vec<bindings::WorkspaceSymbol> {
         fn symbol_in(
             uri: &str,
@@ -1521,8 +1453,7 @@ impl bindings::GuestWorkspace for Workspace {
                         .map(|label| symbol_in(&uri, label, Some(format!("Label • {routine}")))),
                 )
                 .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+            });
 
         cls_symbols.chain(rtn_symbols).collect()
     }
@@ -1662,13 +1593,9 @@ impl Default for bindings::Position {
     }
 }
 
-#[allow(clippy::derivable_impls)]
 impl Default for bindings::Range {
     fn default() -> Self {
-        Self {
-            start: Default::default(),
-            end: Default::default(),
-        }
+        Self::point(Position::default())
     }
 }
 
@@ -1700,6 +1627,11 @@ mod tests {
             (range.end.line, range.end.character),
         )
     }
+
+    const OPTIONS: bindings::FormattingOptions = bindings::FormattingOptions {
+        tab_size: 4,
+        insert_spaces: true,
+    };
 
     // A link's target as `references` lists it.
     fn target(link: &bindings::LocationLink) -> bindings::Location {
@@ -1934,10 +1866,8 @@ mod tests {
                 doc: String::new(),
                 name: String::new(),
                 members: self.mem.clone().into_iter().collect(),
-                class_type: self
-                    .is_datatype
-                    .filter(|yes| *yes)
-                    .map(|_| bindings::ClassType::Datatype),
+                class_type: (self.is_datatype == Some(true))
+                    .then_some(bindings::ClassType::Datatype),
                 ..Default::default()
             }))
         }
@@ -2051,17 +1981,10 @@ mod tests {
                 .inlay_hint(generated.clone(), bindings::Range::default())
                 .is_empty()
         );
-        let options = || bindings::FormattingOptions {
-            tab_size: 4,
-            insert_spaces: true,
-        };
         let set = || bindings::Range::point((3, 1).into());
-        assert_eq!(workspace.format(generated.clone(), options()), Some(vec![]));
+        assert_eq!(workspace.format(generated.clone(), OPTIONS), Some(vec![]));
         assert!(workspace.code_actions(generated.clone(), set()).is_empty());
-        let call = bindings::Position {
-            line: 6,
-            character: 4,
-        };
+        let call = (6, 4).into();
         assert!(workspace.definition(generated, call).is_some());
         // The same code as a routine of its own is reported on.
         let edited = "Plain.int".to_string();
@@ -2072,7 +1995,7 @@ mod tests {
         assert!(!workspace.diagnostics(edited.clone()).is_empty());
         assert!(
             !workspace
-                .format(edited.clone(), options())
+                .format(edited.clone(), OPTIONS)
                 .unwrap()
                 .is_empty()
         );
@@ -2248,28 +2171,12 @@ mod tests {
 
         // Line 3 (` write x`): `x` is at character 7.
         let ty = workspace
-            .hover_type(
-                uri.clone(),
-                bindings::Position {
-                    line: 3,
-                    character: 7,
-                },
-            )
+            .hover_type(uri.clone(), (3, 7).into())
             .expect("expected a hover type for `x`");
         assert!(ty.contains("Integer"), "{ty}");
 
         // The `Set` target itself (` set x = ...`, `x` at character 5) isn't covered.
-        assert!(
-            workspace
-                .hover_type(
-                    uri,
-                    bindings::Position {
-                        line: 2,
-                        character: 5
-                    }
-                )
-                .is_none()
-        );
+        assert!(workspace.hover_type(uri, (2, 5).into()).is_none());
     }
 
     #[test]
@@ -2284,13 +2191,7 @@ mod tests {
         let diagnostics = workspace.diagnostics(uri.clone());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let expansion = workspace
-            .macro_expansion(
-                uri,
-                bindings::Position {
-                    line: 4,
-                    character: 10,
-                },
-            )
+            .macro_expansion(uri, (4, 10).into())
             .expect("expected a macro expansion at that position");
         assert!(
             expansion.contains("\"x\"") && !expansion.contains("$g("),
@@ -2311,28 +2212,12 @@ mod tests {
 
         // Line 4 (`\tWrite $$$GREETING`): inside the `$$$GREETING` invocation.
         let expansion = workspace
-            .macro_expansion(
-                uri.clone(),
-                bindings::Position {
-                    line: 4,
-                    character: 10,
-                },
-            )
+            .macro_expansion(uri.clone(), (4, 10).into())
             .expect("expected a macro expansion at that position");
         assert!(expansion.contains("hi"), "{expansion:?}");
 
         // Elsewhere on the same line, not inside the invocation.
-        assert!(
-            workspace
-                .macro_expansion(
-                    uri,
-                    bindings::Position {
-                        line: 4,
-                        character: 1
-                    }
-                )
-                .is_none()
-        );
+        assert!(workspace.macro_expansion(uri, (4, 1).into()).is_none());
     }
 
     #[test]
@@ -2500,13 +2385,7 @@ mod tests {
         );
         // Character 7 on line 2 (` do ..Bar()`) is on "Bar", inside `Foo`'s own body.
         let member = workspace
-            .hover_member(
-                uri,
-                bindings::Position {
-                    line: 2,
-                    character: 7,
-                },
-            )
+            .hover_member(uri, (2, 7).into())
             .expect("expected a member at that position");
         assert_eq!(member.name, "Bar");
     }
@@ -2520,26 +2399,10 @@ mod tests {
             "Class Test.Hover {\nClassMethod Foo() {\n}\n}\n".to_string(),
         );
         let member = workspace
-            .hover_member(
-                uri.clone(),
-                bindings::Position {
-                    line: 1,
-                    character: 5,
-                },
-            )
+            .hover_member(uri.clone(), (1, 5).into())
             .expect("expected a member at that position");
         assert_eq!(member.name, "Foo");
-        assert!(
-            workspace
-                .hover_member(
-                    uri,
-                    bindings::Position {
-                        line: 0,
-                        character: 0,
-                    },
-                )
-                .is_none()
-        );
+        assert!(workspace.hover_member(uri, (0, 0).into()).is_none());
     }
 
     #[test]
@@ -2551,13 +2414,7 @@ mod tests {
             "Class Test.Hover {\nClassMethod Foo() {\n}\n}\n".to_string(),
         );
         let markdown = workspace
-            .hover(
-                uri,
-                bindings::Position {
-                    line: 1,
-                    character: 5,
-                },
-            )
+            .hover(uri, (1, 5).into())
             .expect("expected hover text at that position");
         assert_eq!(markdown, "(**Test.Hover**) ClassMethod <u>**Foo**</u>()");
     }
@@ -2575,10 +2432,7 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         // `x` is a macro argument: a hover type and a macro expansion both apply.
-        let position = bindings::Position {
-            line: 5,
-            character: 12,
-        };
+        let position = (5, 12).into();
         assert!(workspace.hover_type(uri.clone(), position).is_some());
         assert!(workspace.macro_expansion(uri.clone(), position).is_some());
 
@@ -2594,13 +2448,7 @@ mod tests {
         let (workspace, base_uri, sub_uri) = base_and_sub();
 
         let link = workspace
-            .definition(
-                sub_uri,
-                bindings::Position {
-                    line: 2,
-                    character: 24,
-                },
-            )
+            .definition(sub_uri, (2, 24).into())
             .expect("expected a definition at that position");
         assert_eq!(link.target_uri, base_uri);
         // The name, `Foo` in `ClassMethod Foo() {`, is selected; the whole member is revealed.
@@ -2636,13 +2484,7 @@ mod tests {
         // `r%P1` inside the instance method (line 3) should resolve like `..P1`/`i%P1` —
         // go-to-definition finds the property declaration.
         let link = workspace
-            .definition(
-                uri,
-                bindings::Position {
-                    line: 3,
-                    character: 10,
-                },
-            )
+            .definition(uri, (3, 10).into())
             .expect("expected a definition for `r%P1`");
         assert_eq!(link.target_selection_range.start.line, 1);
     }
@@ -2653,13 +2495,7 @@ mod tests {
 
         // Position inside "Base", within the `##class(Test.Base)` literal itself.
         let link = workspace
-            .definition(
-                sub_uri,
-                bindings::Position {
-                    line: 2,
-                    character: 18,
-                },
-            )
+            .definition(sub_uri, (2, 18).into())
             .expect("expected a definition at that position");
         assert_eq!(link.target_uri, base_uri);
         assert_eq!(span(link.target_selection_range), ((0, 6), (0, 15)));
@@ -2693,13 +2529,7 @@ mod tests {
                 .to_string(),
         );
         let link = workspace
-            .definition(
-                uri,
-                bindings::Position {
-                    line: 2,
-                    character: 18,
-                },
-            )
+            .definition(uri, (2, 18).into())
             .expect("expected a definition at that position");
         assert_eq!(link.target_uri, "mock:///External.cls");
         // Nothing of a document outside the workspace is known beyond the host's uri.
@@ -2717,25 +2547,13 @@ mod tests {
         );
 
         let link = workspace
-            .definition(
-                uri.clone(),
-                bindings::Position {
-                    line: 5,
-                    character: 5,
-                },
-            )
+            .definition(uri.clone(), (5, 5).into())
             .expect("expected a definition at that position");
         assert_eq!(span(link.target_selection_range), ((8, 0), (8, 3)));
         assert_eq!(span(link.target_range), ((8, 0), (9, 5)));
         // Not into the blank line before the next label.
         let link = workspace
-            .definition(
-                uri,
-                bindings::Position {
-                    line: 1,
-                    character: 5,
-                },
-            )
+            .definition(uri, (1, 5).into())
             .expect("expected a definition at that position");
         assert_eq!(span(link.target_selection_range), ((4, 0), (4, 4)));
         assert_eq!(span(link.target_range), ((4, 0), (6, 5)));
@@ -2752,13 +2570,7 @@ mod tests {
         );
 
         let link = workspace
-            .definition(
-                uri,
-                bindings::Position {
-                    line: 1,
-                    character: 5,
-                },
-            )
+            .definition(uri, (1, 5).into())
             .expect("expected a definition at that position");
         assert_eq!(span(link.target_selection_range), ((4, 0), (4, 3)));
         assert_eq!(span(link.target_range), ((4, 0), (6, 1)));
@@ -2973,13 +2785,7 @@ mod tests {
         );
 
         let link = workspace
-            .definition(
-                uri,
-                bindings::Position {
-                    line: 2,
-                    character: 5,
-                },
-            )
+            .definition(uri, (2, 5).into())
             .expect("expected a definition at that position");
         assert_eq!(link.target_uri, callee_uri);
         assert_eq!(span(link.target_selection_range), ((4, 0), (4, 3)));
@@ -3005,13 +2811,7 @@ mod tests {
         );
 
         let link = workspace
-            .definition(
-                uri,
-                bindings::Position {
-                    line: 2,
-                    character: 5,
-                },
-            )
+            .definition(uri, (2, 5).into())
             .expect("expected a definition at that position");
         assert_eq!(link.target_uri, callee_uri);
         // In the callee's own lines, not its expansion's, which the include lengthens.
@@ -3036,13 +2836,7 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         let link = workspace
-            .definition(
-                uri,
-                bindings::Position {
-                    line: 6,
-                    character: 3,
-                },
-            )
+            .definition(uri, (6, 3).into())
             .expect("expected a definition at that position");
         assert_eq!(span(link.target_selection_range), ((8, 0), (8, 4)));
         assert_eq!(span(link.target_range), ((8, 0), (9, 5)));
@@ -3067,13 +2861,7 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         let link = workspace
-            .definition(
-                mac_uri.clone(),
-                bindings::Position {
-                    line: 6,
-                    character: 5,
-                },
-            )
+            .definition(mac_uri.clone(), (6, 5).into())
             .expect("expected a definition at that position");
         assert_eq!(link.target_uri, mac_uri);
         // In the routine's own lines, not the expansion's, which the include lengthens.
@@ -3096,10 +2884,7 @@ mod tests {
                 .to_string(),
         );
 
-        let call_site = bindings::Position {
-            line: 2,
-            character: 24,
-        };
+        let call_site = (2, 24).into();
         let definition = target(
             &workspace
                 .definition(sub_uri.clone(), call_site)
@@ -3195,13 +2980,7 @@ mod tests {
         );
 
         let link = workspace
-            .definition(
-                uri,
-                bindings::Position {
-                    line: 2,
-                    character: 7,
-                },
-            )
+            .definition(uri, (2, 7).into())
             .expect("expected a definition at that position");
         assert_eq!(link.target_selection_range.start.line, 4);
         assert_eq!(span(link.target_range), ((4, 0), (6, 1)));
@@ -3394,11 +3173,7 @@ mod tests {
             (&text[start..end], edits[0].new_text.as_str()),
             ("set", "Set")
         );
-        let options = bindings::FormattingOptions {
-            tab_size: 4,
-            insert_spaces: true,
-        };
-        assert_eq!(workspace.format(uri.clone(), options).as_ref(), Some(edits));
+        assert_eq!(workspace.format(uri.clone(), OPTIONS).as_ref(), Some(edits));
         assert!(workspace.code_actions(uri, at(1, 0)).is_empty());
     }
 
@@ -3415,11 +3190,7 @@ mod tests {
         assert_eq!(actions[0].diagnostics[0].code, "S4933");
         let edits = &actions[0].edit.as_ref().unwrap().changes[0].1;
         assert_eq!(edits[0].new_text, "\n        ");
-        let options = bindings::FormattingOptions {
-            tab_size: 4,
-            insert_spaces: true,
-        };
-        assert_eq!(workspace.format(uri, options).as_ref(), Some(edits));
+        assert_eq!(workspace.format(uri, OPTIONS).as_ref(), Some(edits));
     }
 
     #[test]
@@ -3452,11 +3223,7 @@ mod tests {
             .map(|d| d.range.start.line)
             .collect();
         assert_eq!(braces, [5, 8, 11], "{diagnostics:?}");
-        let options = bindings::FormattingOptions {
-            tab_size: 4,
-            insert_spaces: true,
-        };
-        let edits = workspace.format(uri, options).unwrap();
+        let edits = workspace.format(uri, OPTIONS).unwrap();
         assert_eq!(edits.len(), 1, "{edits:?}");
         assert_eq!(
             (span(edits[0].range), edits[0].new_text.as_str()),
@@ -3650,10 +3417,7 @@ mod tests {
             uri.clone(),
             "ROUTINE Short\n#define X 1\n\twrite $$$X\n\tquit\n".to_string(),
         );
-        let position = bindings::Position {
-            line: 100,
-            character: 0,
-        };
+        let position = (100, 0).into();
         assert!(workspace.hover(uri.clone(), position).is_none());
         assert!(workspace.macro_expansion(uri, position).is_none());
     }
@@ -3691,13 +3455,7 @@ mod tests {
             "Class Test.G {\nClassMethod G(a As Test.G) {\n If $R(2) { Kill a }\n Set b = $G(a)\n Write b\n}\n}\n".to_string(),
         );
         let hover = workspace
-            .hover_type(
-                uri,
-                bindings::Position {
-                    line: 4,
-                    character: 7,
-                },
-            )
+            .hover_type(uri, (4, 7).into())
             .expect("hover on `b`");
         assert!(!hover.contains("String"), "{hover}");
     }
@@ -3772,10 +3530,7 @@ mod tests {
             "C.cls".to_string(),
             "Class Test.C {\nClassMethod M() {\n Do ##class(Test.Foo).Baz()\n}\n}\n".to_string(),
         );
-        let foo = bindings::Position {
-            line: 2,
-            character: 15,
-        };
+        let foo = (2, 15).into();
         let definition = |ws: &Workspace| {
             ws.definition("C.cls".to_string(), foo)
                 .map(|l| l.target_uri)
@@ -3801,10 +3556,7 @@ mod tests {
         let affected = workspace.close("A.cls".to_string());
         assert!(affected.contains(&"B.cls".to_string()), "{affected:?}");
         assert!(workspace.diagnostics("B.cls".to_string()).is_empty());
-        let foo = bindings::Position {
-            line: 2,
-            character: 15,
-        };
+        let foo = (2, 15).into();
         assert_eq!(
             workspace
                 .definition("C.cls".to_string(), foo)
@@ -3823,13 +3575,7 @@ mod tests {
             "ROUTINE Sub\n#define Wrap(%flag) $$Wrap^Other(%flag)\n#define Has(%flags,%flag) (%flags[%flag)\n\tWrite $$$Has($$$Wrap($g(%flag)),\"D\")\n\tQuit\n".to_string(),
         );
         let expansion = workspace
-            .macro_expansion(
-                uri,
-                bindings::Position {
-                    line: 3,
-                    character: 8,
-                },
-            )
+            .macro_expansion(uri, (3, 8).into())
             .expect("expansion");
         assert_eq!(expansion.trim(), "($$Wrap^Other($g(%flag))[\"D\")");
     }
@@ -3861,17 +3607,8 @@ mod tests {
             .find(|info| info.message.contains("Expands to"))
             .unwrap_or_else(|| panic!("{diagnostics:?}"));
         assert_eq!(expands_to.message, "↳ Expands to: Quit $$Fn^Missing(1)");
-        let range = expands_to.location.range;
-        assert_eq!(
-            (
-                range.start.line,
-                range.start.character,
-                range.end.line,
-                range.end.character
-            ),
-            (5, 4, 5, 19),
-            "{diagnostics:?}"
-        );
+        let range = span(expands_to.location.range);
+        assert_eq!(range, ((5, 4), (5, 19)), "{diagnostics:?}");
     }
 
     #[test]
@@ -3888,18 +3625,9 @@ mod tests {
             .flat_map(|d| &d.related_information)
             .find(|info| info.message.contains("Expands to"))
             .unwrap_or_else(|| panic!("{diagnostics:?}"));
-        let range = expands_to.location.range;
+        let range = span(expands_to.location.range);
         assert_eq!(expands_to.location.uri, "Lib.inc", "{diagnostics:?}");
-        assert_eq!(
-            (
-                range.start.line,
-                range.start.character,
-                range.end.line,
-                range.end.character
-            ),
-            (2, 4, 2, 19),
-            "{diagnostics:?}"
-        );
+        assert_eq!(range, ((2, 4), (2, 19)), "{diagnostics:?}");
     }
 
     // Both land right after the closing brace; the `end while` one used to be pushed one
@@ -3940,14 +3668,8 @@ mod tests {
         let expected = bindings::Location::new(
             "Shared.inc".to_string(),
             bindings::Range {
-                start: bindings::Position {
-                    line: 0,
-                    character: 8,
-                },
-                end: bindings::Position {
-                    line: 0,
-                    character: 19,
-                },
+                start: (0, 8).into(),
+                end: (0, 19).into(),
             },
         );
         let at = |uri: &str, line, character| {
