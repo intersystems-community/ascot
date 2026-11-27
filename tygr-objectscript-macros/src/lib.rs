@@ -16,13 +16,13 @@ use syn::visit::Visit;
 use syn::visit_mut::VisitMut;
 use syn::{
     Attribute, Error, Field, Fields, GenericArgument, Generics, Ident, Index, Item, ItemEnum,
-    ItemImpl, ItemMod, ItemStruct, LitStr, Macro, Meta, PathArguments, Token, Type, TypeMacro,
-    Variant, WherePredicate, parse_quote,
+    ItemImpl, ItemMod, ItemStruct, LitStr, Macro, Meta, Path, PathArguments, Token, Type,
+    TypeMacro, Variant, WherePredicate, parse_quote,
 };
 
-/// `#[sugar]` on a variant leaves it out of the core, converted by the author's `impl Desugar` for
-/// `XSugar`, the emitted enum of the marked variants owning their fields; on a field, drops it; on a
-/// struct or enum, both levels keep it and the author writes the conversion.
+/// `#[sugar(f)]` on a variant leaves it out of the core, `f` taking the variant's fields by value to the
+/// enclosing core type; `#[sugar]` on a field drops it; on a struct or enum, both levels keep it and the
+/// author writes the conversion, its variants' marks then bare.
 /// `Kw!("READ ONLY", "READONLY")`: a keyword, its words a blank apart and none the start of a longer
 /// word, in its canonical spelling or others, a phrase one `Phrase` and the spellings one `Spellings`.
 #[proc_macro]
@@ -102,14 +102,27 @@ fn desugar() -> TokenStream2 {
     quote!(crate::sql::desugar::Desugar)
 }
 
-fn take_mark(attrs: &mut Vec<Attribute>) -> syn::Result<bool> {
+/// `Some(None)` for `#[sugar]`, `Some(Some(f))` for `#[sugar(f)]`.
+fn take_mark(attrs: &mut Vec<Attribute>) -> syn::Result<Option<Option<Path>>> {
     let Some(i) = attrs.iter().position(|attr| attr.path().is_ident("sugar")) else {
-        return Ok(false);
+        return Ok(None);
     };
     let attr = attrs.remove(i);
-    match attr.meta {
-        Meta::Path(_) => Ok(true),
-        _ => Err(Error::new_spanned(attr, "expected `#[sugar]`")),
+    match &attr.meta {
+        Meta::Path(_) => Ok(Some(None)),
+        Meta::List(list) => Ok(Some(Some(list.parse_args()?))),
+        _ => Err(Error::new_spanned(
+            attr,
+            "expected `#[sugar]` or `#[sugar(f)]`",
+        )),
+    }
+}
+
+/// `#[sugar]` alone, where no conversion is named.
+fn plain_mark(attrs: &mut Vec<Attribute>) -> syn::Result<bool> {
+    match take_mark(attrs)? {
+        Some(Some(path)) => Err(Error::new_spanned(path, "`#[sugar(f)]` goes on a variant")),
+        mark => Ok(mark.is_some()),
     }
 }
 
@@ -271,23 +284,10 @@ fn plain_arm(enum_name: &Ident, variant: &Variant, dropped: &[usize]) -> TokenSt
     quote!(#pattern => super::core::#enum_name::#name #body,)
 }
 
-/// `Self::V(a, b) => XSugar::V(a, b).desugar()`.
-fn sugar_arm(sugar: &Ident, variant: &Variant) -> TokenStream2 {
-    let desugar = desugar();
-    let name = &variant.ident;
+/// `Self::V(a, b) => f(a, b)`.
+fn sugar_arm(f: &Path, variant: &Variant) -> TokenStream2 {
     let (pattern, binds) = variant_pattern(variant, &[]);
-    let value = match &variant.fields {
-        Fields::Named(_) => quote!(#sugar::#name { #(#binds),* }),
-        _ => quote!(#sugar::#name(#(#binds),*)),
-    };
-    quote!(#pattern => #desugar::desugar(#value),)
-}
-
-/// The marked variant for the `XSugar` enum.
-fn sugar_variant(variant: &Variant) -> Variant {
-    let mut variant = variant.clone();
-    variant.attrs.clear();
-    variant
+    quote!(#pattern => #f(#(#binds),*),)
 }
 
 /// `impl Clone` written out, as the derive refuses a generic item with a `Kw!` field.
@@ -532,7 +532,7 @@ impl Output {
             Item::Use(item) => Some(&mut item.attrs),
             _ => None,
         };
-        let marked = attrs.map_or(Ok(false), take_mark)?;
+        let marked = attrs.map_or(Ok(false), plain_mark)?;
         self.full.items.push(item.to_token_stream());
         if let Item::Type(alias) = &mut item {
             let (name, generics) = (alias.ident.clone(), alias.generics.clone());
@@ -551,7 +551,7 @@ impl Output {
     }
 
     fn structure(&mut self, mut item: ItemStruct) -> syn::Result<()> {
-        let marked = take_mark(&mut item.attrs)?;
+        let marked = plain_mark(&mut item.attrs)?;
         let dropped = self.fields(&mut item.fields)?;
         self.full.items.push(item.to_token_stream());
         self.full.items.push(clone_struct(&item));
@@ -576,22 +576,25 @@ impl Output {
     }
 
     fn enumeration(&mut self, mut item: ItemEnum) -> syn::Result<()> {
-        let marked = take_mark(&mut item.attrs)?;
-        let sugar = format_ident!("{}Sugar", item.ident);
+        let marked = plain_mark(&mut item.attrs)?;
         let mut core_variants = Punctuated::new();
-        let mut sugar_variants: Punctuated<Variant, Token![,]> = Punctuated::new();
         let mut arms = Vec::new();
         for variant in &mut item.variants {
-            let variant_marked = take_mark(&mut variant.attrs)?;
+            let mark = take_mark(&mut variant.attrs)?;
             let dropped = self.fields(&mut variant.fields)?;
-            if variant_marked {
-                sugar_variants.push(sugar_variant(variant));
-                arms.push(sugar_arm(&sugar, variant));
-            } else {
-                let mut core_variant = variant.clone();
-                core_fields(&mut core_variant.fields, &dropped);
-                core_variants.push(core_variant);
-                arms.push(plain_arm(&item.ident, variant, &dropped));
+            match mark {
+                Some(Some(f)) => arms.push(sugar_arm(&f, variant)),
+                Some(None) if marked => {}
+                Some(None) => {
+                    let message = "a sugar variant names its conversion, `#[sugar(f)]`";
+                    return Err(Error::new_spanned(&variant.ident, message));
+                }
+                None => {
+                    let mut core_variant = variant.clone();
+                    core_fields(&mut core_variant.fields, &dropped);
+                    core_variants.push(core_variant);
+                    arms.push(plain_arm(&item.ident, variant, &dropped));
+                }
             }
         }
         self.full.items.push(item.to_token_stream());
@@ -604,20 +607,8 @@ impl Output {
         if marked {
             return Ok(());
         }
-        let (name, generics, vis) = (&item.ident, &item.generics, &item.vis);
-        if !sugar_variants.is_empty() {
-            let mut generics = generics.clone();
-            for param in generics.type_params_mut() {
-                param.eq_token = None;
-                param.default = None;
-            }
-            self.full.items.push(quote! {
-                #[derive(::core::clone::Clone)]
-                #vis enum #sugar #generics { #sugar_variants }
-            });
-        }
         let body = quote!(match self { #(#arms)* });
-        self.impls.push(impl_of(name, generics, body));
+        self.impls.push(impl_of(&item.ident, &item.generics, body));
         Ok(())
     }
 
@@ -626,7 +617,7 @@ impl Output {
         let mut dropped = Vec::new();
         for (i, field) in fields.iter_mut().enumerate() {
             self.literals(&field.ty);
-            if take_mark(&mut field.attrs)? {
+            if plain_mark(&mut field.attrs)? {
                 dropped.push(i);
             }
         }

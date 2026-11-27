@@ -729,8 +729,8 @@ macro_rules! scalar_functions {
 
         const SCALAR_FUNCTIONS: &[&str] = &[$($name,)*];
 
-        fn scalar_function(function: ScalarFunction) -> core::ValueExpressionPrimary {
-            match function {
+        fn scalar_function(function: Box<ScalarFunction>) -> core::ValueExpressionPrimary {
+            match *function {
                 $(ScalarFunction::$Variant(_, a) => call(scalar_functions!(@name $name $($core)?), args(a)),)*
             }
         }
@@ -832,7 +832,7 @@ pub mod leveled {
         ),
         Literal(Literal),
         Builtin(Box<Builtin>),
-        #[sugar]
+        #[sugar(scalar_function)]
         ScalarFunction(Box<ScalarFunction>),
         WindowFunction(Box<WindowFunction>),
         AggregateFunction(Box<AggregateFunction>),
@@ -841,17 +841,17 @@ pub mod leveled {
             space: Space,
             term: Box<Operand>,
         },
-        #[sugar]
+        #[sugar(percent_call)]
         PercentUnary {
             op: PercentOperator,
             term: Box<Operand<Space1>>,
         },
-        #[sugar]
+        #[sugar(string_operation)]
         StringOperation(Box<StringOperation>),
         ExtrinsicFunction(Box<ExtrinsicFunction>),
         ParameterMarker(StringEq!("?")),
         Case(Box<Case>),
-        #[sugar]
+        #[sugar(odbc_escape)]
         OdbcEscape(Box<ODBCEscape>),
         Query(Subquery),
         Niladic(Niladic),
@@ -860,18 +860,6 @@ pub mod leveled {
         SpecialSystemVariable(SpecialSystemVariable),
         HostVariable(HostVariable),
         Null(Kw!("NULL")),
-    }
-
-    impl Desugar for ValueExpressionPrimarySugar {
-        type Core = core::ValueExpressionPrimary;
-        fn desugar(self) -> Self::Core {
-            match self {
-                Self::ScalarFunction(f) => scalar_function(*f),
-                Self::PercentUnary { op, term } => percent_call(op, *term),
-                Self::StringOperation(operation) => string_operation(*operation),
-                Self::OdbcEscape(escape) => odbc_escape(*escape),
-            }
-        }
     }
 
     /// The call a function's keyword and argument list spell; a niladic-looking one gets `()`.
@@ -924,23 +912,27 @@ pub mod leveled {
         )))
     }
 
-    fn odbc_escape(escape: ODBCEscape) -> core::ValueExpressionPrimary {
+    fn odbc_escape(escape: Box<ODBCEscape>) -> core::ValueExpressionPrimary {
         match escape.wrapped {
             ODBCEscapeContent::DateTime(value) => cast(value),
             ODBCEscapeContent::Function(function) => odbc_function(function.prefixed),
         }
     }
 
-    fn percent_call(op: PercentOperator, term: Operand<Space1>) -> core::ValueExpressionPrimary {
-        let arg = match term {
+    fn percent_call(
+        op: PercentOperator,
+        term: Box<Operand<Space1>>,
+    ) -> core::ValueExpressionPrimary {
+        let arg = match *term {
             Operand::Paren(_, parens) => (*parens.wrapped).desugar(),
             Operand::ValueExpressionPrimary(_, term) => core::ValueExpression::one(term.desugar()),
         };
         call(&op.print(), vec![arg])
     }
 
-    fn string_operation(operation: StringOperation) -> core::ValueExpressionPrimary {
-        let (expr, _, truncation) = operation.args.1.wrapped;
+    fn string_operation(operation: Box<StringOperation>) -> core::ValueExpressionPrimary {
+        let StringOperation { op, args } = *operation;
+        let (expr, _, truncation) = args.1.wrapped;
         let truncation = match truncation {
             TruncationLength::Const(constant) => {
                 let core::Nested::Bare(_, literal) = constant.desugar();
@@ -950,8 +942,7 @@ pub mod leveled {
                 core::ValueExpressionPrimary::HostVariable(host_var)
             }
         };
-        let args = vec![expr.desugar(), term(truncation)];
-        call(&operation.op.print(), args)
+        call(&op.print(), vec![expr.desugar(), term(truncation)])
     }
 
     #[derive(Grammar)]
@@ -1373,35 +1364,50 @@ pub mod leveled {
             Kw!("FROM"),
             ValueExpression<Space1>,
         ),
-        #[sugar]
+        #[sugar(trim_spec)]
         Spec(
             TrimSpecification,
             Option<(Space1, Kw!("FROM"))>,
             ValueExpression<Space1>,
         ),
-        #[sugar]
+        #[sugar(trim_chars)]
         Chars(
             ValueExpression,
             Space1,
             Kw!("FROM"),
             ValueExpression<Space1>,
         ),
-        #[sugar]
+        #[sugar(trim_bare)]
         Bare(ValueExpression),
     }
 
-    impl Desugar for TrimArgsSugar {
-        type Core = core::TrimArgs;
-        fn desugar(self) -> Self::Core {
-            let (spec, chars, expr) = match self {
-                Self::Spec(spec, _, expr) => (spec.desugar(), string(" "), expr.desugar()),
-                Self::Chars(chars, .., expr) => {
-                    (Default::default(), chars.desugar().after(), expr.desugar())
-                }
-                Self::Bare(expr) => (Default::default(), string(" "), expr.desugar().after()),
-            };
-            core::TrimArgs::SpecChars(spec, chars, Default::default(), Default::default(), expr)
-        }
+    fn trim_spec(
+        spec: TrimSpecification,
+        _: Option<(Space1, Kw!("FROM"))>,
+        expr: ValueExpression<Space1>,
+    ) -> core::TrimArgs {
+        trim(spec.desugar(), string(" "), expr.desugar())
+    }
+
+    fn trim_chars(
+        chars: ValueExpression,
+        _: Space1,
+        _: Kw!("FROM"),
+        expr: ValueExpression<Space1>,
+    ) -> core::TrimArgs {
+        trim(Default::default(), chars.desugar().after(), expr.desugar())
+    }
+
+    fn trim_bare(expr: ValueExpression) -> core::TrimArgs {
+        trim(Default::default(), string(" "), expr.desugar().after())
+    }
+
+    fn trim(
+        spec: core::TrimSpecification,
+        chars: core::ValueExpression<Space1>,
+        expr: core::ValueExpression<Space1>,
+    ) -> core::TrimArgs {
+        core::TrimArgs::SpecChars(spec, chars, Default::default(), Default::default(), expr)
     }
 
     #[derive(Grammar)]
@@ -1564,19 +1570,17 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum DoubleQuotable<K: Grammar> {
         Bare(K),
-        #[sugar]
+        #[sugar(unquoted_double)]
         Quoted(Wrap<DoubleQuote, K, DoubleQuote>),
     }
 
-    impl<K: Grammar + Desugar> Desugar for DoubleQuotableSugar<K>
+    fn unquoted_double<K: Grammar + Desugar>(
+        quoted: Wrap<DoubleQuote, K, DoubleQuote>,
+    ) -> core::DoubleQuotable<K::Core>
     where
         K::Core: Grammar,
     {
-        type Core = core::DoubleQuotable<K::Core>;
-        fn desugar(self) -> Self::Core {
-            let Self::Quoted(quoted) = self;
-            core::DoubleQuotable::Bare(quoted.wrapped.desugar())
-        }
+        core::DoubleQuotable::Bare(quoted.wrapped.desugar())
     }
 
     /// A keyword bare or in single or double quotes, as a date part (2026.2 takes `'day'` and `"day"`,
@@ -1584,23 +1588,17 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum Quotable<K: Grammar> {
         Bare(K),
-        #[sugar]
+        #[sugar(unquoted)]
         Single(Wrap<SingleQuote, K, SingleQuote>),
-        #[sugar]
+        #[sugar(unquoted)]
         Double(Wrap<DoubleQuote, K, DoubleQuote>),
     }
 
-    impl<K: Grammar + Desugar> Desugar for QuotableSugar<K>
+    fn unquoted<Q: Grammar, K: Grammar + Desugar>(quoted: Wrap<Q, K, Q>) -> core::Quotable<K::Core>
     where
         K::Core: Grammar,
     {
-        type Core = core::Quotable<K::Core>;
-        fn desugar(self) -> Self::Core {
-            match self {
-                Self::Single(quoted) => core::Quotable::Bare(quoted.wrapped.desugar()),
-                Self::Double(quoted) => core::Quotable::Bare(quoted.wrapped.desugar()),
-            }
-        }
+        core::Quotable::Bare(quoted.wrapped.desugar())
     }
 
     /// `T` in parentheses to any depth: 2026.2 takes `TOP (1)`, `LIMIT ((10))`, `DATEADD((dd), 1, d)` and
@@ -1608,21 +1606,20 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum Nested<T: Grammar, B: Grammar + Default = ()> {
         Bare(B, T),
-        #[sugar]
+        #[sugar(unnested)]
         Parens(Option<B>, Parenthesized<Box<Nested<T>>>),
     }
 
-    impl<T: Grammar + Desugar, B: Grammar + Default + Desugar> Desugar for NestedSugar<T, B>
+    fn unnested<T: Grammar + Desugar, B: Grammar + Default + Desugar>(
+        _: Option<B>,
+        parens: Parenthesized<Box<Nested<T>>>,
+    ) -> core::Nested<T::Core, B::Core>
     where
         T::Core: Grammar,
         B::Core: Grammar + Default,
     {
-        type Core = core::Nested<T::Core, B::Core>;
-        fn desugar(self) -> Self::Core {
-            let Self::Parens(_, parens) = self;
-            let core::Nested::Bare(_, bare) = (*parens.wrapped).desugar();
-            core::Nested::Bare(Default::default(), bare)
-        }
+        let core::Nested::Bare(_, bare) = (*parens.wrapped).desugar();
+        core::Nested::Bare(Default::default(), bare)
     }
 
     #[derive(Grammar)]
@@ -1798,7 +1795,7 @@ pub mod leveled {
 
     #[derive(Grammar)]
     pub enum WindowFrameExtent {
-        #[sugar]
+        #[sugar(single_bound)]
         Single(WindowFrameBound),
         Between {
             between_kw: Kw!("BETWEEN"),
@@ -1808,21 +1805,17 @@ pub mod leveled {
     }
 
     /// `ROWS n PRECEDING` is `ROWS BETWEEN n PRECEDING AND CURRENT ROW`, the standard's lone-bound reading.
-    impl Desugar for WindowFrameExtentSugar {
-        type Core = core::WindowFrameExtent;
-        fn desugar(self) -> Self::Core {
-            let Self::Single(bound) = self;
-            let current_row = core::WindowFrameBound::CurrentRow(Default::default());
-            core::WindowFrameExtent::Between {
-                between_kw: Default::default(),
-                start: (Default::default(), bound.desugar()),
-                end: (
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                    current_row,
-                ),
-            }
+    fn single_bound(bound: WindowFrameBound) -> core::WindowFrameExtent {
+        let current_row = core::WindowFrameBound::CurrentRow(Default::default());
+        core::WindowFrameExtent::Between {
+            between_kw: Default::default(),
+            start: (Default::default(), bound.desugar()),
+            end: (
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                current_row,
+            ),
         }
     }
 
@@ -1867,20 +1860,16 @@ pub mod leveled {
     #[tygr(inline)]
     pub enum OrBooleanTerm {
         Or(Space1, Kw!("OR"), BooleanTerm<Space1>),
-        #[sugar]
+        #[sugar(bang)]
         Bang(Space, StringEq!("!"), BooleanTerm<Space>),
     }
 
-    impl Desugar for OrBooleanTermSugar {
-        type Core = core::OrBooleanTerm;
-        fn desugar(self) -> Self::Core {
-            let Self::Bang(_, _, and) = self;
-            core::OrBooleanTerm::Or(
-                Default::default(),
-                Default::default(),
-                and.desugar().after(),
-            )
-        }
+    fn bang(_: Space, _: StringEq!("!"), term: BooleanTerm<Space>) -> core::OrBooleanTerm {
+        core::OrBooleanTerm::Or(
+            Default::default(),
+            Default::default(),
+            term.desugar().after(),
+        )
     }
 
     #[derive(Grammar)]
@@ -1903,20 +1892,20 @@ pub mod leveled {
     #[tygr(inline)]
     pub enum AndBooleanFactor {
         And(Space1, Kw!("AND"), BooleanFactor<Space1>),
-        #[sugar]
+        #[sugar(ampersand)]
         Ampersand(Space, StringEq!("&"), BooleanFactor<Space>),
     }
 
-    impl Desugar for AndBooleanFactorSugar {
-        type Core = core::AndBooleanFactor;
-        fn desugar(self) -> Self::Core {
-            let Self::Ampersand(_, _, cond) = self;
-            core::AndBooleanFactor::And(
-                Default::default(),
-                Default::default(),
-                cond.desugar().after(),
-            )
-        }
+    fn ampersand(
+        _: Space,
+        _: StringEq!("&"),
+        factor: BooleanFactor<Space>,
+    ) -> core::AndBooleanFactor {
+        core::AndBooleanFactor::And(
+            Default::default(),
+            Default::default(),
+            factor.desugar().after(),
+        )
     }
 
     pub type NoIndex = Option<(Kw!("%NOINDEX"), Space1)>;
@@ -2497,7 +2486,7 @@ pub mod leveled {
     #[derive(Grammar)]
     pub enum TableReference<B: Grammar + Default = ()> {
         Join(JoinedTable<B>),
-        #[sugar]
+        #[sugar(outer_join_escape)]
         OJSyntax(
             Option<B>,
             OuterJoinEscapeOpen,
@@ -2510,15 +2499,16 @@ pub mod leveled {
 
     pub type OuterJoinEscapeClose = (Space, StringEq!("}"));
 
-    impl<B: Grammar + Default + Desugar> Desugar for TableReferenceSugar<B>
+    fn outer_join_escape<B: Grammar + Default + Desugar>(
+        _: Option<B>,
+        _: OuterJoinEscapeOpen,
+        table: JoinedTable<Space1>,
+        _: OuterJoinEscapeClose,
+    ) -> core::TableReference<B::Core>
     where
         B::Core: Grammar + Default,
     {
-        type Core = core::TableReference<B::Core>;
-        fn desugar(self) -> Self::Core {
-            let Self::OJSyntax(_, _, table, _) = self;
-            core::TableReference::Join(table.desugar().after())
-        }
+        core::TableReference::Join(table.desugar().after())
     }
 
     #[derive(Grammar)]
@@ -2702,38 +2692,44 @@ pub mod leveled {
             limit: Prefix<Kw!("LIMIT"), LimitSpecification>,
             offset: Option<(Space1, ResultOffsetClause)>,
         },
-        #[sugar]
+        #[sugar(offset_fetch)]
         OffsetFetch {
             offset: ResultOffsetClause,
             fetch: Option<(Space1, Fetch)>,
         },
-        #[sugar]
+        #[sugar(fetch_only)]
         FetchOnly(Fetch),
     }
 
-    /// `OFFSET m [ROWS] [FETCH … n …]` is `LIMIT n OFFSET m`, `LIMIT ALL OFFSET m` without the FETCH, and
-    /// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` alone `LIMIT n`.
-    impl Desugar for RowLimitingClauseSugar {
-        type Core = core::RowLimitingClause;
-        fn desugar(self) -> Self::Core {
-            let count = |fetch: Fetch| core::LimitSpecification::Val(fetch.valspec.desugar());
-            let (limit, offset) = match self {
-                Self::OffsetFetch { offset, fetch } => (
-                    fetch.map_or_else(Default::default, |(_, fetch)| count(fetch)),
-                    Some((
-                        Default::default(),
-                        core::ResultOffsetClause {
-                            kw: Default::default(),
-                            count: offset.count.desugar(),
-                        },
-                    )),
-                ),
-                Self::FetchOnly(fetch) => (count(fetch), None),
-            };
-            core::RowLimitingClause::LimitOffset {
-                limit: Prefix::new(Default::default(), limit),
-                offset,
-            }
+    /// `OFFSET m [ROWS] [FETCH … n …]` is `LIMIT n OFFSET m`, `LIMIT ALL OFFSET m` without the FETCH.
+    fn offset_fetch(
+        offset: ResultOffsetClause,
+        fetch: Option<(Space1, Fetch)>,
+    ) -> core::RowLimitingClause {
+        let offset = core::ResultOffsetClause {
+            kw: Default::default(),
+            count: offset.count.desugar(),
+        };
+        let limit = fetch.map_or_else(Default::default, |(_, fetch)| fetch_count(fetch));
+        limit_offset(limit, Some((Default::default(), offset)))
+    }
+
+    /// `FETCH [FIRST|NEXT] n [ROWS] [ONLY]` alone is `LIMIT n`.
+    fn fetch_only(fetch: Fetch) -> core::RowLimitingClause {
+        limit_offset(fetch_count(fetch), None)
+    }
+
+    fn fetch_count(fetch: Fetch) -> core::LimitSpecification {
+        core::LimitSpecification::Val(fetch.valspec.desugar())
+    }
+
+    fn limit_offset(
+        limit: core::LimitSpecification,
+        offset: Option<(Space1, core::ResultOffsetClause)>,
+    ) -> core::RowLimitingClause {
+        core::RowLimitingClause::LimitOffset {
+            limit: Prefix::new(Default::default(), limit),
+            offset,
         }
     }
 
@@ -2834,94 +2830,57 @@ pub mod leveled {
         Subquery(Subquery),
     }
 
-    /// An INSERT's values, or DEFAULT VALUES after an optional column list (2026.2 takes both).
+    /// An INSERT's columns and source: a column list with VALUES, or with a query, or DEFAULT VALUES (2026.2 takes
+    /// it after a column list too).
     #[derive(Grammar)]
     pub enum InsertColumnsAndSource {
-        InsertSource(InsertSource),
+        ColumnList(ColumnList),
+        Query {
+            columns: Option<ColumnReferenceList>,
+            query: (Space, SourceQuery),
+        },
         DefaultValues {
             columns: Option<ColumnReferenceList>,
             kw: (Space, Kw!("DEFAULT VALUES")),
         },
     }
 
-    /// The values of an INSERT: a column list with VALUES, a query or a host array, or SET assignments, which read
-    /// as the column list with VALUES.
+    /// A column list with its VALUES, as INSERT and UPDATE take it, or SET assignments, which read the same.
     #[derive(Grammar)]
-    pub enum InsertSource {
-        #[sugar]
-        SetClauseList(SetClauseList),
-        ColumnList(ColumnList<ValueSource>),
+    pub enum ColumnList {
+        #[sugar(set_clause_list)]
+        SetClauseList {
+            set_kw: Kw!("SET"),
+            assignments: (Space1, VecSep<Ranged<SetClause>, ArgSep>),
+        },
+        Columns {
+            columns: Option<ColumnReferenceList>,
+            values: (Space, ValuesClause),
+        },
     }
 
-    impl Desugar for InsertSourceSugar {
-        type Core = core::InsertSource;
-        fn desugar(self) -> Self::Core {
-            let Self::SetClauseList(list) = self;
-            let core::ColumnList { columns, values } = list.desugar();
-            core::InsertSource::ColumnList(core::ColumnList {
-                columns,
-                values: (values.0, core::ValueSource::Values(values.1)),
-            })
+    /// `SET a = 1, b = 2` reads as `(a,b)VALUES(1,2)`.
+    fn set_clause_list(
+        _: Kw!("SET"),
+        (_, list): (Space1, VecSep<Ranged<SetClause>, ArgSep>),
+    ) -> core::ColumnList {
+        let (columns, values) = (list.items.into_iter())
+            .map(|a| (a.ranged.column.desugar(), a.ranged.value.desugar()))
+            .unzip();
+        let values = core::ValuesClause {
+            values_kw: Default::default(),
+            space: Default::default(),
+            spec: core::ValuesSpecification::ValueExpression(parenthesized(commas(values))),
+        };
+        core::ColumnList::Columns {
+            columns: Some((Default::default(), parenthesized(commas(columns)))),
+            values: (Default::default(), values),
         }
-    }
-
-    /// The values of an UPDATE: a column list with VALUES, or SET assignments reading the same.
-    #[derive(Grammar)]
-    pub enum UpdateSource {
-        #[sugar]
-        SetClauseList(SetClauseList),
-        ColumnList(ColumnList<ValuesClause>),
-    }
-
-    impl Desugar for UpdateSourceSugar {
-        type Core = core::UpdateSource;
-        fn desugar(self) -> Self::Core {
-            let Self::SetClauseList(list) = self;
-            core::UpdateSource::ColumnList(list.desugar())
-        }
-    }
-
-    /// `SET a = 1, b = 2` reads as `(a, b) VALUES (1, 2)`.
-    #[derive(Grammar)]
-    #[sugar]
-    pub struct SetClauseList {
-        pub set_kw: Kw!("SET"),
-        pub assignments: (Space1, VecSep<Ranged<SetClause>, ArgSep>),
-    }
-
-    impl Desugar for SetClauseList {
-        type Core = core::ColumnList<core::ValuesClause>;
-        fn desugar(self) -> Self::Core {
-            let (columns, values) = (self.assignments.1.items.into_iter())
-                .map(|a| (a.ranged.column.desugar(), a.ranged.value.desugar()))
-                .unzip();
-            let values = core::ValuesClause {
-                values_kw: Default::default(),
-                space: Default::default(),
-                spec: core::ValuesSpecification::ValueExpression(parenthesized(commas(values))),
-            };
-            core::ColumnList {
-                columns: Some((Default::default(), parenthesized(commas(columns)))),
-                values: (Default::default(), values),
-            }
-        }
-    }
-
-    #[derive(Grammar)]
-    pub struct ColumnList<Values: Grammar> {
-        pub columns: Option<ColumnReferenceList>,
-        pub values: (Space, Values),
     }
 
     pub type ColumnNameList = Parenthesized<VecSep<Ident, ArgSep>>;
 
     pub type ColumnReferenceList = Args<VecSep<ColumnReference, ArgSep>>;
-
-    #[derive(Grammar)]
-    pub enum ValueSource {
-        Query(SourceQuery),
-        Values(ValuesClause),
-    }
 
     #[derive(Grammar)]
     pub struct ValuesClause {
@@ -2962,7 +2921,7 @@ pub mod leveled {
         Update {
             options: Vec<(Space1, UpdateOption)>,
             target: (Space, TargetTable),
-            assignment: (Space, UpdateSource),
+            assignment: (Space, ColumnList),
             from: Option<(Space1, FromClause)>,
             where_clause: Option<(Space1, DmlWhereClause)>,
         },

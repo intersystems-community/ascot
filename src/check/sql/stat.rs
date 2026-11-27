@@ -92,40 +92,21 @@ impl Walk for TargetTable {
 impl Walk for InsertColumnsAndSource {
     fn walk(&self, w: &mut Walker) {
         match self {
-            InsertColumnsAndSource::InsertSource(values) => values.walk(w),
-            InsertColumnsAndSource::DefaultValues { columns, .. } => {
-                for column in columns.iter().flat_map(|list| list.1.wrapped.items.iter()) {
-                    w.column(column)
-                }
+            InsertColumnsAndSource::ColumnList(list) => list.walk(w),
+            InsertColumnsAndSource::Query { columns, query } => {
+                w.columns(columns);
+                w.outside(&query.1)
             }
+            InsertColumnsAndSource::DefaultValues { columns, .. } => w.columns(columns),
         }
     }
 }
 
-impl Walk for InsertSource {
+impl Walk for ColumnList {
     fn walk(&self, w: &mut Walker) {
-        let InsertSource::ColumnList(list) = self;
-        list.walk(w)
-    }
-}
-
-impl Walk for UpdateSource {
-    fn walk(&self, w: &mut Walker) {
-        let UpdateSource::ColumnList(list) = self;
-        list.walk(w)
-    }
-}
-
-impl<Values: Walk + Grammar> Walk for ColumnList<Values> {
-    fn walk(&self, w: &mut Walker) {
-        for column in self
-            .columns
-            .iter()
-            .flat_map(|list| list.1.wrapped.items.iter())
-        {
-            w.column(column)
-        }
-        self.values.1.walk(w)
+        let ColumnList::Columns { columns, values } = self;
+        w.columns(columns);
+        values.1.walk(w)
     }
 }
 
@@ -133,15 +114,6 @@ impl Walk for SetClause {
     fn walk(&self, w: &mut Walker) {
         w.column(&self.column);
         self.value.walk(w)
-    }
-}
-
-impl Walk for ValueSource {
-    fn walk(&self, w: &mut Walker) {
-        match self {
-            ValueSource::Query(query) => w.outside(query),
-            ValueSource::Values(values) => values.walk(w),
-        }
     }
 }
 

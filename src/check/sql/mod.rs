@@ -192,6 +192,12 @@ impl Walker<'_> {
         self.current().aliases.push(alias);
     }
 
+    fn columns(&mut self, columns: &Option<ColumnReferenceList>) {
+        for column in columns.iter().flat_map(|list| list.1.wrapped.items.iter()) {
+            self.column(column)
+        }
+    }
+
     fn column(&mut self, column: &ColumnReference) {
         let Some(check) = self.check.filter(|_| !self.unchecked) else {
             return;
