@@ -57,13 +57,7 @@ impl Const {
 
     // Whether `=` holds between the two: the string equality `$CASE` tests with, so `1` is `"1"`.
     pub fn same_value(&self, other: &Const) -> bool {
-        match (self, other) {
-            (Const::Integer(a), Const::Integer(b)) => a == b,
-            (Const::String(a), Const::String(b)) => a == b,
-            (Const::Integer(n), Const::String(s)) | (Const::String(s), Const::Integer(n)) => {
-                *s == n.to_string()
-            }
-        }
+        self.as_string() == other.as_string()
     }
 
     // Whether a value tests true: nonzero, a string by its numeric prefix.
@@ -223,26 +217,21 @@ impl Term {
             Term::Const(c) => c.clone(),
             Term::Neg(term) => (!term.eval(val)?.truthy()).into(),
             Term::Infix { l, o, r } => {
-                let l = l.eval(val)?;
-                let r = r.eval(val)?;
+                let (l, r) = (l.eval(val)?, r.eval(val)?);
+                let (a, b) = (l.as_integer(), r.as_integer());
                 match o {
-                    TermOp::Eq => return Some((l.as_string() == r.as_string()).into()),
-                    TermOp::Ne => return Some((l.as_string() != r.as_string()).into()),
-                    _ => {}
-                }
-                let (l, r) = (l.as_integer()?, r.as_integer()?);
-                match o {
-                    TermOp::Eq | TermOp::Ne => unreachable!(),
-                    TermOp::Le | TermOp::Ng => (l <= r).into(),
-                    TermOp::Lt => (l < r).into(),
-                    TermOp::Ge | TermOp::Nl => (l >= r).into(),
-                    TermOp::Gt => (l > r).into(),
-                    TermOp::Add => l.checked_add(r)?.into(),
-                    TermOp::Sub => l.checked_sub(r)?.into(),
-                    TermOp::Pow => l.checked_pow(r)?.into(),
-                    TermOp::Mul => l.checked_mul(r)?.into(),
-                    TermOp::IntDiv => l.checked_div(r)?.into(),
-                    TermOp::Mod => l.checked_rem(r)?.into(),
+                    TermOp::Eq => l.same_value(&r).into(),
+                    TermOp::Ne => (!l.same_value(&r)).into(),
+                    TermOp::Le | TermOp::Ng => (a? <= b?).into(),
+                    TermOp::Lt => (a? < b?).into(),
+                    TermOp::Ge | TermOp::Nl => (a? >= b?).into(),
+                    TermOp::Gt => (a? > b?).into(),
+                    TermOp::Add => a?.checked_add(b?)?.into(),
+                    TermOp::Sub => a?.checked_sub(b?)?.into(),
+                    TermOp::Pow => a?.checked_pow(b?)?.into(),
+                    TermOp::Mul => a?.checked_mul(b?)?.into(),
+                    TermOp::IntDiv => a?.checked_div(b?)?.into(),
+                    TermOp::Mod => a?.checked_rem(b?)?.into(),
                 }
             }
         })
@@ -442,10 +431,7 @@ impl std::fmt::Display for PowerTy {
             PowerTy::Union(fst, snd, rst) => write!(
                 f,
                 "%DataType ∈ {{{fst}, {snd}{}}}",
-                rst.iter()
-                    .map(|c| format!(", {c}"))
-                    .collect::<Vec<_>>()
-                    .join("")
+                rst.iter().map(|c| format!(", {c}")).collect::<String>()
             ),
             PowerTy::Term { target, term } => {
                 write!(f, "%DataType = {} where %? = %{}", term, target)
@@ -455,21 +441,15 @@ impl std::fmt::Display for PowerTy {
                 cases,
                 default,
             } => {
-                fn show(ty: &Option<Ty>) -> &dyn std::fmt::Display {
-                    match ty {
-                        Some(ty) => ty,
-                        None => &"<UNDEFINED>",
-                    }
-                }
                 write!(f, "$CASE(%{}, ", target)?;
                 for (i, (name, ty)) in cases.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "\"{}\":{}", name, show(ty))?;
+                    write!(f, "\"{}\":{}", name, MaybeTy::from(ty.clone()))?;
                 }
                 if let Some(ty) = default {
-                    write!(f, ", :{}", show(ty))?;
+                    write!(f, ", :{}", MaybeTy::from(ty.clone()))?;
                 }
                 write!(f, ")")
             }
@@ -843,10 +823,7 @@ impl From<&Formal> for NormalArg {
             formal.call_type.as_deref().and_then(ref_mode),
             formal.name.print(),
             formal.as_type.as_deref().map(Ty::from),
-            formal
-                .default
-                .as_ref()
-                .map(|default| default.deref().print()),
+            formal.default.as_deref().map(Print::print),
         )
     }
 }
@@ -958,11 +935,8 @@ pub enum TyProcedureOrAny {
 
 impl TyProcedure {
     pub fn get_arg(&self, i: usize) -> Option<NormalArg> {
-        if let Some(arg) = self.normal_args.get(i) {
-            Some(arg.clone())
-        } else {
-            self.variadic_arg.as_ref().map(NormalArg::from)
-        }
+        (self.normal_args.get(i).cloned())
+            .or_else(|| self.variadic_arg.as_ref().map(NormalArg::from))
     }
 }
 
@@ -996,28 +970,19 @@ pub(crate) trait ClassNames {
         owner: &str,
         given: &dyn Fn(&str) -> Option<String>,
     ) {
-        self.class_names(&mut |ty| instantiate_ty(ty, receiver, owner, given));
-    }
-}
-
-fn instantiate_ty(
-    ty: &mut Ty,
-    receiver: &ClassTy,
-    owner: &str,
-    given: &dyn Fn(&str) -> Option<String>,
-) {
-    match ty {
-        Ty::This => *ty = Ty::ins(receiver.clone()),
-        Ty::Param(param) => {
-            let arg = receiver
-                .param(param)
-                .or_else(|| given(param))
-                .or_else(|| crate::mask::generic_default(owner, param));
-            if let Some(arg) = arg {
-                *ty = Ty::from(arg);
+        self.class_names(&mut |ty| match ty {
+            Ty::This => *ty = Ty::ins(receiver.clone()),
+            Ty::Param(param) => {
+                let arg = receiver
+                    .param(param)
+                    .or_else(|| given(param))
+                    .or_else(|| crate::mask::generic_default(owner, param));
+                if let Some(arg) = arg {
+                    *ty = Ty::from(arg);
+                }
             }
-        }
-        Ty::Any | Ty::OREF(_) => {}
+            Ty::Any | Ty::OREF(_) => {}
+        });
     }
 }
 

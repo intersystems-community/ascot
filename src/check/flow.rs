@@ -9,12 +9,12 @@
 use crate::bindings;
 use crate::bindings::Location;
 use crate::bindings::RefMode;
-use crate::check::CheckCommand;
 use crate::check::env::*;
 use crate::check::errors::*;
 use crate::check::types::*;
+use crate::check::{CheckCommand, unimplemented};
 use crate::details::WithRange;
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;
@@ -62,7 +62,7 @@ struct Shared<'a> {
     // is unclear until the first return/quit command. Shared (the `Rc`) with the labels that
     // return for this body (see `check_block_body`).
     output: OutputCell,
-    ty_var: RefCell<u32>,
+    ty_var: Cell<u32>,
     reading_list: RefCell<HashMap<Written, bool>>,
     // The entries of `reading_list` that are information rather than a warning when never read.
     unread_roles: RefCell<HashMap<Written, UnreadRole>>,
@@ -79,7 +79,7 @@ struct Shared<'a> {
     cursors: RefCell<HashMap<String, Vec<String>>>,
     // Set once an `if` branch's checking failed partway (see `check_branch`): the deferred "never
     // read"/"never assigned" reports can't be trusted after that.
-    incomplete: std::cell::Cell<bool>,
+    incomplete: Cell<bool>,
 }
 
 struct LoopContext {
@@ -213,9 +213,7 @@ impl Local {
 
 impl<'a> Flow<'a> {
     pub(crate) fn fresh(&mut self) -> u32 {
-        let ty_var = *self.shared.ty_var.borrow();
-        self.shared.ty_var.replace(ty_var + 1);
-        ty_var
+        self.shared.ty_var.replace(self.shared.ty_var.get() + 1)
     }
 
     pub(crate) fn with_range<T>(
@@ -472,7 +470,7 @@ impl<'a> Flow<'a> {
                 env,
                 may_exist,
                 output,
-                ty_var: RefCell::new(0),
+                ty_var: Cell::new(0),
                 reading_list: RefCell::new(reading_list),
                 unread_roles: RefCell::new(HashMap::new()),
                 ref_params: RefCell::new(ref_params),
@@ -480,7 +478,9 @@ impl<'a> Flow<'a> {
                 creates: RefCell::new(HashSet::new()),
                 writes: RefCell::new(HashSet::new()),
                 cursors: RefCell::new(HashMap::new()),
-                incomplete: std::cell::Cell::new(false),
+                // A handler, or any nested label, may hand what it assigns on to another label or
+                // back to its block, so its deferred reports can't be trusted.
+                incomplete: Cell::new(is_handler || (may_exist && procedure_block)),
             }),
             bindings: Some(bindings),
             loop_context: None,
@@ -489,20 +489,9 @@ impl<'a> Flow<'a> {
             new_all: false,
             detached: false,
         };
-        // A handler, or any nested label, may hand what it assigns on to another label or back to
-        // its block, so its deferred reports can't be trusted.
-        if is_handler || (may_exist && procedure_block) {
-            flow.mark_incomplete();
-        }
         handler(&mut flow)?;
         if flow.bindings.is_some() && auto_return {
-            flow.handle_return(WithRange::new(
-                None,
-                bindings::Range {
-                    start: range.end,
-                    end: range.end,
-                },
-            ))?;
+            flow.handle_return(WithRange::new(None, bindings::Range::point(range.end)))?;
         }
         // Deferred until every split flow has run: still `false` means never read.
         if !flow.shared.incomplete.get() {
@@ -734,10 +723,7 @@ impl<'a> Flow<'a> {
             }
             (None, None) => {}
             (Some(_), None) | (None, Some(_)) => {
-                return Err(TypeErrorKind::Unimplemented {
-                    what: "Internal error: inconsistent loop context".to_string(),
-                }
-                .into());
+                return Err(unimplemented("Internal error: inconsistent loop context"));
             }
         }
         Ok(())
@@ -1010,11 +996,7 @@ impl<'a> Flow<'a> {
     fn other_names(&mut self, keep: &[String]) -> Result<Vec<String>, QuasiTypeError> {
         Ok(self
             .bindings()?
-            .bindings
-            .keys()
-            .filter(|name| !keep.contains(name) && !is_percent_variable(name))
-            .cloned()
-            .collect())
+            .names_where(|name, _| !keep.contains(name) && !is_percent_variable(name)))
     }
 
     pub(crate) fn has_binding(&mut self, name: &str) -> Result<bool, QuasiTypeError> {
@@ -1056,19 +1038,16 @@ impl<'a> Flow<'a> {
     pub(crate) fn handle_set(
         &mut self,
         local: Local,
-        ty: PowerTy,
+        mut ty: PowerTy,
         range: bindings::Range,
     ) -> Result<(), QuasiTypeError> {
         let Local { name, subs } = local;
         self.note_ref_param(&name, RefUse::Set)?;
         let env = self.shared.env;
-        let ty = match ty.to_maybe_ty(env).maybe_defined() {
-            Some(_) => ty,
-            None => {
-                self.add_soft_diagnostic(QuasiTypeError::undefined());
-                PowerTy::plain(Ty::Any)
-            }
-        };
+        if ty.to_maybe_ty(env).maybe_defined().is_none() {
+            self.add_soft_diagnostic(QuasiTypeError::undefined());
+            ty = PowerTy::plain(Ty::Any);
+        }
         let binding = self.lookup(name.clone())?;
         let new = binding.new;
         if subs.is_empty() {
@@ -1210,14 +1189,14 @@ impl<'a> Flow<'a> {
     }
 
     pub(crate) fn read_write_publics(&mut self) -> Result<(), QuasiTypeError> {
-        for name in self.bindings()?.names_where(|b| !b.private) {
+        for name in self.bindings()?.names_where(|_, b| !b.private) {
             self.invalidate(Local::bare(name), Ty::Any.into())?;
         }
         Ok(())
     }
 
     fn read_olds(&mut self) -> Result<(), QuasiTypeError> {
-        for name in self.bindings()?.names_where(|b| b.new != Some(true)) {
+        for name in self.bindings()?.names_where(|_, b| b.new != Some(true)) {
             self.read(&name)?
         }
         Ok(())
@@ -1409,10 +1388,10 @@ pub struct Bindings {
 }
 
 impl Bindings {
-    fn names_where(&self, keep: impl Fn(&Binding) -> bool) -> Vec<String> {
+    fn names_where(&self, keep: impl Fn(&String, &Binding) -> bool) -> Vec<String> {
         self.bindings
             .iter()
-            .filter(|(_, binding)| keep(binding))
+            .filter(|(name, binding)| keep(name, binding))
             .map(|(name, _)| name.clone())
             .collect()
     }
