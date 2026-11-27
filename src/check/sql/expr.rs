@@ -16,7 +16,7 @@ impl<B: tygr::Grammar + Default> Walk for Operand<B> {
     fn walk(&self, w: &mut Walker) {
         match self {
             Operand::Paren(_, expression) => expression.walk(w),
-            Operand::ValueExpressionPrimary(_, term) => term.walk(w),
+            Operand::Plain(_, term) => term.walk(w),
         }
     }
 }
@@ -410,7 +410,7 @@ impl<B: tygr::Grammar + Default> Walk for BooleanFactor<B> {
     fn walk(&self, w: &mut Walker) {
         match self {
             BooleanFactor::Paren(_, condition) => condition.walk(w),
-            BooleanFactor::Factor(_, factor) => factor.walk(w),
+            BooleanFactor::Plain(_, factor) => factor.walk(w),
         }
     }
 }

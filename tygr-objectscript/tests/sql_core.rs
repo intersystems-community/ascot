@@ -23,7 +23,7 @@ fn core_query(text: &str) -> core::QuerySpecification {
 fn term_of<B: tygr::Grammar + Default>(
     expr: &core::ValueExpression<B>,
 ) -> &Ranged<core::ValueExpressionPrimary> {
-    let core::Operand::ValueExpressionPrimary(_, term) = &expr.first else {
+    let core::Operand::Plain(_, term) = &expr.first else {
         panic!("parentheses")
     };
     term
@@ -73,7 +73,7 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
         .prefixed
         .first
         .first;
-    let core::BooleanFactor::Factor(_, not) = condition else {
+    let core::BooleanFactor::Plain(_, not) = condition else {
         panic!("{text}")
     };
     let core::Factor::Not(_, inner) = &not.ranged else {
@@ -82,7 +82,7 @@ fn synthesized_nodes_stand_at_the_source_they_replace() {
     let core::BooleanFactor::Paren(_, paren) = &**inner else {
         panic!("{text}")
     };
-    let core::BooleanFactor::Factor(_, factor) = &paren.wrapped.first.first else {
+    let core::BooleanFactor::Plain(_, factor) = &paren.wrapped.first.first else {
         panic!("{text}")
     };
     assert_eq!(&text[factor.range()], "d NOT IN (1, 2)");

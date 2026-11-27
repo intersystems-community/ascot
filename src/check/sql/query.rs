@@ -153,7 +153,16 @@ impl Walk for Join {
 impl<B: tygr::Grammar + Default> Walk for TablePrimary<B> {
     fn walk(&self, w: &mut Walker) {
         match self {
-            TablePrimary::TableValuedFunction(_, function, alias) => {
+            TablePrimary::Plain(_, table) => table.walk(w),
+            TablePrimary::Paren(_, table) => table.walk(w),
+        }
+    }
+}
+
+impl Walk for NamedTable {
+    fn walk(&self, w: &mut Walker) {
+        match self {
+            NamedTable::TableValuedFunction(function, alias) => {
                 let args = (function.args.wrapped.as_ref()).map_or(0, |(args, _)| args.items.len());
                 w.call(&function.table.0, args, SqlProcedureUse::Table);
                 w.table(None, alias.as_ref());
@@ -161,13 +170,24 @@ impl<B: tygr::Grammar + Default> Walk for TablePrimary<B> {
                     args.walk(w)
                 }
             }
-            TablePrimary::Lateral(_, _, _, query, alias) | TablePrimary::Query(_, query, alias) => {
+            NamedTable::Lateral(_, _, query, alias) => {
                 w.table(None, alias.as_ref());
                 query.walk(w)
             }
-            TablePrimary::JoinedTable(_, joined) => joined.walk(w),
-            TablePrimary::JSONTable(_, _, alias) => w.table(None, alias.as_ref()),
-            TablePrimary::Table(_, name, alias) => w.table(Some(name_of(&name.0)), alias.as_ref()),
+            NamedTable::JSONTable(_, alias) => w.table(None, alias.as_ref()),
+            NamedTable::Table(name, alias) => w.table(Some(name_of(&name.0)), alias.as_ref()),
+        }
+    }
+}
+
+impl Walk for ParenthesizedTable {
+    fn walk(&self, w: &mut Walker) {
+        match self {
+            ParenthesizedTable::Query(query, alias) => {
+                w.table(None, alias.as_ref());
+                query.walk(w)
+            }
+            ParenthesizedTable::JoinedTable(joined) => joined.walk(w),
         }
     }
 }

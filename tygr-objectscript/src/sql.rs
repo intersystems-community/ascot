@@ -899,7 +899,7 @@ pub mod leveled {
     ) -> core::ValueExpressionPrimary {
         let arg = match *term {
             Operand::Paren(_, parens) => (*parens.wrapped).desugar(),
-            Operand::ValueExpressionPrimary(_, term) => core::ValueExpression::one(term.desugar()),
+            Operand::Plain(_, term) => core::ValueExpression::one(term.desugar()),
         };
         call(&op.print(), vec![arg])
     }
@@ -1100,7 +1100,7 @@ pub mod leveled {
     impl<B: Grammar + Default> ValueExpression<B> {
         pub fn one(term: Ranged<ValueExpressionPrimary>) -> Self {
             ValueExpression {
-                first: Operand::ValueExpressionPrimary(Default::default(), term),
+                first: Operand::Plain(Default::default(), term),
                 rest: Vec::new(),
             }
         }
@@ -1114,24 +1114,27 @@ pub mod leveled {
         }
     }
 
-    /// A term, or an expression in parentheses, before which the blank may be left out.
+    /// An operand after the blank `B` its place gives it: `P`, parenthesized, which may do without the blank, or
+    /// the plain `T`.
     #[derive(Grammar)]
     #[tygr(inline)]
-    pub enum Operand<B: Grammar + Default = ()> {
-        Paren(Option<B>, Parenthesized<Box<ValueExpression>>),
-        ValueExpressionPrimary(B, Ranged<ValueExpressionPrimary>),
+    pub enum Gapped<B: Grammar + Default, T: Grammar, P: Grammar> {
+        Paren(Option<B>, P),
+        Plain(B, T),
     }
 
-    impl<B: Grammar + Default> Operand<B> {
-        pub fn after<C: Grammar + Default>(self) -> Operand<C> {
+    impl<B: Grammar + Default, T: Grammar, P: Grammar> Gapped<B, T, P> {
+        /// The operand at another place, with that place's blank.
+        pub fn after<C: Grammar + Default>(self) -> Gapped<C, T, P> {
             match self {
-                Operand::Paren(_, parens) => Operand::Paren(None, parens),
-                Operand::ValueExpressionPrimary(_, term) => {
-                    Operand::ValueExpressionPrimary(Default::default(), term)
-                }
+                Gapped::Paren(_, parens) => Gapped::Paren(None, parens),
+                Gapped::Plain(_, plain) => Gapped::Plain(Default::default(), plain),
             }
         }
     }
+
+    pub type Operand<B = ()> =
+        Gapped<B, Ranged<ValueExpressionPrimary>, Parenthesized<Box<ValueExpression>>>;
 
     #[derive(Grammar)]
     pub struct Case {
@@ -1867,23 +1870,8 @@ pub mod leveled {
 
     pub type NoIndex = Option<(Kw!("%NOINDEX"), Space1)>;
 
-    /// A condition after the blank `B` its place gives it: in parentheses, or a factor.
-    #[derive(Grammar)]
-    pub enum BooleanFactor<B: Grammar + Default = ()> {
-        Paren(Option<B>, Parenthesized<Box<BooleanValueExpression>>),
-        Factor(B, Ranged<Factor>),
-    }
-
-    impl<B: Grammar + Default> BooleanFactor<B> {
-        pub fn after<C: Grammar + Default>(self) -> BooleanFactor<C> {
-            match self {
-                BooleanFactor::Paren(_, condition) => BooleanFactor::Paren(None, condition),
-                BooleanFactor::Factor(_, factor) => {
-                    BooleanFactor::Factor(Default::default(), factor)
-                }
-            }
-        }
-    }
+    pub type BooleanFactor<B = ()> =
+        Gapped<B, Ranged<Factor>, Parenthesized<Box<BooleanValueExpression>>>;
 
     /// NOT, or a predicate after its `%NOINDEX` hint (2026.2 takes the hint before no NOT or parenthesis). A
     /// predicate's own NOT, where IRIS writes it, is dropped and the predicate stands in `NOT(…)` in the core, each
@@ -2111,7 +2099,7 @@ pub mod leveled {
 
     /// `NOT(…)` around a factor, standing at the negated predicate's range.
     fn negation(factor: core::Factor) -> core::Factor {
-        let factor = core::BooleanFactor::Factor((), desugar::synthesized(factor));
+        let factor = core::BooleanFactor::Plain((), desugar::synthesized(factor));
         let condition = parenthesized(Box::new(core::BooleanValueExpression::one(factor)));
         core::Factor::Not(
             Default::default(),
@@ -2453,35 +2441,20 @@ pub mod leveled {
         },
     }
 
-    /// A table reference after the blank `B` its place gives it, which a parenthesis may do without.
+    pub type TablePrimary<B = ()> = Gapped<B, NamedTable, ParenthesizedTable>;
+
     #[derive(Grammar)]
-    pub enum TablePrimary<B: Grammar + Default = ()> {
-        JSONTable(B, JSONTable, Option<Alias>),
-        TableValuedFunction(B, TableValuedFunction, Option<Alias>),
-        Table(B, TableName, Option<Alias>),
-        Lateral(B, Kw!("LATERAL"), Space, Subquery, Option<Alias>),
-        Query(Option<B>, Subquery, Option<Alias>),
-        JoinedTable(Option<B>, Parenthesized<Box<JoinedTable>>),
+    pub enum NamedTable {
+        JSONTable(JSONTable, Option<Alias>),
+        TableValuedFunction(TableValuedFunction, Option<Alias>),
+        Table(TableName, Option<Alias>),
+        Lateral(Kw!("LATERAL"), Space, Subquery, Option<Alias>),
     }
 
-    impl<B: Grammar + Default> TablePrimary<B> {
-        pub fn after<C: Grammar + Default>(self) -> TablePrimary<C> {
-            let before = Default::default();
-            match self {
-                TablePrimary::JSONTable(_, table, alias) => {
-                    TablePrimary::JSONTable(before, table, alias)
-                }
-                TablePrimary::TableValuedFunction(_, function, alias) => {
-                    TablePrimary::TableValuedFunction(before, function, alias)
-                }
-                TablePrimary::Table(_, name, alias) => TablePrimary::Table(before, name, alias),
-                TablePrimary::Lateral(_, kw, space, query, alias) => {
-                    TablePrimary::Lateral(before, kw, space, query, alias)
-                }
-                TablePrimary::Query(_, query, alias) => TablePrimary::Query(None, query, alias),
-                TablePrimary::JoinedTable(_, table) => TablePrimary::JoinedTable(None, table),
-            }
-        }
+    #[derive(Grammar)]
+    pub enum ParenthesizedTable {
+        Query(Subquery, Option<Alias>),
+        JoinedTable(Parenthesized<Box<JoinedTable>>),
     }
 
     #[derive(Grammar)]
@@ -3020,7 +2993,7 @@ pub mod leveled {
             .all(|expression| {
                 let rest = expression.rest.iter().map(|(.., operand)| operand);
                 std::iter::once(&expression.first).chain(rest).all(|operand| {
-                    !matches!(operand, Operand::ValueExpressionPrimary(_, term) if matches!(term.ranged, ValueExpressionPrimary::Column(_)))
+                    !matches!(operand, Operand::Plain(_, term) if matches!(term.ranged, ValueExpressionPrimary::Column(_)))
                 })
             })
         }
