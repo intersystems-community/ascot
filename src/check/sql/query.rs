@@ -33,7 +33,8 @@ impl Walk for QueryExpression {
         w.push_frame();
         w.current().branches = true;
         self.query.walk(w);
-        self.tail.walk(w);
+        self.order.walk(w);
+        self.limit.walk(w);
         w.pop_frame();
         w.pop_frame()
     }
@@ -192,15 +193,16 @@ impl Walk for ParenthesizedTable {
     }
 }
 
-impl Walk for Tail {
+impl Walk for RowLimit {
     fn walk(&self, w: &mut Walker) {
-        match self {
-            Tail::Order(order, limit) => {
-                order.walk(w);
-                limit.walk(w)
-            }
-            Tail::Limit(limit) => limit.walk(w),
-        }
+        self.0.walk(w)
+    }
+}
+
+impl Walk for LimitCount {
+    fn walk(&self, w: &mut Walker) {
+        let LimitCount::Num(count) = self;
+        count.walk(w)
     }
 }
 

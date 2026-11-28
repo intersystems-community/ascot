@@ -21,8 +21,10 @@ use syn::{
 
 /// `#[sugar(f)]` on a variant leaves it out of the core, `f` taking the variant's fields by value to the
 /// enclosing core type; with `#[sugar]` fields inside, the core keeps the variant without them and `f`
-/// takes those fields and the converted variant. `#[sugar]` on a field drops it; on a struct or enum,
-/// both levels keep it and the author writes the conversion, its variants' marks then bare.
+/// takes those fields and the converted variant. `#[sugar]` alone on a variant leaves it out of the core
+/// and names no conversion: nothing of the enum's type stands for it, so the enum gets no `Desugar` and
+/// the type above it that can say what the variant becomes converts by hand. `#[sugar]` on a field drops
+/// it; on a struct or enum, both levels keep it and the author writes the conversion.
 /// `Kw!("READ ONLY", "READONLY")`: a keyword, its words a blank apart and none the start of a longer
 /// word, in its canonical spelling or others, a phrase one `Phrase` and the spellings one `Spellings`.
 #[proc_macro]
@@ -431,6 +433,7 @@ impl Output {
 
     fn enumeration(&mut self, mut item: ItemEnum) -> syn::Result<()> {
         let marked = plain_mark(&mut item.attrs)?;
+        let mut partial = false;
         let mut core_variants = Punctuated::new();
         let mut arms = Vec::new();
         for variant in &mut item.variants {
@@ -444,11 +447,7 @@ impl Output {
                     arms.push(hook_arm(&f, &item.ident, variant, &dropped));
                 }
                 Some(Some(f)) => arms.push(sugar_arm(&f, variant)),
-                Some(None) if marked => {}
-                Some(None) => {
-                    let message = "a sugar variant names its conversion, `#[sugar(f)]`";
-                    return Err(Error::new_spanned(&variant.ident, message));
-                }
+                Some(None) => partial = true,
                 None => {
                     let mut core_variant = variant.clone();
                     core_fields(&mut core_variant.fields, &dropped);
@@ -462,7 +461,7 @@ impl Output {
         item.variants = core_variants;
         self.core.items.push(item.to_token_stream());
         self.core.items.push(clone_enum(&item));
-        if marked {
+        if marked || partial {
             return Ok(());
         }
         let body = quote!(match self { #(#arms)* });

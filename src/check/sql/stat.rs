@@ -376,7 +376,8 @@ impl Walk for ModelSource {
                 where_clause,
                 group,
                 having,
-                tail,
+                order,
+                limit,
             } => {
                 from.walk(w);
                 if let Some((_, condition)) = where_clause {
@@ -388,7 +389,8 @@ impl Walk for ModelSource {
                 if let Some((_, having)) = having {
                     having.walk(w)
                 }
-                tail.walk(w)
+                order.walk(w);
+                limit.walk(w)
             }
         }
     }

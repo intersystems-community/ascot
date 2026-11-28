@@ -1980,71 +1980,98 @@ pub mod leveled {
         pub quantifier: SetQuantifier,
     }
 
-    /// With TOP a SELECT orders its own rows and takes no row limit (SQLCODE -386 with one); without TOP it takes a
-    /// row limit, and an ORDER BY after it is the statement's (-25 before UNION, -143 in a subquery). LIMIT ALL alone
-    /// cuts nothing and is dropped before the limit is read, as `ALL` would read as a host variable's name.
+    /// An ordered SELECT, TOP with its own ORDER BY, or a limited one, with its row limit (2026.2 refuses TOP with a
+    /// LIMIT, -386); an ORDER BY after a limited SELECT is the statement's (-25 before UNION, -143 in a subquery).
+    /// The core's ordered SELECT has TOP ALL alone: TOP n is the limited SELECT's LIMIT n, and with an ORDER BY the
+    /// ordered SELECT stands under `SELECT * FROM (…) LIMIT n`, DISTINCT and the options inside and INTO outside
+    /// (2026.2 gives `TOP 2 a FROM t ORDER BY a` and the nested form the same rows, for DISTINCT, a UNION operand, a
+    /// scalar or correlated subquery and a CTE alike).
     #[derive(Grammar)]
+    #[sugar]
     pub enum QuerySpecification {
-        #[sugar(top_count)]
         Top {
             select: Select,
-            top: Kw!("TOP ALL", "TOP"),
-            #[sugar]
-            count: Option<Nested<Count, Space1>>,
-            top_space: Space1,
+            top: Kw!("TOP"),
+            count: TopCount,
+            space: Space1,
             clauses: SelectClauses,
             order: Option<(Space1, OrderByClause)>,
         },
         Plain {
             select: Select,
             clauses: SelectClauses,
-            #[sugar]
-            limit_all: Option<(Space1, Kw!("LIMIT ALL"))>,
-            limit: Option<(Space1, RowLimitingClause)>,
+            limit: RowLimit,
         },
     }
 
-    /// TOP n is the SELECT's LIMIT n; when the SELECT orders its own rows it keeps TOP ALL and stands in a derived
-    /// table under `SELECT * FROM (…) LIMIT n`, DISTINCT and the options inside and INTO outside (2026.2 gives
-    /// `TOP 2 a FROM t ORDER BY a` and the nested form the same rows, for DISTINCT, a UNION operand, a scalar or
-    /// correlated subquery and a CTE alike).
-    fn top_count(
-        count: Option<Nested<Count, Space1>>,
-        select: core::QuerySpecification,
-    ) -> core::QuerySpecification {
-        let Some(count) = count else {
-            return select;
-        };
-        let cut = limit(count.desugar(), None);
-        match select {
-            core::QuerySpecification::Top {
-                select,
-                clauses,
-                order: None,
-                ..
-            } => core::QuerySpecification::Plain {
-                select,
-                clauses,
-                limit: Some((Default::default(), cut)),
-            },
-            core::QuerySpecification::Top {
-                select,
-                top,
-                top_space,
-                mut clauses,
-                order,
-            } => {
-                let into = clauses.into.take();
-                let ordered = core::QuerySpecification::Top {
+    #[derive(Grammar)]
+    pub enum TopCount {
+        All(Space1, Kw!("ALL")),
+        #[sugar]
+        Num(Nested<Count, Space1>),
+    }
+
+    impl Desugar for QuerySpecification {
+        type Core = core::QuerySpecification;
+        fn desugar(self) -> Self::Core {
+            let (select, top, count, space, mut clauses, order) = match self {
+                QuerySpecification::Plain {
+                    select,
+                    clauses,
+                    limit,
+                } => {
+                    return core::QuerySpecification::Plain {
+                        select: select.desugar(),
+                        clauses: clauses.desugar(),
+                        limit: limit.desugar(),
+                    };
+                }
+                QuerySpecification::Top {
                     select,
                     top,
-                    top_space,
+                    count,
+                    space,
                     clauses,
                     order,
+                } => (
+                    select.desugar(),
+                    top.desugar(),
+                    count,
+                    space.desugar(),
+                    clauses,
+                    order,
+                ),
+            };
+            let limit = match count {
+                TopCount::All(blank, all) => {
+                    return core::QuerySpecification::Top {
+                        select,
+                        top,
+                        count: core::TopCount::All(blank.desugar(), all.desugar()),
+                        space,
+                        clauses: clauses.desugar(),
+                        order: order.desugar(),
+                    };
+                }
+                TopCount::Num(count) => row_limit(count.desugar()),
+            };
+            let Some(order) = order else {
+                return core::QuerySpecification::Plain {
+                    select,
+                    clauses: clauses.desugar(),
+                    limit,
                 };
-                cut_over(ordered, into, cut)
-            }
-            plain => plain,
+            };
+            let into = clauses.into.take().desugar();
+            let ordered = core::QuerySpecification::Top {
+                select,
+                top,
+                count: core::TopCount::All(Default::default(), Default::default()),
+                space,
+                clauses: clauses.desugar(),
+                order: Some(order.desugar()),
+            };
+            cut_over(ordered, into, limit)
         }
     }
 
@@ -2052,7 +2079,7 @@ pub mod leveled {
     fn cut_over(
         query: core::QuerySpecification,
         into: Option<(Space1, core::IntoClause)>,
-        limit: core::RowLimitingClause,
+        limit: core::RowLimit,
     ) -> core::QuerySpecification {
         let term = core::QueryTerm::QuerySpecification(desugar::synthesized(query));
         let body = core::QueryExpressionBody(VecSep {
@@ -2089,7 +2116,7 @@ pub mod leveled {
         core::QuerySpecification::Plain {
             select,
             clauses,
-            limit: Some((Default::default(), limit)),
+            limit,
         }
     }
 
@@ -2101,19 +2128,6 @@ pub mod leveled {
         pub where_clause: Option<(Space1, WhereClause)>,
         pub group: Option<(Space1, GroupByClause)>,
         pub having: Option<(Space1, HavingClause)>,
-    }
-
-    /// The statement's ORDER BY with the row limit after it, or its row limit alone, the one place a LIMIT is the
-    /// whole's: 2026.2 reads A UNION B LIMIT 1 LIMIT 2 as B's limit then the whole's, refuses a third (-25), takes
-    /// (A UNION B) LIMIT 2, and merges a lone SELECT's two limits into the smaller count with the offsets summed.
-    #[derive(Grammar)]
-    pub enum Tail {
-        Order(
-            OrderByClause,
-            #[sugar] Option<(Space1, Kw!("LIMIT ALL"))>,
-            Option<(Space1, RowLimitingClause)>,
-        ),
-        Limit(RowLimitingClause),
     }
 
     /// The query an INSERT or a CREATE TABLE AS reads, ordered once, last (2026.2 takes LIMIT 1 ORDER BY a, not
@@ -2454,45 +2468,75 @@ pub mod leveled {
         ValueExpression(ValueExpression),
     }
 
-    /// A cut is LIMIT n [OFFSET m] or OFFSET m in the core, LIMIT ALL being dropped before it by the clause that holds
-    /// it (2026.2 takes `OFFSET 1` alone everywhere a LIMIT goes); `OFFSET m [ROWS] FETCH … n …` is LIMIT n OFFSET m
-    /// and a lone FETCH is LIMIT n.
+    /// The row limit a query may take. In the core it is LIMIT n [OFFSET m] or OFFSET m: LIMIT ALL cuts nothing, so
+    /// alone it is no limit and before an OFFSET it leaves the OFFSET (2026.2 takes `OFFSET 1` alone everywhere a
+    /// LIMIT goes), `OFFSET m [ROWS] FETCH … n …` is LIMIT n OFFSET m, and a lone FETCH is LIMIT n.
     #[derive(Grammar)]
+    #[sugar]
+    pub struct RowLimit(pub Option<(Space1, RowLimitingClause)>);
+
+    #[derive(Grammar)]
+    #[sugar]
     pub enum RowLimitingClause {
         LimitOffset {
-            limit: Prefix<Kw!("LIMIT"), Nested<Count, Space1>>,
+            limit: Prefix<Kw!("LIMIT"), LimitCount>,
             offset: Option<(Space1, ResultOffsetClause)>,
         },
-        #[sugar(offset_fetch)]
+        #[sugar]
         OffsetFetch(ResultOffsetClause, Space1, Fetch),
         Offset(ResultOffsetClause),
-        #[sugar(fetch_only)]
+        #[sugar]
         FetchOnly(Fetch),
     }
 
-    fn offset_fetch(
-        offset: ResultOffsetClause,
-        _: Space1,
-        fetch: Fetch,
-    ) -> core::RowLimitingClause {
-        limit(
-            fetch.valspec.desugar(),
-            Some((Default::default(), offset.desugar())),
-        )
+    #[derive(Grammar)]
+    pub enum LimitCount {
+        #[sugar]
+        All(Space1, Kw!("ALL")),
+        Num(Nested<Count, Space1>),
     }
 
-    fn fetch_only(fetch: Fetch) -> core::RowLimitingClause {
-        limit(fetch.valspec.desugar(), None)
+    impl Desugar for RowLimit {
+        type Core = core::RowLimit;
+        fn desugar(self) -> Self::Core {
+            core::RowLimit(self.0.and_then(|(space, clause)| {
+                let offset =
+                    |offset: ResultOffsetClause| core::RowLimitingClause::Offset(offset.desugar());
+                let clause = match clause {
+                    RowLimitingClause::LimitOffset {
+                        limit,
+                        offset: rest,
+                    } => match limit.prefixed {
+                        LimitCount::All(..) => offset(rest?.1),
+                        LimitCount::Num(count) => limit_offset(count.desugar(), rest.desugar()),
+                    },
+                    RowLimitingClause::OffsetFetch(rest, _, fetch) => {
+                        let rest = Some((Default::default(), rest.desugar()));
+                        limit_offset(fetch.valspec.desugar(), rest)
+                    }
+                    RowLimitingClause::Offset(rest) => offset(rest),
+                    RowLimitingClause::FetchOnly(fetch) => {
+                        limit_offset(fetch.valspec.desugar(), None)
+                    }
+                };
+                Some((space.desugar(), clause))
+            }))
+        }
     }
 
-    fn limit(
+    fn limit_offset(
         count: core::Nested<core::Count, Space1>,
         offset: Option<(Space1, core::ResultOffsetClause)>,
     ) -> core::RowLimitingClause {
         core::RowLimitingClause::LimitOffset {
-            limit: Prefix::new(Default::default(), count),
+            limit: Prefix::new(Default::default(), core::LimitCount::Num(count)),
             offset,
         }
+    }
+
+    /// `LIMIT n`.
+    fn row_limit(count: core::Nested<core::Count, Space1>) -> core::RowLimit {
+        core::RowLimit(Some((Default::default(), limit_offset(count, None))))
     }
 
     #[derive(Grammar)]
@@ -2912,16 +2956,17 @@ pub mod leveled {
         Into(Kw!("INTO"), Space, VecSep<TargetSpecification, ArgSep>),
     }
 
-    /// ISO's query expression, the root query: WITH, the body and the Tail, which no nested query takes. 2026.2
-    /// refuses a parenthesized first operand after WITH (SQLCODE -383, "CTE is only supported for SELECT…") and
-    /// takes a parenthesized later one; the grammar takes both.
+    /// ISO's query expression, the root query: WITH, the body, and the whole's ORDER BY and row limit, which no
+    /// nested query takes. 2026.2 reads A UNION B LIMIT 1 LIMIT 2 as B's limit then the whole's, refuses a third
+    /// (-25), takes (A UNION B) LIMIT 2, and merges a lone SELECT's two limits into the smaller count with the
+    /// offsets summed. It refuses a parenthesized first operand after WITH (SQLCODE -383, "CTE is only supported
+    /// for SELECT…") and takes a parenthesized later one; the grammar takes both.
     #[derive(Grammar)]
     pub struct QueryExpression {
         pub with_clause: Option<(WithClause, Space)>,
         pub query: QueryExpressionBody,
-        #[sugar]
-        pub limit_all: Option<(Space1, Kw!("LIMIT ALL"))>,
-        pub tail: Option<(Space1, Tail)>,
+        pub order: Option<(Space1, OrderByClause)>,
+        pub limit: RowLimit,
     }
 
     #[derive(Grammar)]
@@ -3889,9 +3934,8 @@ pub mod leveled {
             where_clause: Option<(Space, WhereClause)>,
             group: Option<(Space, GroupByClause)>,
             having: Option<(Space, HavingClause)>,
-            #[sugar]
-            limit_all: Option<(Space, Kw!("LIMIT ALL"))>,
-            tail: Option<(Space, Tail)>,
+            order: Option<(Space, OrderByClause)>,
+            limit: RowLimit,
         },
     }
 
