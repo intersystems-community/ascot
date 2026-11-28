@@ -35,6 +35,7 @@ use std::{iter::once, ops::Deref};
 use tygr::{IntoInner, OLC, Parse, Prefix, Print, Ranged, Raw, Vec1};
 use tygr_objectscript::cos::VecSep;
 use tygr_objectscript::cos::{KeywordKind, KeywordUse, Spelled};
+use tygr_objectscript::sql::desugar::Desugar;
 use types::*;
 
 use crate::diagnostic_filter::Filter;
@@ -737,7 +738,7 @@ fn sql_publics(body: &ProcedureBody) -> HashSet<String> {
     let mut names = HashSet::new();
     walk_blocks(body, &mut |it| {
         if let Left(Command::ESQL(_, statement, _)) = it {
-            let hosts = sql::analyze(statement, None);
+            let hosts = sql::analyze(&(**statement).clone().desugar(), None);
             names.insert("SQLCODE".to_string());
             names.extend(
                 (hosts.reads.into_iter().chain(hosts.writes))

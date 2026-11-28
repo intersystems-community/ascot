@@ -1619,6 +1619,16 @@ version = "0.7.0"
 dependencies = [
  "either",
  "tygr",
+ "tygr-objectscript-macros",
+]
+
+[[package]]
+name = "tygr-objectscript-macros"
+version = "0.7.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

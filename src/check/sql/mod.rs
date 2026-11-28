@@ -1,6 +1,6 @@
-//! The checker of embedded SQL. It walks the parsed statement node by node, the way the
-//! ObjectScript checker does, and records what the flow needs -- every host variable as a read or
-//! a write, and the cursor the statement declares or fetches -- and the names `resolve` checks.
+//! The checker of embedded SQL. It walks the statement, desugared into the core grammar, node by
+//! node, as the ObjectScript checker does, recording what the flow needs -- every host variable read
+//! or written, and the cursor declared or fetched -- and the names `resolve` checks.
 
 use std::ops::Range;
 
@@ -8,12 +8,17 @@ use either::Either;
 use tygr::{Prefix, Print, Ranged, Suffix, Vec1, Wrap};
 
 use crate::bindings::{ClassInfo, MemberKind, SqlProjection};
-use crate::check::errors::{SqlProcedureUse, TypeErrorKind};
+use crate::check::errors::{Arity, SqlProcedureUse, TypeErrorKind};
 use resolve::{Columns, Lookup, ProcInfo};
 use tygr_objectscript::cos::VecSep;
-use tygr_objectscript::sql::*;
+use tygr_objectscript::sql::core::*;
+use tygr_objectscript::sql::{
+    DottedIdent, Host, HostVariable, Ident, Integer, SQLIdentNonKeyword, Space, Space1, Subscript,
+    SubscriptedHost, TargetSpecification, VariableReference,
+};
 
 mod expr;
+mod functions;
 mod query;
 pub(crate) mod resolve;
 mod stat;
@@ -61,9 +66,28 @@ pub(crate) struct ColumnRef {
 
 // What the walker asks of the checker, when there is one (see `resolve`).
 pub(crate) trait Resolver {
+    // The schema of an unqualified name: the class's own, `SQLUser` in a routine.
+    fn default_schema(&self) -> String {
+        "SQLUser".to_string()
+    }
     fn table(&self, schema: &str, table: &str) -> Lookup<Option<Columns>>;
     fn procedure(&self, schema: &str, name: &str) -> Lookup<ProcInfo>;
     fn report(&self, kind: TypeErrorKind, range: &Range<usize>);
+}
+
+// A literal, host variable, parameter marker or macro, in parentheses or not.
+fn literal_or_host(expr: &ValueExpression) -> bool {
+    expr.rest.is_empty()
+        && match &expr.first {
+            Operand::Paren(_, inner) => literal_or_host(&inner.wrapped),
+            Operand::Plain(_, term) => matches!(
+                term.ranged,
+                ValueExpressionPrimary::Literal(_)
+                    | ValueExpressionPrimary::HostVariable(_)
+                    | ValueExpressionPrimary::ParameterMarker(_)
+                    | ValueExpressionPrimary::Macro(..)
+            ),
+        }
 }
 
 // An identifier's text, a delimited one without its quotes.
@@ -110,7 +134,7 @@ pub(super) fn analyze(sql: &SQL, check: Option<&dyn Resolver>) -> Hosts {
         unchecked: false,
         access: Access::Read,
     };
-    sql.stat.walk(&mut w);
+    sql.statement.walk(&mut w);
     w.hosts
 }
 
@@ -137,6 +161,22 @@ impl Walker<'_> {
         self.unchecked = was;
     }
 
+    // TRUNCATE TABLE's options and LOAD's hints, each taken once (measured on 2026.2).
+    fn each_once<'a, T: tygr::Grammar + Print + 'a>(
+        &self,
+        words: impl Iterator<Item = &'a Ranged<T>>,
+    ) {
+        let mut seen = std::collections::HashSet::new();
+        for word in words {
+            let option = word.ranged.print();
+            if !seen.insert(option.to_uppercase())
+                && let Some(check) = self.check
+            {
+                check.report(TypeErrorKind::SqlRepeatedOption { option }, &word.range());
+            }
+        }
+    }
+
     fn push_frame(&mut self) {
         self.frames.push(Frame::default());
     }
@@ -158,11 +198,6 @@ impl Walker<'_> {
         self.frames.last_mut().expect("the statement's frame stays")
     }
 
-    // Whether the current frame is a branch of a `SELECT` statement.
-    fn in_statement(&self) -> bool {
-        self.frames.len() >= 2 && self.frames[self.frames.len() - 2].branches
-    }
-
     // Walks `t` in the enclosing frame: the query feeding an `INSERT` does not see its target.
     fn outside<T: Walk + ?Sized>(&mut self, t: &T) {
         let frame = self.frames.pop().expect("a frame was pushed");
@@ -170,11 +205,11 @@ impl Walker<'_> {
         self.frames.push(frame);
     }
 
-    fn table(&mut self, name: Option<Name>, alias: Option<&SQLTableAlias>) {
+    fn table(&mut self, name: Option<Name>, alias: Option<&Alias>) {
         if self.unchecked {
             return;
         }
-        let alias = alias.map(|(_, _, ident)| text(&ident.0));
+        let alias = alias.map(|alias| text(&alias.name.0));
         let columns = match (&name, self.check) {
             (Some(name), Some(check)) => resolve::table(check, &self.frames, name),
             _ => None,
@@ -189,17 +224,23 @@ impl Walker<'_> {
         self.current().aliases.push(alias);
     }
 
-    fn column(&mut self, column: &Colmn) {
+    fn columns(&mut self, columns: &Option<ColumnReferenceList>) {
+        for column in columns.iter().flat_map(|list| list.1.wrapped.items.iter()) {
+            self.column(column)
+        }
+    }
+
+    fn column(&mut self, column: &ColumnReference) {
         let Some(check) = self.check.filter(|_| !self.unchecked) else {
             return;
         };
         let column = match column {
-            Colmn::Str(label, ..) => ColumnRef {
+            ColumnReference::Str(label, ..) => ColumnRef {
                 qualifier: vec![text(label)],
                 name: None,
                 range: label.range(),
             },
-            Colmn::Arr(dotted, _) => {
+            ColumnReference::Arr(dotted, _) => {
                 let mut qualifier: Vec<String> = dotted.parts().map(text).collect();
                 let name = qualifier.pop();
                 ColumnRef {
@@ -220,6 +261,45 @@ impl Walker<'_> {
         }
     }
 
+    // A call by name: a function IRIS provides is held to what it takes, a `$` name must be one of
+    // those, a qualified name is a stored procedure's, and any other is a user-defined function's.
+    fn function(&mut self, call: &Call) {
+        let name = &call.name.name;
+        let args = call.args.1.wrapped.as_ref();
+        let count = args.map_or(0, |args| args.items.len());
+        if call.name.dollar.is_none() && !name.ranged.rest.is_empty() {
+            return self.call(name, count, SqlProcedureUse::Function);
+        }
+        let Some(check) = self.check.filter(|_| !self.unchecked) else {
+            return;
+        };
+        let dollar = if call.name.dollar.is_some() { "$" } else { "" };
+        let written = format!("{dollar}{}", text(&name.ranged.head));
+        let upper = written.to_uppercase();
+        let kind = match functions::signature(&upper) {
+            Some((min, max)) if count < min || max.is_some_and(|max| count > max) => {
+                let takes = Arity(min, max);
+                TypeErrorKind::SqlArgumentCount {
+                    name: written,
+                    takes,
+                }
+            }
+            Some(_)
+                if functions::LITERAL_LENGTH.contains(&upper.as_str())
+                    && args
+                        .and_then(|args| args.items.get(1))
+                        .is_some_and(|l| !literal_or_host(l)) =>
+            {
+                TypeErrorKind::SqlLengthNotLiteral { name: written }
+            }
+            None if !dollar.is_empty() => {
+                TypeErrorKind::SqlDollarFunctionNotFound { name: written }
+            }
+            _ => return,
+        };
+        check.report(kind, &name.range())
+    }
+
     fn written<T: Walk + ?Sized>(&mut self, t: &T) {
         self.with(Access::Write, t)
     }
@@ -234,11 +314,10 @@ impl Walker<'_> {
         self.access = was;
     }
 
-    fn host(&mut self, host_ref: &HostRef, subscripted: bool) {
-        match host_ref {
-            HostRef::InstanceVariableHostRef(_) => {}
-            HostRef::PropertyHostRef(prop) => self.hosts.reads.push((prop.part1.print(), false)),
-            HostRef::Plain(_, name) => self.local(name.print(), subscripted),
+    fn host(&mut self, host: &Host, subscripted: bool) {
+        match host {
+            Host::Property { name, .. } => self.hosts.reads.push((name.print(), false)),
+            Host::Plain(name) => self.local(name.print(), subscripted),
         }
     }
 
@@ -265,10 +344,10 @@ macro_rules! leaf {
 }
 leaf!(
     Integer,
-    VectorDatyp,
-    TSAddInterval,
-    TSDiffInterval,
-    SQLConvertFunc
+    VectorDataType,
+    DoubleQuotable<TimestampAddInterval>,
+    DoubleQuotable<TimestampDiffInterval>,
+    ODBCConvertType
 );
 
 impl<T: Walk> Walk for Option<T> {
@@ -295,9 +374,40 @@ impl<T: Walk> Walk for Vec1<T> {
     }
 }
 
+impl<T: Walk + tygr::Grammar, B: tygr::Grammar + Default> Walk for Nested<T, B> {
+    fn walk(&self, w: &mut Walker) {
+        let Nested::Bare(_, t) = self;
+        t.walk(w)
+    }
+}
+
 impl<T: Walk> Walk for Box<T> {
     fn walk(&self, w: &mut Walker) {
         (**self).walk(w)
+    }
+}
+
+impl<T: Walk> Walk for Ranged<T> {
+    fn walk(&self, w: &mut Walker) {
+        self.ranged.walk(w)
+    }
+}
+
+impl<T: Walk> Walk for (Space, T) {
+    fn walk(&self, w: &mut Walker) {
+        self.1.walk(w)
+    }
+}
+
+impl<T: Walk> Walk for (T, Space) {
+    fn walk(&self, w: &mut Walker) {
+        self.0.walk(w)
+    }
+}
+
+impl<T: Walk> Walk for (Space1, T) {
+    fn walk(&self, w: &mut Walker) {
+        self.1.walk(w)
     }
 }
 
@@ -334,45 +444,41 @@ impl<A: Walk, B: Walk> Walk for Either<A, B> {
     }
 }
 
-impl<T: Walk + tygr::Grammar> Walk for OptionallyWrapped<T> {
+impl Walk for HostVariable {
     fn walk(&self, w: &mut Walker) {
-        match self {
-            OptionallyWrapped::Wrapped(t) => t.walk(w),
-            OptionallyWrapped::Scalar(t) => t.walk(w),
+        match &self.host {
+            SubscriptedHost::Instance { subs, .. } => w.read(subs),
+            SubscriptedHost::Variable { host, subs } => {
+                w.host(host, subs.is_some());
+                w.read(subs)
+            }
         }
     }
 }
 
-impl Walk for HostVar {
-    fn walk(&self, w: &mut Walker) {
-        w.host(&self.host_ref, self.subs.is_some());
-        w.read(&self.subs)
-    }
-}
-
-impl Walk for Sub {
+impl Walk for Subscript {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Sub::Literal(_) => {}
-            Sub::Var(var) => var.walk(w),
+            Subscript::Literal(_) => {}
+            Subscript::VariableReference(var) => var.walk(w),
         }
     }
 }
 
-impl Walk for Var {
+impl Walk for VariableReference {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Var::HostRef(host_ref) => w.host(host_ref, false),
-            Var::Ident(ident) => w.ident(ident, false),
+            VariableReference::HostReference(host_ref) => w.host(&host_ref.host, false),
+            VariableReference::Ident(ident) => w.ident(ident, false),
         }
     }
 }
 
-impl Walk for Param {
+impl Walk for TargetSpecification {
     fn walk(&self, w: &mut Walker) {
         match self {
-            Param::HostVar(host_var) => host_var.walk(w),
-            Param::Ident(ident, subs) => {
+            TargetSpecification::HostVariable(host_var) => host_var.walk(w),
+            TargetSpecification::Ident(ident, subs) => {
                 w.ident(ident, subs.is_some());
                 w.read(subs)
             }
@@ -380,11 +486,11 @@ impl Walk for Param {
     }
 }
 
-impl Walk for ValSpec {
+impl Walk for ValuesSpecification {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ValSpec::Scalx { exprs, .. } => exprs.walk(w),
-            ValSpec::Var { var, subs } => {
+            ValuesSpecification::ValueExpression(exprs) => exprs.walk(w),
+            ValuesSpecification::VariableReference { var, subs } => {
                 var.walk(w);
                 subs.walk(w)
             }
@@ -392,60 +498,21 @@ impl Walk for ValSpec {
     }
 }
 
-impl Walk for DTSValSpec {
+impl Walk for ODBCDateTimeValue {
     fn walk(&self, w: &mut Walker) {
         match self {
-            DTSValSpec::Literal(_) => {}
-            DTSValSpec::HostVar(host_var) => host_var.walk(w),
+            ODBCDateTimeValue::Literal(_) => {}
+            ODBCDateTimeValue::HostVariable(host_var) => host_var.walk(w),
         }
     }
 }
 
-impl Walk for ColTrun {
+impl Walk for IntoClause {
     fn walk(&self, w: &mut Walker) {
         match self {
-            ColTrun::Const(_) => {}
-            ColTrun::HostVar(host_var) => host_var.walk(w),
+            IntoClause::Into(into) => w.written(into),
+            IntoClause::IntoList(into) => w.written(&into.prefixed.1),
         }
-    }
-}
-
-impl Walk for DatePartCommon {
-    fn walk(&self, w: &mut Walker) {
-        if let DatePartCommon::HostVar(host_var) = self {
-            host_var.walk(w)
-        }
-    }
-}
-
-impl Walk for DatePartPartRaw {
-    fn walk(&self, w: &mut Walker) {
-        if let DatePartPartRaw::Common(common) = self {
-            common.walk(w)
-        }
-    }
-}
-
-impl Walk for DatePartPart {
-    fn walk(&self, w: &mut Walker) {
-        self.0.walk(w)
-    }
-}
-
-impl Walk for Targt {
-    fn walk(&self, w: &mut Walker) {
-        if let Some((_, targt)) = &self.0 {
-            match targt {
-                TargtEnum::Into(into) => w.written(into),
-                TargtEnum::IntoList(into) => w.written(&into.prefixed.1),
-            }
-        }
-    }
-}
-
-impl Walk for HostList {
-    fn walk(&self, w: &mut Walker) {
-        self.0.walk(w)
     }
 }
 
@@ -453,12 +520,31 @@ impl Walk for HostList {
 mod tests {
     use super::*;
     use tygr::Parse;
+    use tygr_objectscript::sql::desugar::Desugar;
+
+    fn parse(text: &str) -> SQL {
+        let full = tygr_objectscript::sql::SQL::parse(text);
+        full.unwrap_or_else(|e| panic!("{text}: {e}")).desugar()
+    }
+
+    fn on_both(text: &str, mock: Option<&Mock>) -> (Hosts, Vec<String>) {
+        let run = |text: &str| {
+            let hosts = analyze(&parse(text), mock.map(|mock| mock as &dyn Resolver));
+            (hosts, mock.map_or_else(Vec::new, |mock| mock.0.take()))
+        };
+        fn codes(reports: &[String]) -> Vec<&str> {
+            reports.iter().map(|report| &report[..5]).collect()
+        }
+        let (hosts, reports) = run(text);
+        let (core_hosts, core_reports) = run(&parse(text).print());
+        assert_eq!(names(&hosts.reads), names(&core_hosts.reads), "{text}");
+        assert_eq!(names(&hosts.writes), names(&core_hosts.writes), "{text}");
+        assert_eq!(codes(&reports), codes(&core_reports), "{text}");
+        (hosts, reports)
+    }
 
     fn hosts_of(text: &str) -> Hosts {
-        analyze(
-            &SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")),
-            None,
-        )
+        on_both(text, None).0
     }
 
     // Two tables and a view, a method and a class query; what gets reported, as `CODE at offset`.
@@ -504,12 +590,7 @@ mod tests {
     }
 
     fn reports(text: &str) -> Vec<String> {
-        let mock = Mock(Default::default());
-        analyze(
-            &SQL::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")),
-            Some(&mock),
-        );
-        mock.0.into_inner()
+        on_both(text, Some(&Mock(Default::default()))).1
     }
 
     #[test]
@@ -519,6 +600,8 @@ mod tests {
             "SELECT Name INTO :n FROM Demo.T p WHERE EXISTS (SELECT 1 FROM Demo.U u WHERE u.Title = p.Name)",
             // A trailing `ORDER BY` names the first branch's columns and aliases.
             "SELECT Name AS N FROM Demo.T UNION SELECT Name FROM Demo.U ORDER BY N",
+            // A branch with `TOP` orders its own rows first (measured on 2026.2).
+            "SELECT Name AS Nn FROM Demo.T UNION SELECT TOP 1 Title AS Tt FROM Demo.U ORDER BY Tt ORDER BY Nn",
             // A CTE's columns are not known, nor a view's.
             "WITH C AS (SELECT Name FROM Demo.T) SELECT Nope FROM C",
             "SELECT V.Nope FROM Demo.V",
@@ -552,6 +635,11 @@ mod tests {
             (
                 "SELECT Name AS N FROM Demo.T UNION SELECT Name FROM Demo.U ORDER BY Nope",
                 "Nope",
+                "A7340",
+            ),
+            (
+                "SELECT Name AS Nn FROM Demo.T UNION SELECT TOP 1 Title FROM Demo.U ORDER BY NN",
+                "NN",
                 "A7340",
             ),
             ("INSERT INTO Demo.T (Title) VALUES (1)", "Title", "A7340"),
@@ -642,11 +730,11 @@ mod tests {
         let statements: Vec<String> = serde_json::from_str(&text).unwrap();
         let (mut parsed, mut missing) = (0, vec![]);
         for (i, statement) in statements.iter().enumerate() {
-            let Ok(sql) = SQL::parse(statement) else {
+            let Ok(sql) = tygr_objectscript::sql::SQL::parse(statement) else {
                 continue;
             };
             parsed += 1;
-            let h = analyze(&sql, None);
+            let h = analyze(&sql.desugar(), None);
             let found: Vec<&str> = h
                 .reads
                 .iter()

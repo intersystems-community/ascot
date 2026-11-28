@@ -2115,7 +2115,7 @@ The key differences are:
 - OSText may contain comments, which requires more detailed handling.
 */
 
-#[derive(Grammar)]
+#[derive(Grammar, Clone)]
 #[tygr(name = "ObjectScript")]
 pub struct OSText(Raw<Vec<OSTextUnit>>);
 

@@ -1106,7 +1106,7 @@ type_error_kinds! {
     /// package and the table's name as its own or as its `SqlTableName`, and no class query of
     /// the package is a `SqlView` of that name. IRIS compiles the statement and gives it SQLCODE
     /// -30 when it runs. The schema is the package with dots as underscores, `SQLUser` for `User`,
-    /// and an unqualified table is in `SQLUser`.
+    /// and an unqualified table is in the class's own schema, a routine's in `SQLUser`.
     ///
     /// ```objectscript env=none compiles
     /// Class Demo.SqlTableNotFound
@@ -1274,6 +1274,117 @@ type_error_kinds! {
     #[severity = Error]
     #[message = "Too many arguments: '{name}' takes {takes}; the statement fails when it runs"]
     SqlTooManyArguments { name: String, takes: ArgCount },
+    /// A `TRUNCATE TABLE` option or a `LOAD` hint written twice. INSERT, UPDATE, DELETE and SELECT
+    /// take an option twice; these two statements take each of theirs once, and IRIS refuses to
+    /// compile the statement (SQLCODE -1, `IDENTIFIER expected, reserved word %NOLOCK found`).
+    ///
+    /// ```objectscript env=none
+    /// Class Demo.SqlRepeatedOption
+    /// {
+    ///
+    /// ClassMethod Clear()
+    /// {
+    ///     &sql(TRUNCATE TABLE %NOLOCK %NOLOCK Demo.Person) //! A3825
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A3825"]
+    #[severity = Error]
+    #[message = "Option '{option}' is given twice; TRUNCATE TABLE and LOAD take each of theirs once"]
+    SqlRepeatedOption { option: String },
+    /// A built-in function with the wrong number of arguments, `ROUND(a)` or `CONCAT(a, b, c)`: IRIS
+    /// compiles the statement with its class and refuses it at its first run (SQLCODE -1). A function
+    /// IRIS does not provide is taken as user-defined and left alone, unless a `$` begins its name
+    /// (A7471).
+    ///
+    /// ```objectscript
+    /// Class Demo.SqlPerson Extends %Persistent
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// Property Age As %Integer;
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.SqlArgumentCount
+    /// {
+    ///
+    /// ClassMethod Rounded() As %Integer
+    /// {
+    ///     &sql(SELECT ROUND(Age) INTO :rounded FROM Demo.SqlPerson) //! A6071
+    ///     Quit rounded
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A6071"]
+    #[severity = Error]
+    #[message = "Wrong number of arguments: '{name}' takes {takes}"]
+    SqlArgumentCount { name: String, takes: Arity },
+    /// A `$` function SQL does not provide: SQL calls a fixed set of ObjectScript functions,
+    /// `$EXTRACT`, `$LENGTH`, `$PIECE`, `$TRANSLATE`, the `$LIST` family and the `$TSQL_` functions;
+    /// IRIS compiles a call to any other with its class and refuses it at its first run (SQLCODE -1).
+    ///
+    /// ```objectscript
+    /// Class Demo.SqlPerson Extends %Persistent
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.SqlDollarFunctionNotFound
+    /// {
+    ///
+    /// ClassMethod Code() As %Integer
+    /// {
+    ///     &sql(SELECT $ASCII(Name) INTO :code FROM Demo.SqlPerson) //! A7471
+    ///     Quit code
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A7471"]
+    #[severity = Error]
+    #[message = "No function '{name}': SQL calls no ObjectScript function of that name"]
+    SqlDollarFunctionNotFound { name: String },
+    /// The truncation length of `%STRING`, `%SQLSTRING`, `%SQLUPPER` or `%TRUNCATE` given as an
+    /// expression: IRIS takes a literal or a host variable there, compiles anything else with its class
+    /// and refuses it at its first run (SQLCODE -1, `LITERAL expected`).
+    ///
+    /// ```objectscript
+    /// Class Demo.SqlPerson Extends %Persistent
+    /// {
+    ///
+    /// Property Name As %String;
+    ///
+    /// Property Age As %Integer;
+    ///
+    /// }
+    /// ```
+    ///
+    /// ```objectscript compiles
+    /// Class Demo.SqlLengthNotLiteral
+    /// {
+    ///
+    /// ClassMethod Upper() As %String
+    /// {
+    ///     &sql(SELECT %SQLUPPER(Name, Age) INTO :upper FROM Demo.SqlPerson) //! A3473
+    ///     Quit upper
+    /// }
+    ///
+    /// }
+    /// ```
+    #[code = "A3473"]
+    #[severity = Error]
+    #[message = "The length of '{name}' must be a literal or a host variable"]
+    SqlLengthNotLiteral { name: String },
     /// A table, field or procedure of embedded SQL the workspace doesn't settle, checked against
     /// IRIS declarations from before ascot recorded SQL names (format 1.0): the schema's package
     /// has classes there, and any of them may project the name through a `SqlTableName`,
@@ -3257,6 +3368,22 @@ pub struct Detail(pub Option<String>);
 /// "no arguments", "1 argument", "2 arguments".
 #[derive(Debug)]
 pub struct ArgCount(pub usize);
+
+/// "1 argument", "at most 1 argument", "1 or 2 arguments", "2 to 4 arguments", "at least 1 argument".
+#[derive(Debug)]
+pub struct Arity(pub usize, pub Option<usize>);
+
+impl std::fmt::Display for Arity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Arity(min, Some(max)) if min == max => ArgCount(min).fmt(f),
+            Arity(0, Some(max)) => write!(f, "at most {}", ArgCount(max)),
+            Arity(min, Some(max)) if max == min + 1 => write!(f, "{min} or {max} arguments"),
+            Arity(min, Some(max)) => write!(f, "{min} to {max} arguments"),
+            Arity(min, None) => write!(f, "at least {}", ArgCount(min)),
+        }
+    }
+}
 
 impl std::fmt::Display for ArgCount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

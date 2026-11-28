@@ -148,11 +148,11 @@ here, then `npm link @intersystems-community/ascot` there.
 
 Pushing a `v*.*.*` tag builds the `ascot` binary for Linux, macOS (Intel and
 Apple silicon) and Windows, attaches them and `style.json` to a GitHub release, publishes the
-`tygr-objectscript` and `ascot` crates to crates.io at the versions in their
+`tygr-objectscript-macros`, `tygr-objectscript` and `ascot` crates to crates.io at the versions in their
 `Cargo.toml`s, and publishes the npm package at the version in
 `bindings/js/package.json`; bump those by hand first. crates.io rejects a
 version that is already published, so every tagged release needs a new version
-of both crates.
+of all three crates.
 
 ## License
 
