@@ -1995,7 +1995,7 @@ pub mod leveled {
             count: TopCount,
             space: Space1,
             clauses: SelectClauses,
-            order: Option<(Space1, OrderByClause)>,
+            order: Option<(Space1, Ranged<OrderByClause>)>,
         },
         Limit {
             clauses: SelectClauses,
@@ -2046,27 +2046,20 @@ pub mod leveled {
                     count,
                     space,
                     mut clauses,
-                    order: Some(order),
+                    order: Some((_, order)),
                 } => {
                     let count = top_limit(count);
                     let into = count.as_ref().and_then(|_| clauses.into.take());
-                    // The `*` stands at the select list and the ordered SELECT at its ORDER BY.
-                    let (list, sorts) = (&clauses.select_list.items, &order.1.prefixed.items);
-                    let star = Ranged::new(
-                        list[0].start,
-                        core::SelectItem::Star(Default::default()),
-                        list[list.len() - 1].end,
-                    );
-                    let (start, end) = (sorts[0].start, sorts[sorts.len() - 1].end);
-                    let ordered = select(core::TopOrLimit::Top {
+                    let (start, end) = (order.start, order.end);
+                    let order = select(core::TopOrLimit::Top {
                         top: top.desugar(),
                         count: core::TopCount::All(Default::default(), Default::default()),
                         space: space.desugar(),
                         clauses: clauses.desugar(),
-                        order: Some(order.desugar()),
+                        order: Some((Default::default(), order.desugar())),
                     });
                     let Some(count) = count else {
-                        return ordered;
+                        return order;
                     };
                     // `SELECT * [INTO …] FROM (ordered) LIMIT n`
                     core::QuerySpecification {
@@ -2076,7 +2069,11 @@ pub mod leveled {
                         quantifier: core::SetQuantifier::All(),
                         top_or_limit: core::TopOrLimit::Limit {
                             clauses: core::SelectClauses {
-                                select_list: VecSep::one(star),
+                                select_list: VecSep::one(Ranged::new(
+                                    0,
+                                    core::SelectItem::Star(Default::default()),
+                                    0,
+                                )),
                                 into: into.desugar(),
                                 from: Some((
                                     Default::default(),
@@ -2091,9 +2088,7 @@ pub mod leveled {
                                                         parenthesized(Box::new(
                                                             core::QueryExpressionBody(VecSep::one(
                                                                 core::QueryTerm::QuerySpecification(
-                                                                    Ranged::new(
-                                                                        start, ordered, end,
-                                                                    ),
+                                                                    Ranged::new(start, order, end),
                                                                 ),
                                                             )),
                                                         )),
