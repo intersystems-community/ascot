@@ -59,28 +59,18 @@ impl Walk for QuerySpecification {
     // In the order SQL evaluates the clauses, so that each name is bound before it is used.
     fn walk(&self, w: &mut Walker) {
         w.push_frame();
-        let (select, clauses, tail): (_, _, &dyn Walk) = match self {
-            QuerySpecification::Top {
-                select,
-                clauses,
-                order,
-                ..
-            } => (select, clauses, order),
-            QuerySpecification::Plain {
-                select,
-                clauses,
-                limit,
-                ..
-            } => (select, clauses, limit),
+        let (clauses, tail): (_, &dyn Walk) = match &self.top_or_limit {
+            TopOrLimit::Top { clauses, order, .. } => (clauses, order),
+            TopOrLimit::Limit { clauses, limit } => (clauses, limit),
         };
         clauses.from.walk(w);
         clauses.where_clause.walk(w);
         clauses.group.walk(w);
         clauses.having.walk(w);
-        for (_, option) in &select.options {
+        for (_, option) in &self.options {
             option.walk(w)
         }
-        select.quantifier.walk(w);
+        self.quantifier.walk(w);
         clauses.select_list.walk(w);
         clauses.into.walk(w);
         tail.walk(w);
@@ -190,12 +180,6 @@ impl Walk for ParenthesizedTable {
             }
             ParenthesizedTable::JoinedTable(joined) => joined.walk(w),
         }
-    }
-}
-
-impl Walk for RowLimit {
-    fn walk(&self, w: &mut Walker) {
-        self.0.walk(w)
     }
 }
 
