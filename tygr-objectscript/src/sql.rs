@@ -2010,109 +2010,110 @@ pub mod leveled {
         Num(Nested<Count, Space1>),
     }
 
-    /// On the ranged SELECT: the ordered SELECT under the limit keeps the SELECT's range, and the `*` over it
-    /// stands at the select list.
-    impl Desugar for Ranged<QuerySpecification> {
-        type Core = Ranged<core::QuerySpecification>;
+    impl Desugar for QuerySpecification {
+        type Core = core::QuerySpecification;
         fn desugar(self) -> Self::Core {
-            let (start, end) = (self.start, self.end);
-            self.map(|select| {
-                let QuerySpecification {
-                    kw,
-                    options,
+            let QuerySpecification {
+                kw,
+                options,
+                space,
+                quantifier,
+                top_or_limit,
+            } = self;
+            let select = |top_or_limit| core::QuerySpecification {
+                kw: kw.desugar(),
+                options: options.desugar(),
+                space: space.desugar(),
+                quantifier: quantifier.desugar(),
+                top_or_limit,
+            };
+            match top_or_limit {
+                TopOrLimit::Limit { clauses, limit } => select(core::TopOrLimit::Limit {
+                    clauses: clauses.desugar(),
+                    limit: limit.desugar(),
+                }),
+                TopOrLimit::Top {
+                    count,
+                    clauses,
+                    order: None,
+                    ..
+                } => select(core::TopOrLimit::Limit {
+                    clauses: clauses.desugar(),
+                    limit: top_limit(count).map(limit),
+                }),
+                TopOrLimit::Top {
+                    top,
+                    count,
                     space,
-                    quantifier,
-                    top_or_limit,
-                } = select;
-                let select = |top_or_limit| core::QuerySpecification {
-                    kw: kw.desugar(),
-                    options: options.desugar(),
-                    space: space.desugar(),
-                    quantifier: quantifier.desugar(),
-                    top_or_limit,
-                };
-                match top_or_limit {
-                    TopOrLimit::Limit { clauses, limit } => select(core::TopOrLimit::Limit {
+                    mut clauses,
+                    order: Some(order),
+                } => {
+                    let count = top_limit(count);
+                    let into = count.as_ref().and_then(|_| clauses.into.take());
+                    // The `*` stands at the select list and the ordered SELECT at its ORDER BY.
+                    let (list, sorts) = (&clauses.select_list.items, &order.1.prefixed.items);
+                    let star = Ranged::new(
+                        list[0].start,
+                        core::SelectItem::Star(Default::default()),
+                        list[list.len() - 1].end,
+                    );
+                    let (start, end) = (sorts[0].start, sorts[sorts.len() - 1].end);
+                    let ordered = select(core::TopOrLimit::Top {
+                        top: top.desugar(),
+                        count: core::TopCount::All(Default::default(), Default::default()),
+                        space: space.desugar(),
                         clauses: clauses.desugar(),
-                        limit: limit.desugar(),
-                    }),
-                    TopOrLimit::Top {
-                        count,
-                        clauses,
-                        order: None,
-                        ..
-                    } => select(core::TopOrLimit::Limit {
-                        clauses: clauses.desugar(),
-                        limit: top_limit(count).map(limit),
-                    }),
-                    TopOrLimit::Top {
-                        top,
-                        count,
-                        space,
-                        mut clauses,
-                        order: Some(order),
-                    } => {
-                        let count = top_limit(count);
-                        let into = count.as_ref().and_then(|_| clauses.into.take());
-                        let list = &clauses.select_list.items;
-                        let star = Ranged::new(
-                            list[0].start,
-                            core::SelectItem::Star(Default::default()),
-                            list[list.len() - 1].end,
-                        );
-                        let ordered = select(core::TopOrLimit::Top {
-                            top: top.desugar(),
-                            count: core::TopCount::All(Default::default(), Default::default()),
-                            space: space.desugar(),
-                            clauses: clauses.desugar(),
-                            order: Some(order.desugar()),
-                        });
-                        let Some(count) = count else {
-                            return ordered;
-                        };
-                        // `SELECT * [INTO …] FROM (ordered) LIMIT n`
-                        core::QuerySpecification {
-                            kw: Default::default(),
-                            options: Vec::new(),
-                            space: Default::default(),
-                            quantifier: core::SetQuantifier::All(),
-                            top_or_limit: core::TopOrLimit::Limit {
-                                clauses: core::SelectClauses {
-                                    select_list: VecSep::one(star),
-                                    into: into.desugar(),
-                                    from: Some((
-                                        Default::default(),
-                                        core::FromClause {
-                                            keyword: Default::default(),
-                                            options: Vec::new(),
-                                            tables: core::TableReferenceList {
-                                                first: core::TableReference::Join(core::JoinedTable {
-                                                    primary: core::Gapped::Paren(
-                                                        Some(Default::default()),
-                                                        core::ParenthesizedTable::Query(
-                                                            parenthesized(Box::new(core::QueryExpressionBody(
-                                                                VecSep::one(core::QueryTerm::QuerySpecification(
-                                                                    Ranged::new(start, ordered, end),
-                                                                )),
-                                                            ))),
-                                                            None,
-                                                        ),
+                        order: Some(order.desugar()),
+                    });
+                    let Some(count) = count else {
+                        return ordered;
+                    };
+                    // `SELECT * [INTO …] FROM (ordered) LIMIT n`
+                    core::QuerySpecification {
+                        kw: Default::default(),
+                        options: Vec::new(),
+                        space: Default::default(),
+                        quantifier: core::SetQuantifier::All(),
+                        top_or_limit: core::TopOrLimit::Limit {
+                            clauses: core::SelectClauses {
+                                select_list: VecSep::one(star),
+                                into: into.desugar(),
+                                from: Some((
+                                    Default::default(),
+                                    core::FromClause {
+                                        keyword: Default::default(),
+                                        options: Vec::new(),
+                                        tables: core::TableReferenceList {
+                                            first: core::TableReference::Join(core::JoinedTable {
+                                                primary: core::Gapped::Paren(
+                                                    Some(Default::default()),
+                                                    core::ParenthesizedTable::Query(
+                                                        parenthesized(Box::new(
+                                                            core::QueryExpressionBody(VecSep::one(
+                                                                core::QueryTerm::QuerySpecification(
+                                                                    Ranged::new(
+                                                                        start, ordered, end,
+                                                                    ),
+                                                                ),
+                                                            )),
+                                                        )),
+                                                        None,
                                                     ),
-                                                    joins: Vec::new(),
-                                                }),
-                                            },
+                                                ),
+                                                joins: Vec::new(),
+                                            }),
                                         },
-                                    )),
-                                    where_clause: None,
-                                    group: None,
-                                    having: None,
-                                },
-                                limit: Some(limit(count)),
+                                    },
+                                )),
+                                where_clause: None,
+                                group: None,
+                                having: None,
                             },
-                        }
+                            limit: Some(limit(count)),
+                        },
                     }
                 }
-            })
+            }
         }
     }
 
